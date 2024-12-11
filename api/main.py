@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, String, DateTime, JSON, Text
@@ -66,6 +66,11 @@ def get_db():
     finally:
         db.close()
 
+async def get_crowdsec_key(db: Session = Depends(get_db)) -> str:
+    """Get CrowdSec API key from database."""
+    key = db.query(APIKey).filter(APIKey.key_name == "CROWDSEC_API_KEY").first()
+    return key.key_value if key else None
+
 # Schemas
 class APIKeys(BaseModel):
     IPAPI_KEY: str
@@ -108,6 +113,63 @@ class RuleState(BaseModel):
     rule_id: str
     enabled: bool
     category: str = ""
+
+# IP Lookup Service Proxy Routes
+@app.post("/iplookup/validate/crowdsec")
+async def proxy_validate_crowdsec(db: Session = Depends(get_db)):
+    """Proxy validation request to IP lookup service"""
+    try:
+        # Get API key from database
+        api_key = await get_crowdsec_key(db)
+        if not api_key:
+            return JSONResponse(
+                status_code=200,
+                content={"valid": False, "message": "No API key provided"}
+            )
+
+        headers = {"x-crowdsec-key": api_key}
+        async with aiohttp.ClientSession() as session:
+            async with session.post('http://iplookup:8000/validate/crowdsec', headers=headers) as response:
+                return JSONResponse(
+                    status_code=response.status,
+                    content=await response.json()
+                )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/iplookup/api/status")
+async def proxy_iplookup_status(db: Session = Depends(get_db)):
+    """Proxy status request to IP lookup service"""
+    try:
+        # Get API key from database
+        api_key = await get_crowdsec_key(db)
+        headers = {"x-crowdsec-key": api_key} if api_key else {}
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get('http://iplookup:8000/api/status', headers=headers) as response:
+                return JSONResponse(
+                    status_code=response.status,
+                    content=await response.json()
+                )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/iplookup/lookup/{ip}")
+async def proxy_ip_lookup(ip: str, db: Session = Depends(get_db)):
+    """Proxy IP lookup request to IP lookup service"""
+    try:
+        # Get API key from database
+        api_key = await get_crowdsec_key(db)
+        headers = {"x-crowdsec-key": api_key} if api_key else {}
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f'http://iplookup:8000/lookup/{ip}', headers=headers) as response:
+                return JSONResponse(
+                    status_code=response.status,
+                    content=await response.json()
+                )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Routes for rule management
 @app.get("/api/rules")
@@ -176,7 +238,16 @@ async def update_api_keys(api_keys: APIKeys, db: Session = Depends(get_db)):
             db.add(APIKey(key_name="CROWDSEC_API_KEY", key_value=api_keys.CROWDSEC_API_KEY))
 
         db.commit()
-        return {"message": "API keys updated successfully"}
+
+        # After saving to DB, validate the CrowdSec key
+        headers = {"x-crowdsec-key": api_keys.CROWDSEC_API_KEY}
+        async with aiohttp.ClientSession() as session:
+            async with session.post('http://iplookup:8000/validate/crowdsec', headers=headers) as response:
+                validation_result = await response.json()
+                return {
+                    "message": "API keys updated successfully",
+                    "crowdsec_validation": validation_result
+                }
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,0 +1,119 @@
+services:
+  # Log Collector Service
+  collector:
+    build:
+      context: ./collector
+      dockerfile: Dockerfile
+    ports:
+      - "514:514/udp"  # Syslog UDP
+      - "514:514/tcp"  # Syslog TCP
+      - "8000:8000"    # HTTP API
+    volumes:
+      - collector_data:/var/log/collector
+    environment:
+      - LOG_LEVEL=info
+    networks:
+      - siem_network
+
+  # Detection Engine Service
+  detection:
+    build:
+      context: ./detection
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"  # Expose port for debugging
+    volumes:
+      - sigma_rules:/app/rules
+    environment:
+      - SIGMA_RULES_PATH=/app/rules
+    networks:
+      - siem_network
+
+  # IP Lookup Service
+  iplookup:
+    build:
+      context: ./iplookup
+      dockerfile: Dockerfile
+    environment:
+      - IPAPI_KEY=${IPAPI_KEY}
+      - CROWDSEC_API_KEY=${CROWDSEC_API_KEY}
+    networks:
+      - siem_network
+
+  # Frontend Service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8080
+      - API_URL=http://api:8080
+    networks:
+      - siem_network
+
+  # API Gateway
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      collector:
+        condition: service_started
+      detection:
+        condition: service_started
+      iplookup:
+        condition: service_started
+    environment:
+      - DB_HOST=db
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - JWT_SECRET=${JWT_SECRET}
+    networks:
+      - siem_network
+
+  # Database
+  db:
+    image: postgres:14-alpine
+    environment:
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=siembox
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - siem_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d siembox"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Redis for caching and message broker
+  redis:
+    image: redis:alpine
+    volumes:
+      - redis_data:/data
+    networks:
+      - siem_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  collector_data:
+  sigma_rules:
+  postgres_data:
+  redis_data:
+
+networks:
+  siem_network:
+    driver: bridge

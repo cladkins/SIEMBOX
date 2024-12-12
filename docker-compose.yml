@@ -5,15 +5,29 @@ services:
       context: ./collector
       dockerfile: Dockerfile
     ports:
-      - "514:514/udp"  # Syslog UDP
-      - "514:514/tcp"  # Syslog TCP
-      - "8000:8000"    # HTTP API
+      - "5514:5514/udp"
+      - "5514:5514/tcp"
+      - "8000:8000"
     volumes:
       - collector_data:/var/log/collector
     environment:
       - LOG_LEVEL=info
+      - API_URL=http://api:8080
+      - RETRY_COUNT=3
+      - BACKOFF_FACTOR=1.5
+      - BUFFER_SIZE=100
+      - FLUSH_INTERVAL=5
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     networks:
       - siem_network
+    depends_on:
+      api:
+        condition: service_healthy
 
   # Detection Engine Service
   detection:
@@ -21,19 +35,25 @@ services:
       context: ./detection
       dockerfile: Dockerfile
     ports:
-      - "8001:8000"  # Expose port for debugging
+      - "8001:8000"
     volumes:
       - sigma_rules:/app/rules
     environment:
       - SIGMA_RULES_PATH=/app/rules
+      - COLLECTOR_HOST=collector
     networks:
       - siem_network
+    depends_on:
+      collector:
+        condition: service_healthy
 
   # IP Lookup Service
   iplookup:
     build:
       context: ./iplookup
       dockerfile: Dockerfile
+    ports:
+      - "8002:8000"  # Added port mapping
     environment:
       - IPAPI_KEY=${IPAPI_KEY}
       - CROWDSEC_API_KEY=${CROWDSEC_API_KEY}
@@ -44,6 +64,11 @@ services:
         condition: service_healthy
     networks:
       - siem_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # Frontend Service
   frontend:
@@ -57,6 +82,9 @@ services:
       - API_URL=http://api:8080
     networks:
       - siem_network
+    depends_on:
+      api:
+        condition: service_healthy
 
   # API Gateway
   api:
@@ -68,19 +96,22 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      collector:
-        condition: service_started
-      detection:
-        condition: service_started
-      iplookup:
-        condition: service_started
+      redis:
+        condition: service_healthy
     environment:
       - DB_HOST=db
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - JWT_SECRET=${JWT_SECRET}
+      - COLLECTOR_HOST=collector
     networks:
       - siem_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   # Database
   db:

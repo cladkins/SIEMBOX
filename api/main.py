@@ -1,29 +1,109 @@
 from fastapi import FastAPI, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, String, DateTime, JSON, Text
+from sqlalchemy import create_engine, Column, String, DateTime, JSON, Text, select
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 from datetime import datetime
 import aiohttp
 from fastapi.responses import JSONResponse
+import logging
+import time
+import psutil
+from tenacity import retry, stop_after_attempt, wait_exponential
+import asyncio
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="SIEMBox API")
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://collector:8000",
+        "http://192.168.1.45:3000",
+        "http://192.168.1.45:8000",
+        "http://192.168.1.45:8080"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Database configuration
-SQLALCHEMY_DATABASE_URL = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@db/siembox"
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
+# Default stats for services when they're unavailable
+default_collector_stats = {
+    "total_logs": 0,
+    "logs_per_minute": 0,
+    "active_connections": 0,
+    "last_log_received": None,
+    "status": "degraded"
+}
+
+default_detection_stats = {
+    "enabled_rules": 0,
+    "total_rules": 0,
+    "alerts_last_24h": 0,
+    "processing_rate": 0,
+    "status": "degraded"
+}
+
+default_iplookup_stats = {
+    "lookup_count": 0,
+    "cache_hit_rate": 0,
+    "threat_detections": 0,
+    "api_quota_remaining": 0,
+    "status": "degraded"
+}
+
+# Global stats tracking
+stats = {
+    "start_time": time.time(),
+    "status": "operational",
+    "services": {
+        "collector": {"status": "unknown", "last_check": None},
+        "detection": {"status": "unknown", "last_check": None},
+        "iplookup": {"status": "unknown", "last_check": None},
+        "database": {"status": "unknown", "last_check": None}
+    }
+}
+
+# Database configuration with retry logic
+def create_db_engine(max_retries=5, retry_interval=5):
+    """Create database engine with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            SQLALCHEMY_DATABASE_URL = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@db/siembox"
+            engine = create_engine(
+                SQLALCHEMY_DATABASE_URL,
+                pool_pre_ping=True,  # Enable connection health checks
+                pool_recycle=300     # Recycle connections every 5 minutes
+            )
+            # Test the connection
+            with engine.connect() as conn:
+                conn.execute(select(1))
+            stats["services"]["database"]["status"] = "operational"
+            stats["services"]["database"]["last_check"] = datetime.now().isoformat()
+            return engine
+        except Exception as e:
+            if attempt == max_retries - 1:
+                logger.error(f"Failed to connect to database after {max_retries} attempts: {e}")
+                stats["services"]["database"]["status"] = "error"
+                stats["services"]["database"]["last_check"] = datetime.now().isoformat()
+                raise
+            logger.warning(f"Database connection attempt {attempt + 1} failed, retrying in {retry_interval} seconds...")
+            time.sleep(retry_interval)
+
+engine = create_db_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -55,21 +135,41 @@ class Detection(Base):
     severity = Column(String)
     matched_log = Column(JSON)
 
-# Create tables
-Base.metadata.create_all(bind=engine)
+# Create tables with retry logic
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=4, max=10))
+def init_db():
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database tables created successfully")
+    except Exception as e:
+        logger.error(f"Failed to create database tables: {e}")
+        raise
 
-# Dependency
+# Dependency with connection management
 def get_db():
     db = SessionLocal()
     try:
+        # Test the connection
+        db.execute(select(1))
+        stats["services"]["database"]["status"] = "operational"
+        stats["services"]["database"]["last_check"] = datetime.now().isoformat()
         yield db
+    except Exception as e:
+        logger.error(f"Database connection error: {e}")
+        stats["services"]["database"]["status"] = "error"
+        stats["services"]["database"]["last_check"] = datetime.now().isoformat()
+        raise HTTPException(status_code=500, detail="Database connection error")
     finally:
         db.close()
 
 async def get_crowdsec_key(db: Session = Depends(get_db)) -> str:
     """Get CrowdSec API key from database."""
-    key = db.query(APIKey).filter(APIKey.key_name == "CROWDSEC_API_KEY").first()
-    return key.key_value if key else None
+    try:
+        key = db.query(APIKey).filter(APIKey.key_name == "CROWDSEC_API_KEY").first()
+        return key.key_value if key else None
+    except Exception as e:
+        logger.error(f"Error retrieving CrowdSec API key: {e}")
+        return None
 
 # Schemas
 class APIKeys(BaseModel):
@@ -114,8 +214,106 @@ class RuleState(BaseModel):
     enabled: bool
     category: str = ""
 
+class BulkRuleState(BaseModel):
+    enabled: bool
+    category: str = ""
+
+async def check_service_health(service_name: str, url: str):
+    """Check health of a service."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    stats["services"][service_name]["status"] = "operational"
+                else:
+                    stats["services"][service_name]["status"] = "degraded"
+                stats["services"][service_name]["last_check"] = datetime.now().isoformat()
+                return await response.json()
+    except Exception as e:
+        logger.error(f"Error checking {service_name} health: {e}")
+        stats["services"][service_name]["status"] = "error"
+        stats["services"][service_name]["last_check"] = datetime.now().isoformat()
+        return None
+
+async def get_system_metrics():
+    """Get system metrics."""
+    try:
+        cpu_usage = psutil.cpu_percent(interval=1)
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        
+        return {
+            "cpu_usage": cpu_usage,
+            "memory_usage": memory.percent,
+            "disk_usage": disk.percent,
+            "memory_available": memory.available,
+            "disk_available": disk.free
+        }
+    except Exception as e:
+        logger.error(f"Error getting system metrics: {e}")
+        return None
+
+# Service Stats Routes
+@app.get("/api/collector/stats")
+async def get_collector_stats():
+    """Get collector service statistics"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get('http://collector:8000/stats') as response:
+                if response.status == 200:
+                    data = await response.json()
+                    stats["services"]["collector"]["status"] = "operational"
+                    return data
+                else:
+                    stats["services"]["collector"]["status"] = "degraded"
+                    return default_collector_stats
+    except Exception as e:
+        logger.error(f"Failed to fetch collector stats: {e}")
+        stats["services"]["collector"]["status"] = "degraded"
+        return default_collector_stats
+
+@app.get("/api/detection/stats")
+async def get_detection_stats():
+    """Get detection service statistics"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get('http://detection:8000/stats') as response:
+                if response.status == 200:
+                    data = await response.json()
+                    stats["services"]["detection"]["status"] = "operational"
+                    return data
+                else:
+                    stats["services"]["detection"]["status"] = "degraded"
+                    return default_detection_stats
+    except Exception as e:
+        logger.error(f"Failed to fetch detection stats: {e}")
+        stats["services"]["detection"]["status"] = "degraded"
+        return default_detection_stats
+
+@app.get("/api/iplookup/stats")
+async def get_iplookup_stats(db: Session = Depends(get_db)):
+    """Get IP lookup service statistics"""
+    try:
+        # Get CrowdSec API key from database
+        api_key = await get_crowdsec_key(db)
+        headers = {"x-api-key": api_key} if api_key else {}
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get('http://iplookup:8000/stats', headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    stats["services"]["iplookup"]["status"] = "operational"
+                    return data
+                else:
+                    stats["services"]["iplookup"]["status"] = "degraded"
+                    return default_iplookup_stats
+    except Exception as e:
+        logger.error(f"Failed to fetch IP lookup stats: {e}")
+        stats["services"]["iplookup"]["status"] = "degraded"
+        return default_iplookup_stats
+
 # IP Lookup Service Proxy Routes
-@app.post("/iplookup/validate/crowdsec")
+@app.get("/iplookup/validate/crowdsec")
 async def proxy_validate_crowdsec(db: Session = Depends(get_db)):
     """Proxy validation request to IP lookup service"""
     try:
@@ -127,9 +325,9 @@ async def proxy_validate_crowdsec(db: Session = Depends(get_db)):
                 content={"valid": False, "message": "No API key provided"}
             )
 
-        headers = {"x-crowdsec-key": api_key}
+        headers = {"x-api-key": api_key}
         async with aiohttp.ClientSession() as session:
-            async with session.post('http://iplookup:8000/validate/crowdsec', headers=headers) as response:
+            async with session.get('http://iplookup:8000/validate/crowdsec', headers=headers) as response:
                 return JSONResponse(
                     status_code=response.status,
                     content=await response.json()
@@ -143,7 +341,7 @@ async def proxy_iplookup_status(db: Session = Depends(get_db)):
     try:
         # Get API key from database
         api_key = await get_crowdsec_key(db)
-        headers = {"x-crowdsec-key": api_key} if api_key else {}
+        headers = {"x-api-key": api_key} if api_key else {}
 
         async with aiohttp.ClientSession() as session:
             async with session.get('http://iplookup:8000/api/status', headers=headers) as response:
@@ -160,7 +358,7 @@ async def proxy_ip_lookup(ip: str, db: Session = Depends(get_db)):
     try:
         # Get API key from database
         api_key = await get_crowdsec_key(db)
-        headers = {"x-crowdsec-key": api_key} if api_key else {}
+        headers = {"x-api-key": api_key} if api_key else {}
 
         async with aiohttp.ClientSession() as session:
             async with session.get(f'http://iplookup:8000/lookup/{ip}', headers=headers) as response:
@@ -204,6 +402,22 @@ async def toggle_rule(rule_state: RuleState):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/rules/bulk-toggle")
+async def bulk_toggle_rules(state: BulkRuleState):
+    """Proxy bulk toggle request to detection service"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post('http://detection:8000/rules/bulk-toggle', json=state.dict()) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    raise HTTPException(
+                        status_code=response.status,
+                        detail="Failed to bulk toggle rules in detection service"
+                    )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Routes
 @app.get("/api/settings/api-keys")
 async def get_api_keys(db: Session = Depends(get_db)):
@@ -237,19 +451,31 @@ async def update_api_keys(api_keys: APIKeys, db: Session = Depends(get_db)):
         else:
             db.add(APIKey(key_name="CROWDSEC_API_KEY", key_value=api_keys.CROWDSEC_API_KEY))
 
+        # Save to database first
         db.commit()
 
-        # After saving to DB, validate the CrowdSec key
-        headers = {"x-crowdsec-key": api_keys.CROWDSEC_API_KEY}
-        async with aiohttp.ClientSession() as session:
-            async with session.post('http://iplookup:8000/validate/crowdsec', headers=headers) as response:
-                validation_result = await response.json()
-                return {
-                    "message": "API keys updated successfully",
-                    "crowdsec_validation": validation_result
-                }
+        # Attempt validation but don't fail if it doesn't work
+        validation_result = {"valid": False, "message": "Validation skipped"}
+        try:
+            # Pass the API key in the x-api-key header
+            headers = {"x-api-key": api_keys.CROWDSEC_API_KEY}
+            async with aiohttp.ClientSession() as session:
+                async with session.get('http://iplookup:8000/validate/crowdsec', headers=headers) as response:
+                    if response.status == 200:
+                        validation_result = await response.json()
+                    else:
+                        logger.error(f"Validation failed with status {response.status}")
+                        validation_result = {"valid": False, "message": "Validation failed"}
+        except Exception as e:
+            logger.warning(f"CrowdSec validation failed but keys were saved: {str(e)}")
+
+        return {
+            "message": "API keys updated successfully",
+            "crowdsec_validation": validation_result
+        }
     except Exception as e:
         db.rollback()
+        logger.error(f"Error saving API keys: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/logs", response_model=List[LogResponse])
@@ -311,10 +537,84 @@ async def create_detection(detection: DetectionCreate, db: Session = Depends(get
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/system/health")
+async def get_system_health():
+    """Get system-wide health information"""
+    try:
+        # Check all services health
+        service_checks = await asyncio.gather(
+            check_service_health("collector", "http://collector:8000/health"),
+            check_service_health("detection", "http://detection:8000/health"),
+            check_service_health("iplookup", "http://iplookup:8000/health")
+        )
+        
+        # Get system metrics
+        metrics = await get_system_metrics()
+        
+        # Calculate overall status
+        service_statuses = [stats["services"][service]["status"] for service in stats["services"]]
+        if "error" in service_statuses:
+            overall_status = "error"
+        elif "degraded" in service_statuses:
+            overall_status = "degraded"
+        else:
+            overall_status = "operational"
+        
+        stats["status"] = overall_status
+        
+        return {
+            "status": overall_status,
+            "uptime": int(time.time() - stats["start_time"]),
+            "services": stats["services"],
+            "system_metrics": metrics
+        }
+    except Exception as e:
+        logger.error(f"Error getting system health: {e}")
+        return {
+            "status": "degraded",
+            "uptime": int(time.time() - stats["start_time"]),
+            "services": stats["services"],
+            "system_metrics": None
+        }
+
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy"}
+    """Basic health check endpoint"""
+    try:
+        # Quick DB check
+        db = SessionLocal()
+        db.execute(select(1))
+        db.close()
+        
+        return {
+            "status": stats["status"],
+            "timestamp": datetime.now().isoformat(),
+            "uptime": int(time.time() - stats["start_time"])
+        }
+    except Exception as e:
+        stats["status"] = "error"
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "error",
+            "timestamp": datetime.now().isoformat(),
+            "uptime": int(time.time() - stats["start_time"])
+        }
+
+# Startup event
+@app.on_event("startup")
+async def startup_event():
+    """Initialize the application"""
+    logger.info("Starting API service...")
+    try:
+        # Initialize database
+        init_db()
+        logger.info("Database initialized successfully")
+        
+        # Initial health check of all services
+        await get_system_health()
+    except Exception as e:
+        logger.error(f"Failed to initialize application: {e}")
+        raise
 
 if __name__ == "__main__":
     import uvicorn

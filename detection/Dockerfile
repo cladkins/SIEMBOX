@@ -2,9 +2,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies including git
+# Install system dependencies including git and build tools for psutil
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
+    gcc \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Clean pip cache and install Python dependencies

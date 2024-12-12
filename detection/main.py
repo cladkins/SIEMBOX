@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import json
 import asyncio
@@ -11,6 +11,9 @@ import yaml
 import re
 import shutil
 import subprocess
+import time
+import collections
+import psutil
 
 # Configure logging
 logging.basicConfig(
@@ -26,6 +29,19 @@ sigma_rules = []
 
 # Global variable to store rule states
 rule_states = {}
+
+# Global stats tracking
+stats = {
+    "enabled_rules": 0,
+    "total_rules": 0,
+    "alerts_last_24h": 0,
+    "processing_rate": 0,
+    "status": "operational",
+    "start_time": time.time(),
+    "processed_logs": 0,
+    "last_minute_logs": collections.deque(maxlen=60),  # Store last minute's worth of logs
+    "alerts": collections.deque(maxlen=1440)  # Store last 24 hours worth of alerts (1 minute intervals)
+}
 
 class Alert(BaseModel):
     rule_id: str
@@ -50,6 +66,37 @@ class RuleState(BaseModel):
     rule_id: str
     enabled: bool
     category: str = ""
+
+class BulkRuleState(BaseModel):
+    """Model for bulk rule state updates."""
+    enabled: bool
+    category: str = ""  # Optional: to update rules of a specific category
+
+def update_processing_stats():
+    """Update processing rate statistics."""
+    current_time = time.time()
+    stats["last_minute_logs"].append((current_time, stats["processed_logs"]))
+    
+    # Calculate processing rate over the last minute
+    if len(stats["last_minute_logs"]) > 1:
+        oldest_time, oldest_count = stats["last_minute_logs"][0]
+        newest_time, newest_count = stats["last_minute_logs"][-1]
+        time_diff = newest_time - oldest_time
+        if time_diff > 0:
+            stats["processing_rate"] = int((newest_count - oldest_count) / time_diff)
+
+def update_alert_stats(new_alert: bool = False):
+    """Update alert statistics."""
+    current_time = datetime.now()
+    if new_alert:
+        stats["alerts"].append(current_time)
+    
+    # Clean up old alerts (older than 24 hours)
+    cutoff_time = current_time - timedelta(hours=24)
+    while stats["alerts"] and stats["alerts"][0] < cutoff_time:
+        stats["alerts"].popleft()
+    
+    stats["alerts_last_24h"] = len(stats["alerts"])
 
 def setup_rules_directory():
     """Clone or update Sigma rules repository."""
@@ -145,6 +192,10 @@ def load_rules():
                 except Exception as e:
                     logger.error(f"Error loading rule {file}: {str(e)}")
     
+    # Update stats
+    stats["total_rules"] = len(rules)
+    stats["enabled_rules"] = len([r for r in rules if r.enabled])
+    
     return rules
 
 def match_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
@@ -183,19 +234,26 @@ async def analyze_log(log_entry: Dict[str, Any]):
     """Analyze a log entry against detection rules."""
     alerts = []
     try:
+        stats["processed_logs"] += 1
+        update_processing_stats()
+        
         for rule in sigma_rules:
             if rule.enabled and match_rule(rule, log_entry):
-                alerts.append(Alert(
+                alert = Alert(
                     rule_id=rule.id,
                     rule_name=rule.title,
                     timestamp=datetime.now(),
                     log_source=log_entry.get('source', 'unknown'),
                     matched_log=log_entry,
                     severity=rule.level
-                ))
+                )
+                alerts.append(alert)
+                update_alert_stats(new_alert=True)
+                
         return {"alerts": [alert.dict() for alert in alerts]}
     except Exception as e:
         logger.error(f"Error analyzing log: {str(e)}")
+        stats["status"] = "degraded"
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/rules")
@@ -227,6 +285,8 @@ async def toggle_rule(rule_state: RuleState):
         for rule in sigma_rules:
             if rule.id == rule_state.rule_id:
                 rule.enabled = rule_state.enabled
+                # Update stats
+                stats["enabled_rules"] = len([r for r in sigma_rules if r.enabled])
                 return {
                     "success": True,
                     "message": f"Rule {rule_state.rule_id} {'enabled' if rule_state.enabled else 'disabled'}"
@@ -235,13 +295,66 @@ async def toggle_rule(rule_state: RuleState):
         raise HTTPException(status_code=404, detail=f"Rule {rule_state.rule_id} not found")
     except Exception as e:
         logger.error(f"Error toggling rule: {str(e)}")
+        stats["status"] = "degraded"
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/rules/bulk-toggle")
+async def bulk_toggle_rules(state: BulkRuleState):
+    """Toggle all rules or rules of a specific category."""
+    try:
+        updated_count = 0
+        for rule in sigma_rules:
+            # If category is specified, only update rules in that category
+            if state.category and rule.category != state.category:
+                continue
+                
+            rule.enabled = state.enabled
+            rule_states[rule.id] = state.enabled
+            updated_count += 1
+        
+        # Update stats
+        stats["enabled_rules"] = len([r for r in sigma_rules if r.enabled])
+        
+        category_msg = f" in category '{state.category}'" if state.category else ""
+        return {
+            "success": True,
+            "message": f"{updated_count} rules{category_msg} {'enabled' if state.enabled else 'disabled'}",
+            "updated_count": updated_count
+        }
+    except Exception as e:
+        logger.error(f"Error bulk toggling rules: {str(e)}")
+        stats["status"] = "degraded"
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/stats")
+async def get_stats():
+    """Get detection engine statistics."""
+    try:
+        # Get system metrics
+        cpu_usage = psutil.cpu_percent(interval=1)
+        memory = psutil.virtual_memory()
+        
+        return {
+            "enabled_rules": stats["enabled_rules"],
+            "total_rules": stats["total_rules"],
+            "alerts_last_24h": stats["alerts_last_24h"],
+            "processing_rate": stats["processing_rate"],
+            "status": stats["status"],
+            "uptime": int(time.time() - stats["start_time"]),
+            "system_metrics": {
+                "cpu_usage": cpu_usage,
+                "memory_usage": memory.percent
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting stats: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
     return {
-        "status": "healthy",
+        "status": stats["status"],
         "rules_loaded": len(sigma_rules),
         "timestamp": datetime.now().isoformat()
     }

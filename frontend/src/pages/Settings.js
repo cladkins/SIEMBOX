@@ -12,7 +12,10 @@ import {
   Chip,
   Paper,
   Link,
-  CircularProgress
+  CircularProgress,
+  ButtonGroup,
+  InputAdornment,
+  IconButton
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import InfoIcon from '@mui/icons-material/Info';
@@ -20,6 +23,10 @@ import WarningIcon from '@mui/icons-material/Warning';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import BlockIcon from '@mui/icons-material/Block';
 import ErrorIcon from '@mui/icons-material/Error';
+import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
+import PowerOffIcon from '@mui/icons-material/PowerOff';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import config from '../config';
 import axios from 'axios';
 import RuleList from '../components/RuleList';
@@ -88,6 +95,26 @@ const SaveButton = styled(Button)({
   }
 });
 
+const ActionButton = styled(Button)({
+  backgroundColor: '#2d2d2d',
+  color: '#fff',
+  '&:hover': {
+    backgroundColor: '#3d3d3d',
+  },
+  '&.enable': {
+    backgroundColor: '#1a472a',
+    '&:hover': {
+      backgroundColor: '#2a573a',
+    },
+  },
+  '&.disable': {
+    backgroundColor: '#472a2a',
+    '&:hover': {
+      backgroundColor: '#573a3a',
+    },
+  }
+});
+
 const StatsCard = styled(Paper)({
   backgroundColor: '#2d2d2d',
   padding: '12px 16px',
@@ -124,6 +151,7 @@ function Settings() {
     IPAPI_KEY: '',
     CROWDSEC_API_KEY: ''
   });
+  const [showCrowdSecKey, setShowCrowdSecKey] = useState(false);
   const [apiStatus, setApiStatus] = useState({
     ipapi_mode: 'free',
     ipapi_requests_remaining: null,
@@ -138,6 +166,7 @@ function Settings() {
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [bulkUpdating, setBulkUpdating] = useState(false);
   const [snackbar, setSnackbar] = useState({
     open: false,
     message: '',
@@ -175,6 +204,43 @@ function Settings() {
     }
   };
 
+  const handleBulkToggle = async (enabled) => {
+    try {
+      setBulkUpdating(true);
+      await axios.post(`${config.apiUrl}/api/rules/bulk-toggle`, {
+        enabled: enabled
+      });
+      
+      // Update local state
+      const updatedRules = rules.map(rule => ({
+        ...rule,
+        enabled: enabled
+      }));
+      setRules(updatedRules);
+      
+      // Update stats
+      setStats(prev => ({
+        ...prev,
+        enabled: enabled ? prev.total : 0
+      }));
+
+      setSnackbar({
+        open: true,
+        message: `All rules ${enabled ? 'enabled' : 'disabled'} successfully`,
+        severity: 'success'
+      });
+    } catch (error) {
+      console.error('Error bulk toggling rules:', error);
+      setSnackbar({
+        open: true,
+        message: 'Error updating rules',
+        severity: 'error'
+      });
+    } finally {
+      setBulkUpdating(false);
+    }
+  };
+
   useEffect(() => {
     fetchApiKeys();
     fetchApiStatus();
@@ -199,7 +265,11 @@ function Settings() {
 
   const fetchApiStatus = async () => {
     try {
-      const response = await axios.get(`${config.apiUrl}/iplookup/api/status`);
+      const response = await axios.get(`${config.apiUrl}/iplookup/api/status`, {
+        headers: apiKeys.CROWDSEC_API_KEY ? {
+          'x-api-key': apiKeys.CROWDSEC_API_KEY
+        } : undefined
+      });
       setApiStatus(response.data);
     } catch (error) {
       console.error('Error fetching API status:', error);
@@ -208,7 +278,11 @@ function Settings() {
 
   const validateCrowdSecKey = async () => {
     try {
-      const response = await axios.post(`${config.apiUrl}/iplookup/validate/crowdsec`);
+      const response = await axios.get(`${config.apiUrl}/iplookup/validate/crowdsec`, {
+        headers: {
+          'x-api-key': apiKeys.CROWDSEC_API_KEY
+        }
+      });
       return response.data.valid;
     } catch (error) {
       console.error('Error validating CrowdSec key:', error);
@@ -220,11 +294,20 @@ function Settings() {
     try {
       setSaving(true);
       
+      // Trim whitespace from API keys
+      const trimmedKeys = {
+        IPAPI_KEY: apiKeys.IPAPI_KEY.trim(),
+        CROWDSEC_API_KEY: apiKeys.CROWDSEC_API_KEY.trim()
+      };
+      
       // Save API keys
-      await axios.post(`${config.apiUrl}/api/settings/api-keys`, apiKeys);
+      await axios.post(`${config.apiUrl}/api/settings/api-keys`, trimmedKeys);
+      
+      // Update state with trimmed values
+      setApiKeys(trimmedKeys);
       
       // Validate CrowdSec key if provided
-      if (apiKeys.CROWDSEC_API_KEY) {
+      if (trimmedKeys.CROWDSEC_API_KEY) {
         const isValid = await validateCrowdSecKey();
         if (!isValid) {
           setSnackbar({
@@ -346,7 +429,7 @@ function Settings() {
                 name="IPAPI_KEY"
                 value={apiKeys.IPAPI_KEY}
                 onChange={handleChange}
-                type="password"
+                type="text"
                 variant="outlined"
                 placeholder="Enter your IP-API key"
               />
@@ -392,9 +475,22 @@ function Settings() {
                 name="CROWDSEC_API_KEY"
                 value={apiKeys.CROWDSEC_API_KEY}
                 onChange={handleChange}
-                type="password"
+                type={showCrowdSecKey ? "text" : "password"}
                 variant="outlined"
                 placeholder="Enter your CrowdSec API key"
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton
+                        onClick={() => setShowCrowdSecKey(!showCrowdSecKey)}
+                        edge="end"
+                        sx={{ color: 'rgba(255, 255, 255, 0.7)' }}
+                      >
+                        {showCrowdSecKey ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }}
               />
               <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.5)', mt: 1, display: 'block', fontSize: '0.75rem' }}>
                 Enter your CrowdSec API key from{' '}
@@ -450,19 +546,40 @@ function Settings() {
 
       <DarkCard>
         <CardContent>
-          <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 2, mb: 3 }}>
-            <StatsCard>
-              <Typography variant="body2" color="text.secondary">Total Rules</Typography>
-              <Typography variant="h6">{stats.total}</Typography>
-            </StatsCard>
-            <StatsCard>
-              <Typography variant="body2" color="text.secondary">Enabled Rules</Typography>
-              <Typography variant="h6">{stats.enabled}</Typography>
-            </StatsCard>
-            <StatsCard>
-              <Typography variant="body2" color="text.secondary">Categories</Typography>
-              <Typography variant="h6">{stats.categories}</Typography>
-            </StatsCard>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+            <Box sx={{ display: 'flex', gap: 2 }}>
+              <StatsCard>
+                <Typography variant="body2" color="text.secondary">Total Rules</Typography>
+                <Typography variant="h6">{stats.total}</Typography>
+              </StatsCard>
+              <StatsCard>
+                <Typography variant="body2" color="text.secondary">Enabled Rules</Typography>
+                <Typography variant="h6">{stats.enabled}</Typography>
+              </StatsCard>
+              <StatsCard>
+                <Typography variant="body2" color="text.secondary">Categories</Typography>
+                <Typography variant="h6">{stats.categories}</Typography>
+              </StatsCard>
+            </Box>
+            
+            <ButtonGroup variant="contained">
+              <ActionButton
+                className="enable"
+                onClick={() => handleBulkToggle(true)}
+                disabled={bulkUpdating}
+                startIcon={<PowerSettingsNewIcon />}
+              >
+                Enable All
+              </ActionButton>
+              <ActionButton
+                className="disable"
+                onClick={() => handleBulkToggle(false)}
+                disabled={bulkUpdating}
+                startIcon={<PowerOffIcon />}
+              >
+                Disable All
+              </ActionButton>
+            </ButtonGroup>
           </Box>
 
           <RuleList

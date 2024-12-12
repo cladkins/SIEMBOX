@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Header
+from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel, IPvAnyAddress
 from datetime import datetime, timedelta
 import logging
@@ -9,6 +9,8 @@ import redis
 import asyncio
 from typing import Dict, Any, Optional, List
 from collections import deque
+import time
+import psutil
 
 # Configure logging with more detail
 logging.basicConfig(
@@ -26,23 +28,55 @@ redis_client = redis.Redis(
     db=0
 )
 
+# Global stats tracking
+stats = {
+    "lookup_count": 0,
+    "cache_hits": 0,
+    "total_lookups": 0,
+    "threat_detections": 0,
+    "api_quota_remaining": 0,
+    "start_time": time.time(),
+    "status": "operational"
+}
+
 # Constants for rate limiting
 IPAPI_BATCH_SIZE = 100
 IPAPI_REQUESTS_PER_MINUTE = 45
-CROWDSEC_BATCH_SIZE = 100
-CROWDSEC_REQUESTS_PER_DAY = 30
+CROWDSEC_BATCH_SIZE = 5  # Reduced batch size to avoid rate limits
+CROWDSEC_REQUESTS_PER_DAY = 50  # Community tier limit
 BATCH_INTERVAL = 60  # Seconds between batches
 VALIDATION_INTERVAL = 60  # Seconds between validation attempts
+CROWDSEC_REQUEST_DELAY = 2  # Seconds between CrowdSec requests
+CROWDSEC_CACHE_TTL = 3600 * 12  # Cache CrowdSec results for 12 hours
 
-# CrowdSec API Constants
-CROWDSEC_CTI_BASE_URL = "https://cti.api.crowdsec.net/v2"
+# Known DNS servers to skip CrowdSec lookup
+KNOWN_DNS_SERVERS = {
+    "1.1.1.1",  # Cloudflare
+    "1.0.0.1",  # Cloudflare
+    "8.8.8.8",  # Google
+    "8.8.4.4",  # Google
+    "9.9.9.9",  # Quad9
+    "49.112.112.112",  # Quad9
+    "208.67.222.222",  # OpenDNS
+    "208.67.220.220",  # OpenDNS
+    "8.26.56.26",     # Comodo
+    "8.20.247.20"     # Comodo
+}
+
+# Default response for known DNS servers
+DNS_SERVER_RESPONSE = {
+    "is_threat": False,
+    "threat_score": 0,
+    "threat_types": [],
+    "cached": True
+}
 
 # Request queues
 ipapi_queue = deque()
 crowdsec_queue = deque()
 processing_lock = asyncio.Lock()
 
-def get_crowdsec_api_key(x_crowdsec_key: Optional[str] = Header(None, alias="x-crowdsec-key")) -> Optional[str]:
+def get_crowdsec_api_key(x_crowdsec_key: Optional[str] = Header(None, alias="x-api-key")) -> Optional[str]:
     """Get CrowdSec API key from environment or header."""
     return x_crowdsec_key or os.getenv('CROWDSEC_API_KEY')
 
@@ -93,7 +127,8 @@ async def validate_crowdsec_key(api_key: str) -> bool:
     # Set validation attempt flag
     redis_client.setex(cache_key, VALIDATION_INTERVAL, '1')
         
-    url = f"{CROWDSEC_CTI_BASE_URL}/smoke/1.1.1.1"  # Use Cloudflare's DNS as test IP
+    # Use a test IP for validation
+    url = "https://cti.api.crowdsec.net/v2/smoke/192.0.2.1"  # Using TEST-NET-1 IP instead of DNS server
     headers = {
         "x-api-key": api_key,
         "User-Agent": "SIEMBox/1.0"
@@ -109,6 +144,8 @@ async def validate_crowdsec_key(api_key: str) -> bool:
                 if response.status == 200:
                     try:
                         data = await response.json()
+                        # Cache the successful validation
+                        redis_client.setex(f"crowdsec_key_valid:{api_key}", 3600, '1')
                         return True
                     except json.JSONDecodeError:
                         logger.error("Failed to parse JSON response")
@@ -211,6 +248,9 @@ async def process_crowdsec_queue():
             results = await get_threat_info_batch([ip for ip, _ in batch])
             for (ip, future), result in zip(batch, results):
                 future.set_result(result)
+            
+            # Add delay between batches to avoid rate limits
+            await asyncio.sleep(CROWDSEC_REQUEST_DELAY)
         except Exception as e:
             for _, future in batch:
                 if not future.done():
@@ -218,10 +258,12 @@ async def process_crowdsec_queue():
 
 async def get_ip_info_internal(ip: str) -> Dict[str, Any]:
     """Internal function to get IP information."""
-    cache_key = f"ip_info:{ip}"
+    stats["total_lookups"] += 1
     
+    cache_key = f"ip_info:{ip}"
     cached_data = redis_client.get(cache_key)
     if cached_data:
+        stats["cache_hits"] += 1
         return {**json.loads(cached_data), "cached": True}
     
     api_key = os.getenv('IPAPI_KEY')
@@ -236,6 +278,7 @@ async def get_ip_info_internal(ip: str) -> Dict[str, Any]:
                 data = await response.json()
                 if data.get('status') == 'success':
                     redis_client.setex(cache_key, 86400, json.dumps(data))
+                    stats["lookup_count"] += 1
                     return {**data, "cached": False}
     
     raise HTTPException(status_code=500, detail="Failed to fetch IP information")
@@ -249,45 +292,52 @@ async def get_threat_info_batch(ips: List[str], api_key: Optional[str] = None) -
     results = []
     
     for ip in ips:
+        # Skip CrowdSec lookup for known DNS servers
+        if ip in KNOWN_DNS_SERVERS:
+            results.append(DNS_SERVER_RESPONSE)
+            continue
+            
         cache_key = f"threat_info:{ip}"
         cached_data = redis_client.get(cache_key)
         
         if cached_data:
-            results.append({**json.loads(cached_data), "cached": True})
+            threat_info = json.loads(cached_data)
+            if threat_info.get("is_threat", False):
+                stats["threat_detections"] += 1
+            results.append({**threat_info, "cached": True})
             continue
         
-        url = f"{CROWDSEC_CTI_BASE_URL}/indicators/search"
+        url = f"https://cti.api.crowdsec.net/v2/smoke/{ip}"
         headers = {
             "x-api-key": api_key,
-            "Content-Type": "application/json",
             "User-Agent": "SIEMBox/1.0"
-        }
-        payload = {
-            "criteria": {
-                "ip": ip
-            }
         }
         
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=payload) as response:
+                async with session.get(url, headers=headers) as response:
                     logger.info(f"CrowdSec threat info response status for IP {ip}: {response.status}")
                     response_text = await response.text()
                     logger.info(f"CrowdSec threat info response for IP {ip}: {response_text}")
                     
                     if response.status == 200:
                         data = await response.json()
-                        indicators = data.get('indicators', [])
+                        # Map CrowdSec response to our threat info format
                         threat_info = {
-                            "is_threat": len(indicators) > 0,
-                            "threat_score": max([ind.get('score', 0) for ind in indicators], default=0),
-                            "threat_types": list(set(ind.get('attack_type', '') for ind in indicators if ind.get('attack_type')))
+                            "is_threat": data.get('reputation', 'unknown') in ['malicious', 'suspicious'],
+                            "threat_score": data.get('background_noise_score', 0),
+                            "threat_types": [b.get('label') for b in data.get('behaviors', [])]
                         }
-                        redis_client.setex(cache_key, 3600, json.dumps(threat_info))
+                        if threat_info["is_threat"]:
+                            stats["threat_detections"] += 1
+                        redis_client.setex(cache_key, CROWDSEC_CACHE_TTL, json.dumps(threat_info))
                         results.append({**threat_info, "cached": False})
                         
                         # Decrement daily limit
                         redis_client.decr(get_crowdsec_rate_limit_key())
+                        
+                        # Add delay between requests to avoid rate limits
+                        await asyncio.sleep(CROWDSEC_REQUEST_DELAY)
                         continue
                     elif response.status == 429:
                         # If rate limited, use cached data if available
@@ -295,8 +345,11 @@ async def get_threat_info_batch(ips: List[str], api_key: Optional[str] = None) -
                         if cached_data:
                             results.append({**json.loads(cached_data), "cached": True})
                             continue
+                        # Add longer delay when rate limited
+                        await asyncio.sleep(CROWDSEC_REQUEST_DELAY * 2)
         except Exception as e:
             logger.error(f"Error fetching threat info for {ip}: {str(e)}")
+            stats["status"] = "degraded"
         
         results.append({"is_threat": False, "threat_score": 0, "threat_types": [], "cached": False})
     
@@ -304,11 +357,17 @@ async def get_threat_info_batch(ips: List[str], api_key: Optional[str] = None) -
 
 async def get_threat_info(ip: str, api_key: Optional[str] = None) -> Dict[str, Any]:
     """Get threat information with rate limiting and queueing."""
+    # Return default response for known DNS servers
+    if ip in KNOWN_DNS_SERVERS:
+        return DNS_SERVER_RESPONSE
+        
     api_key = api_key or os.getenv('CROWDSEC_API_KEY')
     if not api_key:
         return {"is_threat": False, "threat_score": 0, "threat_types": [], "cached": False}
     
     remaining = get_crowdsec_requests_remaining()
+    stats["api_quota_remaining"] = remaining
+    
     if remaining > 0:
         results = await get_threat_info_batch([ip], api_key)
         return results[0]
@@ -324,10 +383,11 @@ async def get_threat_info(ip: str, api_key: Optional[str] = None) -> Dict[str, A
         result = await future
         return {**result, "queued": True}
     except Exception as e:
+        stats["status"] = "degraded"
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/lookup/{ip}", response_model=IPLookupResult)
-async def lookup_ip(ip: IPvAnyAddress, x_crowdsec_key: Optional[str] = Header(None, alias="x-crowdsec-key")):
+async def lookup_ip(ip: IPvAnyAddress, x_crowdsec_key: Optional[str] = Header(None, alias="x-api-key")):
     """Look up information about an IP address."""
     try:
         ip_str = str(ip)
@@ -359,10 +419,38 @@ async def lookup_ip(ip: IPvAnyAddress, x_crowdsec_key: Optional[str] = Header(No
         )
     except Exception as e:
         logger.error(f"Error looking up IP {ip}: {str(e)}")
+        stats["status"] = "degraded"
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/validate/crowdsec")
-async def validate_crowdsec(x_crowdsec_key: Optional[str] = Header(None, alias="x-crowdsec-key")):
+@app.get("/stats")
+async def get_stats():
+    """Get IP lookup service statistics."""
+    try:
+        # Calculate cache hit rate
+        cache_hit_rate = (stats["cache_hits"] / stats["total_lookups"] * 100) if stats["total_lookups"] > 0 else 0
+        
+        # Get system metrics
+        cpu_usage = psutil.cpu_percent(interval=1)
+        memory = psutil.virtual_memory()
+        
+        return {
+            "lookup_count": stats["lookup_count"],
+            "cache_hit_rate": round(cache_hit_rate, 2),
+            "threat_detections": stats["threat_detections"],
+            "api_quota_remaining": stats["api_quota_remaining"],
+            "status": stats["status"],
+            "uptime": int(time.time() - stats["start_time"]),
+            "system_metrics": {
+                "cpu_usage": cpu_usage,
+                "memory_usage": memory.percent
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/validate/crowdsec")
+async def validate_crowdsec(x_crowdsec_key: Optional[str] = Header(None, alias="x-api-key")):
     """Validate CrowdSec API key and return status."""
     api_key = get_crowdsec_api_key(x_crowdsec_key)
     if not api_key:
@@ -383,7 +471,7 @@ async def validate_crowdsec(x_crowdsec_key: Optional[str] = Header(None, alias="
         return {"valid": False, "message": "Invalid API key"}
 
 @app.get("/api/status")
-async def get_api_status(x_crowdsec_key: Optional[str] = Header(None, alias="x-crowdsec-key")):
+async def get_api_status(x_crowdsec_key: Optional[str] = Header(None, alias="x-api-key")):
     """Get current API status."""
     api_key = get_crowdsec_api_key(x_crowdsec_key)
     ipapi_remaining = get_ipapi_requests_remaining()
@@ -430,7 +518,7 @@ async def get_api_status(x_crowdsec_key: Optional[str] = Header(None, alias="x-c
 async def health_check():
     """Health check endpoint."""
     return {
-        "status": "healthy",
+        "status": stats["status"],
         "timestamp": datetime.now().isoformat(),
         "ipapi_mode": "paid" if is_using_paid_ipapi() else "free",
         "crowdsec_mode": "enabled" if os.getenv('CROWDSEC_API_KEY') else "disabled"

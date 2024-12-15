@@ -1,0 +1,367 @@
+# SIEMBox Documentation
+
+[Previous sections remain unchanged]
+
+## Performance Tuning
+
+### Database Optimization
+
+1. PostgreSQL Configuration:
+   ```ini
+   # postgresql.conf optimizations
+   
+   # Memory Settings
+   shared_buffers = 2GB                  # 25% of total RAM
+   effective_cache_size = 6GB            # 75% of total RAM
+   maintenance_work_mem = 512MB          # for maintenance operations
+   work_mem = 32MB                       # per connection
+   
+   # Write Ahead Log
+   wal_buffers = 16MB
+   checkpoint_completion_target = 0.9
+   checkpoint_timeout = 15min
+   
+   # Query Planning
+   random_page_cost = 1.1                # for SSD storage
+   effective_io_concurrency = 200
+   default_statistics_target = 100
+   
+   # Parallel Query
+   max_worker_processes = 8
+   max_parallel_workers_per_gather = 4
+   max_parallel_workers = 8
+   ```
+
+2. Index Optimization:
+   ```sql
+   -- Logs table indexes
+   CREATE INDEX idx_logs_timestamp ON logs USING BRIN (timestamp);
+   CREATE INDEX idx_logs_source ON logs (source);
+   CREATE INDEX idx_logs_level ON logs (level);
+   
+   -- Alerts table indexes
+   CREATE INDEX idx_alerts_timestamp ON alerts USING BRIN (timestamp);
+   CREATE INDEX idx_alerts_rule_id ON alerts (rule_id);
+   CREATE INDEX idx_alerts_severity ON alerts (severity);
+   
+   -- Composite indexes for common queries
+   CREATE INDEX idx_logs_timestamp_source ON logs (timestamp, source);
+   CREATE INDEX idx_alerts_timestamp_severity ON alerts (timestamp, severity);
+   ```
+
+3. Table Partitioning:
+   ```sql
+   -- Partition logs table by month
+   CREATE TABLE logs (
+     id SERIAL,
+     timestamp TIMESTAMP NOT NULL,
+     source TEXT,
+     level TEXT,
+     message TEXT,
+     metadata JSONB
+   ) PARTITION BY RANGE (timestamp);
+   
+   -- Create monthly partitions
+   CREATE TABLE logs_y2024m01 PARTITION OF logs
+     FOR VALUES FROM ('2024-01-01') TO ('2024-02-01');
+   
+   -- Automate partition creation
+   CREATE OR REPLACE FUNCTION create_partition_and_indexes()
+   RETURNS void AS $$
+   DECLARE
+     partition_date DATE;
+     partition_name TEXT;
+   BEGIN
+     partition_date := date_trunc('month', NOW()) + interval '1 month';
+     partition_name := 'logs_y' || 
+       to_char(partition_date, 'YYYY') || 
+       'm' || to_char(partition_date, 'MM');
+     
+     EXECUTE format(
+       'CREATE TABLE %I PARTITION OF logs
+        FOR VALUES FROM (%L) TO (%L)',
+       partition_name,
+       partition_date,
+       partition_date + interval '1 month'
+     );
+     
+     -- Create indexes on partition
+     EXECUTE format(
+       'CREATE INDEX %I ON %I USING BRIN (timestamp)',
+       partition_name || '_timestamp_idx',
+       partition_name
+     );
+   END;
+   $$ LANGUAGE plpgsql;
+   ```
+
+4. Maintenance Tasks:
+   ```sql
+   -- Regular VACUUM
+   VACUUM ANALYZE logs;
+   VACUUM ANALYZE alerts;
+   
+   -- Update statistics
+   ANALYZE logs;
+   ANALYZE alerts;
+   
+   -- Reindex tables
+   REINDEX TABLE logs;
+   REINDEX TABLE alerts;
+   ```
+
+### Caching Strategy
+
+1. Redis Configuration:
+   ```ini
+   # redis.conf optimizations
+   
+   # Memory Management
+   maxmemory 2GB
+   maxmemory-policy allkeys-lru
+   
+   # Persistence
+   save 900 1           # save if 1 change in 15 minutes
+   save 300 10          # save if 10 changes in 5 minutes
+   save 60 10000        # save if 10000 changes in 1 minute
+   
+   # Performance
+   activerehashing yes
+   no-appendfsync-on-rewrite yes
+   ```
+
+2. Cache Policies:
+   ```python
+   # IP Lookup Cache
+   CACHE_POLICIES = {
+     'geolocation': {
+       'ttl': 604800,    # 7 days
+       'max_size': 100000
+     },
+     'threat_intel': {
+       'ttl': 3600,      # 1 hour
+       'max_size': 50000
+     },
+     'negative_cache': {
+       'ttl': 300,       # 5 minutes
+       'max_size': 10000
+     }
+   }
+   
+   # Detection Rules Cache
+   RULES_CACHE = {
+     'enabled_rules': {
+       'ttl': 60,        # 1 minute
+       'max_size': 1000
+     },
+     'rule_matches': {
+       'ttl': 300,       # 5 minutes
+       'max_size': 10000
+     }
+   }
+   ```
+
+3. Cache Warming:
+   ```python
+   # Warm up caches on startup
+   async def warm_caches():
+     # Pre-load frequently accessed rules
+     common_rules = await db.fetch_common_rules()
+     for rule in common_rules:
+       await cache.set(f"rule:{rule.id}", rule)
+     
+     # Pre-load geolocation data for common IPs
+     common_ips = await db.fetch_common_ips()
+     for ip in common_ips:
+       await cache.set(f"geo:{ip}", await lookup_ip(ip))
+   ```
+
+4. Cache Monitoring:
+   ```python
+   # Cache metrics
+   CACHE_METRICS = {
+     'hits': Counter('cache_hits_total', 'Cache hits'),
+     'misses': Counter('cache_misses_total', 'Cache misses'),
+     'size': Gauge('cache_size_bytes', 'Cache size'),
+     'evictions': Counter('cache_evictions_total', 'Cache evictions')
+   }
+   ```
+
+### Scaling Recommendations
+
+1. Vertical Scaling:
+   ```yaml
+   # Resource allocation recommendations
+   
+   # Small deployment (up to 1000 logs/second)
+   resources:
+     api:
+       cpu: 2
+       memory: 4Gi
+     detection:
+       cpu: 2
+       memory: 4Gi
+     database:
+       cpu: 4
+       memory: 8Gi
+     redis:
+       cpu: 2
+       memory: 4Gi
+   
+   # Medium deployment (up to 5000 logs/second)
+   resources:
+     api:
+       cpu: 4
+       memory: 8Gi
+     detection:
+       cpu: 4
+       memory: 8Gi
+     database:
+       cpu: 8
+       memory: 16Gi
+     redis:
+       cpu: 4
+       memory: 8Gi
+   
+   # Large deployment (10000+ logs/second)
+   resources:
+     api:
+       cpu: 8
+       memory: 16Gi
+     detection:
+       cpu: 8
+       memory: 16Gi
+     database:
+       cpu: 16
+       memory: 32Gi
+     redis:
+       cpu: 8
+       memory: 16Gi
+   ```
+
+2. Horizontal Scaling:
+   ```yaml
+   # docker-compose.scale.yml
+   services:
+     api:
+       deploy:
+         replicas: 3
+         update_config:
+           parallelism: 1
+           delay: 10s
+         restart_policy:
+           condition: on-failure
+     
+     detection:
+       deploy:
+         replicas: 3
+         update_config:
+           parallelism: 1
+           delay: 10s
+         restart_policy:
+           condition: on-failure
+     
+     collector:
+       deploy:
+         replicas: 2
+         update_config:
+           parallelism: 1
+           delay: 10s
+         restart_policy:
+           condition: on-failure
+   ```
+
+3. Load Balancing:
+   ```nginx
+   # nginx.conf
+   upstream api_servers {
+     least_conn;
+     server api_1:8080;
+     server api_2:8080;
+     server api_3:8080;
+   }
+   
+   upstream detection_servers {
+     least_conn;
+     server detection_1:8001;
+     server detection_2:8001;
+     server detection_3:8001;
+   }
+   
+   server {
+     listen 80;
+     
+     location /api/ {
+       proxy_pass http://api_servers;
+       proxy_next_upstream error timeout invalid_header http_500;
+       proxy_connect_timeout 2;
+     }
+     
+     location /detection/ {
+       proxy_pass http://detection_servers;
+       proxy_next_upstream error timeout invalid_header http_500;
+       proxy_connect_timeout 2;
+     }
+   }
+   ```
+
+4. Database Scaling:
+   ```yaml
+   # PostgreSQL replication
+   services:
+     db_primary:
+       image: postgres:14-alpine
+       environment:
+         POSTGRES_USER: siembox
+         POSTGRES_PASSWORD: ${DB_PASSWORD}
+         POSTGRES_DB: siembox
+       command: >
+         postgres
+         -c wal_level=replica
+         -c max_wal_senders=10
+         -c max_replication_slots=10
+     
+     db_replica:
+       image: postgres:14-alpine
+       environment:
+         POSTGRES_USER: siembox
+         POSTGRES_PASSWORD: ${DB_PASSWORD}
+         POSTGRES_DB: siembox
+       command: >
+         postgres
+         -c hot_standby=on
+         -c primary_conninfo='host=db_primary port=5432 user=siembox password=${DB_PASSWORD}'
+   ```
+
+5. Performance Monitoring:
+   ```yaml
+   # prometheus.rules.yml
+   groups:
+   - name: performance
+     rules:
+     - alert: HighCPUUsage
+       expr: avg(rate(process_cpu_seconds_total[5m])) > 0.8
+       for: 5m
+       labels:
+         severity: warning
+     
+     - alert: HighMemoryUsage
+       expr: process_resident_memory_bytes / container_memory_limit_bytes > 0.8
+       for: 5m
+       labels:
+         severity: warning
+     
+     - alert: HighDatabaseConnections
+       expr: pg_stat_activity_count > 100
+       for: 5m
+       labels:
+         severity: warning
+     
+     - alert: SlowQueries
+       expr: rate(pg_stat_activity_max_tx_duration[5m]) > 30
+       for: 5m
+       labels:
+         severity: warning
+   ```
+
+[Previous sections continue unchanged]

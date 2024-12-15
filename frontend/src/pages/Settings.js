@@ -37,7 +37,7 @@ const DarkCard = styled(Card)({
   boxShadow: 'none',
   '& .MuiCardContent-root': {
     padding: '24px',
-  }
+  },
 });
 
 const DarkTextField = styled(TextField)({
@@ -51,7 +51,7 @@ const DarkTextField = styled(TextField)({
     },
     '&.Mui-focused fieldset': {
       borderColor: '#4d9fff',
-    }
+    },
   },
   '& .MuiInputLabel-root': {
     color: 'rgba(255, 255, 255, 0.7)',
@@ -69,7 +69,7 @@ const StatusChip = styled(Chip)({
     border: 'none',
     '& .MuiChip-icon': {
       color: '#4d9fff',
-    }
+    },
   },
   '&.warning': {
     backgroundColor: '#ff9f4d33',
@@ -77,7 +77,7 @@ const StatusChip = styled(Chip)({
     border: 'none',
     '& .MuiChip-icon': {
       color: '#ff9f4d',
-    }
+    },
   },
 });
 
@@ -92,7 +92,7 @@ const SaveButton = styled(Button)({
   '&.Mui-disabled': {
     backgroundColor: '#4d9fff88',
     color: '#ffffff88',
-  }
+  },
 });
 
 const ActionButton = styled(Button)({
@@ -112,7 +112,7 @@ const ActionButton = styled(Button)({
     '&:hover': {
       backgroundColor: '#573a3a',
     },
-  }
+  },
 });
 
 const StatsCard = styled(Paper)({
@@ -121,7 +121,7 @@ const StatsCard = styled(Paper)({
   borderRadius: '4px',
   '& .MuiTypography-root': {
     color: '#fff',
-  }
+  },
 });
 
 const FieldLabel = styled(Typography)({
@@ -135,8 +135,8 @@ const ApiLink = styled(Link)({
   color: '#4d9fff',
   textDecoration: 'none',
   '&:hover': {
-    textDecoration: 'underline'
-  }
+    textDecoration: 'underline',
+  },
 });
 
 const LoadingSpinner = styled(CircularProgress)({
@@ -181,7 +181,7 @@ function Settings() {
   const fetchRules = async () => {
     try {
       setLoading(true);
-      const response = await axios.get(`${config.apiUrl}/api/rules`);
+      const response = await axios.get(`${config.detectionUrl}/rules`);
       const rulesData = response.data.rules;
       setRules(rulesData);
       
@@ -207,7 +207,7 @@ function Settings() {
   const handleBulkToggle = async (enabled) => {
     try {
       setBulkUpdating(true);
-      await axios.post(`${config.apiUrl}/api/rules/bulk-toggle`, {
+      await axios.post(`${config.detectionUrl}/rules/bulk-toggle`, {
         enabled: enabled
       });
       
@@ -301,7 +301,7 @@ function Settings() {
       };
       
       // Save API keys
-      await axios.post(`${config.apiUrl}/api/settings/api-keys`, trimmedKeys);
+      const saveResponse = await axios.post(`${config.apiUrl}/api/settings/api-keys`, trimmedKeys);
       
       // Update state with trimmed values
       setApiKeys(trimmedKeys);
@@ -310,11 +310,20 @@ function Settings() {
       if (trimmedKeys.CROWDSEC_API_KEY) {
         const isValid = await validateCrowdSecKey();
         if (!isValid) {
-          setSnackbar({
-            open: true,
-            message: 'CrowdSec API key is invalid',
-            severity: 'error'
-          });
+          // Check if the response indicates a rate limit
+          if (saveResponse.data.crowdsec_validation?.message?.toLowerCase().includes('rate limit')) {
+            setSnackbar({
+              open: true,
+              message: 'API key saved successfully. Note: Rate limit reached (50 requests/day). The key will be validated when the limit resets.',
+              severity: 'warning'
+            });
+          } else {
+            setSnackbar({
+              open: true,
+              message: 'CrowdSec API key validation failed. Please check the key and try again.',
+              severity: 'error'
+            });
+          }
           setSaving(false);
           return;
         }
@@ -342,7 +351,7 @@ function Settings() {
 
   const handleToggleRule = async (ruleId, enabled, category) => {
     try {
-      await axios.post(`${config.apiUrl}/api/rules/toggle`, {
+      await axios.post(`${config.detectionUrl}/rules/toggle`, {
         rule_id: ruleId,
         enabled: !enabled,
         category
@@ -396,7 +405,7 @@ function Settings() {
         return (
           <StatusChip
             icon={<ErrorIcon sx={{ fontSize: 16 }} />}
-            label="INVALID KEY"
+            label="RATE LIMITED"
             className="warning"
             size="small"
           />
@@ -501,7 +510,7 @@ function Settings() {
                 >
                   crowdsec.net
                 </ApiLink>
-                {' '}for threat intelligence. Limited to 30 requests per day with batch processing enabled.
+                {' '}for threat intelligence. Limited to 50 requests per day with batch processing enabled.
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
                 {getCrowdSecStatusChip()}
@@ -509,7 +518,7 @@ function Settings() {
                   <>
                     <StatusChip
                       icon={<WarningIcon sx={{ fontSize: 16 }} />}
-                      label={`${apiStatus.crowdsec_requests_remaining || 0}/30 daily requests remaining`}
+                      label={`${apiStatus.crowdsec_requests_remaining || 0}/50 daily requests remaining`}
                       className="warning"
                       size="small"
                     />

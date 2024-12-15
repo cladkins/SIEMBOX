@@ -1,0 +1,398 @@
+SIEMBox Security Guide
+
+Authentication and Authorization
+=============================
+
+1. JWT Authentication
+-------------------
+
+Configuration:
+  JWT_SECRET=secure_random_string_at_least_32_characters
+  JWT_EXPIRATION=3600  # 1 hour in seconds
+  JWT_REFRESH_EXPIRATION=604800  # 7 days in seconds
+
+Token Structure:
+  {
+    "header": {
+      "alg": "HS256",
+      "typ": "JWT"
+    },
+    "payload": {
+      "sub": "user_id",
+      "username": "admin",
+      "roles": ["admin"],
+      "iat": 1705766400,
+      "exp": 1705770000
+    }
+  }
+
+Token Management:
+  - Access tokens expire after 1 hour
+  - Refresh tokens expire after 7 days
+  - Tokens are invalidated on password change
+  - Failed login attempts are rate limited
+
+2. API Key Management
+-------------------
+
+IP-API Configuration:
+  - Key stored in environment variable
+  - Rate limit: 45 requests/minute
+  - Automatic retry with exponential backoff
+  - Failed requests are cached (negative caching)
+
+CrowdSec Configuration:
+  - Key stored in environment variable
+  - Rate limit: 30 requests/day
+  - Batch processing enabled
+  - Results cached for 1 hour
+
+Key Rotation Policy:
+  - API keys rotated every 90 days
+  - Old keys have 7-day grace period
+  - Key rotation scheduled during low-traffic periods
+  - Automatic key validation on rotation
+
+3. Role-Based Access Control
+--------------------------
+
+Available Roles:
+  - admin: Full system access
+  - operator: Manage rules and view logs
+  - analyst: View logs and alerts
+  - viewer: View-only access
+
+Permission Matrix:
+  admin:
+    - Manage users and roles
+    - Configure system settings
+    - Full API access
+    - Manage rules
+    - View all data
+
+  operator:
+    - Enable/disable rules
+    - View logs and alerts
+    - Access API endpoints
+    - Configure detection rules
+
+  analyst:
+    - View logs and alerts
+    - Search and filter data
+    - Export reports
+    - Access read-only API
+
+  viewer:
+    - View dashboard
+    - View public reports
+    - No configuration access
+    - No API access
+
+Network Security
+==============
+
+1. Service Isolation
+------------------
+
+Network Configuration:
+  networks:
+    frontend_net:
+      - frontend
+      - api
+    
+    backend_net:
+      - api
+      - detection
+      - collector
+      - iplookup
+      - redis
+      - db
+
+    collector_net:
+      - collector
+
+Port Exposure:
+  - Frontend: 3000 (HTTP)
+  - API Gateway: 8080 (HTTP)
+  - Collector: 5514 (TCP/UDP)
+  - Internal services: Not exposed
+
+2. CORS Configuration
+-------------------
+
+API Gateway Settings:
+  CORS_ORIGINS=[
+    "http://localhost:3000",
+    "http://frontend:3000"
+  ]
+  
+  CORS_METHODS=[
+    "GET",
+    "POST",
+    "PUT",
+    "DELETE",
+    "OPTIONS"
+  ]
+  
+  CORS_HEADERS=[
+    "Authorization",
+    "Content-Type",
+    "X-Api-Key"
+  ]
+
+3. Rate Limiting
+--------------
+
+API Gateway Limits:
+  - 1000 requests per minute per IP
+  - 100 requests per minute per endpoint
+  - 10 failed login attempts per hour
+  - Configurable through environment variables
+
+IP Lookup Service Limits:
+  - 45 requests per minute (IP-API)
+  - 30 requests per day (CrowdSec)
+  - Batch processing enabled
+  - Cache results to reduce API calls
+
+4. TLS Configuration
+-----------------
+
+Certificate Management:
+  - Auto-renewal with Let's Encrypt
+  - 2048-bit RSA keys
+  - ECDSA certificates preferred
+  - 90-day renewal cycle
+
+Nginx TLS Settings:
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
+  ssl_prefer_server_ciphers off;
+  ssl_session_timeout 1d;
+  ssl_session_cache shared:SSL:50m;
+  ssl_session_tickets off;
+  ssl_stapling on;
+  ssl_stapling_verify on;
+
+Data Security
+===========
+
+1. Data Encryption
+----------------
+
+At Rest:
+  - Database encryption using dm-crypt
+  - Volume encryption for persistent data
+  - Encrypted backup storage
+  - Secure key storage in vault
+
+In Transit:
+  - TLS 1.2/1.3 for all HTTP traffic
+  - Encrypted syslog for log collection
+  - Internal service communication over TLS
+  - Certificate-based authentication
+
+2. Data Sanitization
+------------------
+
+Input Validation:
+  - SQL injection prevention
+  - XSS protection
+  - CSRF tokens
+  - Input length limits
+  - Character encoding validation
+
+Output Encoding:
+  - HTML escaping
+  - JSON encoding
+  - CSV injection prevention
+  - File name sanitization
+
+3. Sensitive Data Handling
+------------------------
+
+PII Protection:
+  - Automatic PII detection
+  - Data masking in logs
+  - Access control for sensitive data
+  - Audit logging of access
+
+Data Retention:
+  - Configurable retention periods
+  - Secure data deletion
+  - Archive encryption
+  - Compliance logging
+
+Container Security
+================
+
+1. Container Hardening
+--------------------
+
+Base Image Security:
+  - Use official minimal base images
+  - Regular security updates
+  - Remove unnecessary packages
+  - Minimal attack surface
+
+Runtime Security:
+  - Run as non-root user
+  - Read-only root filesystem
+  - Drop unnecessary capabilities
+  - Resource limits enforced
+
+2. Service Isolation
+------------------
+
+User Contexts:
+  - API Gateway: uid=1000
+  - Detection: uid=65534 (nobody)
+  - Collector: uid=1001
+  - IP Lookup: uid=1002
+  - Frontend: uid=1003
+
+Volume Permissions:
+  - Rules directory: 750 (nobody:nogroup)
+  - Log directory: 740 (collector:collector)
+  - Config directory: 600 (root:root)
+
+3. Resource Controls
+-----------------
+
+Memory Limits:
+  - API Gateway: 512MB
+  - Detection: 1GB
+  - Collector: 256MB
+  - IP Lookup: 256MB
+  - Frontend: 256MB
+
+CPU Limits:
+  - API Gateway: 2 cores
+  - Detection: 4 cores
+  - Collector: 2 cores
+  - IP Lookup: 1 core
+  - Frontend: 1 core
+
+Security Monitoring
+=================
+
+1. Audit Logging
+--------------
+
+Event Types:
+  - Authentication attempts
+  - Authorization failures
+  - Configuration changes
+  - Rule modifications
+  - Data access
+
+Log Format:
+  {
+    "timestamp": "2024-01-20T15:30:00Z",
+    "event_type": "AUTH_ATTEMPT",
+    "user": "admin",
+    "ip": "192.168.1.100",
+    "success": true,
+    "details": {
+      "method": "password",
+      "user_agent": "Mozilla/5.0"
+    }
+  }
+
+2. Intrusion Detection
+-------------------
+
+Detection Rules:
+  - Failed login attempts
+  - Suspicious API usage
+  - Unusual data access patterns
+  - Configuration tampering
+  - Network anomalies
+
+Response Actions:
+  - Account lockout
+  - IP blocking
+  - Alert generation
+  - Admin notification
+  - Automatic mitigation
+
+3. Vulnerability Management
+------------------------
+
+Scanning Schedule:
+  - Daily container scans
+  - Weekly dependency checks
+  - Monthly penetration tests
+  - Continuous compliance monitoring
+
+Update Policy:
+  - Security patches: Immediate
+  - Regular updates: Weekly
+  - Major versions: Quarterly
+  - Emergency procedures defined
+
+Security Best Practices
+=====================
+
+1. Password Policy
+----------------
+
+Requirements:
+  - Minimum length: 12 characters
+  - Complexity: Letters, numbers, symbols
+  - History: Last 12 passwords
+  - Maximum age: 90 days
+  - Lockout: 5 attempts
+
+Storage:
+  - Argon2id hashing
+  - Unique salt per password
+  - Pepper using environment variable
+  - Regular algorithm updates
+
+2. API Security
+-------------
+
+Request Validation:
+  - Schema validation
+  - Content type verification
+  - Size limits
+  - Rate limiting
+  - API key verification
+
+Response Security:
+  - No sensitive data in responses
+  - Proper error handling
+  - Security headers
+  - Response sanitization
+
+3. File Security
+--------------
+
+Upload Controls:
+  - File type validation
+  - Size limits
+  - Virus scanning
+  - Metadata stripping
+  - Secure storage
+
+Download Controls:
+  - Access control
+  - Rate limiting
+  - Bandwidth limits
+  - Audit logging
+
+4. Secure Development
+-------------------
+
+Code Review:
+  - Security review required
+  - Automated scanning
+  - Dependency checking
+  - Regular audits
+
+Deployment Process:
+  - Immutable infrastructure
+  - Version control
+  - Change management
+  - Rollback procedures

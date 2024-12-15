@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime
 import json
@@ -21,6 +22,20 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="SIEMBox Log Collector")
 
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://localhost:8080",
+        "http://frontend:3000"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Global stats tracking
 stats = {
     "total_logs": 0,
@@ -41,6 +56,20 @@ PRIVATE_IP_PATTERNS = [
     r'^192\.168\.',
     r'^127\.',
 ]
+
+# Severity to level mapping
+SEVERITY_TO_LEVEL = {
+    'emerg': 'CRITICAL',
+    'alert': 'CRITICAL',
+    'crit': 'CRITICAL',
+    'err': 'ERROR',
+    'error': 'ERROR',
+    'warning': 'WARNING',
+    'warn': 'WARNING',
+    'notice': 'INFO',
+    'info': 'INFO',
+    'debug': 'DEBUG'
+}
 
 class LogEntry(BaseModel):
     source: str
@@ -66,12 +95,16 @@ class LogForwarder:
 
     def extract_ips(self, log_data: dict) -> Set[str]:
         """Extract unique public IP addresses from log data."""
-        # Convert the entire log data to a string for IP extraction
         log_str = json.dumps(log_data)
-        # Find all IP addresses
         ip_addresses = set(re.findall(IP_PATTERN, log_str))
-        # Filter out private IPs
         return {ip for ip in ip_addresses if not self.is_private_ip(ip)}
+
+    def map_severity_to_level(self, severity: str) -> str:
+        """Map syslog severity to log level."""
+        if not severity:
+            return "INFO"
+        severity_lower = severity.lower()
+        return SEVERITY_TO_LEVEL.get(severity_lower, "INFO")
 
     async def process_ip_batch(self):
         """Process batch of IPs with the iplookup service."""
@@ -79,16 +112,13 @@ class LogForwarder:
             return
 
         try:
-            # Get API key from API service
             async with self.session.get(f'{self.api_url}/api/settings/api-keys') as response:
                 if response.status == 200:
                     keys = await response.json()
                     crowdsec_key = keys.get('CROWDSEC_API_KEY')
                     
                     if crowdsec_key:
-                        headers = {'x-crowdsec-key': crowdsec_key}
-                        
-                        # Process each IP in the batch
+                        headers = {'X-Api-Key': crowdsec_key}
                         for ip in self.ip_batch:
                             try:
                                 async with self.session.get(f'{self.api_url}/iplookup/lookup/{ip}', headers=headers) as lookup_response:
@@ -96,7 +126,6 @@ class LogForwarder:
                                         stats["ip_addresses_analyzed"] += 1
                             except Exception as e:
                                 logger.error(f"Error looking up IP {ip}: {str(e)}")
-                
         except Exception as e:
             logger.error(f"Error processing IP batch: {str(e)}")
         finally:
@@ -146,14 +175,26 @@ class LogForwarder:
             if time.time() - self.last_ip_batch_time >= self.ip_batch_interval:
                 await self.process_ip_batch()
 
-            # Forward log to API
-            async with self.session.post(f'{self.api_url}/api/logs', json={
+            # Map severity to level and format log data
+            severity = log_data.get('severity', '')
+            level = self.map_severity_to_level(severity)
+
+            # Format log data to match API expectations
+            api_log_data = {
                 'source': log_data.get('source', 'syslog'),
-                'type': log_data.get('facility', 'syslog'),
                 'message': log_data.get('message', ''),
-                'raw_data': log_data,
-                'timestamp': log_data.get('timestamp', datetime.now().isoformat())
-            }) as response:
+                'level': level,
+                'log_metadata': {
+                    'facility': log_data.get('facility'),
+                    'severity': severity,
+                    'tag': log_data.get('tag'),
+                    'raw_data': log_data,
+                    'timestamp': log_data.get('timestamp', datetime.now().isoformat())
+                }
+            }
+
+            # Forward log to API
+            async with self.session.post(f'{self.api_url}/api/logs', json=api_log_data) as response:
                 if response.status != 200:
                     text = await response.text()
                     logger.error(f"Failed to forward log to API: {text}")

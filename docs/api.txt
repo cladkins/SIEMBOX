@@ -1,0 +1,332 @@
+SIEMBox API Documentation
+
+API Gateway (Port 8080)
+======================
+
+1. Logs Management
+-----------------
+
+GET /api/logs
+Request:
+  Query Parameters:
+  - page: Page number (default: 1)
+  - page_size: Items per page (10-100, default: 50)
+  - start_time: Filter logs from this time (ISO 8601 format)
+  - end_time: Filter logs until this time (ISO 8601 format)
+
+Response:
+  {
+    "items": [
+      {
+        "id": "log123",
+        "timestamp": "2024-01-20T15:30:00Z",
+        "source": "application",
+        "level": "INFO",
+        "message": "User login successful",
+        "metadata": {
+          "user_id": "123",
+          "ip": "192.168.1.100"
+        }
+      }
+    ],
+    "total": 150,
+    "page": 1,
+    "page_size": 50,
+    "total_pages": 3,
+    "has_more": true
+  }
+
+Error Responses:
+  - 400: Invalid query parameters
+  - 401: Unauthorized
+  - 500: Internal server error
+
+POST /api/logs
+Request:
+  {
+    "source": "application",
+    "message": "User login successful",
+    "level": "INFO",
+    "log_metadata": {
+      "user_id": "123",
+      "ip": "192.168.1.100"
+    }
+  }
+
+Response:
+  {
+    "success": true,
+    "message": "Log entry created",
+    "data": {
+      "id": "log124",
+      "timestamp": "2024-01-20T15:31:00Z",
+      "source": "application",
+      "level": "INFO",
+      "message": "User login successful",
+      "metadata": {
+        "user_id": "123",
+        "ip": "192.168.1.100"
+      }
+    }
+  }
+
+Error Responses:
+  - 400: Invalid request body
+  - 401: Unauthorized
+  - 500: Internal server error
+
+2. API Keys Management
+---------------------
+
+GET /api/settings/api-keys
+Response:
+  {
+    "IPAPI_KEY": "masked_key",
+    "CROWDSEC_API_KEY": "masked_key"
+  }
+
+Error Responses:
+  - 401: Unauthorized
+  - 500: Internal server error
+
+POST /api/settings/api-keys
+Request:
+  {
+    "IPAPI_KEY": "your_ipapi_key",
+    "CROWDSEC_API_KEY": "your_crowdsec_key"
+  }
+
+Response:
+  {
+    "success": true,
+    "message": "API keys updated successfully",
+    "data": {
+      "IPAPI_KEY": "masked_key",
+      "CROWDSEC_API_KEY": "masked_key"
+    }
+  }
+
+Error Responses:
+  - 400: Invalid API keys
+  - 401: Unauthorized
+  - 500: Internal server error
+
+Detection Service (Port 8001)
+===========================
+
+1. Rules Management
+------------------
+
+GET /rules
+Response:
+  {
+    "total": 100,
+    "rules": [
+      {
+        "id": "rule_123",
+        "title": "Suspicious Login Attempt",
+        "severity": "high",
+        "description": "Detects multiple failed login attempts",
+        "enabled": true,
+        "category": "authentication/brute_force"
+      }
+    ]
+  }
+
+Error Responses:
+  - 500: Internal server error
+
+POST /rules/toggle
+Request:
+  {
+    "rule_id": "rule_123",
+    "enabled": true,
+    "category": "authentication/brute_force"
+  }
+
+Response:
+  {
+    "success": true,
+    "message": "Rule rule_123 enabled"
+  }
+
+Error Responses:
+  - 400: Invalid rule ID
+  - 404: Rule not found
+  - 500: Internal server error
+
+POST /rules/bulk-toggle
+Request:
+  {
+    "enabled": true,
+    "category": "authentication"
+  }
+
+Response:
+  {
+    "success": true,
+    "message": "25 rules enabled",
+    "updated_count": 25
+  }
+
+Error Responses:
+  - 400: Invalid request
+  - 500: Internal server error
+
+2. Log Analysis
+--------------
+
+POST /analyze
+Request:
+  {
+    "source": "application",
+    "message": "Failed password for user root",
+    "level": "WARNING",
+    "metadata": {
+      "ip": "192.168.1.100",
+      "user": "root"
+    }
+  }
+
+Response:
+  {
+    "alerts": [
+      {
+        "rule_id": "rule_123",
+        "rule_name": "Suspicious Login Attempt",
+        "timestamp": "2024-01-20T15:32:00Z",
+        "log_source": "auth.log",
+        "matched_log": {
+          "source": "ssh",
+          "message": "Failed password for user root"
+        },
+        "severity": "high"
+      }
+    ]
+  }
+
+Error Responses:
+  - 400: Invalid log entry
+  - 500: Internal server error
+
+IP Lookup Service (Port 8002)
+===========================
+
+1. IP Lookup
+-----------
+
+GET /iplookup/lookup/{ip}
+Headers:
+  - X-Api-Key: CrowdSec API key (optional)
+
+Response:
+  {
+    "ip": "8.8.8.8",
+    "geolocation": {
+      "country": "United States",
+      "city": "Mountain View",
+      "latitude": 37.4056,
+      "longitude": -122.0775
+    },
+    "threat_data": {
+      "score": 0,
+      "categories": [],
+      "last_seen": null,
+      "source": "crowdsec"
+    }
+  }
+
+Error Responses:
+  - 400: Invalid IP address
+  - 401: Invalid API key
+  - 429: Rate limit exceeded
+  - 500: Internal server error
+
+2. API Status
+------------
+
+GET /iplookup/api/status
+Response:
+  {
+    "ipapi_mode": "free",
+    "ipapi_requests_remaining": 45,
+    "ipapi_next_reset": "2024-01-20T16:00:00Z",
+    "crowdsec_mode": "enabled",
+    "crowdsec_requests_remaining": 30,
+    "crowdsec_next_reset": "2024-01-21T00:00:00Z"
+  }
+
+Error Responses:
+  - 500: Internal server error
+
+Health Check Endpoints
+====================
+
+All services provide a health check endpoint:
+
+GET /health
+Response:
+  {
+    "status": "operational",
+    "timestamp": "2024-01-20T15:35:00Z",
+    "components": {
+      "component_name": {
+        "status": "operational",
+        "details": {}
+      }
+    }
+  }
+
+Error Responses:
+  - 500: Internal server error
+
+Rate Limiting
+============
+
+1. IP-API Rate Limits:
+   - Free Tier: 45 requests per minute
+   - Pro Tier: Unlimited requests
+
+2. CrowdSec Rate Limits:
+   - 30 requests per day
+   - Batch processing enabled
+
+3. API Gateway Rate Limits:
+   - 1000 requests per minute per IP
+   - Configurable through environment variables
+
+Error Handling
+=============
+
+Common Error Response Format:
+  {
+    "error": {
+      "code": "ERROR_CODE",
+      "message": "Human readable error message",
+      "details": {}
+    }
+  }
+
+Error Codes:
+1. Authentication Errors (401)
+   - INVALID_API_KEY: Invalid or missing API key
+   - EXPIRED_TOKEN: JWT token has expired
+   - INVALID_TOKEN: Invalid JWT token
+
+2. Authorization Errors (403)
+   - INSUFFICIENT_PERMISSIONS: User lacks required permissions
+   - RATE_LIMIT_EXCEEDED: API rate limit exceeded
+
+3. Resource Errors (404)
+   - RULE_NOT_FOUND: Detection rule not found
+   - LOG_NOT_FOUND: Log entry not found
+
+4. Validation Errors (400)
+   - INVALID_REQUEST: Request body validation failed
+   - INVALID_PARAMETERS: Invalid query parameters
+   - INVALID_IP_ADDRESS: Invalid IP address format
+
+5. Server Errors (500)
+   - INTERNAL_ERROR: Internal server error
+   - DATABASE_ERROR: Database operation failed
+   - CACHE_ERROR: Redis operation failed

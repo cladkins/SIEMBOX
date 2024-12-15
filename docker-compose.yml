@@ -1,4 +1,66 @@
 services:
+  # Database
+  db:
+    image: postgres:14-alpine
+    environment:
+      - POSTGRES_USER=${DB_USER:-siembox}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-changeme}
+      - POSTGRES_DB=siembox
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - siem_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U ${DB_USER:-siembox} -d siembox"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    ports:
+      - "5432:5432"
+
+  # Redis for caching and rate limiting
+  redis:
+    image: redis:alpine
+    volumes:
+      - redis_data:/data
+    networks:
+      - siem_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    ports:
+      - "6379:6379"
+
+  # Detection Engine Service
+  detection:
+    build:
+      context: ./detection
+      dockerfile: Dockerfile
+    ports:
+      - "${DETECTION_PORT:-8001}:8000"
+    volumes:
+      - sigma_rules:/app/rules
+      - /tmp:/tmp
+    tmpfs:
+      - /tmp/git:mode=777
+    environment:
+      - SIGMA_RULES_PATH=/app/rules
+      - GIT_DISCOVERY_ACROSS_FILESYSTEM=1
+    networks:
+      - siem_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    user: "65534:65534"
+    init: true
+
   # Log Collector Service
   collector:
     build:
@@ -7,7 +69,7 @@ services:
     ports:
       - "5514:5514/udp"
       - "5514:5514/tcp"
-      - "8000:8000"
+      - "${COLLECTOR_PORT:-8000}:8000"
     volumes:
       - collector_data:/var/log/collector
     environment:
@@ -25,27 +87,6 @@ services:
       start_period: 40s
     networks:
       - siem_network
-    depends_on:
-      api:
-        condition: service_healthy
-
-  # Detection Engine Service
-  detection:
-    build:
-      context: ./detection
-      dockerfile: Dockerfile
-    ports:
-      - "8001:8000"
-    volumes:
-      - sigma_rules:/app/rules
-    environment:
-      - SIGMA_RULES_PATH=/app/rules
-      - COLLECTOR_HOST=collector
-    networks:
-      - siem_network
-    depends_on:
-      collector:
-        condition: service_healthy
 
   # IP Lookup Service
   iplookup:
@@ -53,38 +94,23 @@ services:
       context: ./iplookup
       dockerfile: Dockerfile
     ports:
-      - "8002:8000"  # Added port mapping
+      - "${IPLOOKUP_PORT:-8002}:8000"
     environment:
       - IPAPI_KEY=${IPAPI_KEY}
       - CROWDSEC_API_KEY=${CROWDSEC_API_KEY}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+    networks:
+      - siem_network
     depends_on:
       redis:
         condition: service_healthy
-    networks:
-      - siem_network
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-
-  # Frontend Service
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    environment:
-      - REACT_APP_API_URL=http://localhost:8080
-      - API_URL=http://api:8080
-    networks:
-      - siem_network
-    depends_on:
-      api:
-        condition: service_healthy
+      start_period: 30s
 
   # API Gateway
   api:
@@ -92,63 +118,53 @@ services:
       context: ./api
       dockerfile: Dockerfile
     ports:
-      - "8080:8080"
+      - "${API_PORT:-8080}:8080"
+    environment:
+      - DB_HOST=db
+      - DB_USER=${DB_USER:-siembox}
+      - DB_PASSWORD=${DB_PASSWORD:-changeme}
+      - DB_NAME=siembox
+      - JWT_SECRET=${JWT_SECRET:-siembox_dev_secret_key_change_in_production}
+    networks:
+      - siem_network
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    environment:
-      - DB_HOST=db
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - JWT_SECRET=${JWT_SECRET}
-      - COLLECTOR_HOST=collector
-    networks:
-      - siem_network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 60s
 
-  # Database
-  db:
-    image: postgres:14-alpine
-    environment:
-      - POSTGRES_USER=${DB_USER}
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-      - POSTGRES_DB=siembox
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - siem_network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d siembox"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  # Redis for caching and rate limiting
-  redis:
-    image: redis:alpine
-    volumes:
-      - redis_data:/data
-    networks:
-      - siem_network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+  # Frontend Service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     ports:
-      - "6379:6379"
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8080}
+      - REACT_APP_DETECTION_URL=${REACT_APP_DETECTION_URL:-http://localhost:8001}
+    networks:
+      - siem_network
+    depends_on:
+      api:
+        condition: service_healthy
+      detection:
+        condition: service_healthy
 
 volumes:
   collector_data:
   sigma_rules:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/rules
   postgres_data:
   redis_data:
 

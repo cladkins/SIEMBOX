@@ -1,0 +1,282 @@
+SIEMBox Monitoring Guide
+
+Prometheus Integration
+====================
+
+1. Available Metrics
+------------------
+
+API Gateway Metrics:
+  - siembox_api_requests_total{method="GET|POST", endpoint="/api/*", status="2xx|4xx|5xx"}
+  - siembox_api_request_duration_seconds{method, endpoint}
+  - siembox_api_active_connections
+  - siembox_api_errors_total{type="database|cache|internal"}
+  - siembox_api_database_connections
+  - siembox_api_cache_hits_total
+  - siembox_api_cache_misses_total
+
+Detection Service Metrics:
+  - siembox_rules_total{status="enabled|disabled"}
+  - siembox_rule_matches_total{rule_id, severity}
+  - siembox_detection_processing_time_seconds
+  - siembox_detection_queue_size
+  - siembox_detection_rules_loaded
+  - siembox_detection_rules_enabled
+  - siembox_detection_alerts_total{severity}
+
+IP Lookup Service Metrics:
+  - siembox_iplookup_requests_total{source="ipapi|crowdsec"}
+  - siembox_iplookup_cache_hits_total
+  - siembox_iplookup_errors_total{source, type}
+  - siembox_iplookup_quota_remaining{source}
+  - siembox_iplookup_response_time_seconds
+  - siembox_iplookup_batch_size
+
+Collector Service Metrics:
+  - siembox_logs_received_total{source}
+  - siembox_logs_forwarded_total
+  - siembox_log_processing_errors_total
+  - siembox_collector_buffer_size
+  - siembox_collector_processing_time_seconds
+  - siembox_collector_queue_size
+
+2. Prometheus Configuration
+-------------------------
+
+prometheus.yml:
+  global:
+    scrape_interval: 15s
+    evaluation_interval: 15s
+
+  scrape_configs:
+    - job_name: 'siembox'
+      static_configs:
+        - targets:
+          - 'api:8080'      # API Gateway
+          - 'detection:8001' # Detection Service
+          - 'iplookup:8002' # IP Lookup Service
+          - 'collector:8000' # Collector Service
+
+    - job_name: 'siembox-node'
+      static_configs:
+        - targets:
+          - 'node-exporter:9100'
+
+3. Recording Rules
+----------------
+
+rules.yml:
+  groups:
+    - name: siembox_recording_rules
+      rules:
+        - record: job:siembox_api_requests_total:rate5m
+          expr: rate(siembox_api_requests_total[5m])
+        
+        - record: job:siembox_api_errors:rate5m
+          expr: rate(siembox_api_errors_total[5m])
+        
+        - record: job:siembox_rule_matches:rate5m
+          expr: rate(siembox_rule_matches_total[5m])
+        
+        - record: job:siembox_logs_processed:rate5m
+          expr: rate(siembox_logs_forwarded_total[5m])
+
+Grafana Integration
+=================
+
+1. Dashboard Setup
+----------------
+
+System Overview Dashboard:
+  Panels:
+  - Service Health Status
+    * Health check status for all services
+    * Response times
+    * Error rates
+  
+  - Resource Usage
+    * CPU usage per service
+    * Memory usage per service
+    * Disk usage
+    * Network I/O
+  
+  - Request Rates
+    * API requests per second
+    * Success/error ratio
+    * Response time percentiles
+    * Active connections
+
+Detection Analysis Dashboard:
+  Panels:
+  - Rule Statistics
+    * Total vs enabled rules
+    * Rules by category
+    * Most triggered rules
+    * Rule processing time
+  
+  - Alert Overview
+    * Alerts by severity
+    * Alerts timeline
+    * Top alert sources
+    * Alert trends
+
+Log Processing Dashboard:
+  Panels:
+  - Log Ingestion
+    * Logs per second
+    * Logs by source
+    * Processing success rate
+    * Buffer utilization
+  
+  - Processing Performance
+    * Processing latency
+    * Queue size
+    * Error rates
+    * Throughput
+
+IP Intelligence Dashboard:
+  Panels:
+  - API Usage
+    * Requests per minute
+    * Cache hit ratio
+    * API quota usage
+    * Response times
+  
+  - Threat Intelligence
+    * Threats detected
+    * Geographical distribution
+    * Threat categories
+    * Batch processing stats
+
+2. Alerting Configuration
+-----------------------
+
+Alert Rules:
+
+1. Service Health:
+   - alert: ServiceDown
+     expr: up == 0
+     for: 1m
+     labels:
+       severity: critical
+     annotations:
+       summary: "Service {{ $labels.instance }} is down"
+
+2. Resource Usage:
+   - alert: HighCPUUsage
+     expr: rate(process_cpu_seconds_total[5m]) > 0.8
+     for: 5m
+     labels:
+       severity: warning
+     annotations:
+       summary: "High CPU usage on {{ $labels.instance }}"
+
+   - alert: HighMemoryUsage
+     expr: process_resident_memory_bytes / container_memory_limit_bytes > 0.8
+     for: 5m
+     labels:
+       severity: warning
+     annotations:
+       summary: "High memory usage on {{ $labels.instance }}"
+
+3. Application Specific:
+   - alert: HighErrorRate
+     expr: rate(siembox_api_errors_total[5m]) > 0.1
+     for: 5m
+     labels:
+       severity: warning
+     annotations:
+       summary: "High error rate detected"
+
+   - alert: LogProcessingDelay
+     expr: siembox_collector_buffer_size > 1000
+     for: 5m
+     labels:
+       severity: warning
+     annotations:
+       summary: "Log processing delay detected"
+
+   - alert: APIQuotaLow
+     expr: siembox_iplookup_quota_remaining < 100
+     for: 5m
+     labels:
+       severity: warning
+     annotations:
+       summary: "API quota running low"
+
+Notification Channels:
+
+1. Email:
+   - Type: email
+   - Settings:
+     * To: team@example.com
+     * From: alerts@siembox.local
+     * Subject: [SIEMBox] {{ .GroupLabels.alertname }}
+
+2. Slack:
+   - Type: slack
+   - Settings:
+     * Webhook URL: https://hooks.slack.com/services/xxx/yyy/zzz
+     * Channel: #siembox-alerts
+     * Username: SIEMBox Alerts
+
+3. PagerDuty:
+   - Type: pagerduty
+   - Settings:
+     * Integration Key: your_integration_key
+     * Severity mapping:
+       - critical: critical
+       - warning: warning
+       - info: info
+
+Alert Routing:
+  routes:
+    - receiver: 'slack'
+      group_by: ['alertname']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      match:
+        severity: warning
+
+    - receiver: 'pagerduty'
+      group_by: ['alertname']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 1h
+      match:
+        severity: critical
+
+Visualization Best Practices
+==========================
+
+1. Dashboard Organization:
+   - Group related metrics
+   - Use consistent time ranges
+   - Include service status headers
+   - Add documentation links
+
+2. Panel Types:
+   - Time series: Rate changes, trends
+   - Gauge: Current values, quotas
+   - Stat: Single important metrics
+   - Table: Detailed breakdowns
+   - Heatmap: Distribution patterns
+
+3. Color Coding:
+   - Green: Healthy/Normal
+   - Yellow: Warning/Degraded
+   - Red: Critical/Error
+   - Blue: Informational
+
+4. Thresholds:
+   - CPU Usage: >80% warning, >90% critical
+   - Memory Usage: >80% warning, >90% critical
+   - Error Rate: >5% warning, >10% critical
+   - API Quota: <20% warning, <10% critical
+
+5. Time Ranges:
+   - Default: Last 6 hours
+   - Quick ranges: 1h, 6h, 12h, 24h
+   - Compare with previous periods
+   - Auto-refresh: 1m for overview, 5m for details

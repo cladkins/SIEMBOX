@@ -313,6 +313,43 @@ async def save_api_keys(
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
+# Add proxy routes for iplookup service
+@app.get("/iplookup/validate/crowdsec")
+async def proxy_validate_crowdsec(x_api_key: Optional[str] = Header(None, alias="x-api-key")):
+    """Proxy CrowdSec validation request to iplookup service"""
+    try:
+        headers = {"x-api-key": x_api_key} if x_api_key else {}
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "http://iplookup:8000/validate/crowdsec",
+                headers=headers
+            )
+            return response.json()
+    except httpx.RequestError as e:
+        logger.error(f"Error proxying to iplookup service: {str(e)}")
+        raise HTTPException(status_code=503, detail="IP lookup service unavailable")
+    except Exception as e:
+        logger.error(f"Error in CrowdSec validation proxy: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/iplookup/api/status")
+async def proxy_iplookup_status(x_api_key: Optional[str] = Header(None, alias="x-api-key")):
+    """Proxy IP lookup status request to iplookup service"""
+    try:
+        headers = {"x-api-key": x_api_key} if x_api_key else {}
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "http://iplookup:8000/api/status",
+                headers=headers
+            )
+            return response.json()
+    except httpx.RequestError as e:
+        logger.error(f"Error proxying to iplookup service: {str(e)}")
+        raise HTTPException(status_code=503, detail="IP lookup service unavailable")
+    except Exception as e:
+        logger.error(f"Error in IP lookup status proxy: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""

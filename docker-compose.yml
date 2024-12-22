@@ -2,15 +2,15 @@ services:
   db:
     image: postgres:14-alpine
     environment:
-      - POSTGRES_USER=${DB_USER:-siembox}
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-changeme}
+      - POSTGRES_USER=siembox
+      - POSTGRES_PASSWORD=changeme
       - POSTGRES_DB=siembox
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - siem_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h localhost -U ${DB_USER:-siembox} -d siembox"]
+      test: ["CMD-SHELL", "pg_isready -h localhost -U siembox -d siembox"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -30,7 +30,7 @@ services:
       start_period: 10s
 
   detection:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-cladkins}/siembox/detection:latest
+    image: ghcr.io/cladkins/siembox/detection:latest
     ports:
       - "8001:8000"
     volumes:
@@ -49,7 +49,7 @@ services:
     init: true
 
   collector:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-cladkins}/siembox/collector:latest
+    image: ghcr.io/cladkins/siembox/collector:latest
     ports:
       - "5514:5514/udp"
       - "5514:5514/tcp"
@@ -69,12 +69,10 @@ services:
       start_period: 40s
 
   iplookup:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-cladkins}/siembox/iplookup:latest
+    image: ghcr.io/cladkins/siembox/iplookup:latest
     ports:
       - "8002:8000"
     environment:
-      - IPAPI_KEY=${IPAPI_KEY}
-      - CROWDSEC_API_KEY=${CROWDSEC_API_KEY}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     networks:
@@ -90,16 +88,15 @@ services:
       start_period: 30s
 
   api:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-cladkins}/siembox/api:latest
+    image: ghcr.io/cladkins/siembox/api:latest
     ports:
       - "8080:8080"
     environment:
       - DB_HOST=db
-      - DB_USER=${DB_USER:-siembox}
-      - DB_PASSWORD=${DB_PASSWORD:-changeme}
+      - DB_USER=siembox
+      - DB_PASSWORD=changeme
       - DB_NAME=siembox
-      - JWT_SECRET=${JWT_SECRET:-change_this_in_production}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - JWT_SECRET=change_this_in_production
     networks:
       - siem_network
     depends_on:
@@ -109,7 +106,7 @@ services:
         condition: service_healthy
 
   frontend:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-cladkins}/siembox/frontend:latest
+    image: ghcr.io/cladkins/siembox/frontend:latest
     ports:
       - "3000:3000"
     environment:
@@ -125,10 +122,15 @@ services:
 
 volumes:
   collector_data:
+    name: siembox_collector_data
   sigma_rules:
+    name: siembox_sigma_rules
   postgres_data:
+    name: siembox_postgres_data
   redis_data:
+    name: siembox_redis_data
 
 networks:
   siem_network:
+    name: siembox_network
     driver: bridge

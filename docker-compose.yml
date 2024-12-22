@@ -1,5 +1,4 @@
 services:
-  # Database
   db:
     image: postgres:14-alpine
     environment:
@@ -16,10 +15,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    ports:
-      - "5432:5432"
 
-  # Redis for caching and rate limiting
   redis:
     image: redis:alpine
     volumes:
@@ -32,24 +28,15 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    ports:
-      - "6379:6379"
 
-  # Detection Engine Service
   detection:
-    build:
-      context: ./detection
-      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_REPOSITORY}/detection:latest
     ports:
-      - "${DETECTION_PORT:-8001}:8000"
+      - "8001:8000"
     volumes:
       - sigma_rules:/app/rules
-      - /tmp:/tmp
-    tmpfs:
-      - /tmp/git:mode=777
     environment:
       - SIGMA_RULES_PATH=/app/rules
-      - GIT_DISCOVERY_ACROSS_FILESYSTEM=1
     networks:
       - siem_network
     healthcheck:
@@ -61,40 +48,30 @@ services:
     user: "65534:65534"
     init: true
 
-  # Log Collector Service
   collector:
-    build:
-      context: ./collector
-      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_REPOSITORY}/collector:latest
     ports:
       - "5514:5514/udp"
       - "5514:5514/tcp"
-      - "${COLLECTOR_PORT:-8000}:8000"
+      - "8000:8000"
     volumes:
       - collector_data:/var/log/collector
     environment:
       - LOG_LEVEL=info
       - API_URL=http://api:8080
-      - RETRY_COUNT=3
-      - BACKOFF_FACTOR=1.5
-      - BUFFER_SIZE=100
-      - FLUSH_INTERVAL=5
+    networks:
+      - siem_network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    networks:
-      - siem_network
 
-  # IP Lookup Service
   iplookup:
-    build:
-      context: ./iplookup
-      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_REPOSITORY}/iplookup:latest
     ports:
-      - "${IPLOOKUP_PORT:-8002}:8000"
+      - "8002:8000"
     environment:
       - IPAPI_KEY=${IPAPI_KEY}
       - CROWDSEC_API_KEY=${CROWDSEC_API_KEY}
@@ -112,19 +89,16 @@ services:
       retries: 3
       start_period: 30s
 
-  # API Gateway
   api:
-    build:
-      context: ./api
-      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_REPOSITORY}/api:latest
     ports:
-      - "${API_PORT:-8080}:8080"
+      - "8080:8080"
     environment:
       - DB_HOST=db
       - DB_USER=${DB_USER:-siembox}
       - DB_PASSWORD=${DB_PASSWORD:-changeme}
       - DB_NAME=siembox
-      - JWT_SECRET=${JWT_SECRET:-siembox_dev_secret_key_change_in_production}
+      - JWT_SECRET=${JWT_SECRET:-change_this_in_production}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
     networks:
       - siem_network
@@ -134,16 +108,13 @@ services:
       redis:
         condition: service_healthy
 
-  # Frontend Service
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-      args:
-        - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8080}
-        - REACT_APP_DETECTION_URL=${REACT_APP_DETECTION_URL:-http://localhost:8001}
+    image: ghcr.io/${GITHUB_REPOSITORY}/frontend:latest
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8080
+      - REACT_APP_DETECTION_URL=http://localhost:8001
     networks:
       - siem_network
     depends_on:
@@ -155,11 +126,6 @@ services:
 volumes:
   collector_data:
   sigma_rules:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${PWD}/rules
   postgres_data:
   redis_data:
 

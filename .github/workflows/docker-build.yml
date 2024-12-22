@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ github.repository_owner }}/siembox
 
 jobs:
   build-and-push:
@@ -41,8 +41,8 @@ jobs:
           context: ./api
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/api:latest
-            ${{ env.REGISTRY }}/${{ github.repository }}/api:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ github.sha }}
 
       - name: Build and push Detection image
         uses: docker/build-push-action@v5
@@ -50,8 +50,8 @@ jobs:
           context: ./detection
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/detection:latest
-            ${{ env.REGISTRY }}/${{ github.repository }}/detection:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/detection:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/detection:${{ github.sha }}
 
       - name: Build and push Collector image
         uses: docker/build-push-action@v5
@@ -59,8 +59,8 @@ jobs:
           context: ./collector
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/collector:latest
-            ${{ env.REGISTRY }}/${{ github.repository }}/collector:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/collector:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/collector:${{ github.sha }}
 
       - name: Build and push Frontend image
         uses: docker/build-push-action@v5
@@ -68,8 +68,8 @@ jobs:
           context: ./frontend
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/frontend:latest
-            ${{ env.REGISTRY }}/${{ github.repository }}/frontend:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:${{ github.sha }}
 
       - name: Build and push IP Lookup image
         uses: docker/build-push-action@v5
@@ -77,5 +77,5 @@ jobs:
           context: ./iplookup
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/iplookup:latest
-            ${{ env.REGISTRY }}/${{ github.repository }}/iplookup:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/iplookup:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/iplookup:${{ github.sha }}

@@ -2,6 +2,14 @@ FROM node:18-alpine
 
 WORKDIR /app
 
+# Add build arguments
+ARG REACT_APP_API_URL
+ARG REACT_APP_DETECTION_URL
+
+# Set environment variables
+ENV REACT_APP_API_URL=${REACT_APP_API_URL}
+ENV REACT_APP_DETECTION_URL=${REACT_APP_DETECTION_URL}
+
 # Install dependencies
 COPY package*.json ./
 RUN npm install

@@ -1,7 +1,7 @@
-from fastapi import FastAPI, Depends, Query, HTTPException
+from fastapi import FastAPI, Depends, Query, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func, update
+from sqlalchemy import select, desc, func, update, and_
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
@@ -15,7 +15,7 @@ from database import get_db, Base, engine
 from models import (
     Log, LogResponse, PaginatedLogsResponse,
     Rule, RuleResponse, RulesListResponse,
-    APIKeys, APIKeyResponse
+    APIKeys, APIKeyResponse, Setting
 )
 from pydantic import BaseModel
 
@@ -51,6 +51,39 @@ class RuleToggle(BaseModel):
 # Model for bulk rule toggle
 class BulkRuleToggle(BaseModel):
     enabled: bool
+
+async def get_setting_value(db: AsyncSession, key: str) -> Optional[str]:
+    """Get a setting value from the database"""
+    result = await db.execute(
+        select(Setting).where(Setting.key == key)
+    )
+    setting = result.scalar_one_or_none()
+    if setting:
+        setting.last_used_at = datetime.utcnow()
+        await db.commit()
+        return setting.get_value()
+    return None
+
+async def set_setting_value(db: AsyncSession, key: str, value: str, user: str = "system") -> None:
+    """Set a setting value in the database"""
+    result = await db.execute(
+        select(Setting).where(Setting.key == key)
+    )
+    setting = result.scalar_one_or_none()
+    
+    if setting:
+        setting.set_value(value)
+        setting.updated_at = datetime.utcnow()
+        setting.created_by = user
+    else:
+        setting = Setting(
+            key=key,
+            created_by=user
+        )
+        setting.set_value(value)
+        db.add(setting)
+    
+    await db.commit()
 
 @app.post("/api/logs", response_model=LogResponse)
 async def create_log(
@@ -227,31 +260,57 @@ async def bulk_toggle_rules(toggle_data: BulkRuleToggle):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/settings/api-keys", response_model=APIKeyResponse)
-async def get_api_keys():
-    """Get stored API keys"""
+async def get_api_keys(db: AsyncSession = Depends(get_db)):
+    """Get stored API keys with masked values"""
     try:
-        # In a real application, these would be stored securely
-        return APIKeyResponse(
-            IPAPI_KEY=os.getenv("IPAPI_KEY", ""),
-            CROWDSEC_API_KEY=os.getenv("CROWDSEC_API_KEY", "")
-        )
+        result = await db.execute(select(Setting).where(
+            Setting.key.in_(["IPAPI_KEY", "CROWDSEC_API_KEY"])
+        ))
+        settings = result.scalars().all()
+        
+        return APIKeyResponse.from_settings(settings)
     except Exception as e:
         logger.error(f"Error getting API keys: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/settings/api-keys", response_model=APIKeyResponse)
-async def save_api_keys(api_keys: APIKeys):
-    """Save API keys"""
+async def save_api_keys(
+    api_keys: APIKeys,
+    db: AsyncSession = Depends(get_db),
+    user: str = "admin"  # In production, get this from auth token
+):
+    """Save API keys with encryption"""
     try:
-        # In a real application, these would be stored securely
-        # For now, we'll just return the keys as if they were saved
-        return APIKeyResponse(
-            IPAPI_KEY=api_keys.IPAPI_KEY,
-            CROWDSEC_API_KEY=api_keys.CROWDSEC_API_KEY,
-            crowdsec_validation={"valid": True}
+        # Save IPAPI key
+        await set_setting_value(db, "IPAPI_KEY", api_keys.IPAPI_KEY, user)
+        
+        # Save CrowdSec key
+        await set_setting_value(db, "CROWDSEC_API_KEY", api_keys.CROWDSEC_API_KEY, user)
+        
+        # Create audit log
+        new_log = Log(
+            source="api",
+            message="API keys updated",
+            level="INFO",
+            log_metadata={
+                "user": user,
+                "action": "update_api_keys",
+                "timestamp": datetime.utcnow().isoformat()
+            }
         )
+        db.add(new_log)
+        await db.commit()
+        
+        # Return masked values
+        result = await db.execute(select(Setting).where(
+            Setting.key.in_(["IPAPI_KEY", "CROWDSEC_API_KEY"])
+        ))
+        settings = result.scalars().all()
+        
+        return APIKeyResponse.from_settings(settings)
     except Exception as e:
         logger.error(f"Error saving API keys: {str(e)}")
+        await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")

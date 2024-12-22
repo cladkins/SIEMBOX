@@ -8,7 +8,7 @@ SIEMBox is a Security Information and Event Management (SIEM) system designed fo
 System Architecture
 =================
 
-The system consists of five main services:
+The system consists of seven main components:
 
 1. Collector Service (Port 5514, 8000)
    - Receives logs via syslog (TCP/UDP on port 5514)
@@ -25,13 +25,14 @@ The system consists of five main services:
    - Provides rule management API
    - Supports rule categorization and bulk operations
    - Maintains rule states (enabled/disabled)
-   - Runs as non-root user for security
-   - Uses bind mount for rules persistence
+   - Runs as non-root user (65534:65534)
+   - Uses named volume with bind driver for rules persistence
+   - Supports temporary git operations via tmpfs
 
 3. IP Lookup Service (Port 8002)
    - Provides IP geolocation via ip-api.com
    - Integrates with CrowdSec for threat intelligence
-   - Implements caching for performance
+   - Implements Redis-based caching for performance
    - Handles rate limiting for API quotas
    - Supports batch processing of IP lookups
 
@@ -50,6 +51,20 @@ The system consists of five main services:
    - System statistics and monitoring
    - Dark theme modern UI
    - Responsive design
+
+6. Database Service (Port 5432)
+   - PostgreSQL 14 Alpine
+   - Stores logs, alerts, and configurations
+   - Supports data retention policies
+   - Implements health checks
+   - Uses persistent volume for data storage
+
+7. Cache Service (Port 6379)
+   - Redis Alpine
+   - Handles IP lookup caching
+   - Implements rate limiting
+   - Supports health monitoring
+   - Uses persistent volume for data
 
 Initial Setup
 ============

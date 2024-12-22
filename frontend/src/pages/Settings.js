@@ -148,20 +148,14 @@ const LoadingSpinner = styled(CircularProgress)({
 
 function Settings() {
   const [apiKeys, setApiKeys] = useState({
-    IPAPI_KEY: '',
     CROWDSEC_API_KEY: ''
   });
   const [showCrowdSecKey, setShowCrowdSecKey] = useState(false);
   const [apiStatus, setApiStatus] = useState({
-    ipapi_mode: 'free',
-    ipapi_requests_remaining: null,
-    ipapi_next_reset: null,
-    ipapi_queue_size: 0,
     crowdsec_mode: 'disabled',
     crowdsec_requests_remaining: null,
     crowdsec_next_reset: null,
-    crowdsec_queue_size: 0,
-    batch_size: 0
+    crowdsec_queue_size: 0
   });
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -252,7 +246,9 @@ function Settings() {
   const fetchApiKeys = async () => {
     try {
       const response = await axios.get(`${config.apiUrl}/api/settings/api-keys`);
-      setApiKeys(response.data);
+      setApiKeys({
+        CROWDSEC_API_KEY: response.data.CROWDSEC_API_KEY
+      });
     } catch (error) {
       console.error('Error fetching API keys:', error);
       setSnackbar({
@@ -270,7 +266,12 @@ function Settings() {
           'x-api-key': apiKeys.CROWDSEC_API_KEY
         } : undefined
       });
-      setApiStatus(response.data);
+      setApiStatus({
+        crowdsec_mode: response.data.crowdsec_mode,
+        crowdsec_requests_remaining: response.data.crowdsec_requests_remaining,
+        crowdsec_next_reset: response.data.crowdsec_next_reset,
+        crowdsec_queue_size: response.data.crowdsec_queue_size
+      });
     } catch (error) {
       console.error('Error fetching API status:', error);
     }
@@ -294,16 +295,15 @@ function Settings() {
     try {
       setSaving(true);
       
-      // Trim whitespace from API keys
+      // Trim whitespace from API key
       const trimmedKeys = {
-        IPAPI_KEY: apiKeys.IPAPI_KEY.trim(),
         CROWDSEC_API_KEY: apiKeys.CROWDSEC_API_KEY.trim()
       };
       
-      // Save API keys
+      // Save API key
       const saveResponse = await axios.post(`${config.apiUrl}/api/settings/api-keys`, trimmedKeys);
       
-      // Update state with trimmed values
+      // Update state with trimmed value
       setApiKeys(trimmedKeys);
       
       // Validate CrowdSec key if provided
@@ -331,17 +331,17 @@ function Settings() {
       
       setSnackbar({
         open: true,
-        message: 'API keys saved successfully',
+        message: 'API key saved successfully',
         severity: 'success'
       });
       
       // Refresh status after saving
       await fetchApiStatus();
     } catch (error) {
-      console.error('Error saving API keys:', error);
+      console.error('Error saving API key:', error);
       setSnackbar({
         open: true,
-        message: 'Error saving API keys',
+        message: 'Error saving API key',
         severity: 'error'
       });
     } finally {
@@ -432,52 +432,6 @@ function Settings() {
         <CardContent>
           <Stack spacing={4}>
             <Box>
-              <FieldLabel>IP-API Key</FieldLabel>
-              <DarkTextField
-                fullWidth
-                name="IPAPI_KEY"
-                value={apiKeys.IPAPI_KEY}
-                onChange={handleChange}
-                type="text"
-                variant="outlined"
-                placeholder="Enter your IP-API key"
-              />
-              <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.5)', mt: 1, display: 'block', fontSize: '0.75rem' }}>
-                Enter your IP-API key for IP geolocation services from{' '}
-                <ApiLink 
-                  href="https://ip-api.com/" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                >
-                  ip-api.com
-                </ApiLink>
-                . Currently using free tier (45 requests/minute, batch processing enabled)
-              </Typography>
-              <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
-                <StatusChip
-                  icon={<InfoIcon sx={{ fontSize: 16 }} />}
-                  label={`${apiStatus.ipapi_mode.toUpperCase()} Mode`}
-                  className="free"
-                  size="small"
-                />
-                <StatusChip
-                  icon={<WarningIcon sx={{ fontSize: 16 }} />}
-                  label={`${apiStatus.ipapi_requests_remaining || 0}/${apiStatus.batch_size || 45} requests remaining`}
-                  className="warning"
-                  size="small"
-                />
-                {apiStatus.ipapi_queue_size > 0 && (
-                  <StatusChip
-                    icon={<InfoIcon sx={{ fontSize: 16 }} />}
-                    label={`${apiStatus.ipapi_queue_size} requests queued`}
-                    className="warning"
-                    size="small"
-                  />
-                )}
-              </Box>
-            </Box>
-
-            <Box>
               <FieldLabel>CrowdSec API Key</FieldLabel>
               <DarkTextField
                 fullWidth
@@ -542,7 +496,7 @@ function Settings() {
                 disabled={saving}
                 startIcon={saving && <LoadingSpinner size={20} />}
               >
-                {saving ? 'Saving...' : 'Save API Keys'}
+                {saving ? 'Saving...' : 'Save API Key'}
               </SaveButton>
             </Box>
           </Stack>

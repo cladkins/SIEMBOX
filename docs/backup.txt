@@ -34,7 +34,7 @@ Backup Script (backup_db.sh):
 2. Volume Backup
 --------------
 
-Sigma Rules Volume:
+Sigma Rules Volume (Bind Mount):
   $ tar czf /backup/sigma_rules_$(date +\%Y\%m\%d).tar.gz ./rules
 
 Collector Data Volume:
@@ -45,6 +45,10 @@ Redis Data Volume:
   $ docker run --rm -v redis_data:/data -v /backup:/backup \
     alpine tar czf /backup/redis_data_$(date +\%Y\%m\%d).tar.gz /data
 
+Postgres Data Volume:
+  $ docker run --rm -v postgres_data:/data -v /backup:/backup \
+    alpine tar czf /backup/postgres_data_$(date +\%Y\%m\%d).tar.gz /data
+
 Volume Backup Script (backup_volumes.sh):
   #!/bin/bash
   
@@ -54,7 +58,7 @@ Volume Backup Script (backup_volumes.sh):
   # Create backup directory
   mkdir -p $BACKUP_DIR
   
-  # Backup Sigma rules
+  # Backup Sigma rules (bind mount)
   tar czf $BACKUP_DIR/sigma_rules_$DATE.tar.gz ./rules
   
   # Backup collector data
@@ -64,6 +68,10 @@ Volume Backup Script (backup_volumes.sh):
   # Backup Redis data
   docker run --rm -v redis_data:/data -v $BACKUP_DIR:/backup \
     alpine tar czf /backup/redis_data_$DATE.tar.gz /data
+  
+  # Backup Postgres data
+  docker run --rm -v postgres_data:/data -v $BACKUP_DIR:/backup \
+    alpine tar czf /backup/postgres_data_$DATE.tar.gz /data
 
 3. Configuration Backup
 --------------------
@@ -146,7 +154,7 @@ Database Recovery Script (recover_db.sh):
 2. Volume Recovery
 ----------------
 
-Restore Sigma Rules:
+Restore Sigma Rules (Bind Mount):
   $ rm -rf ./rules/*
   $ tar xzf /backup/sigma_rules_20240120.tar.gz -C ./rules
 
@@ -163,6 +171,12 @@ Restore Redis Data:
   $ docker run --rm -v redis_data:/data -v /backup:/backup \
     alpine tar xzf /backup/redis_data_20240120.tar.gz -C /data
 
+Restore Postgres Data:
+  $ docker volume rm postgres_data
+  $ docker volume create postgres_data
+  $ docker run --rm -v postgres_data:/data -v /backup:/backup \
+    alpine tar xzf /backup/postgres_data_20240120.tar.gz -C /data
+
 Volume Recovery Script (recover_volumes.sh):
   #!/bin/bash
   
@@ -174,7 +188,7 @@ Volume Recovery Script (recover_volumes.sh):
   DATE=$1
   BACKUP_DIR="/backup/volumes"
   
-  # Restore Sigma rules
+  # Restore Sigma rules (bind mount)
   rm -rf ./rules/*
   tar xzf $BACKUP_DIR/sigma_rules_$DATE.tar.gz -C ./rules
   
@@ -192,6 +206,12 @@ Volume Recovery Script (recover_volumes.sh):
   docker volume create redis_data
   docker run --rm -v redis_data:/data -v $BACKUP_DIR:/backup \
     alpine tar xzf /backup/redis_data_$DATE.tar.gz -C /data
+  
+  # Restore Postgres data
+  docker volume rm postgres_data
+  docker volume create postgres_data
+  docker run --rm -v postgres_data:/data -v $BACKUP_DIR:/backup \
+    alpine tar xzf /backup/postgres_data_$DATE.tar.gz -C /data
 
 3. Configuration Recovery
 ----------------------
@@ -359,6 +379,7 @@ Weekly Verification Script (verify_backup.sh):
   tar tzf /backup/volumes/sigma_rules_$DATE.tar.gz > /dev/null
   tar tzf /backup/volumes/collector_data_$DATE.tar.gz > /dev/null
   tar tzf /backup/volumes/redis_data_$DATE.tar.gz > /dev/null
+  tar tzf /backup/volumes/postgres_data_$DATE.tar.gz > /dev/null
   
   # Test configuration backups
   tar tzf /backup/configs/configs_$DATE.tar.gz > /dev/null

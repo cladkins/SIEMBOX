@@ -2,7 +2,7 @@ import asyncio
 import logging
 from sqlalchemy.ext.asyncio import create_async_engine
 from database import Base, DATABASE_URL
-from models import Log  # Import the Log model to ensure it's registered
+from models import Log, Setting, Alert  # Import all models to ensure they're registered
 
 # Configure logging
 logging.basicConfig(

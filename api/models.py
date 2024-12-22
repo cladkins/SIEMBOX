@@ -5,7 +5,7 @@ from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, Foreign
 from sqlalchemy.orm import relationship
 from database import Base
 from cryptography.fernet import Fernet
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 # Generate a key if not provided
 ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY')
@@ -19,7 +19,7 @@ if isinstance(ENCRYPTION_KEY, str):
 
 fernet = Fernet(ENCRYPTION_KEY)
 
-class Settings(Base):
+class Setting(Base):
     __tablename__ = "settings"
     id = Column(Integer, primary_key=True)
     key = Column(String, unique=True, nullable=False)
@@ -69,8 +69,7 @@ class LogResponse(BaseModel):
     log_metadata: Dict[str, Any] = {}
     alert_id: Optional[int] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 class PaginatedLogsResponse(BaseModel):
     logs: List[LogResponse]
@@ -80,6 +79,18 @@ class PaginatedLogsResponse(BaseModel):
     total_pages: int
     has_more: bool
 
+class Rule(BaseModel):
+    id: str
+    title: str
+    description: str
+    level: str
+    detection: Dict[str, Any]
+    logsource: Dict[str, str]
+    enabled: bool = False
+    category: str = ""
+
+    model_config = ConfigDict(from_attributes=True)
+
 class RuleResponse(BaseModel):
     id: str
     title: str
@@ -88,8 +99,7 @@ class RuleResponse(BaseModel):
     enabled: bool
     category: Optional[str] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 class RulesListResponse(BaseModel):
     rules: List[RuleResponse]
@@ -105,7 +115,7 @@ class APIKeyResponse(BaseModel):
     crowdsec_validation: Optional[Dict[str, Any]] = None
 
     @classmethod
-    def from_settings(cls, settings: List[Settings]) -> 'APIKeyResponse':
+    def from_settings(cls, settings: List[Setting]) -> 'APIKeyResponse':
         response = cls()
         for setting in settings:
             if setting.key == "IPAPI_KEY":

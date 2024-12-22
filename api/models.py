@@ -1,29 +1,76 @@
-from sqlalchemy import Column, Integer, String, DateTime, JSON, Boolean
-from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+import os
+from typing import Optional, List, Dict, Any
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON
+from sqlalchemy.orm import relationship
 from database import Base
+from cryptography.fernet import Fernet
+from pydantic import BaseModel
+
+# Generate a key if not provided
+ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY')
+if not ENCRYPTION_KEY:
+    ENCRYPTION_KEY = Fernet.generate_key()
+    print(f"Generated new encryption key: {ENCRYPTION_KEY.decode()}")
+
+# Ensure the key is bytes
+if isinstance(ENCRYPTION_KEY, str):
+    ENCRYPTION_KEY = ENCRYPTION_KEY.encode()
+
+fernet = Fernet(ENCRYPTION_KEY)
+
+class Settings(Base):
+    __tablename__ = "settings"
+    id = Column(Integer, primary_key=True)
+    key = Column(String, unique=True, nullable=False)
+    value = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by = Column(String, nullable=True)
+    last_used_at = Column(DateTime, nullable=True)
+
+    def set_value(self, value: str):
+        if value:
+            self.value = fernet.encrypt(value.encode()).decode()
+
+    def get_value(self) -> Optional[str]:
+        if self.value:
+            return fernet.decrypt(self.value.encode()).decode()
+        return None
 
 class Log(Base):
     __tablename__ = "logs"
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    source = Column(String)
+    level = Column(String)
+    message = Column(Text)
+    processed = Column(Boolean, default=False)
+    log_metadata = Column(JSON, default={})
+    alert_id = Column(Integer, ForeignKey("alerts.id"), nullable=True)
+    alert = relationship("Alert", back_populates="logs")
 
-    id = Column(Integer, primary_key=True, index=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
-    source = Column(String, index=True)
-    message = Column(String)
-    level = Column(String, index=True)
-    log_metadata = Column(JSON, default=dict)
+class Alert(Base):
+    __tablename__ = "alerts"
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    rule_name = Column(String)
+    severity = Column(String)
+    description = Column(Text)
+    logs = relationship("Log", back_populates="alert")
 
+# Pydantic models for API responses
 class LogResponse(BaseModel):
     id: int
     timestamp: datetime
     source: str
-    message: str
     level: str
-    log_metadata: dict = Field(default_factory=dict)
+    message: str
+    processed: bool
+    log_metadata: Dict[str, Any] = {}
+    alert_id: Optional[int] = None
 
     class Config:
-        from_attributes = True
+        orm_mode = True
 
 class PaginatedLogsResponse(BaseModel):
     logs: List[LogResponse]
@@ -33,41 +80,36 @@ class PaginatedLogsResponse(BaseModel):
     total_pages: int
     has_more: bool
 
-    class Config:
-        from_attributes = True
-
-class Rule(Base):
-    __tablename__ = "rules"
-
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, index=True)  # Changed from name to title
-    description = Column(String)
-    category = Column(String, index=True)
-    enabled = Column(Boolean, default=False)
-    severity = Column(String)
-    rule_content = Column(JSON)
-
 class RuleResponse(BaseModel):
-    id: int
-    title: str  # Changed from name to title
-    description: str
-    category: str
-    enabled: bool
+    id: str
+    title: str
+    description: Optional[str] = None
     severity: str
-    rule_content: Dict
+    enabled: bool
+    category: Optional[str] = None
 
     class Config:
-        from_attributes = True
+        orm_mode = True
 
 class RulesListResponse(BaseModel):
     rules: List[RuleResponse]
     total: int
 
 class APIKeys(BaseModel):
-    IPAPI_KEY: str = ""
-    CROWDSEC_API_KEY: str = ""
+    IPAPI_KEY: Optional[str] = None
+    CROWDSEC_API_KEY: Optional[str] = None
 
 class APIKeyResponse(BaseModel):
-    IPAPI_KEY: str
-    CROWDSEC_API_KEY: str
+    IPAPI_KEY: Optional[str] = None
+    CROWDSEC_API_KEY: Optional[str] = None
     crowdsec_validation: Optional[Dict[str, Any]] = None
+
+    @classmethod
+    def from_settings(cls, settings: List[Settings]) -> 'APIKeyResponse':
+        response = cls()
+        for setting in settings:
+            if setting.key == "IPAPI_KEY":
+                response.IPAPI_KEY = "********" if setting.value else None
+            elif setting.key == "CROWDSEC_API_KEY":
+                response.CROWDSEC_API_KEY = "********" if setting.value else None
+        return response

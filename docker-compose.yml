@@ -125,6 +125,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-changeme}
       - DB_NAME=siembox
       - JWT_SECRET=${JWT_SECRET:-siembox_dev_secret_key_change_in_production}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
     networks:
       - siem_network
     depends_on:
@@ -144,11 +145,11 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8080}
+        - REACT_APP_DETECTION_URL=${REACT_APP_DETECTION_URL:-http://localhost:8001}
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
-    environment:
-      - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8080}
-      - REACT_APP_DETECTION_URL=${REACT_APP_DETECTION_URL:-http://localhost:8001}
     networks:
       - siem_network
     depends_on:

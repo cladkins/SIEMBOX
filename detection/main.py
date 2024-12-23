@@ -2,7 +2,6 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime, timedelta
-import logging
 import json
 import asyncio
 from typing import Dict, Any, List
@@ -15,20 +14,17 @@ import git
 import time
 import collections
 import psutil
+from app_logger import setup_logging
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Set up logging with the new handler
+logger = setup_logging("detection")
 
 app = FastAPI(title="SIEMBox Detection Engine")
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -46,12 +42,12 @@ stats = {
     "total_rules": 0,
     "alerts_last_24h": 0,
     "processing_rate": 0,
-    "status": "starting",  # Changed to 'starting' initially
+    "status": "starting",
     "start_time": time.time(),
     "processed_logs": 0,
     "last_minute_logs": collections.deque(maxlen=60),
     "alerts": collections.deque(maxlen=1440),
-    "rules_loaded": False  # Added flag to track rules loading
+    "rules_loaded": False
 }
 
 class Alert(BaseModel):

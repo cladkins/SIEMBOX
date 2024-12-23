@@ -2,7 +2,6 @@ from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, IPvAnyAddress
 from datetime import datetime, timedelta
-import logging
 import json
 import aiohttp
 import os
@@ -13,13 +12,10 @@ from collections import deque
 import time
 import psutil
 import re
+from app_logger import setup_logging
 
-# Configure logging with more detail
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Set up logging with the new handler
+logger = setup_logging("iplookup", "http://api:8080")
 
 # Initialize FastAPI app
 app = FastAPI(title="SIEMBox IP Lookup Service")
@@ -27,7 +23,7 @@ app = FastAPI(title="SIEMBox IP Lookup Service")
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

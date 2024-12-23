@@ -5,7 +5,7 @@ from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, Foreign
 from sqlalchemy.orm import relationship
 from database import Base
 from cryptography.fernet import Fernet
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, Field
 
 # Generate a key if not provided
 ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY')
@@ -49,6 +49,17 @@ class Log(Base):
     alert_id = Column(Integer, ForeignKey("alerts.id"), nullable=True)
     alert = relationship("Alert", back_populates="logs")
 
+class InternalLog(Base):  # Renamed from AppLog to InternalLog to avoid confusion
+    __tablename__ = "internal_logs"  # Changed from app_logs to internal_logs
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    service = Column(String, nullable=False)
+    level = Column(String, nullable=False)
+    message = Column(Text, nullable=False)
+    log_metadata = Column(JSON, default={})
+    component = Column(String)
+    trace_id = Column(String)
+
 class Alert(Base):
     __tablename__ = "alerts"
     id = Column(Integer, primary_key=True)
@@ -66,13 +77,35 @@ class LogResponse(BaseModel):
     level: str
     message: str
     processed: bool
-    log_metadata: Dict[str, Any] = {}
+    log_metadata: Dict[str, Any] = Field(default_factory=dict)
     alert_id: Optional[int] = None
 
-    model_config = ConfigDict(from_attributes=True)
+    class Config:
+        orm_mode = True
+
+class InternalLogResponse(BaseModel):  # Renamed from AppLogResponse to InternalLogResponse
+    id: int
+    timestamp: datetime
+    service: str
+    level: str
+    message: str
+    log_metadata: Dict[str, Any] = Field(default_factory=dict)
+    component: Optional[str] = None
+    trace_id: Optional[str] = None
+
+    class Config:
+        orm_mode = True
 
 class PaginatedLogsResponse(BaseModel):
     logs: List[LogResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    has_more: bool
+
+class PaginatedInternalLogsResponse(BaseModel):  # Renamed from PaginatedAppLogsResponse
+    logs: List[InternalLogResponse]
     total: int
     page: int
     page_size: int
@@ -89,7 +122,8 @@ class Rule(BaseModel):
     enabled: bool = False
     category: str = ""
 
-    model_config = ConfigDict(from_attributes=True)
+    class Config:
+        orm_mode = True
 
 class RuleResponse(BaseModel):
     id: str
@@ -99,7 +133,8 @@ class RuleResponse(BaseModel):
     enabled: bool
     category: Optional[str] = None
 
-    model_config = ConfigDict(from_attributes=True)
+    class Config:
+        orm_mode = True
 
 class RulesListResponse(BaseModel):
     rules: List[RuleResponse]

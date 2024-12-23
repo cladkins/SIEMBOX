@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime
 import json
-import logging
 import asyncio
 from typing import Dict, Any, Optional, Set
 import aiofiles
@@ -12,20 +11,17 @@ import aiohttp
 import time
 import psutil
 import re
+from app_logger import setup_logging
 
-# Configure logging
-logging.basicConfig(
-    level=logging.WARNING,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Set up logging with the new handler
+logger = setup_logging("collector", "http://api:8080")
 
 app = FastAPI(title="SIEMBox Log Collector")
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -75,7 +71,7 @@ class LogEntry(BaseModel):
 
 class LogForwarder:
     def __init__(self):
-        self.api_url = os.getenv('API_URL', 'http://localhost:8080')
+        self.api_url = os.getenv('API_URL', 'http://api:8080')
         self.retry_count = int(os.getenv('RETRY_COUNT', '3'))
         self.backoff_factor = float(os.getenv('BACKOFF_FACTOR', '1.5'))
         self.session: Optional[aiohttp.ClientSession] = None

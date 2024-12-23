@@ -49,7 +49,7 @@ class Log(Base):
     alert_id = Column(Integer, ForeignKey("alerts.id"), nullable=True)
     alert = relationship("Alert", back_populates="logs")
 
-class InternalLog(Base):  # Renamed from AppLog to InternalLog to avoid confusion
+class InternalLog(Base):  # Renamed from AppLog to InternalLog
     __tablename__ = "internal_logs"  # Changed from app_logs to internal_logs
     id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
@@ -68,6 +68,15 @@ class Alert(Base):
     severity = Column(String)
     description = Column(Text)
     logs = relationship("Log", back_populates="alert")
+
+# New request model for creating internal logs
+class CreateInternalLogRequest(BaseModel):
+    service: str
+    level: str
+    message: str
+    log_metadata: Dict[str, Any] = Field(default_factory=dict)
+    component: Optional[str] = None
+    trace_id: Optional[str] = None
 
 # Pydantic models for API responses
 class LogResponse(BaseModel):

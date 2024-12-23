@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from models import InternalLog  # Updated from AppLog to InternalLog
+import asyncio
 
 class DatabaseLogHandler(logging.Handler):
     def __init__(self, service_name: str, get_db):
@@ -24,7 +25,7 @@ class DatabaseLogHandler(logging.Handler):
                 service=self.service_name,
                 level=record.levelname,
                 message=self.format(record),
-                metadata={
+                log_metadata={  # Changed from metadata to log_metadata
                     'function': record.funcName,
                     'line': record.lineno,
                     'module': record.module
@@ -33,10 +34,25 @@ class DatabaseLogHandler(logging.Handler):
                 timestamp=datetime.fromtimestamp(record.created)
             )
 
-            # Since we're in a sync context but need to do async operations,
-            # we'll use asyncio.create_task to schedule the database write
-            import asyncio
-            asyncio.create_task(self._write_to_db(log_entry))
+            # Get or create event loop
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            # Create and run the task
+            task = loop.create_task(self._write_to_db(log_entry))
+            
+            # Add a callback to handle any errors
+            def handle_result(future):
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"Error in async log write: {str(e)}")
+            
+            task.add_done_callback(handle_result)
+
         except Exception as e:
             # Fallback to console logging if database logging fails
             print(f"Error in log handler: {str(e)}")

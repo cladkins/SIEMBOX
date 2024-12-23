@@ -135,6 +135,7 @@ services:
     environment:
       - REACT_APP_API_URL=http://localhost:8080
       - REACT_APP_DETECTION_URL=http://localhost:8001
+      - REACT_APP_IPLOOKUP_URL=http://localhost:8002
     networks:
       - siem_network
     depends_on:

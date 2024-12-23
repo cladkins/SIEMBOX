@@ -15,7 +15,7 @@ from models import (
     Log, LogResponse, PaginatedLogsResponse,
     InternalLog, InternalLogResponse, PaginatedInternalLogsResponse,
     Rule, RuleResponse, RulesListResponse,
-    APIKeys, APIKeyResponse, Setting
+    APIKeys, APIKeyResponse, Setting, CreateInternalLogRequest
 )
 from app_logger import setup_logging
 
@@ -39,7 +39,7 @@ INTERNAL_SERVICES = {'api', 'collector', 'detection', 'iplookup', 'frontend'}
 
 @app.post("/api/app-logs", response_model=InternalLogResponse)
 async def create_internal_log(
-    log_data: InternalLogResponse,
+    log_data: CreateInternalLogRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """Create a new internal application log entry"""
@@ -176,6 +176,63 @@ async def get_logs(
     except Exception as e:
         logger.error(f"Unexpected error in get_logs: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@app.get("/api/settings/api-keys", response_model=APIKeyResponse)
+async def get_api_keys(db: AsyncSession = Depends(get_db)):
+    """Get API keys with masked values"""
+    try:
+        result = await db.execute(select(Setting).where(Setting.key.in_(["IPAPI_KEY", "CROWDSEC_API_KEY"])))
+        settings = result.scalars().all()
+        return APIKeyResponse.from_settings(settings)
+    except Exception as e:
+        logger.error(f"Error getting API keys: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/settings/api-keys", response_model=APIKeyResponse)
+async def update_api_keys(api_keys: APIKeys, db: AsyncSession = Depends(get_db)):
+    """Update API keys"""
+    try:
+        # Update IPAPI_KEY
+        if api_keys.IPAPI_KEY is not None:
+            ipapi_setting = await db.execute(
+                select(Setting).where(Setting.key == "IPAPI_KEY")
+            )
+            ipapi_setting = ipapi_setting.scalar_one_or_none()
+            
+            if ipapi_setting:
+                ipapi_setting.set_value(api_keys.IPAPI_KEY)
+            else:
+                ipapi_setting = Setting(key="IPAPI_KEY")
+                ipapi_setting.set_value(api_keys.IPAPI_KEY)
+                db.add(ipapi_setting)
+
+        # Update CROWDSEC_API_KEY
+        if api_keys.CROWDSEC_API_KEY is not None:
+            crowdsec_setting = await db.execute(
+                select(Setting).where(Setting.key == "CROWDSEC_API_KEY")
+            )
+            crowdsec_setting = crowdsec_setting.scalar_one_or_none()
+            
+            if crowdsec_setting:
+                crowdsec_setting.set_value(api_keys.CROWDSEC_API_KEY)
+            else:
+                crowdsec_setting = Setting(key="CROWDSEC_API_KEY")
+                crowdsec_setting.set_value(api_keys.CROWDSEC_API_KEY)
+                db.add(crowdsec_setting)
+
+        await db.commit()
+
+        # Get updated settings
+        result = await db.execute(
+            select(Setting).where(Setting.key.in_(["IPAPI_KEY", "CROWDSEC_API_KEY"]))
+        )
+        settings = result.scalars().all()
+        return APIKeyResponse.from_settings(settings)
+
+    except Exception as e:
+        logger.error(f"Error updating API keys: {str(e)}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 async def health_check():

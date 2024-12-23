@@ -261,7 +261,7 @@ function Settings() {
 
   const fetchApiStatus = async () => {
     try {
-      const response = await axios.get(`${config.apiUrl}/iplookup/api/status`, {
+      const response = await axios.get(`${config.ipLookupUrl}/api/status`, {
         headers: apiKeys.CROWDSEC_API_KEY ? {
           'x-api-key': apiKeys.CROWDSEC_API_KEY
         } : undefined
@@ -279,7 +279,7 @@ function Settings() {
 
   const validateCrowdSecKey = async () => {
     try {
-      const response = await axios.get(`${config.apiUrl}/iplookup/validate/crowdsec`, {
+      const response = await axios.get(`${config.ipLookupUrl}/validate/crowdsec`, {
         headers: {
           'x-api-key': apiKeys.CROWDSEC_API_KEY
         }

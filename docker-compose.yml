@@ -125,6 +125,34 @@ services:
       retries: 3
       start_period: 40s
 
+  vps-audit:
+    image: ${DOCKER_REGISTRY:-ghcr.io/${GITHUB_REPOSITORY_OWNER:-cladkins}}/siembox/vps-audit:${TAG:-latest}
+    build:
+      context: ./vps-audit
+      dockerfile: Dockerfile
+    ports:
+      - "8004:8004"
+    environment:
+      - POSTGRES_USER=${DB_USER:-siembox}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-changeme}
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=siembox
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-change_this_in_production}
+    networks:
+      - siem_network
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    volumes:
+      - ssh_keys:/root/.ssh
+
   frontend:
     image: ${DOCKER_REGISTRY:-ghcr.io/${GITHUB_REPOSITORY_OWNER:-cladkins}}/siembox/frontend:${TAG:-latest}
     build:
@@ -136,12 +164,15 @@ services:
       - REACT_APP_API_URL=http://localhost:8080
       - REACT_APP_DETECTION_URL=http://localhost:8001
       - REACT_APP_IPLOOKUP_URL=http://localhost:8002
+      - REACT_APP_VPS_AUDIT_URL=http://localhost:8004
     networks:
       - siem_network
     depends_on:
       api:
         condition: service_healthy
       detection:
+        condition: service_healthy
+      vps-audit:
         condition: service_healthy
 
 volumes:
@@ -153,6 +184,8 @@ volumes:
     name: siembox_postgres_data
   redis_data:
     name: siembox_redis_data
+  ssh_keys:
+    name: siembox_ssh_keys
 
 networks:
   siem_network:

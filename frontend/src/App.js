@@ -8,6 +8,7 @@ import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
 import Detections from './pages/Detections';
 import Logs from './pages/Logs';
+import VpsAudit from './pages/VpsAudit';
 
 const theme = createTheme({
   palette: {
@@ -34,6 +35,7 @@ function App() {
               <Route path="/detections" element={<Detections />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/vps-audit" element={<VpsAudit />} />
             </Routes>
           </Box>
         </Box>
@@ -43,4 +45,3 @@ function App() {
 }
 
 export default App;
-

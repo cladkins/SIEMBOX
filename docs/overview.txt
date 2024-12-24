@@ -8,7 +8,7 @@ SIEMBox is a Security Information and Event Management (SIEM) system designed fo
 System Architecture
 =================
 
-The system consists of seven main components:
+The system consists of eight main components:
 
 1. Collector Service (Port 5514, 8000)
    - Receives logs via syslog (TCP/UDP on port 5514)
@@ -36,7 +36,16 @@ The system consists of seven main components:
    - Handles rate limiting for API quotas
    - Supports batch processing of IP lookups
 
-4. API Gateway (Port 8080)
+4. VPS Audit Service (Port 8004)
+   - Performs security audits on remote servers
+   - Supports both password and SSH key authentication
+   - Secure credential storage with encryption
+   - Integrates with vps-audit tool
+   - Maintains audit history and results
+   - Provides detailed security recommendations
+   - Tracks security improvements over time
+
+5. API Gateway (Port 8080)
    - Central coordination point for all services
    - Stores logs in PostgreSQL database
    - Manages API keys and configurations
@@ -44,22 +53,23 @@ The system consists of seven main components:
    - Handles pagination and filtering
    - Implements CORS and security measures
 
-5. Frontend Service (Port 3000)
+6. Frontend Service (Port 3000)
    - React-based web interface
    - Real-time log viewing and filtering
    - Detection rule management
+   - VPS security audit management
    - System statistics and monitoring
    - Dark theme modern UI
    - Responsive design
 
-6. Database Service (Port 5432)
+7. Database Service (Port 5432)
    - PostgreSQL 14 Alpine
    - Stores logs, alerts, and configurations
    - Supports data retention policies
    - Implements health checks
    - Uses persistent volume for data storage
 
-7. Cache Service (Port 6379)
+8. Cache Service (Port 6379)
    - Redis Alpine
    - Handles IP lookup caching
    - Implements rate limiting
@@ -109,17 +119,21 @@ Initial Setup
 
    Security:
    - JWT_SECRET: API security key (Change to secure random string)
+   - ENCRYPTION_KEY: Key for encrypting sensitive data
 
    Service Ports:
    - API_PORT: API Gateway port (default: 8080)
    - DETECTION_PORT: Detection Service port (default: 8001)
    - COLLECTOR_PORT: Collector Service port (default: 8000)
    - IPLOOKUP_PORT: IP Lookup Service port (default: 8002)
+   - VPS_AUDIT_PORT: VPS Audit Service port (default: 8004)
    - FRONTEND_PORT: Frontend Service port (default: 3000)
 
    Frontend Configuration:
    - REACT_APP_API_URL: API Gateway URL (default: http://localhost:8080)
    - REACT_APP_DETECTION_URL: Detection Service URL (default: http://localhost:8001)
+   - REACT_APP_IPLOOKUP_URL: IP Lookup Service URL (default: http://localhost:8002)
+   - REACT_APP_VPS_AUDIT_URL: VPS Audit Service URL (default: http://localhost:8004)
 
    Redis Configuration:
    - REDIS_HOST: Redis host (default: redis)
@@ -140,8 +154,9 @@ Initial Setup
    2. API Gateway (after database is healthy)
    3. Detection Service (loads rules)
    4. IP Lookup Service (after Redis is healthy)
-   5. Collector Service (begins accepting logs)
-   6. Frontend Service (after API and Detection are healthy)
+   5. VPS Audit Service (after database is healthy)
+   6. Collector Service (begins accepting logs)
+   7. Frontend Service (after API and Detection are healthy)
 
 6. Verify Installation:
    # Check service status
@@ -154,6 +169,7 @@ Initial Setup
    $ curl http://localhost:8080/health    # API Gateway
    $ curl http://localhost:8001/health    # Detection Service
    $ curl http://localhost:8002/health    # IP Lookup Service
+   $ curl http://localhost:8004/health    # VPS Audit Service
    $ curl http://localhost:8000/health    # Collector Service
 
 7. Access Web Interface:
@@ -173,6 +189,7 @@ siembox/
 ├── docs/               # Documentation
 ├── frontend/           # Web interface
 ├── iplookup/           # IP intelligence service
+├── vps-audit/          # VPS security audit service
 ├── rules/              # Sigma detection rules
 ├── docker-compose.yml  # Service orchestration
 ├── .env.example        # Environment template
@@ -192,6 +209,12 @@ Next Steps
 
 3. Review and enable detection rules
 
-4. Set up monitoring and alerting
+4. Set up VPS security auditing:
+   - Add servers to monitor
+   - Configure SSH authentication
+   - Schedule regular audits
+   - Review security recommendations
 
-5. Configure backup procedures
+5. Set up monitoring and alerting
+
+6. Configure backup procedures

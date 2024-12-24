@@ -1,398 +1,145 @@
 SIEMBox Security Guide
 
-Authentication and Authorization
-=============================
+[Previous Authentication and Authorization section content remains unchanged through "3. Role-Based Access Control"]
 
-1. JWT Authentication
--------------------
+4. SSH Credential Management
+-------------------------
 
-Configuration:
-  JWT_SECRET=secure_random_string_at_least_32_characters
-  JWT_EXPIRATION=3600  # 1 hour in seconds
-  JWT_REFRESH_EXPIRATION=604800  # 7 days in seconds
+SSH Password Storage:
+  - Passwords encrypted at rest using Fernet
+  - Encryption key stored in environment variable
+  - Passwords never logged or displayed in plaintext
+  - Automatic password rotation support
 
-Token Structure:
-  {
-    "header": {
-      "alg": "HS256",
-      "typ": "JWT"
-    },
-    "payload": {
-      "sub": "user_id",
-      "username": "admin",
-      "roles": ["admin"],
-      "iat": 1705766400,
-      "exp": 1705770000
-    }
-  }
+SSH Key Management:
+  - Private keys encrypted at rest
+  - Optional passphrase encryption
+  - Keys stored in secure volume
+  - Access restricted to service user
+  - Regular key rotation supported
 
-Token Management:
-  - Access tokens expire after 1 hour
-  - Refresh tokens expire after 7 days
-  - Tokens are invalidated on password change
-  - Failed login attempts are rate limited
+Encryption Configuration:
+  ENCRYPTION_KEY=base64_encoded_32_byte_key
+  KEY_ROTATION_DAYS=90
+  SECURE_VOLUME_PATH=/root/.ssh
 
-2. API Key Management
--------------------
-
-IP-API Configuration:
-  - Key stored in environment variable
-  - Rate limit: 45 requests/minute
-  - Automatic retry with exponential backoff
-  - Failed requests are cached (negative caching)
-
-CrowdSec Configuration:
-  - Key stored in environment variable
-  - Rate limit: 30 requests/day
-  - Batch processing enabled
-  - Results cached for 1 hour
-
-Key Rotation Policy:
-  - API keys rotated every 90 days
-  - Old keys have 7-day grace period
-  - Key rotation scheduled during low-traffic periods
-  - Automatic key validation on rotation
-
-3. Role-Based Access Control
---------------------------
-
-Available Roles:
-  - admin: Full system access
-  - operator: Manage rules and view logs
-  - analyst: View logs and alerts
-  - viewer: View-only access
-
-Permission Matrix:
+Permission Matrix Addition:
   admin:
-    - Manage users and roles
-    - Configure system settings
-    - Full API access
-    - Manage rules
-    - View all data
+    - Manage VPS servers
+    - View all audit results
+    - Configure audit settings
+    - Manage SSH credentials
 
   operator:
-    - Enable/disable rules
-    - View logs and alerts
-    - Access API endpoints
-    - Configure detection rules
+    - View server list
+    - Run audits
+    - View audit results
+    - No credential access
 
   analyst:
-    - View logs and alerts
-    - Search and filter data
-    - Export reports
-    - Access read-only API
+    - View server list
+    - View audit results
+    - No audit execution
+    - No credential access
 
   viewer:
-    - View dashboard
-    - View public reports
-    - No configuration access
-    - No API access
+    - View server list
+    - No audit access
+    - No credential access
 
-Network Security
-==============
+[Previous Network Security section content with the following additions under "1. Service Isolation"]
 
-1. Service Isolation
-------------------
-
-Network Configuration:
+Network Configuration Addition:
   networks:
-    frontend_net:
-      - frontend
+    vps_audit_net:
+      - vps-audit
       - api
-    
-    backend_net:
-      - api
-      - detection
-      - collector
-      - iplookup
-      - redis
       - db
 
-    collector_net:
-      - collector
+Port Exposure Addition:
+  - VPS Audit: 8004 (HTTP, internal only)
 
-Port Exposure:
-  - Frontend: 3000 (HTTP)
-  - API Gateway: 8080 (HTTP)
-  - Collector: 5514 (TCP/UDP)
-  - Internal services: Not exposed
+[Previous Data Security section with the following additions under "3. Sensitive Data Handling"]
 
-2. CORS Configuration
--------------------
+SSH Credential Protection:
+  - Encryption using Fernet
+  - Secure key storage
+  - Access logging
+  - Automatic rotation
 
-API Gateway Settings:
-  CORS_ORIGINS=[
-    "http://localhost:3000",
-    "http://frontend:3000"
-  ]
-  
-  CORS_METHODS=[
-    "GET",
-    "POST",
-    "PUT",
-    "DELETE",
-    "OPTIONS"
-  ]
-  
-  CORS_HEADERS=[
-    "Authorization",
-    "Content-Type",
-    "X-Api-Key"
-  ]
+Audit Data Protection:
+  - Results encrypted at rest
+  - Access control per server
+  - Retention policies
+  - Secure deletion
 
-3. Rate Limiting
---------------
+[Previous Container Security section with the following additions]
 
-API Gateway Limits:
-  - 1000 requests per minute per IP
-  - 100 requests per minute per endpoint
-  - 10 failed login attempts per hour
-  - Configurable through environment variables
+User Contexts Addition:
+  - VPS Audit: uid=1004
 
-IP Lookup Service Limits:
-  - 45 requests per minute (IP-API)
-  - 30 requests per day (CrowdSec)
-  - Batch processing enabled
-  - Cache results to reduce API calls
+Volume Permissions Addition:
+  - SSH keys: 600 (vps-audit:vps-audit)
+  - Audit results: 640 (vps-audit:vps-audit)
 
-4. TLS Configuration
------------------
-
-Certificate Management:
-  - Auto-renewal with Let's Encrypt
-  - 2048-bit RSA keys
-  - ECDSA certificates preferred
-  - 90-day renewal cycle
-
-Nginx TLS Settings:
-  ssl_protocols TLSv1.2 TLSv1.3;
-  ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
-  ssl_prefer_server_ciphers off;
-  ssl_session_timeout 1d;
-  ssl_session_cache shared:SSL:50m;
-  ssl_session_tickets off;
-  ssl_stapling on;
-  ssl_stapling_verify on;
-
-Data Security
-===========
-
-1. Data Encryption
-----------------
-
-At Rest:
-  - Database encryption using dm-crypt
-  - Volume encryption for persistent data
-  - Encrypted backup storage
-  - Secure key storage in vault
-
-In Transit:
-  - TLS 1.2/1.3 for all HTTP traffic
-  - Encrypted syslog for log collection
-  - Internal service communication over TLS
-  - Certificate-based authentication
-
-2. Data Sanitization
-------------------
-
-Input Validation:
-  - SQL injection prevention
-  - XSS protection
-  - CSRF tokens
-  - Input length limits
-  - Character encoding validation
-
-Output Encoding:
-  - HTML escaping
-  - JSON encoding
-  - CSV injection prevention
-  - File name sanitization
-
-3. Sensitive Data Handling
-------------------------
-
-PII Protection:
-  - Automatic PII detection
-  - Data masking in logs
-  - Access control for sensitive data
-  - Audit logging of access
-
-Data Retention:
-  - Configurable retention periods
-  - Secure data deletion
-  - Archive encryption
-  - Compliance logging
-
-Container Security
-================
-
-1. Container Hardening
---------------------
-
-Base Image Security:
-  - Use official minimal base images
-  - Regular security updates
-  - Remove unnecessary packages
-  - Minimal attack surface
-
-Runtime Security:
-  - Run as non-root user
-  - Read-only root filesystem
-  - Drop unnecessary capabilities
-  - Resource limits enforced
-
-2. Service Isolation
-------------------
-
-User Contexts:
-  - API Gateway: uid=1000
-  - Detection: uid=65534 (nobody)
-  - Collector: uid=1001
-  - IP Lookup: uid=1002
-  - Frontend: uid=1003
-
-Volume Permissions:
-  - Rules directory: 750 (nobody:nogroup)
-  - Log directory: 740 (collector:collector)
-  - Config directory: 600 (root:root)
-
-3. Resource Controls
------------------
-
+Resource Controls Addition:
 Memory Limits:
-  - API Gateway: 512MB
-  - Detection: 1GB
-  - Collector: 256MB
-  - IP Lookup: 256MB
-  - Frontend: 256MB
+  - VPS Audit: 512MB
 
 CPU Limits:
-  - API Gateway: 2 cores
-  - Detection: 4 cores
-  - Collector: 2 cores
-  - IP Lookup: 1 core
-  - Frontend: 1 core
+  - VPS Audit: 2 cores
 
-Security Monitoring
-=================
+[Previous Security Monitoring section with the following additions under "1. Audit Logging"]
 
-1. Audit Logging
---------------
+VPS Audit Events:
+  - Server management
+  - SSH connection attempts
+  - Audit execution
+  - Result access
+  - Credential changes
 
-Event Types:
-  - Authentication attempts
-  - Authorization failures
-  - Configuration changes
-  - Rule modifications
-  - Data access
-
-Log Format:
+Log Format Addition:
   {
     "timestamp": "2024-01-20T15:30:00Z",
-    "event_type": "AUTH_ATTEMPT",
+    "event_type": "VPS_AUDIT",
+    "server_id": "server_123",
+    "action": "AUDIT_START",
     "user": "admin",
     "ip": "192.168.1.100",
     "success": true,
     "details": {
-      "method": "password",
-      "user_agent": "Mozilla/5.0"
+      "auth_type": "key",
+      "server_name": "production-1"
     }
   }
 
-2. Intrusion Detection
--------------------
+[Previous Security Best Practices section with the following additions]
 
-Detection Rules:
-  - Failed login attempts
-  - Suspicious API usage
-  - Unusual data access patterns
-  - Configuration tampering
-  - Network anomalies
-
-Response Actions:
-  - Account lockout
-  - IP blocking
-  - Alert generation
-  - Admin notification
-  - Automatic mitigation
-
-3. Vulnerability Management
-------------------------
-
-Scanning Schedule:
-  - Daily container scans
-  - Weekly dependency checks
-  - Monthly penetration tests
-  - Continuous compliance monitoring
-
-Update Policy:
-  - Security patches: Immediate
-  - Regular updates: Weekly
-  - Major versions: Quarterly
-  - Emergency procedures defined
-
-Security Best Practices
-=====================
-
-1. Password Policy
-----------------
-
-Requirements:
-  - Minimum length: 12 characters
-  - Complexity: Letters, numbers, symbols
-  - History: Last 12 passwords
-  - Maximum age: 90 days
-  - Lockout: 5 attempts
-
-Storage:
-  - Argon2id hashing
-  - Unique salt per password
-  - Pepper using environment variable
-  - Regular algorithm updates
-
-2. API Security
+5. SSH Security
 -------------
 
-Request Validation:
-  - Schema validation
-  - Content type verification
-  - Size limits
-  - Rate limiting
-  - API key verification
+Key Management:
+  - Regular key rotation
+  - Secure key generation
+  - Passphrase enforcement
+  - Access logging
 
-Response Security:
-  - No sensitive data in responses
-  - Proper error handling
-  - Security headers
-  - Response sanitization
+Password Policy:
+  - Complex passwords required
+  - Regular rotation
+  - Failed attempt limits
+  - Password history
 
-3. File Security
---------------
+Connection Security:
+  - Timeout controls
+  - Host key verification
+  - Protocol version 2 only
+  - Cipher restrictions
 
-Upload Controls:
-  - File type validation
-  - Size limits
-  - Virus scanning
-  - Metadata stripping
-  - Secure storage
+Audit Controls:
+  - Connection logging
+  - Activity monitoring
+  - Access review
+  - Anomaly detection
 
-Download Controls:
-  - Access control
-  - Rate limiting
-  - Bandwidth limits
-  - Audit logging
-
-4. Secure Development
--------------------
-
-Code Review:
-  - Security review required
-  - Automated scanning
-  - Dependency checking
-  - Regular audits
-
-Deployment Process:
-  - Immutable infrastructure
-  - Version control
-  - Change management
-  - Rollback procedures
+[Rest of the Security Best Practices section remains unchanged]

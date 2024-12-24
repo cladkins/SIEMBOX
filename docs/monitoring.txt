@@ -40,6 +40,16 @@ Collector Service Metrics:
   - siembox_collector_processing_time_seconds
   - siembox_collector_queue_size
 
+VPS Audit Service Metrics:
+  - siembox_vps_audit_servers_total{status="active|inactive"}
+  - siembox_vps_audit_audits_total{status="running|completed|failed"}
+  - siembox_vps_audit_audit_duration_seconds{server_id}
+  - siembox_vps_audit_ssh_connections_total{auth_type="password|key", status="success|failed"}
+  - siembox_vps_audit_vulnerabilities_total{severity="high|medium|low"}
+  - siembox_vps_audit_errors_total{type="ssh|audit|database"}
+  - siembox_vps_audit_credential_rotations_total{type="password|key"}
+  - siembox_vps_audit_audit_queue_size
+
 2. Prometheus Configuration
 -------------------------
 
@@ -56,6 +66,7 @@ prometheus.yml:
           - 'detection:8001' # Detection Service
           - 'iplookup:8002' # IP Lookup Service
           - 'collector:8000' # Collector Service
+          - 'vps-audit:8004' # VPS Audit Service
 
     - job_name: 'siembox-node'
       static_configs:
@@ -80,6 +91,11 @@ rules.yml:
         
         - record: job:siembox_logs_processed:rate5m
           expr: rate(siembox_logs_forwarded_total[5m])
+
+        - record: job:siembox_vps_audit_success_rate:5m
+          expr: rate(siembox_vps_audit_audits_total{status="completed"}[5m])
+          /
+          rate(siembox_vps_audit_audits_total{status=~"completed|failed"}[5m])
 
 Grafana Integration
 =================
@@ -148,6 +164,32 @@ IP Intelligence Dashboard:
     * Threat categories
     * Batch processing stats
 
+VPS Audit Dashboard:
+  Panels:
+  - Server Overview
+    * Total servers monitored
+    * Servers by status
+    * Last audit times
+    * SSH connection success rate
+  
+  - Audit Performance
+    * Audits per hour
+    * Average audit duration
+    * Success/failure ratio
+    * Queue size
+  
+  - Security Findings
+    * Vulnerabilities by severity
+    * Top security issues
+    * Recommendations
+    * Trend analysis
+  
+  - SSH Management
+    * Connection attempts
+    * Authentication methods
+    * Credential rotations
+    * Error rates
+
 2. Alerting Configuration
 -----------------------
 
@@ -203,6 +245,30 @@ Alert Rules:
        severity: warning
      annotations:
        summary: "API quota running low"
+
+   - alert: VPSAuditFailureRate
+     expr: rate(siembox_vps_audit_audits_total{status="failed"}[15m]) / rate(siembox_vps_audit_audits_total[15m]) > 0.2
+     for: 15m
+     labels:
+       severity: warning
+     annotations:
+       summary: "High VPS audit failure rate detected"
+
+   - alert: SSHConnectionFailures
+     expr: rate(siembox_vps_audit_ssh_connections_total{status="failed"}[5m]) > 0.3
+     for: 5m
+     labels:
+       severity: warning
+     annotations:
+       summary: "Multiple SSH connection failures detected"
+
+   - alert: CriticalVulnerabilities
+     expr: sum(increase(siembox_vps_audit_vulnerabilities_total{severity="high"}[1h])) > 5
+     for: 1h
+     labels:
+       severity: critical
+     annotations:
+       summary: "Multiple high-severity vulnerabilities detected"
 
 Notification Channels:
 
@@ -274,6 +340,9 @@ Visualization Best Practices
    - Memory Usage: >80% warning, >90% critical
    - Error Rate: >5% warning, >10% critical
    - API Quota: <20% warning, <10% critical
+   - VPS Audit Failure Rate: >20% warning, >40% critical
+   - SSH Connection Failures: >30% warning, >50% critical
+   - High Severity Vulnerabilities: >5/hour warning, >10/hour critical
 
 5. Time Ranges:
    - Default: Last 6 hours

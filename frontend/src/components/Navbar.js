@@ -18,7 +18,8 @@ import {
   Settings as SettingsIcon,
   Menu as MenuIcon,
   Security as SecurityIcon,
-  Article as ArticleIcon
+  Article as ArticleIcon,
+  Storage as StorageIcon
 } from '@mui/icons-material';
 
 const drawerWidth = 240;
@@ -36,6 +37,7 @@ function Navbar() {
     { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
     { text: 'Detections', icon: <SecurityIcon />, path: '/detections' },
     { text: 'Logs', icon: <ArticleIcon />, path: '/logs' },
+    { text: 'VPS Audit', icon: <StorageIcon />, path: '/vps-audit' },
     { text: 'Settings', icon: <SettingsIcon />, path: '/settings' }
   ];
 
@@ -121,4 +123,3 @@ function Navbar() {
 }
 
 export default Navbar;
-

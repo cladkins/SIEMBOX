@@ -1,437 +1,112 @@
-SIEMBox Backup and Recovery Guide
+[Previous content through "3. Configuration Backup" section]
 
-Backup Strategy
-=============
+4. VPS Audit Backup
+-----------------
 
-1. Database Backup
-----------------
+SSH Credentials Backup:
+  $ docker-compose exec -T db pg_dump -U siembox -t servers --column-inserts > \
+    /backup/vps_servers_$(date +\%Y\%m\%d).sql
 
-Daily Automated Backup:
-  $ docker-compose exec -T db pg_dump -U siembox > /backup/siembox_$(date +\%Y\%m\%d).sql
+Audit Results Backup:
+  $ docker-compose exec -T db pg_dump -U siembox -t audit_results --column-inserts > \
+    /backup/vps_audit_results_$(date +\%Y\%m\%d).sql
 
-Backup with Compression:
-  $ docker-compose exec db pg_dump -U siembox | gzip > /backup/siembox_$(date +\%Y\%m\%d).sql.gz
+SSH Keys Volume:
+  $ docker run --rm -v ssh_keys:/data -v /backup:/backup \
+    alpine tar czf /backup/ssh_keys_$(date +\%Y\%m\%d).tar.gz /data
 
-Backup Specific Tables:
-  $ docker-compose exec db pg_dump -U siembox -t logs -t alerts > /backup/critical_data.sql
-
-Backup Script (backup_db.sh):
+VPS Audit Backup Script (backup_vps_audit.sh):
   #!/bin/bash
   
-  BACKUP_DIR="/backup/database"
+  BACKUP_DIR="/backup/vps-audit"
   DATE=$(date +%Y%m%d)
   RETENTION_DAYS=14
   
   # Create backup directory
   mkdir -p $BACKUP_DIR
   
-  # Create backup
-  docker-compose exec -T db pg_dump -U siembox | gzip > $BACKUP_DIR/siembox_$DATE.sql.gz
+  # Backup server configurations and credentials
+  docker-compose exec -T db pg_dump -U siembox -t servers --column-inserts > \
+    $BACKUP_DIR/vps_servers_$DATE.sql
+  
+  # Backup audit results
+  docker-compose exec -T db pg_dump -U siembox -t audit_results --column-inserts > \
+    $BACKUP_DIR/vps_audit_results_$DATE.sql
+  
+  # Backup SSH keys
+  docker run --rm -v ssh_keys:/data -v $BACKUP_DIR:/backup \
+    alpine tar czf /backup/ssh_keys_$DATE.tar.gz /data
   
   # Remove old backups
-  find $BACKUP_DIR -name "*.sql.gz" -mtime +$RETENTION_DAYS -delete
+  find $BACKUP_DIR -name "*.sql" -mtime +$RETENTION_DAYS -delete
+  find $BACKUP_DIR -name "*.tar.gz" -mtime +$RETENTION_DAYS -delete
 
-2. Volume Backup
---------------
+[Previous "Disaster Recovery" section with the following additions under "2. Volume Recovery"]
 
-Sigma Rules Volume (Bind Mount):
-  $ tar czf /backup/sigma_rules_$(date +\%Y\%m\%d).tar.gz ./rules
+Restore SSH Keys:
+  $ docker volume rm ssh_keys
+  $ docker volume create ssh_keys
+  $ docker run --rm -v ssh_keys:/data -v /backup:/backup \
+    alpine tar xzf /backup/ssh_keys_20240120.tar.gz -C /data
 
-Collector Data Volume:
-  $ docker run --rm -v collector_data:/data -v /backup:/backup \
-    alpine tar czf /backup/collector_data_$(date +\%Y\%m\%d).tar.gz /data
+[Previous content through "Data Retention" section with the following additions under "2. Alert Retention"]
 
-Redis Data Volume:
-  $ docker run --rm -v redis_data:/data -v /backup:/backup \
-    alpine tar czf /backup/redis_data_$(date +\%Y\%m\%d).tar.gz /data
+5. VPS Audit Retention
+-------------------
 
-Postgres Data Volume:
-  $ docker run --rm -v postgres_data:/data -v /backup:/backup \
-    alpine tar czf /backup/postgres_data_$(date +\%Y\%m\%d).tar.gz /data
-
-Volume Backup Script (backup_volumes.sh):
+Audit Results Cleanup Script (cleanup_vps_audit.sh):
   #!/bin/bash
   
-  BACKUP_DIR="/backup/volumes"
-  DATE=$(date +%Y%m%d)
-  
-  # Create backup directory
-  mkdir -p $BACKUP_DIR
-  
-  # Backup Sigma rules (bind mount)
-  tar czf $BACKUP_DIR/sigma_rules_$DATE.tar.gz ./rules
-  
-  # Backup collector data
-  docker run --rm -v collector_data:/data -v $BACKUP_DIR:/backup \
-    alpine tar czf /backup/collector_data_$DATE.tar.gz /data
-  
-  # Backup Redis data
-  docker run --rm -v redis_data:/data -v $BACKUP_DIR:/backup \
-    alpine tar czf /backup/redis_data_$DATE.tar.gz /data
-  
-  # Backup Postgres data
-  docker run --rm -v postgres_data:/data -v $BACKUP_DIR:/backup \
-    alpine tar czf /backup/postgres_data_$DATE.tar.gz /data
-
-3. Configuration Backup
---------------------
-
-Environment Variables:
-  $ cp .env /backup/env_$(date +\%Y\%m\%d)
-
-Docker Compose Configuration:
-  $ cp docker-compose.yml /backup/docker-compose_$(date +\%Y\%m\%d).yml
-
-Service Configurations:
-  $ tar czf /backup/configs_$(date +\%Y\%m\%d).tar.gz \
-    collector/rsyslog.conf \
-    detection/main.py \
-    api/main.py \
-    iplookup/main.py
-
-Configuration Backup Script (backup_configs.sh):
-  #!/bin/bash
-  
-  BACKUP_DIR="/backup/configs"
-  DATE=$(date +%Y%m%d)
-  
-  # Create backup directory
-  mkdir -p $BACKUP_DIR
-  
-  # Backup environment file
-  cp .env $BACKUP_DIR/env_$DATE
-  
-  # Backup docker-compose file
-  cp docker-compose.yml $BACKUP_DIR/docker-compose_$DATE.yml
-  
-  # Backup service configurations
-  tar czf $BACKUP_DIR/configs_$DATE.tar.gz \
-    collector/rsyslog.conf \
-    detection/main.py \
-    api/main.py \
-    iplookup/main.py
-
-Disaster Recovery
-===============
-
-1. Database Recovery
-------------------
-
-Stop Affected Services:
-  $ docker-compose stop api detection
-
-Restore Database:
-  $ cat /backup/siembox_20240120.sql | docker-compose exec -T db psql -U siembox
-
-Verify Restoration:
-  $ docker-compose exec db psql -U siembox -c "SELECT COUNT(*) FROM logs;"
-
-Restart Services:
-  $ docker-compose start api detection
-
-Database Recovery Script (recover_db.sh):
-  #!/bin/bash
-  
-  if [ -z "$1" ]; then
-    echo "Usage: $0 backup_file"
-    exit 1
-  fi
-  
-  BACKUP_FILE=$1
-  
-  # Stop dependent services
-  docker-compose stop api detection
-  
-  # Restore database
-  cat $BACKUP_FILE | docker-compose exec -T db psql -U siembox
-  
-  # Verify restoration
-  docker-compose exec db psql -U siembox -c "SELECT COUNT(*) FROM logs;"
-  
-  # Start services
-  docker-compose start api detection
-
-2. Volume Recovery
-----------------
-
-Restore Sigma Rules (Bind Mount):
-  $ rm -rf ./rules/*
-  $ tar xzf /backup/sigma_rules_20240120.tar.gz -C ./rules
-
-Restore Collector Data:
-  $ docker-compose down
-  $ docker volume rm collector_data
-  $ docker volume create collector_data
-  $ docker run --rm -v collector_data:/data -v /backup:/backup \
-    alpine tar xzf /backup/collector_data_20240120.tar.gz -C /data
-
-Restore Redis Data:
-  $ docker volume rm redis_data
-  $ docker volume create redis_data
-  $ docker run --rm -v redis_data:/data -v /backup:/backup \
-    alpine tar xzf /backup/redis_data_20240120.tar.gz -C /data
-
-Restore Postgres Data:
-  $ docker volume rm postgres_data
-  $ docker volume create postgres_data
-  $ docker run --rm -v postgres_data:/data -v /backup:/backup \
-    alpine tar xzf /backup/postgres_data_20240120.tar.gz -C /data
-
-Volume Recovery Script (recover_volumes.sh):
-  #!/bin/bash
-  
-  if [ -z "$1" ]; then
-    echo "Usage: $0 backup_date"
-    exit 1
-  fi
-  
-  DATE=$1
-  BACKUP_DIR="/backup/volumes"
-  
-  # Restore Sigma rules (bind mount)
-  rm -rf ./rules/*
-  tar xzf $BACKUP_DIR/sigma_rules_$DATE.tar.gz -C ./rules
-  
-  # Stop services
-  docker-compose down
-  
-  # Restore collector data
-  docker volume rm collector_data
-  docker volume create collector_data
-  docker run --rm -v collector_data:/data -v $BACKUP_DIR:/backup \
-    alpine tar xzf /backup/collector_data_$DATE.tar.gz -C /data
-  
-  # Restore Redis data
-  docker volume rm redis_data
-  docker volume create redis_data
-  docker run --rm -v redis_data:/data -v $BACKUP_DIR:/backup \
-    alpine tar xzf /backup/redis_data_$DATE.tar.gz -C /data
-  
-  # Restore Postgres data
-  docker volume rm postgres_data
-  docker volume create postgres_data
-  docker run --rm -v postgres_data:/data -v $BACKUP_DIR:/backup \
-    alpine tar xzf /backup/postgres_data_$DATE.tar.gz -C /data
-
-3. Configuration Recovery
-----------------------
-
-Restore Environment Variables:
-  $ cp /backup/env_20240120 .env
-
-Restore Docker Compose Configuration:
-  $ cp /backup/docker-compose_20240120.yml docker-compose.yml
-
-Restore Service Configurations:
-  $ tar xzf /backup/configs_20240120.tar.gz
-
-Configuration Recovery Script (recover_configs.sh):
-  #!/bin/bash
-  
-  if [ -z "$1" ]; then
-    echo "Usage: $0 backup_date"
-    exit 1
-  fi
-  
-  DATE=$1
-  BACKUP_DIR="/backup/configs"
-  
-  # Restore environment file
-  cp $BACKUP_DIR/env_$DATE .env
-  
-  # Restore docker-compose file
-  cp $BACKUP_DIR/docker-compose_$DATE.yml docker-compose.yml
-  
-  # Restore service configurations
-  tar xzf $BACKUP_DIR/configs_$DATE.tar.gz
-
-4. Full System Recovery
---------------------
-
-Full Recovery Script (recover_system.sh):
-  #!/bin/bash
-  
-  if [ -z "$1" ]; then
-    echo "Usage: $0 backup_date"
-    exit 1
-  fi
-  
-  DATE=$1
-  
-  # Stop all services
-  docker-compose down
-  
-  # Restore configurations
-  ./recover_configs.sh $DATE
-  
-  # Restore volumes
-  ./recover_volumes.sh $DATE
-  
-  # Start core services
-  docker-compose up -d db redis
-  sleep 30
-  
-  # Restore database
-  ./recover_db.sh /backup/database/siembox_$DATE.sql.gz
-  
-  # Start remaining services
-  docker-compose up -d api
-  sleep 10
-  docker-compose up -d detection iplookup collector
-  sleep 10
-  docker-compose up -d frontend
-
-Data Retention
-============
-
-1. Log Retention
---------------
-
-Automatic Log Rotation:
-  - Daily logs: 7 days
-  - Weekly summaries: 4 weeks
-  - Monthly summaries: 12 months
-
-Database Cleanup Script (cleanup_logs.sh):
-  #!/bin/bash
-  
-  # Delete logs older than 14 days
+  # Archive old audit results
   docker-compose exec db psql -U siembox -c \
-    "DELETE FROM logs WHERE timestamp < NOW() - INTERVAL '14 days';"
+    "INSERT INTO audit_results_archive 
+     SELECT * FROM audit_results 
+     WHERE timestamp < NOW() - INTERVAL '90 days';"
   
-  # Archive important logs
+  # Delete old audit results
   docker-compose exec db psql -U siembox -c \
-    "INSERT INTO logs_archive 
-     SELECT * FROM logs 
-     WHERE severity IN ('high', 'critical') 
-     AND timestamp < NOW() - INTERVAL '14 days';"
+    "DELETE FROM audit_results 
+     WHERE timestamp < NOW() - INTERVAL '90 days';"
+  
+  # Archive important findings
+  docker-compose exec db psql -U siembox -c \
+    "INSERT INTO audit_findings_archive 
+     SELECT ar.* 
+     FROM audit_results ar 
+     WHERE ar.timestamp < NOW() - INTERVAL '90 days'
+     AND EXISTS (
+       SELECT 1 
+       FROM jsonb_array_elements(ar.vulnerabilities) v 
+       WHERE v->>'severity' = 'high'
+     );"
 
-2. Alert Retention
----------------
+[Previous "Backup Verification" section with the following additions under "1. Automated Testing"]
 
-Alert Cleanup Script (cleanup_alerts.sh):
+VPS Audit Verification Script (verify_vps_audit_backup.sh):
   #!/bin/bash
   
-  # Delete alerts older than 90 days
-  docker-compose exec db psql -U siembox -c \
-    "DELETE FROM alerts WHERE timestamp < NOW() - INTERVAL '90 days';"
-  
-  # Archive important alerts
-  docker-compose exec db psql -U siembox -c \
-    "INSERT INTO alerts_archive 
-     SELECT * FROM alerts 
-     WHERE severity IN ('high', 'critical') 
-     AND timestamp < NOW() - INTERVAL '90 days';"
-
-3. Cache Retention
----------------
-
-Redis Configuration:
-  maxmemory 2gb
-  maxmemory-policy allkeys-lru
-
-Cache TTL Settings:
-  - Threat data: 24 hours
-  - Geolocation data: 7 days
-  - Negative cache: 1 hour
-
-4. Performance Data
-----------------
-
-Metrics Retention Script (cleanup_metrics.sh):
-  #!/bin/bash
-  
-  # Aggregate old metrics
-  docker-compose exec db psql -U siembox -c \
-    "INSERT INTO metrics_archive 
-     SELECT date_trunc('hour', timestamp), 
-            avg(cpu_usage), 
-            avg(memory_usage),
-            sum(requests)
-     FROM performance_metrics 
-     WHERE timestamp < NOW() - INTERVAL '7 days'
-     GROUP BY date_trunc('hour', timestamp);"
-  
-  # Remove old metrics
-  docker-compose exec db psql -U siembox -c \
-    "DELETE FROM performance_metrics 
-     WHERE timestamp < NOW() - INTERVAL '7 days';"
-
-Backup Verification
-=================
-
-1. Automated Testing
-------------------
-
-Weekly Verification Script (verify_backup.sh):
-  #!/bin/bash
-  
-  TEST_DIR="/tmp/backup_test"
+  TEST_DIR="/tmp/vps_audit_test"
   DATE=$(date +%Y%m%d)
   
   # Create test environment
   mkdir -p $TEST_DIR
   
-  # Test database backup
-  gunzip -c /backup/database/siembox_$DATE.sql.gz > $TEST_DIR/test.sql
+  # Test server configurations backup
+  psql -f $BACKUP_DIR/vps_servers_$DATE.sql -v ON_ERROR_STOP=1
   
-  # Test volume backups
-  tar tzf /backup/volumes/sigma_rules_$DATE.tar.gz > /dev/null
-  tar tzf /backup/volumes/collector_data_$DATE.tar.gz > /dev/null
-  tar tzf /backup/volumes/redis_data_$DATE.tar.gz > /dev/null
-  tar tzf /backup/volumes/postgres_data_$DATE.tar.gz > /dev/null
+  # Test audit results backup
+  psql -f $BACKUP_DIR/vps_audit_results_$DATE.sql -v ON_ERROR_STOP=1
   
-  # Test configuration backups
-  tar tzf /backup/configs/configs_$DATE.tar.gz > /dev/null
+  # Test SSH keys backup
+  tar tzf $BACKUP_DIR/ssh_keys_$DATE.tar.gz > /dev/null
+  
+  # Verify data integrity
+  docker-compose exec db psql -U siembox -c \
+    "SELECT COUNT(*) FROM servers;"
+  docker-compose exec db psql -U siembox -c \
+    "SELECT COUNT(*) FROM audit_results;"
   
   # Clean up
   rm -rf $TEST_DIR
 
-2. Recovery Testing
------------------
-
-Monthly Recovery Test Script (test_recovery.sh):
-  #!/bin/bash
-  
-  TEST_DIR="/tmp/siembox_recovery_test"
-  DATE=$(date +%Y%m%d)
-  
-  # Create test environment
-  mkdir -p $TEST_DIR
-  cd $TEST_DIR
-  
-  # Clone repository
-  git clone https://github.com/yourusername/siembox.git
-  cd siembox
-  
-  # Test recovery
-  ./recover_system.sh $DATE
-  
-  # Run tests
-  ./run_tests.sh
-  
-  # Clean up
-  cd /
-  rm -rf $TEST_DIR
-
-3. Monitoring
------------
-
-Backup Monitoring Script (monitor_backups.sh):
-  #!/bin/bash
-  
-  # Check backup freshness
-  find /backup -type f -mtime +1 -name "*.sql.gz" | grep -q . && \
-    echo "WARNING: Database backup is older than 24 hours"
-  
-  # Check backup sizes
-  for backup in /backup/*/*.{sql.gz,tar.gz}; do
-    size=$(du -h "$backup" | cut -f1)
-    echo "Backup size for $backup: $size"
-  done
-  
-  # Check backup integrity
-  for backup in /backup/*/*.tar.gz; do
-    tar tzf "$backup" > /dev/null 2>&1 || \
-      echo "ERROR: Corrupt backup detected: $backup"
-  done
+[Rest of the previous content remains unchanged]

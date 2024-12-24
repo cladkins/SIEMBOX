@@ -42,3 +42,18 @@ yarn-error.log
 # Application specific
 logs/
 data/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# SSH Keys and certificates
+.ssh/
+*.pem
+*.key
+*.crt
+
+# Additional sensitive files
+*.env
+!.env.example

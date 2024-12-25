@@ -17,6 +17,14 @@ from models import (
     Rule, RuleResponse, RulesListResponse,
     APIKeys, APIKeyResponse, Setting, CreateInternalLogRequest
 )
+from pydantic import BaseModel
+from typing import Dict, Any, Optional
+
+class CreateLogRequest(BaseModel):
+    source: str
+    message: str
+    level: str = "INFO"
+    log_metadata: Dict[str, Any] = {}
 from app_logger import setup_logging
 
 # Set up logging with the new handler
@@ -121,6 +129,38 @@ async def get_internal_logs(
     except Exception as e:
         logger.error(f"Error getting internal logs: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/logs", response_model=LogResponse)
+async def create_log(
+    log_data: CreateLogRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Create a new log entry"""
+    try:
+        # Create new log entry
+        new_log = Log(
+            source=log_data.source,
+            message=log_data.message,
+            level=log_data.level,
+            log_metadata=log_data.log_metadata,
+            timestamp=datetime.utcnow()
+        )
+
+        db.add(new_log)
+        await db.commit()
+        await db.refresh(new_log)
+
+        logger.info(f"Successfully created log entry with id: {new_log.id}")
+        return new_log
+
+    except SQLAlchemyError as e:
+        logger.error(f"Database error in create_log: {str(e)}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error in create_log: {str(e)}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @app.get("/api/logs", response_model=PaginatedLogsResponse)
 async def get_logs(

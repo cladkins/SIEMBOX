@@ -32,7 +32,7 @@ services:
       start_period: 10s
 
   detection:
-    image: ${DOCKER_REGISTRY:-ghcr.io/${GITHUB_REPOSITORY_OWNER:-cladkins}}/siembox/detection:${TAG:-latest}
+    image: ghcr.io/cladkins/siembox/detection:latest
     build:
       context: ./detection
       dockerfile: Dockerfile
@@ -57,7 +57,7 @@ services:
     init: true
 
   collector:
-    image: ${DOCKER_REGISTRY:-ghcr.io/${GITHUB_REPOSITORY_OWNER:-cladkins}}/siembox/collector:${TAG:-latest}
+    image: ghcr.io/cladkins/siembox/collector:latest
     build:
       context: ./collector
       dockerfile: Dockerfile
@@ -80,7 +80,7 @@ services:
       start_period: 40s
 
   iplookup:
-    image: ${DOCKER_REGISTRY:-ghcr.io/${GITHUB_REPOSITORY_OWNER:-cladkins}}/siembox/iplookup:${TAG:-latest}
+    image: ghcr.io/cladkins/siembox/iplookup:latest
     build:
       context: ./iplookup
       dockerfile: Dockerfile
@@ -102,7 +102,7 @@ services:
       start_period: 30s
 
   api:
-    image: ${DOCKER_REGISTRY:-ghcr.io/${GITHUB_REPOSITORY_OWNER:-cladkins}}/siembox/api:${TAG:-latest}
+    image: ghcr.io/cladkins/siembox/api:latest
     build:
       context: ./api
       dockerfile: Dockerfile
@@ -129,7 +129,7 @@ services:
       start_period: 40s
 
   vps-audit:
-    image: ${DOCKER_REGISTRY:-ghcr.io/${GITHUB_REPOSITORY_OWNER:-cladkins}}/siembox/vps-audit:${TAG:-latest}
+    image: ghcr.io/cladkins/siembox/vps-audit:latest
     build:
       context: ./vps-audit
       dockerfile: Dockerfile
@@ -157,7 +157,7 @@ services:
       - ssh_keys:/root/.ssh
 
   frontend:
-    image: ${DOCKER_REGISTRY:-ghcr.io/${GITHUB_REPOSITORY_OWNER:-cladkins}}/siembox/frontend:${TAG:-latest}
+    image: ghcr.io/cladkins/siembox/frontend:latest
     build:
       context: ./frontend
       dockerfile: Dockerfile

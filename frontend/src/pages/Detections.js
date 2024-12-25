@@ -14,15 +14,46 @@ import {
   CircularProgress,
   IconButton,
   Tooltip,
-  Grid
+  Grid,
+  TextField,
+  InputAdornment
 } from '@mui/material';
-import { Refresh as RefreshIcon } from '@mui/icons-material';
+import {
+  Refresh as RefreshIcon,
+  ArrowUpward as ArrowUpwardIcon,
+  ArrowDownward as ArrowDownwardIcon,
+  Search as SearchIcon
+} from '@mui/icons-material';
 import config from '../config';
 
 function Detections() {
   const [detections, setDetections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [sortConfig, setSortConfig] = useState({ key: 'timestamp', direction: 'desc' });
+  const [filters, setFilters] = useState({
+    timestamp: '',
+    rule_name: '',
+    severity: '',
+    log_source: '',
+    details: ''
+  });
+
+  // Handle sorting
+  const handleSort = (key) => {
+    setSortConfig((prevSort) => ({
+      key,
+      direction: prevSort.key === key && prevSort.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  // Handle filtering
+  const handleFilterChange = (column, value) => {
+    setFilters(prev => ({
+      ...prev,
+      [column]: value
+    }));
+  };
 
   const fetchDetections = async () => {
     try {
@@ -108,6 +139,60 @@ function Detections() {
     }
   };
 
+  // Filter detections
+  const filteredDetections = detections.filter(detection => {
+    return Object.entries(filters).every(([key, value]) => {
+      if (!value) return true;
+      
+      const searchValue = value.toLowerCase();
+      switch (key) {
+        case 'timestamp':
+          return new Date(detection.timestamp)
+            .toLocaleString()
+            .toLowerCase()
+            .includes(searchValue);
+        case 'rule_name':
+          return detection.rule_name.toLowerCase().includes(searchValue);
+        case 'severity':
+          return detection.severity.toLowerCase().includes(searchValue);
+        case 'log_source':
+          return detection.log_source.toLowerCase().includes(searchValue);
+        case 'details':
+          return formatDetails(detection.matched_log).toLowerCase().includes(searchValue);
+        default:
+          return true;
+      }
+    });
+  });
+
+  // Sort detections
+  const sortedDetections = [...filteredDetections].sort((a, b) => {
+    const { key, direction } = sortConfig;
+    let comparison = 0;
+
+    switch (key) {
+      case 'timestamp':
+        comparison = new Date(a.timestamp) - new Date(b.timestamp);
+        break;
+      case 'rule_name':
+        comparison = a.rule_name.localeCompare(b.rule_name);
+        break;
+      case 'severity':
+        comparison = a.severity.localeCompare(b.severity);
+        break;
+      case 'log_source':
+        comparison = a.log_source.localeCompare(b.log_source);
+        break;
+      case 'details':
+        comparison = formatDetails(a.matched_log).localeCompare(formatDetails(b.matched_log));
+        break;
+      default:
+        comparison = 0;
+    }
+
+    return direction === 'asc' ? comparison : -comparison;
+  });
+
   if (error) {
     return (
       <Box sx={{ p: 3 }}>
@@ -157,25 +242,92 @@ function Detections() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell sx={{ color: 'rgba(255, 255, 255, 0.7)', borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}>
-                  Timestamp
-                </TableCell>
-                <TableCell sx={{ color: 'rgba(255, 255, 255, 0.7)', borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}>
-                  Rule Name
-                </TableCell>
-                <TableCell sx={{ color: 'rgba(255, 255, 255, 0.7)', borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}>
-                  Severity
-                </TableCell>
-                <TableCell sx={{ color: 'rgba(255, 255, 255, 0.7)', borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}>
-                  Source
-                </TableCell>
-                <TableCell sx={{ color: 'rgba(255, 255, 255, 0.7)', borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}>
-                  Details
-                </TableCell>
+                {[
+                  { id: 'timestamp', label: 'Timestamp' },
+                  { id: 'rule_name', label: 'Rule Name' },
+                  { id: 'severity', label: 'Severity' },
+                  { id: 'log_source', label: 'Source' },
+                  { id: 'details', label: 'Details' }
+                ].map((column) => (
+                  <TableCell
+                    key={column.id}
+                    onClick={() => handleSort(column.id)}
+                    sx={{
+                      color: 'rgba(255, 255, 255, 0.7)',
+                      borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+                      cursor: 'pointer',
+                      '&:hover': {
+                        backgroundColor: 'rgba(255, 255, 255, 0.05)'
+                      }
+                    }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                      {column.label}
+                      {sortConfig.key === column.id && (
+                        <Box component="span" sx={{ ml: 1 }}>
+                          {sortConfig.direction === 'asc' ? (
+                            <ArrowUpwardIcon sx={{ fontSize: 16 }} />
+                          ) : (
+                            <ArrowDownwardIcon sx={{ fontSize: 16 }} />
+                          )}
+                        </Box>
+                      )}
+                    </Box>
+                  </TableCell>
+                ))}
+              </TableRow>
+              <TableRow>
+                {[
+                  'timestamp',
+                  'rule_name',
+                  'severity',
+                  'log_source',
+                  'details'
+                ].map((column) => (
+                  <TableCell
+                    key={column}
+                    sx={{
+                      borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+                      padding: '8px'
+                    }}
+                  >
+                    <TextField
+                      size="small"
+                      placeholder={`Filter ${column.replace('_', ' ')}...`}
+                      value={filters[column]}
+                      onChange={(e) => handleFilterChange(column, e.target.value)}
+                      InputProps={{
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <SearchIcon sx={{ color: 'rgba(255, 255, 255, 0.3)' }} />
+                          </InputAdornment>
+                        ),
+                        sx: {
+                          color: '#fff',
+                          '& .MuiOutlinedInput-notchedOutline': {
+                            borderColor: 'rgba(255, 255, 255, 0.1)'
+                          },
+                          '&:hover .MuiOutlinedInput-notchedOutline': {
+                            borderColor: 'rgba(255, 255, 255, 0.3)'
+                          },
+                          '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                            borderColor: '#4d9fff'
+                          }
+                        }
+                      }}
+                      sx={{
+                        width: '100%',
+                        '& .MuiInputBase-input': {
+                          color: '#fff'
+                        }
+                      }}
+                    />
+                  </TableCell>
+                ))}
               </TableRow>
             </TableHead>
             <TableBody>
-              {detections.length === 0 ? (
+              {sortedDetections.length === 0 ? (
                 <TableRow>
                   <TableCell 
                     colSpan={5} 
@@ -189,7 +341,7 @@ function Detections() {
                   </TableCell>
                 </TableRow>
               ) : (
-                detections.map((detection) => (
+                sortedDetections.map((detection) => (
                   <TableRow key={`${detection.rule_id}-${detection.timestamp}`}>
                     <TableCell 
                       sx={{ 

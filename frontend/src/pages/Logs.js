@@ -16,19 +16,31 @@ import {
   CircularProgress,
   Grid,
   Pagination,
-  Stack
+  Stack,
+  InputAdornment
 } from '@mui/material';
-import { Refresh as RefreshIcon } from '@mui/icons-material';
+import {
+  Refresh as RefreshIcon,
+  ArrowUpward as ArrowUpwardIcon,
+  ArrowDownward as ArrowDownwardIcon,
+  Search as SearchIcon
+} from '@mui/icons-material';
 import config from '../config';
 
 function Logs() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [filter, setFilter] = useState('');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [pageSize] = useState(50);
+  const [sortConfig, setSortConfig] = useState({ key: 'timestamp', direction: 'desc' });
+  const [filters, setFilters] = useState({
+    timestamp: '',
+    source: '',
+    type: '',
+    message: ''
+  });
 
   const fetchLogs = async () => {
     try {
@@ -63,9 +75,70 @@ function Logs() {
     setPage(newPage);
   };
 
-  const filteredLogs = logs.filter(log => 
-    JSON.stringify(log).toLowerCase().includes(filter.toLowerCase())
-  );
+  // Handle sorting
+  const handleSort = (key) => {
+    setSortConfig((prevSort) => ({
+      key,
+      direction: prevSort.key === key && prevSort.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  // Handle filtering
+  const handleFilterChange = (column, value) => {
+    setFilters(prev => ({
+      ...prev,
+      [column]: value
+    }));
+  };
+
+  // Filter logs
+  const filteredLogs = logs.filter(log => {
+    return Object.entries(filters).every(([key, value]) => {
+      if (!value) return true;
+      
+      const searchValue = value.toLowerCase();
+      switch (key) {
+        case 'timestamp':
+          return new Date(log.timestamp)
+            .toLocaleString()
+            .toLowerCase()
+            .includes(searchValue);
+        case 'source':
+          return log.source.toLowerCase().includes(searchValue);
+        case 'type':
+          return log.type.toLowerCase().includes(searchValue);
+        case 'message':
+          return log.message.toLowerCase().includes(searchValue);
+        default:
+          return true;
+      }
+    });
+  });
+
+  // Sort logs
+  const sortedLogs = [...filteredLogs].sort((a, b) => {
+    const { key, direction } = sortConfig;
+    let comparison = 0;
+
+    switch (key) {
+      case 'timestamp':
+        comparison = new Date(a.timestamp) - new Date(b.timestamp);
+        break;
+      case 'source':
+        comparison = a.source.localeCompare(b.source);
+        break;
+      case 'type':
+        comparison = a.type.localeCompare(b.type);
+        break;
+      case 'message':
+        comparison = a.message.localeCompare(b.message);
+        break;
+      default:
+        comparison = 0;
+    }
+
+    return direction === 'asc' ? comparison : -comparison;
+  });
 
   if (error) {
     return (
@@ -84,34 +157,6 @@ function Logs() {
           </Typography>
         </Grid>
         <Grid item>
-          <TextField
-            label="Filter logs"
-            variant="outlined"
-            size="small"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            sx={{
-              mr: 2,
-              '& .MuiOutlinedInput-root': {
-                backgroundColor: '#2d2d2d',
-                '& fieldset': {
-                  borderColor: 'rgba(255, 255, 255, 0.1)',
-                },
-                '&:hover fieldset': {
-                  borderColor: 'rgba(255, 255, 255, 0.2)',
-                },
-                '&.Mui-focused fieldset': {
-                  borderColor: '#4d9fff',
-                }
-              },
-              '& .MuiInputLabel-root': {
-                color: 'rgba(255, 255, 255, 0.7)',
-              },
-              '& .MuiInputBase-input': {
-                color: '#fff',
-              },
-            }}
-          />
           <Tooltip title="Refresh logs">
             <IconButton 
               onClick={handleRefresh} 
@@ -145,22 +190,90 @@ function Logs() {
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableCell sx={{ color: 'rgba(255, 255, 255, 0.7)', borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}>
-                    Timestamp
-                  </TableCell>
-                  <TableCell sx={{ color: 'rgba(255, 255, 255, 0.7)', borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}>
-                    Source
-                  </TableCell>
-                  <TableCell sx={{ color: 'rgba(255, 255, 255, 0.7)', borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}>
-                    Type
-                  </TableCell>
-                  <TableCell sx={{ color: 'rgba(255, 255, 255, 0.7)', borderBottom: '1px solid rgba(255, 255, 255, 0.1)' }}>
-                    Message
-                  </TableCell>
+                  {[
+                    { id: 'timestamp', label: 'Timestamp' },
+                    { id: 'source', label: 'Source' },
+                    { id: 'type', label: 'Type' },
+                    { id: 'message', label: 'Message' }
+                  ].map((column) => (
+                    <TableCell
+                      key={column.id}
+                      onClick={() => handleSort(column.id)}
+                      sx={{
+                        color: 'rgba(255, 255, 255, 0.7)',
+                        borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+                        cursor: 'pointer',
+                        '&:hover': {
+                          backgroundColor: 'rgba(255, 255, 255, 0.05)'
+                        }
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        {column.label}
+                        {sortConfig.key === column.id && (
+                          <Box component="span" sx={{ ml: 1 }}>
+                            {sortConfig.direction === 'asc' ? (
+                              <ArrowUpwardIcon sx={{ fontSize: 16 }} />
+                            ) : (
+                              <ArrowDownwardIcon sx={{ fontSize: 16 }} />
+                            )}
+                          </Box>
+                        )}
+                      </Box>
+                    </TableCell>
+                  ))}
+                </TableRow>
+                <TableRow>
+                  {[
+                    'timestamp',
+                    'source',
+                    'type',
+                    'message'
+                  ].map((column) => (
+                    <TableCell
+                      key={column}
+                      sx={{
+                        borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+                        padding: '8px'
+                      }}
+                    >
+                      <TextField
+                        size="small"
+                        placeholder={`Filter ${column}...`}
+                        value={filters[column]}
+                        onChange={(e) => handleFilterChange(column, e.target.value)}
+                        InputProps={{
+                          startAdornment: (
+                            <InputAdornment position="start">
+                              <SearchIcon sx={{ color: 'rgba(255, 255, 255, 0.3)' }} />
+                            </InputAdornment>
+                          ),
+                          sx: {
+                            color: '#fff',
+                            '& .MuiOutlinedInput-notchedOutline': {
+                              borderColor: 'rgba(255, 255, 255, 0.1)'
+                            },
+                            '&:hover .MuiOutlinedInput-notchedOutline': {
+                              borderColor: 'rgba(255, 255, 255, 0.3)'
+                            },
+                            '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                              borderColor: '#4d9fff'
+                            }
+                          }
+                        }}
+                        sx={{
+                          width: '100%',
+                          '& .MuiInputBase-input': {
+                            color: '#fff'
+                          }
+                        }}
+                      />
+                    </TableCell>
+                  ))}
                 </TableRow>
               </TableHead>
               <TableBody>
-                {filteredLogs.length === 0 ? (
+                {sortedLogs.length === 0 ? (
                   <TableRow>
                     <TableCell 
                       colSpan={4} 
@@ -174,7 +287,7 @@ function Logs() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredLogs.map((log) => (
+                  sortedLogs.map((log) => (
                     <TableRow key={log.id}>
                       <TableCell 
                         sx={{ 

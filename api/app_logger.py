@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from models import InternalLog  # Updated from AppLog to InternalLog
+from database import async_session
 import asyncio
 
 class DatabaseLogHandler(logging.Handler):
@@ -11,12 +12,9 @@ class DatabaseLogHandler(logging.Handler):
         super().__init__()
         self.service_name = service_name
         self.get_db = get_db
-        self._db_session: Optional[AsyncSession] = None
 
     async def get_session(self) -> AsyncSession:
-        if not self._db_session:
-            self._db_session = await self.get_db()
-        return self._db_session
+        return async_session()
 
     def emit(self, record: logging.LogRecord):
         try:
@@ -58,15 +56,20 @@ class DatabaseLogHandler(logging.Handler):
             print(f"Error in log handler: {str(e)}")
             print(f"Original log message: {record.getMessage()}")
 
-    async def _write_to_db(self, log_entry: InternalLog):  # Updated from AppLog to InternalLog
+    async def _write_to_db(self, log_entry: InternalLog):
+        session = None
         try:
             session = await self.get_session()
-            session.add(log_entry)
-            await session.commit()
+            async with session as s:
+                s.add(log_entry)
+                await s.commit()
         except Exception as e:
             print(f"Error writing to database: {str(e)}")
-            if self._db_session:
-                await self._db_session.rollback()
+            if session:
+                await session.rollback()
+        finally:
+            if session:
+                await session.close()
 
 def setup_logging(service_name: str, get_db, log_level: str = "INFO") -> logging.Logger:
     """Set up logging with the database handler"""

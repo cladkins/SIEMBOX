@@ -2,8 +2,8 @@
 
 Realtime security monitoring and threat detection for your infrastructure. Built with Docker.
 
-![Docker Pulls](https://img.shields.io/docker/pulls/yourusername/siembox)
-![License](https://img.shields.io/github/license/yourusername/siembox)
+![Docker Pulls](https://img.shields.io/docker/pulls/cladkins/siembox)
+![License](https://img.shields.io/github/license/ycladkins/siembox)
 
 ## Quick Start
 

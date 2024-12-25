@@ -2,8 +2,14 @@
 
 Realtime security monitoring and threat detection for your infrastructure. Built with Docker.
 
-![Docker Pulls](https://img.shields.io/docker/pulls/cladkins/siembox)
-![License](https://img.shields.io/github/license/ycladkins/siembox)
+[![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/cladkins/siembox/docker-build.yml?style=flat-square&logo=github-actions&logoColor=white)](https://github.com/cladkins/siembox/actions)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/cladkins/siembox/codeql-analysis.yml?style=flat-square&logo=github&label=CodeQL)](https://github.com/cladkins/siembox/security/code-scanning)
+[![License](https://img.shields.io/github/license/cladkins/siembox?style=flat-square&logo=opensourceinitiative&logoColor=white)](https://github.com/cladkins/siembox/blob/main/LICENSE)
+[![Release](https://img.shields.io/github/v/release/cladkins/siembox?style=flat-square&logo=github)](https://github.com/cladkins/siembox/releases)
+[![Container Registry](https://img.shields.io/badge/Container%20Registry-ghcr.io-blue?style=flat-square&logo=docker&logoColor=white)](https://github.com/cladkins/siembox/pkgs/container/siembox)
+[![Repo Size](https://img.shields.io/github/repo-size/cladkins/siembox?style=flat-square&logo=github)](https://github.com/cladkins/siembox)
+[![Last Commit](https://img.shields.io/github/last-commit/cladkins/siembox?style=flat-square&logo=git)](https://github.com/cladkins/siembox/commits)
+[![Open Issues](https://img.shields.io/github/issues/cladkins/siembox?style=flat-square&logo=github)](https://github.com/cladkins/siembox/issues)
 
 ## Quick Start
 
@@ -17,7 +23,7 @@ Then open http://localhost:3000 in your browser.
 
 1. Get the compose file:
 ```bash
-git clone https://github.com/yourusername/siembox.git
+git clone https://github.com/cladkins/siembox.git
 cd siembox
 ```
 

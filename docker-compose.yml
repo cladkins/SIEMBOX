@@ -69,7 +69,7 @@ services:
       - collector_data:/var/log/collector
     environment:
       - LOG_LEVEL=info
-      - API_URL=http://api:8080
+      - API_URL=http://localhost:8080
     networks:
       - siem_network
     healthcheck:

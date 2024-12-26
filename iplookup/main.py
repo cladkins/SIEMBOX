@@ -7,7 +7,7 @@ import aiohttp
 import os
 import redis
 import asyncio
-from typing import Dict, Any, Optional, List, Set, Tuple
+from typing import Dict, Any, Optional, List, Set
 from collections import deque
 import time
 import psutil
@@ -52,11 +52,8 @@ stats = {
 }
 
 # Constants for rate limiting
-IPAPI_BATCH_SIZE = 100
-IPAPI_REQUESTS_PER_MINUTE = 45
 CROWDSEC_BATCH_SIZE = 5
 CROWDSEC_REQUESTS_PER_DAY = 50  # Community tier limit
-BATCH_INTERVAL = 60  # Seconds between batches
 VALIDATION_INTERVAL = 60  # Seconds between validation attempts
 CROWDSEC_REQUEST_DELAY = 2  # Seconds between CrowdSec requests
 CROWDSEC_CACHE_TTL = 3600 * 12  # Cache CrowdSec results for 12 hours
@@ -84,8 +81,7 @@ DNS_SERVER_RESPONSE = {
     "cached": True
 }
 
-# Request queues
-ipapi_queue = deque()
+# Request queue
 crowdsec_queue = deque()
 processing_lock = asyncio.Lock()
 
@@ -162,23 +158,19 @@ class IPLookupResult(BaseModel):
     queued: bool = False
 
 class APIStatus(BaseModel):
-    ipapi_mode: str
-    ipapi_requests_remaining: Optional[int]
-    ipapi_next_reset: Optional[str]
-    ipapi_queue_size: int
     crowdsec_mode: str
     crowdsec_requests_remaining: Optional[int]
     crowdsec_next_reset: Optional[str]
     crowdsec_queue_size: int
     batch_size: int
 
-async def get_api_keys() -> Tuple[Optional[str], Optional[str]]:
-    """Get API keys from the API Gateway with caching"""
+async def get_api_keys() -> Optional[str]:
+    """Get CrowdSec API key from the API Gateway with caching"""
     cache_key = "api_keys"
     cached_keys = redis_client.get(cache_key)
     if cached_keys:
         keys = json.loads(cached_keys)
-        return keys.get("IPAPI_KEY"), keys.get("CROWDSEC_API_KEY")
+        return keys.get("CROWDSEC_API_KEY")
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -186,17 +178,16 @@ async def get_api_keys() -> Tuple[Optional[str], Optional[str]]:
                 if response.status == 200:
                     data = await response.json()
                     keys = {
-                        "IPAPI_KEY": data.get("IPAPI_KEY", ""),
                         "CROWDSEC_API_KEY": data.get("CROWDSEC_API_KEY", "")
                     }
                     redis_client.setex(cache_key, API_KEY_CACHE_TTL, json.dumps(keys))
-                    return keys["IPAPI_KEY"], keys["CROWDSEC_API_KEY"]
+                    return keys["CROWDSEC_API_KEY"]
                 else:
                     logger.error(f"Failed to fetch API keys: {response.status}")
-                    return None, None
+                    return None
     except Exception as e:
         logger.error(f"Error fetching API keys: {str(e)}")
-        return None, None
+        return None
 
 def get_crowdsec_api_key(x_crowdsec_key: Optional[str] = Header(None, alias="X-Api-Key")) -> Optional[str]:
     """Get CrowdSec API key from header or cached API keys"""
@@ -261,15 +252,10 @@ async def validate_crowdsec_key(api_key: str) -> bool:
         logger.error(f"Error validating CrowdSec API key: {str(e)}")
         return False
 
-async def is_using_paid_ipapi() -> bool:
-    """Check if using paid IP-API key"""
-    ipapi_key, _ = await get_api_keys()
-    return bool(ipapi_key)
-
 async def is_using_crowdsec(api_key: Optional[str] = None) -> bool:
     """Check if using CrowdSec API and if the key is valid"""
     if not api_key:
-        _, api_key = await get_api_keys()
+        api_key = await get_api_keys()
     if not api_key:
         return False
 
@@ -285,23 +271,9 @@ async def is_using_crowdsec(api_key: Optional[str] = None) -> bool:
     redis_client.setex(cache_key, 3600, '1' if is_valid else '0')
     return is_valid
 
-def get_ipapi_rate_limit_key() -> str:
-    """Get Redis key for IP-API rate limiting"""
-    return "ip_api_rate_limit"
-
 def get_crowdsec_rate_limit_key() -> str:
     """Get Redis key for CrowdSec rate limiting"""
     return "crowdsec_api_rate_limit"
-
-def get_ipapi_requests_remaining() -> int:
-    """Get remaining IP-API requests for current window"""
-    if is_using_paid_ipapi():
-        return -1  # Unlimited for paid tier
-    count = redis_client.get(get_ipapi_rate_limit_key())
-    if count is None:
-        redis_client.set(get_ipapi_rate_limit_key(), IPAPI_REQUESTS_PER_MINUTE, ex=BATCH_INTERVAL)
-        return IPAPI_REQUESTS_PER_MINUTE
-    return int(count)
 
 def get_crowdsec_requests_remaining() -> int:
     """Get remaining CrowdSec requests for current window"""
@@ -357,14 +329,7 @@ async def validate_crowdsec(x_crowdsec_key: Optional[str] = Header(None, alias="
 async def get_api_status(x_crowdsec_key: Optional[str] = Header(None, alias="X-Api-Key")):
     """Get current API status"""
     api_key = get_crowdsec_api_key(x_crowdsec_key)
-    ipapi_remaining = get_ipapi_requests_remaining()
     crowdsec_remaining = get_crowdsec_requests_remaining()
-
-    ipapi_next_reset = None
-    if not await is_using_paid_ipapi():
-        ttl = redis_client.ttl(get_ipapi_rate_limit_key())
-        if ttl > 0:
-            ipapi_next_reset = (datetime.now() + timedelta(seconds=ttl)).isoformat()
 
     crowdsec_next_reset = None
     crowdsec_mode = "disabled"
@@ -385,15 +350,11 @@ async def get_api_status(x_crowdsec_key: Optional[str] = Header(None, alias="X-A
                 crowdsec_next_reset = (datetime.now() + timedelta(seconds=ttl)).isoformat()
 
     return APIStatus(
-        ipapi_mode="paid" if await is_using_paid_ipapi() else "free",
-        ipapi_requests_remaining=ipapi_remaining if ipapi_remaining >= 0 else None,
-        ipapi_next_reset=ipapi_next_reset,
-        ipapi_queue_size=len(ipapi_queue),
         crowdsec_mode=crowdsec_mode,
         crowdsec_requests_remaining=crowdsec_remaining if crowdsec_mode == "enabled" else None,
         crowdsec_next_reset=crowdsec_next_reset,
         crowdsec_queue_size=len(crowdsec_queue),
-        batch_size=IPAPI_BATCH_SIZE
+        batch_size=CROWDSEC_BATCH_SIZE
     )
 
 @app.get("/health")
@@ -412,7 +373,6 @@ async def health_check():
         return {
             "status": stats["status"],
             "timestamp": datetime.now().isoformat(),
-            "ipapi_mode": "paid" if await is_using_paid_ipapi() else "free",
             "crowdsec_mode": "enabled" if await is_using_crowdsec() else "disabled",
             "redis_connected": True,
             "api_gateway_connected": True

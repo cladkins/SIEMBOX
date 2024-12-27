@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 import json
 import asyncio
@@ -12,6 +12,7 @@ import time
 import psutil
 import re
 from app_logger import setup_logging
+from cef_utils import CEFParser, CEFFormatter, is_cef_log, normalize_log
 
 # Set up logging with the new handler
 logger = setup_logging("collector", "http://api:8080")
@@ -36,7 +37,9 @@ stats = {
     "status": "operational",
     "minute_counter": 0,
     "last_minute_reset": time.time(),
-    "ip_addresses_analyzed": 0
+    "ip_addresses_analyzed": 0,
+    "cef_logs_received": 0,
+    "cef_parse_errors": 0
 }
 
 # IP address regex pattern
@@ -48,26 +51,26 @@ PRIVATE_IP_PATTERNS = [
     r'^127\.',
 ]
 
-# Severity to level mapping
-SEVERITY_TO_LEVEL = {
-    'emerg': 'CRITICAL',
-    'alert': 'CRITICAL',
-    'crit': 'CRITICAL',
-    'err': 'ERROR',
-    'error': 'ERROR',
-    'warning': 'WARNING',
-    'warn': 'WARNING',
-    'notice': 'INFO',
-    'info': 'INFO',
-    'debug': 'DEBUG'
-}
+class CEFLogEntry(BaseModel):
+    """CEF log entry model"""
+    cef_version: str = Field(default="0")
+    device_vendor: str = Field(default="SIEMBox")
+    device_product: str = Field(default="Collector")
+    device_version: str = Field(default="1.0")
+    signature_id: str = Field(default="0")
+    name: str
+    severity: str = Field(default="0")
+    extensions: Dict[str, Any] = Field(default_factory=dict)
 
 class LogEntry(BaseModel):
+    """Generic log entry model that can handle both CEF and standard formats"""
     source: str
     timestamp: Optional[datetime] = None
     level: str = "INFO"
     message: str
     metadata: Dict[str, Any] = {}
+    cef_format: bool = False
+    cef_data: Optional[CEFLogEntry] = None
 
 class LogForwarder:
     def __init__(self):
@@ -89,13 +92,6 @@ class LogForwarder:
         log_str = json.dumps(log_data)
         ip_addresses = set(re.findall(IP_PATTERN, log_str))
         return {ip for ip in ip_addresses if not self.is_private_ip(ip)}
-
-    def map_severity_to_level(self, severity: str) -> str:
-        """Map syslog severity to log level."""
-        if not severity:
-            return "INFO"
-        severity_lower = severity.lower()
-        return SEVERITY_TO_LEVEL.get(severity_lower, "INFO")
 
     async def process_ip_batch(self):
         """Process batch of IPs with the iplookup service."""
@@ -165,26 +161,11 @@ class LogForwarder:
             if time.time() - self.last_ip_batch_time >= self.ip_batch_interval:
                 await self.process_ip_batch()
 
-            # Map severity to level and format log data
-            severity = log_data.get('severity', '')
-            level = self.map_severity_to_level(severity)
-
-            # Format log data to match API expectations
-            api_log_data = {
-                'source': log_data.get('source', 'syslog'),
-                'message': log_data.get('message', ''),
-                'level': level,
-                'log_metadata': {
-                    'facility': log_data.get('facility'),
-                    'severity': severity,
-                    'tag': log_data.get('tag'),
-                    'raw_data': log_data,
-                    'timestamp': log_data.get('timestamp', datetime.now().isoformat())
-                }
-            }
+            # Normalize log data to include CEF fields
+            normalized_data = normalize_log(log_data)
 
             # Forward log to API
-            async with self.session.post(f'{self.api_url}/api/logs', json=api_log_data) as response:
+            async with self.session.post(f'{self.api_url}/api/logs', json=normalized_data) as response:
                 if response.status != 200:
                     text = await response.text()
                     logger.error(f"Failed to forward log to API: {text}")
@@ -233,6 +214,22 @@ class LogMonitor:
             logger.error(f"Error ensuring log file exists: {str(e)}")
             return False
 
+    async def process_log_line(self, line: str) -> Optional[dict]:
+        """Process a log line, handling both CEF and JSON formats."""
+        try:
+            if is_cef_log(line):
+                stats["cef_logs_received"] += 1
+                parsed = CEFParser.parse(line)
+                if parsed:
+                    return parsed
+                stats["cef_parse_errors"] += 1
+                return None
+            else:
+                return json.loads(line)
+        except json.JSONDecodeError:
+            logger.error(f"Invalid log format: {line}")
+            return None
+
     async def flush_buffer(self):
         """Flush the buffer of log entries."""
         if not self.buffer:
@@ -278,13 +275,11 @@ class LogMonitor:
                         await f.seek(self.last_position)
                         while line := await f.readline():
                             if line.strip():
-                                try:
-                                    log_data = json.loads(line)
+                                log_data = await self.process_log_line(line.strip())
+                                if log_data:
                                     self.buffer.append(log_data)
                                     if len(self.buffer) >= self.buffer_size:
                                         await self.flush_buffer()
-                                except json.JSONDecodeError:
-                                    logger.error(f"Invalid JSON in log file: {line}")
                         self.last_position = await f.tell()
 
                 # Periodic buffer flush
@@ -308,6 +303,16 @@ async def receive_log(log_entry: LogEntry):
             log_entry.timestamp = datetime.now()
 
         log_data = log_entry.dict()
+        
+        # If CEF data is provided, use it
+        if log_entry.cef_format and log_entry.cef_data:
+            log_data = {
+                **log_entry.cef_data.dict(),
+                'timestamp': log_entry.timestamp,
+                'source': log_entry.source
+            }
+            stats["cef_logs_received"] += 1
+
         success = await log_forwarder.forward_log(log_data)
 
         if not success:
@@ -334,6 +339,8 @@ async def get_stats():
             "active_connections": stats["active_connections"],
             "last_log_received": stats["last_log_received"],
             "ip_addresses_analyzed": stats["ip_addresses_analyzed"],
+            "cef_logs_received": stats["cef_logs_received"],
+            "cef_parse_errors": stats["cef_parse_errors"],
             "status": stats["status"]
         }
     except Exception as e:

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from fastapi import FastAPI, Depends, Query, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,12 +11,14 @@ import psutil
 import os
 import json
 import httpx
+import asyncio
 from database import get_db, Base, engine
 from models import (
     Log, LogResponse, PaginatedLogsResponse,
     InternalLog, InternalLogResponse, PaginatedInternalLogsResponse,
     Rule, RuleResponse, RulesListResponse,
-    APIKeys, APIKeyResponse, Setting, CreateInternalLogRequest
+    APIKeys, APIKeyResponse, Setting, CreateInternalLogRequest,
+    Alert
 )
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
@@ -43,7 +46,7 @@ app.add_middleware(
 )
 
 # Internal services list
-INTERNAL_SERVICES = {'api', 'collector', 'detection', 'iplookup', 'frontend'}
+INTERNAL_SERVICES = {'api', 'collector', 'detection', 'iplookup', 'frontend', 'detections_page'}
 
 @app.post("/api/app-logs", response_model=InternalLogResponse)
 async def create_internal_log(
@@ -130,12 +133,34 @@ async def get_internal_logs(
         logger.error(f"Error getting internal logs: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+async def forward_to_detection(log_data: dict):
+    """Forward log to detection service for analysis."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "http://detection:8000/analyze",
+                json=log_data,
+                timeout=10.0
+            )
+            if response.status_code == 200:
+                result = response.json()
+                alerts = result.get("alerts", [])
+                if alerts:
+                    logger.info(f"Detection service found {len(alerts)} alerts")
+                    logger.info(f"Alert details: {json.dumps(alerts)}")
+                return result
+            else:
+                logger.error(f"Detection service returned status {response.status_code}")
+    except Exception as e:
+        logger.error(f"Error forwarding to detection service: {str(e)}")
+    return None
+
 @app.post("/api/logs", response_model=LogResponse)
 async def create_log(
     log_data: CreateLogRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Create a new log entry"""
+    """Create a new log entry and forward to detection service"""
     try:
         # Create new log entry
         new_log = Log(
@@ -150,6 +175,39 @@ async def create_log(
         await db.commit()
         await db.refresh(new_log)
 
+        # Forward to detection service
+        log_dict = {
+            "id": new_log.id,
+            "source": new_log.source,
+            "message": new_log.message,
+            "level": new_log.level,
+            "metadata": new_log.log_metadata,
+            "timestamp": new_log.timestamp.isoformat()
+        }
+        
+        # Forward to detection service and wait for response
+        detection_result = await forward_to_detection(log_dict)
+        
+        if detection_result and detection_result.get("alerts"):
+            alerts = detection_result["alerts"]
+            logger.info(f"Processing {len(alerts)} alerts for log {new_log.id}")
+            # Create alert record for the matched rule
+            if alerts:
+                alert = Alert(
+                    rule_name=alerts[0]["rule_name"],
+                    severity=alerts[0]["severity"],
+                    description=alerts[0]["rule_name"],
+                    timestamp=datetime.utcnow()
+                )
+                db.add(alert)
+                await db.flush()
+                
+                # Update existing log entry with alert_id
+                new_log.alert_id = alert.id
+                await db.commit()
+                logger.info(f"Created alert {alert.id} for log {new_log.id}")
+            logger.info(f"Created alert {alert.id} for log {new_log.id}")
+        
         logger.info(f"Successfully created log entry with id: {new_log.id}")
         return new_log
 
@@ -168,7 +226,8 @@ async def get_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=10, le=100),
     start_time: Optional[datetime] = Query(None),
-    end_time: Optional[datetime] = Query(None)
+    end_time: Optional[datetime] = Query(None),
+    has_alert: Optional[bool] = Query(None)
 ):
     """Get paginated logs with enhanced error handling and performance optimizations"""
     try:
@@ -181,6 +240,13 @@ async def get_logs(
         query = select(Log).where(
             not_(Log.source.in_(INTERNAL_SERVICES))
         ).order_by(desc(Log.timestamp))
+
+        # Add alert filter if specified
+        if has_alert is not None:
+            if has_alert:
+                query = query.where(Log.alert_id.isnot(None))
+            else:
+                query = query.where(Log.alert_id.is_(None))
 
         if start_time:
             query = query.where(Log.timestamp >= start_time)

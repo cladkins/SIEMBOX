@@ -6,6 +6,7 @@ from sqlalchemy.orm import relationship
 from database import Base
 from cryptography.fernet import Fernet
 from pydantic import BaseModel, Field
+import json
 
 # Generate a key if not provided
 ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY')
@@ -91,6 +92,9 @@ class LogResponse(BaseModel):
 
     class Config:
         orm_mode = True
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat()
+        }
 
 class InternalLogResponse(BaseModel):  # Renamed from AppLogResponse to InternalLogResponse
     id: int
@@ -104,6 +108,9 @@ class InternalLogResponse(BaseModel):  # Renamed from AppLogResponse to Internal
 
     class Config:
         orm_mode = True
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat()
+        }
 
 class PaginatedLogsResponse(BaseModel):
     logs: List[LogResponse]
@@ -113,6 +120,11 @@ class PaginatedLogsResponse(BaseModel):
     total_pages: int
     has_more: bool
 
+    class Config:
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat()
+        }
+
 class PaginatedInternalLogsResponse(BaseModel):  # Renamed from PaginatedAppLogsResponse
     logs: List[InternalLogResponse]
     total: int
@@ -120,6 +132,11 @@ class PaginatedInternalLogsResponse(BaseModel):  # Renamed from PaginatedAppLogs
     page_size: int
     total_pages: int
     has_more: bool
+
+    class Config:
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat()
+        }
 
 class Rule(BaseModel):
     id: str

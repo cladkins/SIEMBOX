@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -30,6 +31,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Internal services list
+INTERNAL_SERVICES = {'api', 'collector', 'detection', 'iplookup', 'frontend', 'detections_page'}
+
 # Global variable to store loaded rules
 sigma_rules = []
 
@@ -47,7 +51,8 @@ stats = {
     "processed_logs": 0,
     "last_minute_logs": collections.deque(maxlen=60),
     "alerts": collections.deque(maxlen=1440),
-    "rules_loaded": False
+    "rules_loaded": False,
+    "processed_log_ids": collections.deque(maxlen=1000)  # Store recent log IDs
 }
 
 class Alert(BaseModel):
@@ -211,7 +216,7 @@ async def load_rules():
 
 def match_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
     try:
-        log_str = json.dumps(log_entry).lower()
+        # Check log source requirements
         if rule.logsource:
             source = log_entry.get('source', '').lower()
             if rule.logsource.get('product') and rule.logsource['product'].lower() not in source:
@@ -219,18 +224,59 @@ def match_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
             if rule.logsource.get('service') and rule.logsource['service'].lower() not in source:
                 return False
 
+        # Get metadata from log entry
+        metadata = log_entry.get('metadata', {}) or log_entry.get('log_metadata', {})
+        logger.info(f"Processing rule {rule.id} against log entry metadata: {json.dumps(metadata)}")
+        
         detection = rule.detection
+        logger.info(f"Rule detection criteria: {json.dumps(detection)}")
+
+        # Check if this rule should apply based on log source
+        if 'product' in metadata and rule.logsource.get('product'):
+            if metadata['product'].lower() != rule.logsource['product'].lower():
+                return False
+        if 'category' in metadata and rule.logsource.get('category'):
+            if metadata['category'].lower() != rule.logsource['category'].lower():
+                return False
+
+        # Handle selection with field|contains
+        if 'selection' in detection:
+            selection = detection['selection']
+            if not isinstance(selection, dict):
+                return False
+
+            # All fields in selection must match
+            for field, values in selection.items():
+                if '|contains' in field:
+                    actual_field = field.split('|')[0]
+                    field_value = str(metadata.get(actual_field, '')).lower()
+                    if isinstance(values, list):
+                        if not any(str(v).lower() in field_value for v in values):
+                            return False
+                    else:
+                        if str(values).lower() not in field_value:
+                            return False
+                else:
+                    # Exact match for fields without operators
+                    field_value = str(metadata.get(field, '')).lower()
+                    if isinstance(values, list):
+                        if str(field_value).lower() not in [str(v).lower() for v in values]:
+                            return False
+                    else:
+                        if str(field_value).lower() != str(values).lower():
+                            return False
+            return True  # Only return True if all fields matched
+
+        # Handle keywords
         if 'keywords' in detection:
+            log_str = json.dumps(log_entry).lower()
             keywords = detection['keywords']
             if isinstance(keywords, list):
                 return any(kw.lower() in log_str for kw in keywords)
             return keywords.lower() in log_str
 
-        if 'selection' in detection:
-            selection = detection['selection']
-            if isinstance(selection, dict):
-                return all(str(v).lower() in log_str for v in selection.values())
-            return False
+        logger.debug(f"Rule {rule.id} didn't match log entry: {json.dumps(log_entry)}")
+        return False
 
     except Exception as e:
         logger.error(f"Error matching rule: {str(e)}")
@@ -238,25 +284,42 @@ def match_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
 
 @app.post("/analyze")
 async def analyze_log(log_entry: Dict[str, Any]):
-    alerts = []
     try:
+        # Skip analysis for internal service logs
+        if log_entry.get('source') in INTERNAL_SERVICES:
+            return {"alerts": []}
+
+        # Check for duplicate log processing
+        log_id = log_entry.get('id')
+        if log_id is not None:
+            if log_id in stats["processed_log_ids"]:
+                logger.info(f"Skipping duplicate log ID: {log_id}")
+                return {"alerts": []}
+            stats["processed_log_ids"].append(log_id)
+
         stats["processed_logs"] += 1
         update_processing_stats()
 
+        # Find the first matching rule only
+        matched_rule = None
         for rule in sigma_rules:
             if rule.enabled and match_rule(rule, log_entry):
-                alert = Alert(
-                    rule_id=rule.id,
-                    rule_name=rule.title,
-                    timestamp=datetime.now(),
-                    log_source=log_entry.get('source', 'unknown'),
-                    matched_log=log_entry,
-                    severity=rule.level
-                )
-                alerts.append(alert)
-                update_alert_stats(new_alert=True)
+                matched_rule = rule
+                break
 
-        return {"alerts": [alert.dict() for alert in alerts]}
+        if matched_rule:
+            alert = Alert(
+                rule_id=matched_rule.id,
+                rule_name=matched_rule.title,
+                timestamp=datetime.now(),
+                log_source=log_entry.get('source', 'unknown'),
+                matched_log=log_entry,
+                severity=matched_rule.level
+            )
+            update_alert_stats(new_alert=True)
+            return {"alerts": [alert.dict()]}
+        
+        return {"alerts": []}
     except Exception as e:
         logger.error(f"Error analyzing log: {str(e)}")
         stats["status"] = "degraded"

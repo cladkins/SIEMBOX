@@ -17,13 +17,19 @@ import {
   Grid,
   Pagination,
   Stack,
-  InputAdornment
+  InputAdornment,
+  Modal,
+  Card,
+  CardContent,
+  CardHeader,
+  Divider
 } from '@mui/material';
 import {
   Refresh as RefreshIcon,
   ArrowUpward as ArrowUpwardIcon,
   ArrowDownward as ArrowDownwardIcon,
-  Search as SearchIcon
+  Search as SearchIcon,
+  Close as CloseIcon
 } from '@mui/icons-material';
 import config from '../config';
 
@@ -35,12 +41,38 @@ function Logs() {
   const [totalPages, setTotalPages] = useState(1);
   const [pageSize] = useState(50);
   const [sortConfig, setSortConfig] = useState({ key: 'timestamp', direction: 'desc' });
+  const [selectedLog, setSelectedLog] = useState(null);
   const [filters, setFilters] = useState({
     timestamp: '',
     source: '',
     type: '',
     message: ''
   });
+
+  // Modal styles
+  const modalStyle = {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: '80%',
+    maxWidth: '800px',
+    maxHeight: '90vh',
+    overflow: 'auto',
+    bgcolor: '#1a1a1a',
+    border: '1px solid rgba(255, 255, 255, 0.1)',
+    boxShadow: 24,
+    p: 0,
+    color: '#fff'
+  };
+
+  const handleRowClick = (log) => {
+    setSelectedLog(log);
+  };
+
+  const handleModalClose = () => {
+    setSelectedLog(null);
+  };
 
   const fetchLogs = async () => {
     try {
@@ -288,44 +320,53 @@ function Logs() {
                   </TableRow>
                 ) : (
                   sortedLogs.map((log) => (
-                    <TableRow key={log.id}>
-                      <TableCell 
-                        sx={{ 
-                          color: '#fff',
-                          borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
-                        }}
-                      >
-                        {new Date(log.timestamp).toLocaleString()}
-                      </TableCell>
-                      <TableCell 
-                        sx={{ 
-                          color: '#fff',
-                          borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
-                        }}
-                      >
-                        {log.source}
-                      </TableCell>
-                      <TableCell 
-                        sx={{ 
-                          color: '#fff',
-                          borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
-                        }}
-                      >
-                        {log.type}
-                      </TableCell>
-                      <TableCell 
-                        sx={{ 
-                          maxWidth: '400px',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          color: '#fff',
-                          borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
-                        }}
-                      >
-                        {log.message}
-                      </TableCell>
-                    </TableRow>
+                   <TableRow
+                     key={log.id}
+                     onClick={() => handleRowClick(log)}
+                     sx={{
+                       cursor: 'pointer',
+                       '&:hover': {
+                         backgroundColor: 'rgba(255, 255, 255, 0.05)'
+                       }
+                     }}
+                   >
+                     <TableCell
+                       sx={{
+                         color: '#fff',
+                         borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+                       }}
+                     >
+                       {new Date(log.timestamp).toLocaleString()}
+                     </TableCell>
+                     <TableCell
+                       sx={{
+                         color: '#fff',
+                         borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+                       }}
+                     >
+                       {log.source}
+                     </TableCell>
+                     <TableCell
+                       sx={{
+                         color: '#fff',
+                         borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+                       }}
+                     >
+                       {log.level}
+                     </TableCell>
+                     <TableCell
+                       sx={{
+                         maxWidth: '400px',
+                         overflow: 'hidden',
+                         textOverflow: 'ellipsis',
+                         whiteSpace: 'nowrap',
+                         color: '#fff',
+                         borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+                       }}
+                     >
+                       {log.message}
+                     </TableCell>
+                   </TableRow>
                   ))
                 )}
               </TableBody>
@@ -353,6 +394,105 @@ function Logs() {
           </Box>
         </Stack>
       )}
+
+      {/* Log Details Modal */}
+      <Modal
+        open={selectedLog !== null}
+        onClose={handleModalClose}
+        aria-labelledby="log-details-modal"
+      >
+        <Card sx={modalStyle}>
+          {selectedLog && (
+            <>
+              <CardHeader
+                title={
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Typography variant="h6" component="div">
+                      Log Details
+                    </Typography>
+                    <IconButton onClick={handleModalClose} sx={{ color: '#fff' }}>
+                      <CloseIcon />
+                    </IconButton>
+                  </Box>
+                }
+                sx={{
+                  borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+                  backgroundColor: '#2a2a2a'
+                }}
+              />
+              <CardContent>
+                <Grid container spacing={2}>
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="subtitle1" color="rgba(255, 255, 255, 0.7)">
+                      Timestamp
+                    </Typography>
+                    <Typography variant="body1" sx={{ mb: 2 }}>
+                      {new Date(selectedLog.timestamp).toLocaleString()}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="subtitle1" color="rgba(255, 255, 255, 0.7)">
+                      Source
+                    </Typography>
+                    <Typography variant="body1" sx={{ mb: 2 }}>
+                      {selectedLog.source}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12}>
+                    <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.1)', my: 2 }} />
+                    <Typography variant="subtitle1" color="rgba(255, 255, 255, 0.7)">
+                      Level
+                    </Typography>
+                    <Typography variant="body1" sx={{ mb: 2 }}>
+                      {selectedLog.level}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12}>
+                    <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.1)', my: 2 }} />
+                    <Typography variant="subtitle1" color="rgba(255, 255, 255, 0.7)">
+                      Message
+                    </Typography>
+                    <Paper
+                      sx={{
+                        p: 2,
+                        mt: 1,
+                        backgroundColor: '#2a2a2a',
+                        border: '1px solid rgba(255, 255, 255, 0.1)',
+                        borderRadius: 1
+                      }}
+                    >
+                      <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {selectedLog.message}
+                      </Typography>
+                    </Paper>
+                  </Grid>
+                  {selectedLog.metadata && Object.keys(selectedLog.metadata).length > 0 && (
+                    <Grid item xs={12}>
+                      <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.1)', my: 2 }} />
+                      <Typography variant="subtitle1" color="rgba(255, 255, 255, 0.7)">
+                        Additional Details
+                      </Typography>
+                      <Paper
+                        sx={{
+                          p: 2,
+                          mt: 1,
+                          backgroundColor: '#2a2a2a',
+                          border: '1px solid rgba(255, 255, 255, 0.1)',
+                          borderRadius: 1
+                        }}
+                      >
+                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                          {JSON.stringify(selectedLog.metadata, null, 2)}
+                        </pre>
+                      </Paper>
+                    </Grid>
+                  )}
+                </Grid>
+              </CardContent>
+            </>
+          )}
+        </Card>
+      </Modal>
     </Box>
   );
 }

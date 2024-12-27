@@ -16,15 +16,22 @@ import {
   Tooltip,
   Grid,
   TextField,
-  InputAdornment
+  InputAdornment,
+  Modal,
+  Card,
+  CardContent,
+  CardHeader,
+  Divider
 } from '@mui/material';
 import {
   Refresh as RefreshIcon,
   ArrowUpward as ArrowUpwardIcon,
   ArrowDownward as ArrowDownwardIcon,
-  Search as SearchIcon
+  Search as SearchIcon,
+  Close as CloseIcon
 } from '@mui/icons-material';
 import config from '../config';
+import axios from 'axios';
 
 function Detections() {
   const [detections, setDetections] = useState([]);
@@ -38,6 +45,24 @@ function Detections() {
     log_source: '',
     details: ''
   });
+  const [selectedDetection, setSelectedDetection] = useState(null);
+
+  // Modal styles
+  const modalStyle = {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: '80%',
+    maxWidth: '800px',
+    maxHeight: '90vh',
+    overflow: 'auto',
+    bgcolor: '#1a1a1a',
+    border: '1px solid rgba(255, 255, 255, 0.1)',
+    boxShadow: 24,
+    p: 0,
+    color: '#fff'
+  };
 
   // Handle sorting
   const handleSort = (key) => {
@@ -58,35 +83,32 @@ function Detections() {
   const fetchDetections = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${config.detectionUrl}/analyze`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          source: 'detections_page',
-          message: 'Checking for alerts',
-          level: 'INFO',
-          timestamp: new Date().toISOString()
-        })
+      // Get alerts from the API's logs endpoint with alert_id filter
+      const response = await axios.get(`${config.apiUrl}/api/logs`, {
+        params: {
+          has_alert: true,
+          page: 1,
+          page_size: 100
+        }
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to fetch detections');
+      if (response.data && response.data.logs) {
+        const alerts = response.data.logs.map(log => ({
+          rule_id: log.alert_id,
+          rule_name: log.alert ? log.alert.rule_name : 'Unknown Rule',
+          timestamp: log.timestamp,
+          log_source: log.source,
+          matched_log: {
+            ...log,
+            message: log.message,
+            metadata: log.log_metadata
+          },
+          severity: log.alert ? log.alert.severity : 'medium'
+        }));
+
+        setDetections(alerts);
+        setError(null);
       }
-
-      const data = await response.json();
-      
-      // Get alerts from the response
-      const alerts = data.alerts || [];
-      
-      // Sort alerts by timestamp in descending order
-      const sortedAlerts = alerts.sort((a, b) => 
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-      );
-
-      setDetections(sortedAlerts);
-      setError(null);
     } catch (err) {
       console.error('Error fetching detections:', err);
       setError('Failed to fetch detections. Please try again later.');
@@ -192,6 +214,16 @@ function Detections() {
 
     return direction === 'asc' ? comparison : -comparison;
   });
+
+  // Handle row click
+  const handleRowClick = (detection) => {
+    setSelectedDetection(detection);
+  };
+
+  // Handle modal close
+  const handleModalClose = () => {
+    setSelectedDetection(null);
+  };
 
   if (error) {
     return (
@@ -342,7 +374,16 @@ function Detections() {
                 </TableRow>
               ) : (
                 sortedDetections.map((detection) => (
-                  <TableRow key={`${detection.rule_id}-${detection.timestamp}`}>
+                  <TableRow 
+                    key={`${detection.rule_id}-${detection.timestamp}`}
+                    onClick={() => handleRowClick(detection)}
+                    sx={{ 
+                      cursor: 'pointer',
+                      '&:hover': {
+                        backgroundColor: 'rgba(255, 255, 255, 0.05)'
+                      }
+                    }}
+                  >
                     <TableCell 
                       sx={{ 
                         color: '#fff',
@@ -397,6 +438,95 @@ function Detections() {
           </Table>
         </TableContainer>
       )}
+
+      {/* Details Modal */}
+      <Modal
+        open={selectedDetection !== null}
+        onClose={handleModalClose}
+        aria-labelledby="detection-details-modal"
+      >
+        <Card sx={modalStyle}>
+          {selectedDetection && (
+            <>
+              <CardHeader
+                title={
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Typography variant="h6" component="div">
+                      Detection Details
+                    </Typography>
+                    <IconButton onClick={handleModalClose} sx={{ color: '#fff' }}>
+                      <CloseIcon />
+                    </IconButton>
+                  </Box>
+                }
+                sx={{
+                  borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+                  backgroundColor: '#2a2a2a'
+                }}
+              />
+              <CardContent>
+                <Grid container spacing={2}>
+                  <Grid item xs={12}>
+                    <Typography variant="subtitle1" color="rgba(255, 255, 255, 0.7)">
+                      Rule Name
+                    </Typography>
+                    <Typography variant="body1" sx={{ mb: 2 }}>
+                      {selectedDetection.rule_name}
+                    </Typography>
+                    <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.1)', my: 2 }} />
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="subtitle1" color="rgba(255, 255, 255, 0.7)">
+                      Timestamp
+                    </Typography>
+                    <Typography variant="body1" sx={{ mb: 2 }}>
+                      {new Date(selectedDetection.timestamp).toLocaleString()}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="subtitle1" color="rgba(255, 255, 255, 0.7)">
+                      Severity
+                    </Typography>
+                    <Chip 
+                      label={selectedDetection.severity}
+                      color={getSeverityColor(selectedDetection.severity)}
+                      size="small"
+                    />
+                  </Grid>
+                  <Grid item xs={12}>
+                    <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.1)', my: 2 }} />
+                    <Typography variant="subtitle1" color="rgba(255, 255, 255, 0.7)">
+                      Source
+                    </Typography>
+                    <Typography variant="body1" sx={{ mb: 2 }}>
+                      {selectedDetection.log_source}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12}>
+                    <Divider sx={{ borderColor: 'rgba(255, 255, 255, 0.1)', my: 2 }} />
+                    <Typography variant="subtitle1" color="rgba(255, 255, 255, 0.7)">
+                      Matched Log Details
+                    </Typography>
+                    <Paper 
+                      sx={{ 
+                        p: 2, 
+                        mt: 1, 
+                        backgroundColor: '#2a2a2a',
+                        border: '1px solid rgba(255, 255, 255, 0.1)',
+                        borderRadius: 1
+                      }}
+                    >
+                      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {formatDetails(selectedDetection.matched_log)}
+                      </pre>
+                    </Paper>
+                  </Grid>
+                </Grid>
+              </CardContent>
+            </>
+          )}
+        </Card>
+      </Modal>
     </Box>
   );
 }

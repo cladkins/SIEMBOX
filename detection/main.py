@@ -55,6 +55,46 @@ stats = {
     "processed_log_ids": collections.deque(maxlen=1000)  # Store recent log IDs
 }
 
+# API interaction functions
+async def get_rule_states_from_api():
+    """Get rule states from API service."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get("http://api:8080/api/rule-states") as response:
+                if response.status == 200:
+                    return await response.json()
+    except Exception as e:
+        logger.error(f"Error getting rule states from API: {str(e)}")
+    return {}
+
+async def update_rule_state_in_api(rule_id: str, enabled: bool):
+    """Update rule state in API service."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"http://api:8080/api/rule-states/{rule_id}",
+                params={"enabled": enabled}
+            ) as response:
+                if response.status == 200:
+                    return True
+    except Exception as e:
+        logger.error(f"Error updating rule state in API: {str(e)}")
+    return False
+
+async def update_bulk_rule_states_in_api(rule_states_dict: Dict[str, bool]):
+    """Update multiple rule states in API service."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "http://api:8080/api/rule-states/bulk",
+                json=rule_states_dict
+            ) as response:
+                if response.status == 200:
+                    return True
+    except Exception as e:
+        logger.error(f"Error updating bulk rule states in API: {str(e)}")
+    return False
+
 class Alert(BaseModel):
     rule_id: str
     rule_name: str
@@ -345,16 +385,28 @@ async def list_rules():
 @app.post("/rules/toggle")
 async def toggle_rule(rule_state: RuleState):
     try:
+        # Update local state first
         rule_states[rule_state.rule_id] = rule_state.enabled
+        rule_found = False
+        
         for rule in sigma_rules:
             if rule.id == rule_state.rule_id:
                 rule.enabled = rule_state.enabled
-                stats["enabled_rules"] = len([r for r in sigma_rules if r.enabled])
-                return {
-                    "success": True,
-                    "message": f"Rule {rule_state.rule_id} {'enabled' if rule_state.enabled else 'disabled'}"
-                }
-        raise HTTPException(status_code=404, detail=f"Rule {rule_state.rule_id} not found")
+                rule_found = True
+                break
+        
+        if not rule_found:
+            raise HTTPException(status_code=404, detail=f"Rule {rule_state.rule_id} not found")
+        
+        # Then try to persist to API
+        if not await update_rule_state_in_api(rule_state.rule_id, rule_state.enabled):
+            logger.warning(f"Failed to persist rule state to API for {rule_state.rule_id}")
+        
+        stats["enabled_rules"] = len([r for r in sigma_rules if r.enabled])
+        return {
+            "success": True,
+            "message": f"Rule {rule_state.rule_id} {'enabled' if rule_state.enabled else 'disabled'}"
+        }
     except Exception as e:
         logger.error(f"Error toggling rule: {str(e)}")
         stats["status"] = "degraded"
@@ -363,13 +415,22 @@ async def toggle_rule(rule_state: RuleState):
 @app.post("/rules/bulk-toggle")
 async def bulk_toggle_rules(state: BulkRuleState):
     try:
+        # Update local state first
+        updated_rules = {}
         updated_count = 0
+        
         for rule in sigma_rules:
             if state.category and rule.category != state.category:
                 continue
             rule.enabled = state.enabled
             rule_states[rule.id] = state.enabled
+            updated_rules[rule.id] = state.enabled
             updated_count += 1
+
+        # Then try to persist to API
+        if updated_count > 0:
+            if not await update_bulk_rule_states_in_api(updated_rules):
+                logger.warning(f"Failed to persist {updated_count} rule states to API")
 
         stats["enabled_rules"] = len([r for r in sigma_rules if r.enabled])
         category_msg = f" in category '{state.category}'" if state.category else ""
@@ -441,9 +502,16 @@ async def health_check():
 @app.on_event("startup")
 async def startup_event():
     """Initialize the detection engine with improved error handling."""
-    global sigma_rules
+    global sigma_rules, rule_states
     logger.info("Starting detection engine...")
     try:
+        # First load rule states from API
+        api_states = await get_rule_states_from_api()
+        if api_states:
+            rule_states.update(api_states)
+            logger.info(f"Loaded {len(api_states)} rule states from API")
+        
+        # Then load rules which will use the loaded states
         sigma_rules = await load_rules()
         logger.info(f"Loaded {len(sigma_rules)} detection rules")
     except Exception as e:

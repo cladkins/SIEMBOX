@@ -20,6 +20,7 @@ from models import (
     APIKeys, APIKeyResponse, Setting, CreateInternalLogRequest,
     Alert
 )
+from typing import Dict, List
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
 
@@ -340,6 +341,81 @@ async def update_api_keys(api_keys: APIKeys, db: AsyncSession = Depends(get_db))
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/rule-states")
+async def get_rule_states(db: AsyncSession = Depends(get_db)):
+    """Get all rule states"""
+    try:
+        result = await db.execute(
+            select(Setting).where(Setting.key.like("RULE_STATE_%"))
+        )
+        settings = result.scalars().all()
+        
+        rule_states = {}
+        for setting in settings:
+            rule_id = setting.key.replace("RULE_STATE_", "")
+            rule_states[rule_id] = setting.get_value() == "true"
+            
+        return rule_states
+    except Exception as e:
+        logger.error(f"Error getting rule states: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/rule-states/{rule_id}")
+async def set_rule_state(
+    rule_id: str,
+    enabled: bool,
+    db: AsyncSession = Depends(get_db)
+):
+    """Set state for a specific rule"""
+    try:
+        setting_key = f"RULE_STATE_{rule_id}"
+        result = await db.execute(
+            select(Setting).where(Setting.key == setting_key)
+        )
+        setting = result.scalar_one_or_none()
+        
+        if setting:
+            setting.set_value(str(enabled).lower())
+        else:
+            setting = Setting(key=setting_key)
+            setting.set_value(str(enabled).lower())
+            db.add(setting)
+        
+        await db.commit()
+        return {"rule_id": rule_id, "enabled": enabled}
+    except Exception as e:
+        logger.error(f"Error setting rule state: {str(e)}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/rule-states/bulk")
+async def set_bulk_rule_states(
+    rule_states: Dict[str, bool],
+    db: AsyncSession = Depends(get_db)
+):
+    """Set states for multiple rules at once"""
+    try:
+        for rule_id, enabled in rule_states.items():
+            setting_key = f"RULE_STATE_{rule_id}"
+            result = await db.execute(
+                select(Setting).where(Setting.key == setting_key)
+            )
+            setting = result.scalar_one_or_none()
+            
+            if setting:
+                setting.set_value(str(enabled).lower())
+            else:
+                setting = Setting(key=setting_key)
+                setting.set_value(str(enabled).lower())
+                db.add(setting)
+        
+        await db.commit()
+        return {"updated": len(rule_states)}
+    except Exception as e:
+        logger.error(f"Error setting bulk rule states: {str(e)}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -362,10 +438,8 @@ async def health_check():
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database tables on startup"""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        logger.info("Database tables created successfully")
+    """Placeholder for startup events"""
+    logger.info("Startup event triggered")
 
 if __name__ == "__main__":
     import uvicorn

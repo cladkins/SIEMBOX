@@ -3,7 +3,7 @@ uvicorn==0.20.0
 pydantic==1.10.4
 aiohttp==3.8.4
 PyYAML==6.0
-gitpython&gt;=3.1.41
+gitpython==3.1.41
 psutil==5.9.4
-python-multipart==0.0.5
+python-multipart==0.0.18
 typing-extensions==4.4.0

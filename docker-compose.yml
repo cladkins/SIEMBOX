@@ -185,11 +185,11 @@ services:
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     environment:
-      # These URLs are for browser access, so they need to use the external ports
-      - REACT_APP_API_URL=http://${HOST_ADDRESS:-localhost}:${API_PORT:-8080}
-      - REACT_APP_DETECTION_URL=http://${HOST_ADDRESS:-localhost}:${DETECTION_PORT:-8001}
-      - REACT_APP_IPLOOKUP_URL=http://${HOST_ADDRESS:-localhost}:${IPLOOKUP_PORT:-8002}
-      - REACT_APP_VPS_AUDIT_URL=http://${HOST_ADDRESS:-localhost}:${VPS_AUDIT_PORT:-8004}
+      # These URLs need to use the remote host's address
+      - REACT_APP_API_URL=http://${HOST_ADDRESS}:${API_PORT:-8080}
+      - REACT_APP_DETECTION_URL=http://${HOST_ADDRESS}:${DETECTION_PORT:-8001}
+      - REACT_APP_IPLOOKUP_URL=http://${HOST_ADDRESS}:${IPLOOKUP_PORT:-8002}
+      - REACT_APP_VPS_AUDIT_URL=http://${HOST_ADDRESS}:${VPS_AUDIT_PORT:-8004}
     networks:
       - siem_network
     depends_on:

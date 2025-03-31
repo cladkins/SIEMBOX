@@ -11,9 +11,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Make the start script executable
-RUN chmod +x start.sh
-
 COPY . .
 
-CMD ["/app/start.sh"]
+# Make the start script executable after copying
+RUN chmod +x start.sh
+ # Previous incorrect CMD was commented out, this ensures the correct one is active
+# CMD ["/app/start.sh"]

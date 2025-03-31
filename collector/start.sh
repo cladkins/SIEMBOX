@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Print each command before executing it
+set -x
 # Exit on any error
 set -e
 

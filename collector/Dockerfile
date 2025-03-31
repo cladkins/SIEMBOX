@@ -17,5 +17,10 @@ COPY . .
 
 # Make the start script executable after copying
 RUN chmod +x start.sh
- # Previous incorrect CMD was commented out, this ensures the correct one is active
-# CMD ["/app/start.sh"]
+
+# Create required directories with proper permissions
+RUN mkdir -p /var/log/collector /var/spool/rsyslog /var/run/rsyslog && \
+    chmod -R 777 /var/log/collector /var/spool/rsyslog /var/run/rsyslog
+
+# Set the entrypoint to the start script
+CMD ["/app/start.sh"]

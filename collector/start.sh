@@ -86,4 +86,32 @@ echo "Current files in /var/log/collector:"
 ls -la /var/log/collector
 
 echo "Starting FastAPI application..."
-exec uvicorn main:app --host 0.0.0.0 --port 8000 --log-level debug
+# Start FastAPI in the background
+uvicorn main:app --host 0.0.0.0 --port 8000 --log-level debug &
+FASTAPI_PID=$!
+
+# Wait for FastAPI to start
+sleep 2
+
+# Check if FastAPI is running
+if ! kill -0 $FASTAPI_PID 2>/dev/null; then
+    echo "ERROR: FastAPI failed to start"
+    echo "Checking FastAPI status..."
+    ps aux | grep uvicorn
+    exit 1
+fi
+
+echo "FastAPI started successfully with PID $FASTAPI_PID"
+
+# Keep the container running and monitor both processes
+while true; do
+    if ! kill -0 $RSYSLOG_PID 2>/dev/null; then
+        echo "rsyslog process died"
+        exit 1
+    fi
+    if ! kill -0 $FASTAPI_PID 2>/dev/null; then
+        echo "FastAPI process died"
+        exit 1
+    fi
+    sleep 1
+done

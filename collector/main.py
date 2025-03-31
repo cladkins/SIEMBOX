@@ -161,11 +161,8 @@ class LogForwarder:
             if time.time() - self.last_ip_batch_time >= self.ip_batch_interval:
                 await self.process_ip_batch()
 
-            # Normalize log data to include CEF fields
-            normalized_data = normalize_log(log_data)
-
             # Forward log to API
-            async with self.session.post(f'{self.api_url}/api/logs', json=normalized_data) as response:
+            async with self.session.post(f'{self.api_url}/api/logs', json=log_data) as response:
                 if response.status != 200:
                     text = await response.text()
                     logger.error(f"Failed to forward log to API: {text}")
@@ -201,6 +198,7 @@ class LogMonitor:
         self.buffer_size = int(os.getenv('BUFFER_SIZE', '100'))
         self.flush_interval = int(os.getenv('FLUSH_INTERVAL', '5'))
         self.is_ready = False
+        self.running = False
 
     async def ensure_log_file(self):
         """Ensure log file exists and is accessible."""
@@ -225,9 +223,20 @@ class LogMonitor:
                 stats["cef_parse_errors"] += 1
                 return None
             else:
-                return json.loads(line)
-        except json.JSONDecodeError:
-            logger.error(f"Invalid log format: {line}")
+                try:
+                    return json.loads(line)
+                except json.JSONDecodeError:
+                    # If not valid JSON, treat as plain text
+                    return {
+                        "timestamp": datetime.now().isoformat(),
+                        "source": "unknown",
+                        "facility": "user",
+                        "severity": "info",
+                        "tag": "-",
+                        "message": line
+                    }
+        except Exception as e:
+            logger.error(f"Error processing log line: {str(e)}")
             return None
 
     async def flush_buffer(self):
@@ -248,52 +257,86 @@ class LogMonitor:
         """Get the inode of the log file."""
         try:
             return os.stat(self.log_file).st_ino
-        except (FileNotFoundError, OSError):
+        except Exception:
             return None
 
-    async def monitor(self):
-        """Monitor syslog.json file for new entries with rotation handling."""
-        if not await self.ensure_log_file():
-            return
+    async def monitor_file(self):
+        """Monitor the log file for changes and process new entries."""
+        await self.ensure_log_file()
+        self.running = True
 
-        while True:
+        while self.running:
             try:
+                # Check if file has been rotated
                 current_inode = self.get_file_inode()
-                if current_inode is None:
-                    logger.warning(f"Log file {self.log_file} does not exist")
-                    await asyncio.sleep(1)
-                    continue
-
-                # Check for file rotation
-                if self.last_inode is not None and current_inode != self.last_inode:
-                    logger.info("Log file rotation detected")
+                if current_inode != self.last_inode:
                     self.last_position = 0
                     self.last_inode = current_inode
+                    logger.info("Log file rotated, resetting position")
 
-                if os.path.exists(self.log_file):
-                    async with aiofiles.open(self.log_file, mode='r') as f:
-                        await f.seek(self.last_position)
-                        while line := await f.readline():
-                            if line.strip():
-                                log_data = await self.process_log_line(line.strip())
-                                if log_data:
-                                    self.buffer.append(log_data)
-                                    if len(self.buffer) >= self.buffer_size:
-                                        await self.flush_buffer()
-                        self.last_position = await f.tell()
+                # Read new lines from file
+                async with aiofiles.open(self.log_file, mode='r') as f:
+                    await f.seek(self.last_position)
+                    while True:
+                        line = await f.readline()
+                        if not line:
+                            break
+                        line = line.strip()
+                        if line:
+                            log_data = await self.process_log_line(line)
+                            if log_data:
+                                self.buffer.append(log_data)
+                                if len(self.buffer) >= self.buffer_size:
+                                    await self.flush_buffer()
+                    self.last_position = await f.tell()
 
-                # Periodic buffer flush
-                if self.buffer and len(self.buffer) > 0:
+                # Flush buffer if interval has elapsed
+                if self.buffer:
                     await self.flush_buffer()
 
+                # Wait before next check
+                await asyncio.sleep(1)
+
             except Exception as e:
-                logger.error(f"Error monitoring syslog file: {str(e)}")
-                stats["status"] = "degraded"
+                logger.error(f"Error monitoring log file: {str(e)}")
+                await asyncio.sleep(5)  # Wait longer on error
 
-            await asyncio.sleep(self.flush_interval)
+    async def stop(self):
+        """Stop the log monitor."""
+        self.running = False
+        await self.flush_buffer()
+        await self.forwarder.stop()
 
+# Create global instances
 log_forwarder = LogForwarder()
 log_monitor = LogMonitor(log_forwarder)
+
+@app.on_event("startup")
+async def startup_event():
+    """Start the log monitoring service."""
+    logger.info("Starting log monitoring service")
+    asyncio.create_task(log_monitor.monitor_file())
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop the log monitoring service."""
+    logger.info("Stopping log monitoring service")
+    await log_monitor.stop()
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {
+        "status": stats["status"],
+        "total_logs": stats["total_logs"],
+        "logs_per_minute": stats["logs_per_minute"],
+        "last_log_received": stats["last_log_received"]
+    }
+
+@app.get("/stats")
+async def get_stats():
+    """Get detailed statistics."""
+    return stats
 
 @app.post("/logs")
 async def receive_log(log_entry: LogEntry):
@@ -346,71 +389,6 @@ async def get_stats():
     except Exception as e:
         logger.error(f"Error getting stats: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/health")
-async def health_check():
-    """Enhanced health check endpoint with startup grace period."""
-    try:
-        # During startup, consider the service healthy if basic requirements are met
-        syslog_exists = os.path.exists("/var/log/collector/syslog.json")
-
-        # Basic health criteria
-        basic_health = {
-            "syslog_file": {
-                "exists": syslog_exists,
-                "size": os.path.getsize("/var/log/collector/syslog.json") if syslog_exists else 0,
-                "last_modified": datetime.fromtimestamp(os.path.getmtime("/var/log/collector/syslog.json")).isoformat() if syslog_exists else None
-            },
-            "buffer": {
-                "size": len(log_monitor.buffer),
-                "max_size": log_monitor.buffer_size
-            }
-        }
-
-        # During startup phase, return healthy if basic requirements are met
-        if not log_forwarder.is_ready:
-            return {
-                "status": "starting" if syslog_exists else "degraded",
-                "timestamp": datetime.now().isoformat(),
-                "components": basic_health
-            }
-
-        # Full health check when not in startup
-        api_healthy = False
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f'{log_forwarder.api_url}/health') as response:
-                    api_healthy = response.status == 200
-        except Exception:
-            pass
-
-        basic_health["api_connection"] = {
-            "status": "healthy" if api_healthy else "unhealthy",
-            "url": log_forwarder.api_url
-        }
-
-        return {
-            "status": "healthy" if (syslog_exists and api_healthy) else "degraded",
-            "timestamp": datetime.now().isoformat(),
-            "components": basic_health
-        }
-    except Exception as e:
-        logger.error(f"Error in health check: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize necessary resources on startup."""
-    logger.info("Log Collector service starting up...")
-    await log_forwarder.start()
-    asyncio.create_task(log_monitor.monitor())
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup resources on shutdown."""
-    logger.info("Log Collector service shutting down...")
-    await log_monitor.flush_buffer()
-    await log_forwarder.stop()
 
 if __name__ == "__main__":
     import uvicorn

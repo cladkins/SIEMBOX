@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional
 import json
+import os
 
 class APILogHandler(logging.Handler):
     def __init__(self, service_name: str, api_url: str = "http://api:8080"):
@@ -93,7 +94,7 @@ class APILogHandler(logging.Handler):
             print(f"Error flushing log buffer: {str(e)}")
 
 def setup_logging(service_name: str, api_url: str = "http://api:8080", log_level: str = "INFO") -> logging.Logger:
-    """Set up logging with the API handler"""
+    """Set up logging with the API handler and file handler"""
     # Create logger
     logger = logging.getLogger(service_name)
     logger.setLevel(getattr(logging, log_level))
@@ -107,6 +108,13 @@ def setup_logging(service_name: str, api_url: str = "http://api:8080", log_level
     api_handler = APILogHandler(service_name, api_url)
     api_handler.setFormatter(formatter)
     logger.addHandler(api_handler)
+    
+    # Create and add file handler
+    log_dir = "/var/log/collector"
+    os.makedirs(log_dir, exist_ok=True)
+    file_handler = logging.FileHandler(f"{log_dir}/collector.log")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
     
     # Also add console handler for immediate feedback
     console_handler = logging.StreamHandler()

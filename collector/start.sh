@@ -32,6 +32,10 @@ chmod 666 /var/log/collector/syslog.json
 echo "syslog.json file status:"
 ls -la /var/log/collector/syslog.json
 
+# Verify rsyslog configuration
+echo "Checking rsyslog configuration..."
+cat /etc/rsyslog.conf
+
 # Make rsyslog executable
 echo "Setting rsyslog permissions..."
 chmod +x /usr/sbin/rsyslogd
@@ -43,7 +47,7 @@ echo "Starting rsyslog..."
 RSYSLOG_PID=$!
 
 echo "Waiting for rsyslog to initialize..."
-sleep 2
+sleep 5
 
 # Check if rsyslog is running and listening
 if ! kill -0 $RSYSLOG_PID 2>/dev/null; then
@@ -55,8 +59,11 @@ if ! kill -0 $RSYSLOG_PID 2>/dev/null; then
     exit 1
 fi
 
-# Verify port is listening
+# Verify port is listening with more detailed output
+echo "Checking if rsyslog is listening on port 5514..."
 for i in {1..5}; do
+    echo "Attempt $i of 5..."
+    netstat -tulpn | grep :5514 || true
     if netstat -tulpn | grep :5514 > /dev/null; then
         echo "rsyslog is listening on port 5514"
         break
@@ -65,9 +72,13 @@ for i in {1..5}; do
         echo "ERROR: rsyslog is not listening on port 5514"
         echo "Checking network status..."
         netstat -tulpn
+        echo "Checking rsyslog process..."
+        ps aux | grep rsyslog
+        echo "Checking rsyslog logs..."
+        cat /var/log/collector/rsyslog-debug.log
         exit 1
     fi
-    sleep 1
+    sleep 2
 done
 
 echo "rsyslog started successfully with PID $RSYSLOG_PID"

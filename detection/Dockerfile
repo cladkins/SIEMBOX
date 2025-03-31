@@ -16,6 +16,11 @@ RUN pip install --no-cache-dir pip setuptools wheel build
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy all files (including start.sh)
 COPY . .
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Make the start script executable
+RUN chmod +x start.sh
+
+# Use the start script as the command
+CMD ["/app/start.sh"]

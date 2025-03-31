@@ -1,6 +1,10 @@
 version: "3.8"
 
+# SIEMBox - Security Information and Event Management System
+# This docker-compose file defines all services required to run SIEMBox
+
 services:
+  # Database service - PostgreSQL for storing logs, alerts, and configuration
   db:
     image: postgres:14-alpine
     environment:
@@ -17,7 +21,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    # No external port by default - accessed by other services internally
 
+  # Redis service - Used for caching and rate limiting
   redis:
     image: redis:alpine
     volumes:
@@ -30,93 +36,23 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    # No external port by default - accessed by other services internally
 
-  detection:
-    image: ghcr.io/cladkins/siembox/detection:latest
-    build:
-      context: ./detection
-      dockerfile: Dockerfile
-    ports:
-      - "8001:8000"
-    volumes:
-      - sigma_rules:/app/rules
-    environment:
-      - SIGMA_RULES_PATH=/app/rules
-    networks:
-      - siem_network
-    depends_on:
-      api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    user: "65534:65534"
-    init: true
-
-  collector:
-    image: ghcr.io/cladkins/siembox/collector:latest
-    build:
-      context: ./collector
-      dockerfile: Dockerfile
-    ports:
-      - "5514:5514/udp"
-      - "5514:5514/tcp"
-      - "8000:8000"
-    volumes:
-      - collector_data:/var/log/collector
-    environment:
-      - LOG_LEVEL=info
-      - API_URL=http://api:8080
-    networks:
-      - siem_network
-    depends_on:
-      api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  iplookup:
-    image: ghcr.io/cladkins/siembox/iplookup:latest
-    build:
-      context: ./iplookup
-      dockerfile: Dockerfile
-    ports:
-      - "8002:8000"
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    networks:
-      - siem_network
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health 2>/dev/null"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
+  # API Gateway - Central coordination point for all services
   api:
     image: ghcr.io/cladkins/siembox/api:latest
     build:
       context: ./api
       dockerfile: Dockerfile
     ports:
-      - "8080:8080"
+      - "${API_PORT:-8080}:8080"
     environment:
       - DB_HOST=db
       - DB_USER=${DB_USER:-siembox}
       - DB_PASSWORD=${DB_PASSWORD:-changeme}
       - DB_NAME=siembox
       - JWT_SECRET=${JWT_SECRET:-change_this_in_production}
+      # Internal port remains 8080 - doesn't need to be configurable
     networks:
       - siem_network
     depends_on:
@@ -131,13 +67,93 @@ services:
       retries: 3
       start_period: 40s
 
+  # Detection Service - Manages Sigma rules and analyzes logs
+  detection:
+    image: ghcr.io/cladkins/siembox/detection:latest
+    build:
+      context: ./detection
+      dockerfile: Dockerfile
+    ports:
+      - "${DETECTION_PORT:-8001}:8000"
+    volumes:
+      - sigma_rules:/app/rules
+    environment:
+      - SIGMA_RULES_PATH=/app/rules
+      # Internal port is 8000, external port is configurable
+    networks:
+      - siem_network
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    user: "65534:65534"
+    init: true
+
+  # Collector Service - Receives logs via syslog and HTTP
+  collector:
+    image: ghcr.io/cladkins/siembox/collector:latest
+    build:
+      context: ./collector
+      dockerfile: Dockerfile
+    ports:
+      - "${SYSLOG_UDP_PORT:-5514}:5514/udp"
+      - "${SYSLOG_TCP_PORT:-5514}:5514/tcp"
+      - "${COLLECTOR_PORT:-8000}:8000"
+    volumes:
+      - collector_data:/var/log/collector
+    environment:
+      - LOG_LEVEL=info
+      - API_URL=http://api:8080
+      # Internal ports remain fixed, external ports are configurable
+    networks:
+      - siem_network
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # IP Lookup Service - Provides IP geolocation and threat intelligence
+  iplookup:
+    image: ghcr.io/cladkins/siembox/iplookup:latest
+    build:
+      context: ./iplookup
+      dockerfile: Dockerfile
+    ports:
+      - "${IPLOOKUP_PORT:-8002}:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # Internal port is 8000, external port is configurable
+    networks:
+      - siem_network
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health 2>/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # VPS Audit Service - Performs security audits on remote servers
   vps-audit:
     image: ghcr.io/cladkins/siembox/vps-audit:latest
     build:
       context: ./vps-audit
       dockerfile: Dockerfile
     ports:
-      - "8004:8004"
+      - "${VPS_AUDIT_PORT:-8004}:8004"
     environment:
       - POSTGRES_USER=${DB_USER:-siembox}
       - POSTGRES_PASSWORD=${DB_PASSWORD:-changeme}
@@ -145,6 +161,7 @@ services:
       - POSTGRES_PORT=5432
       - POSTGRES_DB=siembox
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-change_this_in_production}
+      # Both internal and external ports are 8004
     networks:
       - siem_network
     depends_on:
@@ -159,18 +176,20 @@ services:
     volumes:
       - ssh_keys:/root/.ssh
 
+  # Frontend Service - Web interface for the system
   frontend:
     image: ghcr.io/cladkins/siembox/frontend:latest
     build:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT:-3000}:3000"
     environment:
-      - REACT_APP_API_URL=http://localhost:8080
-      - REACT_APP_DETECTION_URL=http://localhost:8001
-      - REACT_APP_IPLOOKUP_URL=http://localhost:8002
-      - REACT_APP_VPS_AUDIT_URL=http://localhost:8004
+      # These URLs are for browser access, so they need to use the external ports
+      - REACT_APP_API_URL=http://${HOST_ADDRESS:-localhost}:${API_PORT:-8080}
+      - REACT_APP_DETECTION_URL=http://${HOST_ADDRESS:-localhost}:${DETECTION_PORT:-8001}
+      - REACT_APP_IPLOOKUP_URL=http://${HOST_ADDRESS:-localhost}:${IPLOOKUP_PORT:-8002}
+      - REACT_APP_VPS_AUDIT_URL=http://${HOST_ADDRESS:-localhost}:${VPS_AUDIT_PORT:-8004}
     networks:
       - siem_network
     depends_on:
@@ -181,6 +200,7 @@ services:
       vps-audit:
         condition: service_healthy
 
+# Persistent volumes for data storage
 volumes:
   collector_data:
     name: siembox_collector_data
@@ -193,6 +213,7 @@ volumes:
   ssh_keys:
     name: siembox_ssh_keys
 
+# Network for service communication
 networks:
   siem_network:
     name: siembox_network

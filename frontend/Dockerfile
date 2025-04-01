@@ -12,9 +12,13 @@ ENV REACT_APP_API_URL=${REACT_APP_API_URL}
 ENV REACT_APP_DETECTION_URL=${REACT_APP_DETECTION_URL}
 ENV REACT_APP_IPLOOKUP_URL=${REACT_APP_IPLOOKUP_URL}
 
+# Configure npm to use a different registry and disable strict SSL
+RUN npm config set registry https://registry.npmjs.org/ && \
+    npm config set strict-ssl false
+
 # Install dependencies
 COPY package*.json ./
-RUN npm install
+RUN npm install --legacy-peer-deps
 
 # Copy application code
 COPY . .

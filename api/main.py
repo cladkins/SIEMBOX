@@ -441,6 +441,41 @@ async def startup_event():
     """Placeholder for startup events"""
     logger.info("Startup event triggered")
 
+@app.get("/api/services/stats")
+async def get_services_stats():
+    """Get aggregated statistics from all services"""
+    try:
+        # Get collector stats
+        async with httpx.AsyncClient() as client:
+            collector_response = await client.get("http://collector:8000/stats")
+            collector_stats = collector_response.json() if collector_response.status_code == 200 else {
+                "total_logs": 0,
+                "logs_per_minute": 0,
+                "status": "degraded"
+            }
+
+        # Get detection stats
+        async with httpx.AsyncClient() as client:
+            detection_response = await client.get("http://detection:8000/stats")
+            detection_stats = detection_response.json() if detection_response.status_code == 200 else {
+                "alerts_last_24h": 0,
+                "enabled_rules": 0,
+                "total_rules": 0,
+                "system_metrics": {
+                    "cpu_usage": 0,
+                    "memory_usage": 0
+                },
+                "status": "degraded"
+            }
+
+        return {
+            "collector": collector_stats,
+            "detection": detection_stats
+        }
+    except Exception as e:
+        logger.error(f"Error getting services stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)

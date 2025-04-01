@@ -79,18 +79,8 @@ function Dashboard() {
 
   const fetchStats = async () => {
     try {
-      const collectorUrl = `http://${window.location.hostname}:8000/stats`;
-      const requests = [
-        axios.get(collectorUrl),
-        axios.get(`${config.detectionUrl}/stats`)
-      ];
-
-      const [collectorResp, detectionResp] = await Promise.all(requests);
-      
-      setStats({
-        collector: collectorResp.data,
-        detection: detectionResp.data
-      });
+      const response = await axios.get(`${config.apiUrl}/api/services/stats`);
+      setStats(response.data);
       setError(null);
     } catch (error) {
       console.error('Error fetching dashboard stats:', error);

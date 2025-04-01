@@ -476,6 +476,21 @@ async def get_services_stats():
         logger.error(f"Error getting services stats: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/rules", response_model=RulesListResponse)
+async def get_rules():
+    """Get all available detection rules from the detection service"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get("http://detection:8000/rules")
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.error(f"Detection service returned status {response.status_code}")
+                return {"rules": []}
+    except Exception as e:
+        logger.error(f"Error fetching rules from detection service: {str(e)}")
+        return {"rules": []}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)

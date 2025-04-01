@@ -175,7 +175,7 @@ function Settings() {
   const fetchRules = async () => {
     try {
       setLoading(true);
-      const response = await axios.get(`${config.detectionUrl}/rules`);
+      const response = await axios.get(`${config.apiUrl}/api/rules`);
       const rulesData = response.data.rules;
       setRules(rulesData);
       
@@ -201,7 +201,7 @@ function Settings() {
   const handleBulkToggle = async (enabled) => {
     try {
       setBulkUpdating(true);
-      await axios.post(`${config.detectionUrl}/rules/bulk-toggle`, {
+      await axios.post(`${config.apiUrl}/api/rule-states/bulk`, {
         enabled: enabled
       });
       
@@ -351,10 +351,8 @@ function Settings() {
 
   const handleToggleRule = async (ruleId, enabled, category) => {
     try {
-      await axios.post(`${config.detectionUrl}/rules/toggle`, {
-        rule_id: ruleId,
-        enabled: !enabled,
-        category
+      await axios.post(`${config.apiUrl}/api/rule-states/${ruleId}`, {
+        enabled: !enabled
       });
       
       const updatedRules = rules.map(rule =>

@@ -1,4 +1,4 @@
-FROM debian:bullseye-slim
+FROM debian:bullseye
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \

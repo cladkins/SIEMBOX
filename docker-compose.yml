@@ -165,6 +165,8 @@ services:
       - "${SYSLOG_TCP_PORT:-5514}:5514/tcp"
       # Expose Fluent Bit's monitoring port (optional)
       - "2020:2020"
+    # Explicitly tell Fluent Bit which config file to use
+    command: /fluent-bit/bin/fluent-bit -c /fluent-bit/etc/fluent-bit.conf
     networks:
       - siem_network
     depends_on:

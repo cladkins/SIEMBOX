@@ -159,17 +159,12 @@ services:
 
   # Fluent Bit Collector Service
   fluent-bit:
-    image: fluent/fluent-bit:latest # Use the official Fluent Bit image
+    image: ghcr.io/cladkins/siembox/fluent-bit:latest # Use custom SIEMBox image
     ports:
       - "${SYSLOG_UDP_PORT:-5514}:5514/udp"
       - "${SYSLOG_TCP_PORT:-5514}:5514/tcp"
       # Expose Fluent Bit's monitoring port (optional)
       - "2020:2020"
-    volumes:
-      # Mount the configuration directory
-      - ./fluent-bit:/fluent-bit/etc/
-    # Tell Fluent Bit to use the YAML configuration file
-    command: /fluent-bit/bin/fluent-bit -c /fluent-bit/etc/fluent-bit.conf
     networks:
       - siem_network
     depends_on:

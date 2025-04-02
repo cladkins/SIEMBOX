@@ -68,16 +68,6 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/detection:${{ github.sha }}
             ${{ startsWith(github.ref, 'refs/tags/') && format('{0}/{1}/detection:{2}', env.REGISTRY, env.IMAGE_NAME, github.ref_name) || '' }}
 
-      - name: Build and push Collector image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./collector
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/collector:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/collector:${{ github.sha }}
-            ${{ startsWith(github.ref, 'refs/tags/') && format('{0}/{1}/collector:{2}', env.REGISTRY, env.IMAGE_NAME, github.ref_name) || '' }}
-
       - name: Build and push Frontend image
         uses: docker/build-push-action@v5
         with:
@@ -101,9 +91,19 @@ jobs:
       - name: Build and push VPS Audit image
         uses: docker/build-push-action@v5
         with:
-          context: ./vps-audit
+          context: ./vps-audit # Specify the context for vps-audit service
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/vps-audit:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/vps-audit:${{ github.sha }}
             ${{ startsWith(github.ref, 'refs/tags/') && format('{0}/{1}/vps-audit:{2}', env.REGISTRY, env.IMAGE_NAME, github.ref_name) || '' }}
+
+      - name: Build and push Fluent Bit image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./fluent-bit # Specify the context for fluent-bit service
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/fluent-bit:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/fluent-bit:${{ github.sha }}
+            ${{ startsWith(github.ref, 'refs/tags/') && format('{0}/{1}/fluent-bit:{2}', env.REGISTRY, env.IMAGE_NAME, github.ref_name) || '' }}

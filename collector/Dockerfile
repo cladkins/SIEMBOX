@@ -1,9 +1,11 @@
-FROM python:3.10-slim
+FROM debian:bullseye-slim
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
-    gcc \
+    python3 \
+    python3-pip \
     python3-dev \
+    gcc \
     rsyslog \
     net-tools \
     netcat-openbsd \
@@ -28,7 +30,7 @@ RUN chmod 644 /etc/rsyslog.conf && \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 COPY . .
 

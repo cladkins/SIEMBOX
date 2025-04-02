@@ -361,59 +361,42 @@ async def get_rule_states(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/rule-states/{rule_id}")
-async def set_rule_state(
-    rule_id: str,
-    enabled: bool,
-    db: AsyncSession = Depends(get_db)
-):
-    """Set state for a specific rule"""
+async def update_rule_state(rule_id: str, enabled: bool):
+    """Update a rule's enabled state"""
     try:
-        setting_key = f"RULE_STATE_{rule_id}"
-        result = await db.execute(
-            select(Setting).where(Setting.key == setting_key)
-        )
-        setting = result.scalar_one_or_none()
-        
-        if setting:
-            setting.set_value(str(enabled).lower())
-        else:
-            setting = Setting(key=setting_key)
-            setting.set_value(str(enabled).lower())
-            db.add(setting)
-        
-        await db.commit()
-        return {"rule_id": rule_id, "enabled": enabled}
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"http://detection:8000/rules/toggle",
+                json={
+                    "rule_id": rule_id,
+                    "enabled": enabled
+                }
+            )
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.error(f"Detection service returned status {response.status_code}")
+                raise HTTPException(status_code=response.status_code, detail="Failed to update rule state")
     except Exception as e:
-        logger.error(f"Error setting rule state: {str(e)}")
-        await db.rollback()
+        logger.error(f"Error updating rule state: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/rule-states/bulk")
-async def set_bulk_rule_states(
-    rule_states: Dict[str, bool],
-    db: AsyncSession = Depends(get_db)
-):
-    """Set states for multiple rules at once"""
+async def bulk_update_rules(enabled: bool):
+    """Bulk update all rules' enabled state"""
     try:
-        for rule_id, enabled in rule_states.items():
-            setting_key = f"RULE_STATE_{rule_id}"
-            result = await db.execute(
-                select(Setting).where(Setting.key == setting_key)
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "http://detection:8000/rules/bulk-toggle",
+                json={"enabled": enabled}
             )
-            setting = result.scalar_one_or_none()
-            
-            if setting:
-                setting.set_value(str(enabled).lower())
+            if response.status_code == 200:
+                return response.json()
             else:
-                setting = Setting(key=setting_key)
-                setting.set_value(str(enabled).lower())
-                db.add(setting)
-        
-        await db.commit()
-        return {"updated": len(rule_states)}
+                logger.error(f"Detection service returned status {response.status_code}")
+                raise HTTPException(status_code=response.status_code, detail="Failed to bulk update rules")
     except Exception as e:
-        logger.error(f"Error setting bulk rule states: {str(e)}")
-        await db.rollback()
+        logger.error(f"Error bulk updating rules: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
@@ -478,7 +461,7 @@ async def get_services_stats():
 
 @app.get("/api/rules", response_model=RulesListResponse)
 async def get_rules():
-    """Get all available detection rules from the detection service"""
+    """Get all detection rules"""
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get("http://detection:8000/rules")
@@ -486,10 +469,10 @@ async def get_rules():
                 return response.json()
             else:
                 logger.error(f"Detection service returned status {response.status_code}")
-                return {"rules": []}
+                raise HTTPException(status_code=response.status_code, detail="Failed to fetch rules from detection service")
     except Exception as e:
-        logger.error(f"Error fetching rules from detection service: {str(e)}")
-        return {"rules": []}
+        logger.error(f"Error fetching rules: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

@@ -24,17 +24,23 @@ ls -la /var/log/collector
 ls -la /var/spool/rsyslog
 ls -la /var/run/rsyslog
 
-# Create and set permissions for syslog.json
-echo "Creating syslog.json file..."
+# Create and set permissions for log files
+echo "Creating log files..."
 touch /var/log/collector/syslog.json
-chmod 666 /var/log/collector/syslog.json
+touch /var/log/collector/rsyslog-debug.log
+touch /var/log/collector/rsyslog-gnutls.log
 
-echo "syslog.json file status:"
-ls -la /var/log/collector/syslog.json
+echo "Setting log file permissions..."
+chmod 666 /var/log/collector/syslog.json
+chmod 666 /var/log/collector/rsyslog-debug.log
+chmod 666 /var/log/collector/rsyslog-gnutls.log
+
+echo "Log file status:"
+ls -la /var/log/collector/
 
 # Verify rsyslog configuration
 echo "Checking rsyslog configuration..."
-cat /etc/rsyslog.conf
+rsyslogd -N1 -f /etc/rsyslog.conf
 
 # Make rsyslog executable
 echo "Setting rsyslog permissions..."
@@ -107,6 +113,8 @@ echo "FastAPI started successfully with PID $FASTAPI_PID"
 while true; do
     if ! kill -0 $RSYSLOG_PID 2>/dev/null; then
         echo "rsyslog process died"
+        echo "Checking rsyslog debug log..."
+        cat /var/log/collector/rsyslog-debug.log
         exit 1
     fi
     if ! kill -0 $FASTAPI_PID 2>/dev/null; then

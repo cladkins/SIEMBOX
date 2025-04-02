@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     gcc \
     rsyslog --install-recommends \
     rsyslog-gnutls \
+    rsyslog-omhttp \
     net-tools \
     netcat-openbsd \
     curl \

@@ -88,31 +88,6 @@ services:
     user: "65534:65534"
     init: true
 
-  # Collector Service - Receives logs via syslog and HTTP
-  collector:
-    image: ghcr.io/cladkins/siembox/collector:latest
-    ports:
-      - "${SYSLOG_UDP_PORT:-5514}:5514/udp"
-      - "${SYSLOG_TCP_PORT:-5514}:5514/tcp"
-      - "${COLLECTOR_PORT:-8000}:8000"
-    volumes:
-      - collector_data:/var/log/collector
-    environment:
-      - LOG_LEVEL=info
-      - API_URL=http://api:8080
-      # Internal ports remain fixed, external ports are configurable
-    networks:
-      - siem_network
-    depends_on:
-      api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
   # IP Lookup Service - Provides IP geolocation and threat intelligence
   iplookup:
     image: ghcr.io/cladkins/siembox/iplookup:latest
@@ -182,6 +157,31 @@ services:
       vps-audit:
         condition: service_healthy
 
+  # Fluent Bit Collector Service
+  fluent-bit:
+    image: fluent/fluent-bit:latest # Use the official Fluent Bit image
+    ports:
+      - "${SYSLOG_UDP_PORT:-5514}:5514/udp"
+      - "${SYSLOG_TCP_PORT:-5514}:5514/tcp"
+      # Expose Fluent Bit's monitoring port (optional)
+      - "2020:2020"
+    volumes:
+      # Mount the configuration directory
+      - ./fluent-bit:/fluent-bit/etc/
+    # Tell Fluent Bit to use the YAML configuration file
+    command: /fluent-bit/bin/fluent-bit -c /fluent-bit/etc/fluent-bit.conf
+    networks:
+      - siem_network
+    depends_on:
+      api:
+        condition: service_healthy
+    # Add a simple healthcheck (optional, checks if the process is running)
+    healthcheck:
+      test: ["CMD-SHELL", "pidof fluent-bit"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
 networks:
   siem_network:
     driver: bridge
@@ -189,6 +189,5 @@ networks:
 volumes:
   postgres_data:
   redis_data:
-  collector_data:
   sigma_rules:
   ssh_keys:

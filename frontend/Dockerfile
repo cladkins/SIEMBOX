@@ -18,7 +18,8 @@ RUN npm config set registry https://registry.npmjs.org/ && \
 
 # Install dependencies
 COPY package*.json ./
-RUN npm install --legacy-peer-deps
+RUN npm install --legacy-peer-deps && \
+    npm install ajv@8.12.0 ajv-keywords@5.1.0 --legacy-peer-deps
 
 # Copy application code
 COPY . .

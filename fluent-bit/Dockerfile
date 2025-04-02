@@ -5,8 +5,6 @@ FROM fluent/fluent-bit:latest
 # Fluent Bit looks for configuration in /fluent-bit/etc/ by default
 COPY fluent-bit.conf /fluent-bit/etc/
 COPY parsers.conf /fluent-bit/etc/
-COPY inputs/ /fluent-bit/etc/inputs/
-COPY filters/ /fluent-bit/etc/filters/
 
 # No explicit CMD or ENTRYPOINT needed unless overriding the base image's default,
 # which is typically to run fluent-bit using /fluent-bit/etc/fluent-bit.conf

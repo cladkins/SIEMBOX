@@ -19,7 +19,7 @@ SIEMBox is a containerized, microservice-based Security Information and Event Ma
 
 ## Getting Started
 
-Follow these steps to get SIEMBox running locally using Docker.
+Follow these steps to get SIEMBox running locally using Docker and pre-built images.
 
 **Prerequisites:**
 
@@ -28,13 +28,21 @@ Follow these steps to get SIEMBox running locally using Docker.
 
 **Steps:**
 
-1.  **Clone the repository:**
+1.  **Create a directory for SIEMBox:**
     ```bash
-    git clone https://github.com/cladkins/siembox.git
+    mkdir siembox
     cd siembox
     ```
 
-2.  **Configure Environment Variables:**
+2.  **Download Configuration Files:**
+    Download the `docker-compose.yml` and `.env.example` files from the repository. You can do this manually or using commands like `curl`:
+    ```bash
+    curl -o docker-compose.yml https://raw.githubusercontent.com/cladkins/siembox/main/docker-compose.yml
+    curl -o .env.example https://raw.githubusercontent.com/cladkins/siembox/main/.env.example
+    ```
+    *(Note: Replace `main` with the appropriate branch or tag if necessary)*
+
+3.  **Configure Environment Variables:**
     Copy the example environment file and edit it with your specific settings.
     ```bash
     cp .env.example .env
@@ -42,14 +50,22 @@ Follow these steps to get SIEMBox running locally using Docker.
     *   **Important:** You **must** set secure values for `DB_PASSWORD`, `JWT_SECRET`, and `ENCRYPTION_KEY` in the `.env` file.
     *   Review other variables in `.env` for optional API keys (like `IPAPI_KEY`, `CROWDSEC_API_KEY`) or custom port configurations.
 
-3.  **Start the containers:**
-    This command will build the images (if not already built) and start all the SIEMBox services in the background. The Sigma rules will be automatically cloned/updated by the detection service on its first start.
+4.  **Pull Pre-built Images:**
+    Fetch the latest service images from the container registry.
+    ```bash
+    docker-compose pull
+    ```
+
+5.  **Start the containers:**
+    This command will start all the SIEMBox services using the pre-built images.
     ```bash
     docker-compose up -d
     ```
 
-4.  **Access the Dashboard:**
-    Once the containers are up and running (which might take a minute or two for the initial setup and rule download), you can access the web interface, typically at: `http://localhost:3000` (or the port configured via `FRONTEND_PORT` in your `.env` file).
+6.  **Access the Dashboard:**
+    Once the containers are up and running, you can access the web interface, typically at: `http://localhost:3000` (or the port configured via `FRONTEND_PORT` in your `.env` file).
+
+*(Optional) For Development:* If you intend to modify the source code, clone the full repository instead (`git clone https://github.com/cladkins/siembox.git`) and follow the steps in the original README version (which will trigger local builds).
 
 ## Documentation
 

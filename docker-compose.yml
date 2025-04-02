@@ -41,9 +41,6 @@ services:
   # API Gateway - Central coordination point for all services
   api:
     image: ghcr.io/cladkins/siembox/api:latest
-    build:
-      context: ./api
-      dockerfile: Dockerfile
     ports:
       - "${API_PORT:-8080}:8080"
     environment:
@@ -70,9 +67,6 @@ services:
   # Detection Service - Manages Sigma rules and analyzes logs
   detection:
     image: ghcr.io/cladkins/siembox/detection:latest
-    build:
-      context: ./detection
-      dockerfile: Dockerfile
     ports:
       - "${DETECTION_PORT:-8001}:8000"
     volumes:
@@ -97,9 +91,6 @@ services:
   # Collector Service - Receives logs via syslog and HTTP
   collector:
     image: ghcr.io/cladkins/siembox/collector:latest
-    build:
-      context: ./collector
-      dockerfile: Dockerfile
     ports:
       - "${SYSLOG_UDP_PORT:-5514}:5514/udp"
       - "${SYSLOG_TCP_PORT:-5514}:5514/tcp"
@@ -125,9 +116,6 @@ services:
   # IP Lookup Service - Provides IP geolocation and threat intelligence
   iplookup:
     image: ghcr.io/cladkins/siembox/iplookup:latest
-    build:
-      context: ./iplookup
-      dockerfile: Dockerfile
     ports:
       - "${IPLOOKUP_PORT:-8002}:8000"
     environment:
@@ -149,9 +137,6 @@ services:
   # VPS Audit Service - Performs security audits on remote servers
   vps-audit:
     image: ghcr.io/cladkins/siembox/vps-audit:latest
-    build:
-      context: ./vps-audit
-      dockerfile: Dockerfile
     ports:
       - "${VPS_AUDIT_PORT:-8004}:8004"
     environment:
@@ -179,9 +164,6 @@ services:
   # Frontend Service - Web interface for the system
   frontend:
     image: ghcr.io/cladkins/siembox/frontend:latest
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     environment:
@@ -200,20 +182,13 @@ services:
       vps-audit:
         condition: service_healthy
 
-# Persistent volumes for data storage
-volumes:
-  collector_data:
-    name: siembox_collector_data
-  sigma_rules:
-    name: siembox_sigma_rules
-  postgres_data:
-    name: siembox_postgres_data
-  redis_data:
-    name: siembox_redis_data
-  ssh_keys:
-    name: siembox_ssh_keys
-
-# Network for service communication
 networks:
   siem_network:
-    name: siembox_network
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  collector_data:
+  sigma_rules:
+  ssh_keys:

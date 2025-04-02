@@ -7,36 +7,14 @@ set -e
 
 echo "Starting collector service..."
 
-# Create required directories with verbose output
-echo "Creating required directories..."
-mkdir -p /var/log/collector
-mkdir -p /var/spool/rsyslog
-mkdir -p /var/run/rsyslog
-
-# Set permissions with verbose output
-echo "Setting directory permissions..."
-chmod -R 777 /var/log/collector
-chmod -R 777 /var/spool/rsyslog
-chmod -R 777 /var/run/rsyslog
-
-echo "Directory permissions set:"
+# Verify required directories exist and have correct permissions
+echo "Verifying directories and permissions..."
 ls -la /var/log/collector
 ls -la /var/spool/rsyslog
 ls -la /var/run/rsyslog
-
-# Create and set permissions for log files
-echo "Creating log files..."
-touch /var/log/collector/syslog.json
-touch /var/log/collector/rsyslog-debug.log
-touch /var/log/collector/rsyslog-gnutls.log
-
-echo "Setting log file permissions..."
-chmod 666 /var/log/collector/syslog.json
-chmod 666 /var/log/collector/rsyslog-debug.log
-chmod 666 /var/log/collector/rsyslog-gnutls.log
-
-echo "Log file status:"
-ls -la /var/log/collector/
+ls -la /var/log/collector/syslog.json
+ls -la /var/log/collector/rsyslog-debug.log
+ls -la /var/log/collector/rsyslog-gnutls.log
 
 # Verify rsyslog configuration
 echo "Checking rsyslog configuration..."

@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-dev \
     gcc \
-    rsyslog \
+    rsyslog --install-recommends \
     net-tools \
     netcat-openbsd \
     curl \

@@ -5,6 +5,12 @@ RUN apt-get update && apt-get install -y \
     gcc \
     python3-dev \
     rsyslog \
+    rsyslog-gnutls \
+    rsyslog-relp \
+    rsyslog-mysql \
+    rsyslog-pgsql \
+    rsyslog-mongodb \
+    rsyslog-omclickhouse \
     net-tools \
     netcat-openbsd \
     curl \

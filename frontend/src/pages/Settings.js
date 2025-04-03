@@ -201,15 +201,9 @@ function Settings() {
   const handleBulkToggle = async (enabled) => {
     try {
       setBulkUpdating(true);
-      
-      // Create a map of rule IDs to enabled state
-      const ruleStates = {};
-      rules.forEach(rule => {
-        ruleStates[rule.id] = enabled;
+      await axios.post(`${config.apiUrl}/api/rule-states/bulk`, {
+        enabled: enabled
       });
-      
-      // Send the bulk update request
-      await axios.post(`${config.apiUrl}/api/rule-states/bulk`, ruleStates);
       
       // Update local state
       const updatedRules = rules.map(rule => ({
@@ -357,20 +351,15 @@ function Settings() {
 
   const handleToggleRule = async (ruleId, enabled, category) => {
     try {
-      // Create a rule state object with just this rule
-      const ruleStates = {};
-      ruleStates[ruleId] = !enabled;
+      await axios.post(`${config.apiUrl}/api/rule-states/${ruleId}`, {
+        enabled: !enabled
+      });
       
-      // Send the update request
-      await axios.post(`${config.apiUrl}/api/rule-states/bulk`, ruleStates);
-      
-      // Update local state
       const updatedRules = rules.map(rule =>
         rule.id === ruleId ? { ...rule, enabled: !enabled } : rule
       );
       setRules(updatedRules);
 
-      // Update stats
       setStats(prev => ({
         ...prev,
         enabled: updatedRules.filter(rule => rule.enabled).length

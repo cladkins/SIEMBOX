@@ -472,39 +472,21 @@ async def update_rule_state(rule_id: str, enabled: bool):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/rule-states/bulk")
-async def bulk_update_rules(rule_states: Dict[str, bool], db: AsyncSession = Depends(get_db)):
-    """Bulk update rule states"""
+async def bulk_update_rules(enabled: bool):
+    """Bulk update all rules' enabled state"""
     try:
-        # First update in the database
-        for rule_id, enabled in rule_states.items():
-            setting_key = f"RULE_STATE_{rule_id}"
-            result = await db.execute(
-                select(Setting).where(Setting.key == setting_key)
-            )
-            setting = result.scalar_one_or_none()
-            
-            if setting:
-                setting.set_value("true" if enabled else "false")
-            else:
-                setting = Setting(key=setting_key, value="true" if enabled else "false")
-                db.add(setting)
-        
-        await db.commit()
-        
-        # Then forward to detection service
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "http://detection:8000/rules/bulk-toggle",
-                json={"enabled": True, "rule_ids": list(rule_states.keys())}
+                json={"enabled": enabled}
             )
             if response.status_code == 200:
-                return {"success": True, "message": f"Updated {len(rule_states)} rule states"}
+                return response.json()
             else:
                 logger.error(f"Detection service returned status {response.status_code}")
                 raise HTTPException(status_code=response.status_code, detail="Failed to bulk update rules")
     except Exception as e:
         logger.error(f"Error bulk updating rules: {str(e)}")
-        await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")

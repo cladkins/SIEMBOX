@@ -121,6 +121,7 @@ class RuleState(BaseModel):
 class BulkRuleState(BaseModel):
     enabled: bool
     category: str = ""
+    rule_ids: List[str] = None
 
 def update_processing_stats():
     current_time = time.time()
@@ -431,13 +432,25 @@ async def bulk_toggle_rules(state: BulkRuleState):
         updated_rules = {}
         updated_count = 0
         
-        for rule in sigma_rules:
-            if state.category and rule.category != state.category:
-                continue
-            rule.enabled = state.enabled
-            rule_states[rule.id] = state.enabled
-            updated_rules[rule.id] = state.enabled
-            updated_count += 1
+        # If rule_ids is provided, only update those rules
+        if hasattr(state, 'rule_ids') and state.rule_ids:
+            for rule in sigma_rules:
+                if rule.id in state.rule_ids:
+                    if state.category and rule.category != state.category:
+                        continue
+                    rule.enabled = state.enabled
+                    rule_states[rule.id] = state.enabled
+                    updated_rules[rule.id] = state.enabled
+                    updated_count += 1
+        else:
+            # Otherwise update all rules in the category (or all if no category)
+            for rule in sigma_rules:
+                if state.category and rule.category != state.category:
+                    continue
+                rule.enabled = state.enabled
+                rule_states[rule.id] = state.enabled
+                updated_rules[rule.id] = state.enabled
+                updated_count += 1
 
         # Then try to persist to API
         if updated_count > 0:

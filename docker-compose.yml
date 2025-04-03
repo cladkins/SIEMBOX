@@ -1,5 +1,3 @@
-version: "3.8"
-
 # SIEMBox - Security Information and Event Management System
 # This docker-compose file defines all services required to run SIEMBox
 

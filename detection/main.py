@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from datetime import datetime, timedelta
 import json
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import aiohttp
 import os
 import yaml
@@ -121,7 +121,7 @@ class RuleState(BaseModel):
 class BulkRuleState(BaseModel):
     enabled: bool
     category: str = ""
-    rule_ids: List[str] = None
+    rule_ids: Optional[List[str]] = None
 
 def update_processing_stats():
     current_time = time.time()
@@ -433,7 +433,7 @@ async def bulk_toggle_rules(state: BulkRuleState):
         updated_count = 0
         
         # If rule_ids is provided, only update those rules
-        if hasattr(state, 'rule_ids') and state.rule_ids:
+        if state.rule_ids:
             for rule in sigma_rules:
                 if rule.id in state.rule_ids:
                     if state.category and rule.category != state.category:

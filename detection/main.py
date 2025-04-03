@@ -201,8 +201,8 @@ async def load_rules():
                     continue
                 else:
                     logger.error("Failed to verify rules directory after all retries")
-                    stats["status"] = "degraded"
-                    return rules
+                    logger.warning("Loading sample rules as fallback...")
+                    return load_sample_rules()
 
             rules_base_dir = os.path.join(rules_dir, "rules")
             
@@ -250,6 +250,11 @@ async def load_rules():
                             logger.error(f"Error loading rule {file}: {str(e)}")
                             continue
 
+            # If no rules were loaded, fall back to sample rules
+            if len(rules) == 0:
+                logger.warning("No rules were loaded from the repository, loading sample rules as fallback...")
+                return load_sample_rules()
+
             # Update stats
             stats["total_rules"] = len(rules)
             stats["enabled_rules"] = len([r for r in rules if r.enabled])
@@ -263,8 +268,55 @@ async def load_rules():
             if attempt < max_retries - 1:
                 await asyncio.sleep(retry_delay)
             else:
-                stats["status"] = "degraded"
-                return rules
+                logger.error("Failed to load rules after all retries, loading sample rules as fallback...")
+                return load_sample_rules()
+
+def load_sample_rules():
+    """Load sample rules as a fallback."""
+    logger.info("Loading sample rules...")
+    
+    # Create some sample rules
+    sample_rules = [
+        Rule(
+            id="sample_rule_1",
+            title="Suspicious Login Attempt",
+            description="Detects multiple failed login attempts",
+            level="medium",
+            detection={"selection": {"event_id": 4625}, "condition": "selection"},
+            logsource={"product": "windows", "service": "security"},
+            enabled=True,
+            category="windows"
+        ),
+        Rule(
+            id="sample_rule_2",
+            title="Suspicious Command Execution",
+            description="Detects execution of suspicious commands",
+            level="high",
+            detection={"selection": {"command": ["powershell.exe", "cmd.exe"]}, "condition": "selection"},
+            logsource={"product": "windows", "service": "sysmon"},
+            enabled=True,
+            category="windows"
+        ),
+        Rule(
+            id="sample_rule_3",
+            title="Suspicious Network Connection",
+            description="Detects connections to suspicious IP addresses",
+            level="medium",
+            detection={"selection": {"dst_ip": ["10.0.0.1", "192.168.1.1"]}, "condition": "selection"},
+            logsource={"product": "linux", "service": "firewall"},
+            enabled=True,
+            category="linux"
+        )
+    ]
+    
+    # Update stats
+    stats["total_rules"] = len(sample_rules)
+    stats["enabled_rules"] = len([r for r in sample_rules if r.enabled])
+    stats["rules_loaded"] = True
+    stats["status"] = "degraded"  # Still mark as degraded since we're using fallback
+    
+    logger.info(f"Loaded {len(sample_rules)} sample rules")
+    return sample_rules
 
 def match_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
     try:

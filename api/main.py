@@ -451,8 +451,17 @@ async def get_rule_states(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/rule-states/{rule_id}")
-async def update_rule_state(rule_id: str, enabled: bool):
+async def update_rule_state(rule_id: str, request: Request):
     """Update a rule's enabled state"""
+    # Parse the request body to get the enabled parameter
+    try:
+        body = await request.json()
+        enabled = body.get("enabled")
+        if enabled is None:
+            raise HTTPException(status_code=422, detail="Missing 'enabled' parameter in request body")
+    except Exception as e:
+        logger.error(f"Error parsing request body: {str(e)}")
+        raise HTTPException(status_code=400, detail="Invalid request body")
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -472,8 +481,17 @@ async def update_rule_state(rule_id: str, enabled: bool):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/rule-states/bulk")
-async def bulk_update_rules(enabled: bool):
+async def bulk_update_rules(request: Request):
     """Bulk update all rules' enabled state"""
+    # Parse the request body to get the enabled parameter
+    try:
+        body = await request.json()
+        enabled = body.get("enabled")
+        if enabled is None:
+            raise HTTPException(status_code=422, detail="Missing 'enabled' parameter in request body")
+    except Exception as e:
+        logger.error(f"Error parsing request body: {str(e)}")
+        raise HTTPException(status_code=400, detail="Invalid request body")
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(

@@ -1,7 +1,4 @@
 function reformat(tag, timestamp, record)
-    -- Print the record for debugging
-    print("Input record: " .. require("cjson").encode(record))
-    
     -- Create a new record that matches the API's expected structure
     local new_record = {}
     
@@ -12,8 +9,8 @@ function reformat(tag, timestamp, record)
     if record["message"] then
         new_record["message"] = record["message"]
     else
-        -- If no message field, use the whole record as the message
-        new_record["message"] = require("cjson").encode(record)
+        -- If no message field, use a default message
+        new_record["message"] = "Syslog message from " .. (record["hostname"] or "unknown host")
     end
     
     -- Set the level field (default to "INFO" if not present)
@@ -27,9 +24,6 @@ function reformat(tag, timestamp, record)
     
     -- Add the metadata to the new record
     new_record["log_metadata"] = log_metadata
-    
-    -- Print the new record for debugging
-    print("Output record: " .. require("cjson").encode(new_record))
     
     -- Return the new record
     return 1, timestamp, new_record

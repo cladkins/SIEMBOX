@@ -1,5 +1,6 @@
 function reformat(tag, timestamp, record)
     -- Create a new record that exactly matches the API's expected structure
+    -- Based on the successful test with test_api_logs.py
     local new_record = {}
     
     -- Set the source field (required by the API)
@@ -24,8 +25,23 @@ function reformat(tag, timestamp, record)
     local log_metadata = {}
     for k, v in pairs(record) do
         -- Only add non-nil values to avoid serialization issues
-        if v ~= nil then
-            log_metadata[k] = v
+        if v ~= nil and type(v) ~= "function" and type(v) ~= "userdata" then
+            -- Convert tables to strings to avoid serialization issues
+            if type(v) == "table" then
+                -- Simple table serialization
+                local str = "{"
+                for tk, tv in pairs(v) do
+                    if type(tv) == "string" then
+                        str = str .. tostring(tk) .. '="' .. tostring(tv) .. '", '
+                    else
+                        str = str .. tostring(tk) .. "=" .. tostring(tv) .. ", "
+                    end
+                end
+                str = str .. "}"
+                log_metadata[k] = str
+            else
+                log_metadata[k] = v
+            end
         end
     end
     

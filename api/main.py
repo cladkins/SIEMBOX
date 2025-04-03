@@ -214,12 +214,16 @@ async def create_log(
         if isinstance(body, list):
             logger.info(f"Received batch of {len(body)} logs")
             results = []
+            
+            # Process each log entry in the batch
             for log_item in body:
                 try:
-                    # Process each log entry
-                    result = await process_single_log(log_item, db)
-                    if result:
-                        results.append(result)
+                    # Create a new database session for each log to isolate transactions
+                    async with AsyncSession(engine) as log_db:
+                        result = await process_single_log(log_item, log_db)
+                        if result:
+                            # Convert to dict to avoid SQLAlchemy session issues
+                            results.append(LogResponse.from_orm(result))
                 except Exception as e:
                     logger.error(f"Error processing log in batch: {str(e)}")
                     # Continue processing other logs in the batch
@@ -231,10 +235,14 @@ async def create_log(
             return results
         else:
             # Process a single log entry
-            return await process_single_log(body, db)
+            result = await process_single_log(body, db)
+            return result
     except Exception as e:
         logger.error(f"Unexpected error in create_log: {str(e)}")
-        await db.rollback()
+        try:
+            await db.rollback()
+        except Exception as rollback_error:
+            logger.error(f"Error during rollback: {str(rollback_error)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 async def process_single_log(body, db):
@@ -284,20 +292,23 @@ async def process_single_log(body, db):
             logger.info(f"Processing {len(alerts)} alerts for log {new_log.id}")
             # Create alert record for the matched rule
             if alerts:
-                alert = Alert(
-                    rule_name=alerts[0]["rule_name"],
-                    severity=alerts[0]["severity"],
-                    description=alerts[0]["rule_name"],
-                    timestamp=datetime.utcnow()
-                )
-                db.add(alert)
-                await db.flush()
-                
-                # Update existing log entry with alert_id
-                new_log.alert_id = alert.id
-                await db.commit()
-                logger.info(f"Created alert {alert.id} for log {new_log.id}")
-            logger.info(f"Created alert {alert.id} for log {new_log.id}")
+                try:
+                    alert = Alert(
+                        rule_name=alerts[0]["rule_name"],
+                        severity=alerts[0]["severity"],
+                        description=alerts[0]["rule_name"],
+                        timestamp=datetime.utcnow()
+                    )
+                    db.add(alert)
+                    await db.flush()
+                    
+                    # Update existing log entry with alert_id
+                    new_log.alert_id = alert.id
+                    await db.commit()
+                    logger.info(f"Created alert {alert.id} for log {new_log.id}")
+                except Exception as e:
+                    logger.error(f"Error creating alert for log {new_log.id}: {str(e)}")
+                    # Continue processing even if alert creation fails
         
         logger.info(f"Successfully created log entry with id: {new_log.id}")
         return new_log

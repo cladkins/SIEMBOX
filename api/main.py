@@ -566,15 +566,23 @@ async def bulk_update_rules(request: Request, db: AsyncSession = Depends(get_db)
             logger.info(f"Bulk updated rule states in database: {len(rules)} rules -> {enabled}")
             
             # Then forward to detection service
-            response = await client.post(
-                "http://detection:8000/rules/bulk-toggle",
-                json={"enabled": enabled}
-            )
-            if response.status_code == 200:
-                return response.json()
-            else:
-                logger.error(f"Detection service returned status {response.status_code}")
-                raise HTTPException(status_code=response.status_code, detail="Failed to bulk update rules")
+            try:
+                logger.info(f"Sending bulk toggle request to detection service: enabled={enabled}")
+                response = await client.post(
+                    "http://detection:8000/rules/bulk-toggle",
+                    json={"enabled": enabled}
+                )
+                
+                if response.status_code == 200:
+                    logger.info("Bulk toggle request successful")
+                    return response.json()
+                else:
+                    response_text = await response.text()
+                    logger.error(f"Detection service returned status {response.status_code}: {response_text}")
+                    raise HTTPException(status_code=response.status_code, detail=f"Failed to bulk update rules: {response_text}")
+            except Exception as e:
+                logger.error(f"Error sending bulk toggle request to detection service: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Error communicating with detection service: {str(e)}")
     except Exception as e:
         logger.error(f"Error bulk updating rules: {str(e)}")
         await db.rollback()

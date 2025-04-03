@@ -15,6 +15,7 @@ import git
 import time
 import collections
 import psutil
+import traceback
 from app_logger import setup_logging
 
 # Set up logging with the new handler
@@ -439,6 +440,9 @@ async def toggle_rule(rule_state: RuleState):
 @app.post("/rules/bulk-toggle")
 async def bulk_toggle_rules(state: BulkRuleState):
     try:
+        # Log the received state for debugging
+        logger.info(f"Received bulk toggle request: {state}")
+        
         # Update local state
         updated_count = 0
         
@@ -453,6 +457,9 @@ async def bulk_toggle_rules(state: BulkRuleState):
 
         stats["enabled_rules"] = len([r for r in sigma_rules if r.enabled])
         category_msg = f" in category '{state.category}'" if state.category else ""
+        
+        logger.info(f"Bulk updated {updated_count} rules, enabled={state.enabled}")
+        
         return {
             "success": True,
             "message": f"{updated_count} rules{category_msg} {'enabled' if state.enabled else 'disabled'}",
@@ -460,6 +467,7 @@ async def bulk_toggle_rules(state: BulkRuleState):
         }
     except Exception as e:
         logger.error(f"Error bulk toggling rules: {str(e)}")
+        logger.error(f"Exception details: {traceback.format_exc()}")
         stats["status"] = "degraded"
         raise HTTPException(status_code=500, detail=str(e))
 

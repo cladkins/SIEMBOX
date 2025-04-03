@@ -141,38 +141,36 @@ def update_alert_stats(new_alert: bool = False):
         stats["alerts"].popleft()
     stats["alerts_last_24h"] = len(stats["alerts"])
 async def setup_rules_directory():
-    """Clone or update Sigma rules repository using GitPython."""
+    """Verify the rules directory is properly set up."""
     rules_dir = "/app/rules"
-    repo_url = "https://github.com/SigmaHQ/sigma.git"
+    
     try:
-        # Create directory if it doesn't exist
-        os.makedirs(rules_dir, exist_ok=True)
-
-        # Check if it's already a git repo
-        if os.path.exists(os.path.join(rules_dir, ".git")):
-            logger.info("Updating Sigma rules repository...")
-            repo = git.Repo(rules_dir)
-            origin = repo.remotes.origin
-            origin.pull()
-            return True
-
-        # Clean directory contents but keep the directory
-        for item in os.listdir(rules_dir):
-            item_path = os.path.join(rules_dir, item)
-            if os.path.isfile(item_path) or os.path.islink(item_path):
-                os.unlink(item_path)
-            elif os.path.isdir(item_path):
-                shutil.rmtree(item_path)
-
-        # Clone repository
-        logger.info("Cloning Sigma rules repository...")
-        git.Repo.clone_from(repo_url, rules_dir, depth=1)
+        # Check if the rules directory exists
+        if not os.path.exists(rules_dir):
+            logger.error(f"Rules directory {rules_dir} does not exist")
+            return False
+            
+        # Check if the rules subdirectory exists (this is where actual rules are in the Sigma repo)
+        rules_subdir = os.path.join(rules_dir, "rules")
+        if not os.path.exists(rules_subdir):
+            logger.error(f"Rules subdirectory {rules_subdir} does not exist")
+            return False
+            
+        # Count the number of rule files
+        rule_count = 0
+        for root, _, files in os.walk(rules_subdir):
+            for file in files:
+                if file.endswith('.yml') or file.endswith('.yaml'):
+                    rule_count += 1
+                    
+        if rule_count == 0:
+            logger.error("No rule files found in the rules directory")
+            return False
+            
+        logger.info(f"Found {rule_count} rule files in the rules directory")
         return True
-    except git.exc.GitCommandError as e:
-        logger.error(f"Git operation failed: {str(e)}")
-        return False
     except Exception as e:
-        logger.error(f"Failed to setup rules directory: {str(e)}")
+        logger.error(f"Failed to verify rules directory: {str(e)}")
         return False
         return False
 
@@ -195,45 +193,59 @@ async def load_rules():
 
     for attempt in range(max_retries):
         try:
+            # Verify rules directory is properly set up
             if not await setup_rules_directory():
-                logger.warning(f"Failed to setup rules directory (attempt {attempt + 1}/{max_retries})")
+                logger.warning(f"Failed to verify rules directory (attempt {attempt + 1}/{max_retries})")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(retry_delay)
                     continue
                 else:
-                    logger.error("Failed to setup rules directory after all retries")
+                    logger.error("Failed to verify rules directory after all retries")
                     stats["status"] = "degraded"
                     return rules
 
             rules_base_dir = os.path.join(rules_dir, "rules")
-            if not os.path.exists(rules_base_dir):
-                logger.error(f"Rules directory not found: {rules_base_dir}")
-                stats["status"] = "degraded"
-                return rules
-
+            
+            # Count of processed files for logging
+            processed_files = 0
+            valid_rules = 0
+            
             # Walk through all directories under rules/
             for root, _, files in os.walk(rules_base_dir):
                 for file in files:
-                    if file.endswith('.yml'):
+                    if file.endswith('.yml') or file.endswith('.yaml'):
+                        processed_files += 1
                         try:
                             file_path = os.path.join(root, file)
                             with open(file_path) as f:
                                 data = yaml.safe_load(f)
-                                if isinstance(data, dict):
-                                    if 'detection' in data and 'title' in data:
-                                        rule_id = data.get('id', file)
-                                        category = get_rule_category(file_path, rules_dir)
-                                        enabled = rule_states.get(rule_id, False)
-                                        rules.append(Rule(
-                                            id=rule_id,
-                                            title=data['title'],
-                                            description=data.get('description', ''),
-                                            level=data.get('level', 'medium'),
-                                            detection=data['detection'],
-                                            logsource=data.get('logsource', {}),
-                                            enabled=enabled,
-                                            category=category
-                                        ))
+                                if not isinstance(data, dict):
+                                    continue
+                                    
+                                if 'detection' not in data or 'title' not in data:
+                                    continue
+                                
+                                # Valid rule found
+                                valid_rules += 1
+                                rule_id = data.get('id', os.path.splitext(file)[0])
+                                category = get_rule_category(file_path, rules_dir)
+                                enabled = rule_states.get(rule_id, False)
+                                
+                                rules.append(Rule(
+                                    id=rule_id,
+                                    title=data['title'],
+                                    description=data.get('description', ''),
+                                    level=data.get('level', 'medium'),
+                                    detection=data['detection'],
+                                    logsource=data.get('logsource', {}),
+                                    enabled=enabled,
+                                    category=category
+                                ))
+                                
+                                # Log progress periodically
+                                if valid_rules % 100 == 0:
+                                    logger.info(f"Loaded {valid_rules} valid rules so far...")
+                                    
                         except Exception as e:
                             logger.error(f"Error loading rule {file}: {str(e)}")
                             continue
@@ -243,7 +255,7 @@ async def load_rules():
             stats["enabled_rules"] = len([r for r in rules if r.enabled])
             stats["rules_loaded"] = True
             stats["status"] = "operational"
-            logger.info(f"Successfully loaded {len(rules)} rules")
+            logger.info(f"Successfully loaded {len(rules)} rules from {processed_files} processed files")
             return rules
 
         except Exception as e:
@@ -501,22 +513,53 @@ async def health_check():
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize the detection engine with improved error handling."""
+    """Initialize the detection engine with improved error handling and retries."""
     global sigma_rules, rule_states
     logger.info("Starting detection engine...")
+    
+    # Set initial status
+    stats["status"] = "starting"
+    
+    # Wait a bit to ensure the rules directory is fully set up by the start.sh script
+    logger.info("Waiting for rules directory to be fully set up...")
+    await asyncio.sleep(5)
+    
+    # Maximum number of retries for API operations
+    max_retries = 5
+    retry_delay = 3  # seconds
+    
+    # Try to load rule states from API with retries
+    for attempt in range(max_retries):
+        try:
+            # First load rule states from API
+            api_states = await get_rule_states_from_api()
+            if api_states:
+                rule_states.update(api_states)
+                logger.info(f"Loaded {len(api_states)} rule states from API")
+            break  # Success, exit retry loop
+        except Exception as e:
+            logger.warning(f"Error loading rule states (attempt {attempt+1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("Failed to load rule states after all retries")
+    
+    # Load rules (which has its own retry mechanism)
     try:
-        # First load rule states from API
-        api_states = await get_rule_states_from_api()
-        if api_states:
-            rule_states.update(api_states)
-            logger.info(f"Loaded {len(api_states)} rule states from API")
-        
-        # Then load rules which will use the loaded states
         sigma_rules = await load_rules()
-        logger.info(f"Loaded {len(sigma_rules)} detection rules")
+        if sigma_rules:
+            logger.info(f"Successfully loaded {len(sigma_rules)} detection rules")
+            stats["status"] = "operational"
+        else:
+            logger.warning("No rules were loaded, service may be degraded")
+            stats["status"] = "degraded"
     except Exception as e:
-        logger.error(f"Error during startup: {str(e)}")
+        logger.error(f"Error loading rules during startup: {str(e)}")
         stats["status"] = "degraded"
+        
+    # Log startup completion status
+    logger.info(f"Detection engine startup completed with status: {stats['status']}")
 
 if __name__ == "__main__":
     import uvicorn

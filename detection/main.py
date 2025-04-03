@@ -73,10 +73,12 @@ async def update_rule_state_in_api(rule_id: str, enabled: bool):
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"http://api:8080/api/rule-states/{rule_id}",
-                params={"enabled": enabled}
+                json={"enabled": enabled}
             ) as response:
                 if response.status == 200:
                     return True
+                else:
+                    logger.error(f"API returned status {response.status} when updating rule state")
     except Exception as e:
         logger.error(f"Error updating rule state in API: {str(e)}")
     return False
@@ -84,13 +86,22 @@ async def update_rule_state_in_api(rule_id: str, enabled: bool):
 async def update_bulk_rule_states_in_api(rule_states_dict: Dict[str, bool]):
     """Update multiple rule states in API service."""
     try:
+        # Extract the enabled value (should be the same for all rules)
+        if not rule_states_dict:
+            return False
+            
+        # All rules should have the same enabled value in a bulk update
+        enabled = next(iter(rule_states_dict.values()))
+        
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 "http://api:8080/api/rule-states/bulk",
-                json=rule_states_dict
+                json={"enabled": enabled}
             ) as response:
                 if response.status == 200:
                     return True
+                else:
+                    logger.error(f"API returned status {response.status} when bulk updating rule states")
     except Exception as e:
         logger.error(f"Error updating bulk rule states in API: {str(e)}")
     return False

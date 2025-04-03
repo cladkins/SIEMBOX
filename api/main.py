@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from fastapi import FastAPI, Depends, Query, HTTPException, Header
+from fastapi import FastAPI, Depends, Query, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func, update, and_, not_
@@ -29,6 +29,47 @@ class CreateLogRequest(BaseModel):
     message: str
     level: str = "INFO"
     log_metadata: Dict[str, Any] = {}
+
+# More flexible log request model that can handle various formats
+class FlexibleLogRequest(BaseModel):
+    # Allow any fields, we'll extract what we need
+    __root__: Dict[str, Any]
+    
+    def to_standard_format(self) -> CreateLogRequest:
+        """Convert to standard CreateLogRequest format"""
+        data = self.__root__
+        
+        # Extract source, defaulting to a value if not present
+        source = data.get("source", "unknown")
+        
+        # Extract message, looking in various possible locations
+        message = data.get("message", None)
+        if message is None:
+            # Try to find message in other common fields
+            for field in ["msg", "log", "MESSAGE", "message_text"]:
+                if field in data:
+                    message = data[field]
+                    break
+            
+            # If still not found, use a default
+            if message is None:
+                message = "No message content"
+        
+        # Extract level, defaulting to INFO
+        level = data.get("level", "INFO")
+        
+        # Everything else goes into log_metadata
+        log_metadata = {}
+        for k, v in data.items():
+            if k not in ["source", "message", "level"]:
+                log_metadata[k] = v
+        
+        return CreateLogRequest(
+            source=source,
+            message=message,
+            level=level,
+            log_metadata=log_metadata
+        )
 from app_logger import setup_logging
 
 # Set up logging with the new handler
@@ -158,11 +199,30 @@ async def forward_to_detection(log_data: dict):
 
 @app.post("/api/logs", response_model=LogResponse)
 async def create_log(
-    log_data: CreateLogRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """Create a new log entry and forward to detection service"""
     try:
+        # Get the raw request body
+        body = await request.json()
+        
+        # Log the raw request for debugging
+        logger.debug(f"Received log request: {body}")
+        
+        # Try to parse as FlexibleLogRequest
+        try:
+            flexible_log = FlexibleLogRequest(__root__=body)
+            log_data = flexible_log.to_standard_format()
+        except Exception as e:
+            # If that fails, try to parse as CreateLogRequest
+            try:
+                log_data = CreateLogRequest(**body)
+            except Exception as inner_e:
+                logger.error(f"Failed to parse log request: {str(inner_e)}")
+                logger.error(f"Request body: {body}")
+                raise HTTPException(status_code=422, detail=f"Invalid log format: {str(inner_e)}")
+        
         # Create new log entry
         new_log = Log(
             source=log_data.source,

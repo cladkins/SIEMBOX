@@ -1,5 +1,5 @@
 function reformat(tag, timestamp, record)
-    -- Create a new record that matches the API's expected structure
+    -- Create a new record that exactly matches the API's expected structure
     local new_record = {}
     
     -- Set the source field (required by the API)
@@ -9,8 +9,12 @@ function reformat(tag, timestamp, record)
     if record["message"] then
         new_record["message"] = record["message"]
     else
-        -- If no message field, use a default message
-        new_record["message"] = "Syslog message from " .. (record["hostname"] or "unknown host")
+        -- If no message field, create one from available data
+        if record["hostname"] and record["ident"] then
+            new_record["message"] = string.format("Message from %s [%s]", record["hostname"], record["ident"])
+        else
+            new_record["message"] = "Syslog message"
+        end
     end
     
     -- Set the level field (default to "INFO" if not present)
@@ -19,7 +23,10 @@ function reformat(tag, timestamp, record)
     -- Create a metadata object with all the original fields
     local log_metadata = {}
     for k, v in pairs(record) do
-        log_metadata[k] = v
+        -- Only add non-nil values to avoid serialization issues
+        if v ~= nil then
+            log_metadata[k] = v
+        end
     end
     
     -- Add the metadata to the new record

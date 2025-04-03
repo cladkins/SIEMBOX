@@ -13,7 +13,6 @@ import {
   Paper,
   Link,
   CircularProgress,
-  ButtonGroup,
   InputAdornment,
   IconButton
 } from '@mui/material';
@@ -23,8 +22,6 @@ import WarningIcon from '@mui/icons-material/Warning';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import BlockIcon from '@mui/icons-material/Block';
 import ErrorIcon from '@mui/icons-material/Error';
-import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
-import PowerOffIcon from '@mui/icons-material/PowerOff';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import config from '../config';
@@ -160,7 +157,6 @@ function Settings() {
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [bulkUpdating, setBulkUpdating] = useState(false);
   const [snackbar, setSnackbar] = useState({
     open: false,
     message: '',
@@ -198,42 +194,7 @@ function Settings() {
     }
   };
 
-  const handleBulkToggle = async (enabled) => {
-    try {
-      setBulkUpdating(true);
-      await axios.post(`${config.apiUrl}/api/rule-states/bulk`, {
-        enabled: enabled
-      });
-      
-      // Update local state
-      const updatedRules = rules.map(rule => ({
-        ...rule,
-        enabled: enabled
-      }));
-      setRules(updatedRules);
-      
-      // Update stats
-      setStats(prev => ({
-        ...prev,
-        enabled: enabled ? prev.total : 0
-      }));
-
-      setSnackbar({
-        open: true,
-        message: `All rules ${enabled ? 'enabled' : 'disabled'} successfully`,
-        severity: 'success'
-      });
-    } catch (error) {
-      console.error('Error bulk toggling rules:', error);
-      setSnackbar({
-        open: true,
-        message: 'Error updating rules',
-        severity: 'error'
-      });
-    } finally {
-      setBulkUpdating(false);
-    }
-  };
+  // Bulk toggle functionality removed as requested
 
   useEffect(() => {
     fetchApiKeys();
@@ -522,25 +483,7 @@ function Settings() {
                 <Typography variant="h6">{stats.categories}</Typography>
               </StatsCard>
             </Box>
-            
-            <ButtonGroup variant="contained">
-              <ActionButton
-                className="enable"
-                onClick={() => handleBulkToggle(true)}
-                disabled={bulkUpdating}
-                startIcon={<PowerSettingsNewIcon />}
-              >
-                Enable All
-              </ActionButton>
-              <ActionButton
-                className="disable"
-                onClick={() => handleBulkToggle(false)}
-                disabled={bulkUpdating}
-                startIcon={<PowerOffIcon />}
-              >
-                Disable All
-              </ActionButton>
-            </ButtonGroup>
+            {/* Bulk toggle buttons removed as requested */}
           </Box>
 
           <RuleList

@@ -515,78 +515,7 @@ async def update_rule_state(rule_id: str, request: Request, db: AsyncSession = D
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/rule-states/bulk")
-async def bulk_update_rules(request: Request, db: AsyncSession = Depends(get_db)):
-    """Bulk update all rules' enabled state"""
-    # Parse the request body to get the enabled parameter
-    try:
-        body = await request.json()
-        enabled = body.get("enabled")
-        if enabled is None:
-            raise HTTPException(status_code=422, detail="Missing 'enabled' parameter in request body")
-    except Exception as e:
-        logger.error(f"Error parsing request body: {str(e)}")
-        raise HTTPException(status_code=400, detail="Invalid request body")
-    
-    try:
-        # First get all rules from detection service
-        async with httpx.AsyncClient() as client:
-            rules_response = await client.get("http://detection:8000/rules")
-            if rules_response.status_code != 200:
-                logger.error(f"Failed to get rules from detection service: {rules_response.status_code}")
-                raise HTTPException(status_code=500, detail="Failed to get rules from detection service")
-            
-            rules_data = rules_response.json()
-            rules = rules_data.get("rules", [])
-            
-            # Update all rule states in the database
-            for rule in rules:
-                rule_id = rule.get("id")
-                if not rule_id:
-                    continue
-                    
-                setting_key = f"RULE_STATE_{rule_id}"
-                
-                # Check if the setting already exists
-                result = await db.execute(
-                    select(Setting).where(Setting.key == setting_key)
-                )
-                setting = result.scalar_one_or_none()
-                
-                if setting:
-                    # Update existing setting
-                    setting.set_value("true" if enabled else "false")
-                else:
-                    # Create new setting
-                    setting = Setting(key=setting_key)
-                    setting.set_value("true" if enabled else "false")
-                    db.add(setting)
-            
-            await db.commit()
-            logger.info(f"Bulk updated rule states in database: {len(rules)} rules -> {enabled}")
-            
-            # Then forward to detection service
-            try:
-                logger.info(f"Sending bulk toggle request to detection service: enabled={enabled}")
-                response = await client.post(
-                    "http://detection:8000/rules/bulk-toggle",
-                    json={"enabled": enabled}
-                )
-                
-                if response.status_code == 200:
-                    logger.info("Bulk toggle request successful")
-                    return response.json()
-                else:
-                    response_text = await response.text()
-                    logger.error(f"Detection service returned status {response.status_code}: {response_text}")
-                    raise HTTPException(status_code=response.status_code, detail=f"Failed to bulk update rules: {response_text}")
-            except Exception as e:
-                logger.error(f"Error sending bulk toggle request to detection service: {str(e)}")
-                raise HTTPException(status_code=500, detail=f"Error communicating with detection service: {str(e)}")
-    except Exception as e:
-        logger.error(f"Error bulk updating rules: {str(e)}")
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+# Bulk toggle endpoint removed as requested
 
 @app.get("/health")
 async def health_check():

@@ -131,9 +131,7 @@ class RuleState(BaseModel):
     enabled: bool
     category: str = ""
 
-class BulkRuleState(BaseModel):
-    enabled: bool
-    category: str = ""
+# BulkRuleState model removed as it's no longer needed
 
 def update_processing_stats():
     current_time = time.time()
@@ -437,34 +435,7 @@ async def toggle_rule(rule_state: RuleState):
         stats["status"] = "degraded"
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/rules/bulk-toggle")
-async def bulk_toggle_rules(state: BulkRuleState):
-    try:
-        # Log the received state for debugging
-        logger.info(f"Received bulk toggle request: {state}")
-        
-        # Update local state
-        updated_count = 0
-        
-        for rule in sigma_rules:
-            if state.category and rule.category != state.category:
-                continue
-            rule.enabled = state.enabled
-            rule_states[rule.id] = state.enabled
-            updated_count += 1
-
-        # No need to persist to API anymore - API handles that directly
-
-        stats["enabled_rules"] = len([r for r in sigma_rules if r.enabled])
-        category_msg = f" in category '{state.category}'" if state.category else ""
-        
-        logger.info(f"Bulk updated {updated_count} rules, enabled={state.enabled}")
-        
-        return {
-            "success": True,
-            "message": f"{updated_count} rules{category_msg} {'enabled' if state.enabled else 'disabled'}",
-            "updated_count": updated_count
-        }
+# Bulk toggle endpoint removed as requested
     except Exception as e:
         logger.error(f"Error bulk toggling rules: {str(e)}")
         logger.error(f"Exception details: {traceback.format_exc()}")

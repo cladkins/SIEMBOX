@@ -67,44 +67,45 @@ async def get_rule_states_from_api():
         logger.error(f"Error getting rule states from API: {str(e)}")
     return {}
 
-async def update_rule_state_in_api(rule_id: str, enabled: bool):
-    """Update rule state in API service."""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"http://api:8080/api/rule-states/{rule_id}",
-                json={"enabled": enabled}
-            ) as response:
-                if response.status == 200:
-                    return True
-                else:
-                    logger.error(f"API returned status {response.status} when updating rule state")
-    except Exception as e:
-        logger.error(f"Error updating rule state in API: {str(e)}")
-    return False
-
-async def update_bulk_rule_states_in_api(rule_states_dict: Dict[str, bool]):
-    """Update multiple rule states in API service."""
-    try:
-        # Extract the enabled value (should be the same for all rules)
-        if not rule_states_dict:
-            return False
-            
-        # All rules should have the same enabled value in a bulk update
-        enabled = next(iter(rule_states_dict.values()))
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "http://api:8080/api/rule-states/bulk",
-                json={"enabled": enabled}
-            ) as response:
-                if response.status == 200:
-                    return True
-                else:
-                    logger.error(f"API returned status {response.status} when bulk updating rule states")
-    except Exception as e:
-        logger.error(f"Error updating bulk rule states in API: {str(e)}")
-    return False
+# These functions are no longer needed as the API now handles persistence directly
+# async def update_rule_state_in_api(rule_id: str, enabled: bool):
+#     """Update rule state in API service."""
+#     try:
+#         async with aiohttp.ClientSession() as session:
+#             async with session.post(
+#                 f"http://api:8080/api/rule-states/{rule_id}",
+#                 json={"enabled": enabled}
+#             ) as response:
+#                 if response.status == 200:
+#                     return True
+#                 else:
+#                     logger.error(f"API returned status {response.status} when updating rule state")
+#     except Exception as e:
+#         logger.error(f"Error updating rule state in API: {str(e)}")
+#     return False
+#
+# async def update_bulk_rule_states_in_api(rule_states_dict: Dict[str, bool]):
+#     """Update multiple rule states in API service."""
+#     try:
+#         # Extract the enabled value (should be the same for all rules)
+#         if not rule_states_dict:
+#             return False
+#
+#         # All rules should have the same enabled value in a bulk update
+#         enabled = next(iter(rule_states_dict.values()))
+#
+#         async with aiohttp.ClientSession() as session:
+#             async with session.post(
+#                 "http://api:8080/api/rule-states/bulk",
+#                 json={"enabled": enabled}
+#             ) as response:
+#                 if response.status == 200:
+#                     return True
+#                 else:
+#                     logger.error(f"API returned status {response.status} when bulk updating rule states")
+#     except Exception as e:
+#         logger.error(f"Error updating bulk rule states in API: {str(e)}")
+#     return False
 
 class Alert(BaseModel):
     rule_id: str
@@ -410,7 +411,7 @@ async def list_rules():
 @app.post("/rules/toggle")
 async def toggle_rule(rule_state: RuleState):
     try:
-        # Update local state first
+        # Update local state
         rule_states[rule_state.rule_id] = rule_state.enabled
         rule_found = False
         
@@ -423,9 +424,7 @@ async def toggle_rule(rule_state: RuleState):
         if not rule_found:
             raise HTTPException(status_code=404, detail=f"Rule {rule_state.rule_id} not found")
         
-        # Then try to persist to API
-        if not await update_rule_state_in_api(rule_state.rule_id, rule_state.enabled):
-            logger.warning(f"Failed to persist rule state to API for {rule_state.rule_id}")
+        # No need to persist to API anymore - API handles that directly
         
         stats["enabled_rules"] = len([r for r in sigma_rules if r.enabled])
         return {
@@ -440,8 +439,7 @@ async def toggle_rule(rule_state: RuleState):
 @app.post("/rules/bulk-toggle")
 async def bulk_toggle_rules(state: BulkRuleState):
     try:
-        # Update local state first
-        updated_rules = {}
+        # Update local state
         updated_count = 0
         
         for rule in sigma_rules:
@@ -449,13 +447,9 @@ async def bulk_toggle_rules(state: BulkRuleState):
                 continue
             rule.enabled = state.enabled
             rule_states[rule.id] = state.enabled
-            updated_rules[rule.id] = state.enabled
             updated_count += 1
 
-        # Then try to persist to API
-        if updated_count > 0:
-            if not await update_bulk_rule_states_in_api(updated_rules):
-                logger.warning(f"Failed to persist {updated_count} rule states to API")
+        # No need to persist to API anymore - API handles that directly
 
         stats["enabled_rules"] = len([r for r in sigma_rules if r.enabled])
         category_msg = f" in category '{state.category}'" if state.category else ""
@@ -570,9 +564,42 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Error loading rules during startup: {str(e)}")
         stats["status"] = "degraded"
+    
+    # Start background task to periodically refresh rule states
+    asyncio.create_task(refresh_rule_states_periodically())
         
     # Log startup completion status
     logger.info(f"Detection engine startup completed with status: {stats['status']}")
+
+async def refresh_rule_states_periodically():
+    """Periodically refresh rule states from API."""
+    logger.info("Starting background task to refresh rule states")
+    refresh_interval = 60  # seconds
+    
+    while True:
+        await asyncio.sleep(refresh_interval)
+        try:
+            # Refresh rule states from API
+            api_states = await get_rule_states_from_api()
+            if api_states:
+                # Update global rule_states
+                rule_states.update(api_states)
+                
+                # Update rule enabled states in memory
+                updated_count = 0
+                for rule in sigma_rules:
+                    if rule.id in api_states:
+                        if rule.enabled != api_states[rule.id]:
+                            rule.enabled = api_states[rule.id]
+                            updated_count += 1
+                
+                # Update stats
+                stats["enabled_rules"] = len([r for r in sigma_rules if r.enabled])
+                
+                if updated_count > 0:
+                    logger.info(f"Refreshed rule states from API: updated {updated_count} rules, {stats['enabled_rules']} of {stats['total_rules']} rules enabled")
+        except Exception as e:
+            logger.error(f"Error refreshing rule states from API: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

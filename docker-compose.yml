@@ -83,7 +83,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    user: "65534:65534"
+    # Run as root to allow cloning the Sigma rules repository
+    # user: "65534:65534"  # Commented out to run as root
     init: true
 
   # IP Lookup Service - Provides IP geolocation and threat intelligence

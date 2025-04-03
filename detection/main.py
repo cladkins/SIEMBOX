@@ -142,77 +142,36 @@ def update_alert_stats(new_alert: bool = False):
     stats["alerts_last_24h"] = len(stats["alerts"])
 
 async def setup_rules_directory():
-    """Setup rules directory with fallback mechanisms."""
+    """Verify the rules directory is properly set up."""
     rules_dir = "/app/rules"
-    repo_url = "https://github.com/SigmaHQ/sigma.git"
-    
-    # Create a sample rule if no rules exist
-    sample_rule_dir = os.path.join(rules_dir, "rules", "windows")
-    sample_rule_path = os.path.join(sample_rule_dir, "sample_rule.yml")
     
     try:
-        # Create directory if it doesn't exist
-        os.makedirs(rules_dir, exist_ok=True)
-        os.makedirs(sample_rule_dir, exist_ok=True)
-        
-        # Try git operations first
-        try:
-            # Check if it's already a git repo
-            if os.path.exists(os.path.join(rules_dir, ".git")):
-                logger.info("Updating Sigma rules repository...")
-                repo = git.Repo(rules_dir)
-                origin = repo.remotes.origin
-                origin.pull()
-                return True
-
-            # Clean directory contents but keep the directory
-            for item in os.listdir(rules_dir):
-                item_path = os.path.join(rules_dir, item)
-                if os.path.isfile(item_path) or os.path.islink(item_path):
-                    os.unlink(item_path)
-                elif os.path.isdir(item_path):
-                    shutil.rmtree(item_path)
-
-            # Clone repository
-            logger.info("Cloning Sigma rules repository...")
-            git.Repo.clone_from(repo_url, rules_dir, depth=1)
-            return True
-        except git.exc.GitCommandError as e:
-            logger.warning(f"Git operation failed, falling back to sample rules: {str(e)}")
-            # Fall through to sample rule creation
-        
-        # Create a sample rule if git operations failed
-        logger.info("Creating sample rules directory...")
-        
-        # Create a sample rule file
-        sample_rule = {
-            "title": "Sample Windows Process Creation",
-            "id": "sample-001",
-            "status": "experimental",
-            "description": "Detects sample suspicious process creation",
-            "author": "SIEMBox",
-            "date": "2025/04/03",
-            "modified": "2025/04/03",
-            "logsource": {
-                "category": "process_creation",
-                "product": "windows"
-            },
-            "detection": {
-                "selection": {
-                    "CommandLine|contains": "suspicious"
-                },
-                "condition": "selection"
-            },
-            "level": "medium"
-        }
-        
-        with open(sample_rule_path, 'w') as f:
-            yaml.dump(sample_rule, f)
+        # Check if the rules directory exists and has content
+        if not os.path.exists(rules_dir):
+            logger.error(f"Rules directory {rules_dir} does not exist")
+            return False
             
-        logger.info(f"Created sample rule at {sample_rule_path}")
+        # Check if the rules subdirectory exists (this is where actual rules are in the Sigma repo)
+        rules_subdir = os.path.join(rules_dir, "rules")
+        if not os.path.exists(rules_subdir):
+            logger.error(f"Rules subdirectory {rules_subdir} does not exist")
+            return False
+            
+        # Count the number of rule files
+        rule_count = 0
+        for root, _, files in os.walk(rules_subdir):
+            for file in files:
+                if file.endswith('.yml') or file.endswith('.yaml'):
+                    rule_count += 1
+                    
+        if rule_count == 0:
+            logger.error("No rule files found in the rules directory")
+            return False
+            
+        logger.info(f"Found {rule_count} rule files in the rules directory")
         return True
     except Exception as e:
-        logger.error(f"Failed to setup rules directory: {str(e)}")
+        logger.error(f"Failed to verify rules directory: {str(e)}")
         return False
 
 def get_rule_category(file_path: str, rules_dir: str) -> str:
@@ -226,7 +185,7 @@ def get_rule_category(file_path: str, rules_dir: str) -> str:
         return "uncategorized"
 
 async def load_rules():
-    """Load all rules from the Sigma repository with retries and fallbacks."""
+    """Load all rules from the Sigma repository with retries."""
     rules = []
     rules_dir = "/app/rules"
     max_retries = 3
@@ -234,23 +193,19 @@ async def load_rules():
 
     for attempt in range(max_retries):
         try:
-            # Setup rules directory (with fallback to sample rules)
+            # Verify rules directory is properly set up
             if not await setup_rules_directory():
-                logger.warning(f"Failed to setup rules directory (attempt {attempt + 1}/{max_retries})")
+                logger.warning(f"Failed to verify rules directory (attempt {attempt + 1}/{max_retries})")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(retry_delay)
                     continue
                 else:
-                    logger.error("Failed to setup rules directory after all retries")
+                    logger.error("Failed to verify rules directory after all retries")
                     stats["status"] = "degraded"
                     return rules
 
             rules_base_dir = os.path.join(rules_dir, "rules")
-            if not os.path.exists(rules_base_dir):
-                logger.error(f"Rules directory not found: {rules_base_dir}")
-                stats["status"] = "degraded"
-                return rules
-
+            
             # Count of processed files for logging
             processed_files = 0
             valid_rules = 0
@@ -265,15 +220,9 @@ async def load_rules():
                             with open(file_path) as f:
                                 data = yaml.safe_load(f)
                                 if not isinstance(data, dict):
-                                    logger.warning(f"Rule file {file} does not contain a valid YAML dictionary")
                                     continue
                                     
-                                if 'detection' not in data:
-                                    logger.warning(f"Rule file {file} missing 'detection' field")
-                                    continue
-                                    
-                                if 'title' not in data:
-                                    logger.warning(f"Rule file {file} missing 'title' field")
+                                if 'detection' not in data or 'title' not in data:
                                     continue
                                 
                                 # Valid rule found
@@ -293,27 +242,13 @@ async def load_rules():
                                     category=category
                                 ))
                                 
-                                # Log every 100 rules for progress indication
+                                # Log progress periodically
                                 if valid_rules % 100 == 0:
                                     logger.info(f"Loaded {valid_rules} valid rules so far...")
                                     
                         except Exception as e:
                             logger.error(f"Error loading rule {file}: {str(e)}")
                             continue
-
-            # If no rules were loaded, create a default rule
-            if len(rules) == 0:
-                logger.warning("No valid rules found, creating a default rule")
-                rules.append(Rule(
-                    id="default-rule-001",
-                    title="Default Rule",
-                    description="This is a default rule created when no valid rules were found",
-                    level="medium",
-                    detection={"selection": {"field": "value"}, "condition": "selection"},
-                    logsource={"product": "windows", "category": "process_creation"},
-                    enabled=True,
-                    category="windows/process_creation"
-                ))
 
             # Update stats
             stats["total_rules"] = len(rules)
@@ -584,6 +519,10 @@ async def startup_event():
     
     # Set initial status
     stats["status"] = "starting"
+    
+    # Wait a bit to ensure the rules directory is fully set up by the start.sh script
+    logger.info("Waiting for rules directory to be fully set up...")
+    await asyncio.sleep(5)
     
     # Maximum number of retries for API operations
     max_retries = 5

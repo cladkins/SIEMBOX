@@ -68,7 +68,7 @@ services:
     ports:
       - "${DETECTION_PORT:-8001}:8000"
     volumes:
-      - sigma_rules:/app/rules
+      - ./rules:/app/rules
     environment:
       - SIGMA_RULES_PATH=/app/rules
       # Internal port is 8000, external port is configurable

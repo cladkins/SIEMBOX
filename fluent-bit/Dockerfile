@@ -1,5 +1,5 @@
 # Use the official Fluent Bit image as the base
-FROM fluent/fluent-bit:3.0
+FROM fluent/fluent-bit:latest
 
 # Copy the custom configuration files into the image
 # Fluent Bit looks for configuration in /fluent-bit/etc/ by default

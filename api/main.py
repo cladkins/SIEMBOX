@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func, update, and_, not_
 from sqlalchemy.exc import SQLAlchemyError
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from datetime import datetime, timedelta
 import traceback
 import psutil
@@ -197,7 +197,7 @@ async def forward_to_detection(log_data: dict):
         logger.error(f"Error forwarding to detection service: {str(e)}")
     return None
 
-@app.post("/api/logs", response_model=LogResponse)
+@app.post("/api/logs", response_model=Union[LogResponse, List[LogResponse]])
 async def create_log(
     request: Request,
     db: AsyncSession = Depends(get_db)
@@ -210,6 +210,36 @@ async def create_log(
         # Log the raw request for debugging
         logger.debug(f"Received log request: {body}")
         
+        # Check if we received an array of logs
+        if isinstance(body, list):
+            logger.info(f"Received batch of {len(body)} logs")
+            results = []
+            for log_item in body:
+                try:
+                    # Process each log entry
+                    result = await process_single_log(log_item, db)
+                    if result:
+                        results.append(result)
+                except Exception as e:
+                    logger.error(f"Error processing log in batch: {str(e)}")
+                    # Continue processing other logs in the batch
+                    continue
+            
+            if not results:
+                raise HTTPException(status_code=422, detail="Failed to process any logs in batch")
+            
+            return results
+        else:
+            # Process a single log entry
+            return await process_single_log(body, db)
+    except Exception as e:
+        logger.error(f"Unexpected error in create_log: {str(e)}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+async def process_single_log(body, db):
+    """Process a single log entry"""
+    try:
         # Try to parse as FlexibleLogRequest
         try:
             flexible_log = FlexibleLogRequest(__root__=body)
@@ -221,7 +251,7 @@ async def create_log(
             except Exception as inner_e:
                 logger.error(f"Failed to parse log request: {str(inner_e)}")
                 logger.error(f"Request body: {body}")
-                raise HTTPException(status_code=422, detail=f"Invalid log format: {str(inner_e)}")
+                return None
         
         # Create new log entry
         new_log = Log(

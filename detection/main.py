@@ -17,9 +17,12 @@ import collections
 import psutil
 import traceback
 from app_logger import setup_logging
-# Import sigma-cli and ocsf-lib
+# Import sigma-cli, ocsf-lib, and pySigma-pipeline-ocsf
 import sigma
 import ocsf
+from sigma.collection import SigmaCollection
+from sigma.backends.ocsf import OCSFBackend
+from sigma.pipelines.ocsf import ocsf_pipeline
 
 # Set up logging with the new handler
 logger = setup_logging("detection")
@@ -351,7 +354,7 @@ def match_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
         return False
 
 def match_ocsf_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
-    """Match a rule against an OCSF log entry using the ocsf-lib package."""
+    """Match a rule against an OCSF log entry using the pySigma-pipeline-ocsf package."""
     try:
         # Get raw event from log entry
         raw_event = log_entry.get('raw_event', {})
@@ -368,16 +371,39 @@ def match_ocsf_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
             
             logger.info(f"Processing rule {rule.id} against OCSF log entry: class={ocsf_class}, category={ocsf_category}, activity={ocsf_activity}")
             
-            # Use ocsf-lib to validate and normalize the event
-            event_dict = {
-                'class_name': combined_data.get('class_name', ''),
-                'category_name': combined_data.get('category_name', ''),
-                'activity_name': combined_data.get('activity_name', ''),
-                'time': combined_data.get('time', ''),
-                'severity': combined_data.get('severity', ''),
-                'message': combined_data.get('message', ''),
-                'raw_event': raw_event
-            }
+            # Convert Sigma rule to OCSF query using pySigma-pipeline-ocsf
+            try:
+                # Create a SigmaCollection from the rule's detection
+                rule_yaml = {
+                    "title": rule.title,
+                    "id": rule.id,
+                    "status": "experimental",
+                    "description": rule.description,
+                    "level": rule.level,
+                    "logsource": rule.logsource,
+                    "detection": rule.detection
+                }
+                
+                # Create a SigmaCollection and apply the OCSF pipeline
+                sigma_collection = SigmaCollection.from_dicts([rule_yaml])
+                backend = OCSFBackend(ocsf_pipeline())
+                
+                # Convert to OCSF query
+                ocsf_queries = backend.convert(sigma_collection)
+                
+                # Check if any of the queries match the log entry
+                for query in ocsf_queries:
+                    # Execute the query against the OCSF log entry
+                    if eval_ocsf_query(query, combined_data):
+                        return True
+                
+                # If no match using pySigma pipeline, fall back to basic matching
+                logger.info(f"No match using pySigma pipeline for rule {rule.id}, falling back to basic matching")
+                return basic_ocsf_match(rule, combined_data)
+                
+            except Exception as sigma_error:
+                logger.warning(f"Error using pySigma-pipeline-ocsf: {str(sigma_error)}. Falling back to basic matching.")
+                return basic_ocsf_match(rule, combined_data)
             
             # Use ocsf-lib for category mapping
             # This mapping is based on the official OCSF schema
@@ -432,6 +458,41 @@ def match_ocsf_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
 
     except Exception as e:
         logger.error(f"Error matching OCSF rule: {str(e)}")
+        return False
+
+def eval_ocsf_query(query: str, data: Dict[str, Any]) -> bool:
+    """Evaluate an OCSF query against a log entry."""
+    try:
+        # The query is a Python expression that can be evaluated
+        # We need to create a safe context for evaluation
+        safe_globals = {
+            "data": data,
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "len": len,
+            "lower": lambda s: s.lower() if isinstance(s, str) else s,
+            "contains": lambda s, sub: sub in s if isinstance(s, str) else False,
+            "startswith": lambda s, sub: s.startswith(sub) if isinstance(s, str) else False,
+            "endswith": lambda s, sub: s.endswith(sub) if isinstance(s, str) else False,
+        }
+        
+        # Replace OCSF field references with dictionary lookups
+        query = query.replace("data.", "data.get('")
+        query = query.replace(" == ", "', '') == ")
+        query = query.replace(" != ", "', '') != ")
+        query = query.replace(" in ", "', '') in ")
+        query = query.replace(" and ", "', '') and data.get('")
+        query = query.replace(" or ", "', '') or data.get('")
+        
+        # Evaluate the query
+        result = eval(query, {"__builtins__": {}}, safe_globals)
+        return bool(result)
+    except Exception as e:
+        logger.error(f"Error evaluating OCSF query: {str(e)}")
         return False
 
 def basic_ocsf_match(rule: Rule, combined_data: Dict[str, Any]) -> bool:

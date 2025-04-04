@@ -9,3 +9,4 @@ python-multipart==0.0.18
 typing-extensions==4.10.0
 ocsf-lib==0.10.0
 sigma-cli==1.0.5
+pysigma-pipeline-ocsf==0.1.0

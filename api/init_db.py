@@ -1,6 +1,6 @@
 import asyncio
 from database import engine, Base
-from models import Log, Setting, Alert, OCSFLog  # Include OCSFLog model
+from models import Setting, Alert, OCSFLog  # Include OCSFLog model
 
 async def init():
     async with engine.begin() as conn:

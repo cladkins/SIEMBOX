@@ -232,7 +232,7 @@ async def forward_to_detection_ocsf(ocsf_log: OCSFLog):
         logger.error(f"Error forwarding OCSF log to detection service: {str(e)}")
     return None
 
-@app.post("/api/logs", response_model=Union[LogResponse, List[LogResponse]])
+@app.post("/api/logs", response_model=Union[OCSFLogResponse, List[OCSFLogResponse]])
 async def create_log(
     request: Request,
     db: AsyncSession = Depends(get_db)
@@ -258,7 +258,7 @@ async def create_log(
                         result = await process_single_log(log_item, log_db)
                         if result:
                             # Convert to dict to avoid SQLAlchemy session issues
-                            results.append(LogResponse.from_orm(result))
+                            results.append(OCSFLogResponse.from_orm(result))
                 except Exception as e:
                     logger.error(f"Error processing log in batch: {str(e)}")
                     # Continue processing other logs in the batch
@@ -296,31 +296,24 @@ async def process_single_log(body, db):
                 logger.error(f"Request body: {body}")
                 return None
         
-        # Create new log entry
-        new_log = Log(
-            source=log_data.source,
+        # Create new OCSF log entry
+        new_log = OCSFLog(
+            activity_name="Log Entry",
+            category_name="System",
+            class_name="Log",
             message=log_data.message,
-            level=log_data.level,
-            log_metadata=log_data.log_metadata,
-            timestamp=datetime.utcnow()
+            severity=log_data.level,
+            time=datetime.utcnow(),
+            raw_event={"source": log_data.source, "level": log_data.level, "log_metadata": log_data.log_metadata}
         )
 
         db.add(new_log)
         await db.commit()
         await db.refresh(new_log)
 
-        # Forward to detection service
-        log_dict = {
-            "id": new_log.id,
-            "source": new_log.source,
-            "message": new_log.message,
-            "level": new_log.level,
-            "metadata": new_log.log_metadata,
-            "timestamp": new_log.timestamp.isoformat()
-        }
-        
+        # Forward to detection service using OCSF format
         # Forward to detection service and wait for response
-        detection_result = await forward_to_detection(log_dict)
+        detection_result = await forward_to_detection_ocsf(new_log)
         
         if detection_result and detection_result.get("alerts"):
             alerts = detection_result["alerts"]
@@ -492,7 +485,7 @@ async def get_ocsf_logs(
         logger.error(f"Unexpected error in get_ocsf_logs: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
-@app.get("/api/logs", response_model=PaginatedLogsResponse)
+@app.get("/api/logs", response_model=PaginatedOCSFLogsResponse)
 async def get_logs(
     db: AsyncSession = Depends(get_db),
     page: int = Query(1, ge=1),
@@ -509,21 +502,21 @@ async def get_logs(
         offset = (page - 1) * page_size
 
         # Build query with time range filter and exclude internal sources
-        query = select(Log).where(
-            not_(Log.source.in_(INTERNAL_SERVICES))
-        ).order_by(desc(Log.timestamp))
+        query = select(OCSFLog).where(
+            not_(OCSFLog.raw_event['source'].astext.in_(INTERNAL_SERVICES))
+        ).order_by(desc(OCSFLog.time))
 
         # Add alert filter if specified
         if has_alert is not None:
             if has_alert:
-                query = query.where(Log.alert_id.isnot(None))
+                query = query.where(OCSFLog.alert_id.isnot(None))
             else:
-                query = query.where(Log.alert_id.is_(None))
+                query = query.where(OCSFLog.alert_id.is_(None))
 
         if start_time:
-            query = query.where(Log.timestamp >= start_time)
+            query = query.where(OCSFLog.time >= start_time)
         if end_time:
-            query = query.where(Log.timestamp <= end_time)
+            query = query.where(OCSFLog.time <= end_time)
 
         try:
             # Get total count
@@ -539,7 +532,7 @@ async def get_logs(
             total_pages = (total_count + page_size - 1) // page_size if total_count else 1
             has_more = page < total_pages
 
-            response = PaginatedLogsResponse(
+            response = PaginatedOCSFLogsResponse(
                 logs=logs,
                 total=total_count or 0,
                 page=page,

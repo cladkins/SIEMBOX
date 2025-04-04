@@ -57,7 +57,7 @@ const OCSFLogList = () => {
         params.append('severity', filters.severity);
       }
       
-      const response = await axios.get(`${config.API_URL}/api/ocsf-logs?${params.toString()}`);
+      const response = await axios.get(`${config.apiUrl}/api/ocsf-logs?${params.toString()}`);
       setLogs(response.data.logs);
       setTotalLogs(response.data.total);
     } catch (error) {

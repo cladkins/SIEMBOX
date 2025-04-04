@@ -10,6 +10,10 @@ done
 echo "Running database migrations..."
 alembic upgrade head
 
+# Initialize database tables
+echo "Initializing database tables..."
+python init_db.py
+
 # Start the application
 echo "Starting API service..."
 exec uvicorn main:app --host 0.0.0.0 --port 8080

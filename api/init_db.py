@@ -1,9 +1,11 @@
 import asyncio
 from database import engine, Base
-from models import Log, Setting, Alert  # Remove InternalLog since it's not needed for initialization
+from models import Log, Setting, Alert, OCSFLog  # Include OCSFLog model
 
 async def init():
-    pass
+    async with engine.begin() as conn:
+        # Create all tables
+        await conn.run_sync(Base.metadata.create_all)
 
 if __name__ == "__main__":
     asyncio.run(init())

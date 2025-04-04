@@ -384,16 +384,16 @@ async def create_ocsf_log(request: Request, db: AsyncSession = Depends(get_db)):
             category_name=body.get("category_name"),
             class_uid=body.get("class_uid"),
             class_name=body.get("class_name"),
-            time=datetime.fromisoformat(body.get("time").replace('Z', '+00:00')) if body.get("time") else datetime.utcnow(),
+            time=datetime.fromisoformat(body.get("time").replace('Z', '')) if body.get("time") else datetime.utcnow(),
             severity=body.get("severity"),
             severity_id=body.get("severity_id"),
             status=body.get("status"),
             status_id=body.get("status_id"),
             message=body.get("message"),
-            src_endpoint=body.get("src_endpoint"),
-            dst_endpoint=body.get("dst_endpoint"),
-            device=body.get("device"),
-            raw_event=body.get("raw_event", {})
+            src_endpoint=body.get("src_endpoint") if isinstance(body.get("src_endpoint"), dict) else None,
+            dst_endpoint=body.get("dst_endpoint") if isinstance(body.get("dst_endpoint"), dict) else None,
+            device=body.get("device") if isinstance(body.get("device"), dict) else None,
+            raw_event=body.get("raw_event", {}) if isinstance(body.get("raw_event"), dict) else {}
         )
         
         db.add(new_log)

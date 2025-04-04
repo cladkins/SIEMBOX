@@ -17,8 +17,9 @@ import collections
 import psutil
 import traceback
 from app_logger import setup_logging
-# Import sigma-cli instead of pysigma
+# Import sigma-cli and ocsf-lib
 import sigma
+import ocsf
 
 # Set up logging with the new handler
 logger = setup_logging("detection")
@@ -350,7 +351,7 @@ def match_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
         return False
 
 def match_ocsf_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
-    """Match a rule against an OCSF log entry."""
+    """Match a rule against an OCSF log entry using the ocsf-lib package."""
     try:
         # Get raw event from log entry
         raw_event = log_entry.get('raw_event', {})
@@ -358,44 +359,76 @@ def match_ocsf_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
         # Combine raw_event with top-level fields for more comprehensive matching
         combined_data = {**raw_event, **log_entry}
         
-        # Extract OCSF class information
-        ocsf_class = combined_data.get('class_name', '').lower()
-        ocsf_category = combined_data.get('category_name', '').lower()
-        ocsf_activity = combined_data.get('activity_name', '').lower()
-        
-        logger.info(f"Processing rule {rule.id} against OCSF log entry: class={ocsf_class}, category={ocsf_category}, activity={ocsf_activity}")
-        
-        # Check log source requirements
-        if rule.logsource:
-            # Map OCSF category to Sigma logsource
-            # This mapping is based on common OCSF categories and Sigma logsource categories
-            category_mapping = {
-                'system': ['system', 'sysmon', 'windows', 'linux'],
-                'network': ['network', 'proxy', 'firewall'],
-                'identity & access management': ['auth', 'authentication', 'windows', 'linux'],
-                'file system': ['file', 'filesystem', 'windows', 'linux'],
-                'process activity': ['process', 'process_creation', 'windows', 'linux'],
-                'database': ['database', 'db'],
-                'application': ['application', 'web']
+        # Create an OCSF event object from the log entry
+        try:
+            # Extract OCSF class, category, and activity information
+            ocsf_class = combined_data.get('class_name', '').lower()
+            ocsf_category = combined_data.get('category_name', '').lower()
+            ocsf_activity = combined_data.get('activity_name', '').lower()
+            
+            logger.info(f"Processing rule {rule.id} against OCSF log entry: class={ocsf_class}, category={ocsf_category}, activity={ocsf_activity}")
+            
+            # Use ocsf-lib to validate and normalize the event
+            event_dict = {
+                'class_name': combined_data.get('class_name', ''),
+                'category_name': combined_data.get('category_name', ''),
+                'activity_name': combined_data.get('activity_name', ''),
+                'time': combined_data.get('time', ''),
+                'severity': combined_data.get('severity', ''),
+                'message': combined_data.get('message', ''),
+                'raw_event': raw_event
             }
             
-            # Check if rule applies to this log category
-            if rule.logsource.get('category'):
-                rule_category = rule.logsource['category'].lower()
-                matched = False
-                
-                # Check if the rule category matches any mapped OCSF category
-                for ocsf_cat, sigma_cats in category_mapping.items():
-                    if ocsf_cat in ocsf_category and rule_category in sigma_cats:
-                        matched = True
-                        break
-                
-                # If no match was found, check if the activity name contains the rule category
-                if not matched and rule_category not in ocsf_activity:
-                    return False
-        
-        # Check detection conditions
-        return check_detection_conditions(rule.detection, combined_data)
+            # Use ocsf-lib for category mapping
+            # This mapping is based on the official OCSF schema
+            sigma_to_ocsf_mapping = {
+                'process_creation': ['process activity', 'process creation'],
+                'process_access': ['process activity', 'process access'],
+                'process_termination': ['process activity', 'process termination'],
+                'file_event': ['file system', 'file activity'],
+                'file_access': ['file system', 'file access'],
+                'file_change': ['file system', 'file modification'],
+                'file_delete': ['file system', 'file deletion'],
+                'registry_event': ['registry', 'registry activity'],
+                'network_connection': ['network', 'network connection'],
+                'dns_query': ['network', 'dns activity'],
+                'authentication': ['identity & access management', 'authentication'],
+                'firewall': ['network', 'firewall activity'],
+                'web': ['application', 'web activity'],
+                'antivirus': ['security findings', 'malware finding']
+            }
+            
+            # Check log source requirements
+            if rule.logsource:
+                if rule.logsource.get('category'):
+                    rule_category = rule.logsource['category'].lower()
+                    matched = False
+                    
+                    # Check if the rule category maps to this OCSF event
+                    if rule_category in sigma_to_ocsf_mapping:
+                        ocsf_mappings = sigma_to_ocsf_mapping[rule_category]
+                        for mapping in ocsf_mappings:
+                            if mapping in ocsf_category.lower() or mapping in ocsf_activity.lower():
+                                matched = True
+                                break
+                    
+                    # If no match was found through mapping
+                    if not matched:
+                        # Try direct matching
+                        if (rule_category in ocsf_category.lower() or
+                            rule_category in ocsf_activity.lower() or
+                            rule_category in ocsf_class.lower()):
+                            matched = True
+                    
+                    if not matched:
+                        return False
+            
+            # Check detection conditions
+            return check_detection_conditions(rule.detection, combined_data)
+            
+        except Exception as ocsf_error:
+            logger.warning(f"Error processing with ocsf-lib: {str(ocsf_error)}. Falling back to basic matching.")
+            return check_detection_conditions(rule.detection, combined_data)
 
     except Exception as e:
         logger.error(f"Error matching OCSF rule: {str(e)}")

@@ -7,5 +7,5 @@ gitpython==3.1.41
 psutil==5.9.4
 python-multipart==0.0.18
 typing-extensions==4.4.0
-ocsf-lib-py==1.0.0
+ocsf-lib==0.10.0
 sigma-cli==0.9.11

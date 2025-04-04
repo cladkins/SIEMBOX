@@ -9,4 +9,4 @@ python-multipart==0.0.18
 cryptography==3.4.7
 alembic==1.7.1
 httpx==0.24.1
-ocsf-lib-py==1.0.0
+ocsf-lib==0.10.0

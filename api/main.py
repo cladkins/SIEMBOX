@@ -368,6 +368,14 @@ async def create_ocsf_log(request: Request, db: AsyncSession = Depends(get_db)):
         # Log the raw request for debugging
         logger.debug(f"Received OCSF log request: {body}")
         
+        # Handle both list and dictionary inputs
+        if isinstance(body, list):
+            # If it's a list, use the first item
+            if len(body) > 0:
+                body = body[0]
+            else:
+                raise HTTPException(status_code=400, detail="Empty list provided")
+        
         # Create new OCSF log entry
         new_log = OCSFLog(
             activity_id=body.get("activity_id"),

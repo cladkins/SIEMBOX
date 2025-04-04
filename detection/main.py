@@ -347,11 +347,101 @@ def match_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
         logger.error(f"Error matching rule: {str(e)}")
         return False
 
+def match_ocsf_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
+    """Match a rule against an OCSF log entry."""
+    try:
+        # Check log source requirements
+        if rule.logsource:
+            # Map OCSF category to Sigma logsource
+            category_name = log_entry.get('category_name', '').lower()
+            
+            # Map common OCSF categories to Sigma logsource categories
+            category_mapping = {
+                'system': ['system', 'sysmon', 'windows', 'linux'],
+                'network': ['network', 'proxy', 'firewall'],
+                'identity & access management': ['auth', 'authentication', 'windows', 'linux'],
+                'file system': ['file', 'filesystem', 'windows', 'linux'],
+                'process': ['process', 'process_creation', 'windows', 'linux'],
+                'database': ['database', 'db'],
+                'application': ['application', 'web']
+            }
+            
+            # Check if rule applies to this log category
+            if rule.logsource.get('category'):
+                rule_category = rule.logsource['category'].lower()
+                mapped_categories = []
+                
+                # Find mapped categories for this OCSF category
+                for ocsf_cat, sigma_cats in category_mapping.items():
+                    if ocsf_cat.lower() in category_name:
+                        mapped_categories.extend(sigma_cats)
+                
+                # If we have mapped categories but rule category doesn't match any
+                if mapped_categories and rule_category not in mapped_categories:
+                    return False
+        
+        # Get raw event from log entry
+        raw_event = log_entry.get('raw_event', {})
+        
+        # Combine raw_event with top-level fields for more comprehensive matching
+        combined_data = {**raw_event, **log_entry}
+        
+        logger.info(f"Processing rule {rule.id} against OCSF log entry: {json.dumps(combined_data)}")
+        
+        detection = rule.detection
+        logger.info(f"Rule detection criteria: {json.dumps(detection)}")
+
+        # Handle selection with field|contains
+        if 'selection' in detection:
+            selection = detection['selection']
+            if not isinstance(selection, dict):
+                return False
+
+            # All fields in selection must match
+            for field, values in selection.items():
+                if '|contains' in field:
+                    actual_field = field.split('|')[0]
+                    field_value = str(combined_data.get(actual_field, '')).lower()
+                    if isinstance(values, list):
+                        if not any(str(v).lower() in field_value for v in values):
+                            return False
+                    else:
+                        if str(values).lower() not in field_value:
+                            return False
+                else:
+                    # Exact match for fields without operators
+                    field_value = str(combined_data.get(field, '')).lower()
+                    if isinstance(values, list):
+                        if str(field_value).lower() not in [str(v).lower() for v in values]:
+                            return False
+                    else:
+                        if str(field_value).lower() != str(values).lower():
+                            return False
+            return True  # Only return True if all fields matched
+
+        # Handle keywords
+        if 'keywords' in detection:
+            log_str = json.dumps(combined_data).lower()
+            keywords = detection['keywords']
+            if isinstance(keywords, list):
+                return any(kw.lower() in log_str for kw in keywords)
+            return keywords.lower() in log_str
+
+        logger.debug(f"Rule {rule.id} didn't match OCSF log entry: {json.dumps(log_entry)}")
+        return False
+
+    except Exception as e:
+        logger.error(f"Error matching OCSF rule: {str(e)}")
+        return False
+
 @app.post("/analyze")
 async def analyze_log(log_entry: Dict[str, Any]):
     try:
-        # Skip analysis for internal service logs
-        if log_entry.get('source') in INTERNAL_SERVICES:
+        # Determine log format (OCSF or standard)
+        is_ocsf = log_entry.get('format') == 'ocsf' or 'category_name' in log_entry
+        
+        # Skip analysis for internal service logs (only for standard logs)
+        if not is_ocsf and log_entry.get('source') in INTERNAL_SERVICES:
             return {"alerts": []}
 
         # Check for duplicate log processing
@@ -368,16 +458,29 @@ async def analyze_log(log_entry: Dict[str, Any]):
         # Find the first matching rule only
         matched_rule = None
         for rule in sigma_rules:
-            if rule.enabled and match_rule(rule, log_entry):
-                matched_rule = rule
-                break
+            if not rule.enabled:
+                continue
+                
+            if is_ocsf:
+                # For OCSF logs, use category_name for matching
+                if match_ocsf_rule(rule, log_entry):
+                    matched_rule = rule
+                    break
+            else:
+                # For standard logs, use the existing match_rule function
+                if match_rule(rule, log_entry):
+                    matched_rule = rule
+                    break
 
         if matched_rule:
+            # Determine log source based on format
+            log_source = log_entry.get('category_name', 'unknown') if is_ocsf else log_entry.get('source', 'unknown')
+            
             alert = Alert(
                 rule_id=matched_rule.id,
                 rule_name=matched_rule.title,
                 timestamp=datetime.now(),
-                log_source=log_entry.get('source', 'unknown'),
+                log_source=log_source,
                 matched_log=log_entry,
                 severity=matched_rule.level
             )

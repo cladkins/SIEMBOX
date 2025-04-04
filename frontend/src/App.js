@@ -8,6 +8,7 @@ import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
 import Detections from './pages/Detections';
 import Logs from './pages/Logs';
+import OCSFLogs from './pages/OCSFLogs';
 import VpsAudit from './pages/VpsAudit';
 
 const theme = createTheme({
@@ -34,6 +35,7 @@ function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/detections" element={<Detections />} />
               <Route path="/logs" element={<Logs />} />
+              <Route path="/ocsf-logs" element={<OCSFLogs />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/vps-audit" element={<VpsAudit />} />
             </Routes>

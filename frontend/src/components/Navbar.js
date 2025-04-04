@@ -19,7 +19,8 @@ import {
   Menu as MenuIcon,
   Security as SecurityIcon,
   Article as ArticleIcon,
-  Storage as StorageIcon
+  Storage as StorageIcon,
+  Schema as SchemaIcon
 } from '@mui/icons-material';
 
 const drawerWidth = 240;
@@ -37,6 +38,7 @@ function Navbar() {
     { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
     { text: 'Detections', icon: <SecurityIcon />, path: '/detections' },
     { text: 'Logs', icon: <ArticleIcon />, path: '/logs' },
+    { text: 'OCSF Logs', icon: <SchemaIcon />, path: '/ocsf-logs' },
     { text: 'VPS Audit', icon: <StorageIcon />, path: '/vps-audit' },
     { text: 'Settings', icon: <SettingsIcon />, path: '/settings' }
   ];

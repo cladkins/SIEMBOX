@@ -18,7 +18,7 @@ from models import (
     InternalLog, InternalLogResponse, PaginatedInternalLogsResponse,
     Rule, RuleResponse, RulesListResponse,
     APIKeys, APIKeyResponse, Setting, CreateInternalLogRequest,
-    Alert
+    Alert, OCSFLog, OCSFLogResponse, PaginatedOCSFLogsResponse
 )
 from typing import Dict, List
 from pydantic import BaseModel
@@ -197,6 +197,41 @@ async def forward_to_detection(log_data: dict):
         logger.error(f"Error forwarding to detection service: {str(e)}")
     return None
 
+async def forward_to_detection_ocsf(ocsf_log: OCSFLog):
+    """Forward OCSF log to detection service for analysis."""
+    try:
+        # Convert OCSFLog to dict for detection service
+        log_dict = {
+            "id": ocsf_log.id,
+            "category_name": ocsf_log.category_name,
+            "activity_name": ocsf_log.activity_name,
+            "message": ocsf_log.message,
+            "severity": ocsf_log.severity,
+            "time": ocsf_log.time.isoformat() if ocsf_log.time else datetime.utcnow().isoformat(),
+            "src_endpoint": ocsf_log.src_endpoint,
+            "raw_event": ocsf_log.raw_event,
+            "format": "ocsf"  # Indicate this is an OCSF format log
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "http://detection:8000/analyze",
+                json=log_dict,
+                timeout=10.0
+            )
+            if response.status_code == 200:
+                result = response.json()
+                alerts = result.get("alerts", [])
+                if alerts:
+                    logger.info(f"Detection service found {len(alerts)} alerts for OCSF log {ocsf_log.id}")
+                    logger.info(f"Alert details: {json.dumps(alerts)}")
+                return result
+            else:
+                logger.error(f"Detection service returned status {response.status_code} for OCSF log")
+    except Exception as e:
+        logger.error(f"Error forwarding OCSF log to detection service: {str(e)}")
+    return None
+
 @app.post("/api/logs", response_model=Union[LogResponse, List[LogResponse]])
 async def create_log(
     request: Request,
@@ -320,6 +355,133 @@ async def process_single_log(body, db):
     except Exception as e:
         logger.error(f"Unexpected error in create_log: {str(e)}")
         await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@app.post("/api/ocsf-logs", response_model=OCSFLogResponse)
+async def create_ocsf_log(request: Request, db: AsyncSession = Depends(get_db)):
+    """Create a new OCSF log entry and forward to detection service"""
+    try:
+        # Get the raw request body
+        body = await request.json()
+        
+        # Log the raw request for debugging
+        logger.debug(f"Received OCSF log request: {body}")
+        
+        # Create new OCSF log entry
+        new_log = OCSFLog(
+            activity_id=body.get("activity_id"),
+            activity_name=body.get("activity_name"),
+            category_uid=body.get("category_uid"),
+            category_name=body.get("category_name"),
+            class_uid=body.get("class_uid"),
+            class_name=body.get("class_name"),
+            time=datetime.fromisoformat(body.get("time").replace('Z', '+00:00')) if body.get("time") else datetime.utcnow(),
+            severity=body.get("severity"),
+            severity_id=body.get("severity_id"),
+            status=body.get("status"),
+            status_id=body.get("status_id"),
+            message=body.get("message"),
+            src_endpoint=body.get("src_endpoint"),
+            dst_endpoint=body.get("dst_endpoint"),
+            device=body.get("device"),
+            raw_event=body.get("raw_event", {})
+        )
+        
+        db.add(new_log)
+        await db.commit()
+        await db.refresh(new_log)
+        
+        # Forward to detection service
+        detection_result = await forward_to_detection_ocsf(new_log)
+        
+        if detection_result and detection_result.get("alerts"):
+            alerts = detection_result["alerts"]
+            logger.info(f"Processing {len(alerts)} alerts for OCSF log {new_log.id}")
+            # Create alert record for the matched rule
+            if alerts:
+                try:
+                    alert = Alert(
+                        rule_name=alerts[0]["rule_name"],
+                        severity=alerts[0]["severity"],
+                        description=alerts[0]["rule_name"],
+                        timestamp=datetime.utcnow()
+                    )
+                    db.add(alert)
+                    await db.flush()
+                    
+                    # Update existing log entry with alert_id
+                    new_log.alert_id = alert.id
+                    await db.commit()
+                    logger.info(f"Created alert {alert.id} for OCSF log {new_log.id}")
+                except Exception as e:
+                    logger.error(f"Error creating alert for OCSF log {new_log.id}: {str(e)}")
+                    # Continue processing even if alert creation fails
+        
+        logger.info(f"Successfully created OCSF log entry with id: {new_log.id}")
+        return new_log
+    except Exception as e:
+        logger.error(f"Error creating OCSF log: {str(e)}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/ocsf-logs", response_model=PaginatedOCSFLogsResponse)
+async def get_ocsf_logs(
+    db: AsyncSession = Depends(get_db),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=10, le=100),
+    start_time: Optional[datetime] = Query(None),
+    end_time: Optional[datetime] = Query(None),
+    category: Optional[str] = Query(None),
+    severity: Optional[str] = Query(None)
+):
+    """Get paginated OCSF logs with filtering"""
+    try:
+        logger.info(f"Starting get_ocsf_logs request: page={page}, page_size={page_size}")
+
+        # Calculate offset
+        offset = (page - 1) * page_size
+
+        # Build query with filters
+        query = select(OCSFLog).order_by(desc(OCSFLog.time))
+
+        # Apply filters
+        if start_time:
+            query = query.where(OCSFLog.time >= start_time)
+        if end_time:
+            query = query.where(OCSFLog.time <= end_time)
+        if category:
+            query = query.where(OCSFLog.category_name == category)
+        if severity:
+            query = query.where(OCSFLog.severity == severity)
+
+        try:
+            # Get total count
+            count_query = select(func.count()).select_from(query.subquery())
+            total_count = await db.scalar(count_query)
+
+            # Get paginated logs
+            result = await db.execute(
+                query.offset(offset).limit(page_size)
+            )
+            logs = result.scalars().all()
+
+            total_pages = (total_count + page_size - 1) // page_size if total_count else 1
+            has_more = page < total_pages
+
+            response = PaginatedOCSFLogsResponse(
+                logs=logs,
+                total=total_count or 0,
+                page=page,
+                page_size=page_size,
+                total_pages=total_pages,
+                has_more=has_more
+            )
+            return response
+        except SQLAlchemyError as e:
+            logger.error(f"Database error in get_ocsf_logs query execution: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error in get_ocsf_logs: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @app.get("/api/logs", response_model=PaginatedLogsResponse)

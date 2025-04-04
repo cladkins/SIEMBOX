@@ -7,6 +7,7 @@ from database import Base
 from cryptography.fernet import Fernet
 from pydantic import BaseModel, Field
 import json
+from ocsf import schema
 
 # Generate a key if not provided
 ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY')
@@ -69,6 +70,7 @@ class Alert(Base):
     severity = Column(String)
     description = Column(Text)
     logs = relationship("Log", back_populates="alert")
+    ocsf_logs = relationship("OCSFLog", back_populates="alert")
 
 # New request model for creating internal logs
 class CreateInternalLogRequest(BaseModel):
@@ -133,6 +135,70 @@ class PaginatedInternalLogsResponse(BaseModel):  # Renamed from PaginatedAppLogs
     total_pages: int
     has_more: bool
 
+    class Config:
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat()
+        }
+
+class OCSFLog(Base):
+    __tablename__ = "ocsf_logs"
+    id = Column(Integer, primary_key=True)
+    
+    # OCSF Core Fields (v1.0.0)
+    activity_id = Column(Integer)
+    activity_name = Column(String)
+    category_uid = Column(Integer)
+    category_name = Column(String)
+    class_uid = Column(Integer)
+    class_name = Column(String)
+    time = Column(DateTime)
+    severity = Column(String)
+    severity_id = Column(Integer)
+    status = Column(String)
+    status_id = Column(Integer)
+    message = Column(Text)
+    
+    # OCSF Observables
+    src_endpoint = Column(JSON)  # Source endpoint details
+    dst_endpoint = Column(JSON)  # Destination endpoint details
+    device = Column(JSON)        # Device information
+    
+    # Original data
+    raw_event = Column(JSON)
+    
+    # Relationships
+    alert_id = Column(Integer, ForeignKey("alerts.id"), nullable=True)
+    alert = relationship("Alert", back_populates="ocsf_logs")
+    
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, onupdate=datetime.utcnow)
+
+class OCSFLogResponse(BaseModel):
+    id: int
+    time: datetime
+    category_name: str
+    activity_name: str
+    severity: str
+    message: str
+    src_endpoint: Optional[Dict[str, Any]] = None
+    dst_endpoint: Optional[Dict[str, Any]] = None
+    raw_event: Dict[str, Any]
+    
+    class Config:
+        orm_mode = True
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat()
+        }
+
+class PaginatedOCSFLogsResponse(BaseModel):
+    logs: List[OCSFLogResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    has_more: bool
+    
     class Config:
         json_encoders = {
             datetime: lambda dt: dt.isoformat()

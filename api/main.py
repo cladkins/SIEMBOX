@@ -15,7 +15,6 @@ import asyncio
 import ocsf
 from database import get_db, Base, engine
 from models import (
-    Log, LogResponse, PaginatedLogsResponse,
     InternalLog, InternalLogResponse, PaginatedInternalLogsResponse,
     Rule, RuleResponse, RulesListResponse,
     APIKeys, APIKeyResponse, Setting, CreateInternalLogRequest,

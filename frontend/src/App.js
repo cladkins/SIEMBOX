@@ -7,7 +7,7 @@ import Navbar from './components/Navbar';
 import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
 import Detections from './pages/Detections';
-import Logs from './pages/Logs';
+// Logs page removed in favor of OCSF Logs
 import OCSFLogs from './pages/OCSFLogs';
 import VpsAudit from './pages/VpsAudit';
 
@@ -34,7 +34,7 @@ function App() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/detections" element={<Detections />} />
-              <Route path="/logs" element={<Logs />} />
+              <Route path="/logs" element={<OCSFLogs />} />
               <Route path="/ocsf-logs" element={<OCSFLogs />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/vps-audit" element={<VpsAudit />} />

@@ -39,17 +39,7 @@ class Setting(Base):
             return fernet.decrypt(self.value.encode()).decode()
         return None
 
-class Log(Base):
-    __tablename__ = "logs"
-    id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime, default=datetime.utcnow)
-    source = Column(String)
-    level = Column(String)
-    message = Column(Text)
-    processed = Column(Boolean, default=False)
-    log_metadata = Column(JSON, default={})
-    alert_id = Column(Integer, ForeignKey("alerts.id"), nullable=True)
-    alert = relationship("Alert", back_populates="logs")
+# Legacy Log model removed - using only OCSFLog now
 
 class InternalLog(Base):  # Renamed from AppLog to InternalLog
     __tablename__ = "internal_logs"  # Changed from app_logs to internal_logs
@@ -69,7 +59,7 @@ class Alert(Base):
     rule_name = Column(String)
     severity = Column(String)
     description = Column(Text)
-    logs = relationship("Log", back_populates="alert")
+    # Legacy logs relationship removed
     ocsf_logs = relationship("OCSFLog", back_populates="alert")
 
 # New request model for creating internal logs
@@ -82,21 +72,7 @@ class CreateInternalLogRequest(BaseModel):
     trace_id: Optional[str] = None
 
 # Pydantic models for API responses
-class LogResponse(BaseModel):
-    id: int
-    timestamp: datetime
-    source: str
-    level: str
-    message: str
-    processed: bool
-    log_metadata: Dict[str, Any] = Field(default_factory=dict)
-    alert_id: Optional[int] = None
-
-    class Config:
-        orm_mode = True
-        json_encoders = {
-            datetime: lambda dt: dt.isoformat()
-        }
+# Legacy LogResponse model removed - using only OCSFLogResponse now
 
 class InternalLogResponse(BaseModel):  # Renamed from AppLogResponse to InternalLogResponse
     id: int
@@ -114,18 +90,7 @@ class InternalLogResponse(BaseModel):  # Renamed from AppLogResponse to Internal
             datetime: lambda dt: dt.isoformat()
         }
 
-class PaginatedLogsResponse(BaseModel):
-    logs: List[LogResponse]
-    total: int
-    page: int
-    page_size: int
-    total_pages: int
-    has_more: bool
-
-    class Config:
-        json_encoders = {
-            datetime: lambda dt: dt.isoformat()
-        }
+# Legacy PaginatedLogsResponse model removed - using only PaginatedOCSFLogsResponse now
 
 class PaginatedInternalLogsResponse(BaseModel):  # Renamed from PaginatedAppLogsResponse
     logs: List[InternalLogResponse]

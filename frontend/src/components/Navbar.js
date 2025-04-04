@@ -37,8 +37,7 @@ function Navbar() {
   const menuItems = [
     { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
     { text: 'Detections', icon: <SecurityIcon />, path: '/detections' },
-    { text: 'Logs', icon: <ArticleIcon />, path: '/logs' },
-    { text: 'OCSF Logs', icon: <SchemaIcon />, path: '/ocsf-logs' },
+    { text: 'Logs', icon: <SchemaIcon />, path: '/logs' },
     { text: 'VPS Audit', icon: <StorageIcon />, path: '/vps-audit' },
     { text: 'Settings', icon: <SettingsIcon />, path: '/settings' }
   ];

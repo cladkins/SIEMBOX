@@ -3,9 +3,9 @@ uvicorn==0.20.0
 pydantic==1.10.4
 aiohttp==3.11.16
 PyYAML==6.0.2
-gitpython==3.1.41
-psutil==5.9.4
+gitpython==3.1.42
+psutil==5.9.8
 python-multipart==0.0.18
-typing-extensions==4.4.0
+typing-extensions==4.10.0
 ocsf-lib==0.10.0
 sigma-cli==1.0.5

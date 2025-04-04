@@ -17,6 +17,9 @@ import collections
 import psutil
 import traceback
 from app_logger import setup_logging
+from sigma.collection import SigmaCollection
+from sigma.backends.base import Backend
+from sigma.pipeline.ocsf import ocsf_pipeline
 
 # Set up logging with the new handler
 logger = setup_logging("detection")
@@ -348,49 +351,75 @@ def match_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
         return False
 
 def match_ocsf_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
-    """Match a rule against an OCSF log entry."""
+    """Match a rule against an OCSF log entry using pySigma OCSF pipeline."""
     try:
-        # Check log source requirements
-        if rule.logsource:
-            # Map OCSF category to Sigma logsource
-            category_name = log_entry.get('category_name', '').lower()
-            
-            # Map common OCSF categories to Sigma logsource categories
-            category_mapping = {
-                'system': ['system', 'sysmon', 'windows', 'linux'],
-                'network': ['network', 'proxy', 'firewall'],
-                'identity & access management': ['auth', 'authentication', 'windows', 'linux'],
-                'file system': ['file', 'filesystem', 'windows', 'linux'],
-                'process': ['process', 'process_creation', 'windows', 'linux'],
-                'database': ['database', 'db'],
-                'application': ['application', 'web']
-            }
-            
-            # Check if rule applies to this log category
-            if rule.logsource.get('category'):
-                rule_category = rule.logsource['category'].lower()
-                mapped_categories = []
-                
-                # Find mapped categories for this OCSF category
-                for ocsf_cat, sigma_cats in category_mapping.items():
-                    if ocsf_cat.lower() in category_name:
-                        mapped_categories.extend(sigma_cats)
-                
-                # If we have mapped categories but rule category doesn't match any
-                if mapped_categories and rule_category not in mapped_categories:
-                    return False
-        
         # Get raw event from log entry
         raw_event = log_entry.get('raw_event', {})
         
         # Combine raw_event with top-level fields for more comprehensive matching
         combined_data = {**raw_event, **log_entry}
         
-        logger.info(f"Processing rule {rule.id} against OCSF log entry: {json.dumps(combined_data)}")
+        # Extract OCSF class information
+        ocsf_class = combined_data.get('class_name', '')
+        ocsf_category = combined_data.get('category_name', '')
+        ocsf_activity = combined_data.get('activity_name', '')
         
-        detection = rule.detection
-        logger.info(f"Rule detection criteria: {json.dumps(detection)}")
+        logger.info(f"Processing rule {rule.id} against OCSF log entry: class={ocsf_class}, category={ocsf_category}, activity={ocsf_activity}")
+        
+        # Convert rule to YAML for pySigma processing
+        rule_yaml = {
+            'title': rule.title,
+            'id': rule.id,
+            'status': 'experimental',
+            'description': rule.description,
+            'logsource': rule.logsource,
+            'detection': rule.detection,
+            'level': rule.level
+        }
+        
+        # Create a SigmaCollection from the rule
+        try:
+            sigma_collection = SigmaCollection.from_dicts([rule_yaml])
+            
+            # Apply OCSF pipeline to the rule
+            pipeline = ocsf_pipeline()
+            processed_collection = pipeline.apply(sigma_collection)
+            
+            # Check if the rule's logsource category maps to the OCSF class/category
+            for rule_obj in processed_collection.rules:
+                # The pipeline adds OCSF metadata to the rule
+                ocsf_meta = rule_obj.custom_attributes.get('ocsf', {})
+                
+                if not ocsf_meta:
+                    # If no OCSF metadata, fall back to basic matching
+                    return basic_ocsf_match(rule, combined_data)
+                
+                # Check if OCSF class/category matches
+                expected_class = ocsf_meta.get('class_name', '').lower()
+                expected_category = ocsf_meta.get('category_name', '').lower()
+                
+                if (expected_class and expected_class in ocsf_class.lower()) or \
+                   (expected_category and expected_category in ocsf_category.lower()):
+                    # If class/category matches, check detection conditions
+                    return check_detection_conditions(rule.detection, combined_data)
+            
+            # If we get here, no match was found through the pipeline
+            # Fall back to basic matching
+            return basic_ocsf_match(rule, combined_data)
+            
+        except Exception as sigma_error:
+            logger.warning(f"Error processing rule with pySigma: {str(sigma_error)}. Falling back to basic matching.")
+            return basic_ocsf_match(rule, combined_data)
 
+    except Exception as e:
+        logger.error(f"Error matching OCSF rule: {str(e)}")
+        return False
+
+def basic_ocsf_match(rule: Rule, combined_data: Dict[str, Any]) -> bool:
+    """Basic matching for OCSF logs when pySigma pipeline fails."""
+    try:
+        detection = rule.detection
+        
         # Handle selection with field|contains
         if 'selection' in detection:
             selection = detection['selection']
@@ -427,11 +456,53 @@ def match_ocsf_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
                 return any(kw.lower() in log_str for kw in keywords)
             return keywords.lower() in log_str
 
-        logger.debug(f"Rule {rule.id} didn't match OCSF log entry: {json.dumps(log_entry)}")
+        return False
+    except Exception as e:
+        logger.error(f"Error in basic OCSF matching: {str(e)}")
         return False
 
+def check_detection_conditions(detection: Dict[str, Any], data: Dict[str, Any]) -> bool:
+    """Check if the data matches the detection conditions."""
+    try:
+        # Handle selection with field|contains
+        if 'selection' in detection:
+            selection = detection['selection']
+            if not isinstance(selection, dict):
+                return False
+
+            # All fields in selection must match
+            for field, values in selection.items():
+                if '|contains' in field:
+                    actual_field = field.split('|')[0]
+                    field_value = str(data.get(actual_field, '')).lower()
+                    if isinstance(values, list):
+                        if not any(str(v).lower() in field_value for v in values):
+                            return False
+                    else:
+                        if str(values).lower() not in field_value:
+                            return False
+                else:
+                    # Exact match for fields without operators
+                    field_value = str(data.get(field, '')).lower()
+                    if isinstance(values, list):
+                        if str(field_value).lower() not in [str(v).lower() for v in values]:
+                            return False
+                    else:
+                        if str(field_value).lower() != str(values).lower():
+                            return False
+            return True  # Only return True if all fields matched
+
+        # Handle keywords
+        if 'keywords' in detection:
+            log_str = json.dumps(data).lower()
+            keywords = detection['keywords']
+            if isinstance(keywords, list):
+                return any(kw.lower() in log_str for kw in keywords)
+            return keywords.lower() in log_str
+
+        return False
     except Exception as e:
-        logger.error(f"Error matching OCSF rule: {str(e)}")
+        logger.error(f"Error checking detection conditions: {str(e)}")
         return False
 
 @app.post("/analyze")

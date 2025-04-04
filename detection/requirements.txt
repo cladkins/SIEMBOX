@@ -8,3 +8,5 @@ psutil==5.9.4
 python-multipart==0.0.18
 typing-extensions==4.4.0
 ocsf-lib-py==1.0.0
+pysigma==0.9.11
+pysigma-pipeline-ocsf==0.1.0

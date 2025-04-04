@@ -21,8 +21,8 @@ from app_logger import setup_logging
 import sigma
 import ocsf
 from sigma.collection import SigmaCollection
-from sigma.backends.ocsf import OCSFBackend
 from sigma.pipelines.ocsf import ocsf_pipeline
+from ocsf_backend import OCSFBackend
 
 # Set up logging with the new handler
 logger = setup_logging("detection")

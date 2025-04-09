@@ -13,11 +13,11 @@ echo -e "${YELLOW}=== Verifying Sigma Rule Processing ===${NC}"
 
 # Step 1: Check if the detection service is running
 echo -e "\n${YELLOW}Step 1: Checking if the detection service is running...${NC}"
-if docker-compose ps | grep -q "detection.*Up"; then
+if docker compose ps | grep -q "detection.*Up"; then
     echo -e "${GREEN}Detection service is running.${NC}"
 else
     echo -e "${RED}Detection service is not running. Please start it with:${NC}"
-    echo -e "  docker-compose up -d detection"
+    echo -e "  docker compose up -d detection"
     exit 1
 fi
 
@@ -33,7 +33,7 @@ sleep 5
 # Step 4: Check detection service logs for rule matching
 echo -e "\n${YELLOW}Step 4: Checking detection service logs for rule matching...${NC}"
 echo -e "${YELLOW}Fetching recent logs from detection service...${NC}"
-LOGS=$(docker-compose logs --tail=100 detection)
+LOGS=$(docker compose logs --tail=100 detection)
 
 # Check for rule matching logs
 if echo "$LOGS" | grep -q "Rule.*match"; then

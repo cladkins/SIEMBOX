@@ -80,10 +80,62 @@ function reformat_ocsf(tag, timestamp, record)
         }
     }
     
+    -- Add IPS alert information to metadata if present
+    if record["ips_alert_info"] and record["ips_alert_info"].is_ips_alert then
+        local ips_info = record["ips_alert_info"]
+        ocsf_record["metadata"]["ips_alert"] = {
+            alert_id = ips_info.alert_id,
+            alert_type = ips_info.alert_type,
+            signature = ips_info.signature,
+            src = ips_info.src,
+            dst = ips_info.dst,
+            protocol = ips_info.protocol
+        }
+        
+        -- Set appropriate severity based on alert type
+        if string.find(ips_info.alert_type:lower(), "critical") or
+           string.find(ips_info.signature:lower(), "critical") then
+            ocsf_record["severity"] = "Critical"
+            ocsf_record["severity_id"] = 80
+        elseif string.find(ips_info.alert_type:lower(), "high") or
+               string.find(ips_info.signature:lower(), "high") then
+            ocsf_record["severity"] = "Error"
+            ocsf_record["severity_id"] = 70
+        elseif string.find(ips_info.alert_type:lower(), "low") or
+               string.find(ips_info.signature:lower(), "low") then
+            ocsf_record["severity"] = "Notice"
+            ocsf_record["severity_id"] = 50
+        else
+            ocsf_record["severity"] = "Warning"
+            ocsf_record["severity_id"] = 60
+        end
+    end
+    
     -- Store original event
     ocsf_record["raw_event"] = record
     
     return 1, timestamp, ocsf_record
+end
+
+-- Function to detect and extract IPS alert information
+function detect_ips_alert(message)
+    -- Check if message contains IPS Alert
+    local ips_pattern = "IPS Alert (%d+): ([^.]+)%. Signature ([^.]+)%. From: ([^,]+), to: ([^,]+), protocol: (%w+)"
+    local alert_id, alert_type, signature, src, dst, protocol = message:match(ips_pattern)
+    
+    if alert_id then
+        return {
+            is_ips_alert = true,
+            alert_id = alert_id,
+            alert_type = alert_type,
+            signature = signature,
+            src = src,
+            dst = dst,
+            protocol = protocol
+        }
+    end
+    
+    return { is_ips_alert = false }
 end
 
 -- Function to determine OCSF mapping based on record content
@@ -102,6 +154,23 @@ function determine_ocsf_mapping(record)
     local facility = record["facility"] or ""
     local program = record["ident"] or record["program"] or ""
     local message = record["message"] or ""
+    
+    -- Check for IPS alerts first
+    local ips_info = detect_ips_alert(message)
+    if ips_info.is_ips_alert then
+        -- Store extracted IPS alert information in the record for later use
+        record["ips_alert_info"] = ips_info
+        
+        -- Map to Security Finding category for IPS alerts
+        return {
+            class_uid = 7000,
+            class_name = "Security Finding",
+            category_uid = 7,
+            category_name = "Security",
+            activity_id = 7001,
+            activity_name = "Intrusion Detection"
+        }
+    end
     
     -- Process-related events
     if string.find(message, "process") or string.find(message, "exec") or string.find(program, "proc") then

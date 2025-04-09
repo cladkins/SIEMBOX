@@ -43,7 +43,8 @@ function Detections() {
     rule_name: '',
     severity: '',
     log_source: '',
-    details: ''
+    details: '',
+    source_type: ''  // New filter for source type
   });
   const [selectedDetection, setSelectedDetection] = useState(null);
   const [summary, setSummary] = useState({
@@ -113,7 +114,8 @@ function Detections() {
             metadata: log.raw_event
           },
           severity: log.severity || 'medium',
-          category: log.category_name
+          category: log.category_name,
+          source_type: log.alert ? log.alert.source_type || 'sigma_rule' : 'unknown'
         }));
 
         setDetections(alerts);
@@ -192,6 +194,8 @@ function Detections() {
           return detection.log_source.toLowerCase().includes(searchValue);
         case 'details':
           return formatDetails(detection.matched_log).toLowerCase().includes(searchValue);
+        case 'source_type':
+          return (detection.source_type || 'unknown').toLowerCase().includes(searchValue);
         default:
           return true;
       }
@@ -215,6 +219,9 @@ function Detections() {
         break;
       case 'log_source':
         comparison = a.log_source.localeCompare(b.log_source);
+        break;
+      case 'source_type':
+        comparison = (a.source_type || 'unknown').localeCompare(b.source_type || 'unknown');
         break;
       case 'details':
         comparison = formatDetails(a.matched_log).localeCompare(formatDetails(b.matched_log));
@@ -398,6 +405,7 @@ function Detections() {
                   { id: 'rule_name', label: 'Rule Name' },
                   { id: 'severity', label: 'Severity' },
                   { id: 'log_source', label: 'Source' },
+                  { id: 'source_type', label: 'Type' },
                   { id: 'details', label: 'Details' }
                 ].map((column) => (
                   <TableCell
@@ -433,6 +441,7 @@ function Detections() {
                   'rule_name',
                   'severity',
                   'log_source',
+                  'source_type',
                   'details'
                 ].map((column) => (
                   <TableCell
@@ -530,8 +539,28 @@ function Detections() {
                         size="small"
                       />
                     </TableCell>
-                    <TableCell 
-                      sx={{ 
+                    <TableCell
+                      sx={{
+                        color: '#fff',
+                        borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+                      }}
+                    >
+                      {detection.log_source}
+                    </TableCell>
+                    <TableCell
+                      sx={{
+                        color: '#fff',
+                        borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+                      }}
+                    >
+                      <Chip
+                        label={detection.source_type === 'ips_alert' ? 'IPS Alert' : 'Sigma Rule'}
+                        color={detection.source_type === 'ips_alert' ? 'secondary' : 'primary'}
+                        size="small"
+                      />
+                    </TableCell>
+                    <TableCell
+                      sx={{
                         color: '#fff',
                         borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
                       }}
@@ -602,13 +631,23 @@ function Detections() {
                       {new Date(selectedDetection.timestamp).toLocaleString()}
                     </Typography>
                   </Grid>
-                  <Grid item xs={12} sm={6}>
+                  <Grid item xs={12} sm={4}>
                     <Typography variant="subtitle1" color="rgba(255, 255, 255, 0.7)">
                       Severity
                     </Typography>
-                    <Chip 
+                    <Chip
                       label={selectedDetection.severity}
                       color={getSeverityColor(selectedDetection.severity)}
+                      size="small"
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={4}>
+                    <Typography variant="subtitle1" color="rgba(255, 255, 255, 0.7)">
+                      Detection Type
+                    </Typography>
+                    <Chip
+                      label={selectedDetection.source_type === 'ips_alert' ? 'IPS Alert' : 'Sigma Rule'}
+                      color={selectedDetection.source_type === 'ips_alert' ? 'secondary' : 'primary'}
                       size="small"
                     />
                   </Grid>

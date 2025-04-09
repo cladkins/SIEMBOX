@@ -59,6 +59,7 @@ class Alert(Base):
     rule_name = Column(String)
     severity = Column(String)
     description = Column(Text)
+    source_type = Column(String, default="sigma_rule")  # New field to distinguish alert sources
     # Legacy logs relationship removed
     ocsf_logs = relationship("OCSFLog", back_populates="alert")
 
@@ -204,6 +205,20 @@ class DetectionSummary(BaseModel):
     total_detections: int
 
     class Config:
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat()
+        }
+
+class AlertResponse(BaseModel):
+    id: int
+    timestamp: datetime
+    rule_name: str
+    severity: str
+    description: Optional[str] = None
+    source_type: str = "sigma_rule"  # New field to distinguish alert sources
+    
+    class Config:
+        orm_mode = True
         json_encoders = {
             datetime: lambda dt: dt.isoformat()
         }

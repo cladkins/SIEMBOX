@@ -285,6 +285,48 @@ async def load_rules():
 
 # Function removed - no longer needed
 
+def extract_ips_alert_info(log_entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Extract information from IPS alert logs."""
+    # Get the message from the log entry
+    message = log_entry.get('message', '')
+    
+    # Check if this is an IPS alert
+    if not message.startswith('IPS Alert'):
+        return None
+    
+    try:
+        # Extract information using regex
+        pattern = r"IPS Alert (\d+): ([^.]+)\. Signature ([^.]+)\. From: ([^,]+), to: ([^,]+), protocol: (\w+)"
+        match = re.search(pattern, message)
+        
+        if not match:
+            return None
+            
+        alert_id, alert_type, signature, src, dst, protocol = match.groups()
+        
+        # Map severity based on alert type or other factors
+        severity = "medium"  # Default
+        if "Critical" in alert_type or "Critical" in signature:
+            severity = "critical"
+        elif "High" in alert_type or "High" in signature:
+            severity = "high"
+        elif "Low" in alert_type or "Low" in signature:
+            severity = "low"
+            
+        return {
+            "is_ips_alert": True,
+            "alert_id": alert_id,
+            "alert_type": alert_type,
+            "signature": signature,
+            "src": src,
+            "dst": dst,
+            "protocol": protocol,
+            "severity": severity
+        }
+    except Exception as e:
+        logger.error(f"Error extracting IPS alert info: {str(e)}")
+        return None
+
 def match_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
     try:
         # Check log source requirements
@@ -649,8 +691,48 @@ async def analyze_log(log_entry: Dict[str, Any]):
 
         stats["processed_logs"] += 1
         update_processing_stats()
-
-        # Find the first matching rule only
+        
+        # First, check if this is an IPS alert
+        ips_info = None
+        message = log_entry.get('message', '')
+        
+        # Check in raw_event metadata for IPS alert info (from Fluent Bit formatter)
+        if is_ocsf and log_entry.get('metadata', {}).get('ips_alert'):
+            ips_info = {
+                "is_ips_alert": True,
+                "alert_id": log_entry['metadata']['ips_alert'].get('alert_id'),
+                "alert_type": log_entry['metadata']['ips_alert'].get('alert_type'),
+                "signature": log_entry['metadata']['ips_alert'].get('signature'),
+                "src": log_entry['metadata']['ips_alert'].get('src'),
+                "dst": log_entry['metadata']['ips_alert'].get('dst'),
+                "protocol": log_entry['metadata']['ips_alert'].get('protocol'),
+                "severity": log_entry.get('severity', 'medium').lower()
+            }
+        # If not found in metadata, try to extract from message
+        elif message.startswith('IPS Alert'):
+            ips_info = extract_ips_alert_info(log_entry)
+        
+        # If this is an IPS alert, create an alert directly
+        if ips_info and ips_info.get("is_ips_alert"):
+            logger.info(f"Found IPS alert: {ips_info['signature']}")
+            
+            # Determine log source
+            log_source = log_entry.get('category_name', 'network') if is_ocsf else log_entry.get('source', 'network')
+            
+            # Create an alert for the IPS alert
+            alert = Alert(
+                rule_id=f"ips-{ips_info['alert_id']}",
+                rule_name=f"IPS Alert: {ips_info['signature']}",
+                timestamp=datetime.now(),
+                log_source=log_source,
+                matched_log=log_entry,
+                severity=ips_info["severity"],
+                source_type="ips_alert"  # Mark this as an IPS alert
+            )
+            update_alert_stats(new_alert=True)
+            return {"alerts": [alert.dict()]}
+        
+        # If not an IPS alert, proceed with normal Sigma rule matching
         matched_rule = None
         for rule in sigma_rules:
             if not rule.enabled:
@@ -677,7 +759,8 @@ async def analyze_log(log_entry: Dict[str, Any]):
                 timestamp=datetime.now(),
                 log_source=log_source,
                 matched_log=log_entry,
-                severity=matched_rule.level
+                severity=matched_rule.level,
+                source_type="sigma_rule"  # Mark this as a Sigma rule alert
             )
             update_alert_stats(new_alert=True)
             return {"alerts": [alert.dict()]}

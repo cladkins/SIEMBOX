@@ -1,0 +1,176 @@
+def extract_ips_alert_info(log_entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Extract information from IPS alert logs."""
+    # Get the message from the log entry
+    message = log_entry.get('message', '')
+    
+    # Check if this is an IPS alert
+    if not message.startswith('IPS Alert'):
+        return None
+    
+    try:
+        # Extract information using regex
+        import re
+        pattern = r"IPS Alert (\d+): ([^.]+)\. Signature ([^.]+)\. From: ([^,]+), to: ([^,]+), protocol: (\w+)"
+        match = re.search(pattern, message)
+        
+        if not match:
+            return None
+            
+        alert_id, alert_type, signature, src, dst, protocol = match.groups()
+        
+        # Map severity based on alert type or other factors
+        severity = "medium"  # Default
+        if "Critical" in alert_type or "Critical" in signature:
+            severity = "critical"
+        elif "High" in alert_type or "High" in signature:
+            severity = "high"
+        elif "Low" in alert_type or "Low" in signature:
+            severity = "low"
+            
+        return {
+            "is_ips_alert": True,
+            "alert_id": alert_id,
+            "alert_type": alert_type,
+            "signature": signature,
+            "src": src,
+            "dst": dst,
+            "protocol": protocol,
+            "severity": severity
+        }
+    except Exception as e:
+        logger.error(f"Error extracting IPS alert info: {str(e)}")
+        return None
+
+def basic_ocsf_match(rule: Rule, combined_data: Dict[str, Any]) -> bool:
+    """Basic matching for OCSF logs when pySigma pipeline fails."""
+    try:
+        detection = rule.detection
+        
+        # Handle selection with field|contains
+        if 'selection' in detection:
+            selection = detection['selection']
+            if not isinstance(selection, dict):
+                return False
+        
+        def check_detection_conditions(detection: Dict[str, Any], data: Dict[str, Any]) -> bool:
+            """Check if the data matches the detection conditions."""
+            try:
+                # Handle selection with field|contains
+                if 'selection' in detection:
+                    selection = detection['selection']
+                    if not isinstance(selection, dict):
+                        return False
+        
+                    # All fields in selection must match
+                    for field, values in selection.items():
+                        if '|contains' in field:
+                            actual_field = field.split('|')[0]
+                            field_value = str(data.get(actual_field, '')).lower()
+                            if isinstance(values, list):
+                                if not any(str(v).lower() in field_value for v in values):
+                                    return False
+                            else:
+                                if str(values).lower() not in field_value:
+                                    return False
+                        else:
+                            # Exact match for fields without operators
+                            field_value = str(data.get(field, '')).lower()
+                            if isinstance(values, list):
+                                if str(field_value).lower() not in [str(v).lower() for v in values]:
+                                    return False
+                            else:
+                                if str(field_value).lower() != str(values).lower():
+                                    return False
+                    return True  # Only return True if all fields matched
+        
+                # Handle keywords
+                if 'keywords' in detection:
+                    log_str = json.dumps(data).lower()
+                    keywords = detection['keywords']
+                    if isinstance(keywords, list):
+                        return any(kw.lower() in log_str for kw in keywords)
+                    return keywords.lower() in log_str
+        
+                return False
+            except Exception as e:
+                logger.error(f"Error checking detection conditions: {str(e)}")
+                return False
+
+            # All fields in selection must match
+            for field, values in selection.items():
+                if '|contains' in field:
+                    actual_field = field.split('|')[0]
+                    field_value = str(combined_data.get(actual_field, '')).lower()
+                    if isinstance(values, list):
+                        if not any(str(v).lower() in field_value for v in values):
+                            return False
+                    else:
+                        if str(values).lower() not in field_value:
+                            return False
+                else:
+                    # Exact match for fields without operators
+                    field_value = str(combined_data.get(field, '')).lower()
+                    if isinstance(values, list):
+                        if str(field_value).lower() not in [str(v).lower() for v in values]:
+                            return False
+                    else:
+                        if str(field_value).lower() != str(values).lower():
+                            return False
+            return True  # Only return True if all fields matched
+
+        # Handle keywords
+        if 'keywords' in detection:
+            log_str = json.dumps(combined_data).lower()
+            keywords = detection['keywords']
+            if isinstance(keywords, list):
+                return any(kw.lower() in log_str for kw in keywords)
+            return keywords.lower() in log_str
+
+        return False
+    except Exception as e:
+        logger.error(f"Error in basic OCSF matching: {str(e)}")
+        return False
+
+def check_detection_conditions(detection: Dict[str, Any], data: Dict[str, Any]) -> bool:
+    """Check if the data matches the detection conditions."""
+    try:
+        # Handle selection with field|contains
+        if 'selection' in detection:
+            selection = detection['selection']
+            if not isinstance(selection, dict):
+                return False
+
+            # All fields in selection must match
+            for field, values in selection.items():
+                if '|contains' in field:
+                    actual_field = field.split('|')[0]
+                    field_value = str(data.get(actual_field, '')).lower()
+                    if isinstance(values, list):
+                        if not any(str(v).lower() in field_value for v in values):
+                            return False
+                    else:
+                        if str(values).lower() not in field_value:
+                            return False
+                else:
+                    # Exact match for fields without operators
+                    field_value = str(data.get(field, '')).lower()
+                    if isinstance(values, list):
+                        if str(field_value).lower() not in [str(v).lower() for v in values]:
+                            return False
+                    else:
+                        if str(field_value).lower() != str(values).lower():
+                            return False
+            return True  # Only return True if all fields matched
+
+        # Handle keywords
+        if 'keywords' in detection:
+            log_str = json.dumps(data).lower()
+            keywords = detection['keywords']
+            if isinstance(keywords, list):
+                return any(kw.lower() in log_str for kw in keywords)
+            return keywords.lower() in log_str
+
+        return False
+    except Exception as e:
+        logger.error(f"Error checking detection conditions: {str(e)}")
+        return False

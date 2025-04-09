@@ -10,7 +10,15 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 # Define paths
-RULES_DIR="/app/rules"
+# Check if we're running in Docker or on the host
+if [ -d "/app/rules" ]; then
+    # Docker environment
+    RULES_DIR="/app/rules"
+else
+    # Host environment - use relative path
+    RULES_DIR="./rules"
+fi
+
 TEST_RULES_DIR="./test_rules"
 WINDOWS_RULES_DIR="${RULES_DIR}/rules/windows/process_creation"
 LINUX_RULES_DIR="${RULES_DIR}/rules/linux/auditd"
@@ -26,7 +34,7 @@ cp test_linux_auth_rule.yml ${TEST_RULES_DIR}/
 cp test_web_attack_rule.yml ${TEST_RULES_DIR}/
 echo -e "${GREEN}Test rules copied to ${TEST_RULES_DIR}${NC}"
 
-# Check if we're running in Docker
+# Check if the rules directory exists
 if [ -d "$RULES_DIR" ]; then
     echo -e "${YELLOW}Installing test rules into Sigma rules directory...${NC}"
     

@@ -2,7 +2,6 @@
 import requests
 import json
 import sys
-from tabulate import tabulate
 
 # Configuration
 API_URL = "http://localhost:8000/api/rules"
@@ -84,20 +83,28 @@ def print_rules_table(rules_data, show_all=False, filter_enabled=None, filter_ca
         print(f"\nShowing 20 of {len(filtered_rules)} rules. Use --all to show all rules.")
         filtered_rules = filtered_rules[:20]
     
-    # Prepare table data
-    table_data = []
-    for rule in filtered_rules:
-        table_data.append([
-            rule.get('id', 'N/A')[:20] + ('...' if len(rule.get('id', '')) > 20 else ''),
-            rule.get('title', 'N/A')[:40] + ('...' if len(rule.get('title', '')) > 40 else ''),
-            rule.get('severity', 'N/A'),
-            rule.get('category', 'N/A'),
-            'Yes' if rule.get('enabled', False) else 'No'
-        ])
+    # Print table header
+    print("\n{:<20} {:<40} {:<10} {:<15} {:<10}".format("ID", "Title", "Severity", "Category", "Enabled"))
+    print("-" * 100)
     
-    # Print table
-    headers = ["ID", "Title", "Severity", "Category", "Enabled"]
-    print("\n" + tabulate(table_data, headers=headers, tablefmt="grid"))
+    # Print table rows
+    for rule in filtered_rules:
+        rule_id = rule.get('id', 'N/A')
+        if len(rule_id) > 20:
+            rule_id = rule_id[:17] + "..."
+        
+        title = rule.get('title', 'N/A')
+        if len(title) > 40:
+            title = title[:37] + "..."
+        
+        severity = rule.get('severity', 'N/A')
+        category = rule.get('category', 'N/A')
+        enabled = 'Yes' if rule.get('enabled', False) else 'No'
+        
+        print("{:<20} {:<40} {:<10} {:<15} {:<10}".format(
+            rule_id, title, severity, category, enabled
+        ))
+    
     print(f"\nTotal: {len(filtered_rules)} rules")
 
 def main():

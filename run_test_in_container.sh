@@ -15,7 +15,7 @@ echo -e "${YELLOW}=== Testing Sigma Rule Matching Inside Container ===${NC}"
 CONTAINER_ID=$(docker ps -q -f name=detection)
 if [ -z "$CONTAINER_ID" ]; then
     echo -e "${RED}Detection container is not running.${NC}"
-    echo -e "${YELLOW}Please start it with: docker-compose up -d detection${NC}"
+    echo -e "${YELLOW}Please start it with: docker compose up -d detection${NC}"
     exit 1
 fi
 

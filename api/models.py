@@ -197,6 +197,31 @@ class RulesListResponse(BaseModel):
     rules: List[RuleResponse]
     total: int
 
+class DetectionSummary(BaseModel):
+    severity_counts: Dict[str, int]
+    category_counts: Dict[str, int]
+    trend_data: Dict[str, int]
+    total_detections: int
+
+    class Config:
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat()
+        }
+
+class DetectionsResponse(BaseModel):
+    logs: List[OCSFLogResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    has_more: bool
+    summary: DetectionSummary
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat()
+        }
+
 class APIKeys(BaseModel):
     IPAPI_KEY: Optional[str] = None
     CROWDSEC_API_KEY: Optional[str] = None

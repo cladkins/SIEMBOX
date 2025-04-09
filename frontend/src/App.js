@@ -1,10 +1,9 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import Box from '@mui/material/Box';
 import Navbar from './components/Navbar';
-import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
 import Detections from './pages/Detections';
 // Logs page removed in favor of OCSF Logs
@@ -32,7 +31,7 @@ function App() {
           <Navbar />
           <Box component="main" sx={{ flexGrow: 1, p: 3, mt: 8 }}>
             <Routes>
-              <Route path="/" element={<Dashboard />} />
+              <Route path="/" element={<Navigate to="/detections" replace />} />
               <Route path="/detections" element={<Detections />} />
               <Route path="/logs" element={<OCSFLogs />} />
               <Route path="/ocsf-logs" element={<OCSFLogs />} />

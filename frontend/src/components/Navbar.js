@@ -14,7 +14,6 @@ import {
   Divider
 } from '@mui/material';
 import {
-  Dashboard as DashboardIcon,
   Settings as SettingsIcon,
   Menu as MenuIcon,
   Security as SecurityIcon,
@@ -35,7 +34,6 @@ function Navbar() {
   };
 
   const menuItems = [
-    { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
     { text: 'Detections', icon: <SecurityIcon />, path: '/detections' },
     { text: 'Logs', icon: <SchemaIcon />, path: '/logs' },
     { text: 'VPS Audit', icon: <StorageIcon />, path: '/vps-audit' },

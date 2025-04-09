@@ -18,7 +18,8 @@ from models import (
     InternalLog, InternalLogResponse, PaginatedInternalLogsResponse,
     Rule, RuleResponse, RulesListResponse,
     APIKeys, APIKeyResponse, Setting, CreateInternalLogRequest,
-    Alert, OCSFLog, OCSFLogResponse, PaginatedOCSFLogsResponse
+    Alert, OCSFLog, OCSFLogResponse, PaginatedOCSFLogsResponse,
+    DetectionSummary, DetectionsResponse
 )
 from typing import Dict, List
 from pydantic import BaseModel
@@ -754,6 +755,126 @@ async def get_rules():
     except Exception as e:
         logger.error(f"Error fetching rules: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+async def get_detection_summary(db: AsyncSession):
+    """Get summary statistics for detections"""
+    try:
+        # Get count by severity
+        severity_query = select(
+            OCSFLog.severity,
+            func.count().label('count')
+        ).where(
+            OCSFLog.alert_id.isnot(None)
+        ).group_by(
+            OCSFLog.severity
+        )
+        severity_result = await db.execute(severity_query)
+        severity_counts = {row.severity: row.count for row in severity_result}
+
+        # Get count by category
+        category_query = select(
+            OCSFLog.category_name,
+            func.count().label('count')
+        ).where(
+            OCSFLog.alert_id.isnot(None)
+        ).group_by(
+            OCSFLog.category_name
+        )
+        category_result = await db.execute(category_query)
+        category_counts = {row.category_name: row.count for row in category_result}
+
+        # Get recent trend (last 7 days)
+        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        trend_query = select(
+            func.date_trunc('day', OCSFLog.time).label('day'),
+            func.count().label('count')
+        ).where(
+            and_(
+                OCSFLog.alert_id.isnot(None),
+                OCSFLog.time >= seven_days_ago
+            )
+        ).group_by(
+            func.date_trunc('day', OCSFLog.time)
+        ).order_by(
+            func.date_trunc('day', OCSFLog.time)
+        )
+        trend_result = await db.execute(trend_query)
+        trend_data = {row.day.strftime('%Y-%m-%d'): row.count for row in trend_result}
+
+        return {
+            "severity_counts": severity_counts,
+            "category_counts": category_counts,
+            "trend_data": trend_data,
+            "total_detections": sum(severity_counts.values())
+        }
+    except Exception as e:
+        logger.error(f"Error getting detection summary: {str(e)}")
+        return {
+            "severity_counts": {},
+            "category_counts": {},
+            "trend_data": {},
+            "total_detections": 0
+        }
+
+@app.get("/api/detections", response_model=DetectionsResponse)
+async def get_detections(
+    db: AsyncSession = Depends(get_db),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=10, le=100),
+    start_time: Optional[datetime] = Query(None),
+    end_time: Optional[datetime] = Query(None),
+    severity: Optional[str] = Query(None),
+    category: Optional[str] = Query(None)
+):
+    """Get paginated detections with summary statistics"""
+    try:
+        # Calculate offset
+        offset = (page - 1) * page_size
+
+        # Build query for logs with alerts
+        query = select(OCSFLog).where(
+            OCSFLog.alert_id.isnot(None)
+        ).order_by(desc(OCSFLog.time))
+
+        # Apply filters
+        if start_time:
+            query = query.where(OCSFLog.time >= start_time)
+        if end_time:
+            query = query.where(OCSFLog.time <= end_time)
+        if severity:
+            query = query.where(OCSFLog.severity == severity)
+        if category:
+            query = query.where(OCSFLog.category_name == category)
+
+        # Get total count
+        count_query = select(func.count()).select_from(query.subquery())
+        total_count = await db.scalar(count_query)
+
+        # Get paginated logs
+        result = await db.execute(
+            query.offset(offset).limit(page_size)
+        )
+        logs = result.scalars().all()
+
+        # Get summary statistics
+        summary = await get_detection_summary(db)
+
+        # Prepare response
+        total_pages = (total_count + page_size - 1) // page_size if total_count else 1
+        has_more = page < total_pages
+
+        return DetectionsResponse(
+            logs=logs,
+            total=total_count or 0,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+            has_more=has_more,
+            summary=summary
+        )
+    except Exception as e:
+        logger.error(f"Error getting detections: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

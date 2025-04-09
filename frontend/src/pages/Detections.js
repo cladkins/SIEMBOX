@@ -46,6 +46,12 @@ function Detections() {
     details: ''
   });
   const [selectedDetection, setSelectedDetection] = useState(null);
+  const [summary, setSummary] = useState({
+    severity_counts: {},
+    category_counts: {},
+    trend_data: {},
+    total_detections: 0
+  });
 
   // Modal styles
   const modalStyle = {
@@ -83,30 +89,35 @@ function Detections() {
   const fetchDetections = async () => {
     try {
       setLoading(true);
-      // Get alerts from the API's logs endpoint with alert_id filter
-      const response = await axios.get(`${config.apiUrl}/api/logs`, {
+      // Get alerts from the new API detections endpoint
+      const response = await axios.get(`${config.apiUrl}/api/detections`, {
         params: {
-          has_alert: true,
           page: 1,
           page_size: 100
         }
       });
 
-      if (response.data && response.data.logs) {
-        const alerts = response.data.logs.map(log => ({
-          rule_id: log.alert_id,
+      if (response.data) {
+        // Extract logs and summary data
+        const { logs, summary: summaryData } = response.data;
+        
+        // Map logs to detections format
+        const alerts = logs.map(log => ({
+          rule_id: log.id,
           rule_name: log.alert ? log.alert.rule_name : 'Unknown Rule',
-          timestamp: log.timestamp,
-          log_source: log.source,
+          timestamp: log.time,
+          log_source: log.category_name,
           matched_log: {
             ...log,
             message: log.message,
-            metadata: log.log_metadata
+            metadata: log.raw_event
           },
-          severity: log.alert ? log.alert.severity : 'medium'
+          severity: log.severity || 'medium',
+          category: log.category_name
         }));
 
         setDetections(alerts);
+        setSummary(summaryData);
         setError(null);
       }
     } catch (err) {
@@ -243,9 +254,9 @@ function Detections() {
         </Grid>
         <Grid item>
           <Tooltip title="Refresh detections">
-            <IconButton 
-              onClick={handleRefresh} 
-              sx={{ 
+            <IconButton
+              onClick={handleRefresh}
+              sx={{
                 color: '#4d9fff',
                 '&:hover': {
                   backgroundColor: 'rgba(77, 159, 255, 0.1)',
@@ -255,6 +266,114 @@ function Detections() {
               <RefreshIcon />
             </IconButton>
           </Tooltip>
+        </Grid>
+      </Grid>
+
+      {/* Summary Section */}
+      <Grid container spacing={3} sx={{ mb: 4 }}>
+        {/* Total Detections */}
+        <Grid item xs={12} sm={6} md={3}>
+          <Paper
+            sx={{
+              p: 2,
+              display: 'flex',
+              flexDirection: 'column',
+              height: 140,
+              backgroundColor: '#1a1a1a',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+            }}
+          >
+            <Typography component="h2" variant="h6" color="primary" gutterBottom>
+              Total Detections
+            </Typography>
+            <Typography component="p" variant="h3">
+              {summary.total_detections}
+            </Typography>
+          </Paper>
+        </Grid>
+        
+        {/* Severity Breakdown */}
+        <Grid item xs={12} sm={6} md={3}>
+          <Paper
+            sx={{
+              p: 2,
+              display: 'flex',
+              flexDirection: 'column',
+              height: 140,
+              backgroundColor: '#1a1a1a',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+            }}
+          >
+            <Typography component="h2" variant="h6" color="primary" gutterBottom>
+              Severity Breakdown
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              {Object.entries(summary.severity_counts || {}).map(([severity, count]) => (
+                <Box key={severity} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <Chip
+                    label={severity}
+                    color={getSeverityColor(severity)}
+                    size="small"
+                    sx={{ minWidth: 70 }}
+                  />
+                  <Typography>{count}</Typography>
+                </Box>
+              ))}
+            </Box>
+          </Paper>
+        </Grid>
+        
+        {/* Category Breakdown */}
+        <Grid item xs={12} sm={6} md={3}>
+          <Paper
+            sx={{
+              p: 2,
+              display: 'flex',
+              flexDirection: 'column',
+              height: 140,
+              backgroundColor: '#1a1a1a',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              overflow: 'auto'
+            }}
+          >
+            <Typography component="h2" variant="h6" color="primary" gutterBottom>
+              Category Breakdown
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              {Object.entries(summary.category_counts || {}).slice(0, 4).map(([category, count]) => (
+                <Box key={category} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <Typography noWrap sx={{ maxWidth: '70%' }}>{category}</Typography>
+                  <Typography>{count}</Typography>
+                </Box>
+              ))}
+            </Box>
+          </Paper>
+        </Grid>
+        
+        {/* Recent Trend */}
+        <Grid item xs={12} sm={6} md={3}>
+          <Paper
+            sx={{
+              p: 2,
+              display: 'flex',
+              flexDirection: 'column',
+              height: 140,
+              backgroundColor: '#1a1a1a',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+            }}
+          >
+            <Typography component="h2" variant="h6" color="primary" gutterBottom>
+              Recent Trend
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              {Object.entries(summary.trend_data || {}).slice(-3).map(([date, count]) => (
+                <Box key={date} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <Typography>{new Date(date).toLocaleDateString()}</Typography>
+                  <Typography>{count}</Typography>
+                </Box>
+              ))}
+            </Box>
+          </Paper>
         </Grid>
       </Grid>
 

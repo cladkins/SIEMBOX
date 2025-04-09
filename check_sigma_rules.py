@@ -4,7 +4,7 @@ import json
 import sys
 
 # Configuration
-API_URL = "http://localhost:8000/api/rules"
+API_URL = "http://192.168.1.194:8000/api/rules"
 
 def get_rules():
     """Get all rules from the API."""

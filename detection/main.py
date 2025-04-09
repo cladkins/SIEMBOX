@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from datetime import datetime, timedelta
 import json
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import aiohttp
 import os
 import yaml

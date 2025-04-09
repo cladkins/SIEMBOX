@@ -350,12 +350,14 @@ def match_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
                 return False
         if 'category' in metadata and rule.logsource.get('category'):
             if metadata['category'].lower() != rule.logsource['category'].lower():
+                logger.debug(f"Rule {rule.id} category mismatch: rule={rule.logsource.get('category')}, log={metadata['category']}")
                 return False
 
         # Handle selection with field|contains
         if 'selection' in detection:
             selection = detection['selection']
             if not isinstance(selection, dict):
+                logger.debug(f"Rule {rule.id} selection is not a dict")
                 return False
 
             # All fields in selection must match
@@ -365,19 +367,32 @@ def match_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
                     field_value = str(metadata.get(actual_field, '')).lower()
                     if isinstance(values, list):
                         if not any(str(v).lower() in field_value for v in values):
+                            logger.debug(f"Rule {rule.id} field '{actual_field}' contains match failed: field_value='{field_value}', values={values}")
                             return False
+                        else:
+                            logger.debug(f"Rule {rule.id} field '{actual_field}' contains match succeeded: field_value='{field_value}', matched one of {values}")
                     else:
                         if str(values).lower() not in field_value:
+                            logger.debug(f"Rule {rule.id} field '{actual_field}' contains match failed: field_value='{field_value}', value='{values}'")
                             return False
+                        else:
+                            logger.debug(f"Rule {rule.id} field '{actual_field}' contains match succeeded: field_value='{field_value}', value='{values}'")
                 else:
                     # Exact match for fields without operators
                     field_value = str(metadata.get(field, '')).lower()
                     if isinstance(values, list):
                         if str(field_value).lower() not in [str(v).lower() for v in values]:
+                            logger.debug(f"Rule {rule.id} field '{field}' exact match failed: field_value='{field_value}', values={values}")
                             return False
+                        else:
+                            logger.debug(f"Rule {rule.id} field '{field}' exact match succeeded: field_value='{field_value}', matched one of {values}")
                     else:
                         if str(field_value).lower() != str(values).lower():
+                            logger.debug(f"Rule {rule.id} field '{field}' exact match failed: field_value='{field_value}', value='{values}'")
                             return False
+                        else:
+                            logger.debug(f"Rule {rule.id} field '{field}' exact match succeeded: field_value='{field_value}', value='{values}'")
+            logger.info(f"Rule {rule.id} matched all selection criteria")
             return True  # Only return True if all fields matched
 
         # Handle keywords
@@ -385,10 +400,22 @@ def match_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
             log_str = json.dumps(log_entry).lower()
             keywords = detection['keywords']
             if isinstance(keywords, list):
-                return any(kw.lower() in log_str for kw in keywords)
-            return keywords.lower() in log_str
+                matched = any(kw.lower() in log_str for kw in keywords)
+                if matched:
+                    matching_kw = next((kw for kw in keywords if kw.lower() in log_str), None)
+                    logger.info(f"Rule {rule.id} keyword match succeeded: keyword='{matching_kw}'")
+                else:
+                    logger.debug(f"Rule {rule.id} keyword match failed: keywords={keywords}")
+                return matched
+            
+            matched = keywords.lower() in log_str
+            if matched:
+                logger.info(f"Rule {rule.id} keyword match succeeded: keyword='{keywords}'")
+            else:
+                logger.debug(f"Rule {rule.id} keyword match failed: keyword='{keywords}'")
+            return matched
 
-        logger.debug(f"Rule {rule.id} didn't match log entry: {json.dumps(log_entry)}")
+        logger.debug(f"Rule {rule.id} didn't match log entry: {json.dumps(log_entry)[:200]}...")
         return False
 
     except Exception as e:
@@ -412,6 +439,7 @@ def match_ocsf_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
             ocsf_activity = combined_data.get('activity_name', '').lower()
             
             logger.info(f"Processing rule {rule.id} against OCSF log entry: class={ocsf_class}, category={ocsf_category}, activity={ocsf_activity}")
+            logger.debug(f"Rule {rule.id} details: title='{rule.title}', level='{rule.level}', logsource={rule.logsource}")
             
             # Convert Sigma rule to OCSF query using pySigma-pipeline-ocsf
             try:
@@ -434,17 +462,27 @@ def match_ocsf_rule(rule: Rule, log_entry: Dict[str, Any]) -> bool:
                 ocsf_queries = backend.convert(sigma_collection)
                 
                 # Check if any of the queries match the log entry
-                for query in ocsf_queries:
+                logger.debug(f"Rule {rule.id} generated {len(ocsf_queries)} OCSF queries")
+                for i, query in enumerate(ocsf_queries):
+                    logger.debug(f"Rule {rule.id} evaluating OCSF query #{i+1}: {query}")
                     # Execute the query against the OCSF log entry
                     if eval_ocsf_query(query, combined_data):
+                        logger.info(f"Rule {rule.id} matched via OCSF query #{i+1}")
                         return True
+                    else:
+                        logger.debug(f"Rule {rule.id} did not match via OCSF query #{i+1}")
                 
                 # If no match using pySigma pipeline, fall back to basic matching
                 logger.info(f"No match using pySigma pipeline for rule {rule.id}, falling back to basic matching")
-                return basic_ocsf_match(rule, combined_data)
+                basic_match_result = basic_ocsf_match(rule, combined_data)
+                if basic_match_result:
+                    logger.info(f"Rule {rule.id} matched via basic matching")
+                else:
+                    logger.debug(f"Rule {rule.id} did not match via basic matching")
+                return basic_match_result
                 
             except Exception as sigma_error:
-                logger.warning(f"Error using pySigma-pipeline-ocsf: {str(sigma_error)}. Falling back to basic matching.")
+                logger.warning(f"Error using pySigma-pipeline-ocsf for rule {rule.id}: {str(sigma_error)}. Falling back to basic matching.")
                 return basic_ocsf_match(rule, combined_data)
             
             # Use ocsf-lib for category mapping
@@ -734,19 +772,26 @@ async def analyze_log(log_entry: Dict[str, Any]):
         
         # If not an IPS alert, proceed with normal Sigma rule matching
         matched_rule = None
-        for rule in sigma_rules:
-            if not rule.enabled:
-                continue
+        logger.info(f"Checking {len(sigma_rules)} Sigma rules for matches")
+        enabled_rules = [rule for rule in sigma_rules if rule.enabled]
+        logger.info(f"Found {len(enabled_rules)} enabled rules to check")
+        
+        for i, rule in enumerate(enabled_rules):
+            logger.debug(f"Checking rule {i+1}/{len(enabled_rules)}: {rule.id} - {rule.title}")
                 
             if is_ocsf:
                 # For OCSF logs, use category_name for matching
+                logger.debug(f"Using OCSF matching for rule {rule.id}")
                 if match_ocsf_rule(rule, log_entry):
                     matched_rule = rule
+                    logger.info(f"Rule {rule.id} matched OCSF log entry")
                     break
             else:
                 # For standard logs, use the existing match_rule function
+                logger.debug(f"Using standard matching for rule {rule.id}")
                 if match_rule(rule, log_entry):
                     matched_rule = rule
+                    logger.info(f"Rule {rule.id} matched standard log entry")
                     break
 
         if matched_rule:

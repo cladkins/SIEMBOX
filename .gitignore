@@ -1,6 +1,9 @@
 # Development workflow documentation (internal use only)
 DEVELOPMENT_WORKFLOW.md
 
+# Project documentation (internal use only)
+docs/
+
 # Dependencies
 node_modules/
 npm-debug.log*

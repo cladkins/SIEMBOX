@@ -1,8 +1,5 @@
-# Development workflow documentation (internal use only)
-DEVELOPMENT_WORKFLOW.md
-
-# Project documentation (internal use only)
-docs/
+# Project management documentation (internal use only)
+project-management/
 
 # Dependencies
 node_modules/

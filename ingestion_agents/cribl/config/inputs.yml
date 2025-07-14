@@ -1,0 +1,27 @@
+inputs:
+  syslog_in:
+    type: syslog
+    disabled: false
+    host: 0.0.0.0
+    udpPort: 5140
+    tcpPort: 5140
+    sendToRoutes: true
+    pqEnabled: false
+    streamtags: []
+    maxBufferSize: 1000
+    ipWhitelistRegex: /.*/
+    timestampTimezone: local
+    singleMsgUdpPackets: false
+    enableProxyHeader: false
+    keepFieldsList: []
+    octetCounting: false
+    inferFraming: true
+    strictlyInferOctetCounting: true
+    allowNonStandardAppName: false
+    maxActiveCxn: 1000
+    socketIdleTimeout: 0
+    socketEndingMaxWait: 30
+    socketMaxLifespan: 0
+    tls:
+      disabled: true
+    enableLoadBalancing: false

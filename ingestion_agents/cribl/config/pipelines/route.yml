@@ -1,0 +1,15 @@
+id: default
+groups: {}
+comments: []
+routes:
+  - id: syslog_to_http_backend
+    name: syslog_to_http_backend
+    final: true
+    disabled: false
+    pipeline: main
+    description: "Route syslog data to HTTP backend"
+    enableOutputExpression: false
+    outputExpression: null
+    filter: "true"
+    clones: []
+    output: "http:http_backend"

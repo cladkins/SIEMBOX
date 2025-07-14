@@ -1,0 +1,34 @@
+outputs:
+  default:
+    id: default
+    type: http
+    disabled: false
+    url: http://backend:8000/api/v1/logs/cribl
+    method: POST
+    headers:
+      - name: Content-Type
+        value: application/json
+    timeout: 30000
+    maxPayloadSizeKB: 4096
+    compress: gzip
+    format: json
+    onBackpressure: block
+    persistentQueue:
+      enabled: true
+      maxFileSize: 100MB
+      maxOpenFiles: 5
+      path: $CRIBL_HOME/state/queues
+  http_backend:
+    id: http_backend
+    type: http
+    disabled: false
+    url: http://backend:8000/api/v1/logs/cribl
+    method: POST
+    headers:
+      - name: Content-Type
+        value: application/json
+    timeout: 30000
+    maxPayloadSizeKB: 4096
+    compress: gzip
+    format: json
+    onBackpressure: block

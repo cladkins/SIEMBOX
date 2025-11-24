@@ -1,7 +1,6 @@
 """
 SIEM BOX - Log Parsing Service
-DEPRECATED: This service is deprecated in Pattern B architecture.
-Log parsing is now handled by Cribl Stream pipelines.
+DEPRECATED: Logs must be normalized before hitting the backend ingestion API.
 """
 from typing import Dict, Any
 import logging
@@ -13,10 +12,8 @@ class LogParser:
     """
     DEPRECATED: Log parsing engine with configurable rules
     
-    In Pattern B architecture, this service is deprecated.
-    Log parsing is now handled by:
-    - Cribl Stream: Pipelines handle log parsing and enrichment
-    - Cribl Packs: Pre-built parsing configurations for common log types
+    In the lightweight architecture this service is deprecated.
+    Parsing is expected to happen on the agent/forwarder that calls /api/v1/logs/ingest.
     
     This class is kept for backward compatibility but should not be used.
     """
@@ -34,9 +31,9 @@ class LogParser:
         """
         return {
             "status": "deprecated",
-            "message": "LogParser is deprecated in Pattern B architecture",
-            "replacement": "Use Cribl Stream pipelines for log parsing",
-            "architecture": "Pattern B - Cribl Stream handles log parsing and enrichment"
+            "message": "LogParser has been removed from the lightweight architecture.",
+            "replacement": "Use lightweight agents (Fluent Bit, Vector, custom scripts, etc.) to parse and enrich events before calling /api/v1/logs/ingest.",
+            "architecture": "Logs arrive pre-parsed and are stored directly in processed_logs."
         }
 
 
@@ -44,8 +41,7 @@ class ParsingService:
     """
     DEPRECATED: Service for managing log parsing operations
     
-    In Pattern B architecture, this service is deprecated.
-    Parsing operations are now handled by Cribl Stream.
+    In the lightweight architecture, parsing happens outside the backend.
     """
     
     def __init__(self):
@@ -61,7 +57,7 @@ class ParsingService:
         """
         return {
             "status": "deprecated",
-            "message": "ParsingService is deprecated in Pattern B architecture",
-            "replacement": "Use Cribl Stream for parsing operations",
-            "architecture": "Pattern B - Cribl Stream handles all parsing logic"
+            "message": "ParsingService has been removed; structured data should be sent directly to the ingestion endpoint.",
+            "replacement": "Perform parsing on the source agent and include structured fields in the LogIngestRequest payload.",
+            "architecture": "Backend focuses on storage, detection, and alerting."
         }

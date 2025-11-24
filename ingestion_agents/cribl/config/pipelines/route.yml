@@ -1,15 +1,39 @@
-id: default
+id: route
 groups: {}
 comments: []
 routes:
-  - id: syslog_to_http_backend
-    name: syslog_to_http_backend
+  - id: syslog_processing
+    name: "Syslog Processing Route"
+    final: false
+    disabled: false
+    pipeline: main
+    description: "Process syslog data through main pipeline"
+    enableOutputExpression: false
+    outputExpression: null
+    filter: "source=='syslog_in'"
+    clones: []
+    output: "siembox_http"
+  
+  - id: http_processing
+    name: "HTTP Processing Route"
+    final: false
+    disabled: false
+    pipeline: main
+    description: "Process HTTP data through main pipeline"
+    enableOutputExpression: false
+    outputExpression: null
+    filter: "source=='http_in'"
+    clones: []
+    output: "siembox_http"
+  
+  - id: default_processing
+    name: "Default Processing Route"
     final: true
     disabled: false
     pipeline: main
-    description: "Route syslog data to HTTP backend"
+    description: "Default route for all other data"
     enableOutputExpression: false
     outputExpression: null
     filter: "true"
     clones: []
-    output: "http:http_backend"
+    output: "default"

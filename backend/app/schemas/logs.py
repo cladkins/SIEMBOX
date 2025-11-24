@@ -31,6 +31,13 @@ class LogIngestRequest(BaseModel):
     protocol: Optional[str] = Field(None, max_length=10, description="Protocol used (TCP, UDP, etc.)")
     hostname: Optional[str] = Field(None, max_length=255, description="Hostname of the log source")
     app_name: Optional[str] = Field(None, max_length=100, description="Application or service name")
+    log_type: Optional[str] = Field(None, max_length=50, description="Type/category of log (auth, firewall, etc.)")
+    severity: Optional[str] = Field(None, max_length=20, description="Log severity (info, warn, error, etc.)")
+    category: Optional[str] = Field(None, max_length=50, description="High-level category (security, system, etc.)")
+    fields: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Optional structured fields already parsed from the log"
+    )
     raw_message: str = Field(..., min_length=1, description="Complete raw log message")
     
     @validator('source_ip')
@@ -63,6 +70,15 @@ class LogIngestRequest(BaseModel):
                 "protocol": "UDP",
                 "hostname": "firewall.local",
                 "app_name": "unifi",
+                "log_type": "firewall",
+                "severity": "medium",
+                "category": "network",
+                "fields": {
+                    "action": "BLOCK",
+                    "src_ip": "10.0.0.1",
+                    "dst_ip": "192.168.1.100",
+                    "rule": "Default deny"
+                },
                 "raw_message": "Jan 01 12:00:00 firewall kernel: [UFW BLOCK] IN=eth0 OUT= MAC=... SRC=10.0.0.1 DST=192.168.1.100"
             }
         }

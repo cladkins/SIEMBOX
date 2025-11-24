@@ -1,7 +1,7 @@
 """
 SIEM BOX - Vulnerability Scanning Schemas
 """
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, IPvAnyAddress
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 from uuid import UUID
@@ -9,7 +9,7 @@ from uuid import UUID
 
 # Asset Schemas
 class AssetBase(BaseModel):
-    ip_address: str = Field(..., description="IP address of the asset")
+    ip_address: IPvAnyAddress = Field(..., description="IP address of the asset")
     hostname: Optional[str] = Field(None, description="Hostname if resolved")
     mac_address: Optional[str] = Field(None, description="MAC address if available")
     asset_type: Optional[str] = Field(None, description="Type of asset")
@@ -38,6 +38,15 @@ class AssetUpdate(BaseModel):
     discovery_method: Optional[str] = None
     confidence_score: Optional[float] = Field(None, ge=0, le=1)
     asset_metadata: Optional[Dict[str, Any]] = None
+
+
+class AssetDiscoveryRequest(BaseModel):
+    target: str = Field(..., description="Network range or host to discover")
+    discovery_method: Optional[str] = Field(None, description="Discovery method (default nmap)")
+    scan_config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Discovery scan configuration overrides"
+    )
 
 
 class AssetResponse(AssetBase):

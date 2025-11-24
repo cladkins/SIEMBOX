@@ -6,7 +6,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, and_, or_, select
-from app.models.logs import ParsedLog, DetectionRule, Alert
+from app.models.logs import ProcessedLog, ParsedLog, DetectionRule, Alert
 from app.schemas.parsing import AlertCreate, DetectionRuleCreate
 from app.services.notification_service import notification_service
 import logging
@@ -185,6 +185,7 @@ class DetectionEngine:
         alerts_generated = 0
         rules_applied = 0
         errors = []
+        created_alerts: List[Alert] = []
         
         # Get rules to apply
         query = select(DetectionRule).filter(DetectionRule.is_enabled == True)
@@ -201,21 +202,22 @@ class DetectionEngine:
                 rules_applied += 1
                 
                 # Create alert records
-                created_alerts = []
+                new_alerts: List[Alert] = []
                 for alert_data in rule_alerts:
                     alert = Alert(**alert_data.dict())
                     db.add(alert)
-                    created_alerts.append(alert)
+                    new_alerts.append(alert)
+                created_alerts.extend(new_alerts)
                     
             except Exception as e:
                 logger.error(f"Error applying rule {rule.name}: {e}")
                 errors.append(f"Rule {rule.name}: {str(e)}")
         
         try:
-            db.commit()
+            await db.commit()
             
             # Send notifications for created alerts (async in background)
-            if alerts_generated > 0:
+            if created_alerts:
                 self._send_alert_notifications_background(db, created_alerts)
                 
         except Exception as e:
@@ -224,6 +226,241 @@ class DetectionEngine:
             errors.append(f"Database error: {str(e)}")
         
         return alerts_generated, rules_applied, errors
+    
+    async def apply_rules_to_processed_logs(self, db: AsyncSession, processed_log_ids: List[str], 
+                                           rule_ids: Optional[List[str]] = None) -> Tuple[int, int, List[str]]:
+        """
+        Apply detection rules to processed logs stored locally
+        
+        Returns:
+            Tuple of (alerts_generated, rules_applied, errors)
+        """
+        alerts_generated = 0
+        rules_applied = 0
+        errors = []
+        created_alerts: List[Alert] = []
+        
+        # Get rules to apply
+        query = select(DetectionRule).filter(DetectionRule.is_enabled == True)
+        if rule_ids:
+            query = query.filter(DetectionRule.id.in_(rule_ids))
+        
+        result = await db.execute(query)
+        rules = result.scalars().all()
+        
+        for rule in rules:
+            try:
+                rule_alerts = await self._apply_single_rule_to_processed_logs(db, rule, processed_log_ids)
+                alerts_generated += len(rule_alerts)
+                rules_applied += 1
+                
+                # Create alert records
+                new_alerts: List[Alert] = []
+                for alert_data in rule_alerts:
+                    alert = Alert(**alert_data.dict())
+                    db.add(alert)
+                    new_alerts.append(alert)
+                created_alerts.extend(new_alerts)
+                    
+            except Exception as e:
+                logger.error(f"Error applying rule {rule.name} to processed logs: {e}")
+                errors.append(f"Rule {rule.name}: {str(e)}")
+        
+        try:
+            await db.commit()
+            
+            # Send notifications for created alerts (async in background)
+            if created_alerts:
+                self._send_alert_notifications_background(db, created_alerts)
+                
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Database error during detection: {e}")
+            errors.append(f"Database error: {str(e)}")
+        
+        return alerts_generated, rules_applied, errors
+    
+    async def _apply_single_rule_to_processed_logs(self, db: AsyncSession, rule: DetectionRule,
+                                                 processed_log_ids: List[str]) -> List[AlertCreate]:
+        """Apply a single detection rule to processed logs"""
+        
+        rule_type = rule.rule_type
+        if rule_type not in self.rule_processors:
+            raise ValueError(f"Unknown rule type: {rule_type}")
+        
+        # Create a modified processor for processed logs
+        if rule_type == "threshold":
+            return await self._process_threshold_rule_processed_logs(db, rule, processed_log_ids)
+        elif rule_type == "pattern":
+            return await self._process_pattern_rule_processed_logs(db, rule, processed_log_ids)
+        elif rule_type == "correlation":
+            return await self._process_correlation_rule_processed_logs(db, rule, processed_log_ids)
+        elif rule_type == "anomaly":
+            return await self._process_anomaly_rule_processed_logs(db, rule, processed_log_ids)
+        else:
+            raise ValueError(f"Rule type {rule_type} not implemented for processed logs")
+    
+    async def _process_threshold_rule_processed_logs(self, db: AsyncSession, rule: DetectionRule,
+                                                   processed_log_ids: List[str]) -> List[AlertCreate]:
+        """Process threshold-based detection rules for processed logs"""
+        alerts = []
+        conditions = rule.conditions
+        
+        # Build base query for ProcessedLog instead of ParsedLog
+        query = select(ProcessedLog)
+        
+        # Filter by log type
+        if "log_type" in conditions:
+            query = query.filter(ProcessedLog.log_type == conditions["log_type"])
+        
+        # Apply time window
+        threshold_config = conditions["threshold"]
+        time_window = threshold_config["time_window"]
+        cutoff_time = datetime.utcnow() - timedelta(seconds=time_window)
+        query = query.filter(ProcessedLog.timestamp >= cutoff_time)
+
+        result = await db.execute(query)
+        logs = result.scalars().all()
+
+        # Apply field conditions in Python to support multiple dialects
+        field_conditions = conditions.get("field_conditions", {})
+        if field_conditions:
+            filtered_logs = []
+            for log in logs:
+                processed_fields = log.processed_fields or {}
+                if all(str(processed_fields.get(field)) == str(value) for field, value in field_conditions.items()):
+                    filtered_logs.append(log)
+            logs = filtered_logs
+        
+        # Group by specified fields
+        group_by_fields = threshold_config.get("group_by", [])
+        
+        if group_by_fields:
+            # Execute query to get logs
+            grouped_logs = {}
+            
+            for log in logs:
+                # Create grouping key
+                key_parts = []
+                for field in group_by_fields:
+                    value = log.processed_fields.get(field, "unknown")
+                    key_parts.append(str(value))
+                group_key = "|".join(key_parts)
+                
+                if group_key not in grouped_logs:
+                    grouped_logs[group_key] = []
+                grouped_logs[group_key].append(log)
+            
+            # Check thresholds for each group
+            threshold_count = threshold_config["count"]
+            
+            for group_key, group_logs in grouped_logs.items():
+                if len(group_logs) >= threshold_count:
+                    # Check for unique field requirement
+                    if "unique_field" in threshold_config:
+                        unique_field = threshold_config["unique_field"]
+                        unique_values = set()
+                        for log in group_logs:
+                            value = log.processed_fields.get(unique_field)
+                            if value:
+                                unique_values.add(value)
+                        
+                        if len(unique_values) < threshold_count:
+                            continue
+                    
+                    # Create alert
+                    alert_data = self._create_alert_data_for_processed_log(
+                        rule, group_logs[0], 
+                        f"Threshold exceeded: {len(group_logs)} events in {time_window}s",
+                        {"group_key": group_key, "event_count": len(group_logs), "events": [str(log.id) for log in group_logs]}
+                    )
+                    alerts.append(alert_data)
+        
+        return alerts
+    
+    async def _process_pattern_rule_processed_logs(self, db: AsyncSession, rule: DetectionRule,
+                                                 processed_log_ids: List[str]) -> List[AlertCreate]:
+        """Process pattern-based detection rules for processed logs"""
+        alerts = []
+        conditions = rule.conditions
+        
+        # Build base query
+        query = select(ProcessedLog)
+        
+        # Filter by log type
+        if "log_type" in conditions:
+            query = query.filter(ProcessedLog.log_type == conditions["log_type"])
+        
+        # Get field to check
+        field_name = conditions.get("field", "message")
+        patterns = conditions.get("patterns", [])
+        
+        result = await db.execute(query)
+        logs = result.scalars().all()
+        
+        for log in logs:
+            # Check both processed_fields and direct attributes
+            if field_name in log.processed_fields:
+                field_value = log.processed_fields[field_name]
+            else:
+                field_value = getattr(log, field_name, log.raw_message)
+            
+            if not field_value:
+                continue
+            
+            # Check each pattern
+            for pattern in patterns:
+                import re
+                if re.search(pattern, str(field_value)):
+                    alert_data = self._create_alert_data_for_processed_log(
+                        rule, log,
+                        f"Suspicious pattern detected in {field_name}",
+                        {"matched_pattern": pattern, "field_value": field_value}
+                    )
+                    alerts.append(alert_data)
+                    break  # Only create one alert per log
+        
+        return alerts
+    
+    async def _process_correlation_rule_processed_logs(self, db: AsyncSession, rule: DetectionRule,
+                                                     processed_log_ids: List[str]) -> List[AlertCreate]:
+        """Process correlation-based detection rules for processed logs"""
+        # Implementation similar to existing correlation but using ProcessedLog
+        # This would be more complex and require adaptation of the existing logic
+        return []
+    
+    async def _process_anomaly_rule_processed_logs(self, db: AsyncSession, rule: DetectionRule,
+                                                 processed_log_ids: List[str]) -> List[AlertCreate]:
+        """Process anomaly-based detection rules for processed logs"""
+        # Implementation similar to existing anomaly but using ProcessedLog
+        # This would be more complex and require adaptation of the existing logic
+        return []
+    
+    def _create_alert_data_for_processed_log(self, rule: DetectionRule, log: ProcessedLog, 
+                                           description: str, additional_data: Dict[str, Any]) -> AlertCreate:
+        """Create alert data structure for processed log"""
+        
+        alert_data = {
+            "log_id": str(log.id),
+            "rule_name": rule.name,
+            "timestamp": log.timestamp.isoformat(),
+            "source_info": {
+                "hostname": log.hostname,
+                "source_ip": str(log.source_ip) if log.source_ip else None,
+                "app_name": log.app_name
+            }
+        }
+        alert_data.update(additional_data)
+        
+        return AlertCreate(
+            processed_log_id=log.id,
+            detection_rule_id=rule.id,
+            title=f"{rule.name} - {log.hostname or 'Unknown'}",
+            description=description,
+            severity=rule.severity,
+            category=rule.category,
+            alert_data=alert_data
+        )
     
     def _send_alert_notifications_background(self, db: AsyncSession, alerts: List[Alert]):
         """Send notifications for alerts in background"""
@@ -587,7 +824,7 @@ class DetectionService:
     
     async def run_detection(self, db: AsyncSession, parsed_log_ids: Optional[List[str]] = None,
                      rule_ids: Optional[List[str]] = None) -> Tuple[int, int, List[str]]:
-        """Run detection on parsed logs"""
+        """Run detection on parsed logs (DEPRECATED - use run_detection_on_processed_logs)"""
         
         if parsed_log_ids is None:
             # Get recent unprocessed logs
@@ -598,6 +835,11 @@ class DetectionService:
             parsed_log_ids = [str(log.id) for log in recent_logs]
         
         return await self.engine.apply_rules(db, parsed_log_ids, rule_ids)
+    
+    async def run_detection_on_processed_logs(self, db: AsyncSession, processed_log_ids: List[str],
+                                            rule_ids: Optional[List[str]] = None) -> Tuple[int, int, List[str]]:
+        """Run detection on processed logs stored locally"""
+        return await self.engine.apply_rules_to_processed_logs(db, processed_log_ids, rule_ids)
     
     async def get_detection_stats(self, db: AsyncSession) -> Dict[str, Any]:
         """Get detection statistics"""

@@ -1,7 +1,7 @@
 """
 SIEM BOX - Log Database Models
 """
-from sqlalchemy import Column, String, Integer, DateTime, Text, text, Boolean, ForeignKey
+from sqlalchemy import Column, String, Integer, DateTime, Text, text, Boolean, ForeignKey, JSON
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID, INET, JSONB
 from sqlalchemy import TIMESTAMP, TypeDecorator, String as SQLString
 from sqlalchemy.sql import func
@@ -55,21 +55,95 @@ class INET_TYPE(TypeDecorator):
 
 
 class JSON_TYPE(TypeDecorator):
-    """Platform-independent JSON type.
-    Uses PostgreSQL's JSONB when available, otherwise uses Text.
+    """Platform-independent JSON type with proper JSON operators.
+    Uses PostgreSQL's JSONB when available, otherwise falls back to JSON.
     """
-    impl = Text
+    impl = JSON
     cache_ok = True
 
     def load_dialect_impl(self, dialect):
         if dialect.name == 'postgresql':
-            return dialect.type_descriptor(JSONB)
-        else:
-            return dialect.type_descriptor(Text)
+            return dialect.type_descriptor(JSONB(astext_type=Text()))
+        return dialect.type_descriptor(JSON())
 
 
-# RawLog model removed - log data now stored in Cribl
-# This model is no longer needed in Pattern B architecture
+# RawLog model removed - log data now stored in processed_logs
+# This model is no longer needed in the lightweight architecture
+
+class ProcessedLog(Base):
+    """
+    Processed log entries received from the ingestion API
+    This stores logs for immediate querying and analysis
+    """
+    __tablename__ = "processed_logs"
+    
+    # Primary key
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4, index=True)
+    
+    # Original log identifiers
+    cribl_log_id = Column(String(255), nullable=True, index=True,
+                         comment="Original log ID from Cribl")
+    
+    # Timestamps
+    timestamp = Column(TIMESTAMP(timezone=True), nullable=False, index=True,
+                      comment="Original log timestamp")
+    received_at = Column(TIMESTAMP(timezone=True), nullable=False, default=func.now(), index=True,
+                        comment="When the log was received from Cribl")
+    
+    # Source information
+    hostname = Column(String(255), nullable=True, index=True,
+                     comment="Source hostname")
+    source_ip = Column(INET_TYPE(), nullable=True, index=True,
+                      comment="Source IP address")
+    app_name = Column(String(100), nullable=True, index=True,
+                     comment="Application name")
+    
+    # Log content
+    raw_message = Column(Text, nullable=True,
+                        comment="Raw log message")
+    
+    # Processed data from Cribl
+    processed_fields = Column(JSON_TYPE(), nullable=True,
+                            comment="Processed fields from Cribl Stream")
+    
+    # Log classification
+    log_type = Column(String(50), nullable=True, index=True,
+                     comment="Type of log (firewall, auth, web, etc.)")
+    severity = Column(String(20), nullable=True, index=True,
+                     comment="Log severity level")
+    category = Column(String(50), nullable=True, index=True,
+                     comment="Log category")
+    
+    # Processing metadata
+    source = Column(String(100), nullable=True, index=True,
+                   comment="Source of the log data")
+    cribl_pipeline = Column(String(100), nullable=True,
+                          comment="Pipeline label when using external processors")
+    
+    # Relationships
+    alerts = relationship("Alert", back_populates="processed_log")
+
+    def __repr__(self):
+        return f"<ProcessedLog(id={self.id}, hostname={self.hostname}, timestamp={self.timestamp})>"
+    
+    def to_dict(self):
+        """Convert model to dictionary for JSON serialization"""
+        return {
+            "id": str(self.id),
+            "cribl_log_id": self.cribl_log_id,
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+            "received_at": self.received_at.isoformat() if self.received_at else None,
+            "hostname": self.hostname,
+            "source_ip": str(self.source_ip) if self.source_ip else None,
+            "app_name": self.app_name,
+            "raw_message": self.raw_message,
+            "processed_fields": self.processed_fields,
+            "log_type": self.log_type,
+            "severity": self.severity,
+            "category": self.category,
+            "source": self.source,
+            "cribl_pipeline": self.cribl_pipeline
+        }
 
 
 class ParsedLog(Base):
@@ -197,7 +271,8 @@ class Alert(Base):
     id = Column(UUID(), primary_key=True, default=uuid.uuid4, index=True)
     
     # Foreign keys
-    parsed_log_id = Column(UUID(), ForeignKey("parsed_logs.id"), nullable=False, index=True)
+    processed_log_id = Column(UUID(), ForeignKey("processed_logs.id"), nullable=True, index=True)
+    parsed_log_id = Column(UUID(), ForeignKey("parsed_logs.id"), nullable=True, index=True) # DEPRECATED: For backward compatibility
     detection_rule_id = Column(UUID(), ForeignKey("detection_rules.id"), nullable=False, index=True)
     
     # Alert metadata
@@ -232,7 +307,8 @@ class Alert(Base):
                                comment="Track which notifications have been sent")
     
     # Relationships
-    parsed_log = relationship("ParsedLog", back_populates="alerts")
+    processed_log = relationship("ProcessedLog", back_populates="alerts")
+    parsed_log = relationship("ParsedLog", back_populates="alerts")  # DEPRECATED: For backward compatibility
     detection_rule = relationship("DetectionRule", back_populates="alerts")
 
     def __repr__(self):
@@ -242,7 +318,8 @@ class Alert(Base):
         """Convert model to dictionary for JSON serialization"""
         return {
             "id": str(self.id),
-            "parsed_log_id": str(self.parsed_log_id),
+            "processed_log_id": str(self.processed_log_id) if self.processed_log_id else None,
+            "parsed_log_id": str(self.parsed_log_id) if self.parsed_log_id else None,  # DEPRECATED
             "detection_rule_id": str(self.detection_rule_id),
             "title": self.title,
             "description": self.description,

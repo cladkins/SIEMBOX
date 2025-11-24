@@ -7,7 +7,8 @@ inputs:
     tcpPort: 5140
     sendToRoutes: true
     pqEnabled: false
-    streamtags: []
+    streamtags:
+      - syslog
     maxBufferSize: 1000
     ipWhitelistRegex: /.*/
     timestampTimezone: local
@@ -25,3 +26,17 @@ inputs:
     tls:
       disabled: true
     enableLoadBalancing: false
+  
+  # HTTP Input for other log sources
+  http_in:
+    type: http
+    disabled: false
+    port: 8088
+    host: 0.0.0.0
+    sendToRoutes: true
+    streamtags:
+      - http
+    maxRequestSize: 1MB
+    enableProxyHeader: false
+    tls:
+      disabled: true

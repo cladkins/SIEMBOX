@@ -11,7 +11,7 @@ from app.models.vulnerabilities import (
     Asset, VulnerabilityScan, Vulnerability, ScanSchedule, CVEDatabase
 )
 from app.schemas.vulnerabilities import (
-    AssetResponse, AssetCreate, AssetUpdate,
+    AssetResponse, AssetCreate, AssetUpdate, AssetDiscoveryRequest,
     VulnerabilityScanResponse, VulnerabilityScanCreate, VulnerabilityScanUpdate,
     VulnerabilityResponse, VulnerabilityCreate, VulnerabilityUpdate,
     ScanScheduleResponse, ScanScheduleCreate, ScanScheduleUpdate,
@@ -26,7 +26,41 @@ from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(redirect_slashes=False)
+
+
+async def _start_scan_job(
+    scan_request: ScanRequest,
+    db: AsyncSession
+) -> Dict[str, str]:
+    """Shared logic for kicking off vulnerability scans."""
+    scan_create = VulnerabilityScanCreate(
+        scan_name=scan_request.scan_name,
+        scan_type=scan_request.scan_type,
+        target=",".join(scan_request.targets),
+        scan_config=scan_request.scan_config
+    )
+    scan_id = await vulnerability_service.start_scan(db, scan_create)
+    logger.info(f"Started scan {scan_id}: {scan_request.scan_name}")
+    return {"scan_id": scan_id, "message": "Scan started successfully"}
+
+
+async def _start_asset_discovery_job(
+    db: AsyncSession,
+    discovery_request: AssetDiscoveryRequest
+) -> Dict[str, str]:
+    """Shared logic for kicking off asset discovery scans."""
+    scan_id = await vulnerability_service.discover_assets(
+        db,
+        discovery_request.target,
+        discovery_request.discovery_method,
+        discovery_request.scan_config
+    )
+    logger.info(f"Started asset discovery for {discovery_request.target}")
+    return {
+        "scan_id": scan_id,
+        "message": f"Asset discovery started for {discovery_request.target}"
+    }
 
 
 # Asset Management Endpoints
@@ -242,22 +276,25 @@ async def start_scan(
     Start a new vulnerability scan
     """
     try:
-        # Convert to scan create schema
-        scan_create = VulnerabilityScanCreate(
-            scan_name=scan_request.scan_name,
-            scan_type=scan_request.scan_type,
-            target=",".join(scan_request.targets),  # Join targets for single target field
-            scan_config=scan_request.scan_config
-        )
-        
-        # Start scan
-        scan_id = await vulnerability_service.start_scan(db, scan_create)
-        
-        logger.info(f"Started scan {scan_id}: {scan_request.scan_name}")
-        return {"scan_id": scan_id, "message": "Scan started successfully"}
-        
+        return await _start_scan_job(scan_request, db)
     except Exception as e:
         logger.error(f"Error starting scan: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/scans/start", response_model=Dict[str, str])
+async def start_scan_compat(
+    scan_request: ScanRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Compatibility endpoint matching /scans/start used by the frontend.
+    """
+    try:
+        return await _start_scan_job(scan_request, db)
+    except Exception as e:
+        logger.error(f"Error starting scan via /scans/start: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -394,65 +431,6 @@ async def get_vulnerability_stats(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{vulnerability_id}", response_model=VulnerabilityResponse)
-async def get_vulnerability(
-    vulnerability_id: UUID,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get a specific vulnerability by ID
-    """
-    try:
-        result = await db.execute(select(Vulnerability).filter(Vulnerability.id == vulnerability_id))
-        vulnerability = result.scalar_one_or_none()
-        
-        if not vulnerability:
-            raise HTTPException(status_code=404, detail="Vulnerability not found")
-        
-        return VulnerabilityResponse.model_validate(vulnerability)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error retrieving vulnerability {vulnerability_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.put("/{vulnerability_id}", response_model=VulnerabilityResponse)
-async def update_vulnerability(
-    vulnerability_id: UUID,
-    vulnerability_update: VulnerabilityUpdate,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Update a vulnerability
-    """
-    try:
-        result = await db.execute(select(Vulnerability).filter(Vulnerability.id == vulnerability_id))
-        vulnerability = result.scalar_one_or_none()
-        
-        if not vulnerability:
-            raise HTTPException(status_code=404, detail="Vulnerability not found")
-        
-        # Update fields
-        update_data = vulnerability_update.dict(exclude_unset=True)
-        for field, value in update_data.items():
-            setattr(vulnerability, field, value)
-        
-        await db.commit()
-        await db.refresh(vulnerability)
-        
-        logger.info(f"Updated vulnerability {vulnerability_id}: status={vulnerability.status}")
-        return VulnerabilityResponse.model_validate(vulnerability)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        await db.rollback()
-        logger.error(f"Error updating vulnerability {vulnerability_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post("/bulk-update")
 async def bulk_update_vulnerabilities(
     bulk_update: BulkVulnerabilityUpdate,
@@ -491,24 +469,45 @@ async def bulk_update_vulnerabilities(
 # Asset Discovery Endpoints
 @router.post("/discover")
 async def discover_assets(
-    background_tasks: BackgroundTasks,
-    network_range: str = Query(..., description="Network range to scan (e.g., 192.168.1.0/24)"),
+    discovery_request: Optional[AssetDiscoveryRequest] = None,
+    network_range: Optional[str] = Query(
+        None,
+        description="Fallback network range to scan (e.g., 192.168.1.0/24)"
+    ),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Discover assets in network range
+    Discover assets in network range (legacy compatibility + new body payload)
     """
     try:
-        scan_id = await vulnerability_service.discover_assets(db, network_range)
+        if not discovery_request and not network_range:
+            raise HTTPException(status_code=400, detail="Target network range is required")
         
-        logger.info(f"Started asset discovery for {network_range}")
-        return {
-            "scan_id": scan_id,
-            "message": f"Asset discovery started for {network_range}"
-        }
+        if discovery_request is None:
+            request = AssetDiscoveryRequest(target=network_range or "")
+        else:
+            request = discovery_request
+        return await _start_asset_discovery_job(db, request)
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error starting asset discovery: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/assets/discover")
+async def discover_assets_compat(
+    discovery_request: AssetDiscoveryRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Compatibility endpoint expected by the frontend (/assets/discover).
+    """
+    try:
+        return await _start_asset_discovery_job(db, discovery_request)
+    except Exception as e:
+        logger.error(f"Error starting asset discovery via /assets/discover: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -693,4 +692,91 @@ async def create_scan_schedule(
     except Exception as e:
         await db.rollback()
         logger.error(f"Error creating scan schedule: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{vulnerability_id}", response_model=VulnerabilityResponse)
+async def get_vulnerability(
+    vulnerability_id: UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get a specific vulnerability by ID
+    """
+    try:
+        result = await db.execute(select(Vulnerability).filter(Vulnerability.id == vulnerability_id))
+        vulnerability = result.scalar_one_or_none()
+        
+        if not vulnerability:
+            raise HTTPException(status_code=404, detail="Vulnerability not found")
+        
+        return VulnerabilityResponse.model_validate(vulnerability)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving vulnerability {vulnerability_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/{vulnerability_id}", response_model=VulnerabilityResponse)
+async def update_vulnerability(
+    vulnerability_id: UUID,
+    vulnerability_update: VulnerabilityUpdate,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Update a vulnerability
+    """
+    try:
+        result = await db.execute(select(Vulnerability).filter(Vulnerability.id == vulnerability_id))
+        vulnerability = result.scalar_one_or_none()
+        
+        if not vulnerability:
+            raise HTTPException(status_code=404, detail="Vulnerability not found")
+        
+        update_data = vulnerability_update.dict(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(vulnerability, field, value)
+        
+        await db.commit()
+        await db.refresh(vulnerability)
+        
+        logger.info(f"Updated vulnerability {vulnerability_id}: status={vulnerability.status}")
+        return VulnerabilityResponse.model_validate(vulnerability)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error updating vulnerability {vulnerability_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{vulnerability_id}")
+async def delete_vulnerability(
+    vulnerability_id: UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Delete a vulnerability
+    """
+    try:
+        result = await db.execute(select(Vulnerability).filter(Vulnerability.id == vulnerability_id))
+        vulnerability = result.scalar_one_or_none()
+        
+        if not vulnerability:
+            raise HTTPException(status_code=404, detail="Vulnerability not found")
+        
+        await db.delete(vulnerability)
+        await db.commit()
+        
+        logger.info(f"Deleted vulnerability {vulnerability_id}")
+        return {"message": "Vulnerability deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error deleting vulnerability {vulnerability_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

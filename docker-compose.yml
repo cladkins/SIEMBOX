@@ -58,22 +58,6 @@ services:
       retries: 5
       start_period: 10s
 
-  # Cribl Log Processor
-  cribl:
-    image: cribl/cribl:4.12.2
-    container_name: siembox-cribl
-    ports:
-      - "9000:9000"      # Cribl UI
-      - "5140:5140/udp"  # Syslog UDP
-    volumes:
-      - ./ingestion_agents/cribl/config:/opt/cribl/config
-      - cribl_data:/opt/cribl/data
-    environment:
-      CRIBL_DIST_MODE: single
-    networks:
-      - siembox-network
-    restart: unless-stopped
-
   # React Frontend
   frontend:
     build:
@@ -102,8 +86,6 @@ volumes:
   vulnerability_data:
     driver: local
   trivy_cache:
-    driver: local
-  cribl_data:
     driver: local
 
 networks:

@@ -581,6 +581,25 @@ class NotificationService:
         else:
             raise ValueError(f"Unknown notification type: {notification_type}")
     
+    async def send_alert_notification(self, db: AsyncSession, alert_id: str) -> bool:
+        """Send notification for a single alert"""
+        try:
+            result = await db.execute(select(Alert).filter(Alert.id == alert_id))
+            alert = result.scalar_one_or_none()
+            
+            if not alert:
+                logger.error(f"Alert {alert_id} not found for notification")
+                return False
+            
+            # Send to all enabled notification types
+            sent_count, failed_count, errors = await self.send_notifications(db, [alert_id])
+            
+            return sent_count > 0
+            
+        except Exception as e:
+            logger.error(f"Error sending alert notification: {e}")
+            return False
+    
     async def send_notifications(self, db: AsyncSession, alert_ids: List[str],
                                notification_types: Optional[List[str]] = None) -> Tuple[int, int, List[str]]:
         """

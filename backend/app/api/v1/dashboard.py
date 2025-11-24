@@ -11,11 +11,10 @@ import logging
 from app.db.database import get_db
 from app.core.deps import get_current_active_user
 from app.models.users import User
-from app.models.logs import ParsedLog
+from app.models.logs import ProcessedLog, Alert
 from app.models.vulnerabilities import Asset, VulnerabilityScan, Vulnerability
 from app.schemas.vulnerabilities import DashboardStats as VulnDashboardStats
 from app.services.vulnerability_service import vulnerability_service
-from app.services.cribl_service import CriblService
 
 logger = logging.getLogger(__name__)
 
@@ -39,50 +38,38 @@ async def get_dashboard_stats(
 
         # === LOG STATISTICS ===
         try:
-            # Initialize Cribl service
-            cribl_service = CriblService()
+            total_logs = (await db.execute(select(func.count(ProcessedLog.id)))).scalar() or 0
+            recent_logs_24h = (await db.execute(
+                select(func.count(ProcessedLog.id)).filter(ProcessedLog.timestamp >= last_24h)
+            )).scalar() or 0
+            logs_last_7d = (await db.execute(
+                select(func.count(ProcessedLog.id)).filter(ProcessedLog.timestamp >= last_7d)
+            )).scalar() or 0
+            logs_last_30d = (await db.execute(
+                select(func.count(ProcessedLog.id)).filter(ProcessedLog.timestamp >= last_30d)
+            )).scalar() or 0
             
-            # Get log statistics from Cribl
-            log_stats_result = await cribl_service.get_log_stats()
-            
-            # Get recent logs (last 24h) from Cribl
-            recent_logs_result = await cribl_service.get_logs_with_filters(
-                start_time=last_24h.isoformat(),
-                end_time=now.isoformat(),
-                limit=1
-            )
-            recent_logs_count = recent_logs_result.get('total_count', 0) if recent_logs_result else 0
-            
-            # Get logs for different time periods
-            logs_7d_result = await cribl_service.get_logs_with_filters(
-                start_time=last_7d.isoformat(),
-                end_time=now.isoformat(),
-                limit=1
-            )
-            logs_last_7d = logs_7d_result.get('total_count', 0) if logs_7d_result else 0
-            
-            logs_30d_result = await cribl_service.get_logs_with_filters(
-                start_time=last_30d.isoformat(),
-                end_time=now.isoformat(),
-                limit=1
-            )
-            logs_last_30d = logs_30d_result.get('total_count', 0) if logs_30d_result else 0
-            
-            # Get top sources from Cribl (simplified - would need aggregation query in real implementation)
-            top_sources = []  # Placeholder - would need Cribl aggregation API
+            top_sources_query = select(
+                ProcessedLog.source,
+                func.count(ProcessedLog.id).label("count")
+            ).group_by(ProcessedLog.source).order_by(desc("count")).limit(5)
+            top_sources = [
+                {"source": source or "unknown", "count": count}
+                for source, count in (await db.execute(top_sources_query)).all()
+            ]
             
             log_stats = {
-                "total_logs": log_stats_result.get('total_count', 0) if log_stats_result else 0,
-                "total_raw_logs": log_stats_result.get('total_count', 0) if log_stats_result else 0,  # Same as total in Pattern B
-                "recent_logs_24h": recent_logs_count,
+                "total_logs": total_logs,
+                "total_raw_logs": total_logs,
+                "recent_logs_24h": recent_logs_24h,
                 "logs_last_7d": logs_last_7d,
                 "logs_last_30d": logs_last_30d,
                 "top_sources": top_sources,
-                "architecture": "Pattern B - Data from Cribl Stream"
+                "architecture": "Direct ingestion"
             }
             
         except Exception as e:
-            logger.warning(f"Error getting log stats from Cribl: {e}")
+            logger.warning(f"Error getting log stats: {e}")
             log_stats = {
                 "total_logs": 0,
                 "total_raw_logs": 0,
@@ -90,7 +77,7 @@ async def get_dashboard_stats(
                 "logs_last_7d": 0,
                 "logs_last_30d": 0,
                 "top_sources": [],
-                "architecture": "Pattern B - Cribl unavailable"
+                "architecture": "Direct ingestion"
             }
 
         # === VULNERABILITY STATISTICS ===
@@ -199,18 +186,36 @@ async def get_dashboard_stats(
 
         # === ALERT STATISTICS ===
         try:
-            # For now, return placeholder alert stats
-            # This would be implemented when alert system is available
+            total_alerts = (await db.execute(select(func.count(Alert.id)))).scalar() or 0
+            open_alerts = (await db.execute(
+                select(func.count(Alert.id)).filter(Alert.status == "open")
+            )).scalar() or 0
+            acknowledged_alerts = (await db.execute(
+                select(func.count(Alert.id)).filter(Alert.status == "investigating")
+            )).scalar() or 0
+            resolved_alerts = (await db.execute(
+                select(func.count(Alert.id)).filter(Alert.status == "resolved")
+            )).scalar() or 0
+            recent_alerts_24h = (await db.execute(
+                select(func.count(Alert.id)).filter(Alert.triggered_at >= last_24h)
+            )).scalar() or 0
+            
+            severity_counts_query = select(
+                Alert.severity,
+                func.count(Alert.id)
+            ).group_by(Alert.severity)
+            severity_counts = {severity or "unknown": count for severity, count in (await db.execute(severity_counts_query)).all()}
+            
             alert_stats = {
-                "total_alerts": 0,
-                "open_alerts": 0,
-                "acknowledged_alerts": 0,
-                "resolved_alerts": 0,
-                "critical_alerts": 0,
-                "high_alerts": 0,
-                "medium_alerts": 0,
-                "low_alerts": 0,
-                "recent_alerts_24h": 0
+                "total_alerts": total_alerts,
+                "open_alerts": open_alerts,
+                "acknowledged_alerts": acknowledged_alerts,
+                "resolved_alerts": resolved_alerts,
+                "critical_alerts": severity_counts.get("critical", 0),
+                "high_alerts": severity_counts.get("high", 0),
+                "medium_alerts": severity_counts.get("medium", 0),
+                "low_alerts": severity_counts.get("low", 0),
+                "recent_alerts_24h": recent_alerts_24h
             }
         except Exception as e:
             logger.warning(f"Error getting alert stats: {e}")
@@ -277,14 +282,14 @@ async def get_log_volume_data(
         end_time = datetime.utcnow()
         start_time = end_time - timedelta(hours=hours)
         
-        # Get log volume by hour
+        # Get log volume by hour using processed logs
         log_volume_query = select(
-            func.date_trunc('hour', ParsedLog.parsed_at).label('hour'),
-            func.count(ParsedLog.id).label('count')
+            func.date_trunc('hour', ProcessedLog.timestamp).label('hour'),
+            func.count(ProcessedLog.id).label('count')
         ).filter(
-            ParsedLog.parsed_at >= start_time
+            ProcessedLog.timestamp >= start_time
         ).group_by(
-            func.date_trunc('hour', ParsedLog.parsed_at)
+            func.date_trunc('hour', ProcessedLog.timestamp)
         ).order_by('hour')
         log_volume_result = await db.execute(log_volume_query)
         log_volume = log_volume_result.all()
@@ -302,6 +307,88 @@ async def get_log_volume_data(
         
     except Exception as e:
         logger.error(f"Error retrieving log volume data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/top-sources")
+async def get_top_sources(
+    limit: int = 10,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get top log sources by source IP
+    """
+    try:
+        query = select(
+            ProcessedLog.source_ip,
+            func.count(ProcessedLog.id).label("count")
+        ).group_by(
+            ProcessedLog.source_ip
+        ).order_by(
+            desc("count")
+        ).limit(limit)
+        
+        result = await db.execute(query)
+        rows = result.all()
+        
+        return {
+            "data": [
+                {
+                    "source_ip": source_ip or "unknown",
+                    "count": count
+                } for source_ip, count in rows
+            ],
+            "limit": limit
+        }
+        
+    except Exception as e:
+        logger.error(f"Error retrieving top sources: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/alert-trends")
+async def get_alert_trends(
+    hours: int = 24,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get alert trends grouped by severity over time
+    """
+    try:
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(hours=hours)
+        
+        query = select(
+            func.date_trunc('hour', Alert.triggered_at).label('hour'),
+            Alert.severity,
+            func.count(Alert.id).label('count')
+        ).filter(
+            Alert.triggered_at >= start_time
+        ).group_by(
+            func.date_trunc('hour', Alert.triggered_at),
+            Alert.severity
+        ).order_by('hour')
+        
+        result = await db.execute(query)
+        rows = result.all()
+        
+        data = [
+            {
+                "timestamp": hour.isoformat() if hour else None,
+                "severity": severity or "unknown",
+                "count": count
+            }
+            for hour, severity, count in rows
+        ]
+        
+        return {
+            "data": data,
+            "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error retrieving alert trends: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -1,8 +1,6 @@
 """
 SIEM BOX - Log Service for Business Logic
-DEPRECATED: This service is deprecated in Pattern B architecture.
-Log ingestion and retrieval is now handled by Cribl Stream.
-Use CriblService for log operations instead.
+DEPRECATED: Use the ingestion API and database queries directly.
 """
 from typing import Dict, Any
 import logging
@@ -14,10 +12,8 @@ class LogService:
     """
     DEPRECATED: Service class for log-related business logic
     
-    In Pattern B architecture, this service is deprecated.
-    Log operations are now handled by:
-    - CriblService: For log search and retrieval
-    - Cribl Stream: For log ingestion and storage
+    In the lightweight architecture this wrapper is unnecessary.
+    Log ingestion happens via /api/v1/logs/ingest and queries should target the processed_logs table directly.
     
     This class is kept for backward compatibility but should not be used.
     """
@@ -32,7 +28,7 @@ class LogService:
         """
         return {
             "status": "deprecated",
-            "message": "LogService is deprecated in Pattern B architecture",
-            "replacement": "Use CriblService for log operations",
-            "architecture": "Pattern B - Cribl Stream handles log storage and retrieval"
+            "message": "LogService has been removed; call the ingestion API or query processed_logs directly.",
+            "replacement": "Use /api/v1/logs/ingest for writes and /api/v1/logs for reads.",
+            "architecture": "Lightweight ingestion stores normalized events directly in PostgreSQL."
         }

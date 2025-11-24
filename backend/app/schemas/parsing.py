@@ -82,7 +82,8 @@ class AlertBase(BaseModel):
 
 class AlertCreate(AlertBase):
     """Schema for creating alerts"""
-    parsed_log_id: UUID = Field(..., description="ID of the associated parsed log")
+    processed_log_id: Optional[UUID] = Field(None, description="ID of the associated processed log")
+    parsed_log_id: Optional[UUID] = Field(None, description="ID of the associated parsed log (DEPRECATED)")
     detection_rule_id: UUID = Field(..., description="ID of the detection rule that triggered this alert")
 
 

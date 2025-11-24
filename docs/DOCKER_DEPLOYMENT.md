@@ -4,19 +4,18 @@ This guide covers the complete containerized deployment of SIEM Box using Docker
 
 ## Overview
 
-SIEM Box uses **Pattern B** architecture with the following containerized services:
+SIEM Box uses a lightweight architecture with the following containerized services:
 - **Frontend**: React application served by Nginx (Port 3000)
-- **Backend**: FastAPI application with direct Cribl integration (Port 8000)
-- **Database**: PostgreSQL 15 for metadata, alerts, and configuration (Port 5432)
-- **Log Processing**: Cribl Stream with dual-destination architecture (Ports 9000, 10514, 8088)
-- **Vulnerability Scanning**: Integrated Nmap and Trivy scanning capabilities
+- **Backend**: FastAPI application providing ingestion, detection, alerts, dashboard, and API (Port 8000)
+- **Database**: PostgreSQL 15 storing processed logs, alerts, and configuration (Port 5432)
+- **Vulnerability Scanning**: Integrated Nmap and Trivy scanning capabilities (runs within backend container)
 - **Notification Service**: Multi-channel alerting (Email, Discord, Webhooks)
 
-### Pattern B Architecture Benefits
-- **Real-time Processing**: Direct backend-to-Cribl integration via HTTP destination
-- **Dual Storage**: HTTP for real-time + filesystem for long-term storage
-- **Scalability**: Cribl handles high-throughput log processing independently
-- **Flexibility**: Easy addition of new log sources without backend changes
+### Architecture Benefits
+- **Real-time Processing**: Ingestion happens directly through the backend; detection runs immediately.
+- **Simple Deployment**: No external log pipeline—only three core containers.
+- **Flexible Inputs**: Any agent that can send HTTP POST requests can deliver logs.
+- **Resource Efficient**: Ideal for homelab hardware without extra services.
 
 ## Quick Start
 
@@ -41,7 +40,6 @@ SIEM Box uses **Pattern B** architecture with the following containerized servic
    - Frontend: http://localhost:3000
    - Backend API: http://localhost:8000
    - API Documentation: http://localhost:8000/docs
-   - Cribl Stream UI: http://localhost:9000
 
 ### Default Credentials
 - Username: `admin`
@@ -64,12 +62,12 @@ SIEM Box uses **Pattern B** architecture with the following containerized servic
 - **Port**: 8000 → 8000 (container)
 - **Features**:
   - FastAPI with comprehensive API documentation
-  - **Pattern B Integration**: Direct Cribl Stream API communication with JWT authentication
+  - Primary log ingestion endpoint (`/api/v1/logs/ingest`) with immediate detection
   - Sophisticated detection engine with 20+ security rules
   - Multi-channel notification system (Email, Discord, Webhooks)
   - Real-time alert processing and management
   - Vulnerability scanning integration (Nmap, Trivy)
-  - PostgreSQL database for metadata and alerts (no raw logs)
+  - PostgreSQL database for processed logs, metadata, and alerts
   - JWT-based authentication system
   - WebSocket support for real-time updates
   - CORS enabled for frontend communication
@@ -79,36 +77,31 @@ SIEM Box uses **Pattern B** architecture with the following containerized servic
 - **Image**: postgres:14-alpine
 - **Port**: 5432 → 5432 (container)
 - **Features**:
-  - **Pattern B Optimized**: Stores metadata, alerts, and configuration (no raw logs)
+  - Stores processed logs, alerts, detection rules, and configuration
   - Automatic database initialization with migration support
   - Health checks for service dependencies
-  - Reduced storage requirements due to Pattern B architecture
+  - Tuned for moderate hardware while retaining query flexibility
 
-### Log Processing Service (Cribl Stream)
-- **Image**: cribl/cribl:4.2.1
-- **Ports**:
-  - 9000 → 9000 (Web UI)
-  - 10514 UDP/TCP → 10514 UDP/TCP (Syslog input)
-  - 8088 → 8088 (HTTP input)
-- **Features**:
-  - **Dual Destination Architecture**:
-    - HTTP destination: Real-time processing via `/api/v1/logs/cribl`
-    - Filesystem destination: Long-term storage to `/opt/cribl/data/SIEMBOX`
-  - Advanced, pipeline-based log processing and enrichment
-  - Support for multiple data sources (Syslog, HTTP, Docker logs)
-  - JWT API authentication for backend integration
-  - Persistent configuration and data via volume mounts (`cribl_data`)
-  - Web-based configuration UI for pipeline management
-  - Health monitoring and comprehensive metrics
+### Ingestion Agents (External)
+- **Examples**: Fluent Bit, Vector, syslog-ng, or custom scripts
+- **Deployment**: Run on each log source or centralized log forwarder host
+- **Responsibilities**:
+  - Collect raw logs (syslog, Docker, application logs)
+  - Parse/enrich into structured JSON
+  - POST events to `http://<backend>:8000/api/v1/logs/ingest`
+- **Guidelines**:
+  - Include `timestamp`, `hostname`, `source_ip`, `log_type`, `severity`, `category`
+  - Place any additional fields inside the `fields` object
+  - Ensure retries/backoff are configured for network interruptions
 
 ## 🎯 Complete Feature Matrix
 
 ### Core SIEM Capabilities
 | Feature | Status | Description |
 |---------|--------|-------------|
-| **Log Ingestion** | ✅ Complete | Multi-source log collection via Cribl Stream (syslog, HTTP, Docker) |
-| **Log Processing** | ✅ Complete | Cribl Stream pipeline-based processing and enrichment |
-| **Real-time Processing** | ✅ Complete | Dual-destination architecture for immediate analysis |
+| **Log Ingestion** | ✅ Complete | Agents send structured JSON directly to the backend ingestion API |
+| **Log Processing** | ✅ Complete | Backend stores/enriches processed logs in PostgreSQL |
+| **Real-time Processing** | ✅ Complete | Detection runs immediately after ingestion |
 | **Detection Engine** | ✅ Complete | 20+ security rules covering major threat vectors |
 | **Alert Management** | ✅ Complete | Full alert lifecycle with status tracking |
 | **Notification System** | ✅ Complete | Multi-channel alerts (Email, Discord, Webhooks) |
@@ -148,9 +141,6 @@ The following environment variables can be configured in `docker-compose.yml`:
 - `DEBUG`: Enable/disable debug mode
 - `LOG_LEVEL`: Logging level (INFO, DEBUG, WARNING, ERROR)
 - `SECRET_KEY`: JWT secret key (change in production)
-- `CRIBL_API_URL`: Cribl Stream API endpoint (default: http://cribl:9000)
-- `CRIBL_API_TOKEN`: JWT token for Cribl API authentication
-- `CRIBL_SEARCH_TIMEOUT`: Timeout for Cribl API requests (default: 30)
 
 #### Database
 - `POSTGRES_DB`: Database name
@@ -197,14 +187,13 @@ All services include health checks:
 - **Frontend**: HTTP GET to `/health`
 - **Backend**: HTTP GET to `/api/v1/health/`
 - **Database**: PostgreSQL connection test
-- **Cribl**: Process health check
 
 ## Data Persistence
 
 The following volumes are created for data persistence:
-- `postgres_data`: Database files (metadata, alerts, configuration only)
-- `cribl_data`: Cribl Stream data and configuration files
-- **Pattern B Storage**: Long-term logs stored in Cribl filesystem destination at `/opt/cribl/data/SIEMBOX`
+- `postgres_data`: Database files (processed logs, alerts, configuration)
+- `vulnerability_data`: Vulnerability scan artifacts
+- `trivy_cache`: Cache for Trivy scans
 
 ## Security Considerations
 
@@ -319,9 +308,9 @@ docker run --rm -v siembox_postgres_data:/data -v $(pwd):/backup alpine tar czf 
 - Failed services are automatically restarted
 
 ### Log Monitoring
-- Centralized logging through Cribl
-- Structured JSON logs from backend
-- Nginx access and error logs from frontend
+- Agents should include their own retry/queue mechanisms when sending to `/api/v1/logs/ingest`
+- Backend emits structured JSON logs (`docker logs siembox-backend`)
+- Nginx access and error logs from frontend (`docker logs siembox-frontend`)
 
 ## Updates and Maintenance
 

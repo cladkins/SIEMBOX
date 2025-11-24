@@ -1,7 +1,6 @@
 """
 SIEM BOX - Parsing API Endpoints
-DEPRECATED: These endpoints are deprecated in Pattern B architecture.
-Log parsing is now handled by Cribl Stream pipelines.
+DEPRECATED: Logs arrive in structured form via the ingestion API.
 """
 from fastapi import APIRouter, HTTPException
 from typing import Dict, Any
@@ -12,6 +11,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _deprecated_detail(reason: str) -> Dict[str, Any]:
+    return {
+        "error": "Endpoint deprecated",
+        "message": "Log parsing is handled by the ingestion pipeline and lightweight agents before data reaches the API.",
+        "reason": reason,
+        "replacement": "Send structured events to /api/v1/logs/ingest with the fields you need for detection."
+    }
+
+
 @router.get("/deprecation-notice")
 async def get_deprecation_notice() -> Dict[str, Any]:
     """
@@ -19,17 +27,14 @@ async def get_deprecation_notice() -> Dict[str, Any]:
     """
     return {
         "status": "deprecated",
-        "message": "Parsing endpoints are deprecated in Pattern B architecture",
-        "replacement": "Use Cribl Stream pipelines for log parsing",
-        "architecture": "Pattern B - Cribl Stream handles all parsing operations",
-        "migration_guide": {
-            "old_workflow": "Raw logs -> Database -> Parsing Service -> Parsed logs",
-            "new_workflow": "Raw logs -> Cribl Stream pipelines -> Parsed logs (stored in Cribl)",
+        "message": "Dedicated parsing endpoints were removed in the lightweight architecture.",
+        "replacement": "Normalize logs on the forwarder/agent and include structured fields when calling /api/v1/logs/ingest.",
+        "ingestion_guidance": {
+            "workflow": "Log source -> lightweight parser/agent -> /api/v1/logs/ingest -> processed_logs table",
             "benefits": [
-                "Real-time parsing during ingestion",
-                "Better performance and scalability",
-                "Built-in parsing for common log formats",
-                "Visual pipeline configuration"
+                "No additional parsing service to operate",
+                "Consistent schema for detection rules",
+                "Lower resource usage on the backend"
             ]
         }
     }
@@ -42,12 +47,7 @@ async def parse_logs_deprecated():
     """
     raise HTTPException(
         status_code=410,
-        detail={
-            "error": "Endpoint deprecated",
-            "message": "Log parsing is now handled by Cribl Stream pipelines",
-            "replacement": "Configure parsing pipelines in Cribl Stream",
-            "documentation": "/api/v1/parsing/deprecation-notice"
-        }
+        detail=_deprecated_detail("Logs should be parsed before they reach the API.")
     )
 
 
@@ -58,12 +58,7 @@ async def get_parsed_logs_deprecated():
     """
     raise HTTPException(
         status_code=410,
-        detail={
-            "error": "Endpoint deprecated",
-            "message": "Parsed logs are now accessed via Cribl Search API",
-            "replacement": "Use /api/v1/logs endpoints which query Cribl directly",
-            "documentation": "/api/v1/parsing/deprecation-notice"
-        }
+        detail=_deprecated_detail("Use /api/v1/logs to query stored events.")
     )
 
 
@@ -74,12 +69,7 @@ async def get_unparsed_logs_deprecated():
     """
     raise HTTPException(
         status_code=410,
-        detail={
-            "error": "Endpoint deprecated",
-            "message": "Raw logs are now stored and parsed in Cribl Stream",
-            "replacement": "Configure parsing pipelines in Cribl Stream",
-            "documentation": "/api/v1/parsing/deprecation-notice"
-        }
+        detail=_deprecated_detail("Raw log storage is not provided; send structured data to /api/v1/logs/ingest.")
     )
 
 
@@ -90,12 +80,7 @@ async def get_parsing_stats_deprecated():
     """
     raise HTTPException(
         status_code=410,
-        detail={
-            "error": "Endpoint deprecated",
-            "message": "Parsing statistics are available in Cribl Stream UI",
-            "replacement": "Access Cribl Stream monitoring dashboard",
-            "documentation": "/api/v1/parsing/deprecation-notice"
-        }
+        detail=_deprecated_detail("Parsing stats are no longer tracked server-side.")
     )
 
 
@@ -106,12 +91,7 @@ async def get_parsing_rules_deprecated():
     """
     raise HTTPException(
         status_code=410,
-        detail={
-            "error": "Endpoint deprecated",
-            "message": "Parsing rules are now configured as Cribl Stream pipelines",
-            "replacement": "Manage pipelines in Cribl Stream UI",
-            "documentation": "/api/v1/parsing/deprecation-notice"
-        }
+        detail=_deprecated_detail("Maintain parsing rules inside the agent or forwarder that sends logs.")
     )
 
 
@@ -122,12 +102,7 @@ async def get_available_parsers_deprecated():
     """
     raise HTTPException(
         status_code=410,
-        detail={
-            "error": "Endpoint deprecated",
-            "message": "Parsers are now Cribl Stream functions and packs",
-            "replacement": "Browse available packs in Cribl Stream",
-            "documentation": "/api/v1/parsing/deprecation-notice"
-        }
+        detail=_deprecated_detail("Choose or build parsers within your forwarding agent.")
     )
 
 
@@ -138,12 +113,7 @@ async def auto_parse_recent_logs_deprecated():
     """
     raise HTTPException(
         status_code=410,
-        detail={
-            "error": "Endpoint deprecated",
-            "message": "Parsing is now automatic in Cribl Stream pipelines",
-            "replacement": "Configure real-time parsing pipelines in Cribl Stream",
-            "documentation": "/api/v1/parsing/deprecation-notice"
-        }
+        detail=_deprecated_detail("Automatic parsing now occurs upstream before logs are ingested.")
     )
 
 
@@ -154,10 +124,5 @@ async def get_parsed_log_deprecated(log_id: str):
     """
     raise HTTPException(
         status_code=410,
-        detail={
-            "error": "Endpoint deprecated",
-            "message": "Parsed logs are now accessed via Cribl Search API",
-            "replacement": f"Use /api/v1/logs/{log_id} which queries Cribl directly",
-            "documentation": "/api/v1/parsing/deprecation-notice"
-        }
+        detail=_deprecated_detail(f"Use /api/v1/logs/{log_id} to retrieve stored events.")
     )

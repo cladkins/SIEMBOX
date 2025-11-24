@@ -33,11 +33,6 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     
-    # Cribl API Configuration
-    cribl_api_url: str = "http://cribl:9000/api/v1"
-    cribl_api_token: Optional[str] = None
-    cribl_search_timeout: int = 30
-    
     # Notification Settings
     # Email Configuration
     smtp_server: Optional[str] = None

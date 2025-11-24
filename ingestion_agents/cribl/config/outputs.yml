@@ -1,6 +1,7 @@
 outputs:
-  default:
-    id: default
+  # HTTP Output to Backend for Real-time Processing
+  siembox_http:
+    id: siembox_http
     type: http
     disabled: false
     url: http://backend:8000/api/v1/logs/cribl
@@ -8,6 +9,8 @@ outputs:
     headers:
       - name: Content-Type
         value: application/json
+      - name: Authorization
+        value: Bearer ${CRIBL_API_TOKEN}
     timeout: 30000
     maxPayloadSizeKB: 4096
     compress: gzip
@@ -18,17 +21,29 @@ outputs:
       maxFileSize: 100MB
       maxOpenFiles: 5
       path: $CRIBL_HOME/state/queues
-  http_backend:
-    id: http_backend
-    type: http
+    
+  # Filesystem Output for Long-term Storage
+  siembox_storage:
+    id: siembox_storage
+    type: filesystem
     disabled: false
-    url: http://backend:8000/api/v1/logs/cribl
-    method: POST
-    headers:
-      - name: Content-Type
-        value: application/json
-    timeout: 30000
-    maxPayloadSizeKB: 4096
-    compress: gzip
+    path: /opt/cribl/data/SIEMBOX
     format: json
+    compress: gzip
+    maxFileSize: 100MB
+    maxOpenFiles: 100
+    onBackpressure: block
+    partitionExpr: "`${C.Time.strftime(_time ? new Date(_time*1000) : new Date(), '%Y/%m/%d')}`"
+    filenameExpr: "`${C.Time.strftime(_time ? new Date(_time*1000) : new Date(), '%Y%m%d_%H')}.log`"
+    
+  # Default Output (catchall)
+  default:
+    id: default
+    type: filesystem
+    disabled: false
+    path: /opt/cribl/data/SIEMBOX/unprocessed
+    format: json
+    compress: gzip
+    maxFileSize: 50MB
+    maxOpenFiles: 50
     onBackpressure: block

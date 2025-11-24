@@ -13,8 +13,12 @@ from app.models.users import User
 from app.schemas.auth import UserCreate, TokenData
 
 
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Password hashing context (bcrypt_sha256 avoids the 72-byte bcrypt limit)
+pwd_context = CryptContext(
+    schemes=["bcrypt_sha256", "bcrypt"],
+    deprecated="auto",
+    default="bcrypt_sha256"
+)
 
 # JWT settings
 ALGORITHM = "HS256"

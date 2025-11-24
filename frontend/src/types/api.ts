@@ -37,7 +37,7 @@ export interface User {
 
 // Log types
 export interface RawLog {
-  id: number;
+  id: string;
   timestamp: string;
   source_ip: string;
   source_type: string;
@@ -46,16 +46,37 @@ export interface RawLog {
 }
 
 export interface ParsedLog {
-  id: number;
-  raw_log_id: number;
+  id: string;
+  raw_log_id?: string;
   timestamp: string;
-  source_ip: string;
+  source_ip?: string;
   source_type: string;
-  log_level: string;
-  message: string;
-  parsed_fields: Record<string, string | number | boolean | null>;
+  log_level?: string;
+  message?: string;
+  parsed_fields?: Record<string, any>;
   created_at: string;
   raw_log?: RawLog;
+  // New fields for compatibility with backend LogResponse
+  hostname?: string;
+  raw_message?: string;
+}
+
+// New ProcessedLog type for Cribl-processed logs
+export interface ProcessedLog {
+  id: string;
+  cribl_log_id?: string;
+  timestamp: string;
+  received_at: string;
+  hostname?: string;
+  source_ip?: string;
+  app_name?: string;
+  raw_message?: string;
+  processed_fields?: Record<string, any>;
+  log_type?: string;
+  severity?: string;
+  category?: string;
+  source?: string;
+  cribl_pipeline?: string;
 }
 
 // Detection Rule types
@@ -107,7 +128,8 @@ export interface DetectionTestResult {
 // Alert types
 export interface Alert {
   id: string;
-  parsed_log_id: string;
+  processed_log_id?: string;
+  parsed_log_id?: string; // DEPRECATED: For backward compatibility
   detection_rule_id: string;
   title: string;
   description: string;
@@ -121,6 +143,7 @@ export interface Alert {
   notifications_sent?: Record<string, string | number | boolean | object | null>;
   rule?: DetectionRule;
   log?: ParsedLog;
+  processed_log?: ProcessedLog;
 }
 
 export interface UpdateAlertRequest {
@@ -217,7 +240,11 @@ export interface LogQueryParams {
   size?: number;
   source_type?: string;
   source_ip?: string;
+  hostname?: string;
+  app_name?: string;
   log_level?: string;
+  severity?: string;
+  log_type?: string;
   start_time?: string;
   end_time?: string;
   search?: string;
@@ -228,7 +255,7 @@ export interface AlertQueryParams {
   size?: number;
   severity?: string;
   status?: string;
-  rule_id?: number;
+  rule_id?: string;
   start_time?: string;
   end_time?: string;
 }

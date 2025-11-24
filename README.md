@@ -14,19 +14,19 @@
 
 ## 🏗️ Architecture Overview
 
-SIEM BOX uses a modern **Pattern B** architecture with dual-destination log processing:
+SIEM BOX now uses a **lightweight ingestion architecture**:
 
-- **Log Processing Layer**: Cribl Stream for collecting, processing, and routing logs
-- **Backend API**: FastAPI-based service with direct Cribl integration
-- **Database**: PostgreSQL for metadata, alerts, and configuration (not raw logs)
-- **Frontend**: React-based web interface (Phase 3)
-- **Vulnerability Scanner**: Network and container scanning (Phase 4)
+- **Log Processing Layer**: Lightweight agents (Fluent Bit, Vector, custom scripts) send structured JSON directly to the FastAPI ingestion endpoint.
+- **Backend API**: FastAPI service that stores logs in PostgreSQL, runs detection, and exposes the UI/API.
+- **Database**: PostgreSQL for processed logs, alerts, metadata, and configuration.
+- **Frontend**: React-based web interface.
+- **Vulnerability Scanner**: Network and container scanning (Phase 4).
 
-### Pattern B Architecture Benefits
-- **Real-time Processing**: Direct backend-to-Cribl integration for immediate log analysis
-- **Dual Storage**: HTTP destination for real-time processing + filesystem for long-term storage
-- **Scalability**: Cribl handles high-throughput log processing independently
-- **Flexibility**: Easy addition of new log sources without backend changes
+### Architecture Benefits
+- **Real-time Processing**: Logs are persisted immediately and detection runs as soon as they are ingested.
+- **Single Storage**: PostgreSQL holds searchable processed logs and alert context.
+- **Resource Friendly**: No separate log processing cluster is required—ideal for homelab hardware.
+- **Flexible Inputs**: Any agent that can send HTTP requests can deliver logs to the ingestion API.
 
 ## 🚀 Quick Start
 
@@ -75,18 +75,26 @@ SIEM BOX uses a modern **Pattern B** architecture with dual-destination log proc
 
 ### Log Source Configuration
 
-Configure your devices to send logs to the SIEM BOX:
-- **Syslog**: Point devices to `your-siembox-ip:10514` (UDP/TCP) - Cribl Stream input
-- **Docker logs**: Automatically collected from local containers via Cribl
-- **HTTP logs**: Send directly to Cribl Stream at `your-siembox-ip:8088`
-- See [configuration examples](ingestion_agents/examples/) for specific devices
+Configure your devices/agents to send JSON events to the ingestion API:
+- **HTTP ingestion**: `POST https://<your-siembox>/api/v1/logs/ingest`
+- Include fields such as `timestamp`, `hostname`, `source_ip`, `log_type`, `severity`, `category`, and any additional metadata in the `fields` object.
+- See [configuration examples](ingestion_agents/examples/) for Fluent Bit, Vector, or custom scripts that transform syslog/docker events into JSON before posting.
 
-### Cribl Stream Configuration
-- **Web UI**: Access Cribl configuration at `http://localhost:9000`
-- **Dual Destinations**:
-  - HTTP output to backend (`/api/v1/logs/cribl`) for real-time processing
-  - Filesystem output to `/opt/cribl/data/SIEMBOX` for long-term storage
-- **Authentication**: JWT token-based API access for backend integration
+> Tip: A simple `curl` example
+> ```bash
+> curl -X POST http://localhost:8000/api/v1/logs/ingest \
+>   -H "Content-Type: application/json" \
+>   -d '{
+>     "timestamp": "2024-01-01T12:00:00Z",
+>     "hostname": "firewall.local",
+>     "source_ip": "192.168.1.1",
+>     "log_type": "firewall",
+>     "severity": "medium",
+>     "category": "network",
+>     "fields": {"action": "BLOCK", "src_ip": "10.0.0.1", "dst_port": 22},
+>     "raw_message": "UFW BLOCK ..."
+>   }'
+> ```
 
 ## 📊 Current Status - PRODUCTION READY ✅
 
@@ -101,10 +109,10 @@ Configure your devices to send logs to the SIEM BOX:
 - **Real-time Dashboard**: Live monitoring with WebSocket updates and interactive statistics
 
 ✅ **Core Infrastructure:**
-- **Pattern B Architecture**: Cribl Stream for log processing with dual-destination approach
-- Multi-source log ingestion (Syslog, Docker, Firewall, Web servers) via Cribl
-- Real-time log processing with direct backend-to-Cribl API integration
-- PostgreSQL database for metadata, alerts, and configuration (optimized for non-log data)
+- **Lightweight Architecture**: Agents push JSON events straight into the FastAPI backend.
+- Multi-source log ingestion (Syslog, Docker, Firewall, Web servers) via lightweight shippers + HTTP ingestion.
+- Real-time log processing handled directly by the backend (no external pipelines required).
+- PostgreSQL database for processed logs, metadata, alerts, and configuration.
 - Docker Compose orchestration with persistent volumes and health monitoring
 - Comprehensive REST API with interactive documentation
 
@@ -129,11 +137,11 @@ Configure your devices to send logs to the SIEM BOX:
 - `GET /api/v1/health/` - Service health check
 
 ### Log Management
-- `POST /api/v1/logs/cribl` - **Active**: Receive processed logs from Cribl Stream
-- `GET /api/v1/logs/parsed` - Retrieve parsed logs with advanced filtering
-- `GET /api/v1/logs/stats/summary` - Log statistics and summaries
-- `POST /api/v1/logs/ingest` - **Deprecated**: Returns HTTP 410 (use Cribl Stream)
-- `POST /api/v1/logs/ingest/fluent-bit` - **Deprecated**: Returns HTTP 410 (use Cribl Stream)
+- `POST /api/v1/logs/ingest` - Primary ingestion endpoint for structured events
+- `GET /api/v1/logs` - Retrieve processed logs with filtering and pagination
+- `GET /api/v1/logs/{log_id}` - Retrieve a specific log entry
+- `GET /api/v1/logs/stats` - Log statistics and summaries
+- `GET /api/v1/logs/stats/summary` - Alias for `/stats`
 
 ### Alert Management
 - `GET /api/v1/alerts/` - Retrieve alerts with filtering and pagination
@@ -150,9 +158,8 @@ Configure your devices to send logs to the SIEM BOX:
 - `POST /api/v1/detection/test` - Test detection rules
 
 ### Parsing Configuration
-- **Note**: Parsing is now handled by Cribl Stream
-- `GET /api/v1/parsing/*` - **Deprecated**: Returns HTTP 410 (configure via Cribl UI)
-- **Cribl Configuration**: Access parsing configuration at `http://localhost:9000`
+- Parsing occurs upstream (e.g., Fluent Bit/Vector/custom scripts). Send structured events directly to `/api/v1/logs/ingest`.
+- `GET /api/v1/parsing/*` - **Deprecated**: Returns HTTP 410 with guidance on preparing logs before ingestion.
 
 ### Vulnerability Management
 - `GET /api/v1/vulnerabilities/` - Retrieve vulnerabilities with filtering
@@ -197,16 +204,13 @@ Configure your devices to send logs to the SIEM BOX:
 
 ### Service Overview
 - **frontend**: React application with Nginx (Production-ready web interface)
-- **backend**: FastAPI application server (Core SIEM engine)
+- **backend**: FastAPI application server (Ingestion, detection, API)
 - **postgres**: PostgreSQL 15 database (Data persistence)
-- **fluent-bit**: Log collection and forwarding (Multi-source ingestion)
 
 ### Service Ports
 - `3000`: Frontend web interface
 - `8000`: FastAPI backend API
 - `5432`: PostgreSQL database
-- `5140`: Syslog receiver (UDP/TCP)
-- `2020`: Fluent Bit metrics and health
 
 ### Service Features
 - **Frontend**: Production-optimized React build, Nginx reverse proxy, WebSocket support
@@ -216,8 +220,8 @@ Configure your devices to send logs to the SIEM BOX:
 
 ### Data Persistence
 - PostgreSQL data: `postgres_data` volume
-- Fluent Bit state: `fluent_bit_data` volume
-- Application logs: Centralized logging system
+- Ingestion agents: manage their own state (if applicable)
+- Application logs: Docker-managed logs (`docker logs <service>`)
 
 ## 🔍 Monitoring and Troubleshooting
 
@@ -229,19 +233,15 @@ docker-compose ps
 # Check backend health
 curl http://localhost:8000/api/v1/health/
 
-# Check Fluent Bit metrics
-curl http://localhost:2020/api/v1/metrics
+# Check recent logs
+curl "http://localhost:8000/api/v1/logs?limit=10"
 ```
 
 ### Log Analysis
 ```bash
 # View service logs
 docker logs siembox-backend
-docker logs siembox-fluent-bit
 docker logs siembox-postgres
-
-# Check log ingestion
-curl "http://localhost:8000/api/v1/logs/?limit=10"
 ```
 
 ### Common Issues
@@ -261,7 +261,7 @@ curl "http://localhost:8000/api/v1/logs/?limit=10"
   ```
 
 #### Other Common Issues
-- **No logs appearing**: Check Fluent Bit configuration and source connectivity
+- **No logs appearing**: Ensure your forwarding agent is posting to `/api/v1/logs/ingest` and check backend logs
 - **Database connection errors**: Verify PostgreSQL service health
 - **High resource usage**: Adjust log retention and Fluent Bit buffer settings
 - **Container startup failures**: Check Docker logs with `docker logs siembox-postgres`

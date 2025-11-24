@@ -74,5 +74,37 @@ venv.bak/
 
 # Temporary and cache directories
 .roo/
+.pytest_cache/
+
+# Test files (keep tests in backend/tests/ and frontend/src/__tests__)
 test_backend_integration.py
-test_frontend_integration.html 
+test_frontend_integration.html
+test_*.py
+test_*.sh
+
+# Setup scripts (use docker compose instead)
+setup.sh
+
+# Documentation that doesn't belong in repo
+docs/
+project_docs/
+project-management/
+
+# Virtual environments (NEVER commit these)
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Random images
+*.png
+*.jpg
+*.jpeg
+!frontend/public/**/*.png
+!frontend/public/**/*.jpg 

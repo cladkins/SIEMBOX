@@ -1,0 +1,32 @@
+routes:
+  # Route for Syslog data to both HTTP backend and filesystem storage
+  - id: syslog_to_dual_output
+    name: "Syslog to Backend and Storage"
+    filter: "source=='syslog_in'"
+    output: siembox_http
+    disabled: false
+    final: false
+    clones:
+      - output: siembox_storage
+        filter: "true"
+        disabled: false
+  
+  # Route for HTTP input data to both destinations
+  - id: http_to_dual_output
+    name: "HTTP to Backend and Storage"
+    filter: "source=='http_in'"
+    output: siembox_http
+    disabled: false
+    final: false
+    clones:
+      - output: siembox_storage
+        filter: "true"
+        disabled: false
+  
+  # Default route for any other data
+  - id: default_route
+    name: "Default Route"
+    filter: "true"
+    output: default
+    disabled: false
+    final: true

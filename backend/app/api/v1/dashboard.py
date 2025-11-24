@@ -273,7 +273,8 @@ async def get_dashboard_stats(
 @router.get("/log-volume")
 async def get_log_volume_data(
     hours: int = 24,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Get log volume data for charts
@@ -313,7 +314,8 @@ async def get_log_volume_data(
 @router.get("/top-sources")
 async def get_top_sources(
     limit: int = 10,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Get top log sources by source IP
@@ -349,7 +351,8 @@ async def get_top_sources(
 @router.get("/alert-trends")
 async def get_alert_trends(
     hours: int = 24,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Get alert trends grouped by severity over time
@@ -395,7 +398,8 @@ async def get_alert_trends(
 @router.get("/vulnerability-trends")
 async def get_vulnerability_trends(
     days: int = 30,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Get vulnerability trends over time

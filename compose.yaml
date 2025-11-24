@@ -1,4 +1,18 @@
-# SIEM BOX - Docker Compose Configuration
+# SIEM BOX - Production Docker Compose Configuration
+#
+# IMPORTANT: Before deploying to production:
+# 1. Create a .env file and set secure passwords
+# 2. Generate a secure SECRET_KEY: openssl rand -hex 32
+# 3. Update POSTGRES_PASSWORD to a strong password
+# 4. Configure notification settings (optional)
+# 5. Review and update CORS_ORIGINS for your domain
+#
+# Quick start:
+#   docker compose up -d
+# View logs:
+#   docker compose logs -f
+# Stop all services:
+#   docker compose down
 
 services:
   # PostgreSQL Database
@@ -6,9 +20,9 @@ services:
     image: postgres:14-alpine
     container_name: siembox-postgres
     environment:
-      POSTGRES_DB: siembox
-      POSTGRES_USER: siembox
-      POSTGRES_PASSWORD: siembox
+      POSTGRES_DB: ${POSTGRES_DB:-siembox}
+      POSTGRES_USER: ${POSTGRES_USER:-siembox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-siembox}
       POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -31,10 +45,19 @@ services:
       dockerfile: Dockerfile
     container_name: siembox-backend
     environment:
-      DATABASE_URL: postgresql://siembox:siembox@postgres:5432/siembox
-      DEBUG: "false"
-      LOG_LEVEL: INFO
-      SECRET_KEY: "your-secret-key-change-in-production"
+      DATABASE_URL: ${DATABASE_URL:-postgresql://siembox:siembox@postgres:5432/siembox}
+      DEBUG: ${DEBUG:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      # Optional notification settings
+      SMTP_SERVER: ${SMTP_SERVER:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
     ports:
       - "8000:8000"
     volumes:

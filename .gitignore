@@ -70,4 +70,9 @@ venv.bak/
 *.sqlite3
 
 # Docker
-.dockerignore 
+.dockerignore
+
+# Temporary and cache directories
+.roo/
+test_backend_integration.py
+test_frontend_integration.html 

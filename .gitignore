@@ -77,10 +77,9 @@ venv.bak/
 .pytest_cache/
 
 # Test files (keep tests in backend/tests/ and frontend/src/__tests__)
-test_backend_integration.py
-test_frontend_integration.html
-test_*.py
-test_*.sh
+# But allow our useful test scripts in root:
+# - test_syslog.py (syslog client)
+# - test_detection_flow.py (detection verification)
 
 # Setup scripts (use docker compose instead)
 setup.sh

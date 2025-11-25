@@ -4,6 +4,12 @@ import rateLimit from 'express-rate-limit';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { logger } from './utils/logger';
 
+// Import routes
+import logsRoutes from './routes/logs';
+import parsersRoutes from './routes/parsers';
+import rulesRoutes from './routes/rules';
+import alertsRoutes from './routes/alerts';
+
 const app: Application = express();
 
 // Middleware
@@ -33,13 +39,13 @@ app.get('/health', (req, res) => {
   });
 });
 
-// API routes will be added here
-// app.use('/api/auth', authRoutes);
-// app.use('/api/logs', logRoutes);
-// app.use('/api/parsers', parserRoutes);
-// app.use('/api/rules', ruleRoutes);
-// app.use('/api/alerts', alertRoutes);
-// app.use('/api/users', userRoutes);
+// API routes
+// app.use('/api/auth', authRoutes); // TODO: Implement authentication
+app.use('/api/logs', logsRoutes);
+app.use('/api/parsers', parsersRoutes);
+app.use('/api/rules', rulesRoutes);
+app.use('/api/alerts', alertsRoutes);
+// app.use('/api/users', userRoutes); // TODO: Implement user management
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

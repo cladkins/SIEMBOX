@@ -98,7 +98,7 @@ export class SyslogServer {
   private async processSyslogMessage(
     rawMessage: string,
     sourceIp: string,
-    protocol: 'udp' | 'tcp'
+    _protocol: 'udp' | 'tcp'
   ): Promise<void> {
     try {
       // Parse syslog message (RFC 3164 or RFC 5424)

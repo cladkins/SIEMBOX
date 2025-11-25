@@ -1,5 +1,5 @@
 import { query } from '../../config/database';
-import logger from '../../utils/logger';
+import { logger } from '../../utils/logger';
 
 export class CleanupService {
   private intervalId: NodeJS.Timeout | null = null;
@@ -116,8 +116,10 @@ export class CleanupService {
     };
 
     result.rows.forEach((row) => {
-      const key = row.key.replace('retention_', '');
-      settings[key] = parseInt(row.value, 10);
+      const key = row.key.replace('retention_', '') as keyof typeof settings;
+      if (key in settings) {
+        settings[key] = parseInt(row.value, 10);
+      }
     });
 
     return settings;

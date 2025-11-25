@@ -6,13 +6,13 @@ import { authorize } from '../middleware/auth';
 const router = Router();
 
 // Get retention settings
-router.get('/retention', authorize('admin'), async (req: Request, res: Response) => {
+router.get('/retention', authorize('admin'), async (_req: Request, res: Response) => {
   try {
     const result = await query(
       `SELECT * FROM system_settings WHERE key LIKE 'retention_%'`
     );
 
-    const settings = {
+    const settings: Record<string, any> = {
       raw_logs_days: 30,
       parsed_logs_days: 90,
       alerts_days: 365,
@@ -20,7 +20,8 @@ router.get('/retention', authorize('admin'), async (req: Request, res: Response)
     };
 
     result.rows.forEach((row) => {
-      settings[row.key.replace('retention_', '')] = row.value;
+      const key = row.key.replace('retention_', '');
+      settings[key] = row.value;
     });
 
     res.json(settings);
@@ -104,7 +105,7 @@ router.post('/retention/cleanup', authorize('admin'), async (req: Request, res: 
 });
 
 // Get cleanup statistics
-router.get('/retention/stats', authorize('admin'), async (req: Request, res: Response) => {
+router.get('/retention/stats', authorize('admin'), async (_req: Request, res: Response) => {
   try {
     const stats = await query(`
       SELECT

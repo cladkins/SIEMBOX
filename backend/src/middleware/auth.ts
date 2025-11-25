@@ -21,7 +21,7 @@ declare global {
  * Authentication middleware
  * Validates session token and attaches user to request
  */
-export const authenticate = async (req: Request, res: Response, next: NextFunction) => {
+export const authenticate = async (req: Request, _res: Response, next: NextFunction) => {
   try {
     // Get token from Authorization header or cookie
     const authHeader = req.headers.authorization;
@@ -73,7 +73,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
  */
 export const optionalAuthenticate = async (
   req: Request,
-  res: Response,
+  _res: Response,
   next: NextFunction
 ) => {
   try {
@@ -113,7 +113,7 @@ export const optionalAuthenticate = async (
  * Requires specific roles to access route
  */
 export const authorize = (...allowedRoles: ('admin' | 'analyst' | 'viewer')[]) => {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return (req: Request, _res: Response, next: NextFunction) => {
     if (!req.user) {
       return next(new ApiError(401, 'Authentication required'));
     }

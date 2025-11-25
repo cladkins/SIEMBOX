@@ -23,7 +23,7 @@ interface RuleLogic {
 
 export class RulesEngine {
   private rules: DetectionRule[] = [];
-  private aggregationCache: Map<string, any[]> = new Map();
+  private _aggregationCache: Map<string, any[]> = new Map();
 
   async initialize(): Promise<void> {
     try {

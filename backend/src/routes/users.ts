@@ -10,7 +10,7 @@ const router = Router();
 router.use(authenticate);
 
 // Get all users (admin only)
-router.get('/', requireAdmin, async (req: Request, res: Response) => {
+router.get('/', requireAdmin, async (_req: Request, res: Response) => {
   try {
     const users = await UserModel.findAll();
     res.json(users);

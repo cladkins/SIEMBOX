@@ -6,7 +6,7 @@ import { ApiError } from '../middleware/errorHandler';
 const router = Router();
 
 // Get all parsers
-router.get('/', async (req: Request, res: Response) => {
+router.get('/', async (_req: Request, res: Response) => {
   try {
     const parsers = await ParserModel.findAll();
     res.json(parsers);

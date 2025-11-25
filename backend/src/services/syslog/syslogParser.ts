@@ -45,7 +45,7 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
 
     if (rfc5424Match) {
       // RFC 5424 format
-      const [, version, timestamp, hostname, appName, procId, msgId, structuredData, message] =
+      const [, _version, timestamp, hostname, appName, procId, _msgId, _structuredData, message] =
         rfc5424Match;
 
       result.timestamp = parseTimestamp(timestamp) || new Date();

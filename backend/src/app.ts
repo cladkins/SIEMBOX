@@ -3,8 +3,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
-import { authenticate, optionalAuthenticate } from './middleware/auth';
-import { logger } from './utils/logger';
+import { authenticate } from './middleware/auth';
 
 // Import routes
 import authRoutes from './routes/auth';
@@ -37,7 +36,7 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', (_req, res) => {
   res.status(200).json({
     status: 'ok',
     timestamp: new Date().toISOString(),

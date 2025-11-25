@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SIEM BOX - Minimal</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background: #1a1a1a;
+            color: #00ff00;
+            padding: 20px;
+        }
+
+        .header {
+            border-bottom: 2px solid #00ff00;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            font-size: 24px;
+        }
+
+        .stats {
+            margin-bottom: 20px;
+            padding: 10px;
+            background: #2a2a2a;
+            border: 1px solid #00ff00;
+        }
+
+        .stats span {
+            margin-right: 20px;
+        }
+
+        .controls {
+            margin-bottom: 20px;
+        }
+
+        button {
+            background: #00ff00;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+
+        button:hover {
+            background: #00cc00;
+        }
+
+        button:active {
+            background: #009900;
+        }
+
+        .log-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #2a2a2a;
+        }
+
+        .log-table th {
+            background: #333;
+            color: #00ff00;
+            padding: 10px;
+            text-align: left;
+            border: 1px solid #00ff00;
+            position: sticky;
+            top: 0;
+        }
+
+        .log-table td {
+            padding: 8px;
+            border: 1px solid #444;
+            vertical-align: top;
+        }
+
+        .log-table tr:hover {
+            background: #333;
+        }
+
+        .timestamp {
+            color: #00ccff;
+            white-space: nowrap;
+        }
+
+        .hostname {
+            color: #ffaa00;
+        }
+
+        .source-ip {
+            color: #ff00ff;
+        }
+
+        .message {
+            color: #00ff00;
+            word-break: break-word;
+        }
+
+        .error {
+            color: #ff0000;
+            padding: 20px;
+            background: #2a2a2a;
+            border: 1px solid #ff0000;
+        }
+
+        .loading {
+            color: #ffaa00;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .auto-refresh {
+            color: #00ccff;
+        }
+
+        .auto-refresh.active {
+            color: #00ff00;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>SIEM BOX - Minimal Syslog Viewer</h1>
+        <p>Dead simple. Just logs.</p>
+    </div>
+
+    <div class="stats">
+        <span>Total Logs: <strong id="total-count">-</strong></span>
+        <span>Displayed: <strong id="displayed-count">0</strong></span>
+        <span>Last Update: <strong id="last-update">Never</strong></span>
+        <span class="auto-refresh" id="auto-refresh-status">Auto-refresh: OFF</span>
+    </div>
+
+    <div class="controls">
+        <button onclick="loadLogs()">🔄 Refresh Now</button>
+        <button onclick="toggleAutoRefresh()">⏰ Toggle Auto-Refresh (5s)</button>
+        <button onclick="clearTable()">🗑️ Clear Display</button>
+        <label style="color: #00ff00; margin-left: 20px;">
+            Limit:
+            <select id="limit-select" onchange="loadLogs()">
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+                <option value="500">500</option>
+            </select>
+        </label>
+    </div>
+
+    <div id="content">
+        <div class="loading">Loading...</div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8000';
+        let autoRefreshInterval = null;
+
+        async function loadLogs() {
+            const limit = document.getElementById('limit-select').value;
+            const contentDiv = document.getElementById('content');
+
+            try {
+                // Fetch logs
+                const response = await fetch(`${API_URL}/logs?limit=${limit}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const logs = await response.json();
+
+                // Check for error object
+                if (logs.error) {
+                    throw new Error(logs.error);
+                }
+
+                // Update total count
+                try {
+                    const countResponse = await fetch(`${API_URL}/logs/count`);
+                    const countData = await countResponse.json();
+                    document.getElementById('total-count').textContent = countData.count || 0;
+                } catch (e) {
+                    console.error('Failed to get count:', e);
+                }
+
+                // Display logs
+                if (logs.length === 0) {
+                    contentDiv.innerHTML = '<div class="loading">No logs found. Send some syslog!</div>';
+                } else {
+                    displayLogs(logs);
+                }
+
+                // Update metadata
+                document.getElementById('displayed-count').textContent = logs.length;
+                document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+
+            } catch (error) {
+                contentDiv.innerHTML = `
+                    <div class="error">
+                        <strong>Error loading logs:</strong><br>
+                        ${error.message}<br><br>
+                        Make sure the API is running:<br>
+                        <code>python3 minimal-api.py</code>
+                    </div>
+                `;
+                console.error('Error:', error);
+            }
+        }
+
+        function displayLogs(logs) {
+            const html = `
+                <table class="log-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Timestamp</th>
+                            <th>Hostname</th>
+                            <th>Source IP</th>
+                            <th>Message</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${logs.map(log => `
+                            <tr>
+                                <td>${log.id}</td>
+                                <td class="timestamp">${formatTimestamp(log.timestamp)}</td>
+                                <td class="hostname">${escapeHtml(log.hostname || '-')}</td>
+                                <td class="source-ip">${escapeHtml(log.source_ip)}</td>
+                                <td class="message">${escapeHtml(log.message || log.raw_syslog)}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+            document.getElementById('content').innerHTML = html;
+        }
+
+        function formatTimestamp(ts) {
+            if (!ts) return '-';
+            const date = new Date(ts);
+            return date.toLocaleString();
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function toggleAutoRefresh() {
+            const statusEl = document.getElementById('auto-refresh-status');
+
+            if (autoRefreshInterval) {
+                // Stop auto-refresh
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+                statusEl.textContent = 'Auto-refresh: OFF';
+                statusEl.classList.remove('active');
+            } else {
+                // Start auto-refresh
+                autoRefreshInterval = setInterval(loadLogs, 5000);
+                statusEl.textContent = 'Auto-refresh: ON (5s)';
+                statusEl.classList.add('active');
+                loadLogs(); // Immediate refresh
+            }
+        }
+
+        function clearTable() {
+            document.getElementById('content').innerHTML = '<div class="loading">Table cleared. Click Refresh to reload.</div>';
+            document.getElementById('displayed-count').textContent = '0';
+        }
+
+        // Load logs on page load
+        window.addEventListener('load', function() {
+            loadLogs();
+            // Auto-start refresh
+            setTimeout(() => {
+                toggleAutoRefresh();
+            }, 1000);
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keypress', function(e) {
+            if (e.key === 'r') loadLogs();
+            if (e.key === 'a') toggleAutoRefresh();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,71 @@
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+.env.production
+config.local.*
+secrets.*
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pnpm-store/
+package-lock.json
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+pgdata/
+postgres-data/
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+coverage/
+.nyc_output/
+
+# SSL Certificates & Keys
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+*.pfx
+
+# Docker volumes (local testing)
+volumes/
+docker-compose.override.yml
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Temporary files
+tmp/
+temp/
+*.tmp

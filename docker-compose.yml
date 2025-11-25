@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: siembox-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-siembox}
+      POSTGRES_USER: ${DB_USER:-siembox}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-siembox}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - siembox-network
+    restart: unless-stopped
+
+  # Backend API and Syslog Server
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: siembox-backend
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: ${PORT:-3000}
+      HOST: 0.0.0.0
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-siembox}
+      DB_USER: ${DB_USER:-siembox}
+      DB_PASSWORD: ${DB_PASSWORD:-changeme}
+      JWT_SECRET: ${JWT_SECRET:-change-this-secret-key}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-changeme}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+    ports:
+      - "3000:3000"
+      - "514:514/udp"  # Syslog UDP
+      - "514:514/tcp"  # Syslog TCP
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - siembox-network
+    restart: unless-stopped
+
+  # Frontend (Vue.js + Nginx)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+    container_name: siembox-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - siembox-network
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+    driver: local
+
+networks:
+  siembox-network:
+    driver: bridge

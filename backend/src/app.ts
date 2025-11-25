@@ -1,10 +1,14 @@
 import express, { Application } from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
+import { authenticate, optionalAuthenticate } from './middleware/auth';
 import { logger } from './utils/logger';
 
 // Import routes
+import authRoutes from './routes/auth';
+import usersRoutes from './routes/users';
 import logsRoutes from './routes/logs';
 import parsersRoutes from './routes/parsers';
 import rulesRoutes from './routes/rules';
@@ -20,6 +24,7 @@ app.use(cors({
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(cookieParser());
 
 // Rate limiting
 const limiter = rateLimit({
@@ -40,12 +45,14 @@ app.get('/health', (req, res) => {
 });
 
 // API routes
-// app.use('/api/auth', authRoutes); // TODO: Implement authentication
-app.use('/api/logs', logsRoutes);
-app.use('/api/parsers', parsersRoutes);
-app.use('/api/rules', rulesRoutes);
-app.use('/api/alerts', alertsRoutes);
-// app.use('/api/users', userRoutes); // TODO: Implement user management
+app.use('/api/auth', authRoutes);
+app.use('/api/users', usersRoutes);
+
+// Protected routes (require authentication)
+app.use('/api/logs', authenticate, logsRoutes);
+app.use('/api/parsers', authenticate, parsersRoutes);
+app.use('/api/rules', authenticate, rulesRoutes);
+app.use('/api/alerts', authenticate, alertsRoutes);
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

@@ -66,8 +66,8 @@ docker-compose logs backend | grep -i migration
 
 ### 5. Access the Application
 
-- Frontend: http://your-server-ip
-- API: http://your-server-ip:3000
+- Frontend: http://your-server-ip:3000
+- API: http://your-server-ip:3001
 - Default login: `admin` / (password from DEFAULT_ADMIN_PASSWORD)
 
 ### 6. Send Test Syslog

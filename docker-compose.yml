@@ -28,7 +28,7 @@ services:
     container_name: siembox-backend
     environment:
       NODE_ENV: ${NODE_ENV:-production}
-      PORT: ${PORT:-3000}
+      PORT: ${PORT:-3001}
       HOST: 0.0.0.0
       DB_HOST: postgres
       DB_PORT: 5432
@@ -40,7 +40,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
     ports:
-      - "3000:3000"
+      - "3001:3001"
       - "514:514/udp"  # Syslog UDP
       - "514:514/tcp"  # Syslog TCP
     depends_on:
@@ -56,10 +56,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3001}
     container_name: siembox-frontend
     ports:
-      - "80:80"
+      - "3000:80"
     depends_on:
       - backend
     networks:

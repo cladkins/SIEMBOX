@@ -60,6 +60,7 @@ services:
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
     ports:
       - "8000:8000"
+      - "514:514/udp"  # Syslog UDP
     volumes:
       - vulnerability_data:/app/vulnerability_data
       - trivy_cache:/root/.cache/trivy

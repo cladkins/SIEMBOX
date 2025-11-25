@@ -56,7 +56,33 @@ See [CLAUDE.md](CLAUDE.md) for technical details.
 
 ## Sending Logs
 
-### Option 1: Direct HTTP
+### Option 1: Syslog (Recommended - Works Out of the Box)
+
+Point your devices to send syslog to your SIEM BOX IP on UDP port 514.
+
+**Firewall/Router Configuration:**
+```
+Syslog Server: 192.168.1.x
+Port: 514
+Protocol: UDP
+```
+
+**Works with:**
+- OPNsense/pfSense firewalls
+- Unifi devices
+- Cisco/Juniper routers
+- Linux servers (rsyslog/syslog-ng)
+- Any device that supports syslog
+
+**Test it:**
+```bash
+# Send a test syslog message
+python3 test_syslog.py
+```
+
+### Option 2: Direct HTTP (For Applications)
+
+For apps that can send JSON:
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/logs/ingest \
@@ -72,27 +98,27 @@ curl -X POST http://localhost:8000/api/v1/logs/ingest \
   }'
 ```
 
-### Option 2: Fluent Bit (Recommended)
+### Option 3: Fluent Bit/Vector (Advanced)
 
-Install Fluent Bit on your systems:
+For custom log parsing:
 
+**Fluent Bit:**
 ```ini
 [OUTPUT]
-    Name http
+    Name syslog
     Match *
     Host your-siembox-ip
-    Port 8000
-    URI /api/v1/logs/ingest
-    Format json
+    Port 514
+    Mode udp
 ```
 
-### Option 3: Vector
-
+**Vector:**
 ```toml
 [sinks.siembox]
-type = "http"
-uri = "http://your-siembox-ip:8000/api/v1/logs/ingest"
-encoding.codec = "json"
+type = "socket"
+mode = "udp"
+address = "your-siembox-ip:514"
+encoding.codec = "syslog"
 ```
 
 More examples in [ingestion_agents/](ingestion_agents/)
@@ -141,8 +167,9 @@ For production deployment with custom passwords, SSL, etc., see [DEPLOYMENT.md](
 
 ## Ports
 
+- **514/UDP**: Syslog ingestion (primary method)
 - **3000**: Web interface
-- **8000**: API and log ingestion
+- **8000**: API and HTTP log ingestion
 - **5432**: PostgreSQL (internal)
 
 ## Documentation

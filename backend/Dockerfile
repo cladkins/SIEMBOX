@@ -38,6 +38,7 @@ USER siembox
 
 # Expose port
 EXPOSE 8000
+EXPOSE 514/udp
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

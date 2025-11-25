@@ -63,14 +63,25 @@ async def startup_event():
     Application startup event
     """
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
-    
+
     try:
         # Initialize database
         await init_db()
         logger.info("Database initialized successfully")
-        
+
+        # Start syslog server
+        from app.services.syslog_service import syslog_server
+        try:
+            await syslog_server.start()
+            logger.info("✅ Syslog server started on UDP 514")
+        except PermissionError:
+            logger.warning("⚠️  Cannot bind to port 514 (requires root/CAP_NET_BIND_SERVICE)")
+            logger.warning("Syslog ingestion will not be available")
+        except Exception as e:
+            logger.error(f"Failed to start syslog server: {e}")
+
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
+        logger.error(f"Failed to initialize application: {e}")
         raise
 
 

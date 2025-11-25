@@ -30,6 +30,16 @@ That's it! The system will:
 
 ### 3. Send Your First Log
 
+**Option A: Syslog (Easiest)**
+
+```bash
+python3 test_syslog.py
+```
+
+This sends test syslog messages that will trigger detection rules.
+
+**Option B: HTTP POST**
+
 ```bash
 curl -X POST http://localhost:8000/api/v1/logs/ingest \
   -H "Content-Type: application/json" \
@@ -50,33 +60,44 @@ curl -X POST http://localhost:8000/api/v1/logs/ingest \
 - You should see your test log appear
 - Refresh the dashboard to see updated statistics
 
-### 5. Configure Log Forwarding
+### 5. Configure Your Devices to Send Logs
 
-#### For Linux/macOS Systems
+#### Firewalls (OPNsense/pfSense/Unifi)
 
-Add to your rsyslog configuration (`/etc/rsyslog.d/siembox.conf`):
+In your firewall's syslog settings:
+```
+Remote Syslog Server: 192.168.1.x (your SIEM BOX IP)
+Port: 514
+Protocol: UDP
+```
+
+#### Linux Systems
+
+Edit `/etc/rsyslog.conf` or create `/etc/rsyslog.d/siembox.conf`:
 
 ```bash
 # Forward all logs to SIEM BOX
-*.* action(type="omhttp"
-    server="your-siembox-ip"
-    serverport="8000"
-    restpath="api/v1/logs/ingest")
+*.* @192.168.1.x:514
 ```
 
-#### For Docker Containers
-
-Add logging driver to your docker-compose.yaml:
-
-```yaml
-logging:
-  driver: "json-file"
-  options:
-    max-size: "10m"
-    max-file: "3"
+Restart rsyslog:
+```bash
+sudo systemctl restart rsyslog
 ```
 
-Then use a log shipper (Fluent Bit, Logstash, etc.) to forward to SIEM BOX.
+#### Network Devices
+
+Most network devices have a "Syslog Server" setting:
+- Enter your SIEM BOX IP address
+- Port: 514
+- Protocol: UDP
+
+#### Test Syslog
+
+```bash
+# Install logger (usually pre-installed)
+logger -n 192.168.1.x -P 514 "Test message from my server"
+```
 
 ### 6. Set Up Alerts (Optional)
 

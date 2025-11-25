@@ -64,6 +64,7 @@ export const api = {
   login: (username: string, password: string) =>
     apiClient.post('/auth/login', { username, password }),
   logout: () => apiClient.post('/auth/logout'),
+  getProfile: () => apiClient.get('/auth/me'),
 
   // Logs
   getRawLogs: (params?: any) => apiClient.get('/logs/raw', { params }),
@@ -83,10 +84,10 @@ export const api = {
   createRule: (data: any) => apiClient.post('/rules', data),
   updateRule: (id: number, data: any) => apiClient.put(`/rules/${id}`, data),
   deleteRule: (id: number) => apiClient.delete(`/rules/${id}`),
-  testRule: (id: number, params?: any) => apiClient.post(`/rules/${id}/test`, params),
 
   // Alerts
   getAlerts: (params?: any) => apiClient.get('/alerts', { params }),
+  getAlertStatistics: () => apiClient.get('/alerts/statistics'),
   getAlert: (id: number) => apiClient.get(`/alerts/${id}`),
   updateAlert: (id: number, data: any) => apiClient.put(`/alerts/${id}`, data),
   deleteAlert: (id: number) => apiClient.delete(`/alerts/${id}`),

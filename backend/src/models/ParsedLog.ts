@@ -49,6 +49,7 @@ export class ParsedLogModel {
     offset?: number;
     sourceIp?: string;
     eventType?: string;
+    search?: string;
     startTime?: Date;
     endTime?: Date;
   }): Promise<{ logs: ParsedLog[]; total: number }> {
@@ -64,6 +65,11 @@ export class ParsedLogModel {
     if (options?.eventType) {
       conditions.push(`event_type = $${paramIndex++}`);
       params.push(options.eventType);
+    }
+
+    if (options?.search) {
+      conditions.push(`parsed_data::text ILIKE $${paramIndex++}`);
+      params.push(`%${options.search}%`);
     }
 
     if (options?.startTime) {

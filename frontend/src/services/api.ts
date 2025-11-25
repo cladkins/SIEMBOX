@@ -97,4 +97,10 @@ export const api = {
   createUser: (data: any) => apiClient.post('/users', data),
   updateUser: (id: number, data: any) => apiClient.put(`/users/${id}`, data),
   deleteUser: (id: number) => apiClient.delete(`/users/${id}`),
+
+  // Settings - Retention
+  getRetentionSettings: () => apiClient.get('/settings/retention'),
+  updateRetentionSettings: (data: any) => apiClient.put('/settings/retention', data),
+  runManualCleanup: (data: any) => apiClient.post('/settings/retention/cleanup', data),
+  getRetentionStatistics: () => apiClient.get('/settings/retention/stats'),
 };

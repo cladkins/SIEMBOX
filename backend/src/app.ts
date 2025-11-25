@@ -13,6 +13,7 @@ import logsRoutes from './routes/logs';
 import parsersRoutes from './routes/parsers';
 import rulesRoutes from './routes/rules';
 import alertsRoutes from './routes/alerts';
+import settingsRoutes from './routes/settings';
 
 const app: Application = express();
 
@@ -53,6 +54,7 @@ app.use('/api/logs', authenticate, logsRoutes);
 app.use('/api/parsers', authenticate, parsersRoutes);
 app.use('/api/rules', authenticate, rulesRoutes);
 app.use('/api/alerts', authenticate, alertsRoutes);
+app.use('/api/settings', authenticate, settingsRoutes);
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

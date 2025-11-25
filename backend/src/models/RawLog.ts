@@ -48,6 +48,7 @@ export class RawLogModel {
     limit?: number;
     offset?: number;
     sourceIp?: string;
+    search?: string;
     startTime?: Date;
     endTime?: Date;
   }): Promise<{ logs: RawLog[]; total: number }> {
@@ -58,6 +59,11 @@ export class RawLogModel {
     if (options?.sourceIp) {
       conditions.push(`source_ip = $${paramIndex++}`);
       params.push(options.sourceIp);
+    }
+
+    if (options?.search) {
+      conditions.push(`raw_message ILIKE $${paramIndex++}`);
+      params.push(`%${options.search}%`);
     }
 
     if (options?.startTime) {

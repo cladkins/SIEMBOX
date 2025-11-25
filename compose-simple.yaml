@@ -1,0 +1,75 @@
+# SIEM BOX - Simple Compose with React UI
+# Uses existing React frontend with simple backend
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:14-alpine
+    container_name: siembox-postgres
+    environment:
+      POSTGRES_DB: siembox
+      POSTGRES_USER: siembox
+      POSTGRES_PASSWORD: siembox
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-minimal-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - siembox
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U siembox -d siembox"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Simple Backend (FastAPI + Syslog)
+  backend:
+    image: python:3.11-slim
+    container_name: siembox-backend
+    command: >
+      sh -c "
+        pip install fastapi uvicorn asyncpg pyjwt &&
+        python /app/simple-backend.py
+      "
+    volumes:
+      - ./simple-backend.py:/app/simple-backend.py:ro
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: siembox
+      DB_USER: siembox
+      DB_PASS: siembox
+      SECRET_KEY: change-me-in-production
+    ports:
+      - "8000:8000"
+      - "514:514/udp"
+    networks:
+      - siembox
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # React Frontend (existing UI)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: siembox-frontend
+    ports:
+      - "3000:80"
+    networks:
+      - siembox
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  siembox:
+    driver: bridge

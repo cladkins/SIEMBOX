@@ -14,7 +14,6 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 .pnpm-store/
-package-lock.json
 
 # Build outputs
 dist/

@@ -1,18 +1,5 @@
-# SIEM BOX - Production Docker Compose Configuration
-#
-# IMPORTANT: Before deploying to production:
-# 1. Create a .env file and set secure passwords
-# 2. Generate a secure SECRET_KEY: openssl rand -hex 32
-# 3. Update POSTGRES_PASSWORD to a strong password
-# 4. Configure notification settings (optional)
-# 5. Review and update CORS_ORIGINS for your domain
-#
-# Quick start:
-#   docker compose up -d
-# View logs:
-#   docker compose logs -f
-# Stop all services:
-#   docker compose down
+# SIEM BOX - Simple Compose with React UI
+# Uses existing React frontend with simple backend
 
 services:
   # PostgreSQL Database
@@ -20,101 +7,69 @@ services:
     image: postgres:14-alpine
     container_name: siembox-postgres
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-siembox}
-      POSTGRES_USER: ${POSTGRES_USER:-siembox}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-siembox}
-      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+      POSTGRES_DB: siembox
+      POSTGRES_USER: siembox
+      POSTGRES_PASSWORD: siembox
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+      - ./init-minimal-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "5432:5432"
     networks:
-      - siembox-network
+      - siembox
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U siembox -d siembox"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
       retries: 5
 
-  # FastAPI Backend with Vulnerability Scanning
+  # Simple Backend (FastAPI + Syslog)
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: python:3.11-slim
     container_name: siembox-backend
+    command: >
+      sh -c "
+        pip install fastapi uvicorn asyncpg pyjwt &&
+        python /app/simple-backend.py
+      "
+    volumes:
+      - ./simple-backend.py:/app/simple-backend.py:ro
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://siembox:siembox@postgres:5432/siembox}
-      DEBUG: ${DEBUG:-false}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
-      # Optional notification settings
-      SMTP_SERVER: ${SMTP_SERVER:-}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USERNAME: ${SMTP_USERNAME:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      EMAIL_FROM: ${EMAIL_FROM:-}
-      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
-      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: siembox
+      DB_USER: siembox
+      DB_PASS: siembox
+      SECRET_KEY: change-me-in-production
     ports:
       - "8000:8000"
-      - "514:514/udp"  # Syslog UDP
-    volumes:
-      - vulnerability_data:/app/vulnerability_data
-      - trivy_cache:/root/.cache/trivy
+      - "514:514/udp"
     networks:
-      - siembox-network
+      - siembox
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-    # Enable privileged mode for network scanning capabilities
-    privileged: true
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
 
-  # React Frontend
+  # React Frontend (existing UI)
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: siembox-frontend
-    command: sh -c 'while ! curl -s -f http://backend:8000/api/v1/health; do echo "Waiting for backend..."; sleep 1; done; nginx -g "daemon off;"'
     ports:
       - "3000:80"
     networks:
-      - siembox-network
+      - siembox
     depends_on:
-      backend:
-        condition: service_healthy
+      - backend
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:80/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
 
 volumes:
   postgres_data:
     driver: local
-  vulnerability_data:
-    driver: local
-  trivy_cache:
-    driver: local
 
 networks:
-  siembox-network:
+  siembox:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16

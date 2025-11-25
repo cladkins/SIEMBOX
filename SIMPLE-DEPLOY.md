@@ -20,13 +20,13 @@ git checkout develop
 git pull
 
 # Start everything
-docker compose -f compose-simple.yaml up -d
+docker compose up -d
 ```
 
 ### 2. Watch Startup
 
 ```bash
-docker compose -f compose-simple.yaml logs -f
+docker compose logs -f
 ```
 
 Wait for:
@@ -151,7 +151,7 @@ docker logs siembox-frontend | tail -20
 docker logs siembox-frontend
 
 # Rebuild frontend
-docker compose -f compose-simple.yaml up -d --build frontend
+docker compose up -d --build frontend
 ```
 
 ### Port 514 permission error?
@@ -162,7 +162,7 @@ Port 514 requires privileged access. The docker container should handle this, bu
 # Check backend logs
 docker logs siembox-backend | grep -i permission
 
-# May need to add to compose-simple.yaml under backend service:
+# May need to add to compose.yaml under backend service:
 # privileged: true
 ```
 
@@ -202,16 +202,16 @@ Then we add ONE feature at a time:
 
 ```bash
 # Stop
-docker compose -f compose-simple.yaml stop
+docker compose stop
 
 # Start
-docker compose -f compose-simple.yaml start
+docker compose start
 
 # Restart
-docker compose -f compose-simple.yaml restart
+docker compose restart
 
 # Remove everything
-docker compose -f compose-simple.yaml down -v
+docker compose down -v
 ```
 
 ## Success Checklist

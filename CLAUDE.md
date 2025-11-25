@@ -4,214 +4,335 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-SIEM BOX is a production-ready, self-hosted Security Information and Event Management (SIEM) solution designed for homelab environments. It now uses a **lightweight ingestion architecture** where agents send structured JSON events directly to a FastAPI backend backed by PostgreSQL.
+SIEM BOX is a **lightweight, self-hosted SIEM solution** designed for homelab environments. The architecture has been simplified to focus on the core functionality: **syslog ingestion, log storage, and web-based viewing**.
 
-## Key Architecture Components
+## Simplified Architecture
 
-### Lightweight Architecture
-- **Log Processing**: Agents (Fluent Bit, Vector, custom scripts, etc.) normalize events and call `/api/v1/logs/ingest`
-- **Backend**: FastAPI application with async SQLAlchemy for ingestion, detection, alerting, and API/UI support
-- **Database**: PostgreSQL stores processed logs, alerts, detection rules, and configuration
-- **Frontend**: React 18 with TypeScript, Vite build system
-- **Storage**: Processed logs live in PostgreSQL; no external pipeline required
+### Core Components
 
-### Service Structure
-- **Frontend**: React app at `frontend/` with comprehensive UI for all operations
-- **Backend**: FastAPI app at `backend/` with modular service architecture
-- **Ingestion Agents**: Example configurations in `ingestion_agents/` for Fluent Bit/Vector/custom scripts
-- **Database**: PostgreSQL with async SQLAlchemy ORM
+**Backend: `simple-backend.py` (~350 lines)**
+- FastAPI application with integrated syslog server
+- UDP 514 syslog receiver (RFC 3164 parsing)
+- PostgreSQL storage via asyncpg
+- JWT authentication
+- REST API for log retrieval
+
+**Database: PostgreSQL**
+- Single `logs` table with indexes
+- Schema defined in `init-minimal-db.sql`
+- Stores parsed syslog messages
+
+**Frontend: React Dashboard**
+- Located in `frontend/`
+- Nginx-served static build
+- Connects to backend API
+- JWT token-based authentication
+
+### Log Flow
+
+```
+Firewall/Router → UDP 514 → simple-backend.py → PostgreSQL → React UI
+    (Syslog)                   (Parse + Store)     (logs)      (View)
+```
+
+1. Device sends syslog to UDP 514
+2. `simple-backend.py` parses syslog (RFC 3164 format)
+3. Extracts: timestamp, hostname, source_ip, message
+4. Stores in `logs` table
+5. Frontend queries via `/api/v1/logs` endpoint
+
+## File Structure
+
+```
+/
+├── simple-backend.py          # Main backend (syslog + API)
+├── init-minimal-db.sql        # Database schema
+├── compose.yaml               # Docker deployment
+├── frontend/                  # React UI
+│   ├── Dockerfile
+│   └── (React app)
+├── backend-old-backup/        # Archived complex backend (not used)
+└── compose-old-backup.yaml    # Archived complex compose (not used)
+```
 
 ## Development Commands
 
-### Docker Deployment (Primary)
+### Docker Deployment (Primary Method)
+
 ```bash
 # Start all services
-docker-compose up -d
+docker compose up -d
 
-# Stop all services
-docker-compose down
+# Watch logs
+docker compose logs -f
 
-# View service logs
+# Stop services
+docker compose down
+
+# View specific service logs
 docker logs siembox-backend
-docker logs siembox-frontend
 docker logs siembox-postgres
-
-# Service health checks
-curl http://localhost:8000/api/v1/health/
+docker logs siembox-frontend
 ```
 
-### Backend Development
+### Testing Syslog Ingestion
+
 ```bash
-cd backend
-python -m venv venv
-source venv/bin/activate  # or venv\Scripts\activate on Windows
-pip install -r requirements.txt
+# Send test syslog
+echo "<134>Nov 24 12:34:56 test-host Test message" | nc -u localhost 514
 
-# Run backend in development mode
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# Check backend received it
+docker logs siembox-backend | grep SYSLOG
 
-# Run tests
-pytest tests/
-pytest tests/ -v  # verbose output
-pytest tests/ --cov=app --cov-report=html  # with coverage
-
-# Database migrations (if needed)
-alembic upgrade head
+# Check database
+docker exec siembox-postgres psql -U siembox -d siembox \
+  -c "SELECT * FROM logs ORDER BY id DESC LIMIT 5;"
 ```
 
-### Frontend Development
+### API Testing
+
 ```bash
-cd frontend
-npm install
+# Login
+curl -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}'
 
-# Development server
-npm run dev
+# Get logs (with auth token)
+TOKEN="<your-token-here>"
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/v1/logs
 
-# Build for production
-npm run build
-
-# Run tests
-npm test
-npm run test:watch
-npm run test:coverage
-npm run test:ci
-
-# Linting
-npm run lint
-```
-
-### Utility Scripts
-```bash
-# Setup script for first-time deployment
-./setup.sh
-
-# Deployment testing
-./test_deployment.sh
-
-# Reset Docker volumes (destroys all data)
-./scripts/reset-volumes.sh
+# Dashboard stats
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/v1/dashboard/stats
 ```
 
 ## Important Implementation Details
 
-### Log Flow
-1. Agents parse raw logs and POST structured events to `POST /api/v1/logs/ingest`
-2. Backend stores each event in `processed_logs`, immediately runs detection, and creates alerts if needed
-3. Frontend queries `/api/v1/logs`, `/api/v1/dashboard/*`, `/api/v1/alerts/*` for visualization and triage
+### Backend: simple-backend.py
 
-### Deprecated Endpoints
-- `/api/v1/parsing/*` – Returns HTTP 410 with guidance; parsing occurs upstream before ingestion.
+**Key Classes:**
+- `SyslogServer` - Handles UDP 514 syslog ingestion
+- `SyslogProtocol` - asyncio DatagramProtocol for receiving UDP packets
 
-### Service Ports
-- **3000**: Frontend web interface
-- **8000**: Backend API
-- **5432**: PostgreSQL database
+**Key Functions:**
+- `parse_syslog()` - Parses RFC 3164 format: `<PRI>TIMESTAMP HOSTNAME MESSAGE`
+- `handle_syslog()` - Receives UDP packet, parses, stores in DB
+- `store_log()` - Inserts into PostgreSQL `logs` table
+
+**API Endpoints:**
+- `POST /api/v1/auth/login` - Returns JWT token (hardcoded admin/admin123)
+- `GET /api/v1/logs` - Returns paginated logs (requires auth)
+- `GET /api/v1/dashboard/stats` - Returns log counts (requires auth)
+
+**Authentication:**
+- Hardcoded credentials: `admin` / `admin123`
+- JWT tokens with 24-hour expiration
+- Bearer token authentication on protected endpoints
 
 ### Database Schema
-- **alerts**: Security alerts and incidents
-- **detection_rules**: Custom security rules
-- **users**: Authentication and authorization
-- **vulnerabilities**: Vulnerability scan results
-- **notification_channels**: Alert notification configuration
 
-### Key Services (backend/app/services/)
-- **detection_service.py**: Real-time security rule evaluation
-- **alert_service.py**: Alert lifecycle management
-- **notification_service.py**: Multi-channel alerting
-- **vulnerability_service.py**: Network and container scanning
-- **auth_service.py**: User authentication
-
-## Configuration Notes
-
-### Environment Variables
-- Check `backend/.env.example` for configuration options
-- Database URL, secret keys, and debug settings
-
-### Ingestion Agent Configuration
-- Example Fluent Bit/Vector configurations live under `ingestion_agents/`
-- Agents should output structured JSON (with `timestamp`, `hostname`, `source_ip`, etc.) to `/api/v1/logs/ingest`
-- Include any parsed fields in the payload’s `fields` object so detection rules can act on them
-- Tests: Use `curl` or custom scripts to post sample events to the ingestion endpoint during development
-
-### Frontend Configuration
-- Vite proxy setup for API calls in `vite.config.ts`
-- WebSocket support for real-time updates
-
-## Testing Guidelines
-
-### Backend Testing
-- Use `pytest` for all backend tests
-- Tests located in `backend/tests/`
-- Database tests use async SQLAlchemy patterns
-- Mock external services (notification providers, vulnerability scanners) as needed
-
-### Frontend Testing
-- Jest for unit tests
-- React Testing Library for component tests
-- Playwright for E2E tests
-- Coverage reports available
-
-### Integration Testing
-- Use `test_deployment.sh` for end-to-end validation
-- Health checks for all services
-- Log ingestion and retrieval testing
-
-## Security Considerations
-
-### Authentication
-- JWT-based authentication system
-- Default credentials: admin/admin123 (MUST change in production)
-- Session management with refresh tokens
-
-### Network Security
-- Privileged container mode for network scanning
-- Source authentication should be handled by the agent (e.g., API tokens, TLS); backend expects trusted traffic
-- CORS configuration for frontend integration
-
-### Data Protection
-- Processed logs (with structured fields) are stored directly in PostgreSQL
-- Sensitive data handling in notification services
-- Secure communication between services
-
-## Common Development Patterns
-
-### Service Layer Pattern
-All business logic is in service classes with async methods:
-```python
-# Example service usage
-from app.services.detection_service import DetectionService
-
-async def process_log(log_data: dict):
-    detection_service = DetectionService()
-    await detection_service.run_detection(log_data)
+**Table: logs**
+```sql
+CREATE TABLE logs (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMP NOT NULL,        -- Parsed from syslog
+    hostname VARCHAR(255),               -- Parsed from syslog
+    source_ip VARCHAR(45) NOT NULL,      -- UDP source address
+    message TEXT,                        -- Parsed message content
+    raw_syslog TEXT NOT NULL,            -- Original syslog string
+    created_at TIMESTAMP DEFAULT NOW()   -- Insertion timestamp
+);
 ```
 
-### API Response Patterns
-- Use Pydantic models for request/response validation
-- Consistent error handling with HTTP status codes
-- Async route handlers throughout
+**Indexes:**
+- `idx_logs_timestamp` - Fast time-based queries
+- `idx_logs_source_ip` - Filter by source
+- `idx_logs_hostname` - Filter by host
 
-### Frontend State Management
-- Zustand for global state management
-- React Query for server state and caching
-- WebSocket integration for real-time updates
+### Frontend
+
+**Build System:** Vite
+**Framework:** React 18
+**Deployment:** Nginx container serves static build
+
+**Key Pages:**
+- Login page (`/login`)
+- Dashboard (`/`)
+- Logs page (`/logs`)
+
+**API Integration:**
+- Uses `fetch()` with JWT tokens
+- Base URL configured in Vite proxy
+- Nginx proxies `/api/*` to backend
+
+### Docker Compose Structure
+
+```yaml
+services:
+  postgres:          # PostgreSQL database
+  backend:           # simple-backend.py
+  frontend:          # React + Nginx
+```
+
+**Ports:**
+- `514/udp` - Syslog ingestion
+- `3000` - Frontend web UI
+- `8000` - Backend API
+- `5432` - PostgreSQL (internal)
+
+## Configuration
+
+### Environment Variables (Backend)
+
+Set in `compose.yaml` under backend service:
+
+```yaml
+environment:
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_NAME: siembox
+  DB_USER: siembox
+  DB_PASS: siembox
+  SECRET_KEY: change-me-in-production
+```
+
+### Syslog Configuration
+
+Devices should send syslog to:
+- **Host:** SIEM BOX IP address
+- **Port:** 514
+- **Protocol:** UDP
+- **Format:** Any (will be parsed as RFC 3164)
 
 ## Troubleshooting
 
-### Common Issues
-1. **PostgreSQL version compatibility**: Run `./scripts/reset-volumes.sh` if needed
-2. **Ingestion connectivity**: Verify your agent can reach `/api/v1/logs/ingest` and that the backend logs show received events
-3. **Frontend build issues**: Ensure Node.js version compatibility
-4. **Permission errors**: Check Docker volume permissions
+### No logs appearing in UI
 
-### Health Checks
-- Backend: `GET /api/v1/health/`
-- Database: `GET /api/v1/health/database`
-- Backend: `http://localhost:8000/api/v1/health`
+1. **Check backend is receiving syslogs:**
+   ```bash
+   docker logs siembox-backend | grep SYSLOG
+   ```
+   Should see: `[SYSLOG] ✅ hostname from source_ip`
 
-### Log Analysis
-- Backend logs: `docker logs siembox-backend`
-- Database queries: Enable SQLAlchemy logging in development
-- Backlog processing: Inspect backend logs and the `processed_logs` table
+2. **Verify database has logs:**
+   ```bash
+   docker exec siembox-postgres psql -U siembox -d siembox \
+     -c "SELECT COUNT(*) FROM logs;"
+   ```
 
-This is a production-ready SIEM solution with comprehensive documentation. Focus on the Pattern B architecture when making changes and ensure all modifications maintain the dual-destination log processing flow.
+3. **Test API returns logs:**
+   ```bash
+   # Login and get token
+   TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"username":"admin","password":"admin123"}' | \
+     python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+   # Get logs
+   curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/v1/logs
+   ```
+
+4. **Check frontend can reach backend:**
+   - Open browser console (F12)
+   - Look for API errors
+   - Verify requests to `/api/v1/*` are going through
+
+### Port 514 permission errors
+
+Port 514 requires privileged access. If you see permission errors:
+
+```bash
+docker logs siembox-backend | grep -i permission
+```
+
+Add to `compose.yaml` under backend service:
+```yaml
+backend:
+  privileged: true
+```
+
+### Frontend build fails
+
+```bash
+# Check frontend logs
+docker logs siembox-frontend
+
+# Rebuild
+docker compose up -d --build frontend
+```
+
+## What This System Does
+
+✅ **Working Features:**
+- Syslog ingestion (UDP 514)
+- Log storage in PostgreSQL
+- REST API with authentication
+- React dashboard for viewing logs
+- Basic statistics (total logs, 24h logs)
+
+❌ **Not Implemented:**
+- Detection rules
+- Alerts
+- Notifications
+- Vulnerability scanning
+- User management (beyond hardcoded admin)
+- Log filtering/search in UI (backend supports it)
+- Advanced analytics
+
+## Development Philosophy
+
+This is a **simplified, focused SIEM** that does ONE thing well: **collect and display syslogs**.
+
+**Design Principles:**
+1. Simple is better than complex
+2. Self-contained (no external dependencies)
+3. Easy to understand (~350 lines of backend code)
+4. Easy to deploy (one docker compose command)
+5. Foundation for future features
+
+## Next Steps for Enhancement
+
+When basic functionality is proven working:
+
+1. **Add log filtering** in frontend (backend already supports `limit`, `skip`)
+2. **Add basic detection rules** (e.g., failed SSH attempts)
+3. **Add simple alerting** (e.g., Discord webhook)
+4. **Add log search** (by hostname, IP, message content)
+5. **Add user management** (proper user database)
+
+But first: **verify basic syslog → storage → display works perfectly**.
+
+## Testing Checklist
+
+Before considering enhancements:
+
+- [ ] Can receive syslog from firewall/router
+- [ ] Logs appear in database
+- [ ] React UI displays logs
+- [ ] Dashboard shows correct stats
+- [ ] Authentication works
+- [ ] Can view logs from last 24 hours
+- [ ] System stable for 24+ hours
+- [ ] No memory leaks
+- [ ] No database performance issues
+
+## Support & Documentation
+
+- **[README.md](README.md)** - Main documentation
+- **[SIMPLE-DEPLOY.md](SIMPLE-DEPLOY.md)** - Deployment guide
+- **[TESTING.md](TESTING.md)** - Testing procedures
+- **API Docs**: http://localhost:8000/docs (FastAPI auto-generated)
+
+## Common Issues
+
+**Issue:** "Can't login to UI"
+**Solution:** Credentials are hardcoded: `admin` / `admin123`
+
+**Issue:** "No logs showing in UI"
+**Solution:** Check all 3 layers (syslog reception, database storage, API response)
+
+**Issue:** "Port 514 already in use"
+**Solution:** Another syslog daemon might be running (rsyslog, syslog-ng)
+
+---
+
+**Remember:** This is a SIMPLE system. Don't add complexity unless absolutely necessary. The goal is a working foundation, not a feature-complete enterprise SIEM.

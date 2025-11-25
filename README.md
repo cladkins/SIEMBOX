@@ -6,11 +6,12 @@ Stop manually checking logs. SIEM BOX collects, analyzes, and alerts on security
 
 ## What Does It Do?
 
-- **Collects logs** from all your systems (firewalls, servers, containers)
-- **Detects threats** with pre-built security rules
-- **Sends alerts** via email, Discord, or Slack when shit happens
-- **Scans for vulnerabilities** in your network and containers
-- **Shows everything** in a clean web dashboard
+- **Collects syslog** from all your systems (firewalls, servers, routers)
+- **Stores logs** in PostgreSQL for searching and analysis
+- **Shows everything** in a clean React dashboard
+- **Real-time monitoring** with auto-refreshing log display
+
+**Simple and focused. Just syslog ingestion and display.**
 
 ## Quick Start
 
@@ -29,30 +30,30 @@ Open http://localhost:3000 and login with `admin`/`admin123`
 **For Homelabs:**
 - Runs on a Raspberry Pi or any machine with 2GB RAM
 - No expensive enterprise licenses
-- Actually works without a PhD in cybersecurity
+- Simple and lightweight - ~350 lines of Python
 - Self-contained - no cloud dependencies
 
 **What You Get:**
-- Real-time log monitoring from all your systems
-- 20+ pre-configured detection rules (brute force, port scans, etc.)
-- Automatic vulnerability scanning
-- Alert notifications to Discord/Email/Slack
+- Real-time log monitoring from all your systems via syslog
+- Clean React dashboard for viewing logs
+- PostgreSQL storage for log history
 - Full REST API for automation
+- JWT authentication for security
 
 ## Architecture
 
 ```
-Your Systems → Log Agents → SIEM BOX → Alerts
-                (Fluent Bit)   (Docker)    (You)
+Your Systems → UDP 514 → SIEM BOX → React UI
+   (Syslog)              (Docker)      (You)
 ```
 
 **Components:**
-- **Frontend**: React dashboard (port 3000)
-- **Backend**: FastAPI service (port 8000)
+- **Frontend**: React dashboard on Nginx (port 3000)
+- **Backend**: FastAPI + Syslog server (port 8000, UDP 514)
 - **Database**: PostgreSQL (port 5432)
-- **Ingestion**: HTTP endpoint for logs
+- **Ingestion**: Syslog UDP 514 (primary) + HTTP API
 
-See [CLAUDE.md](CLAUDE.md) for technical details.
+See [SIMPLE-DEPLOY.md](SIMPLE-DEPLOY.md) for deployment details.
 
 ## Sending Logs
 
@@ -77,28 +78,10 @@ Protocol: UDP
 **Test it:**
 ```bash
 # Send a test syslog message
-python3 test_syslog.py
+echo "<134>Nov 24 12:34:56 firewall kernel: Test syslog" | nc -u localhost 514
 ```
 
-### Option 2: Direct HTTP (For Applications)
-
-For apps that can send JSON:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/logs/ingest \
-  -H "Content-Type: application/json" \
-  -d '{
-    "timestamp": "2025-01-01T12:00:00Z",
-    "hostname": "my-server",
-    "source_ip": "192.168.1.100",
-    "app_name": "nginx",
-    "raw_message": "GET /api/users HTTP/1.1 200",
-    "severity": "info",
-    "log_type": "access"
-  }'
-```
-
-### Option 3: Fluent Bit/Vector (Advanced)
+### Option 2: Fluent Bit/Vector (Advanced)
 
 For custom log parsing:
 
@@ -125,45 +108,41 @@ More examples in [ingestion_agents/](ingestion_agents/)
 
 ## Features
 
-### ✅ Log Management
-- Collect from any source (syslog, Docker, apps)
-- Search and filter with web UI
-- Real-time log streaming
+### ✅ Syslog Ingestion
+- UDP 514 syslog receiver
+- RFC 3164 syslog parsing (legacy format)
+- Automatic hostname and timestamp extraction
+- Works with any syslog-compatible device
 
-### ✅ Threat Detection
-- 20+ pre-configured security rules
-- Custom rule creation via UI
-- Pattern matching, thresholds, correlation
-- Automatic alert generation
+### ✅ Log Storage
+- PostgreSQL database for all logs
+- Indexed for fast queries
+- Stores raw syslog + parsed fields
 
-### ✅ Alerting
-- Multi-channel notifications (Email, Discord, Slack, SMS)
-- Configurable severity levels
-- Alert acknowledgment and tracking
-- Historical alert timeline
+### ✅ Web Dashboard
+- React-based UI
+- View recent logs with pagination
+- Dashboard stats (total logs, 24h logs)
+- JWT authentication
 
-### ✅ Vulnerability Scanning
-- Network scanning with Nmap
-- Container scanning with Trivy
-- Scheduled scans
-- CVE tracking and remediation workflow
-
-### ✅ Dashboard
-- Real-time statistics
-- Log volume charts
-- Alert trends
-- Top sources by activity
+### ✅ REST API
+- `/api/v1/auth/login` - Authentication
+- `/api/v1/logs` - Get logs with pagination
+- `/api/v1/dashboard/stats` - Dashboard statistics
+- Full API docs at `/docs` when running
 
 ## Configuration
 
-All configuration is done through the web UI after deployment:
+**Default Login:**
+- Username: `admin`
+- Password: `admin123`
 
-1. **Settings** → Configure notifications
-2. **Detection Rules** → Customize or add rules
-3. **Vulnerabilities** → Set up scan schedules
-4. **Users** → Manage access (change default password!)
+**Environment Variables** (optional):
+- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASS` - Database connection
+- `SECRET_KEY` - JWT secret (change in production!)
+- `SYSLOG_HOST`, `SYSLOG_PORT` - Syslog server settings
 
-For production deployment with custom passwords, SSL, etc., see [DEPLOYMENT.md](DEPLOYMENT.md)
+All configuration is in `compose.yaml`. For production deployment with SSL, custom passwords, etc., see [SIMPLE-DEPLOY.md](SIMPLE-DEPLOY.md)
 
 ## Ports
 
@@ -174,8 +153,8 @@ For production deployment with custom passwords, SSL, etc., see [DEPLOYMENT.md](
 
 ## Documentation
 
-- **[QUICK_START.md](QUICK_START.md)** - 5-minute setup guide
-- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Production deployment guide
+- **[SIMPLE-DEPLOY.md](SIMPLE-DEPLOY.md)** - Complete deployment guide
+- **[TESTING.md](TESTING.md)** - Testing and verification guide
 - **[CLAUDE.md](CLAUDE.md)** - Architecture and technical details
 - **API Docs**: http://localhost:8000/docs (when running)
 
@@ -199,22 +178,31 @@ git pull && docker compose up -d --build
 
 ### No logs showing up?
 
-1. Check backend is receiving logs:
+1. Check backend is receiving syslogs:
    ```bash
-   docker compose logs backend | grep ingest
+   docker logs siembox-backend | grep SYSLOG
    ```
 
-2. Test the ingestion endpoint:
+2. Send a test syslog:
    ```bash
-   curl -X POST http://localhost:8000/api/v1/logs/ingest \
-     -H "Content-Type: application/json" \
-     -d '{"timestamp":"2025-01-01T12:00:00Z","hostname":"test","source_ip":"192.168.1.1","app_name":"test","raw_message":"test","severity":"info","log_type":"test"}'
+   echo "<134>Nov 24 12:34:56 test-host Test message" | nc -u localhost 514
    ```
 
 3. Check database:
    ```bash
    docker exec siembox-postgres psql -U siembox -d siembox \
-     -c "SELECT COUNT(*) FROM processed_logs;"
+     -c "SELECT COUNT(*) FROM logs;"
+   ```
+
+4. Check API returns logs:
+   ```bash
+   # Login first
+   TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"username":"admin","password":"admin123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+   # Get logs
+   curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/v1/logs | python3 -m json.tool
    ```
 
 ### Frontend won't load?
@@ -229,7 +217,7 @@ All services should show "healthy".
 
 ### Other issues?
 
-See [DEPLOYMENT.md](DEPLOYMENT.md#troubleshooting) for more troubleshooting steps.
+See [SIMPLE-DEPLOY.md](SIMPLE-DEPLOY.md) for more troubleshooting steps.
 
 ## Security
 
@@ -240,13 +228,13 @@ See [DEPLOYMENT.md](DEPLOYMENT.md#troubleshooting) for more troubleshooting step
 **🚨 CHANGE THESE IMMEDIATELY AFTER FIRST LOGIN 🚨**
 
 For production:
-1. Change default password (Settings → Users)
-2. Generate secure SECRET_KEY: `openssl rand -hex 32`
-3. Use strong database password in `.env` file
+1. Change default password after first login
+2. Generate secure SECRET_KEY: `openssl rand -hex 32` (update in compose.yaml)
+3. Use strong database password in compose.yaml
 4. Set up reverse proxy with SSL (nginx/Caddy)
 5. Restrict database port to localhost only
 
-See [DEPLOYMENT.md](DEPLOYMENT.md#security-hardening) for full security checklist.
+The simple backend has hardcoded credentials for simplicity. For production, you'll need to implement proper user management.
 
 ## Requirements
 

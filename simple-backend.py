@@ -269,6 +269,17 @@ async def login(credentials: LoginRequest) -> LoginResponse:
         )
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
+@app.get("/api/v1/auth/me")
+async def get_current_user(_user: dict = Depends(verify_token)) -> Dict:
+    """Get current user profile"""
+    return {
+        "username": "admin",
+        "email": "admin@siembox.local",
+        "is_active": True,
+        "is_superuser": True,
+        "id": 1
+    }
+
 @app.get("/api/v1/logs")
 async def get_logs(
     limit: int = 50,

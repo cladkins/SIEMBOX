@@ -106,4 +106,5 @@ venv.bak/
 *.jpg
 *.jpeg
 !frontend/public/**/*.png
-!frontend/public/**/*.jpg 
+!frontend/public/**/*.jpg backend-old-backup/
+compose-old-backup.yaml

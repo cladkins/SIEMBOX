@@ -40,9 +40,8 @@ services:
       JOURNAL_2: ${JOURNAL_2:-}
       JOURNAL_3: ${JOURNAL_3:-}
 
-    volumes:
-      # UNCOMMENT AND CUSTOMIZE THE MOUNTS YOU NEED:
-
+    # UNCOMMENT AND ADD VOLUME MOUNTS AS NEEDED:
+    # volumes:
       # For NPM logs:
       # - /etc/komodo/stacks/npm/data/logs:/logs:ro
 

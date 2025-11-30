@@ -8,12 +8,33 @@ Universal log forwarder for sending logs from any source to SIEMBox via syslog. 
 - **Docker Container Logs**: Forward logs from specific Docker containers
 - **Systemd Journal**: Forward systemd journal logs (host system logs)
 - **Multiple Sources**: Monitor multiple log sources simultaneously
+- **Web-Based Config UI**: Easy-to-use interface for generating configurations
 - **Easy Configuration**: Single `.env` file for all settings
 - **Lightweight**: Based on Alpine Linux (~15MB image)
 - **Flexible**: Supports UDP and TCP syslog
 - **Custom Tags**: Tag logs by source for easy filtering in SIEMBox
 
 ## Quick Start
+
+### Option 1: Use the Configuration UI (Recommended)
+
+The easiest way to configure the log shipper is using the web-based UI:
+
+```bash
+cd log-shipper
+docker-compose -f docker-compose.config-ui.yml up -d
+```
+
+Then open your browser to **http://localhost:3002** and:
+1. Enter your SIEMBox connection details
+2. Add your log sources using the form
+3. Click "Generate Configuration"
+4. Download the `.env` and `docker-compose.yml` files
+5. Deploy using the generated files
+
+![Config UI](https://via.placeholder.com/800x400?text=Config+UI+Screenshot)
+
+### Option 2: Manual Configuration
 
 ### 1. Copy Configuration Files
 

@@ -93,7 +93,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
   }
 });
 
-// Test parser against sample log
+// Test parser against sample log (saved parser)
 router.post('/:id/test', async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
@@ -110,6 +110,43 @@ router.post('/:id/test', async (req: Request, res: Response) => {
 
     const parserEngine = new ParserEngine();
     const result = await parserEngine.testParser(parser, sample);
+
+    res.json({
+      matched: result !== null,
+      fields: result,
+    });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to test parser');
+  }
+});
+
+// Test parser configuration without saving (for parser builder)
+router.post('/test', async (req: Request, res: Response) => {
+  try {
+    const { parser_type, pattern, field_mappings, sample } = req.body;
+
+    if (!parser_type || !pattern || !field_mappings || !sample) {
+      throw new ApiError(400, 'Missing required fields: parser_type, pattern, field_mappings, sample');
+    }
+
+    // Create temporary parser object for testing
+    const tempParser: Parser = {
+      id: 0,
+      name: 'Test Parser',
+      description: null,
+      enabled: true,
+      priority: 100,
+      parser_type,
+      pattern,
+      field_mappings,
+      test_samples: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+
+    const parserEngine = new ParserEngine();
+    const result = await parserEngine.testParser(tempParser, sample);
 
     res.json({
       matched: result !== null,

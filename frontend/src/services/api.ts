@@ -77,6 +77,8 @@ export const api = {
   updateParser: (id: number, data: any) => apiClient.put(`/parsers/${id}`, data),
   deleteParser: (id: number) => apiClient.delete(`/parsers/${id}`),
   testParser: (id: number, sample: string) => apiClient.post(`/parsers/${id}/test`, { sample }),
+  testParserConfig: (parser_type: string, pattern: string, field_mappings: any, sample: string) =>
+    apiClient.post('/parsers/test', { parser_type, pattern, field_mappings, sample }),
 
   // Detection Rules
   getRules: () => apiClient.get('/rules'),

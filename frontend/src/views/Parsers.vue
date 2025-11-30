@@ -303,16 +303,15 @@ async function testCurrentParser() {
     }
   });
 
-  const testParser = {
-    id: 0,
-    ...parserForm,
-    field_mappings: mappings,
-  };
-
   testing.value = true;
   try {
-    // We'll create a temp parser ID for testing
-    const response = await api.testParser(selectedParser.value?.id || 0, testSample.value);
+    // Test parser configuration without saving
+    const response = await api.testParserConfig(
+      parserForm.parser_type,
+      parserForm.pattern,
+      mappings,
+      testSample.value
+    );
     testResult.value = response.data;
   } catch (error) {
     ElMessage.error('Test failed');

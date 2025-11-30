@@ -258,15 +258,6 @@ docker inspect siembox-log-shipper | jq '.[0].State.Health'
    docker restart siembox-log-shipper
    ```
 
-## Examples
-
-See the [examples](./examples/) directory for common configurations:
-
-- `examples/nginx.env` - Nginx access and error logs
-- `examples/docker.env` - Docker container logs
-- `examples/systemd.env` - System service logs
-- `examples/multi-source.env` - Multiple sources combined
-
 ## Architecture
 
 ### Managed Mode Flow

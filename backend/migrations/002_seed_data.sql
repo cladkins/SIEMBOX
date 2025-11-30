@@ -258,3 +258,134 @@ alert:
     true
 )
 ON CONFLICT (name) DO NOTHING;
+
+-- Built-in Detection Rule: UniFi IPS Repeated Blocks
+INSERT INTO detection_rules (name, description, severity, rule_yaml, rule_logic, tags, enabled)
+VALUES (
+    'UniFi IPS Repeated Attack Attempts',
+    'Detects multiple IPS block events from same external IP (persistent attack)',
+    'high',
+    'name: UniFi IPS Repeated Attack Attempts
+description: Detects multiple IPS block events from same external IP (persistent attack)
+severity: high
+enabled: true
+tags: [unifi, ips, intrusion, attack]
+
+conditions:
+  - field: action_type
+    operator: equals
+    value: "ips"
+  - field: action
+    operator: equals
+    value: "add"
+
+aggregation:
+  field: external_ip
+  timeframe: 10m
+  threshold: 5
+
+alert:
+  title: "Repeated IPS Blocks from {external_ip}"
+  description: "{count} IPS block events from {external_ip} in 10 minutes - possible persistent attack"',
+    '{"conditions": [{"field": "action_type", "operator": "equals", "value": "ips"}, {"field": "action", "operator": "equals", "value": "add"}], "aggregation": {"field": "external_ip", "timeframe": "10m", "threshold": 5}}',
+    ARRAY['unifi', 'ips', 'intrusion', 'attack'],
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Built-in Detection Rule: UniFi IPS Internal System Targeted
+INSERT INTO detection_rules (name, description, severity, rule_yaml, rule_logic, tags, enabled)
+VALUES (
+    'UniFi IPS Internal System Under Attack',
+    'Detects when internal system is being repeatedly targeted by IPS blocks',
+    'critical',
+    'name: UniFi IPS Internal System Under Attack
+description: Detects when internal system is being repeatedly targeted by IPS blocks
+severity: critical
+enabled: true
+tags: [unifi, ips, internal-threat, attack]
+
+conditions:
+  - field: action_type
+    operator: equals
+    value: "ips"
+  - field: action
+    operator: equals
+    value: "add"
+
+aggregation:
+  field: internal_ip
+  timeframe: 15m
+  threshold: 10
+
+alert:
+  title: "Internal System {internal_ip} Under Attack"
+  description: "{count} IPS blocks targeting {internal_ip} in 15 minutes - system may be compromised or under heavy attack"',
+    '{"conditions": [{"field": "action_type", "operator": "equals", "value": "ips"}, {"field": "action", "operator": "equals", "value": "add"}], "aggregation": {"field": "internal_ip", "timeframe": "15m", "threshold": 10}}',
+    ARRAY['unifi', 'ips', 'internal-threat', 'attack'],
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Built-in Detection Rule: UniFi IDS/IPS Error Events
+INSERT INTO detection_rules (name, description, severity, rule_yaml, rule_logic, tags, enabled)
+VALUES (
+    'UniFi IDS/IPS Error Events',
+    'Detects error-level events in UniFi IDS/IPS system',
+    'medium',
+    'name: UniFi IDS/IPS Error Events
+description: Detects error-level events in UniFi IDS/IPS system
+severity: medium
+enabled: true
+tags: [unifi, ips, ids, errors]
+
+conditions:
+  - field: severity
+    operator: equals
+    value: "Error"
+  - field: event_type
+    operator: contains
+    value: "error"
+
+alert:
+  title: "UniFi IDS/IPS Error Detected"
+  description: "IDS/IPS error event: {event_type} - {external_ip}:{external_port} -> {internal_ip}:{internal_port}"',
+    '{"conditions": [{"field": "severity", "operator": "equals", "value": "Error"}, {"field": "event_type", "operator": "contains", "value": "error"}]}',
+    ARRAY['unifi', 'ips', 'ids', 'errors'],
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Built-in Detection Rule: UniFi IPS Port Scan Detection
+INSERT INTO detection_rules (name, description, severity, rule_yaml, rule_logic, tags, enabled)
+VALUES (
+    'UniFi IPS Port Scan Detection',
+    'Detects potential port scanning activity based on IPS blocks from same IP to multiple internal ports',
+    'high',
+    'name: UniFi IPS Port Scan Detection
+description: Detects potential port scanning activity based on IPS blocks from same IP to multiple internal ports
+severity: high
+enabled: true
+tags: [unifi, ips, port-scan, reconnaissance]
+
+conditions:
+  - field: action_type
+    operator: equals
+    value: "ips"
+  - field: action
+    operator: equals
+    value: "add"
+
+aggregation:
+  field: external_ip
+  timeframe: 5m
+  threshold: 8
+
+alert:
+  title: "Port Scan Detected from {external_ip}"
+  description: "{count} IPS blocks from {external_ip} in 5 minutes - likely port scanning activity"',
+    '{"conditions": [{"field": "action_type", "operator": "equals", "value": "ips"}, {"field": "action", "operator": "equals", "value": "add"}], "aggregation": {"field": "external_ip", "timeframe": "5m", "threshold": 8}}',
+    ARRAY['unifi', 'ips', 'port-scan', 'reconnaissance'],
+    true
+)
+ON CONFLICT (name) DO NOTHING;

@@ -40,6 +40,7 @@ docker compose up -d
 - **[Deployment Guide](./DEPLOYMENT.md)** - Installation, configuration, and troubleshooting
 - **[Log Shipper](./log-shipper/README.md)** - Universal log forwarder for any source
 - **[Community Parsers](./PARSERS.md)** - Pre-built parsers for common log sources
+- **[Detection Rules](./RULES.md)** - Built-in and community detection rules
 - **Parser Builder** - Visual tool for creating custom parsers (in UI)
 - **Rule Editor** - Create detection rules with conditions and aggregations (in UI)
 

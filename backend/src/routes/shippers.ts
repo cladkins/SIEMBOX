@@ -1,0 +1,343 @@
+import { Router, Request, Response } from 'express';
+import { LogShipperModel, ShipperSourceModel, ShipperVolumeModel, ShipperActivityModel } from '../models/LogShipper';
+import { ApiError } from '../middleware/errorHandler';
+import crypto from 'crypto';
+
+const router = Router();
+
+// Generate API key for new shipper
+function generateApiKey(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+// Get all shippers
+router.get('/', async (_req: Request, res: Response) => {
+  try {
+    const shippers = await LogShipperModel.findAll();
+    res.json(shippers);
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch shippers');
+  }
+});
+
+// Get single shipper with full config
+router.get('/:id', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const shipper = await LogShipperModel.getFullConfig(id);
+
+    if (!shipper) {
+      throw new ApiError(404, 'Shipper not found');
+    }
+
+    res.json(shipper);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to fetch shipper');
+  }
+});
+
+// Create new shipper
+router.post('/', async (req: Request, res: Response) => {
+  try {
+    const { name, description, hostname } = req.body;
+
+    if (!name) {
+      throw new ApiError(400, 'Shipper name is required');
+    }
+
+    const apiKey = generateApiKey();
+
+    const shipper = await LogShipperModel.create({
+      name,
+      description,
+      hostname,
+      api_key: apiKey,
+    });
+
+    await ShipperActivityModel.log(shipper.id, 'created', 'Shipper created');
+
+    res.status(201).json(shipper);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to create shipper');
+  }
+});
+
+// Update shipper
+router.put('/:id', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const updates = req.body;
+
+    // Don't allow updating api_key directly
+    delete updates.api_key;
+
+    const shipper = await LogShipperModel.update(id, updates);
+
+    if (!shipper) {
+      throw new ApiError(404, 'Shipper not found');
+    }
+
+    await ShipperActivityModel.log(id, 'config_updated', 'Shipper configuration updated');
+
+    res.json(shipper);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to update shipper');
+  }
+});
+
+// Delete shipper
+router.delete('/:id', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const deleted = await LogShipperModel.delete(id);
+
+    if (!deleted) {
+      throw new ApiError(404, 'Shipper not found');
+    }
+
+    res.json({ message: 'Shipper deleted successfully' });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to delete shipper');
+  }
+});
+
+// Get shipper sources
+router.get('/:id/sources', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const sources = await ShipperSourceModel.findByShipperId(id);
+    res.json(sources);
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch sources');
+  }
+});
+
+// Add source to shipper
+router.post('/:id/sources', async (req: Request, res: Response) => {
+  try {
+    const shipper_id = parseInt(req.params.id);
+    const { source_type, enabled, file_path, container_name, journal_unit, tag, facility } = req.body;
+
+    if (!source_type || !tag) {
+      throw new ApiError(400, 'source_type and tag are required');
+    }
+
+    const source = await ShipperSourceModel.create({
+      shipper_id,
+      source_type,
+      enabled,
+      file_path,
+      container_name,
+      journal_unit,
+      tag,
+      facility: facility || 'local0',
+    });
+
+    await ShipperActivityModel.log(shipper_id, 'source_added', `Added ${source_type} source: ${tag}`);
+
+    res.status(201).json(source);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to add source');
+  }
+});
+
+// Update source
+router.put('/sources/:sourceId', async (req: Request, res: Response) => {
+  try {
+    const sourceId = parseInt(req.params.sourceId);
+    const updates = req.body;
+
+    const source = await ShipperSourceModel.update(sourceId, updates);
+
+    if (!source) {
+      throw new ApiError(404, 'Source not found');
+    }
+
+    await ShipperActivityModel.log(source.shipper_id, 'source_updated', `Updated source: ${source.tag}`);
+
+    res.json(source);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to update source');
+  }
+});
+
+// Delete source
+router.delete('/sources/:sourceId', async (req: Request, res: Response) => {
+  try {
+    const sourceId = parseInt(req.params.sourceId);
+    const deleted = await ShipperSourceModel.delete(sourceId);
+
+    if (!deleted) {
+      throw new ApiError(404, 'Source not found');
+    }
+
+    res.json({ message: 'Source deleted successfully' });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to delete source');
+  }
+});
+
+// Get shipper volumes
+router.get('/:id/volumes', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const volumes = await ShipperVolumeModel.findByShipperId(id);
+    res.json(volumes);
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch volumes');
+  }
+});
+
+// Add volume to shipper
+router.post('/:id/volumes', async (req: Request, res: Response) => {
+  try {
+    const shipper_id = parseInt(req.params.id);
+    const { host_path, container_path, mode } = req.body;
+
+    if (!host_path || !container_path) {
+      throw new ApiError(400, 'host_path and container_path are required');
+    }
+
+    const volume = await ShipperVolumeModel.create({
+      shipper_id,
+      host_path,
+      container_path,
+      mode: mode || 'ro',
+    });
+
+    await ShipperActivityModel.log(shipper_id, 'volume_added', `Added volume: ${host_path}`);
+
+    res.status(201).json(volume);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to add volume');
+  }
+});
+
+// Delete volume
+router.delete('/volumes/:volumeId', async (req: Request, res: Response) => {
+  try {
+    const volumeId = parseInt(req.params.volumeId);
+    const deleted = await ShipperVolumeModel.delete(volumeId);
+
+    if (!deleted) {
+      throw new ApiError(404, 'Volume not found');
+    }
+
+    res.json({ message: 'Volume deleted successfully' });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to delete volume');
+  }
+});
+
+// Get shipper activity log
+router.get('/:id/activity', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const limit = parseInt(req.query.limit as string) || 50;
+    const activity = await ShipperActivityModel.getRecentActivity(id, limit);
+    res.json(activity);
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch activity');
+  }
+});
+
+// Regenerate API key
+router.post('/:id/regenerate-key', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const newApiKey = generateApiKey();
+
+    const shipper = await LogShipperModel.update(id, { api_key: newApiKey });
+
+    if (!shipper) {
+      throw new ApiError(404, 'Shipper not found');
+    }
+
+    await ShipperActivityModel.log(id, 'key_regenerated', 'API key regenerated');
+
+    res.json({ api_key: newApiKey });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to regenerate API key');
+  }
+});
+
+// ============================================================================
+// PUBLIC ENDPOINTS (for shippers to call - no authentication required)
+// ============================================================================
+
+// Shipper heartbeat/registration
+router.post('/register', async (req: Request, res: Response) => {
+  try {
+    const { api_key, version, hostname, metadata } = req.body;
+
+    if (!api_key) {
+      throw new ApiError(400, 'API key is required');
+    }
+
+    const shipper = await LogShipperModel.findByApiKey(api_key);
+
+    if (!shipper) {
+      throw new ApiError(404, 'Invalid API key');
+    }
+
+    const ip_address = req.ip || req.socket.remoteAddress || 'unknown';
+
+    // Update shipper info
+    await LogShipperModel.update(shipper.id, {
+      version,
+      hostname,
+      metadata,
+      ip_address,
+      last_seen: new Date(),
+      status: 'online',
+    });
+
+    // Return current configuration
+    const config = await LogShipperModel.getFullConfig(shipper.id);
+
+    res.json({
+      success: true,
+      config,
+    });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to register shipper');
+  }
+});
+
+// Get shipper configuration (for shipper to poll)
+router.get('/config/:api_key', async (req: Request, res: Response) => {
+  try {
+    const { api_key } = req.params;
+
+    const shipper = await LogShipperModel.findByApiKey(api_key);
+
+    if (!shipper) {
+      throw new ApiError(404, 'Invalid API key');
+    }
+
+    // Update heartbeat
+    const ip_address = req.ip || req.socket.remoteAddress || 'unknown';
+    await LogShipperModel.updateHeartbeat(api_key, ip_address);
+
+    // Get full configuration
+    const config = await LogShipperModel.getFullConfig(shipper.id);
+
+    res.json(config);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to fetch configuration');
+  }
+});
+
+export default router;

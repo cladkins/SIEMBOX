@@ -31,6 +31,10 @@
           <el-icon><Files /></el-icon>
           <span>Detection Rules</span>
         </el-menu-item>
+        <el-menu-item index="/shippers">
+          <el-icon><Upload /></el-icon>
+          <span>Log Shippers</span>
+        </el-menu-item>
         <el-menu-item index="/settings">
           <el-icon><Tools /></el-icon>
           <span>Settings</span>
@@ -60,7 +64,7 @@
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
-import { Monitor, Bell, Document, Setting, Files, Tools } from '@element-plus/icons-vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();
@@ -74,6 +78,7 @@ const pageTitle = computed(() => {
     '/logs': 'Logs',
     '/parsers': 'Parsers',
     '/rules': 'Detection Rules',
+    '/shippers': 'Log Shippers',
     '/settings': 'Settings',
   };
   return titles[route.path] || 'SIEMBox';

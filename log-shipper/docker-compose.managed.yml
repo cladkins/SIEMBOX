@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  log-shipper:
+    build:
+      context: .
+      dockerfile: Dockerfile.managed
+    container_name: siembox-log-shipper
+    restart: unless-stopped
+
+    environment:
+      # REQUIRED: API key from SIEMBox (get this from SIEMBox UI)
+      SHIPPER_API_KEY: ${SHIPPER_API_KEY}
+
+      # REQUIRED: SIEMBox API URL
+      SIEMBOX_API_URL: ${SIEMBOX_API_URL:-http://192.168.1.76:3001/api}
+
+      # Optional: Poll interval for configuration updates (seconds)
+      CONFIG_POLL_INTERVAL: ${CONFIG_POLL_INTERVAL:-30}
+
+      # Optional: Heartbeat interval (seconds)
+      HEARTBEAT_INTERVAL: ${HEARTBEAT_INTERVAL:-60}
+
+    # Volume mounts configured from SIEMBox UI
+    # Uncomment and add as needed based on your configuration
+    volumes:
+      - /tmp/test-logs:/test-logs:ro
+
+    network_mode: host

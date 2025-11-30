@@ -105,4 +105,21 @@ export const api = {
   updateRetentionSettings: (data: any) => apiClient.put('/settings/retention', data),
   runManualCleanup: (data: any) => apiClient.post('/settings/retention/cleanup', data),
   getRetentionStatistics: () => apiClient.get('/settings/retention/stats'),
+
+  // Log Shippers
+  getShippers: () => apiClient.get('/shippers'),
+  getShipper: (id: number) => apiClient.get(`/shippers/${id}`),
+  createShipper: (data: any) => apiClient.post('/shippers', data),
+  updateShipper: (id: number, data: any) => apiClient.put(`/shippers/${id}`, data),
+  deleteShipper: (id: number) => apiClient.delete(`/shippers/${id}`),
+
+  // Shipper Sources
+  getShipperSources: (shipperId: number) => apiClient.get(`/shippers/${shipperId}/sources`),
+  createShipperSource: (shipperId: number, data: any) => apiClient.post(`/shippers/${shipperId}/sources`, data),
+  deleteShipperSource: (shipperId: number, sourceId: number) => apiClient.delete(`/shippers/${shipperId}/sources/${sourceId}`),
+
+  // Shipper Volumes
+  getShipperVolumes: (shipperId: number) => apiClient.get(`/shippers/${shipperId}/volumes`),
+  createShipperVolume: (shipperId: number, data: any) => apiClient.post(`/shippers/${shipperId}/volumes`, data),
+  deleteShipperVolume: (shipperId: number, volumeId: number) => apiClient.delete(`/shippers/${shipperId}/volumes/${volumeId}`),
 };

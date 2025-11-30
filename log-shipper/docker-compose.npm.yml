@@ -1,0 +1,34 @@
+# Example: Forward NPM logs to SIEMBox
+# Deploy this on your NPM server
+
+version: '3.8'
+
+services:
+  log-shipper:
+    build: .
+    container_name: siembox-log-shipper-npm
+    environment:
+      # SIEMBox server details
+      SIEM_HOST: 192.168.1.76
+      SIEM_PORT: 514
+      SIEM_PROTOCOL: udp
+
+      # Hostname to identify this shipper
+      SHIPPER_HOSTNAME: npm-server
+
+      # File-based log sources
+      # Format: FILE_N=/path/to/file;tag;facility
+      FILE_1: /logs/proxy-host-1.log;npm-access;local0
+      FILE_2: /logs/proxy-host-2.log;npm-access;local0
+      FILE_3: /logs/proxy-host-3.log;npm-access;local0
+      FILE_4: /logs/error.log;npm-error;local0
+      FILE_5: /logs/default.log;npm-default;local0
+
+    volumes:
+      # Mount NPM logs directory (read-only)
+      - /etc/komodo/stacks/npm/data/logs:/logs:ro
+
+    restart: unless-stopped
+
+    # Use host network for simplest networking
+    network_mode: host

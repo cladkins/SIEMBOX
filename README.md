@@ -5,6 +5,7 @@ A lightweight, self-hosted Security Information and Event Management (SIEM) syst
 ## Features
 
 - **Syslog Ingestion**: Receive logs via UDP/TCP on port 514
+- **Log Shipper**: Universal log forwarder for collecting logs from any source
 - **Custom Parsers**: Build regex, grok, or JSON parsers to extract fields from logs
 - **Detection Rules**: Create rules with conditions and thresholds to trigger alerts
 - **Alert Management**: View, acknowledge, and manage security alerts
@@ -37,6 +38,7 @@ docker compose up -d
 ## Documentation
 
 - **[Deployment Guide](./DEPLOYMENT.md)** - Installation, configuration, and troubleshooting
+- **[Log Shipper](./log-shipper/README.md)** - Universal log forwarder for any source
 - **[Community Parsers](./PARSERS.md)** - Pre-built parsers for common log sources
 - **Parser Builder** - Visual tool for creating custom parsers (in UI)
 - **Rule Editor** - Create detection rules with conditions and aggregations (in UI)
@@ -46,6 +48,7 @@ docker compose up -d
 - **Frontend**: Vue.js 3 + Element Plus UI + Vite
 - **Backend**: Node.js + TypeScript + Express
 - **Database**: PostgreSQL with JSONB for flexible log storage
+- **Log Shipper**: Alpine-based log forwarder (optional component)
 - **Deployment**: Docker Compose
 
 ## Contributing

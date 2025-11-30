@@ -1,0 +1,49 @@
+# SIEMBox Log Shipper Configuration Example
+# Copy this file to config.yml and customize for your environment
+
+# File-based log sources
+files:
+  # NPM Access Logs
+  - path: /logs/npm/proxy-host-*.log
+    tag: npm-access
+    facility: local0
+
+  # NPM Error Logs
+  - path: /logs/npm/error.log
+    tag: npm-error
+    facility: local0
+
+  # Application Logs
+  - path: /var/log/myapp/application.log
+    tag: myapp
+    facility: local1
+
+  # System Auth Logs
+  - path: /var/log/auth.log
+    tag: system-auth
+    facility: local2
+
+# Docker container log sources
+# Note: Requires /var/run/docker.sock to be mounted
+docker:
+  # Forward logs from specific containers
+  - container: nginx
+    tag: nginx
+    facility: local3
+
+  - container: postgres
+    tag: postgres
+    facility: local3
+
+# Systemd journal sources
+# Note: Requires host journalctl to be available
+journal:
+  # System SSH service
+  - unit: sshd
+    tag: sshd
+    facility: local4
+
+  # Docker service
+  - unit: docker
+    tag: docker-service
+    facility: local4

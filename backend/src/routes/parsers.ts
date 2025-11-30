@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { ParserModel } from '../models/Parser';
+import { ParserModel, Parser } from '../models/Parser';
 import { ParserEngine } from '../services/parser/parserEngine';
 import { ApiError } from '../middleware/errorHandler';
 

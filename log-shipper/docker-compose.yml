@@ -1,61 +1,62 @@
-# SIEMBox Log Shipper - Main Deployment File
-# This is a generic example showing all capabilities
-
 version: '3.8'
 
 services:
   log-shipper:
     build: .
-    container_name: siembox-log-shipper
-    environment:
-      # Required: SIEMBox server connection
-      SIEM_HOST: ${SIEM_HOST:-192.168.1.76}
-      SIEM_PORT: ${SIEM_PORT:-514}
-      SIEM_PROTOCOL: ${SIEM_PROTOCOL:-udp}  # udp or tcp
-
-      # Optional: Custom hostname identifier
-      SHIPPER_HOSTNAME: ${SHIPPER_HOSTNAME:-log-shipper}
-
-      # File-based log sources
-      # Format: FILE_N=/path/to/file;tag;facility
-      # Uncomment and customize as needed:
-      # FILE_1: /logs/app.log;application;local0
-      # FILE_2: /logs/error.log;app-error;local0
-
-      # Docker container log sources
-      # Format: DOCKER_N=container_name;tag;facility
-      # Requires: /var/run/docker.sock mounted
-      # Uncomment and customize as needed:
-      # DOCKER_1: nginx;nginx;local3
-      # DOCKER_2: postgres;database;local3
-
-      # Systemd journal sources
-      # Format: JOURNAL_N=unit_name;tag;facility
-      # Requires: systemd journal access
-      # Uncomment and customize as needed:
-      # JOURNAL_1: sshd;ssh;local4
-      # JOURNAL_2: docker;docker-daemon;local4
-
-    volumes:
-      # Option 1: Use config file instead of environment variables
-      # - ./config.yml:/config/config.yml:ro
-
-      # Option 2: Mount log directories
-      # - /path/to/logs:/logs:ro
-
-      # Option 3: Mount Docker socket for container logs
-      # - /var/run/docker.sock:/var/run/docker.sock:ro
-
-      # Option 4: Mount host logs
-      # - /var/log:/host-logs:ro
-
+    container_name: ${CONTAINER_NAME:-siembox-log-shipper}
     restart: unless-stopped
 
-    # Use host network for simplest setup
-    # Alternatively, use bridge network if you prefer
-    network_mode: host
+    environment:
+      # SIEMBox connection settings (from .env file)
+      SIEM_HOST: ${SIEM_HOST}
+      SIEM_PORT: ${SIEM_PORT:-514}
+      SIEM_PROTOCOL: ${SIEM_PROTOCOL:-udp}
+      SHIPPER_HOSTNAME: ${SHIPPER_HOSTNAME:-log-shipper}
 
-# If using bridge network instead of host:
-# networks:
-#   default:
-#     driver: bridge
+      # File-based log sources (from .env file)
+      # Format: /path/to/file;tag;facility
+      FILE_1: ${FILE_1:-}
+      FILE_2: ${FILE_2:-}
+      FILE_3: ${FILE_3:-}
+      FILE_4: ${FILE_4:-}
+      FILE_5: ${FILE_5:-}
+      FILE_6: ${FILE_6:-}
+      FILE_7: ${FILE_7:-}
+      FILE_8: ${FILE_8:-}
+      FILE_9: ${FILE_9:-}
+      FILE_10: ${FILE_10:-}
+
+      # Docker container log sources (from .env file)
+      # Format: container_name;tag;facility
+      DOCKER_1: ${DOCKER_1:-}
+      DOCKER_2: ${DOCKER_2:-}
+      DOCKER_3: ${DOCKER_3:-}
+      DOCKER_4: ${DOCKER_4:-}
+      DOCKER_5: ${DOCKER_5:-}
+
+      # Systemd journal sources (from .env file)
+      # Format: unit_name;tag;facility
+      JOURNAL_1: ${JOURNAL_1:-}
+      JOURNAL_2: ${JOURNAL_2:-}
+      JOURNAL_3: ${JOURNAL_3:-}
+
+    volumes:
+      # UNCOMMENT AND CUSTOMIZE THE MOUNTS YOU NEED:
+
+      # For NPM logs:
+      # - /etc/komodo/stacks/npm/data/logs:/logs:ro
+
+      # For custom log directories:
+      # - /path/to/your/logs:/logs:ro
+
+      # For host system logs:
+      # - /var/log:/host-logs:ro
+
+      # For Docker container logs:
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
+
+      # For config file (alternative to env vars):
+      # - ./config.yml:/config/config.yml:ro
+
+    # Use host network for simplest setup
+    network_mode: host

@@ -8,218 +8,251 @@ Universal log forwarder for sending logs from any source to SIEMBox via syslog. 
 - **Docker Container Logs**: Forward logs from specific Docker containers
 - **Systemd Journal**: Forward systemd journal logs (host system logs)
 - **Multiple Sources**: Monitor multiple log sources simultaneously
-- **Flexible Configuration**: Configure via environment variables or YAML file
+- **Easy Configuration**: Single `.env` file for all settings
 - **Lightweight**: Based on Alpine Linux (~15MB image)
-- **Network Modes**: Supports both UDP and TCP syslog
+- **Flexible**: Supports UDP and TCP syslog
 - **Custom Tags**: Tag logs by source for easy filtering in SIEMBox
 
 ## Quick Start
 
-### 1. Forward NPM Logs (Your Use Case)
-
-On your NPM server:
+### 1. Copy Configuration Files
 
 ```bash
 cd log-shipper
-docker-compose -f docker-compose.npm.yml up -d
+cp .env.example .env
 ```
 
-This will forward all NPM logs from `/etc/komodo/stacks/npm/data/logs` to your SIEMBox at `192.168.1.76:514`.
+### 2. Edit `.env` File
 
-### 2. Forward Host System Logs
+Edit `.env` and set your SIEMBox server IP:
 
 ```bash
-docker-compose -f docker-compose.host.yml up -d
+SIEM_HOST=192.168.1.76  # Your SIEMBox server IP
 ```
 
-### 3. Forward Docker Container Logs
+Then uncomment the log sources you want to forward. For example, for NPM logs:
 
 ```bash
-docker-compose -f docker-compose.docker.yml up -d
+FILE_1=/logs/proxy-host-1.log;npm-access;local0
+FILE_2=/logs/error.log;npm-error;local0
 ```
 
-## Configuration Methods
+### 3. Edit `docker-compose.yml`
 
-You can configure the log shipper in two ways:
+Uncomment the volume mounts for your log sources. For NPM:
 
-### Method 1: Environment Variables (Recommended for simple setups)
-
-```yaml
-environment:
-  SIEM_HOST: 192.168.1.76
-  SIEM_PORT: 514
-  SIEM_PROTOCOL: udp
-  SHIPPER_HOSTNAME: my-server
-
-  # File sources: FILE_N=/path;tag;facility
-  FILE_1: /logs/app.log;application;local0
-  FILE_2: /logs/error.log;app-error;local0
-
-  # Docker sources: DOCKER_N=container;tag;facility
-  DOCKER_1: nginx;nginx;local3
-
-  # Journal sources: JOURNAL_N=unit;tag;facility
-  JOURNAL_1: sshd;ssh;local4
-```
-
-### Method 2: Config File (Recommended for complex setups)
-
-Create `config.yml`:
-
-```yaml
-files:
-  - path: /logs/npm/proxy-host-*.log
-    tag: npm-access
-    facility: local0
-
-docker:
-  - container: nginx
-    tag: nginx
-    facility: local3
-
-journal:
-  - unit: sshd
-    tag: sshd
-    facility: local4
-```
-
-Mount it:
 ```yaml
 volumes:
-  - ./config.yml:/config/config.yml:ro
+  - /etc/komodo/stacks/npm/data/logs:/logs:ro
 ```
 
-## Environment Variables
+### 4. Deploy
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SIEM_HOST` | `localhost` | SIEMBox server hostname or IP |
-| `SIEM_PORT` | `514` | SIEMBox syslog port |
-| `SIEM_PROTOCOL` | `udp` | Protocol: `udp` or `tcp` |
-| `SHIPPER_HOSTNAME` | `hostname` | Hostname identifier in logs |
-| `LOG_LEVEL` | `info` | Log verbosity |
+```bash
+docker-compose up -d
+```
 
-### Dynamic Source Variables
+### 5. Verify
 
-**File Sources:**
-- Format: `FILE_N=/path/to/file;tag;facility`
-- Example: `FILE_1=/var/log/app.log;myapp;local0`
+```bash
+# Check shipper logs
+docker logs -f siembox-log-shipper
 
-**Docker Container Sources:**
-- Format: `DOCKER_N=container_name;tag;facility`
+# Check SIEMBox UI
+# Navigate to http://your-siembox-ip:3000
+```
+
+## Configuration
+
+All configuration is done through two files:
+
+### 1. `.env` File (Environment Variables)
+
+Controls **what** logs to forward:
+
+```bash
+# Required
+SIEM_HOST=192.168.1.76
+SIEM_PORT=514
+
+# File sources (format: /path;tag;facility)
+FILE_1=/logs/app.log;myapp;local0
+FILE_2=/logs/error.log;myapp-error;local0
+
+# Docker sources (format: container;tag;facility)
+DOCKER_1=nginx;nginx;local3
+
+# Journal sources (format: unit;tag;facility)
+JOURNAL_1=sshd;ssh;local4
+```
+
+### 2. `docker-compose.yml` (Volume Mounts)
+
+Controls **where** logs come from:
+
+```yaml
+volumes:
+  # Uncomment what you need:
+  - /path/to/logs:/logs:ro                          # For file sources
+  - /var/run/docker.sock:/var/run/docker.sock:ro    # For Docker sources
+  - /var/log:/host-logs:ro                          # For host logs
+```
+
+## Common Use Cases
+
+### Use Case 1: NPM Logs (Your Scenario)
+
+**`.env` file:**
+```bash
+SIEM_HOST=192.168.1.76
+SHIPPER_HOSTNAME=npm-server
+
+FILE_1=/logs/proxy-host-1.log;npm-access;local0
+FILE_2=/logs/proxy-host-2.log;npm-access;local0
+FILE_3=/logs/error.log;npm-error;local0
+```
+
+**`docker-compose.yml` volumes:**
+```yaml
+volumes:
+  - /etc/komodo/stacks/npm/data/logs:/logs:ro
+```
+
+### Use Case 2: Host System Logs
+
+**`.env` file:**
+```bash
+SIEM_HOST=192.168.1.76
+SHIPPER_HOSTNAME=web-server
+
+FILE_1=/host-logs/auth.log;auth;local2
+FILE_2=/host-logs/syslog;syslog;local2
+JOURNAL_1=sshd;ssh;local4
+```
+
+**`docker-compose.yml` volumes:**
+```yaml
+volumes:
+  - /var/log:/host-logs:ro
+  - /var/run/docker.sock:/var/run/docker.sock:ro  # For journal
+```
+
+### Use Case 3: Docker Container Logs
+
+**`.env` file:**
+```bash
+SIEM_HOST=192.168.1.76
+SHIPPER_HOSTNAME=docker-host
+
+DOCKER_1=nginx;nginx;local3
+DOCKER_2=postgres;database;local3
+DOCKER_3=redis;cache;local3
+```
+
+**`docker-compose.yml` volumes:**
+```yaml
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock:ro
+```
+
+### Use Case 4: Mixed Sources
+
+**`.env` file:**
+```bash
+SIEM_HOST=192.168.1.76
+SHIPPER_HOSTNAME=app-server
+
+# Application files
+FILE_1=/app-logs/application.log;myapp;local1
+FILE_2=/app-logs/error.log;myapp-error;local1
+
+# System logs
+FILE_3=/host-logs/auth.log;auth;local2
+
+# Container logs
+DOCKER_1=nginx;nginx;local3
+```
+
+**`docker-compose.yml` volumes:**
+```yaml
+volumes:
+  - /var/log/myapp:/app-logs:ro
+  - /var/log:/host-logs:ro
+  - /var/run/docker.sock:/var/run/docker.sock:ro
+```
+
+## Environment Variables Reference
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SIEM_HOST` | **Yes** | - | SIEMBox server IP or hostname |
+| `SIEM_PORT` | No | `514` | SIEMBox syslog port |
+| `SIEM_PROTOCOL` | No | `udp` | Protocol: `udp` or `tcp` |
+| `SHIPPER_HOSTNAME` | No | `log-shipper` | Identifier in logs |
+
+### Log Source Variables
+
+**File Sources:** `FILE_1` through `FILE_10`
+- Format: `/path/to/file;tag;facility`
+- Example: `FILE_1=/logs/app.log;myapp;local0`
+
+**Docker Sources:** `DOCKER_1` through `DOCKER_5`
+- Format: `container_name;tag;facility`
 - Example: `DOCKER_1=nginx;nginx;local3`
 - Requires: `/var/run/docker.sock` mounted
 
-**Systemd Journal Sources:**
-- Format: `JOURNAL_N=unit_name;tag;facility`
+**Journal Sources:** `JOURNAL_1` through `JOURNAL_3`
+- Format: `unit_name;tag;facility`
 - Example: `JOURNAL_1=sshd;ssh;local4`
 - Requires: systemd journal access
 
-## Syslog Facilities
+### Syslog Facilities
 
-Use these facility codes to organize logs in SIEMBox:
+| Facility | Use For |
+|----------|---------|
+| `local0` | Web server access logs, general application logs |
+| `local1` | Application-specific logs |
+| `local2` | System logs (auth, syslog, kernel) |
+| `local3` | Container/service logs |
+| `local4` | Security/authentication logs |
+| `local5-7` | Reserved for custom use |
 
-- `local0` - General application logs
-- `local1` - Application-specific logs
-- `local2` - System logs
-- `local3` - Container/service logs
-- `local4` - Security/auth logs
-- `local5` - Reserved
-- `local6` - Reserved
-- `local7` - Reserved
+## Deployment Examples
 
-## Examples
+### Deploy on NPM Server
 
-### Example 1: NPM Logs
+```bash
+# 1. Copy log-shipper directory to NPM server
+scp -r log-shipper user@npm-server:/opt/
 
-```yaml
-services:
-  log-shipper:
-    image: siembox-log-shipper
-    environment:
-      SIEM_HOST: 192.168.1.76
-      SIEM_PORT: 514
-      FILE_1: /logs/proxy-host-1.log;npm-access;local0
-      FILE_2: /logs/error.log;npm-error;local0
-    volumes:
-      - /etc/komodo/stacks/npm/data/logs:/logs:ro
-    network_mode: host
+# 2. SSH to NPM server
+ssh user@npm-server
+cd /opt/log-shipper
+
+# 3. Configure
+cp .env.example .env
+nano .env  # Set SIEM_HOST and uncomment NPM file sources
+
+nano docker-compose.yml  # Uncomment NPM volume mount
+
+# 4. Deploy
+docker-compose up -d
+
+# 5. Verify
+docker logs -f siembox-log-shipper
 ```
 
-### Example 2: Multiple Applications
-
-```yaml
-services:
-  log-shipper:
-    image: siembox-log-shipper
-    environment:
-      SIEM_HOST: 192.168.1.76
-      FILE_1: /logs/nginx/access.log;nginx-access;local0
-      FILE_2: /logs/nginx/error.log;nginx-error;local0
-      FILE_3: /logs/app/app.log;myapp;local1
-      DOCKER_1: postgres;database;local3
-      DOCKER_2: redis;cache;local3
-    volumes:
-      - /var/log/nginx:/logs/nginx:ro
-      - /var/log/myapp:/logs/app:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    network_mode: host
-```
-
-### Example 3: Host System Monitoring
-
-```yaml
-services:
-  log-shipper:
-    image: siembox-log-shipper
-    environment:
-      SIEM_HOST: 192.168.1.76
-      FILE_1: /host-logs/auth.log;auth;local2
-      FILE_2: /host-logs/syslog;syslog;local2
-      JOURNAL_1: sshd;ssh;local4
-      JOURNAL_2: docker;docker-daemon;local4
-    volumes:
-      - /var/log:/host-logs:ro
-    network_mode: host
-    pid: host
-```
-
-## Building
-
-Build the Docker image:
+### Deploy on Any Server
 
 ```bash
 cd log-shipper
-docker build -t siembox-log-shipper .
-```
+cp .env.example .env
 
-Or build with docker-compose:
+# Edit configuration
+nano .env                    # Configure log sources
+nano docker-compose.yml      # Uncomment volume mounts
 
-```bash
-docker-compose build
-```
-
-## Deployment
-
-### Deploy to NPM Server
-
-1. Copy the `log-shipper` directory to your NPM server
-2. Edit `docker-compose.npm.yml` and update `SIEM_HOST` if needed
-3. Deploy:
-
-```bash
-cd log-shipper
-docker-compose -f docker-compose.npm.yml up -d
-```
-
-### Deploy to Any Server
-
-1. Copy the `log-shipper` directory
-2. Create/edit your own docker-compose file or use one of the examples
-3. Update environment variables for your sources
-4. Deploy:
-
-```bash
+# Deploy
 docker-compose up -d
 ```
 
@@ -231,7 +264,7 @@ docker-compose up -d
 docker logs -f siembox-log-shipper
 ```
 
-You should see output like:
+**Healthy output:**
 ```
 [INFO] =========================================
 [INFO] SIEMBox Log Shipper Starting
@@ -249,78 +282,140 @@ You should see output like:
 
 ### Verify in SIEMBox
 
-1. Log into SIEMBox UI: http://192.168.1.76:3000
+1. Open SIEMBox UI: `http://192.168.1.76:3000`
 2. Navigate to **Logs** page
-3. Look for logs with tags like `npm-access`, `npm-error`, etc.
-4. Filter by hostname to see logs from specific shippers
+3. Filter by:
+   - **Tag** (e.g., `npm-access`, `nginx`, `auth`)
+   - **Hostname** (your `SHIPPER_HOSTNAME` value)
 
 ## Troubleshooting
 
-### Logs not appearing in SIEMBox
+### No logs appearing in SIEMBox
 
-1. **Check shipper is running:**
-   ```bash
-   docker ps | grep log-shipper
+**1. Check shipper is running:**
+```bash
+docker ps | grep log-shipper
+```
+
+**2. Check shipper logs for errors:**
+```bash
+docker logs siembox-log-shipper
+```
+
+**3. Test network connectivity:**
+```bash
+docker exec siembox-log-shipper nc -zv 192.168.1.76 514
+```
+
+**4. Verify SIEMBox is listening:**
+```bash
+# On SIEMBox server
+netstat -uln | grep 514
+```
+
+### "File not found" errors
+
+- Check file paths in `.env` match mounted paths in container
+- Verify volume mounts in `docker-compose.yml` are correct
+- Ensure files exist on host: `ls -la /path/to/logs`
+
+### "Container not found" (Docker sources)
+
+- Verify container names: `docker ps --format '{{.Names}}'`
+- Ensure Docker socket is mounted: `/var/run/docker.sock`
+- Check containers are running when shipper starts
+
+### Permission denied
+
+**For log files:**
+```bash
+chmod 644 /path/to/log/file
+```
+
+**For Docker socket:**
+```bash
+chmod 666 /var/run/docker.sock
+# Or add user to docker group
+```
+
+## Management Commands
+
+```bash
+# Start shipper
+docker-compose up -d
+
+# Stop shipper
+docker-compose down
+
+# Restart after config changes
+docker-compose restart
+
+# View logs
+docker logs -f siembox-log-shipper
+
+# Rebuild after updates
+docker-compose build
+docker-compose up -d
+```
+
+## Advanced Configuration
+
+### Using Config File Instead of Environment Variables
+
+For complex setups, use `config.yml` instead:
+
+1. Copy example: `cp config.yml.example config.yml`
+2. Edit `config.yml` with your sources
+3. In `docker-compose.yml`, uncomment:
+   ```yaml
+   volumes:
+     - ./config.yml:/config/config.yml:ro
    ```
 
-2. **Check shipper logs:**
-   ```bash
-   docker logs siembox-log-shipper
-   ```
+See `config.yml.example` for format.
 
-3. **Test network connectivity:**
-   ```bash
-   docker exec siembox-log-shipper nc -zv 192.168.1.76 514
-   ```
+### Custom Network Setup
 
-4. **Check SIEMBox is listening:**
-   On SIEMBox server:
-   ```bash
-   netstat -uln | grep 514
-   ```
+By default, uses `host` network mode for simplicity. To use bridge network:
 
-### Permission Issues
+**In `docker-compose.yml`:**
+```yaml
+# Comment out:
+# network_mode: host
 
-If you see "Permission denied" errors:
-
-1. **For file sources:** Ensure files are readable
-   ```bash
-   chmod 644 /path/to/log/file
-   ```
-
-2. **For Docker socket:** Ensure socket is accessible
-   ```bash
-   chmod 666 /var/run/docker.sock
-   # Or add container to docker group
-   ```
-
-### Docker container not found
-
-If monitoring Docker containers, ensure:
-1. Container names are correct (use `docker ps` to verify)
-2. Docker socket is mounted: `/var/run/docker.sock:/var/run/docker.sock:ro`
-3. Containers are running when shipper starts
-
-## Security Considerations
-
-- **Read-only mounts**: Always mount log sources as read-only (`:ro`)
-- **Docker socket**: Mounting Docker socket gives container access to Docker API - use with caution
-- **Network isolation**: Consider using bridge network instead of host network for better isolation
-- **Firewall**: Ensure firewall allows UDP/TCP 514 to SIEMBox server
+# Uncomment at bottom:
+networks:
+  default:
+    driver: bridge
+```
 
 ## Performance
 
-- **Lightweight**: ~15MB image size
-- **Low CPU**: Minimal CPU usage, primarily I/O bound
-- **Memory**: ~10-20MB RAM per shipper instance
+- **Image Size**: ~15MB
+- **Memory Usage**: ~10-20MB per instance
+- **CPU Usage**: Minimal, I/O bound
 - **Scalability**: Can monitor dozens of log sources per shipper
+
+## Security Best Practices
+
+- ✅ Always mount logs as **read-only** (`:ro`)
+- ✅ Use specific volume mounts, not entire filesystems
+- ⚠️ Docker socket access gives container Docker API access
+- ✅ Consider using bridge network instead of host for isolation
+- ✅ Ensure firewall allows UDP/TCP 514 to SIEMBox
+
+## Example Configurations
+
+See the `examples/` directory for complete docker-compose examples:
+- `examples/docker-compose.npm.yml` - NPM-specific setup
+- `examples/docker-compose.host.yml` - Host system logs
+- `examples/docker-compose.docker.yml` - Docker container logs
+
+## Support
+
+- **SIEMBox Issues**: https://github.com/cladkins/SIEMBOX/issues
+- **Discussions**: https://github.com/cladkins/SIEMBOX/discussions
 
 ## License
 
 MIT License - Same as SIEMBox
-
-## Support
-
-For issues or questions:
-- SIEMBox Issues: https://github.com/cladkins/SIEMBOX/issues
-- SIEMBox Discussions: https://github.com/cladkins/SIEMBOX/discussions

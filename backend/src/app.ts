@@ -17,6 +17,9 @@ import shippersRoutes from './routes/shippers';
 
 const app: Application = express();
 
+// Trust proxy - needed when behind nginx/reverse proxy
+app.set('trust proxy', 1);
+
 // Middleware
 app.use(cors({
   origin: process.env.CORS_ORIGIN || '*',

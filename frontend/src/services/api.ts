@@ -116,7 +116,8 @@ export const api = {
   // Shipper Sources
   getShipperSources: (shipperId: number) => apiClient.get(`/shippers/${shipperId}/sources`),
   createShipperSource: (shipperId: number, data: any) => apiClient.post(`/shippers/${shipperId}/sources`, data),
-  deleteShipperSource: (shipperId: number, sourceId: number) => apiClient.delete(`/shippers/${shipperId}/sources/${sourceId}`),
+  updateShipperSource: (sourceId: number, data: any) => apiClient.put(`/shippers/sources/${sourceId}`, data),
+  deleteShipperSource: (sourceId: number) => apiClient.delete(`/shippers/sources/${sourceId}`),
 
   // Shipper Volumes
   getShipperVolumes: (shipperId: number) => apiClient.get(`/shippers/${shipperId}/volumes`),

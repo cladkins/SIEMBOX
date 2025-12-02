@@ -157,8 +157,15 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="Actions" width="100" align="center">
+          <el-table-column label="Actions" width="180" align="center">
             <template #default="{ row }">
+              <el-button
+                size="small"
+                @click="editSource(row)"
+                :icon="Edit"
+              >
+                Edit
+              </el-button>
               <el-button
                 size="small"
                 type="danger"
@@ -205,8 +212,8 @@
       </div>
     </el-dialog>
 
-    <!-- Add Source Dialog -->
-    <el-dialog v-model="sourceDialogVisible" title="Add Log Source" width="600px">
+    <!-- Add/Edit Source Dialog -->
+    <el-dialog v-model="sourceDialogVisible" :title="sourceForm.id ? 'Edit Log Source' : 'Add Log Source'" width="600px">
       <el-form :model="sourceForm" label-width="130px">
         <el-form-item label="Source Type" required>
           <el-select v-model="sourceForm.source_type" placeholder="Select source type">
@@ -313,6 +320,7 @@ import {
   Plus,
   Refresh,
   View,
+  Edit,
   Delete,
   CopyDocument,
 } from '@element-plus/icons-vue';
@@ -335,6 +343,7 @@ const shipperForm = reactive({
 });
 
 const sourceForm = reactive({
+  id: null as number | null,
   source_type: 'file',
   file_path: '',
   container_name: '',
@@ -433,6 +442,7 @@ async function deleteShipperConfirm(shipper: any) {
 }
 
 function showAddSource() {
+  sourceForm.id = null;
   sourceForm.source_type = 'file';
   sourceForm.file_path = '';
   sourceForm.container_name = '';
@@ -440,6 +450,18 @@ function showAddSource() {
   sourceForm.tag = '';
   sourceForm.facility = 'local0';
   sourceForm.enabled = true;
+  sourceDialogVisible.value = true;
+}
+
+function editSource(source: any) {
+  sourceForm.id = source.id;
+  sourceForm.source_type = source.source_type;
+  sourceForm.file_path = source.file_path || '';
+  sourceForm.container_name = source.container_name || '';
+  sourceForm.journal_unit = source.journal_unit || '';
+  sourceForm.tag = source.tag;
+  sourceForm.facility = source.facility;
+  sourceForm.enabled = source.enabled;
   sourceDialogVisible.value = true;
 }
 
@@ -466,15 +488,22 @@ async function saveSource() {
 
   saving.value = true;
   try {
-    await api.createShipperSource(currentShipper.value.id, sourceForm);
-    ElMessage.success('Source added successfully');
+    if (sourceForm.id) {
+      // Update existing source
+      await api.updateShipperSource(sourceForm.id, sourceForm);
+      ElMessage.success('Source updated successfully');
+    } else {
+      // Create new source
+      await api.createShipperSource(currentShipper.value.id, sourceForm);
+      ElMessage.success('Source added successfully');
+    }
     sourceDialogVisible.value = false;
 
     // Refresh shipper details
     const response = await api.getShipper(currentShipper.value.id);
     currentShipper.value = response.data;
   } catch (error) {
-    ElMessage.error('Failed to add source');
+    ElMessage.error(sourceForm.id ? 'Failed to update source' : 'Failed to add source');
   } finally {
     saving.value = false;
   }
@@ -492,7 +521,7 @@ async function deleteSource(source: any) {
       }
     );
 
-    await api.deleteShipperSource(currentShipper.value.id, source.id);
+    await api.deleteShipperSource(source.id);
     ElMessage.success('Source deleted successfully');
 
     // Refresh shipper details

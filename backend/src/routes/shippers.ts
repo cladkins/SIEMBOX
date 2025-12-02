@@ -10,11 +10,36 @@ function generateApiKey(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
+// Calculate shipper status based on last_seen timestamp
+function calculateStatus(lastSeen: Date | null, currentStatus: string): string {
+  if (!lastSeen) {
+    return 'pending';
+  }
+
+  const now = new Date();
+  const lastSeenTime = new Date(lastSeen);
+  const minutesSinceLastSeen = (now.getTime() - lastSeenTime.getTime()) / 1000 / 60;
+
+  // Consider offline if no heartbeat for 3 minutes (2x heartbeat interval + buffer)
+  if (minutesSinceLastSeen > 3) {
+    return 'offline';
+  }
+
+  return currentStatus === 'error' ? 'error' : 'online';
+}
+
 // Get all shippers
 router.get('/', async (_req: Request, res: Response) => {
   try {
     const shippers = await LogShipperModel.findAll();
-    res.json(shippers);
+
+    // Calculate dynamic status based on last_seen
+    const shippersWithStatus = shippers.map((shipper: any) => ({
+      ...shipper,
+      status: calculateStatus(shipper.last_seen, shipper.status)
+    }));
+
+    res.json(shippersWithStatus);
   } catch (error) {
     throw new ApiError(500, 'Failed to fetch shippers');
   }
@@ -29,6 +54,9 @@ router.get('/:id', async (req: Request, res: Response) => {
     if (!shipper) {
       throw new ApiError(404, 'Shipper not found');
     }
+
+    // Calculate dynamic status
+    shipper.status = calculateStatus(shipper.last_seen, shipper.status);
 
     res.json(shipper);
   } catch (error) {

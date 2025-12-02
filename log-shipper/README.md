@@ -28,49 +28,72 @@ In managed mode, the shipper is configured entirely from the SIEMBox web UI. Thi
 - Monitor shipper status and health
 - Easy to manage multiple shippers
 
-**Setup:**
+**Quick Start:**
 
-1. **Create a Shipper in SIEMBox UI**
-   - Navigate to **Log Shippers** in the SIEMBox web interface
-   - Click **Add Shipper**
-   - Enter a name and description
-   - Copy the generated API key
+### Step 1: Create Shipper in SIEMBox UI
 
-2. **Configure Sources and Volumes**
-   - Click **View** on your shipper
-   - Add log sources (files, Docker containers, systemd journals)
-   - Add volume mounts for accessing log files
-   - Sources and volumes are automatically synced to the shipper
+1. Navigate to **Log Shippers** in the SIEMBox web interface
+2. Click **Add Shipper**
+3. Enter a name (e.g., "Web Server") and optional description
+4. **Copy the API key** - you'll need this for deployment
 
-3. **Deploy the Shipper**
+### Step 2: Deploy the Shipper Container
 
-   Create a `.env` file with your API key:
-   ```bash
-   SHIPPER_API_KEY=your-api-key-here
-   SIEMBOX_API_URL=http://your-siembox-ip:3001/api
-   ```
+Create a docker-compose.yml file on your target machine:
 
-   Deploy using docker-compose:
-   ```bash
-   docker compose -f docker-compose.managed.yml up -d
-   ```
+```yaml
+services:
+  siembox-log-shipper:
+    image: siembox-log-shipper:managed
+    container_name: siembox-log-shipper
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - SHIPPER_API_KEY=paste-your-api-key-here
+      - SIEMBOX_API_URL=http://your-siembox-ip:3001/api
+    volumes:
+      # Mount directories containing log files you want to monitor
+      - /var/log:/var/log:ro                                    # System logs
+      - /path/to/app/logs:/path/to/app/logs:ro                 # Application logs
+      # For Docker container logs (optional)
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+```
 
-   Or deploy manually:
-   ```bash
-   docker run -d \
-     --name siembox-log-shipper \
-     --network host \
-     -v /var/log:/host-logs:ro \
-     -v /var/run/docker.sock:/var/run/docker.sock:ro \
-     -e SHIPPER_API_KEY=your-api-key-here \
-     -e SIEMBOX_API_URL=http://your-siembox-ip:3001/api \
-     siembox-log-shipper:managed
-   ```
+**IMPORTANT:** Update the volumes section to match where your log files are located on the host machine.
 
-4. **Verify in SIEMBox UI**
-   - The shipper should appear as "online" within 30 seconds
-   - Check the "Last Seen" timestamp to confirm heartbeat
-   - View configured sources and their status
+Deploy the shipper:
+```bash
+docker compose up -d
+```
+
+### Step 3: Verify Shipper is Online
+
+1. Return to the **Log Shippers** page in SIEMBox UI
+2. Your shipper should show status: **online** within 30 seconds
+3. Check the "Last Seen" timestamp confirms it's checking in
+
+### Step 4: Add Log Sources
+
+Now tell the shipper which log files to monitor:
+
+1. Click **View** on your shipper
+2. Click **Add Source** button
+3. Configure the source:
+   - **Type**: file
+   - **File Path**: Full path to log file (e.g., `/var/log/nginx/access.log`)
+   - **Tag**: Friendly name (e.g., `nginx-access`)
+   - **Facility**: local0 (or choose different for each source)
+   - **Enabled**: ✓ (checked)
+4. Click **Save**
+
+**The shipper will automatically pick up the configuration within 30 seconds and start forwarding logs!**
+
+### Important Notes:
+
+- **Volume mounts** in docker-compose.yml give the container access to directories
+- **Log sources** in the UI tell the shipper which specific files to tail
+- File paths in sources must match the paths INSIDE the container (same as host if you use matching mounts)
+- You can add/edit/remove sources anytime through the UI without restarting the container
 
 ### Standalone Mode
 
@@ -240,13 +263,72 @@ docker inspect siembox-log-shipper | jq '.[0].State.Health'
 
 ### Logs not appearing in SIEMBox
 
+**Check shipper logs for "File not found" warnings:**
+```bash
+docker logs siembox-log-shipper | grep "File not found"
+```
+
+If you see warnings like:
+```
+[WARN] File not found: /var/log/nginx/access.log
+```
+
+This means the shipper can't access the file. **This is usually a volume mount issue.**
+
+**Solution:**
+
+1. **Verify the file exists on the HOST machine:**
+   ```bash
+   ls -la /var/log/nginx/access.log
+   ```
+
+2. **Add the volume mount to docker-compose.yml:**
+   ```yaml
+   volumes:
+     - /var/log/nginx:/var/log/nginx:ro
+   ```
+
+3. **Restart the shipper to apply volume changes:**
+   ```bash
+   docker compose down
+   docker compose up -d
+   ```
+
+4. **Verify logs start flowing within 30 seconds**
+
+**Other checks:**
+
 1. Verify source is enabled in SIEMBox UI
-2. Check file paths are correct and accessible
-3. Verify volume mounts in docker-compose.yml
+2. Check file paths match EXACTLY (case-sensitive)
+3. Ensure file has read permissions
 4. Check syslog receiver is running in SIEMBox:
    ```bash
    docker logs siembox-backend | grep -i syslog
    ```
+
+### How to Verify Logs Are Being Received
+
+**Option 1: Check the Logs page in SIEMBox UI**
+- Navigate to the "Logs" menu in the web interface
+- You should see logs appearing in real-time
+
+**Option 2: Query the database directly**
+```bash
+# Check total log count
+docker exec siembox-postgres psql -U siembox -d siembox -c "SELECT COUNT(*) as total_logs FROM raw_logs;"
+
+# View recent logs
+docker exec siembox-postgres psql -U siembox -d siembox -c "SELECT timestamp, source_ip, LEFT(raw_message, 100) as message FROM raw_logs ORDER BY timestamp DESC LIMIT 10;"
+
+# Check logs from a specific source IP
+docker exec siembox-postgres psql -U siembox -d siembox -c "SELECT COUNT(*) FROM raw_logs WHERE source_ip = '192.168.1.100';"
+```
+
+**Option 3: Watch backend logs for incoming syslog messages**
+```bash
+# This will show when logs are being received
+docker logs siembox-backend -f
+```
 
 ### Configuration not updating
 

@@ -1,3 +1,4 @@
+import 'express-async-errors'; // Must be imported before routes
 import express, { Application } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';

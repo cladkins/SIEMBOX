@@ -12,6 +12,7 @@ router.get('/raw', async (req: Request, res: Response) => {
     const offset = parseInt(req.query.offset as string) || 0;
     const sourceIp = req.query.source_ip as string;
     const search = req.query.search as string;
+    const severity = req.query.severity !== undefined ? parseInt(req.query.severity as string) : undefined;
     const startTime = req.query.start_date ? new Date(req.query.start_date as string) : undefined;
     const endTime = req.query.end_date ? new Date(req.query.end_date as string) : undefined;
 
@@ -20,6 +21,7 @@ router.get('/raw', async (req: Request, res: Response) => {
       offset,
       sourceIp,
       search,
+      severity,
       startTime,
       endTime,
     });

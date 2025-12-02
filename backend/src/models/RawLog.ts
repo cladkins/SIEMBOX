@@ -49,6 +49,7 @@ export class RawLogModel {
     offset?: number;
     sourceIp?: string;
     search?: string;
+    severity?: number;
     startTime?: Date;
     endTime?: Date;
   }): Promise<{ logs: RawLog[]; total: number }> {
@@ -64,6 +65,11 @@ export class RawLogModel {
     if (options?.search) {
       conditions.push(`raw_message ILIKE $${paramIndex++}`);
       params.push(`%${options.search}%`);
+    }
+
+    if (options?.severity !== undefined) {
+      conditions.push(`severity = $${paramIndex++}`);
+      params.push(options.severity);
     }
 
     if (options?.startTime) {

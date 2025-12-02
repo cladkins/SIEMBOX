@@ -34,6 +34,24 @@
           />
         </el-form-item>
 
+        <el-form-item label="Severity">
+          <el-select
+            v-model="filters.severity"
+            placeholder="All Severities"
+            clearable
+            style="width: 160px"
+          >
+            <el-option label="Emergency" :value="0" />
+            <el-option label="Alert" :value="1" />
+            <el-option label="Critical" :value="2" />
+            <el-option label="Error" :value="3" />
+            <el-option label="Warning" :value="4" />
+            <el-option label="Notice" :value="5" />
+            <el-option label="Info" :value="6" />
+            <el-option label="Debug" :value="7" />
+          </el-select>
+        </el-form-item>
+
         <el-form-item label="Date Range">
           <el-date-picker
             v-model="dateRange"
@@ -167,6 +185,7 @@ const filters = reactive({
   search: '',
   source_ip: '',
   event_type: '',
+  severity: null as number | null,
 });
 
 const dateRange = ref<[Date, Date] | null>(null);
@@ -196,6 +215,10 @@ const buildQueryParams = () => {
 
   if (filters.event_type) {
     params.event_type = filters.event_type;
+  }
+
+  if (filters.severity !== null && filters.severity !== undefined) {
+    params.severity = filters.severity;
   }
 
   if (dateRange.value && dateRange.value.length === 2) {
@@ -250,6 +273,7 @@ const resetFilters = () => {
   filters.search = '';
   filters.source_ip = '';
   filters.event_type = '';
+  filters.severity = null;
   dateRange.value = null;
   applyFilters();
 };

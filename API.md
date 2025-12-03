@@ -1270,6 +1270,10 @@ Get single shipper with full configuration.
   "status": "online",
   "api_key": "a1b2c3d4...",
   "last_seen": "2025-11-30T12:34:56Z",
+  "config": {},
+  "metadata": {},
+  "created_at": "2025-11-01T00:00:00Z",
+  "updated_at": "2025-11-30T12:34:56Z",
   "sources": [
     {
       "id": 1,
@@ -1287,13 +1291,11 @@ Get single shipper with full configuration.
       "container_path": "/var/log/nginx",
       "mode": "ro"
     }
-  ],
-  "config": {
-    "siem_host": "192.168.1.76",
-    "siem_port": 514
-  }
+  ]
 }
 ```
+
+**Note:** Syslog settings are NOT included in this admin endpoint. They are only auto-injected in the public shipper endpoints (`/register` and `/config/:api_key`) for shipper consumption.
 
 **Errors:**
 - `404` - Shipper not found
@@ -1681,19 +1683,45 @@ Regenerate shipper API key (invalidates old key).
 **Response (200):**
 ```json
 {
-  "success": true,
-  "config": {
-    "id": 1,
-    "name": "Web Server Shipper",
-    "sources": [...],
-    "volumes": [...],
-    "config": {
-      "siem_host": "192.168.1.76",
-      "siem_port": 514
+  "id": 1,
+  "name": "Web Server Shipper",
+  "description": "Nginx web server logs",
+  "api_key": "a1b2c3d4...",
+  "status": "online",
+  "version": "1.0.0",
+  "last_seen": "2025-11-30T12:34:56Z",
+  "ip_address": "192.168.1.100",
+  "hostname": "webserver01",
+  "config": {},
+  "metadata": {
+    "os": "Ubuntu 22.04",
+    "arch": "x86_64"
+  },
+  "created_at": "2025-11-01T00:00:00Z",
+  "updated_at": "2025-11-30T12:34:56Z",
+  "sources": [
+    {
+      "id": 1,
+      "source_type": "file",
+      "enabled": true,
+      "file_path": "/var/log/nginx/access.log",
+      "tag": "nginx-access",
+      "facility": "local0"
     }
-  }
+  ],
+  "volumes": [
+    {
+      "host_path": "/var/log/nginx",
+      "container_path": "/var/log/nginx",
+      "mode": "ro"
+    }
+  ],
+  "siem_host": "192.168.1.76",
+  "siem_port": 514
 }
 ```
+
+**Important:** Syslog settings (`siem_host` and `siem_port`) are automatically injected at the top level of the response for shipper consumption.
 
 **Use Case:** Called by shipper on startup and periodically for heartbeat.
 
@@ -1714,6 +1742,17 @@ Regenerate shipper API key (invalidates old key).
 {
   "id": 1,
   "name": "Web Server Shipper",
+  "description": "Nginx web server logs",
+  "api_key": "a1b2c3d4...",
+  "status": "online",
+  "version": "1.0.0",
+  "last_seen": "2025-11-30T12:34:56Z",
+  "ip_address": "192.168.1.100",
+  "hostname": "webserver01",
+  "config": {},
+  "metadata": {},
+  "created_at": "2025-11-01T00:00:00Z",
+  "updated_at": "2025-11-30T12:34:56Z",
   "sources": [
     {
       "id": 1,
@@ -1731,12 +1770,15 @@ Regenerate shipper API key (invalidates old key).
       "mode": "ro"
     }
   ],
-  "config": {
-    "siem_host": "192.168.1.76",
-    "siem_port": 514
-  }
+  "siem_host": "192.168.1.76",
+  "siem_port": 514
 }
 ```
+
+**Important:**
+- Syslog settings (`siem_host` and `siem_port`) are automatically injected at the top level
+- Response structure is identical to `/shippers/register` for consistency
+- Shipper scripts parse `sources`, `volumes`, `siem_host`, and `siem_port` from the top level
 
 **Use Case:** Polled by shipper every 30 seconds to get latest configuration.
 

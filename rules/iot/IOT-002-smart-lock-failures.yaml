@@ -1,0 +1,22 @@
+name: Smart Lock Repeated Failures
+description: Detects repeated failed access attempts to smart locks indicating potential physical breach attempt or technical issue. 5 failed lock access attempts in 10 minutes requires immediate investigation as it may indicate physical security threat.
+severity: low
+enabled: true
+tags: [iot, smart-lock, physical-security, access-control, home-assistant]
+
+conditions:
+  - field: device_type
+    operator: equals
+    value: "lock"
+  - field: event
+    operator: contains
+    value: "access_denied"
+
+aggregation:
+  field: device_id
+  timeframe: 10m
+  threshold: 5
+
+alert:
+  title: "Smart Lock Repeated Access Failures: {device_name}"
+  description: "{count} failed access attempts to smart lock '{device_name}' in 10 minutes. PHYSICAL SECURITY THREAT - Verify if legitimate user or breach attempt, review lock access logs and methods, check physical lock status, alert household occupants immediately, review security camera footage if available, consider temporary lock disable if under attack, and contact authorities if breach confirmed."

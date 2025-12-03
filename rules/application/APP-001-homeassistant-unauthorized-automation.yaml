@@ -1,0 +1,17 @@
+name: Home Assistant Unauthorized Automation
+description: Detects unauthorized automation changes in Home Assistant. Automation modifications should be logged and reviewed for unauthorized changes that could affect physical security, privacy, or safety. Single event detection for any automation change.
+severity: medium
+enabled: true
+tags: [home-assistant, automation, iot, smart-home, configuration-change]
+
+conditions:
+  - field: event_type
+    operator: equals
+    value: "automation_triggered"
+  - field: user
+    operator: not_equals
+    value: "admin"
+
+alert:
+  title: "Home Assistant Automation Triggered by Non-Admin: {user}"
+  description: "Automation '{automation_name}' was triggered by non-admin user {user} from {client_ip}. Review automation changes made, verify legitimate user action, check if automation affects security devices, test automation for malicious behavior, and revert unauthorized changes if needed."

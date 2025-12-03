@@ -1,0 +1,19 @@
+name: Unusual Service Restart Pattern
+description: Detects repeated service restarts that may indicate service crashes, exploitation attempts, or system tampering. 5 restarts in 15 minutes indicates instability, potential exploitation causing crashes, or attacker tampering with services. Normal services restart infrequently except during updates or configuration changes.
+severity: medium
+enabled: true
+tags: [service-restart, availability, infrastructure, systemd, tampering]
+
+conditions:
+  - field: message
+    operator: regex
+    value: "(service.*restart|systemd.*restart|Starting.*service|Stopped.*service|restarting)"
+
+aggregation:
+  field: program
+  timeframe: 15m
+  threshold: 5
+
+alert:
+  title: "Unusual Service Restart Pattern: {program}"
+  description: "{count} restarts of {program} in 15 minutes on {hostname}. Identify service and restart reason, review service logs for errors/crashes, check for exploitation indicators (segfaults, buffer overflows), verify service configuration file integrity, monitor service behavior post-restart, check for tampering with service files or systemd units, investigate if restarts continue beyond normal operations, and consider service isolation if suspicious activity detected."

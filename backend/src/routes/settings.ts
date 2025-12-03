@@ -178,4 +178,140 @@ router.put('/syslog', authorize('admin'), async (req: Request, res: Response) =>
   }
 });
 
+// ===========================
+// IP Whitelist Management
+// ===========================
+
+// Get all IP whitelist entries
+router.get('/ip-whitelist', authorize('admin'), async (_req: Request, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT id, ip_address::text, description, rule_id, created_at, updated_at
+       FROM ip_whitelist
+       ORDER BY created_at DESC`
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch IP whitelist');
+  }
+});
+
+// Add IP to whitelist
+router.post('/ip-whitelist', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const { ip_address, description, rule_id } = req.body;
+
+    if (!ip_address) {
+      throw new ApiError(400, 'IP address is required');
+    }
+
+    // Validate CIDR format by attempting to insert (PostgreSQL will validate)
+    const result = await query(
+      `INSERT INTO ip_whitelist (ip_address, description, rule_id, created_by)
+       VALUES ($1::cidr, $2, $3, $4)
+       RETURNING id, ip_address::text, description, rule_id, created_at`,
+      [ip_address, description || null, rule_id || null, req.user?.id || null]
+    );
+
+    res.status(201).json({
+      message: 'IP address added to whitelist',
+      entry: result.rows[0],
+    });
+  } catch (error: any) {
+    if (error.code === '23505') {
+      // Unique constraint violation
+      throw new ApiError(409, 'IP address already exists in whitelist');
+    } else if (error.code === '22P02') {
+      // Invalid CIDR format
+      throw new ApiError(400, 'Invalid IP address or CIDR format');
+    }
+    throw new ApiError(500, 'Failed to add IP to whitelist');
+  }
+});
+
+// Update IP whitelist entry
+router.put('/ip-whitelist/:id', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { description, rule_id } = req.body;
+
+    const result = await query(
+      `UPDATE ip_whitelist
+       SET description = $1, rule_id = $2, updated_at = NOW()
+       WHERE id = $3
+       RETURNING id, ip_address::text, description, rule_id, updated_at`,
+      [description || null, rule_id || null, parseInt(id, 10)]
+    );
+
+    if (result.rowCount === 0) {
+      throw new ApiError(404, 'IP whitelist entry not found');
+    }
+
+    res.json({
+      message: 'IP whitelist entry updated',
+      entry: result.rows[0],
+    });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to update IP whitelist entry');
+  }
+});
+
+// Delete IP from whitelist
+router.delete('/ip-whitelist/:id', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const result = await query(
+      `DELETE FROM ip_whitelist WHERE id = $1 RETURNING ip_address::text`,
+      [parseInt(id, 10)]
+    );
+
+    if (result.rowCount === 0) {
+      throw new ApiError(404, 'IP whitelist entry not found');
+    }
+
+    res.json({
+      message: 'IP address removed from whitelist',
+      ip_address: result.rows[0].ip_address,
+    });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to delete IP whitelist entry');
+  }
+});
+
+// Check if IP is whitelisted (utility endpoint for testing)
+router.post('/ip-whitelist/check', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const { ip_address } = req.body;
+
+    if (!ip_address) {
+      throw new ApiError(400, 'IP address is required');
+    }
+
+    const result = await query(
+      `SELECT id, ip_address::text, description
+       FROM ip_whitelist
+       WHERE ip_address >> $1::inet
+       LIMIT 1`,
+      [ip_address]
+    );
+
+    const isWhitelisted = result.rowCount! > 0;
+
+    res.json({
+      ip_address,
+      is_whitelisted: isWhitelisted,
+      matched_entry: isWhitelisted ? result.rows[0] : null,
+    });
+  } catch (error: any) {
+    if (error.code === '22P02') {
+      throw new ApiError(400, 'Invalid IP address format');
+    }
+    throw new ApiError(500, 'Failed to check IP whitelist');
+  }
+});
+
 export default router;

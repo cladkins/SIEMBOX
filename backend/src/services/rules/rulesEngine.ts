@@ -6,8 +6,8 @@ import { query } from '../../config/database';
 
 interface RuleCondition {
   field: string;
-  operator: 'equals' | 'contains' | 'regex' | 'greater_than' | 'less_than' | 'not_contains';
-  value: string | number;
+  operator: 'equals' | 'contains' | 'regex' | 'greater_than' | 'less_than' | 'not_contains' | 'not_in_whitelist' | 'exists';
+  value: string | number | boolean;
 }
 
 interface RuleAggregation {
@@ -52,8 +52,8 @@ export class RulesEngine {
   private async evaluateRule(rule: DetectionRule, parsedLog: ParsedLog): Promise<boolean> {
     const ruleLogic: RuleLogic = rule.rule_logic;
 
-    // Evaluate conditions
-    const conditionsMatch = this.evaluateConditions(ruleLogic.conditions, parsedLog.parsed_data);
+    // Evaluate conditions (now async)
+    const conditionsMatch = await this.evaluateConditions(ruleLogic.conditions, parsedLog.parsed_data);
 
     if (!conditionsMatch) {
       return false;
@@ -80,18 +80,19 @@ export class RulesEngine {
     }
   }
 
-  private evaluateConditions(
+  private async evaluateConditions(
     conditions: RuleCondition[],
     data: Record<string, any>
-  ): boolean {
+  ): Promise<boolean> {
     for (const condition of conditions) {
       const fieldValue = data[condition.field];
 
-      if (fieldValue === undefined || fieldValue === null) {
+      // Skip null/undefined check for 'exists' operator (it handles these cases)
+      if (condition.operator !== 'exists' && (fieldValue === undefined || fieldValue === null)) {
         return false;
       }
 
-      const matched = this.evaluateCondition(condition, fieldValue);
+      const matched = await this.evaluateCondition(condition, fieldValue);
       if (!matched) {
         return false;
       }
@@ -100,7 +101,7 @@ export class RulesEngine {
     return true; // All conditions matched
   }
 
-  private evaluateCondition(condition: RuleCondition, fieldValue: any): boolean {
+  private async evaluateCondition(condition: RuleCondition, fieldValue: any): Promise<boolean> {
     const { operator, value } = condition;
     const fieldStr = String(fieldValue);
     const valueStr = String(value);
@@ -130,9 +131,39 @@ export class RulesEngine {
       case 'less_than':
         return Number(fieldValue) < Number(value);
 
+      case 'exists':
+        // Check if field exists and is not null/undefined
+        return value === true ? fieldValue !== undefined && fieldValue !== null : fieldValue === undefined || fieldValue === null;
+
+      case 'not_in_whitelist':
+        // Check if IP address is NOT in whitelist
+        if (value !== true) {
+          logger.warn('not_in_whitelist operator requires value: true');
+          return false;
+        }
+        return await this.checkIpNotInWhitelist(fieldValue);
+
       default:
         logger.warn(`Unknown operator: ${operator}`);
         return false;
+    }
+  }
+
+  private async checkIpNotInWhitelist(ipAddress: string): Promise<boolean> {
+    try {
+      // Query whitelist table to check if IP is whitelisted
+      const result = await query(
+        `SELECT 1 FROM ip_whitelist WHERE ip_address >> $1::inet LIMIT 1`,
+        [ipAddress]
+      );
+
+      // Return true if IP is NOT in whitelist (no rows found)
+      const isWhitelisted = (result.rowCount || 0) > 0;
+      return !isWhitelisted;
+    } catch (error) {
+      logger.error('Error checking IP whitelist:', { ipAddress, error });
+      // On error, assume not whitelisted (fail-safe)
+      return true;
     }
   }
 

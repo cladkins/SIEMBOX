@@ -127,10 +127,13 @@ export class ParserEngine {
       // Include the full message
       fields.message = message;
 
-      // Determine event type from parser name or extracted fields
-      const event_type = this.determineEventType(parser.name, fields);
+      // Post-process fields for specific parsers
+      const processedFields = this.postProcessFields(parser.name, fields);
 
-      return { fields, event_type };
+      // Determine event type from parser name or extracted fields
+      const event_type = this.determineEventType(parser.name, processedFields);
+
+      return { fields: processedFields, event_type };
     } catch (error) {
       logger.error(`Regex parser ${parser.name} error:`, error);
       return null;
@@ -184,6 +187,54 @@ export class ParserEngine {
     }
   }
 
+  private postProcessFields(parserName: string, fields: Record<string, any>): Record<string, any> {
+    // Post-processing for Vaultwarden parser to derive action, event, and path fields
+    if (parserName === 'vaultwarden-access' && fields.message) {
+      const message = fields.message.toLowerCase();
+
+      // Derive action field for vault operations
+      if (message.includes('vault export')) {
+        fields.action = 'vault_export';
+      } else if (message.includes('vault import')) {
+        fields.action = 'vault_import';
+      } else if (message.includes('vault sync')) {
+        fields.action = 'vault_sync';
+      } else if (message.includes('vault accessed')) {
+        fields.action = 'vault_access';
+      }
+
+      // Derive event field for authentication and device events
+      if (message.includes('failed login') || message.includes('invalid password')) {
+        fields.event = 'login_failure';
+      } else if (message.includes('successful login')) {
+        fields.event = 'login_success';
+      } else if (message.includes('device registered') || message.includes('new device')) {
+        fields.event = 'device_registered';
+      } else if (message.includes('api authentication failed')) {
+        fields.event = 'api_auth_failure';
+      }
+
+      // Derive path from module (approximation for API monitoring)
+      if (fields.module) {
+        const module = fields.module.toLowerCase();
+        if (module.includes('::api::core')) {
+          fields.path = '/api/core';
+        } else if (module.includes('::api::identity')) {
+          fields.path = '/api/identity';
+        } else if (module.includes('::api::admin')) {
+          fields.path = '/admin';
+        } else if (module.includes('::api::')) {
+          fields.path = '/api';
+        }
+      }
+
+      // Ensure service field is always set
+      fields.service = 'vaultwarden';
+    }
+
+    return fields;
+  }
+
   private determineEventType(parserName: string, fields: Record<string, any>): string {
     // Determine event type from parser name or field values
     if (parserName.toLowerCase().includes('ssh')) {
@@ -193,6 +244,17 @@ export class ParserEngine {
         return 'ssh_successful_login';
       }
       return 'ssh_auth';
+    } else if (parserName.toLowerCase().includes('vaultwarden')) {
+      if (fields.event === 'login_failure') {
+        return 'vaultwarden_failed_login';
+      } else if (fields.event === 'login_success') {
+        return 'vaultwarden_successful_login';
+      } else if (fields.action === 'vault_export') {
+        return 'vaultwarden_vault_export';
+      } else if (fields.event === 'device_registered') {
+        return 'vaultwarden_device_registered';
+      }
+      return 'vaultwarden_event';
     } else if (parserName.toLowerCase().includes('apache') || parserName.toLowerCase().includes('nginx')) {
       return 'http_request';
     } else if (parserName.toLowerCase().includes('sudo')) {

@@ -143,21 +143,24 @@ docker logs siembox-backend | grep -i syslog
 docker exec -it siembox-db psql -U siembox -d siembox
 
 # Check recent logs
-SELECT id, timestamp, hostname, tag, message
-FROM logs
+SELECT id, timestamp, hostname, source_ip, LEFT(raw_message, 80) as message
+FROM raw_logs
 ORDER BY timestamp DESC
 LIMIT 10;
 
-# Count logs by tag
-SELECT tag, COUNT(*)
-FROM logs
-GROUP BY tag
+# Count logs by hostname
+SELECT hostname, COUNT(*)
+FROM raw_logs
+GROUP BY hostname
 ORDER BY COUNT(*) DESC;
 
 # Check logs from last 5 minutes
 SELECT COUNT(*) as recent_logs
-FROM logs
+FROM raw_logs
 WHERE timestamp > NOW() - INTERVAL '5 minutes';
+
+# Check total log count
+SELECT COUNT(*) as total_logs FROM raw_logs;
 
 # Exit
 \q
@@ -166,6 +169,8 @@ WHERE timestamp > NOW() - INTERVAL '5 minutes';
 **✅ Success:** You should see logs with timestamps within the last few minutes
 
 **❌ Problem:** If count is 0 or logs are old, shipper isn't sending or SIEM isn't receiving
+
+**Note:** Logs are stored in the `raw_logs` table, not `logs`. The raw syslog messages are parsed separately into `parsed_logs` if parsers are configured.
 
 ### 8. Verify in SIEMBox Web UI
 
@@ -322,7 +327,7 @@ echo ""
 
 echo "5. Recent Logs in Database:"
 docker exec siembox-db psql -U siembox -d siembox -t -c \
-  "SELECT COUNT(*) FROM logs WHERE timestamp > NOW() - INTERVAL '5 minutes';" | xargs echo "   Logs (last 5 min):"
+  "SELECT COUNT(*) FROM raw_logs WHERE timestamp > NOW() - INTERVAL '5 minutes';" | xargs echo "   Logs (last 5 min):"
 echo ""
 
 echo "=== Health Check Complete ==="
@@ -364,7 +369,7 @@ If you're still having issues:
    docker logs log-shipper > shipper.log
    docker logs siembox-backend > backend.log
    docker exec siembox-db psql -U siembox -d siembox -c \
-     "SELECT * FROM logs ORDER BY timestamp DESC LIMIT 50;" > recent-logs.txt
+     "SELECT * FROM raw_logs ORDER BY timestamp DESC LIMIT 50;" > recent-logs.txt
    ```
 
 2. Review documentation:

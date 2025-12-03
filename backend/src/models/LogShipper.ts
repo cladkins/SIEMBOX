@@ -39,6 +39,13 @@ export interface ShipperVolume {
   created_at: Date;
 }
 
+export interface ShipperFullConfig extends LogShipper {
+  sources: ShipperSource[];
+  volumes: ShipperVolume[];
+  siem_host?: string;
+  siem_port?: number;
+}
+
 export class LogShipperModel {
   // Create a new shipper
   static async create(shipper: Partial<LogShipper>): Promise<LogShipper> {
@@ -124,7 +131,7 @@ export class LogShipperModel {
   }
 
   // Get shipper with sources and volumes
-  static async getFullConfig(id: number): Promise<any> {
+  static async getFullConfig(id: number): Promise<ShipperFullConfig | null> {
     const shipper = await this.findById(id);
     if (!shipper) return null;
 

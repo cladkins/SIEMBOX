@@ -38,7 +38,7 @@ async function getSyslogSettings(): Promise<{ siem_host: string; siem_port: numb
 }
 
 // Calculate shipper status based on last_seen timestamp
-function calculateStatus(lastSeen: Date | null, currentStatus: string): string {
+function calculateStatus(lastSeen: Date | null, currentStatus: string): 'pending' | 'online' | 'offline' | 'error' {
   if (!lastSeen) {
     return 'pending';
   }
@@ -357,20 +357,17 @@ router.post('/register', async (req: Request, res: Response) => {
       status: 'online',
     });
 
-    // Return current configuration with syslog settings injected
+    // Return current configuration with syslog settings injected at top level
     const config = await LogShipperModel.getFullConfig(shipper.id);
     const syslogSettings = await getSyslogSettings();
 
-    // Inject syslog settings into config
-    config.config = {
-      ...config.config,
+    // Inject syslog settings at top level (not nested in config.config)
+    const fullConfig = {
+      ...config,
       ...syslogSettings,
     };
 
-    res.json({
-      success: true,
-      config,
-    });
+    res.json(fullConfig);
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to register shipper');
@@ -392,17 +389,17 @@ router.get('/config/:api_key', async (req: Request, res: Response) => {
     const ip_address = req.ip || req.socket.remoteAddress || 'unknown';
     await LogShipperModel.updateHeartbeat(api_key, ip_address);
 
-    // Get full configuration with syslog settings injected
+    // Get full configuration with syslog settings injected at top level
     const config = await LogShipperModel.getFullConfig(shipper.id);
     const syslogSettings = await getSyslogSettings();
 
-    // Inject syslog settings into config
-    config.config = {
-      ...config.config,
+    // Inject syslog settings at top level (not nested in config.config)
+    const fullConfig = {
+      ...config,
       ...syslogSettings,
     };
 
-    res.json(config);
+    res.json(fullConfig);
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch configuration');

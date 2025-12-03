@@ -1,5 +1,15 @@
 # Log Shipper Deployment Verification Guide
 
+**Navigation:** [Main README](../README.md) > [Log Shipper](./README.md) > Deployment Verification
+
+**Related Documentation:**
+- [Verification Guide](./VERIFICATION-GUIDE.md) - How to verify logs are flowing
+- [Quick Reference](./QUICK-REFERENCE.md) - Common commands
+- [Technical Details](./INCIDENT-REPORT-PROCESS-MANAGEMENT.md) - Complete technical analysis
+- [Log Shipper README](./README.md) - Setup and configuration
+
+---
+
 ## Critical Fix Summary
 
 This deployment includes a CRITICAL fix for process management that completely prevented log forwarding. Without this fix, the log shipper is non-functional.

@@ -1,5 +1,14 @@
 # Log Shipper Verification Guide
 
+**Navigation:** [Main README](../README.md) > [Log Shipper](./README.md) > Verification Guide
+
+**Related Documentation:**
+- [Quick Reference](./QUICK-REFERENCE.md) - Common commands
+- [Deployment Verification](./DEPLOYMENT-VERIFICATION.md) - Full deployment guide
+- [Troubleshooting](../TROUBLESHOOTING.md) - General troubleshooting
+
+---
+
 ## How to Verify Logs are Being Sent and Received
 
 This guide helps you verify that the log shipper is:

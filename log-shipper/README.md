@@ -2,6 +2,13 @@
 
 Universal log forwarder for sending logs from any source to SIEMBox via syslog. Deploy this lightweight container on any machine to forward logs from files, Docker containers, or systemd journals.
 
+## 📚 Documentation
+
+- **[Verification Guide](./VERIFICATION-GUIDE.md)** - Step-by-step guide to verify logs are being sent and received
+- **[Deployment Verification](./DEPLOYMENT-VERIFICATION.md)** - Comprehensive deployment and testing procedures
+- **[Quick Reference](./QUICK-REFERENCE.md)** - Common commands and troubleshooting tips
+- **[Technical Details](./INCIDENT-REPORT-PROCESS-MANAGEMENT.md)** - Process management architecture and implementation
+
 ## Features
 
 - **Centralized Management**: Configure and manage shippers from the SIEMBox web UI
@@ -243,6 +250,10 @@ docker inspect siembox-log-shipper | jq '.[0].State.Health'
 ```
 
 ## Troubleshooting
+
+For comprehensive troubleshooting, see:
+- **[Verification Guide](./VERIFICATION-GUIDE.md)** - Complete verification procedures
+- **[Quick Reference](./QUICK-REFERENCE.md)** - Quick troubleshooting commands
 
 ### Shipper shows as "Offline"
 

@@ -1,5 +1,15 @@
 # Incident Report: Log Shipper Process Management Failure
 
+**Navigation:** [Main README](../README.md) > [Log Shipper](./README.md) > Technical Details
+
+**Related Documentation:**
+- [Verification Guide](./VERIFICATION-GUIDE.md) - How to verify the fix worked
+- [Deployment Verification](./DEPLOYMENT-VERIFICATION.md) - Deployment procedures
+- [Quick Reference](./QUICK-REFERENCE.md) - Quick troubleshooting
+- [Log Shipper README](./README.md) - Setup guide
+
+---
+
 ## Incident Summary
 
 **Severity:** CRITICAL

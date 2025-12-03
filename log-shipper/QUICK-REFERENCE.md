@@ -1,5 +1,14 @@
 # Log Shipper Process Management - Quick Reference
 
+**Navigation:** [Main README](../README.md) > [Log Shipper](./README.md) > Quick Reference
+
+**Related Documentation:**
+- [Verification Guide](./VERIFICATION-GUIDE.md) - How to verify logs are flowing
+- [Deployment Verification](./DEPLOYMENT-VERIFICATION.md) - Full deployment guide
+- [Technical Details](./INCIDENT-REPORT-PROCESS-MANAGEMENT.md) - Complete technical analysis
+
+---
+
 ## What Was Fixed
 
 ### The Bug

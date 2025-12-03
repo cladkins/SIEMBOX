@@ -41,6 +41,16 @@ docker compose up -d
 - **[Deployment Guide](./DEPLOYMENT.md)** - Installation, configuration, and setup
 - **[Log Shipper Setup](./log-shipper/README.md)** - Universal log forwarder configuration
 
+### Log Shipper Documentation
+- **[Log Shipper README](./log-shipper/README.md)** - Setup and configuration
+- **[Verification Guide](./log-shipper/VERIFICATION-GUIDE.md)** - How to verify logs are flowing
+- **[Quick Reference](./log-shipper/QUICK-REFERENCE.md)** - Common commands and troubleshooting
+- **[Deployment Verification](./log-shipper/DEPLOYMENT-VERIFICATION.md)** - Step-by-step deployment guide
+- **[Technical Details](./log-shipper/INCIDENT-REPORT-PROCESS-MANAGEMENT.md)** - Process management architecture
+
+### Recent Updates
+- **[Incident Resolution Summary](./INCIDENT-RESOLUTION-SUMMARY.md)** - Recent critical bug fix (2025-12-03)
+
 ### Reference Documentation
 - **[API Reference](./API.md)** - Complete REST API documentation
 - **[Community Parsers](./PARSERS.md)** - Pre-built parsers for common log sources

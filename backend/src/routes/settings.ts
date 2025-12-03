@@ -126,4 +126,56 @@ router.get('/retention/stats', authorize('admin'), async (_req: Request, res: Re
   }
 });
 
+// Get syslog server settings
+router.get('/syslog', async (_req: Request, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT * FROM system_settings WHERE key IN ('syslog_host', 'syslog_port')`
+    );
+
+    const settings: Record<string, any> = {
+      syslog_host: '',
+      syslog_port: 514,
+    };
+
+    result.rows.forEach((row) => {
+      settings[row.key] = row.value;
+    });
+
+    res.json(settings);
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch syslog settings');
+  }
+});
+
+// Update syslog server settings
+router.put('/syslog', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const { syslog_host, syslog_port } = req.body;
+
+    if (!syslog_host) {
+      throw new ApiError(400, 'Syslog host is required');
+    }
+
+    const settings = [
+      { key: 'syslog_host', value: syslog_host },
+      { key: 'syslog_port', value: syslog_port || 514 },
+    ];
+
+    for (const setting of settings) {
+      await query(
+        `INSERT INTO system_settings (key, value)
+         VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+        [setting.key, setting.value]
+      );
+    }
+
+    res.json({ message: 'Syslog settings updated successfully' });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to update syslog settings');
+  }
+});
+
 export default router;

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { LogShipperModel, ShipperSourceModel, ShipperVolumeModel, ShipperActivityModel } from '../models/LogShipper';
 import { ApiError } from '../middleware/errorHandler';
+import { query } from '../config/database';
 import crypto from 'crypto';
 
 const router = Router();
@@ -8,6 +9,32 @@ const router = Router();
 // Generate API key for new shipper
 function generateApiKey(): string {
   return crypto.randomBytes(32).toString('hex');
+}
+
+// Get syslog server settings from system_settings
+async function getSyslogSettings(): Promise<{ siem_host: string; siem_port: number }> {
+  try {
+    const result = await query(
+      `SELECT key, value FROM system_settings WHERE key IN ('syslog_host', 'syslog_port')`
+    );
+
+    const settings: Record<string, any> = {
+      siem_host: '',
+      siem_port: 514,
+    };
+
+    result.rows.forEach((row) => {
+      if (row.key === 'syslog_host') {
+        settings.siem_host = row.value;
+      } else if (row.key === 'syslog_port') {
+        settings.siem_port = parseInt(row.value, 10);
+      }
+    });
+
+    return settings;
+  } catch (error) {
+    return { siem_host: '', siem_port: 514 };
+  }
 }
 
 // Calculate shipper status based on last_seen timestamp
@@ -330,8 +357,15 @@ router.post('/register', async (req: Request, res: Response) => {
       status: 'online',
     });
 
-    // Return current configuration
+    // Return current configuration with syslog settings injected
     const config = await LogShipperModel.getFullConfig(shipper.id);
+    const syslogSettings = await getSyslogSettings();
+
+    // Inject syslog settings into config
+    config.config = {
+      ...config.config,
+      ...syslogSettings,
+    };
 
     res.json({
       success: true,
@@ -358,8 +392,15 @@ router.get('/config/:api_key', async (req: Request, res: Response) => {
     const ip_address = req.ip || req.socket.remoteAddress || 'unknown';
     await LogShipperModel.updateHeartbeat(api_key, ip_address);
 
-    // Get full configuration
+    // Get full configuration with syslog settings injected
     const config = await LogShipperModel.getFullConfig(shipper.id);
+    const syslogSettings = await getSyslogSettings();
+
+    // Inject syslog settings into config
+    config.config = {
+      ...config.config,
+      ...syslogSettings,
+    };
 
     res.json(config);
   } catch (error) {

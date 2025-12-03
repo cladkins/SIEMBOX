@@ -77,6 +77,9 @@ send_log() {
     fi
 }
 
+# Global variable for tracking background PIDs
+TAILING_PIDS=()
+
 # Tail a log file and forward it
 tail_file() {
     local file="$1"
@@ -89,9 +92,32 @@ tail_file() {
     fi
 
     log_info "Tailing file: $file (tag: $tag)"
-    tail -F "$file" 2>/dev/null | while IFS= read -r line; do
-        send_log "$line" "$tag" "$facility" "info"
-    done &
+
+    # Use named pipe to properly track tail process PID
+    local pipe="/tmp/shipper-pipe-$$-$RANDOM"
+    mkfifo "$pipe" 2>/dev/null || {
+        log_error "Failed to create named pipe for $file"
+        return
+    }
+
+    # Start tail process, redirect to pipe, background it
+    tail -F "$file" > "$pipe" 2>/dev/null &
+    local tail_pid=$!
+    TAILING_PIDS+=($tail_pid)
+
+    # Start reader process in a new process group
+    (
+        # Create new process group
+        set -m
+        while IFS= read -r line; do
+            send_log "$line" "$tag" "$facility" "info"
+        done < "$pipe"
+    ) &
+    local reader_pid=$!
+    TAILING_PIDS+=($reader_pid)
+
+    # Cleanup pipe in background after a moment (both processes have it open)
+    (sleep 1; rm -f "$pipe" 2>/dev/null) &
 }
 
 # Tail Docker container logs
@@ -106,9 +132,32 @@ tail_docker_container() {
     fi
 
     log_info "Tailing Docker container: $container (tag: $tag)"
-    docker logs -f "$container" 2>&1 | while IFS= read -r line; do
-        send_log "$line" "$tag" "$facility" "info"
-    done &
+
+    # Use named pipe to properly track docker logs process PID
+    local pipe="/tmp/shipper-docker-pipe-$$-$RANDOM"
+    mkfifo "$pipe" 2>/dev/null || {
+        log_error "Failed to create named pipe for container $container"
+        return
+    }
+
+    # Start docker logs process, redirect to pipe, background it
+    docker logs -f "$container" > "$pipe" 2>&1 &
+    local docker_pid=$!
+    TAILING_PIDS+=($docker_pid)
+
+    # Start reader process in a new process group
+    (
+        # Create new process group
+        set -m
+        while IFS= read -r line; do
+            send_log "$line" "$tag" "$facility" "info"
+        done < "$pipe"
+    ) &
+    local reader_pid=$!
+    TAILING_PIDS+=($reader_pid)
+
+    # Cleanup pipe in background after a moment (both processes have it open)
+    (sleep 1; rm -f "$pipe" 2>/dev/null) &
 }
 
 # Tail systemd journal
@@ -118,9 +167,32 @@ tail_journal() {
     local facility="${3:-local2}"
 
     log_info "Tailing systemd journal: $unit (tag: $tag)"
-    journalctl -u "$unit" -f -n 0 --no-pager 2>/dev/null | while IFS= read -r line; do
-        send_log "$line" "$tag" "$facility" "info"
-    done &
+
+    # Use named pipe to properly track journalctl process PID
+    local pipe="/tmp/shipper-journal-pipe-$$-$RANDOM"
+    mkfifo "$pipe" 2>/dev/null || {
+        log_error "Failed to create named pipe for journal unit $unit"
+        return
+    }
+
+    # Start journalctl process, redirect to pipe, background it
+    journalctl -u "$unit" -f -n 0 --no-pager > "$pipe" 2>/dev/null &
+    local journal_pid=$!
+    TAILING_PIDS+=($journal_pid)
+
+    # Start reader process in a new process group
+    (
+        # Create new process group
+        set -m
+        while IFS= read -r line; do
+            send_log "$line" "$tag" "$facility" "info"
+        done < "$pipe"
+    ) &
+    local reader_pid=$!
+    TAILING_PIDS+=($reader_pid)
+
+    # Cleanup pipe in background after a moment (both processes have it open)
+    (sleep 1; rm -f "$pipe" 2>/dev/null) &
 }
 
 # Parse configuration file if it exists
@@ -253,7 +325,30 @@ cleanup() {
     log_info ""
     log_info "Shutting down log shipper..."
     send_log "Log shipper stopping" "log-shipper" "local0" "notice"
-    kill $(jobs -p) 2>/dev/null
+
+    # Kill all tracked processes
+    if [ ${#TAILING_PIDS[@]} -gt 0 ]; then
+        log_info "Stopping all tailing processes (${#TAILING_PIDS[@]} processes)..."
+        for pid in "${TAILING_PIDS[@]}"; do
+            if kill -0 "$pid" 2>/dev/null; then
+                # Kill process group to ensure all children are terminated
+                kill -TERM -$pid 2>/dev/null || kill -TERM $pid 2>/dev/null || true
+                # Give it a moment to terminate gracefully
+                sleep 0.1
+                # Force kill if still alive
+                if kill -0 "$pid" 2>/dev/null; then
+                    kill -KILL -$pid 2>/dev/null || kill -KILL $pid 2>/dev/null || true
+                fi
+            fi
+        done
+    fi
+
+    # Cleanup any remaining jobs
+    kill $(jobs -p) 2>/dev/null || true
+
+    # Clean up any stray named pipes
+    rm -f /tmp/shipper-*pipe-$$ 2>/dev/null || true
+
     exit 0
 }
 

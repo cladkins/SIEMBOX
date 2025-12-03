@@ -150,13 +150,22 @@ EOF
 # Stop all tailing processes
 stop_tailing() {
     if [ ${#TAILING_PIDS[@]} -gt 0 ]; then
-        log_info "Stopping all tailing processes..."
+        log_info "Stopping all tailing processes (${#TAILING_PIDS[@]} processes)..."
         for pid in "${TAILING_PIDS[@]}"; do
             if kill -0 "$pid" 2>/dev/null; then
-                kill "$pid" 2>/dev/null || true
+                log_debug "Killing process $pid"
+                # Kill process group to ensure all children are terminated
+                kill -TERM -$pid 2>/dev/null || kill -TERM $pid 2>/dev/null || true
+                # Give it a moment to terminate gracefully
+                sleep 0.1
+                # Force kill if still alive
+                if kill -0 "$pid" 2>/dev/null; then
+                    kill -KILL -$pid 2>/dev/null || kill -KILL $pid 2>/dev/null || true
+                fi
             fi
         done
         TAILING_PIDS=()
+        log_debug "All tailing processes stopped"
     fi
 }
 
@@ -175,11 +184,33 @@ tail_file_source() {
 
     log_info "Tailing file: $file_path (tag: $tag)"
 
-    tail -F "$file_path" 2>/dev/null | while IFS= read -r line; do
-        send_log "$line" "$tag" "$facility" "info" "$siem_host" "$siem_port"
-    done &
+    # Use named pipe to properly track tail process PID
+    local pipe="/tmp/shipper-pipe-$$-$RANDOM"
+    mkfifo "$pipe" 2>/dev/null || {
+        log_error "Failed to create named pipe for $file_path"
+        return
+    }
 
-    TAILING_PIDS+=($!)
+    # Start tail process, redirect to pipe, background it
+    tail -F "$file_path" > "$pipe" 2>/dev/null &
+    local tail_pid=$!
+    TAILING_PIDS+=($tail_pid)
+    log_debug "Started tail process $tail_pid for $file_path"
+
+    # Start reader process in a new process group
+    (
+        # Create new process group
+        set -m
+        while IFS= read -r line; do
+            send_log "$line" "$tag" "$facility" "info" "$siem_host" "$siem_port"
+        done < "$pipe"
+    ) &
+    local reader_pid=$!
+    TAILING_PIDS+=($reader_pid)
+    log_debug "Started reader process $reader_pid for $file_path"
+
+    # Cleanup pipe in background after a moment (both processes have it open)
+    (sleep 1; rm -f "$pipe" 2>/dev/null) &
 }
 
 # Start tailing a Docker container
@@ -197,11 +228,33 @@ tail_docker_source() {
 
     log_info "Tailing Docker container: $container (tag: $tag)"
 
-    docker logs -f "$container" 2>&1 | while IFS= read -r line; do
-        send_log "$line" "$tag" "$facility" "info" "$siem_host" "$siem_port"
-    done &
+    # Use named pipe to properly track docker logs process PID
+    local pipe="/tmp/shipper-docker-pipe-$$-$RANDOM"
+    mkfifo "$pipe" 2>/dev/null || {
+        log_error "Failed to create named pipe for container $container"
+        return
+    }
 
-    TAILING_PIDS+=($!)
+    # Start docker logs process, redirect to pipe, background it
+    docker logs -f "$container" > "$pipe" 2>&1 &
+    local docker_pid=$!
+    TAILING_PIDS+=($docker_pid)
+    log_debug "Started docker logs process $docker_pid for $container"
+
+    # Start reader process in a new process group
+    (
+        # Create new process group
+        set -m
+        while IFS= read -r line; do
+            send_log "$line" "$tag" "$facility" "info" "$siem_host" "$siem_port"
+        done < "$pipe"
+    ) &
+    local reader_pid=$!
+    TAILING_PIDS+=($reader_pid)
+    log_debug "Started reader process $reader_pid for $container"
+
+    # Cleanup pipe in background after a moment (both processes have it open)
+    (sleep 1; rm -f "$pipe" 2>/dev/null) &
 }
 
 # Apply configuration from SIEMBox
@@ -215,9 +268,9 @@ apply_config() {
     # Stop existing tailing processes
     stop_tailing
 
-    # Extract SIEMBox connection info from config
-    local siem_host=$(echo "$config" | jq -r '.config.siem_host // ""' 2>/dev/null)
-    local siem_port=$(echo "$config" | jq -r '.config.siem_port // "514"' 2>/dev/null)
+    # Extract SIEMBox connection info from config (at top level after Phase 1 backend changes)
+    local siem_host=$(echo "$config" | jq -r '.siem_host // ""' 2>/dev/null)
+    local siem_port=$(echo "$config" | jq -r '.siem_port // "514"' 2>/dev/null)
 
     # If not in config, extract from SIEMBOX_API_URL environment variable
     if [ "$siem_host" = "null" ] || [ -z "$siem_host" ] || [ "$siem_host" = "" ]; then

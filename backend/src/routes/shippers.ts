@@ -18,7 +18,7 @@ async function getSyslogSettings(): Promise<{ siem_host: string; siem_port: numb
       `SELECT key, value FROM system_settings WHERE key IN ('syslog_host', 'syslog_port')`
     );
 
-    const settings: Record<string, any> = {
+    const settings: { siem_host: string; siem_port: number } = {
       siem_host: '',
       siem_port: 514,
     };

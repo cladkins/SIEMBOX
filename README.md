@@ -37,12 +37,22 @@ docker compose up -d
 
 ## Documentation
 
-- **[Deployment Guide](./DEPLOYMENT.md)** - Installation, configuration, and troubleshooting
-- **[Log Shipper](./log-shipper/README.md)** - Universal log forwarder for any source
+### Getting Started
+- **[Deployment Guide](./DEPLOYMENT.md)** - Installation, configuration, and setup
+- **[Log Shipper Setup](./log-shipper/README.md)** - Universal log forwarder configuration
+
+### Reference Documentation
+- **[API Reference](./API.md)** - Complete REST API documentation
 - **[Community Parsers](./PARSERS.md)** - Pre-built parsers for common log sources
 - **[Detection Rules](./RULES.md)** - Built-in and community detection rules
-- **Parser Builder** - Visual tool for creating custom parsers (in UI)
-- **Rule Editor** - Create detection rules with conditions and aggregations (in UI)
+
+### Operations & Security
+- **[Security Hardening](./SECURITY.md)** - Comprehensive security guide
+- **[Troubleshooting](./TROUBLESHOOTING.md)** - Common issues and solutions
+
+### Development
+- **[Contributing Guide](./CONTRIBUTING.md)** - How to contribute
+- **[Backend API](./backend/README.md)** - Backend development documentation
 
 ## Architecture
 

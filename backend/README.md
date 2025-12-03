@@ -86,42 +86,75 @@ backend/
 
 ## API Endpoints
 
-### Health Check
-- `GET /health` - Server health status
+**Complete API documentation:** See [../API.md](../API.md) for detailed request/response examples.
 
-### Authentication (Coming Soon)
+### Authentication
 - `POST /api/auth/login` - User login
 - `POST /api/auth/logout` - User logout
+- `GET /api/auth/me` - Get current user profile
+- `PUT /api/auth/me/password` - Change password
+- `POST /api/auth/cleanup` - Cleanup expired sessions (admin)
 
-### Logs (Coming Soon)
-- `GET /api/logs/raw` - List raw logs
+### Logs
+- `GET /api/logs/raw` - List raw syslog messages
 - `GET /api/logs/parsed` - List parsed logs
+- `GET /api/logs/parsed/search` - Search logs by field
 
-### Parsers (Coming Soon)
+### Parsers
 - `GET /api/parsers` - List all parsers
+- `GET /api/parsers/:id` - Get single parser
 - `POST /api/parsers` - Create parser
 - `PUT /api/parsers/:id` - Update parser
 - `DELETE /api/parsers/:id` - Delete parser
-- `POST /api/parsers/:id/test` - Test parser
+- `POST /api/parsers/:id/test` - Test saved parser
+- `POST /api/parsers/test` - Test parser config (without saving)
 
-### Detection Rules (Coming Soon)
+### Detection Rules
 - `GET /api/rules` - List all rules
+- `GET /api/rules/:id` - Get single rule
 - `POST /api/rules` - Create rule
 - `PUT /api/rules/:id` - Update rule
 - `DELETE /api/rules/:id` - Delete rule
-- `POST /api/rules/:id/test` - Test rule
 
-### Alerts (Coming Soon)
-- `GET /api/alerts` - List alerts
+### Alerts
+- `GET /api/alerts` - List alerts (with filtering)
+- `GET /api/alerts/statistics` - Get alert statistics
 - `GET /api/alerts/:id` - Get alert details
-- `PUT /api/alerts/:id` - Update alert
+- `PUT /api/alerts/:id` - Update alert status
 - `DELETE /api/alerts/:id` - Delete alert
 
-### Users (Coming Soon)
+### Users
 - `GET /api/users` - List users (admin only)
+- `GET /api/users/:id` - Get single user (admin only)
 - `POST /api/users` - Create user (admin only)
 - `PUT /api/users/:id` - Update user (admin only)
 - `DELETE /api/users/:id` - Delete user (admin only)
+
+### Settings
+- `GET /api/settings/retention` - Get retention settings (admin)
+- `PUT /api/settings/retention` - Update retention (admin)
+- `POST /api/settings/retention/cleanup` - Manual cleanup (admin)
+- `GET /api/settings/retention/stats` - Get cleanup stats (admin)
+- `GET /api/settings/syslog` - Get syslog server settings
+- `PUT /api/settings/syslog` - Update syslog settings (admin)
+
+### Log Shippers
+- `GET /api/shippers` - List all shippers
+- `GET /api/shippers/:id` - Get shipper with full config
+- `POST /api/shippers` - Create shipper
+- `PUT /api/shippers/:id` - Update shipper
+- `DELETE /api/shippers/:id` - Delete shipper
+- `GET /api/shippers/:id/sources` - Get shipper sources
+- `POST /api/shippers/:id/sources` - Add source
+- `PUT /api/shippers/sources/:sourceId` - Update source
+- `DELETE /api/shippers/sources/:sourceId` - Delete source
+- `GET /api/shippers/:id/volumes` - Get volume mounts
+- `POST /api/shippers/:id/volumes` - Add volume
+- `DELETE /api/shippers/volumes/:volumeId` - Delete volume
+- `GET /api/shippers/:id/activity` - Get activity log
+- `POST /api/shippers/:id/regenerate-key` - Regenerate API key
+- `POST /api/shippers/register` - Shipper registration (public)
+- `GET /api/shippers/config/:api_key` - Get config (public)
 
 ## Default Admin User
 

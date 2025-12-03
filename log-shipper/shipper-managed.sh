@@ -216,13 +216,22 @@ apply_config() {
     stop_tailing
 
     # Extract SIEMBox connection info from config
-    local siem_host=$(echo "$config" | jq -r '.config.siem_host // "localhost"' 2>/dev/null)
+    local siem_host=$(echo "$config" | jq -r '.config.siem_host // ""' 2>/dev/null)
     local siem_port=$(echo "$config" | jq -r '.config.siem_port // "514"' 2>/dev/null)
 
-    # If not in config, try to extract from first source or use defaults
+    # If not in config, extract from SIEMBOX_API_URL environment variable
+    if [ "$siem_host" = "null" ] || [ -z "$siem_host" ] || [ "$siem_host" = "" ]; then
+        # Extract host from SIEMBOX_API_URL (e.g., http://192.168.1.76:3001/api -> 192.168.1.76)
+        siem_host=$(echo "$SIEMBOX_API_URL" | sed -E 's|^https?://([^:/]+).*|\1|')
+        log_debug "Extracted SIEM host from SIEMBOX_API_URL: $siem_host"
+    fi
+
+    # Final fallback
     if [ "$siem_host" = "null" ] || [ -z "$siem_host" ]; then
         siem_host="localhost"
+        log_warn "Could not determine SIEM host, using localhost"
     fi
+
     if [ "$siem_port" = "null" ] || [ -z "$siem_port" ]; then
         siem_port="514"
     fi

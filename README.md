@@ -37,6 +37,8 @@ docker compose up -d
 
 ## Documentation
 
+📖 **[Documentation Map](./DOCUMENTATION-MAP.md)** - Complete overview of all documentation
+
 ### Getting Started
 - **[Deployment Guide](./DEPLOYMENT.md)** - Installation, configuration, and setup
 - **[Log Shipper Setup](./log-shipper/README.md)** - Universal log forwarder configuration

@@ -4,7 +4,6 @@ import { logger } from './utils/logger';
 import pool from './config/database';
 import { SyslogServer } from './services/syslog/syslogServer';
 import { CleanupService } from './services/cleanup/cleanupService';
-import { seedData } from './scripts/seed-data';
 
 dotenv.config();
 
@@ -23,13 +22,6 @@ const startServer = async () => {
     // Test database connection
     await pool.query('SELECT NOW()');
     logger.info('Database connection successful');
-
-    // Initialize seed data (parsers from migrations, rules from YAML)
-    logger.info('Initializing seed data...');
-    const seedSuccess = await seedData();
-    if (!seedSuccess) {
-      logger.warn('Seed data initialization had errors, but continuing startup');
-    }
 
     // Start syslog server
     syslogServer = new SyslogServer(SYSLOG_PORT);

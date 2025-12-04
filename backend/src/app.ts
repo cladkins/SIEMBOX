@@ -5,7 +5,7 @@ import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { authenticate } from './middleware/auth';
-import { getSeedStatus } from './scripts/seed-data';
+import { query } from './config/database';
 
 // Import routes
 import authRoutes from './routes/auth';
@@ -50,17 +50,25 @@ app.get('/health', (_req, res) => {
   });
 });
 
-// Seed status endpoint
-app.get('/health/seed-status', async (_req: Request, res: Response) => {
+// Database status endpoint
+app.get('/health/database-status', async (_req: Request, res: Response) => {
   try {
-    const status = await getSeedStatus();
-    res.status(200).json(status);
+    const parsers = await query('SELECT COUNT(*) as count FROM parsers');
+    const rules = await query('SELECT COUNT(*) as count FROM detection_rules');
+    const parserCount = parseInt(parsers.rows[0].count, 10);
+    const ruleCount = parseInt(rules.rows[0].count, 10);
+
+    res.status(200).json({
+      parsers: parserCount,
+      rules: ruleCount,
+      ready: parserCount >= 18 && ruleCount >= 40
+    });
   } catch (error) {
     res.status(500).json({
-      error: 'Failed to check seed status',
+      error: 'Failed to check database status',
       parsers: 0,
       rules: 0,
-      seeded: false,
+      ready: false
     });
   }
 });

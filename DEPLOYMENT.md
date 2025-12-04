@@ -53,16 +53,27 @@ docker-compose ps
 docker-compose logs -f
 ```
 
-### 4. Initialize Database
+### 4. Initialize Database and Seed Data
 
-The database migrations run automatically when the backend starts. Wait for the backend to be healthy:
+The database migrations and seed data import run automatically when the backend starts. Wait for the backend to be healthy:
 
 ```bash
-# Check backend logs to ensure migrations completed
+# Check backend logs to ensure migrations and seeding completed
 docker-compose logs backend | grep -i migration
+docker-compose logs backend | grep -i seed
 
-# You should see messages about migrations being applied
+# You should see messages about:
+# - Migrations being applied (including parser imports)
+# - Detection rules being seeded from YAML files
+# - Successful import counts
 ```
+
+On first startup, SIEMBox automatically:
+- Runs all database migrations (including 18+ parsers)
+- Seeds 40+ detection rules from YAML files
+- Creates default admin user
+
+**No manual steps required!**
 
 ### 5. Access the Application
 
@@ -163,14 +174,38 @@ docker-compose up -d --build
 # Migrations run automatically on backend startup
 ```
 
-## Database Migrations
+## Database Migrations and Seeding
 
-Migrations are located in `backend/migrations/` and run automatically on startup in order:
-- `001_initial_schema.sql` - Core tables
-- `002_seed_data.sql` - Default parsers, rules, and admin user
-- `003_system_settings.sql` - Retention settings
+### Automatic Process
 
-### Manual Migration (if needed)
+Migrations and seeding happen automatically on backend startup:
+
+1. **Migrations** (run in order from `backend/migrations/`):
+   - `001_initial_schema.sql` - Core tables
+   - `002_seed_data.sql` - Default admin user
+   - `003_system_settings.sql` - Retention settings
+   - `004_*.sql` through `006_*.sql` - Additional schema updates
+   - `007_import_phase2_parsers.sql` - **11 Phase 2 parsers** (reverse proxy, auth, apps)
+
+2. **Seed Data** (automatic on first run):
+   - Checks if detection_rules table is empty
+   - If empty, imports **40+ YAML rules** from `rules/` directory
+   - If rules exist, skips import (idempotent)
+
+3. **Health Check**:
+   ```bash
+   # Check seed status
+   curl http://localhost:3001/health/seed-status
+
+   # Expected response:
+   # {
+   #   "parsers": 18,
+   #   "rules": 48,
+   #   "seeded": true
+   # }
+   ```
+
+### Manual Operations (if needed)
 
 ```bash
 # Access the backend container
@@ -178,6 +213,28 @@ docker-compose exec backend sh
 
 # Run migrations manually
 npm run migrate
+
+# Re-seed detection rules (only imports new rules)
+npm run seed-data
+
+# Import specific rules from YAML
+npm run import-rules
+```
+
+### Verify Automatic Seeding
+
+```bash
+# Check backend startup logs
+docker-compose logs backend | tail -50
+
+# You should see:
+# [info] Starting database migrations...
+# [info] Migration completed: 007_import_phase2_parsers.sql
+# [info] All migrations completed successfully!
+# [info] Initializing seed data...
+# [info] Seeding detection rules from YAML files...
+# [info] Successfully seeded 40 detection rules
+# [info] Seed data initialization complete
 ```
 
 ## Backup and Restore

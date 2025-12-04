@@ -102,7 +102,7 @@ async function importRule(filePath: string): Promise<boolean> {
     // Create rule in database
     const rule = await DetectionRuleModel.create({
       name: yamlRule.name,
-      description: yamlRule.description || null,
+      description: yamlRule.description || undefined,
       enabled: yamlRule.enabled !== false, // Default to true
       severity: yamlRule.severity,
       rule_yaml: fileContent, // Store original YAML

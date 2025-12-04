@@ -217,7 +217,7 @@ export class RulesEngine {
   private async evaluateDistinctCountAggregation(
     rule: DetectionRule,
     aggregation: RuleAggregation,
-    parsedLog: ParsedLog,
+    _parsedLog: ParsedLog,
     fieldValue: any,
     startTime: Date
   ): Promise<boolean> {

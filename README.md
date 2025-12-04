@@ -4,10 +4,11 @@ A lightweight, self-hosted Security Information and Event Management (SIEM) syst
 
 ## Features
 
+- **Zero-Configuration Setup**: Automatically seeds 18+ parsers and 40+ detection rules on first startup
 - **Syslog Ingestion**: Receive logs via UDP/TCP on port 514
 - **Log Shipper**: Universal log forwarder for collecting logs from any source
-- **Custom Parsers**: Build regex, grok, or JSON parsers to extract fields from logs
-- **Detection Rules**: Create rules with conditions and thresholds to trigger alerts
+- **Pre-Built Parsers**: Nginx, Traefik, Caddy, Authelia, Keycloak, Nextcloud, Pi-hole, and more
+- **Detection Rules**: Built-in rules for authentication failures, web attacks, DNS anomalies, and system events
 - **Alert Management**: View, acknowledge, and manage security alerts
 - **Log Retention**: Configurable retention policies with automated cleanup
 - **User Management**: Role-based access control (Admin, Analyst, Viewer)
@@ -29,6 +30,12 @@ nano .env
 
 # Build and start
 docker compose up -d
+
+# That's it! SIEMBox automatically:
+# - Runs database migrations
+# - Imports 18+ parsers (Nginx, Traefik, Caddy, Authelia, etc.)
+# - Seeds 40+ detection rules
+# - Creates default admin user
 
 # Access the UI
 # Frontend: http://localhost:3000

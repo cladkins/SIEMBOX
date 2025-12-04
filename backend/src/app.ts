@@ -1,10 +1,11 @@
 import 'express-async-errors'; // Must be imported before routes
-import express, { Application } from 'express';
+import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { authenticate } from './middleware/auth';
+import { getSeedStatus } from './scripts/seed-data';
 
 // Import routes
 import authRoutes from './routes/auth';
@@ -47,6 +48,21 @@ app.get('/health', (_req, res) => {
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
   });
+});
+
+// Seed status endpoint
+app.get('/health/seed-status', async (_req: Request, res: Response) => {
+  try {
+    const status = await getSeedStatus();
+    res.status(200).json(status);
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to check seed status',
+      parsers: 0,
+      rules: 0,
+      seeded: false,
+    });
+  }
 });
 
 // API routes

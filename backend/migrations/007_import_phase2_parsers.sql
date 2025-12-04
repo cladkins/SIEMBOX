@@ -154,7 +154,7 @@ VALUES (
   true,
   42,
   'json',
-  NULL,
+  '',
   '{
     "ts": "timestamp",
     "request.client_ip": "client_ip",

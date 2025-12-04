@@ -31,8 +31,30 @@ export const query = async (text: string, params?: any[]) => {
     const duration = Date.now() - start;
     logger.debug('Executed query', { text, duration, rows: res.rowCount });
     return res;
-  } catch (error) {
-    logger.error('Database query error:', { text, error });
+  } catch (error: any) {
+    // Extract PostgreSQL error details for proper logging
+    // Error properties exist on prototype chain and don't serialize with JSON.stringify
+    const errorDetails = {
+      message: error.message || 'Unknown error',
+      code: error.code || 'UNKNOWN',
+      detail: error.detail || null,
+      hint: error.hint || null,
+      position: error.position || null,
+      where: error.where || null,
+      schema: error.schema || null,
+      table: error.table || null,
+      column: error.column || null,
+      dataType: error.dataType || null,
+      constraint: error.constraint || null,
+    };
+
+    logger.error('Database query error:', {
+      query: text,
+      params: params ? JSON.stringify(params) : null,
+      error: errorDetails,
+      stack: error.stack,
+    });
+
     throw error;
   }
 };

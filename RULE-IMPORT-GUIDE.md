@@ -1,196 +1,158 @@
-# SIEMBox Rule Import Guide
+# SIEMBox Auto-Import System Guide
 
 **Date:** 2025-12-04
-**Purpose:** Import 40 Phase 3 detection rules into production database
-**Status:** Ready for deployment
+**Purpose:** Document automatic parser and detection rule import system
+**Status:** ✅ Fully Implemented - Zero Configuration Required
 
 ---
 
-## Problem Statement
+## Overview
 
-The database currently has only **10 detection rules** (4 seed rules + 4 UniFi IPS rules + 2 Phase 3 rules).
+SIEMBox now features **automatic parser and detection rule import** on first startup. No manual import steps are required.
 
-**Missing:** 30+ Phase 3 detection rules (AUTH-*, PROXY-*, ACCESS-*, INFRA-*, EXFIL-*, APP-*, IOT-*, PWDMGR-*)
+**What gets imported automatically:**
+- **18 Parsers** - Phase 2 log parsers (NGINX Proxy Manager, Traefik, Caddy, Authelia, Vaultwarden, Pi-hole, Nextcloud, etc.)
+- **40+ Detection Rules** - Phase 3 security rules (AUTH-*, PROXY-*, ACCESS-*, INFRA-*, EXFIL-*, APP-*, IOT-*, PWDMGR-*)
 
-The 40 YAML rule files exist in `rules/` directory but were never imported into the database. The frontend queries the database, so the UI shows incomplete data.
+**How it works:**
+1. **Migration 007** imports 11 Phase 2 parsers via SQL INSERT statements
+2. **Seed Data Script** imports 40 YAML detection rules on first run
+3. Both operations are **idempotent** (safe to re-run)
+4. All imports happen **automatically** during `docker compose up`
 
 ---
 
-## Solution
+## Zero-Configuration Deployment
 
-A new import script (`backend/src/scripts/import-rules.ts`) reads all YAML files from `rules/` and inserts them into the `detection_rules` table.
-
----
-
-## Deployment Steps
-
-### 1. Pull Latest Code
-
-On your Docker host:
+### Step 1: Pull Latest Code
 
 ```bash
 cd /path/to/siembox
 git pull origin develop
 ```
 
-### 2. Rebuild Backend Container
+### Step 2: Rebuild and Start
 
 ```bash
-docker compose build backend
+docker compose build
+docker compose up -d
 ```
 
-### 3. Stop Backend (to prevent log processing during import)
+**That's it!** Parsers and rules are imported automatically.
+
+### Step 3: Verify Import
+
+Check counts:
 
 ```bash
-docker compose stop backend
-```
-
-### 4. Run Import Script
-
-```bash
-docker compose run --rm backend npm run import-rules
+docker exec siembox-postgres psql -U siembox -d siembox -c "
+SELECT
+  (SELECT COUNT(*) FROM parsers) as parser_count,
+  (SELECT COUNT(*) FROM detection_rules) as rule_count;
+"
 ```
 
 **Expected output:**
 ```
-[info]: Starting rule import from YAML files...
-[info]: Scanning for YAML rule files { rulesDir: '/app/rules' }
-[info]: Found 40 YAML rule files
-[info]: Importing: authentication/AUTH-001-ssh-brute-force.yaml
-[info]: Rule imported successfully { id: 11, name: 'SSH Brute Force Detection', severity: 'high' }
-[info]: Importing: authentication/AUTH-002-brute-force-success.yaml
-...
-[info]: Rule import complete { total: 40, imported: 38, skipped: 2, failed: 0 }
-[info]: ✓ Successfully imported 38 new rules
-[info]: - Skipped 2 existing rules
+ parser_count | rule_count
+--------------+------------
+           18 |         40+
 ```
 
-**Note:** Some rules may be skipped if they already exist (e.g., "Direct Root SSH Login" from seed data).
-
-### 5. Verify Import
-
-Check rule count:
+Or check via health endpoint:
 
 ```bash
-docker exec siembox-postgres psql -U siembox -d siembox -c "SELECT COUNT(*) as total_rules FROM detection_rules;"
+curl http://localhost:8080/health/seed-status
 ```
 
-**Expected:** Should show 40-48 rules (40 Phase 3 + seed rules + any manual rules)
+**Expected response:**
+```json
+{
+  "parsers": 18,
+  "rules": 40,
+  "seeded": true
+}
+```
 
-List imported rules:
+---
+
+## How Auto-Import Works
+
+### Parser Import (Migration 007)
+
+**File:** `backend/migrations/007_import_phase2_parsers.sql`
+
+- Runs during database migration sequence (001 → 007)
+- Deletes existing parsers by name (idempotent)
+- Inserts 11 Phase 2 parsers with regex patterns and field mappings
+- Parsers include: NGINX Proxy Manager, Traefik, Caddy, Standard NGINX, Authelia, Authentik, Keycloak, Nextcloud, Pi-hole
+
+**Parsers added:**
+1. nginx-proxy-manager-access
+2. nginx-proxy-manager-error
+3. traefik-access
+4. caddy-access
+5. standard-nginx-access
+6. standard-nginx-error
+7. authelia-access
+8. authentik-audit
+9. keycloak-event
+10. nextcloud-access
+11. pihole-query
+
+### Rule Import (Seed Data)
+
+**File:** `backend/src/scripts/seed-data.ts`
+
+- Runs after migrations during server startup
+- Checks if `detection_rules` table is empty
+- If empty, imports all YAML files from `rules/` directory
+- Skips import if rules already exist (idempotent)
+
+**Rules imported:**
+- **11 AUTH rules** - Authentication attack detection
+- **8 PROXY rules** - Reverse proxy security monitoring
+- **4 ACCESS rules** - Unauthorized access detection
+- **4 INFRA rules** - Infrastructure security monitoring
+- **3 EXFIL rules** - Data exfiltration detection
+- **4 APP rules** - Application security monitoring
+- **2 IOT rules** - IoT device security
+- **4 PWDMGR rules** - Password manager security
+
+---
+
+## Verifying Auto-Import
+
+### 1. Check Logs
+
+During startup, you'll see:
+
+```
+[info]: Running migration: 007_import_phase2_parsers.sql
+[info]: Migration complete
+[info]: Checking if seed data is needed...
+[info]: Seeding detection rules from YAML files...
+[info]: Starting rule import from YAML files...
+[info]: Found 40 YAML rule files
+[info]: Rule imported successfully { id: 11, name: 'SSH Brute Force Detection', severity: 'high' }
+...
+[info]: ✓ Successfully imported 38 new rules
+[info]: - Skipped 2 existing rules
+[info]: Seed data initialization complete
+```
+
+### 2. Check Parser Count
 
 ```bash
 docker exec siembox-postgres psql -U siembox -d siembox -c "
-SELECT name, severity, enabled
-FROM detection_rules
-ORDER BY name
-LIMIT 50;
+SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE enabled = true) as enabled
+FROM parsers;
 "
 ```
 
-**Expected:** Should see AUTH-*, PROXY-*, ACCESS-*, INFRA-*, EXFIL-*, APP-*, IOT-*, PWDMGR-* rules
+**Expected:** 18 total, 18 enabled
 
-### 6. Restart Backend
-
-```bash
-docker compose start backend
-```
-
-### 7. Verify in UI
-
-1. Log into SIEMBox web interface (http://your-server:3000)
-2. Navigate to **Detection Rules** page
-3. Verify all 40 Phase 3 rules are visible
-4. Check that rules are enabled and have correct severity levels
-
----
-
-## Troubleshooting
-
-### Import Script Fails
-
-**Error:** `Cannot find module 'js-yaml'`
-
-**Solution:** The `js-yaml` dependency already exists in `package.json`, but if needed:
-```bash
-docker compose run --rm backend npm install
-docker compose build backend
-```
-
-### Rules Already Exist
-
-**Output:** `[info]: Rule already exists, skipping { name: 'SSH Brute Force Detection', id: 1 }`
-
-**Solution:** This is normal. The script skips duplicate rules by name. No action needed.
-
-### Import Hangs or Times Out
-
-**Solution:**
-1. Check database connectivity: `docker logs siembox-postgres --tail 50`
-2. Verify backend can connect: `docker logs siembox-backend --tail 50`
-3. Re-run import with detailed logs: Add `LOG_LEVEL=debug` environment variable
-
-### Rules Not Showing in UI
-
-**Possible causes:**
-1. Frontend not updated - Clear browser cache and refresh
-2. API endpoint issue - Check browser console for errors
-3. Backend not restarted - Restart with `docker compose restart backend`
-
-**Verify rules exist in database:**
-```bash
-docker exec siembox-postgres psql -U siembox -d siembox -c "SELECT COUNT(*) FROM detection_rules;"
-```
-
-If rules exist in database but not in UI, check:
-- Browser console for API errors
-- Backend logs: `docker logs siembox-backend --tail 100`
-- Frontend logs: `docker logs siembox-frontend --tail 100`
-
----
-
-## Parser Import (Phase 2 Parsers)
-
-**Status:** Parser import is separate from rule import.
-
-**Current state:**
-- Database has **7 parsers** (should be 12+ from Phase 2)
-- Vaultwarden parser was added in migration 005
-
-**Missing parsers:**
-- NGINX Proxy Manager (access logs)
-- NGINX Proxy Manager (error logs)
-- Traefik (access logs)
-- Caddy (access logs)
-- Standard NGINX (access logs)
-- Standard NGINX (error logs)
-- Authelia (access logs)
-- Authentik (audit logs)
-- Keycloak (event logs)
-- Nextcloud (access logs)
-- Pi-hole (query logs)
-
-**Recommended approach:**
-1. Create parsers through the **Parsers** UI page (admin panel)
-2. Use the parser documentation in `docs/parsers/` for regex patterns and field mappings
-3. Or create a separate parser import script (similar to rule import)
-
-**Parser creation priority:**
-1. **NGINX Proxy Manager** - Most critical (842 users)
-2. **Traefik** - High priority (312 users)
-3. **Caddy** - Medium priority (203 users)
-4. **Authelia** - Authentication monitoring
-5. **Vaultwarden** - Password manager security (already exists)
-6. **Pi-hole** - DNS monitoring
-7. **Nextcloud** - File access monitoring
-8. **Standard NGINX** - Web server monitoring
-9. **Authentik / Keycloak** - SSO monitoring
-
----
-
-## Post-Import Validation
-
-### 1. Rule Count by Category
+### 3. Check Rule Count by Category
 
 ```bash
 docker exec siembox-postgres psql -U siembox -d siembox -c "
@@ -218,39 +180,216 @@ ORDER BY category;
  PWDMGR-  |          4 |             4
 ```
 
-### 2. Rule Severity Distribution
+### 4. Verify in UI
+
+1. Navigate to http://your-server:3000
+2. Log in with admin credentials
+3. Go to **Parsers** page → should see 18 parsers
+4. Go to **Detection Rules** page → should see 40+ rules
+5. All rules should be **enabled** by default
+
+---
+
+## Troubleshooting
+
+### Migration 006 Error: "idx_ip_whitelist_cidr already exists"
+
+**Status:** ✅ Fixed in latest commit
+
+**Solution:** Migration 006 now uses `CREATE INDEX IF NOT EXISTS` for idempotency.
+
+**If you see this error:**
+1. Pull latest code: `git pull origin develop`
+2. Rebuild backend: `docker compose build backend`
+3. Restart: `docker compose up -d`
+
+### Migration 007 Takes Long Time
+
+**Normal behavior:** Migration 007 inserts 11 large parser records with regex patterns. This can take 10-30 seconds.
+
+**Watch logs:**
+```bash
+docker logs -f siembox-backend
+```
+
+Look for: `[info]: Running migration: 007_import_phase2_parsers.sql`
+
+### Seed Data Not Importing Rules
+
+**Check logs:**
+```bash
+docker logs siembox-backend | grep "seed"
+```
+
+**Possible causes:**
+1. Rules already exist → Script skips import (normal behavior)
+2. Database connectivity issue → Check postgres logs
+3. YAML file errors → Check specific error messages
+
+**Force re-import (if needed):**
+```bash
+# Delete all rules
+docker exec siembox-postgres psql -U siembox -d siembox -c "DELETE FROM detection_rules;"
+
+# Restart backend to trigger auto-import
+docker compose restart backend
+```
+
+### Parsers Not Showing in UI
+
+**Verify parsers exist:**
+```bash
+docker exec siembox-postgres psql -U siembox -d siembox -c "SELECT id, name, enabled FROM parsers ORDER BY priority LIMIT 20;"
+```
+
+**If parsers exist but not in UI:**
+1. Clear browser cache
+2. Check browser console for API errors
+3. Verify backend is running: `docker ps | grep backend`
+4. Check backend logs: `docker logs siembox-backend --tail 100`
+
+### Rules Not Showing in UI
+
+**Verify rules exist:**
+```bash
+docker exec siembox-postgres psql -U siembox -d siembox -c "SELECT COUNT(*) FROM detection_rules;"
+```
+
+**If rules exist but not in UI:**
+1. Clear browser cache and refresh
+2. Check browser console for JavaScript errors
+3. Verify API endpoint: `curl http://localhost:8080/api/rules`
+4. Check backend logs for API errors
+
+---
+
+## Success Criteria
+
+✅ **Auto-Import Successful When:**
+1. Backend container starts without errors
+2. Database has 18 parsers
+3. Database has 40+ detection rules
+4. All parsers visible in **Parsers** UI page
+5. All rules visible in **Detection Rules** UI page
+6. Health endpoint returns `"seeded": true`
+
+---
+
+## Manual Import (If Needed)
+
+If for any reason auto-import doesn't work, you can manually trigger imports:
+
+### Manual Parser Import
+
+Parsers are imported via migration 007. To re-run:
 
 ```bash
-docker exec siembox-postgres psql -U siembox -d siembox -c "
-SELECT severity, COUNT(*) as count
-FROM detection_rules
-GROUP BY severity
-ORDER BY
-  CASE severity
-    WHEN 'critical' THEN 1
-    WHEN 'high' THEN 2
-    WHEN 'medium' THEN 3
-    WHEN 'low' THEN 4
-  END;
-"
+# Drop and recreate parsers (WARNING: destructive)
+docker exec siembox-postgres psql -U siembox -d siembox -c "DELETE FROM parsers;"
+
+# Restart to trigger migrations
+docker compose restart backend
+```
+
+### Manual Rule Import
+
+```bash
+docker compose run --rm backend npm run import-rules
 ```
 
 **Expected output:**
 ```
- severity | count
-----------+-------
- critical |     5
- high     |    17
- medium   |    14
- low      |     4
+[info]: Starting rule import from YAML files...
+[info]: Found 40 YAML rule files
+[info]: Rule import complete { total: 40, imported: 40, skipped: 0, failed: 0 }
+[info]: ✓ Successfully imported 40 new rules
 ```
 
-### 3. Test Rule Triggering
+---
 
-Send a test log to verify rule engine is working:
+## Architecture Details
+
+### Database Migration Sequence
+
+```
+001_init_tables.sql          - Core schema (users, logs, parsers, rules, alerts)
+002_seed_demo_data.sql        - Demo user and initial parsers
+003_syslog_settings.sql       - Syslog server configuration
+004_log_severity_filtering.sql - Log filtering enhancements
+005_vaultwarden_parser.sql    - Vaultwarden password manager parser
+006_add_ip_whitelist.sql      - IP whitelist for admin access control
+007_import_phase2_parsers.sql - 11 Phase 2 parsers (NGINX, Traefik, etc.)
+```
+
+### Seed Data Flow
+
+```
+server.ts startup
+  ↓
+runMigrations() - Executes 001-007
+  ↓
+seedData() - Checks if rules needed
+  ↓
+importRules() - Imports YAML files from rules/
+  ↓
+Server ready with parsers and rules
+```
+
+### Idempotency Design
+
+**Migration 007:**
+```sql
+-- Delete existing parsers before inserting
+DELETE FROM parsers WHERE name IN ('nginx-proxy-manager-access', ...);
+
+-- Insert parsers
+INSERT INTO parsers (name, ...) VALUES (...);
+```
+
+**Seed Data:**
+```typescript
+// Check if rules already exist
+const result = await query('SELECT COUNT(*) FROM detection_rules');
+if (count > 0) {
+  logger.info('Rules already present, skipping seed');
+  return true;
+}
+
+// Import only if empty
+await importRules();
+```
+
+**Import Rules:**
+```typescript
+// Check for duplicate before inserting
+const existing = await DetectionRuleModel.findByName(yamlRule.name);
+if (existing) {
+  logger.info('Rule already exists, skipping');
+  return false;
+}
+
+// Insert only if not exists
+await DetectionRuleModel.create({...});
+```
+
+---
+
+## Next Steps After Auto-Import
+
+1. **Verify Alert Generation** - Send test logs to trigger rules
+2. **Monitor False Positives** - First 24 hours will show baseline patterns
+3. **Tune Thresholds** - Adjust rule thresholds based on environment
+4. **Configure IP Whitelist** - Add trusted admin IPs to reduce alerts
+5. **Review Parser Priority** - Adjust parser order if needed
+6. **Enable/Disable Rules** - Turn off rules not relevant to your environment
+
+---
+
+## Test Rule Triggering
+
+Send a test SSH brute force log:
 
 ```bash
-# Test SSH brute force detection
 for i in {1..6}; do
   echo "<13>Dec  4 12:34:56 testhost sshd[12345]: Failed password for admin from 192.168.1.100 port 22 ssh2" | nc -u -w1 your-siembox-server 514
   sleep 1
@@ -265,43 +404,23 @@ SELECT title, severity, created_at
 FROM alerts
 WHERE title LIKE '%SSH Brute Force%'
 ORDER BY created_at DESC
-LIMIT 5;
+LIMIT 1;
 "
 ```
-
----
-
-## Success Criteria
-
-✅ **Rule Import Successful When:**
-1. Database has 40+ detection rules
-2. All Phase 3 rule categories present (AUTH, PROXY, ACCESS, INFRA, EXFIL, APP, IOT, PWDMGR)
-3. Rules visible in SIEMBox web UI
-4. Rules are enabled and have correct severity levels
-5. Test logs trigger alerts correctly
-
----
-
-## Next Steps After Import
-
-1. **Monitor Alert Volume** - First 24 hours will show baseline alert patterns
-2. **Tune Thresholds** - Adjust rule thresholds based on false positive rates
-3. **Add Parsers** - Create the 11 missing Phase 2 parsers through UI
-4. **Review Alerts** - Acknowledge legitimate alerts, investigate suspicious ones
-5. **Update IP Whitelist** - Add known admin IPs to reduce false positives
-6. **Enable Aggregation** - Phase 4B distinct_count rules will detect distributed attacks
 
 ---
 
 ## Support
 
 **Documentation:**
-- `docs/reference/RULES.md` - Complete rule documentation
-- `docs/operations/RULE-DEPLOYMENT-CHECKLIST.md` - Deployment checklist
+- `README.md` - Project overview and quick start
+- `DEPLOYMENT.md` - Full deployment guide
+- `docs/reference/RULES.md` - Detection rule documentation
 - `docs/reference/PARSERS.md` - Parser creation guide
 
 **Troubleshooting:**
 - `docs/operations/TROUBLESHOOTING.md` - Common issues
+- GitHub Issues: https://github.com/cladkins/SIEMBOX/issues
 
 **Git Repository:**
 - https://github.com/cladkins/SIEMBOX
@@ -310,14 +429,34 @@ LIMIT 5;
 
 ## Rollback Procedure
 
-If import causes issues:
+If auto-import causes issues:
 
-### 1. Delete imported rules
+### 1. Stop backend
 
 ```bash
+docker compose stop backend
+```
+
+### 2. Delete imported data
+
+```bash
+# Delete all parsers and rules
 docker exec siembox-postgres psql -U siembox -d siembox -c "
-DELETE FROM detection_rules
-WHERE name LIKE 'AUTH-%'
+DELETE FROM parsers WHERE name IN (
+  'nginx-proxy-manager-access',
+  'nginx-proxy-manager-error',
+  'traefik-access',
+  'caddy-access',
+  'standard-nginx-access',
+  'standard-nginx-error',
+  'authelia-access',
+  'authentik-audit',
+  'keycloak-event',
+  'nextcloud-access',
+  'pihole-query'
+);
+
+DELETE FROM detection_rules WHERE name LIKE 'AUTH-%'
    OR name LIKE 'PROXY-%'
    OR name LIKE 'ACCESS-%'
    OR name LIKE 'INFRA-%'
@@ -328,20 +467,24 @@ WHERE name LIKE 'AUTH-%'
 "
 ```
 
-### 2. Restart backend
+### 3. Restart backend
 
 ```bash
-docker compose restart backend
+docker compose start backend
 ```
 
-### 3. Verify
+### 4. Verify
 
 ```bash
-docker exec siembox-postgres psql -U siembox -d siembox -c "SELECT COUNT(*) FROM detection_rules;"
+docker exec siembox-postgres psql -U siembox -d siembox -c "
+SELECT
+  (SELECT COUNT(*) FROM parsers) as parser_count,
+  (SELECT COUNT(*) FROM detection_rules) as rule_count;
+"
 ```
 
-Should return to original count (10 or fewer).
+Should return to original counts (7 parsers, 10 rules).
 
 ---
 
-**Ready to proceed?** Follow steps 1-7 above to import all 40 detection rules into your SIEMBox deployment.
+**Ready?** Just run `docker compose up -d` and everything imports automatically! 🚀

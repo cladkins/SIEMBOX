@@ -15,10 +15,10 @@ CREATE TABLE IF NOT EXISTS ip_whitelist (
 );
 
 -- Create GiST index for efficient CIDR lookups
-CREATE INDEX idx_ip_whitelist_cidr ON ip_whitelist USING GIST (ip_address inet_ops);
+CREATE INDEX IF NOT EXISTS idx_ip_whitelist_cidr ON ip_whitelist USING GIST (ip_address inet_ops);
 
 -- Add unique constraint to prevent duplicate IP entries
-CREATE UNIQUE INDEX idx_ip_whitelist_unique ON ip_whitelist (ip_address);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ip_whitelist_unique ON ip_whitelist (ip_address);
 
 -- Add comment to table
 COMMENT ON TABLE ip_whitelist IS 'IP addresses whitelisted for admin interface access and rule exceptions';

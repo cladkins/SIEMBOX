@@ -19,12 +19,10 @@ const parsers = [
     pattern: '^(?P<client_ip>[\\d.]+)\\s+-\\s+(?P<remote_user>\\S+)\\s+\\[(?P<timestamp>[^\\]]+)\\]\\s+"(?P<method>\\w+)\\s+(?P<request_uri>\\S+)\\s+HTTP/(?P<http_version>[\\d.]+)"\\s+(?P<status_code>\\d{3})\\s+(?P<body_bytes_sent>\\d+)\\s+"(?P<http_referer>[^"]*)"\\s+"(?P<user_agent>[^"]*)"',
     field_mappings: {
       "client_ip": "client_ip",
-      "source_ip": "client_ip",
       "remote_user": "remote_user",
       "timestamp": "timestamp",
       "method": "method",
       "request_uri": "request_uri",
-      "path": "request_uri",
       "http_version": "http_version",
       "status_code": "status_code",
       "body_bytes_sent": "body_bytes_sent",
@@ -53,7 +51,6 @@ const parsers = [
     field_mappings: {
       "timestamp": "timestamp",
       "log_level": "log_level",
-      "severity": "log_level",
       "message": "message",
       "service": "nginx-proxy-manager"
     },
@@ -76,10 +73,8 @@ const parsers = [
     pattern: '',
     field_mappings: {
       "ClientAddr": "client_ip",
-      "ClientAddr": "source_ip",
       "RequestMethod": "method",
       "RequestPath": "request_uri",
-      "RequestPath": "path",
       "RequestProtocol": "http_version",
       "DownstreamStatus": "status_code",
       "DownstreamContentSize": "body_bytes_sent",
@@ -140,12 +135,10 @@ const parsers = [
     pattern: '^(?P<client_ip>[\\d.]+)\\s+-\\s+(?P<remote_user>\\S+)\\s+\\[(?P<timestamp>[^\\]]+)\\]\\s+"(?P<method>\\w+)\\s+(?P<request_uri>\\S+)\\s+HTTP/(?P<http_version>[\\d.]+)"\\s+(?P<status_code>\\d{3})\\s+(?P<body_bytes_sent>\\d+)\\s+"(?P<http_referer>[^"]*)"\\s+"(?P<user_agent>[^"]*)"',
     field_mappings: {
       "client_ip": "client_ip",
-      "source_ip": "client_ip",
       "remote_user": "remote_user",
       "timestamp": "timestamp",
       "method": "method",
       "request_uri": "request_uri",
-      "path": "request_uri",
       "http_version": "http_version",
       "status_code": "status_code",
       "body_bytes_sent": "body_bytes_sent",
@@ -174,7 +167,6 @@ const parsers = [
     field_mappings: {
       "timestamp": "timestamp",
       "log_level": "log_level",
-      "severity": "log_level",
       "message": "message",
       "service": "nginx"
     },
@@ -198,13 +190,10 @@ const parsers = [
     field_mappings: {
       "timestamp": "timestamp",
       "log_level": "log_level",
-      "severity": "log_level",
       "message": "message",
       "method": "method",
       "path": "path",
-      "request_uri": "path",
       "client_ip": "client_ip",
-      "source_ip": "client_ip",
       "status_code": "status_code",
       "service": "authelia"
     },
@@ -234,7 +223,6 @@ const parsers = [
       "user": "user",
       "username": "user",
       "ip": "client_ip",
-      "ip": "source_ip",
       "success": "success",
       "app": "app",
       "service": "authentik"
@@ -266,7 +254,6 @@ const parsers = [
       "realm": "realm",
       "user_id": "user_id",
       "client_ip": "client_ip",
-      "source_ip": "client_ip",
       "service": "keycloak"
     },
     test_samples: [
@@ -292,14 +279,11 @@ const parsers = [
       "timestamp": "timestamp",
       "app": "app",
       "log_level": "log_level",
-      "severity": "log_level",
       "message": "message",
       "user": "user",
       "url": "url",
-      "path": "url",
       "method": "method",
       "client_ip": "client_ip",
-      "source_ip": "client_ip",
       "service": "nextcloud"
     },
     test_samples: [
@@ -324,10 +308,8 @@ const parsers = [
       "timestamp": "timestamp",
       "query_type": "query_type",
       "domain": "domain",
-      "query": "domain",
       "result": "result",
       "client_ip": "client_ip",
-      "source_ip": "client_ip",
       "service": "pihole"
     },
     test_samples: [

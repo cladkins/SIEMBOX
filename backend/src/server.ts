@@ -4,6 +4,7 @@ import { logger } from './utils/logger';
 import pool from './config/database';
 import { SyslogServer } from './services/syslog/syslogServer';
 import { CleanupService } from './services/cleanup/cleanupService';
+import { importRules } from './scripts/import-rules';
 
 dotenv.config();
 
@@ -22,6 +23,10 @@ const startServer = async () => {
     // Test database connection
     await pool.query('SELECT NOW()');
     logger.info('Database connection successful');
+
+    // Auto-import detection rules on first startup
+    logger.info('Checking for detection rules to import...');
+    await importRules();
 
     // Start syslog server
     syslogServer = new SyslogServer(SYSLOG_PORT);

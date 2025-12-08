@@ -74,6 +74,157 @@ VALUES (
 )
 ON CONFLICT (name) DO NOTHING;
 
+-- ============================================================================
+-- PHASE 2 PARSERS: Reverse Proxy and Application Parsers
+-- ============================================================================
+
+-- Phase 2 Parser: NGINX Proxy Manager - Access Logs
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'nginx-proxy-manager-access',
+    'Parses NGINX Proxy Manager access logs for web traffic monitoring and attack detection',
+    'regex',
+    50,
+    '^(?<client_ip>[\d.]+)\s+-\s+(?<remote_user>\S+)\s+\[(?<timestamp>[^\]]+)\]\s+"(?<method>\w+)\s+(?<request_uri>\S+)\s+HTTP/(?<http_version>[\d.]+)"\s+(?<status_code>\d{3})\s+(?<body_bytes_sent>\d+)\s+"(?<http_referer>[^"]*)"\s+"(?<user_agent>[^"]*)"',
+    '{"client_ip": "client_ip", "remote_user": "remote_user", "timestamp": "timestamp", "method": "method", "request_uri": "request_uri", "http_version": "http_version", "status_code": "status_code", "body_bytes_sent": "body_bytes_sent", "http_referer": "http_referer", "user_agent": "user_agent", "service": "nginx-proxy-manager"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Phase 2 Parser: NGINX Proxy Manager - Error Logs
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'nginx-proxy-manager-error',
+    'Parses NGINX Proxy Manager error logs for troubleshooting and security monitoring',
+    'regex',
+    49,
+    '^(?<timestamp>\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+\[(?<log_level>\w+)\]\s+(?<message>.*)$',
+    '{"timestamp": "timestamp", "log_level": "log_level", "message": "message", "service": "nginx-proxy-manager"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Phase 2 Parser: Traefik - Access Logs (JSON)
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'traefik-access',
+    'Parses Traefik reverse proxy access logs in JSON format',
+    'json',
+    48,
+    '',
+    '{"ClientAddr": "client_ip", "RequestMethod": "method", "RequestPath": "request_uri", "RequestProtocol": "http_version", "DownstreamStatus": "status_code", "DownstreamContentSize": "body_bytes_sent", "RequestRefererHeader": "http_referer", "RequestUserAgentHeader": "user_agent", "Duration": "duration", "service": "traefik"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Phase 2 Parser: Caddy - Access Logs (JSON)
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'caddy-access',
+    'Parses Caddy web server access logs with JSON format',
+    'json',
+    42,
+    '',
+    '{"ts": "timestamp", "request.client_ip": "client_ip", "request.method": "method", "request.uri": "request_uri", "request.proto": "http_version", "status": "status_code", "size": "body_bytes_sent", "request.headers.Referer[0]": "http_referer", "request.headers.User-Agent[0]": "user_agent", "duration": "duration", "service": "caddy"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Phase 2 Parser: Standard NGINX - Access Logs
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'standard-nginx-access',
+    'Parses standard NGINX access logs (combined format)',
+    'regex',
+    40,
+    '^(?<client_ip>[\d.]+)\s+-\s+(?<remote_user>\S+)\s+\[(?<timestamp>[^\]]+)\]\s+"(?<method>\w+)\s+(?<request_uri>\S+)\s+HTTP/(?<http_version>[\d.]+)"\s+(?<status_code>\d{3})\s+(?<body_bytes_sent>\d+)\s+"(?<http_referer>[^"]*)"\s+"(?<user_agent>[^"]*)"',
+    '{"client_ip": "client_ip", "remote_user": "remote_user", "timestamp": "timestamp", "method": "method", "request_uri": "request_uri", "http_version": "http_version", "status_code": "status_code", "body_bytes_sent": "body_bytes_sent", "http_referer": "http_referer", "user_agent": "user_agent", "service": "nginx"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Phase 2 Parser: Standard NGINX - Error Logs
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'standard-nginx-error',
+    'Parses standard NGINX error logs',
+    'regex',
+    39,
+    '^(?<timestamp>\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+\[(?<log_level>\w+)\]\s+(?<message>.*)$',
+    '{"timestamp": "timestamp", "log_level": "log_level", "message": "message", "service": "nginx"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Phase 2 Parser: Authelia - Access Logs
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'authelia-access',
+    'Parses Authelia authentication gateway access logs',
+    'regex',
+    25,
+    '^time="(?<timestamp>[^"]+)"\s+level=(?<log_level>\w+)\s+msg="(?<message>[^"]*)"(?:\s+method=(?<method>\w+))?(?:\s+path=(?<path>[^\s]+))?(?:\s+remote_ip=(?<client_ip>[\d.]+))?(?:\s+status_code=(?<status_code>\d+))?',
+    '{"timestamp": "timestamp", "log_level": "log_level", "message": "message", "method": "method", "path": "path", "client_ip": "client_ip", "status_code": "status_code", "service": "authelia"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Phase 2 Parser: Authentik - Audit Logs (JSON)
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'authentik-audit',
+    'Parses Authentik SSO audit logs in JSON format',
+    'json',
+    24,
+    '',
+    '{"timestamp": "timestamp", "event": "event", "user": "user", "ip": "client_ip", "success": "success", "app": "app", "service": "authentik"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Phase 2 Parser: Keycloak - Event Logs
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'keycloak-event',
+    'Parses Keycloak identity provider event logs',
+    'regex',
+    23,
+    '^(?<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d+)\s+\w+\s+\[(?<logger>[^\]]+)\].*?type=(?<event>\w+).*?(?:realmId=(?<realm>\w+))?.*?(?:userId=(?<user_id>[^,\s]+))?.*?(?:ipAddress=(?<client_ip>[\d.]+))?',
+    '{"timestamp": "timestamp", "logger": "logger", "event": "event", "realm": "realm", "user_id": "user_id", "client_ip": "client_ip", "service": "keycloak"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Phase 2 Parser: Nextcloud - Access Logs
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'nextcloud-access',
+    'Parses Nextcloud file sharing and collaboration platform logs',
+    'regex',
+    35,
+    '^\[(?<timestamp>[^\]]+)\]\s+(?<app>\w+)\.(?<log_level>\w+):\s+(?<message>.+?)\s+\{.*?"user":"(?<user>[^"]*)".*?"url":"(?<url>[^"]*)".*?"method":"(?<method>[^"]*)".*?"ip":"(?<client_ip>[^"]*)"',
+    '{"timestamp": "timestamp", "app": "app", "log_level": "log_level", "message": "message", "user": "user", "url": "url", "method": "method", "client_ip": "client_ip", "service": "nextcloud"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Phase 2 Parser: Pi-hole - Query Logs
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'pihole-query',
+    'Parses Pi-hole DNS query logs for network monitoring and ad blocking',
+    'regex',
+    30,
+    '^(?<timestamp>\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2})\s+dnsmasq\[\d+\]:\s+(?<query_type>\w+)\s+(?<domain>[^\s]+)\s+(?:is\s+(?<result>[^\s]+))?(?:from\s+(?<client_ip>[\d.]+))?',
+    '{"timestamp": "timestamp", "query_type": "query_type", "domain": "domain", "result": "result", "client_ip": "client_ip", "service": "pihole"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- ============================================================================
+-- DETECTION RULES
+-- ============================================================================
+
 -- Built-in Detection Rule: SSH Brute Force
 INSERT INTO detection_rules (name, description, severity, rule_yaml, rule_logic, tags, enabled)
 VALUES (

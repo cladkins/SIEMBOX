@@ -130,8 +130,8 @@ async function importRule(filePath: string): Promise<boolean> {
 async function main() {
   logger.info('Starting rule import from YAML files...');
 
-  // Find rules directory (project root / rules)
-  const rulesDir = path.join(__dirname, '../../../rules');
+  // Find rules directory (mounted at /app/rules in Docker container)
+  const rulesDir = path.join(__dirname, '../../rules');
 
   if (!fs.existsSync(rulesDir)) {
     logger.warn('Rules directory not found - skipping rule import', { rulesDir });

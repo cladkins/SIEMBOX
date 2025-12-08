@@ -490,6 +490,82 @@ curl -X PUT http://localhost:3001/api/shippers/sources/<source-id> \
 
 ## Parser Problems
 
+### Issue: "Invalid regular expression: Invalid group" Error
+
+**Symptoms:**
+- Backend logs show repeated errors: `Regex parser <name> error: Invalid regular expression: Invalid group`
+- Parser appears in database but fails at runtime
+- Error mentions `(?P` in the pattern
+
+**Root Cause:**
+Parser contains Python-style regex syntax `(?P<name>...)` instead of JavaScript syntax `(?<name>...)`. JavaScript's RegExp doesn't support Python's named group syntax.
+
+**Example Error:**
+```
+Regex parser vaultwarden-access error: Invalid regular expression: /^\[(?P\d{4}-\d{2}-\d{2}...: Invalid group
+```
+
+**Diagnosis:**
+```bash
+# Check for Python-style regex in database
+docker exec siembox-postgres psql -U siembox -d siembox -c \
+  "SELECT id, name, substring(pattern, 1, 100) as pattern_preview
+   FROM parsers
+   WHERE pattern LIKE '%(?P<%'
+   ORDER BY priority;"
+
+# Run comprehensive validation
+npx ts-node backend/scripts/validate-parsers.ts
+```
+
+**Solution:**
+
+**Option 1: SQL Fix Script (Recommended for existing databases)**
+```bash
+# Fix vaultwarden parser specifically
+docker exec -i siembox-postgres psql -U siembox -d siembox < backend/scripts/fix_vaultwarden_parser.sql
+
+# Or connect interactively
+docker exec -it siembox-postgres psql -U siembox -d siembox
+
+# Then update the parser
+UPDATE parsers
+SET pattern = '<corrected-javascript-pattern>',
+    updated_at = NOW()
+WHERE name = 'vaultwarden-access';
+```
+
+**Option 2: Fix Migration (For fresh deployments)**
+If you haven't deployed yet, fix the migration file:
+- Edit `backend/migrations/005_add_vaultwarden_parser.sql`
+- Replace all `(?P<name>` with `(?<name>`
+- Ensure pattern uses negative lookahead instead of non-greedy quantifiers for complex extractions
+
+**Option 3: Validation & Batch Fix**
+```bash
+# Validate all parsers and get detailed report
+cd backend
+npx ts-node scripts/validate-parsers.ts
+
+# View SQL validation report
+docker exec -i siembox-postgres psql -U siembox -d siembox \
+  < scripts/validate_all_parsers_and_rules.sql
+```
+
+**Prevention:**
+- Always use JavaScript regex syntax: `(?<name>...)` not `(?P<name>...)`
+- Test regex patterns at https://regex101.com with flavor "ECMAScript (JavaScript)"
+- Run `npx ts-node backend/scripts/validate-parsers.ts` before deployment
+- Include parser validation in your CI/CD pipeline
+
+**Related Files:**
+- `backend/scripts/fix_vaultwarden_parser.sql` - Fix script for vaultwarden parser
+- `backend/scripts/validate-parsers.ts` - Comprehensive parser validation
+- `backend/scripts/validate_all_parsers_and_rules.sql` - SQL-based validation report
+- `backend/scripts/README.md` - Documentation for all validation scripts
+
+---
+
 ### Issue: Parser Not Matching Logs
 
 **Diagnosis:**

@@ -48,6 +48,8 @@ docker compose up -d
 
 ### Getting Started
 - **[Deployment Guide](./DEPLOYMENT.md)** - Installation, configuration, and setup
+- **[Fresh Install Fix](./FRESH-INSTALL-FIX.md)** - ⚠️ **Having persistent errors?** Complete fresh start guide
+- **[Deployment Fix Guide](./DEPLOYMENT-FIX-GUIDE.md)** - Troubleshooting deployment issues
 - **[Log Shipper Setup](./log-shipper/README.md)** - Universal log forwarder configuration
 
 ### Log Shipper Documentation

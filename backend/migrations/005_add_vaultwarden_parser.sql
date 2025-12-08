@@ -25,7 +25,7 @@ VALUES (
   true,
   55, -- HIGHEST PRIORITY - Password manager is most critical system
   'regex',
-  '^\[(?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})\]\[(?P<module>[^\]]+)\]\[(?P<log_level>\w+)\]\s+(?P<message>.+?)(?:from\s+IP:\s+(?P<client_ip>[\d.]+))?(?:,\s+Email:\s+(?P<email>\S+))?(?:by\s+(?P<admin_email>\S+)\s+from\s+(?P<admin_ip>[\d.]+))?(?:,\s+Device:\s+(?P<device>[^,]+))?',
+  '^\[(?<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})\]\[(?<module>[^\]]+)\]\[(?<log_level>\w+)\]\s+(?<message>.+?)(?:from\s+IP:\s+(?<client_ip>[\d.]+))?(?:,\s+Email:\s+(?<email>\S+))?(?:by\s+(?<admin_email>\S+)\s+from\s+(?<admin_ip>[\d.]+))?(?:,\s+Device:\s+(?<device>[^,]+))?',
   '{
     "timestamp": "timestamp",
     "module": "module",

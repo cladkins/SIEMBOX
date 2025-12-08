@@ -173,7 +173,7 @@ Vaultwarden is a lightweight, unofficial Bitwarden-compatible server written in 
   "enabled": true,
   "priority": 55,
   "parser_type": "regex",
-  "pattern": "^\\[(?<timestamp>\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}\\.\\d{3})\\]\\[(?<module>[^\\]]+)\\]\\[(?<log_level>\\w+)\\]\\s+(?<message>.+?)(?:from\\s+IP:\\s+(?<client_ip>[\\d.]+))?(?:,\\s+Email:\\s+(?<email>\\S+))?(?:by\\s+(?<admin_email>\\S+)\\s+from\\s+(?<admin_ip>[\\d.]+))?(?:,\\s+Device:\\s+(?<device>[^,]+))?",
+  "pattern": "^\\[(?<timestamp>\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}\\.\\d{3})\\]\\[(?<module>[^\\]]+)\\]\\[(?<log_level>\\w+)\\]\\s+(?<message>(?:(?!(?:\\s+(?:for|from(?:\\s+IP:)?|by)\\s+|,\\s+(?:Email|Device):)).)+?)(?:\\s+for\\s+(?<email>\\S+))?(?:\\s+by\\s+(?<admin_email>\\S+)\\s+from\\s+(?<admin_ip>[\\d.]+)|(?:\\s+from\\s+(?:IP:\\s+)?(?<client_ip>[\\d.]+)(?:,\\s+Email:\\s+(?<email>\\S+))?))(?:,\\s+Device:\\s+(?<device>[^,]+))?$",
   "field_mappings": {
     "timestamp": "timestamp",
     "module": "module",
@@ -269,7 +269,7 @@ VALUES (
   true,
   55,
   'regex',
-  '^\[(?<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})\]\[(?<module>[^\]]+)\]\[(?<log_level>\w+)\]\s+(?<message>.+?)(?:from\s+IP:\s+(?<client_ip>[\d.]+))?(?:,\s+Email:\s+(?<email>\S+))?(?:by\s+(?<admin_email>\S+)\s+from\s+(?<admin_ip>[\d.]+))?(?:,\s+Device:\s+(?<device>[^,]+))?',
+  '^\[(?<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})\]\[(?<module>[^\]]+)\]\[(?<log_level>\w+)\]\s+(?<message>(?:(?!(?:\s+(?:for|from(?:\s+IP:)?|by)\s+|,\s+(?:Email|Device):)).)+?)(?:\s+for\s+(?<email>\S+))?(?:\s+by\s+(?<admin_email>\S+)\s+from\s+(?<admin_ip>[\d.]+)|(?:\s+from\s+(?:IP:\s+)?(?<client_ip>[\d.]+)(?:,\s+Email:\s+(?<email>\S+))?))(?:,\s+Device:\s+(?<device>[^,]+))?$',
   '{"timestamp":"timestamp","module":"module","log_level":"log_level","message":"message","client_ip":"client_ip","email":"email","admin_email":"admin_email","admin_ip":"admin_ip","device":"device"}',
   '[{"raw_message":"[2025-12-03 12:34:56.789][vaultwarden::api::identity][WARN] Failed login attempt from IP: 192.168.1.100, Email: admin@example.com","expected_fields":{"timestamp":"2025-12-03 12:34:56.789","module":"vaultwarden::api::identity","log_level":"WARN","message":"Failed login attempt","client_ip":"192.168.1.100","email":"admin@example.com"}}]',
   NOW(),

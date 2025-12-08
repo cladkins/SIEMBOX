@@ -25,7 +25,7 @@ VALUES (
   true,
   55, -- HIGHEST PRIORITY - Password manager is most critical system
   'regex',
-  '^\[(?<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})\]\[(?<module>[^\]]+)\]\[(?<log_level>\w+)\]\s+(?<message>.+?)(?:from\s+IP:\s+(?<client_ip>[\d.]+))?(?:,\s+Email:\s+(?<email>\S+))?(?:by\s+(?<admin_email>\S+)\s+from\s+(?<admin_ip>[\d.]+))?(?:,\s+Device:\s+(?<device>[^,]+))?',
+  '^\[(?<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})\]\[(?<module>[^\]]+)\]\[(?<log_level>\w+)\]\s+(?<message>(?:(?!(?:\s+(?:for|from(?:\s+IP:)?|by)\s+|,\s+(?:Email|Device):)).)+?)(?:\s+for\s+(?<email>\S+))?(?:\s+by\s+(?<admin_email>\S+)\s+from\s+(?<admin_ip>[\d.]+)|(?:\s+from\s+(?:IP:\s+)?(?<client_ip>[\d.]+)(?:,\s+Email:\s+(?<email>\S+))?))(?:,\s+Device:\s+(?<device>[^,]+))?$',
   '{
     "timestamp": "timestamp",
     "module": "module",
@@ -77,9 +77,9 @@ VALUES (
         "timestamp": "2025-12-03 12:36:22.456",
         "module": "vaultwarden::api::core",
         "log_level": "INFO",
-        "message": "Vault accessed by admin@example.com",
-        "client_ip": "192.168.1.100",
-        "source_ip": "192.168.1.100",
+        "message": "Vault accessed",
+        "admin_email": "admin@example.com",
+        "admin_ip": "192.168.1.100",
         "service": "vaultwarden"
       }
     },
@@ -89,9 +89,9 @@ VALUES (
         "timestamp": "2025-12-03 12:37:45.789",
         "module": "vaultwarden::api::core",
         "log_level": "WARN",
-        "message": "Vault export initiated by admin@example.com",
-        "client_ip": "192.168.1.100",
-        "source_ip": "192.168.1.100",
+        "message": "Vault export initiated",
+        "admin_email": "admin@example.com",
+        "admin_ip": "192.168.1.100",
         "service": "vaultwarden",
         "action": "vault_export"
       }

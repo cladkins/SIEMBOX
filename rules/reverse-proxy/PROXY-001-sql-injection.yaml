@@ -11,7 +11,7 @@ tags: [web, sql-injection, attack, reverse-proxy, exploitation]
 conditions:
   - field: path
     operator: regex
-    value: '('\''"|;|--|\bOR\b|\bUNION\b|\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bDROP\b|0x[0-9a-f]+|\*\s*FROM\s*|\bAND\b.*=)'
+    value: "('|\"|;|--|\bOR\b|\bUNION\b|\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bDROP\b|0x[0-9a-f]+|\*\s*FROM\s*|\bAND\b.*=)"
 
 alert:
   title: "SQL Injection Attempt from {client_ip}"

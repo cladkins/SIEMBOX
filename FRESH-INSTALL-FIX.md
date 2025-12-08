@@ -3,9 +3,11 @@
 ## Problem Summary
 
 You are experiencing persistent errors after redeploying SIEMBox:
-1. **Vaultwarden parser regex error**: Shows `(?` instead of `(?<timestamp>` (missing group names)
+1. **Vaultwarden parser regex error**: "Duplicate capture group name" - JavaScript regex doesn't allow duplicate `(?<email>)` groups
 2. **Detection rules not showing**: Rules not visible in the UI
 3. **Fresh install not working**: Despite shutting down, pruning, and redeploying
+
+**UPDATE (2025-12-08)**: The regex error was caused by TWO `(?<email>)` capture groups in the pattern. This has been fixed in commit d8ad0d5.
 
 ## Root Cause
 
@@ -207,9 +209,9 @@ docker exec siembox-postgres psql -U siembox -d siembox -c \
   "SELECT name, LEFT(pattern, 100) as pattern FROM parsers WHERE name = 'vaultwarden-access';"
 ```
 
-**If pattern shows `(?` instead of `(?<timestamp>`:**
+**If pattern shows duplicate email groups or other issues:**
 
-This means the volume wasn't fully removed. Try:
+Ensure you have the latest code (commit d8ad0d5 or later) and try:
 
 ```bash
 # Force remove everything

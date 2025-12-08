@@ -134,8 +134,10 @@ async function main() {
   const rulesDir = path.join(__dirname, '../../../rules');
 
   if (!fs.existsSync(rulesDir)) {
-    logger.error('Rules directory not found', { rulesDir });
-    process.exit(1);
+    logger.warn('Rules directory not found - skipping rule import', { rulesDir });
+    logger.warn('Detection rules will need to be created manually or rules directory must be mounted');
+    logger.info('Rule import completed: 0 imported (directory not found)');
+    return; // Exit gracefully instead of crashing
   }
 
   logger.info('Scanning for YAML rule files', { rulesDir });

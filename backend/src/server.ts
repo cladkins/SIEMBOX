@@ -26,7 +26,12 @@ const startServer = async () => {
 
     // Auto-import detection rules on first startup
     logger.info('Checking for detection rules to import...');
-    await importRules();
+    try {
+      await importRules();
+    } catch (error) {
+      logger.error('Failed to import rules, but continuing startup:', error);
+      logger.warn('Detection rules may need to be created manually');
+    }
 
     // Start syslog server
     syslogServer = new SyslogServer(SYSLOG_PORT);

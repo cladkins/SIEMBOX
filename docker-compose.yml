@@ -39,6 +39,8 @@ services:
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-changeme}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
+    volumes:
+      - ./rules:/app/rules:ro  # Mount rules directory as read-only
     ports:
       - "3001:3001"
       - "514:514/udp"  # Syslog UDP

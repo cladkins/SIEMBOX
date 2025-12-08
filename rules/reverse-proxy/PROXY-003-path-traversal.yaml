@@ -11,7 +11,7 @@ tags: [web, path-traversal, attack, reverse-proxy, file-access]
 conditions:
   - field: path
     operator: regex
-    value: "(\\.\\./|\\.\\.\\/|\\.\\.\\\\\\/|\\.\\.\%2f|\\.\\.\%5c|\\.\\.\%255c|\\.\\.\\%c0\\%af)"
+    value: '(\.\./|\.\.\/|\.\.\\\/|\.\.\%2f|\.\.\%5c|\.\.\%255c|\.\.\%c0\%af)'
 
 alert:
   title: "Path Traversal Attempt from {client_ip}"

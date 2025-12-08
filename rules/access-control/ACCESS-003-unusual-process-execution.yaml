@@ -11,7 +11,7 @@ tags: [sudo, process-execution, exploitation, malware, access-control]
 conditions:
   - field: command
     operator: regex
-    value: "(/tmp/|curl.*\\||wget.*\\||bash\\s+-c|sh\\s+-c|python\\s+-c|perl\\s+-e|nc\\s+-[el]|ncat|socat.*exec)"
+    value: '(/tmp/|curl.*\||wget.*\||bash\s+-c|sh\s+-c|python\s+-c|perl\s+-e|nc\s+-[el]|ncat|socat.*exec)'
 
 alert:
   title: "Suspicious Process Execution by {user} via Sudo"

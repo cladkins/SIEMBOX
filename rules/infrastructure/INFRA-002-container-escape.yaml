@@ -10,7 +10,7 @@ tags: [container, docker, privilege-escalation, critical, infrastructure]
 conditions:
   - field: message
     operator: regex
-    value: "(docker\\.sock|/proc/self/cgroup|/sys/class/net|capsh|unshare|nsenter|/host/)"
+    value: '(docker\.sock|/proc/self/cgroup|/sys/class/net|capsh|unshare|nsenter|/host/)'
 
 alert:
   title: "CRITICAL: Container Escape Attempt on {hostname}"

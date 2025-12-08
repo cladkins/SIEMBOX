@@ -10,7 +10,7 @@ tags: [exfiltration, data-theft, nextcloud, immich, bulk-download]
 conditions:
   - field: path
     operator: regex
-    value: "\\.(pdf|doc|docx|xls|xlsx|zip|tar|gz|rar|7z|bz2)$"
+    value: '\.(pdf|doc|docx|xls|xlsx|zip|tar|gz|rar|7z|bz2)$'
   - field: status_code
     operator: equals
     value: "200"

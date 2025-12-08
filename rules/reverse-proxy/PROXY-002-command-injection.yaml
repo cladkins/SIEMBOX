@@ -11,7 +11,7 @@ tags: [web, command-injection, attack, reverse-proxy, exploitation]
 conditions:
   - field: path
     operator: regex
-    value: "(;\\s*(ls|cat|curl|wget|bash|sh|cmd\\.exe|powershell)|\\||&&|`|\\$\\(|%0a|%0d|\\|\\s*(cat|ls|id|whoami|uname))"
+    value: '(;\s*(ls|cat|curl|wget|bash|sh|cmd\.exe|powershell)|\||&&|`|\$\(|%0a|%0d|\|\s*(cat|ls|id|whoami|uname))'
 
 alert:
   title: "Command Injection Attempt from {client_ip}"

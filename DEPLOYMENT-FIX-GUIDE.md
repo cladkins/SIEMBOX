@@ -1,5 +1,7 @@
 # SIEMBox Deployment Fix Guide
 
+**NOTE:** If you are experiencing persistent errors after redeploying (regex errors, missing rules, etc.), you likely have an old database volume. See **[FRESH-INSTALL-FIX.md](FRESH-INSTALL-FIX.md)** for instructions on performing a complete fresh start.
+
 ## Issue: Rules Directory Not Found & Login Failure
 
 ### Problem Summary
@@ -80,6 +82,11 @@ ls -la rules/
 ```bash
 # Stop all SIEMBox services
 docker compose down
+
+# IMPORTANT: If you want a TRUE fresh start (new database), use:
+# docker compose down -v
+# The -v flag removes volumes, which gives you a completely fresh database.
+# See FRESH-INSTALL-FIX.md for details.
 
 # Optional: Remove old backend image to force rebuild
 docker rmi siembox-backend 2>/dev/null || true

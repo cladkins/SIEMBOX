@@ -185,8 +185,10 @@ async function main() {
     logger.warn(`✗ Failed to import ${failed} rules`);
   }
 
-  // Exit
-  process.exit(failed > 0 ? 1 : 0);
+  // Only exit if running as standalone script (not during server startup)
+  if (require.main === module) {
+    process.exit(failed > 0 ? 1 : 0);
+  }
 }
 
 // Run if called directly

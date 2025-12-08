@@ -9,7 +9,7 @@ export class ParserEngine {
   private rulesEngine: RulesEngine;
 
   constructor() {
-    this.rulesEngine = new RulesEngine();
+    this.rulesEngine = RulesEngine.getInstance();
   }
 
   async initialize(): Promise<void> {

@@ -23,7 +23,15 @@ interface RuleLogic {
 }
 
 export class RulesEngine {
+  private static instance: RulesEngine | null = null;
   private rules: DetectionRule[] = [];
+
+  static getInstance(): RulesEngine {
+    if (!RulesEngine.instance) {
+      RulesEngine.instance = new RulesEngine();
+    }
+    return RulesEngine.instance;
+  }
 
   async initialize(): Promise<void> {
     try {
@@ -32,6 +40,17 @@ export class RulesEngine {
       logger.info(`Loaded ${this.rules.length} detection rules`);
     } catch (error) {
       logger.error('Failed to initialize rules engine:', error);
+      throw error;
+    }
+  }
+
+  async reload(): Promise<void> {
+    try {
+      // Reload all enabled rules from database
+      this.rules = await DetectionRuleModel.findEnabled();
+      logger.info(`Reloaded ${this.rules.length} detection rules`);
+    } catch (error) {
+      logger.error('Failed to reload rules:', error);
       throw error;
     }
   }

@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { DetectionRuleModel } from '../models/DetectionRule';
 import yaml from 'js-yaml';
 import { ApiError } from '../middleware/errorHandler';
+import { RulesEngine } from '../services/rules/rulesEngine';
 
 const router = Router();
 
@@ -87,6 +88,9 @@ router.put('/:id', async (req: Request, res: Response) => {
       throw new ApiError(404, 'Rule not found');
     }
 
+    // Reload rules engine to pick up the changes
+    await RulesEngine.getInstance().reload();
+
     res.json(rule);
   } catch (error) {
     if (error instanceof ApiError) throw error;
@@ -103,6 +107,9 @@ router.delete('/:id', async (req: Request, res: Response) => {
     if (!deleted) {
       throw new ApiError(404, 'Rule not found');
     }
+
+    // Reload rules engine to pick up the changes
+    await RulesEngine.getInstance().reload();
 
     res.json({ message: 'Rule deleted successfully' });
   } catch (error) {

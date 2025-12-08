@@ -31,25 +31,23 @@ System architecture, design decisions, and implementation specifications.
 - **[PARSER-RULE-IMPLEMENTATION-SPEC.md](architecture/PARSER-RULE-IMPLEMENTATION-SPEC.md)** - Parser and rule implementation design
 - **[VAULTWARDEN-PARSER-IMPLEMENTATION.md](architecture/VAULTWARDEN-PARSER-IMPLEMENTATION.md)** - Vaultwarden parser design decisions
 
-### `/phase-planning` - Project Phase Planning
-High-level planning documents for multi-phase implementation.
+### `/archive` - Historical Documentation Archive
+Archived documentation including resolved incidents, completed phases, and superseded guides. See [archive/README.md](archive/README.md) for complete archive index.
 
-- **[PHASE-4-IMPLEMENTATION-PLAN.md](phase-planning/PHASE-4-IMPLEMENTATION-PLAN.md)** - Phase 4 backend enhancements roadmap
+#### Resolved Incidents
+- **[incidents/SIEMBOX-DB-001/](archive/incidents/SIEMBOX-DB-001/)** - Database migration incident (2025-12-03, resolved)
 
-### `/phase-implementation` - Phase Implementation Summaries
-Detailed implementation summaries and quick reference guides for completed phases.
+#### Completed Implementation Phases
+- **[phase-implementation/](archive/phase-implementation/)** - Phase 3A, 3B, 3C implementation summaries (archived)
 
-- **[AUTHENTICATION-RULES-PHASE-3A.md](phase-implementation/AUTHENTICATION-RULES-PHASE-3A.md)** - Phase 3A authentication rules
-- **[PHASE-3B-IMPLEMENTATION-SUMMARY.md](phase-implementation/PHASE-3B-IMPLEMENTATION-SUMMARY.md)** - Phase 3B summary
-- **[PHASE-3B-QUICK-REFERENCE.md](phase-implementation/PHASE-3B-QUICK-REFERENCE.md)** - Phase 3B quick reference
-- **[PHASE-3C-IMPLEMENTATION-SUMMARY.md](phase-implementation/PHASE-3C-IMPLEMENTATION-SUMMARY.md)** - Phase 3C summary
-- **[PHASE-3C-QUICK-REFERENCE.md](phase-implementation/PHASE-3C-QUICK-REFERENCE.md)** - Phase 3C quick reference
+#### Superseded Documentation
+- **[DEPLOYMENT-FIX-GUIDE.md](archive/DEPLOYMENT-FIX-GUIDE.md)** - Database initialization bug fix (resolved)
+- **[FRESH-INSTALL-FIX.md](archive/FRESH-INSTALL-FIX.md)** - Volume persistence fix (resolved)
+- **[DEPLOYMENT-GUIDE.md](archive/DEPLOYMENT-GUIDE.md)** - Old deployment guide (consolidated)
 
-### `/archive` - Archive & Session History
-Historical session handoffs, planning documents, and project evolution.
-
-- **[SESSION-HANDOFF.md](archive/SESSION-HANDOFF.md)** - Session continuity tracking and project status
-- **[DOCUMENTATION-MAP.md](archive/DOCUMENTATION-MAP.md)** - Historical documentation navigation
+#### Historical Materials
+- **[SESSION-HANDOFF.md](archive/SESSION-HANDOFF.md)** - Session continuity tracking
+- **[DOCUMENTATION-MAP.md](archive/DOCUMENTATION-MAP.md)** - Previous documentation structure
 - **[INCIDENT-RESOLUTION-SUMMARY.md](archive/INCIDENT-RESOLUTION-SUMMARY.md)** - Past incident resolutions
 - **[PLAN.md](archive/PLAN.md)** - Original project planning document
 
@@ -81,25 +79,27 @@ Historical session handoffs, planning documents, and project evolution.
 ### For Architecture Review
 1. [architecture/PARSER-RULE-IMPLEMENTATION-SPEC.md](architecture/PARSER-RULE-IMPLEMENTATION-SPEC.md) - System design
 2. [architecture/HOMELAB-THREAT-MODEL.md](architecture/HOMELAB-THREAT-MODEL.md) - Security architecture
-3. [phase-planning/PHASE-4-IMPLEMENTATION-PLAN.md](phase-planning/PHASE-4-IMPLEMENTATION-PLAN.md) - Future enhancements
+3. [architecture/DOCUMENTATION-ARCHITECTURE.md](architecture/DOCUMENTATION-ARCHITECTURE.md) - Documentation structure
 
 ---
 
 ## 📊 Project Status
 
-**Current Phase:** Phase 4 - Backend Enhancements (60% complete)
+**Current State:** Production Ready
 
 **Recent Milestones:**
-- ✅ Phase 1: Parser infrastructure redesign
-- ✅ Phase 2: 12 production-ready parsers
-- ✅ Phase 3: 40 detection rules implemented
-- 🚧 Phase 4: Advanced backend features (distinct count, IP whitelist, correlation)
+- ✅ 19 production-ready parsers (reverse proxy, auth, applications)
+- ✅ 40+ detection rules implemented and tested
+- ✅ Zero-configuration deployment with automatic seeding
+- ✅ Comprehensive documentation reorganization
 
-**Deployment Status:**
-- **38 of 40 rules** (95%) ready for production deployment
-- **2 rules blocked** pending Phase 4D (event correlation) and Phase 4E (GeoIP enrichment)
+**Features:**
+- Automatic parser and rule seeding on first startup
+- Built-in parsers for common homelab applications
+- Detection rules for authentication, proxy security, data exfiltration, and more
+- Role-based access control and alert management
 
-See [archive/SESSION-HANDOFF.md](archive/SESSION-HANDOFF.md) for detailed project status and [operations/RULE-DEPLOYMENT-CHECKLIST.md](operations/RULE-DEPLOYMENT-CHECKLIST.md) for deployment roadmap.
+See [../DEPLOYMENT.md](../DEPLOYMENT.md) for quick start and [operations/TROUBLESHOOTING.md](operations/TROUBLESHOOTING.md) for support.
 
 ---
 
@@ -134,11 +134,9 @@ When contributing to SIEMBox documentation:
 1. **Technical Reference** → Add to `/reference` or `/parsers`
 2. **Operational Guides** → Add to `/operations`
 3. **Architecture/Design** → Add to `/architecture`
-4. **Planning Documents** → Add to `/phase-planning`
-5. **Implementation Summaries** → Add to `/phase-implementation`
-6. **Historical Materials** → Add to `/archive`
+4. **Historical Materials** → Consult with maintainers before adding to `/archive`
 
-Update this README.md when adding new documentation files.
+Update this README.md when adding new documentation files. Each subdirectory has its own README.md to help with navigation.
 
 ---
 
@@ -162,5 +160,5 @@ Update this README.md when adding new documentation files.
 
 ---
 
-**Last Updated:** 2025-12-03
-**Documentation Version:** 2.0 (Post-reorganization)
+**Last Updated:** 2025-12-08
+**Documentation Version:** 3.0 (Cleanup and reorganization)

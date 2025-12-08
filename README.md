@@ -44,12 +44,10 @@ docker compose up -d
 
 ## Documentation
 
-📖 **[Documentation Map](./DOCUMENTATION-MAP.md)** - Complete overview of all documentation
+📖 **[Complete Documentation Index](./docs/README.md)** - Full documentation navigation
 
 ### Getting Started
 - **[Deployment Guide](./DEPLOYMENT.md)** - Installation, configuration, and setup
-- **[Fresh Install Fix](./FRESH-INSTALL-FIX.md)** - ⚠️ **Having persistent errors?** Complete fresh start guide
-- **[Deployment Fix Guide](./DEPLOYMENT-FIX-GUIDE.md)** - Troubleshooting deployment issues
 - **[Log Shipper Setup](./log-shipper/README.md)** - Universal log forwarder configuration
 
 ### Log Shipper Documentation
@@ -59,17 +57,17 @@ docker compose up -d
 - **[Deployment Verification](./log-shipper/DEPLOYMENT-VERIFICATION.md)** - Step-by-step deployment guide
 - **[Technical Details](./log-shipper/INCIDENT-REPORT-PROCESS-MANAGEMENT.md)** - Process management architecture
 
-### Recent Updates
-- **[Incident Resolution Summary](./INCIDENT-RESOLUTION-SUMMARY.md)** - Recent critical bug fix (2025-12-03)
-
 ### Reference Documentation
 - **[API Reference](./API.md)** - Complete REST API documentation
 - **[Community Parsers](./PARSERS.md)** - Pre-built parsers for common log sources
 - **[Detection Rules](./RULES.md)** - Built-in and community detection rules
+- **[Parser Documentation](./docs/parsers/)** - Application-specific parser guides
+- **[Architecture Documentation](./docs/architecture/)** - System design and specifications
 
 ### Operations & Security
 - **[Security Hardening](./SECURITY.md)** - Comprehensive security guide
-- **[Troubleshooting](./TROUBLESHOOTING.md)** - Common issues and solutions
+- **[Troubleshooting](./docs/operations/TROUBLESHOOTING.md)** - Common issues and solutions
+- **[Operations Guides](./docs/operations/)** - Operational documentation and checklists
 
 ### Development
 - **[Contributing Guide](./CONTRIBUTING.md)** - How to contribute

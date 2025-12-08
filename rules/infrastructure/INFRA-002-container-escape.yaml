@@ -1,5 +1,8 @@
 name: Container Escape Attempt
-description: Detects attempts to escape container isolation to host system. Container escape is a critical attack technique allowing full system compromise from containerized applications. Monitors for access to docker.sock, cgroup manipulation, namespace operations, and kernel exploitation techniques.
+description: >
+  Detects attempts to escape container isolation to host system.
+  Container escape is a critical attack technique allowing full system compromise from containerized applications.
+  Monitors for access to docker.sock, cgroup manipulation, namespace operations, and kernel exploitation techniques.
 severity: critical
 enabled: true
 tags: [container, docker, privilege-escalation, critical, infrastructure]
@@ -11,4 +14,10 @@ conditions:
 
 alert:
   title: "CRITICAL: Container Escape Attempt on {hostname}"
-  description: "Container escape technique detected: {message}. IMMEDIATE INVESTIGATION REQUIRED. Container breakout attempts indicate advanced attacker with container knowledge. Isolate container immediately, review container runtime configuration, check host system integrity, and audit all recent container activities. This is a potential full system compromise."
+  description: >
+    Container escape technique detected: {message}.
+    IMMEDIATE INVESTIGATION REQUIRED.
+    Container breakout attempts indicate advanced attacker with container knowledge.
+    Isolate container immediately, review container runtime configuration,
+    check host system integrity, and audit all recent container activities.
+    This is a potential full system compromise.

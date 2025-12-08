@@ -1,5 +1,8 @@
 name: Unusual Media Streaming Pattern
-description: Detects excessive streaming that may indicate account sharing or abuse. 10+ hours of streaming in 24 hours (600 10-minute segments) is informational for monitoring usage patterns. Adjust threshold based on household size and typical usage.
+description: >
+  Detects excessive streaming that may indicate account sharing or abuse.
+  10+ hours of streaming in 24 hours (600 10-minute segments) is informational for monitoring usage patterns.
+  Adjust threshold based on household size and typical usage.
 severity: low
 enabled: true
 tags: [plex, jellyfin, media-streaming, account-sharing, bandwidth]
@@ -16,4 +19,8 @@ aggregation:
 
 alert:
   title: "High Media Streaming Volume by {user}"
-  description: "{count} stream starts by user {user} in 24 hours (approximately 10+ hours of streaming). Review user account and stream patterns, check for concurrent streams from different IPs, verify user has not shared credentials, review bandwidth usage, and consider stream limits if excessive."
+  description: >
+    {count} stream starts by user {user} in 24 hours (approximately 10+ hours of streaming).
+    Review user account and stream patterns, check for concurrent streams from different IPs,
+    verify user has not shared credentials, review bandwidth usage,
+    and consider stream limits if excessive.

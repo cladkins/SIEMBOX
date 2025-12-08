@@ -1,5 +1,8 @@
 name: Vaultwarden Vault Export
-description: Detects vault export operations that could indicate credential theft. Vault exports are rare operations that export ALL stored credentials in plaintext format. This is a high-risk operation that should be closely monitored and verified as legitimate.
+description: >
+  Detects vault export operations that could indicate credential theft.
+  Vault exports are rare operations that export ALL stored credentials in plaintext format.
+  This is a high-risk operation that should be closely monitored and verified as legitimate.
 severity: critical
 enabled: true
 tags: [vaultwarden, password-manager, data-exfiltration, critical, credential-theft]
@@ -14,4 +17,10 @@ conditions:
 
 alert:
   title: "CRITICAL: Vault Export by {user} from {source_ip}"
-  description: "Complete credential vault export detected for user {user} from {source_ip}. This exports ALL stored credentials in plaintext. IMMEDIATE INVESTIGATION - potential credential theft. Verify legitimate user backup operation. Contact user immediately to confirm. Review export contents if accessible and check for subsequent unusual activity."
+  description: >
+    Complete credential vault export detected for user {user} from {source_ip}.
+    This exports ALL stored credentials in plaintext.
+    IMMEDIATE INVESTIGATION - potential credential theft.
+    Verify legitimate user backup operation.
+    Contact user immediately to confirm.
+    Review export contents if accessible and check for subsequent unusual activity.

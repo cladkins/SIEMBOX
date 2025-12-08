@@ -1,5 +1,8 @@
 name: Nextcloud Suspicious File Access
-description: Detects bulk file access that may indicate automated scanning or data harvesting. 20+ file access attempts in 5 minutes from single IP exceeds normal interactive behavior and indicates automated access patterns or scanning activity.
+description: >
+  Detects bulk file access that may indicate automated scanning or data harvesting.
+  20+ file access attempts in 5 minutes from single IP exceeds normal interactive behavior
+  and indicates automated access patterns or scanning activity.
 severity: high
 enabled: true
 tags: [nextcloud, file-access, data-scanning, bulk-access, exfiltration]
@@ -19,4 +22,9 @@ aggregation:
 
 alert:
   title: "Nextcloud Suspicious File Access from {client_ip}"
-  description: "{count} file access attempts from {client_ip} in 5 minutes to Nextcloud files. Identify user and files accessed, review if legitimate sync or scanning activity, check for compromised credentials, verify no sensitive files accessed, monitor for download/export operations, consider rate limiting if abuse, and review access patterns for anomalies."
+  description: >
+    {count} file access attempts from {client_ip} in 5 minutes to Nextcloud files.
+    Identify user and files accessed, review if legitimate sync or scanning activity,
+    check for compromised credentials, verify no sensitive files accessed,
+    monitor for download/export operations, consider rate limiting if abuse,
+    and review access patterns for anomalies.

@@ -1,5 +1,9 @@
 name: DNS Tunneling Detection
-description: Detects DNS query patterns indicating data exfiltration via DNS tunneling. 50+ DNS TXT queries in 5 minutes is unusual. Legitimate TXT queries are infrequent (SPF, DKIM, verification). Also detects unusually long domain names which are common in DNS tunneling.
+description: >
+  Detects DNS query patterns indicating data exfiltration via DNS tunneling.
+  50+ DNS TXT queries in 5 minutes is unusual.
+  Legitimate TXT queries are infrequent (SPF, DKIM, verification).
+  Also detects unusually long domain names which are common in DNS tunneling.
 severity: high
 enabled: true
 tags: [exfiltration, dns-tunneling, pihole, dns, covert-channel]
@@ -16,4 +20,9 @@ aggregation:
 
 alert:
   title: "DNS Tunneling Detected from {client_ip}"
-  description: "{count} DNS TXT queries from {client_ip} in 5 minutes indicates potential DNS tunneling for data exfiltration. Review DNS queries and target domains, identify source system generating queries, check for data encoding in subdomains, verify if tunneling tool detected, block DNS tunneling at firewall if confirmed, and investigate source system for compromise."
+  description: >
+    {count} DNS TXT queries from {client_ip} in 5 minutes indicates potential DNS tunneling for data exfiltration.
+    Review DNS queries and target domains, identify source system generating queries,
+    check for data encoding in subdomains, verify if tunneling tool detected,
+    block DNS tunneling at firewall if confirmed,
+    and investigate source system for compromise.

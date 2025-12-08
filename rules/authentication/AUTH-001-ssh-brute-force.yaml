@@ -1,5 +1,8 @@
 name: SSH Brute Force Detection
-description: Detects automated SSH brute force attacks based on failed password attempts. 5 failed attempts in 5 minutes balances detection with preventing false positives from legitimate user typos. Homelab environments have small user bases, so legitimate failures should be rare.
+description: >
+  Detects automated SSH brute force attacks based on failed password attempts.
+  5 failed attempts in 5 minutes balances detection with preventing false positives from legitimate user typos.
+  Homelab environments have small user bases, so legitimate failures should be rare.
 severity: high
 enabled: true
 tags: [ssh, brute-force, authentication, attack]
@@ -19,4 +22,8 @@ aggregation:
 
 alert:
   title: "SSH Brute Force Attack from {source_ip}"
-  description: "{count} failed SSH password attempts from {source_ip} in 5 minutes. Targeted user: {user}. Review source IP reputation, check if any attempts succeeded, verify IP is not from known admin, and consider IP blocking if persistent."
+  description: >
+    {count} failed SSH password attempts from {source_ip} in 5 minutes.
+    Targeted user: {user}.
+    Review source IP reputation, check if any attempts succeeded,
+    verify IP is not from known admin, and consider IP blocking if persistent.

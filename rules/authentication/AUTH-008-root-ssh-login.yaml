@@ -1,5 +1,9 @@
 name: Root SSH Login Attempt
-description: Detects direct root SSH login attempts. Direct root SSH login violates security best practices and should NEVER occur. This should be disabled via PermitRootLogin=no in sshd_config. Any occurrence indicates either policy violation or potential compromise.
+description: >
+  Detects direct root SSH login attempts.
+  Direct root SSH login violates security best practices and should NEVER occur.
+  This should be disabled via PermitRootLogin=no in sshd_config.
+  Any occurrence indicates either policy violation or potential compromise.
 severity: critical
 enabled: true
 tags: [ssh, root, authentication, privilege-escalation, critical, policy-violation]
@@ -17,4 +21,10 @@ conditions:
 
 alert:
   title: "CRITICAL: Direct Root SSH Login from {source_ip}"
-  description: "Direct root SSH login detected from {source_ip} to {hostname}. This violates security best practices and should never occur. IMMEDIATE INVESTIGATION REQUIRED. Verify if legitimate admin or potential compromise. Review all commands executed as root. Disable direct root SSH immediately and implement sudo-based administration."
+  description: >
+    Direct root SSH login detected from {source_ip} to {hostname}.
+    This violates security best practices and should never occur.
+    IMMEDIATE INVESTIGATION REQUIRED.
+    Verify if legitimate admin or potential compromise.
+    Review all commands executed as root.
+    Disable direct root SSH immediately and implement sudo-based administration.

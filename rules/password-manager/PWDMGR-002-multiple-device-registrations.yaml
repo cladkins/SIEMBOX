@@ -19,4 +19,9 @@ aggregation:
 
 alert:
   title: "Multiple Vaultwarden Device Registrations: {user}"
-  description: "{count} device registrations for user {user} in 1 hour. Legitimate users typically register devices infrequently. Identify user and devices registered, verify legitimate user activity, check device types and IP addresses, contact user to confirm device registrations, review for suspicious geographic locations, and force re-authentication if suspicious."
+  description: >
+    {count} device registrations for user {user} in 1 hour.
+    Legitimate users typically register devices infrequently.
+    Identify user and devices registered, verify legitimate user activity,
+    check device types and IP addresses, contact user to confirm device registrations,
+    review for suspicious geographic locations, and force re-authentication if suspicious.

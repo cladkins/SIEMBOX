@@ -1,5 +1,8 @@
 name: Multiple Failed SSO Authentication Attempts
-description: Detects brute force attacks against SSO authentication portals (Authelia, authentik, Keycloak). SSO systems protect multiple downstream services, so compromise has cascading impact. 5 failures in 5 minutes indicates automated attack.
+description: >
+  Detects brute force attacks against SSO authentication portals (Authelia, authentik, Keycloak).
+  SSO systems protect multiple downstream services, so compromise has cascading impact.
+  5 failures in 5 minutes indicates automated attack.
 severity: high
 enabled: true
 tags: [authentication, brute-force, sso, authelia, authentik, keycloak, attack]
@@ -19,4 +22,8 @@ aggregation:
 
 alert:
   title: "SSO Brute Force Attack from {source_ip}"
-  description: "{count} failed SSO authentication attempts from {source_ip} in 5 minutes against {service}. SSO compromise would affect multiple downstream services. Review source IP reputation, verify no successful authentications occurred, consider temporary IP block, and alert affected user if personal account."
+  description: >
+    {count} failed SSO authentication attempts from {source_ip} in 5 minutes against {service}.
+    SSO compromise would affect multiple downstream services.
+    Review source IP reputation, verify no successful authentications occurred,
+    consider temporary IP block, and alert affected user if personal account.

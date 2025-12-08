@@ -1,5 +1,8 @@
 name: Bulk File Download Detection
-description: Detects mass file downloads indicating potential data exfiltration. 100+ file downloads in 10 minutes exceeds normal user behavior and indicates automated data harvesting. Focuses on document and archive file types commonly targeted for theft.
+description: >
+  Detects mass file downloads indicating potential data exfiltration.
+  100+ file downloads in 10 minutes exceeds normal user behavior and indicates automated data harvesting.
+  Focuses on document and archive file types commonly targeted for theft.
 severity: high
 enabled: true
 tags: [exfiltration, data-theft, nextcloud, immich, bulk-download]
@@ -19,4 +22,8 @@ aggregation:
 
 alert:
   title: "Bulk File Download Detected from {client_ip}"
-  description: "{count} file downloads (pdf/doc/xls/zip/tar) from {client_ip} in 10 minutes indicates potential data exfiltration. Review files accessed, calculate total data volume transferred, verify if legitimate user operation, check for concurrent suspicious activity, and consider rate limiting or session termination if malicious."
+  description: >
+    {count} file downloads (pdf/doc/xls/zip/tar) from {client_ip} in 10 minutes indicates potential data exfiltration.
+    Review files accessed, calculate total data volume transferred,
+    verify if legitimate user operation, check for concurrent suspicious activity,
+    and consider rate limiting or session termination if malicious.

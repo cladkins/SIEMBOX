@@ -1,27 +1,41 @@
 # SIEMBox Log Shipper Configuration Example
 # Copy this file to config.yml and customize for your environment
 
-# File-based log sources
+# File-based log sources (supports wildcards for glob patterns)
 files:
-  # NPM Access Logs
+  # NPM Access Logs - Using wildcard to match all proxy-host logs
   - path: /logs/npm/proxy-host-*.log
     tag: npm-access
     facility: local0
 
-  # NPM Error Logs
+  # NPM Error Logs - Single specific file
   - path: /logs/npm/error.log
     tag: npm-error
     facility: local0
 
-  # Application Logs
-  - path: /var/log/myapp/application.log
+  # Application Logs - Wildcard to match all app logs
+  - path: /var/log/myapp/app-*.log
     tag: myapp
     facility: local1
 
-  # System Auth Logs
+  # Komodo Stack Logs - Example with nested paths and wildcards
+  - path: /etc/komodo/stacks/npm/data/logs/*.log
+    tag: komodo-npm
+    facility: local0
+
+  # System Auth Logs - Single specific file
   - path: /var/log/auth.log
     tag: system-auth
     facility: local2
+
+# Wildcard Pattern Examples:
+# - *.log           - All .log files in current directory
+# - app-*.log       - All files starting with "app-" and ending with .log
+# - /path/*/*.log   - All .log files in any subdirectory
+# - /logs/app-[0-9].log - All files matching app-0.log through app-9.log
+#
+# Note: Wildcards are expanded at startup. New files created after
+# the shipper starts will not be automatically picked up until restart.
 
 # Docker container log sources
 # Note: Requires /var/run/docker.sock to be mounted

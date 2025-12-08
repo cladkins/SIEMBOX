@@ -80,44 +80,65 @@ send_log() {
 # Global variable for tracking background PIDs
 TAILING_PIDS=()
 
-# Tail a log file and forward it
+# Tail a log file and forward it (supports glob patterns)
 tail_file() {
-    local file="$1"
+    local pattern="$1"
     local tag="$2"
     local facility="${3:-local0}"
 
-    if [ ! -f "$file" ]; then
-        log_warn "File not found: $file"
+    local matched_files=0
+
+    # Expand glob pattern - disable pathname expansion temporarily to check if pattern contains wildcards
+    shopt -s nullglob
+    local expanded_files=($pattern)
+    shopt -u nullglob
+
+    # If no files matched the pattern, check if it's a literal path that doesn't exist
+    if [ ${#expanded_files[@]} -eq 0 ]; then
+        log_warn "No files found matching pattern: $pattern"
         return
     fi
 
-    log_info "Tailing file: $file (tag: $tag)"
+    # Tail each file that matched the pattern
+    for file in "${expanded_files[@]}"; do
+        if [ ! -f "$file" ]; then
+            log_warn "Skipping non-regular file: $file"
+            continue
+        fi
 
-    # Use named pipe to properly track tail process PID
-    local pipe="/tmp/shipper-pipe-$$-$RANDOM"
-    mkfifo "$pipe" 2>/dev/null || {
-        log_error "Failed to create named pipe for $file"
-        return
-    }
+        matched_files=$((matched_files + 1))
+        log_info "Tailing file: $file (tag: $tag, pattern: $pattern)"
 
-    # Start tail process, redirect to pipe, background it
-    tail -F "$file" > "$pipe" 2>/dev/null &
-    local tail_pid=$!
-    TAILING_PIDS+=($tail_pid)
+        # Use named pipe to properly track tail process PID
+        local pipe="/tmp/shipper-pipe-$$-$RANDOM"
+        mkfifo "$pipe" 2>/dev/null || {
+            log_error "Failed to create named pipe for $file"
+            continue
+        }
 
-    # Start reader process in a new process group
-    (
-        # Create new process group
-        set -m
-        while IFS= read -r line; do
-            send_log "$line" "$tag" "$facility" "info"
-        done < "$pipe"
-    ) &
-    local reader_pid=$!
-    TAILING_PIDS+=($reader_pid)
+        # Start tail process, redirect to pipe, background it
+        tail -F "$file" > "$pipe" 2>/dev/null &
+        local tail_pid=$!
+        TAILING_PIDS+=($tail_pid)
 
-    # Cleanup pipe in background after a moment (both processes have it open)
-    (sleep 1; rm -f "$pipe" 2>/dev/null) &
+        # Start reader process in a new process group
+        (
+            # Create new process group
+            set -m
+            while IFS= read -r line; do
+                send_log "$line" "$tag" "$facility" "info"
+            done < "$pipe"
+        ) &
+        local reader_pid=$!
+        TAILING_PIDS+=($reader_pid)
+
+        # Cleanup pipe in background after a moment (both processes have it open)
+        (sleep 1; rm -f "$pipe" 2>/dev/null) &
+    done
+
+    if [ $matched_files -gt 1 ]; then
+        log_info "Started tailing $matched_files files matching pattern: $pattern"
+    fi
 }
 
 # Tail Docker container logs

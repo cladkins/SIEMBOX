@@ -87,13 +87,28 @@ Now tell the shipper which log files to monitor:
 2. Click **Add Source** button
 3. Configure the source:
    - **Type**: file
-   - **File Path**: Full path to log file (e.g., `/var/log/nginx/access.log`)
+   - **File Path**: Full path to log file or wildcard pattern
+     - Single file: `/var/log/nginx/access.log`
+     - Wildcard: `/etc/komodo/stacks/npm/data/logs/*.log`
+     - Multiple: `/var/log/app-*.log`
    - **Tag**: Friendly name (e.g., `nginx-access`)
    - **Facility**: local0 (or choose different for each source)
    - **Enabled**: ✓ (checked)
 4. Click **Save**
 
 **The shipper will automatically pick up the configuration within 30 seconds and start forwarding logs!**
+
+#### Wildcard Pattern Support
+
+The log shipper supports glob patterns for file paths:
+- `*.log` - All .log files in the directory
+- `app-*.log` - All files starting with "app-" and ending in .log
+- `/path/*/*.log` - All .log files in any subdirectory
+- `/logs/app-[0-9].log` - Bracket expressions (app-0.log through app-9.log)
+
+**Example:** `/etc/komodo/stacks/npm/data/logs/*.log` will tail all .log files in that directory.
+
+**Note:** Wildcards are expanded when the shipper starts or configuration updates. New files created after startup won't be picked up until the next configuration poll or restart.
 
 ### Important Notes:
 

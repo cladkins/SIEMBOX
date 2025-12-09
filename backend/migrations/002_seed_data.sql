@@ -156,6 +156,45 @@ VALUES (
 )
 ON CONFLICT (name) DO NOTHING;
 
+-- Phase 2 Parser: NGINX Komodo - Timestamp-First Access Logs
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'nginx-komodo-timestamp-first',
+    'Parses custom NGINX access logs from komodo that start with timestamp',
+    'regex',
+    45,
+    '^\[(?<timestamp>[^\]]+)\]\s+(?:-\s+)?(?<status_code1>\d{3})?\s*(?<status_code2>\d{3})?\s*-?\s*(?<method>GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|CONNECT|TRACE)?\s*(?<protocol>https?|wss?)?\s*(?<request_uri>\S+)?',
+    '{"timestamp": "timestamp", "status_code": "status_code1", "upstream_status": "status_code2", "method": "method", "protocol": "protocol", "request_uri": "request_uri", "service": "nginx-komodo"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Phase 2 Parser: NGINX Komodo - Error Logs
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'nginx-komodo-error',
+    'Parses NGINX error logs from komodo system',
+    'regex',
+    44,
+    '^(?<timestamp>\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+\[(?<log_level>\w+)\]\s+(?<pid>\d+)#(?<worker_id>\d+):\s+\*(?<connection_id>\d+)\s*(?<message>.*)?',
+    '{"timestamp": "timestamp", "log_level": "log_level", "pid": "pid", "worker_id": "worker_id", "connection_id": "connection_id", "message": "error_message", "service": "nginx-komodo"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Phase 2 Parser: NGINX Komodo - IP-Only Minimal Format
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'nginx-komodo-ip-only',
+    'Parses minimal NGINX access logs from komodo with only IP address',
+    'regex',
+    43,
+    '^(?<client_ip>[\d.]+)\s+-\s*(?<message>.*)?',
+    '{"client_ip": "client_ip", "message": "message", "service": "nginx-komodo"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
 -- Phase 2 Parser: Authelia - Access Logs
 INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
 VALUES (

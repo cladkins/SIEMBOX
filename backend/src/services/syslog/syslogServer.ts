@@ -107,7 +107,7 @@ export class SyslogServer {
       // Store raw log in database
       const rawLog = await RawLogModel.create({
         timestamp: parsed.timestamp,
-        raw_message: rawMessage,
+        raw_message: parsed.message,
         source_ip: sourceIp,
         facility: parsed.facility,
         severity: parsed.severity,

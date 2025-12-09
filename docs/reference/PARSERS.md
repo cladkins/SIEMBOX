@@ -3,9 +3,15 @@
 This document contains community-contributed log parsers for SIEMBox. These parsers can be imported into your SIEMBox instance to parse various types of logs.
 
 ## Table of Contents
+- [Parser Development Guide](#parser-development-guide)
+  - [Understanding the Two-Stage Pipeline](#understanding-the-two-stage-pipeline)
+  - [Step-by-Step Parser Creation](#step-by-step-parser-creation)
+  - [Testing Your Parser](#testing-your-parser)
+  - [Common Issues and Solutions](#common-issues-and-solutions)
 - [Built-in Parsers](#built-in-parsers)
   - [SSH Authentication](#ssh-authentication)
   - [Apache/Nginx Access Log](#apachenginx-access-log)
+  - [NGINX Komodo Custom Format](#nginx-komodo-custom-format)
   - [Linux Sudo](#linux-sudo)
   - [Generic Syslog](#generic-syslog)
   - [JSON Parser](#json-parser)
@@ -13,6 +19,326 @@ This document contains community-contributed log parsers for SIEMBox. These pars
   - [Ubiquiti UniFi](#ubiquiti-unifi)
     - [Firewall Logs](#unifi-firewall)
     - [IDS/IPS Logs](#unifi-idsips)
+
+---
+
+## Parser Development Guide
+
+### Understanding the Two-Stage Pipeline
+
+SIEMBox processes syslog messages in two stages:
+
+**Stage 1: Syslog Extraction** - The syslog server (`backend/src/services/syslog/syslogParser.ts`) receives messages like:
+```
+<134>Dec 09 20:36:20 komodo NGINX: [09/Dec/2025:20:35:53 +0000] - 200 200 - GET
+```
+
+It extracts the **message portion only** and stores it in `raw_logs.raw_message`:
+```
+[09/Dec/2025:20:35:53 +0000] - 200 200 - GET
+```
+
+**Stage 2: Application Parsing** - Your parser matches against the extracted message:
+```regex
+^\[(?<timestamp>[^\]]+)\]...
+```
+
+**Critical:** Parser patterns must NOT include the syslog wrapper (`<PRI>TIMESTAMP HOSTNAME TAG:`). They match only the extracted message content.
+
+### Step-by-Step Parser Creation
+
+#### 1. Analyze Your Log Format
+
+First, query the database to see what your `raw_message` actually contains:
+
+```sql
+-- See actual message content that parsers will match against
+SELECT
+  id,
+  LEFT(raw_message, 100) as message_preview,
+  app_name,
+  hostname
+FROM raw_logs
+WHERE app_name = 'YourApp'  -- or source_ip = 'x.x.x.x'
+ORDER BY created_at DESC
+LIMIT 10;
+```
+
+**Example output:**
+```
+message_preview: [09/Dec/2025:20:35:53 +0000] - 200 200 - GET
+app_name: NGINX
+hostname: komodo
+```
+
+#### 2. Design Your Regex Pattern
+
+Create a pattern that matches the **extracted message** format:
+
+**Good pattern:**
+```regex
+^\[(?<timestamp>[^\]]+)\]\s+(?:-\s+)?(?<status_code>\d{3})?...
+```
+
+**Bad pattern (includes syslog wrapper):**
+```regex
+^<\d+>\w+\s+\d+.*NGINX: \[(?<timestamp>...
+```
+
+**Tips for regex patterns:**
+- Start with `^` to anchor to the beginning
+- Use named groups: `(?<field_name>...)`
+- Make optional fields optional: `(?<field>...)?`
+- Test complex patterns incrementally
+- Use non-greedy matching: `.*?` instead of `.*`
+
+#### 3. Create a Test Script
+
+Use `backend/test-nginx-komodo-patterns.js` as a template:
+
+```javascript
+const testSamples = [
+  {
+    name: 'Your log format',
+    message: '[actual raw_message from database]',
+    expectedFields: {
+      field1: 'expected_value',
+      field2: 'expected_value'
+    }
+  }
+];
+
+const pattern = /your-regex-pattern/;
+
+testSamples.forEach(sample => {
+  const match = sample.message.match(pattern);
+  console.log(match ? match.groups : 'No match');
+});
+```
+
+Run the test:
+```bash
+node backend/test-your-parser-patterns.js
+```
+
+#### 4. Set Parser Priority
+
+Priority determines matching order (lower number = higher priority):
+
+- **1-20:** Critical system parsers (SSH, auth logs)
+- **30-50:** Application parsers (web servers, databases)
+- **40-50:** Custom format variants (nginx-komodo, custom apps)
+- **100-500:** Generic parsers
+- **1000+:** Fallback parsers (generic syslog)
+
+**Priority Strategy:**
+- Custom parsers should have **higher priority** than standard parsers
+- Example: `nginx-komodo-timestamp-first` (45) before `standard-nginx-access` (40)
+- This prevents false matches on partial patterns
+
+#### 5. Add Parser to Database
+
+**Option A: Migration File (Recommended for production)**
+
+Create `backend/migrations/00X_add_your_parser.sql`:
+
+```sql
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, enabled)
+VALUES (
+    'your-parser-name',
+    'Parses your custom log format',
+    'regex',
+    45,
+    '^your-regex-pattern',
+    '{"field1": "mapped_name1", "field2": "mapped_name2"}',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+```
+
+Apply migration:
+```bash
+psql -U siembox -d siembox -f backend/migrations/00X_add_your_parser.sql
+```
+
+**Option B: Via API (for testing)**
+
+```bash
+curl -X POST http://localhost:3000/api/parsers \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "your-parser-name",
+    "description": "Parses your custom log format",
+    "parser_type": "regex",
+    "priority": 45,
+    "pattern": "^your-regex-pattern",
+    "field_mappings": {
+      "field1": "mapped_name1",
+      "field2": "mapped_name2"
+    },
+    "enabled": true
+  }'
+```
+
+#### 6. Verify Parser Works
+
+Check if logs are being parsed:
+
+```sql
+-- Count parsed logs by parser
+SELECT
+  p.name,
+  COUNT(*) as parsed_count
+FROM parsed_logs pl
+JOIN parsers p ON pl.parser_id = p.id
+WHERE p.name = 'your-parser-name'
+GROUP BY p.name;
+
+-- View parsed data samples
+SELECT
+  pl.id,
+  pl.parsed_data,
+  rl.raw_message
+FROM parsed_logs pl
+JOIN raw_logs rl ON pl.raw_log_id = rl.id
+JOIN parsers p ON pl.parser_id = p.id
+WHERE p.name = 'your-parser-name'
+LIMIT 5;
+```
+
+### Testing Your Parser
+
+**Unit Testing - Test regex patterns in isolation:**
+
+```javascript
+// test-your-parser.js
+const pattern = /your-pattern/;
+const testCases = [
+  { message: 'log sample 1', shouldMatch: true },
+  { message: 'log sample 2', shouldMatch: true },
+  { message: 'different log', shouldMatch: false }
+];
+
+testCases.forEach(test => {
+  const matches = pattern.test(test.message);
+  console.log(`${test.message}: ${matches === test.shouldMatch ? 'PASS' : 'FAIL'}`);
+});
+```
+
+**Integration Testing - Test with actual database:**
+
+```sql
+-- Test against recent logs
+SELECT
+  id,
+  raw_message,
+  CASE
+    WHEN raw_message ~ 'your-regex-pattern' THEN 'MATCH'
+    ELSE 'NO MATCH'
+  END as test_result
+FROM raw_logs
+WHERE app_name = 'YourApp'
+LIMIT 10;
+```
+
+**Field Extraction Testing:**
+
+```javascript
+// Verify all expected fields are extracted
+const match = logMessage.match(yourPattern);
+const groups = match.groups;
+
+// Check required fields
+assert(groups.timestamp !== undefined, 'timestamp missing');
+assert(groups.field1 !== undefined, 'field1 missing');
+
+// Check field values
+assert(/^\d{4}\/\d{2}\/\d{2}/.test(groups.timestamp), 'invalid timestamp format');
+```
+
+### Common Issues and Solutions
+
+#### Issue 1: Parser Not Matching Logs
+
+**Symptoms:**
+- Logs appear in `raw_logs` but not `parsed_logs`
+- Parser never shows up in statistics
+
+**Diagnosis:**
+```sql
+-- Check what parsers see
+SELECT LEFT(raw_message, 100) FROM raw_logs WHERE app_name = 'YourApp' LIMIT 5;
+
+-- Test pattern manually
+SELECT
+  raw_message,
+  raw_message ~ 'your-pattern' as matches
+FROM raw_logs
+WHERE app_name = 'YourApp'
+LIMIT 10;
+```
+
+**Solutions:**
+1. Verify pattern matches extracted message (not full syslog)
+2. Check for hidden characters or encoding issues
+3. Test with actual `raw_message` content from database
+4. Simplify pattern and add complexity incrementally
+
+#### Issue 2: Wrong Parser Matching Logs
+
+**Symptoms:**
+- Logs parsed by wrong parser
+- Fields extracted incorrectly
+
+**Diagnosis:**
+```sql
+-- Check parser priority ordering
+SELECT name, priority, pattern
+FROM parsers
+WHERE enabled = true
+ORDER BY priority ASC;
+```
+
+**Solutions:**
+1. Adjust priority - lower numbers match first
+2. Make patterns more specific to avoid false matches
+3. Use anchors (`^` and `$`) to match exact formats
+4. Add unique identifiers to patterns
+
+#### Issue 3: Some Fields Not Extracted
+
+**Symptoms:**
+- Parser matches but some fields are null/missing
+- `parsed_data` incomplete
+
+**Diagnosis:**
+```javascript
+// Test field extraction
+const match = message.match(pattern);
+console.log('Matched:', match !== null);
+console.log('Groups:', match?.groups);
+```
+
+**Solutions:**
+1. Make optional fields optional: `(?<field>...)?`
+2. Check regex group names match field_mappings
+3. Verify field values aren't empty strings
+4. Test against various log samples with different field combinations
+
+#### Issue 4: Parser Performance Issues
+
+**Symptoms:**
+- Slow log processing
+- High CPU usage
+- Parser timeouts
+
+**Solutions:**
+1. Avoid catastrophic backtracking in regex
+2. Use non-greedy matching: `.*?` instead of `.*`
+3. Anchor patterns with `^` to fail fast on non-matches
+4. Simplify complex nested groups
+5. Consider parser priority - put most common parsers first
 
 ---
 
@@ -121,6 +447,137 @@ Parses standard Apache and Nginx combined access log format.
 - Monitor server errors (5xx codes)
 - Track API usage patterns
 - Identify suspicious paths
+
+---
+
+### NGINX Komodo Custom Format
+
+Parses custom NGINX log formats from komodo system (192.168.1.194) that use non-standard formatting.
+
+**Background:**
+This parser handles NGINX logs with custom `log_format` directives that don't follow the standard combined format. After syslog extraction, these logs start with timestamps instead of client IPs.
+
+#### Parser 1: Timestamp-First Access Logs
+
+**Configuration:**
+- **Name:** `nginx-komodo-timestamp-first`
+- **Description:** `Parses custom NGINX access logs from komodo that start with timestamp`
+- **Parser Type:** `Regex`
+- **Priority:** `45` (higher than standard NGINX parser)
+
+**Pattern:**
+```regex
+^\[(?<timestamp>[^\]]+)\]\s+(?:-\s+)?(?<status_code1>\d{3})?\s*(?<status_code2>\d{3})?\s*-?\s*(?<method>GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|CONNECT|TRACE)?\s*(?<protocol>https?|wss?)?\s*(?<request_uri>\S+)?
+```
+
+**Field Mappings:**
+| Field Name | Description |
+|------------|-------------|
+| `timestamp` | Request timestamp in NGINX format |
+| `status_code` | HTTP status code (primary) |
+| `upstream_status` | Upstream/backend status code |
+| `method` | HTTP method |
+| `protocol` | Protocol (http/https/ws/wss) |
+| `request_uri` | Request URI/path |
+| `service` | Always "nginx-komodo" |
+
+**Example Logs:**
+```
+[09/Dec/2025:20:35:53 +0000] - 200 200 - GET
+[09/Dec/2025:20:12:14 +0000] 301 - GET http w
+```
+
+**Parsed Fields:**
+```json
+{
+  "timestamp": "09/Dec/2025:20:35:53 +0000",
+  "status_code": "200",
+  "upstream_status": "200",
+  "method": "GET",
+  "service": "nginx-komodo"
+}
+```
+
+#### Parser 2: Error Logs
+
+**Configuration:**
+- **Name:** `nginx-komodo-error`
+- **Description:** `Parses NGINX error logs from komodo system`
+- **Parser Type:** `Regex`
+- **Priority:** `44`
+
+**Pattern:**
+```regex
+^(?<timestamp>\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+\[(?<log_level>\w+)\]\s+(?<pid>\d+)#(?<worker_id>\d+):\s+\*(?<connection_id>\d+)\s*(?<message>.*)?
+```
+
+**Field Mappings:**
+| Field Name | Description |
+|------------|-------------|
+| `timestamp` | Error timestamp (YYYY/MM/DD format) |
+| `log_level` | Error level (error/warn/notice/info) |
+| `pid` | NGINX process ID |
+| `worker_id` | NGINX worker process ID |
+| `connection_id` | Connection identifier |
+| `error_message` | Full error message |
+| `service` | Always "nginx-komodo" |
+
+**Example Logs:**
+```
+2025/12/08 19:37:36 [error] 1484#1484: *17597 upstream timed out
+2025/12/09 19:57:00 [warn] 1484#1484: *24156 upstream server temporarily disabled
+```
+
+**Parsed Fields:**
+```json
+{
+  "timestamp": "2025/12/08 19:37:36",
+  "log_level": "error",
+  "pid": "1484",
+  "worker_id": "1484",
+  "connection_id": "17597",
+  "error_message": "upstream timed out",
+  "service": "nginx-komodo"
+}
+```
+
+#### Parser 3: IP-Only Minimal Format
+
+**Configuration:**
+- **Name:** `nginx-komodo-ip-only`
+- **Description:** `Parses minimal NGINX access logs from komodo with only IP address`
+- **Parser Type:** `Regex`
+- **Priority:** `43`
+
+**Pattern:**
+```regex
+^(?<client_ip>[\d.]+)\s+-\s*(?<message>.*)?
+```
+
+**Field Mappings:**
+| Field Name | Description |
+|------------|-------------|
+| `client_ip` | Client IP address |
+| `message` | Additional content if present |
+| `service` | Always "nginx-komodo" |
+
+**Example Logs:**
+```
+68.218.17.107 -
+192.168.1.100 - some additional content
+```
+
+**Use Cases:**
+- Monitor custom NGINX deployments with non-standard log formats
+- Parse logs from systems with custom `log_format` directives
+- Handle truncated or partial log entries
+- Track both access and error logs from the same source
+
+**Important Notes:**
+- These parsers have **higher priority (45, 44, 43)** than standard NGINX parsers (40, 39)
+- This ensures custom format logs match before falling back to standard parsers
+- Designed for syslog-extracted messages (message portion only, no syslog headers)
+- Reference: Migration `003_add_nginx_custom_parsers.sql`
 
 ---
 

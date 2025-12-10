@@ -16,6 +16,7 @@ export interface ParsedSyslog {
  * RFC 5424: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID STRUCTURED-DATA MESSAGE
  */
 export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
+  const originalMessage = rawMessage;
   const result: ParsedSyslog = {
     timestamp: new Date(),
     facility: null,
@@ -70,13 +71,28 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
           result.appName = appName;
           result.processId = procId || null;
           result.message = message;
+
+          logger.debug('Syslog parsed successfully', {
+            original: originalMessage.substring(0, 80),
+            extracted: message.substring(0, 80),
+            appName,
+            hostname: result.hostname
+          });
         } else {
           result.message = rest;
+          logger.warn('Could not extract TAG from syslog', {
+            original: originalMessage.substring(0, 80),
+            rest: rest.substring(0, 80)
+          });
         }
+      } else {
+        logger.warn('RFC 3164 match failed', {
+          original: originalMessage.substring(0, 80)
+        });
       }
     }
   } catch (error) {
-    logger.error('Error parsing syslog message:', { error, rawMessage });
+    logger.error('Error parsing syslog message:', { error, rawMessage: originalMessage.substring(0, 100) });
   }
 
   return result;

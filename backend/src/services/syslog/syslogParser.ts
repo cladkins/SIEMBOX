@@ -39,7 +39,7 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
       rawMessage = rawMessage.substring(priMatch[0].length);
 
       // Debug: Log the message after PRI removal with character codes
-      logger.debug('After PRI removal', {
+      logger.info('DEBUG: After PRI removal', {
         message: rawMessage.substring(0, 100),
         length: rawMessage.length,
         firstChars: Array.from(rawMessage.substring(0, 20))
@@ -64,12 +64,15 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
       result.processId = procId !== '-' ? procId : null;
       result.message = message;
 
-      logger.debug('RFC 5424 matched successfully');
+      logger.info('DEBUG: RFC 5424 matched successfully');
     } else {
       // Try RFC 3164 format: TIMESTAMP HOSTNAME TAG: MESSAGE
-      logger.debug('Attempting RFC 3164 match', {
+      logger.info('DEBUG: Attempting RFC 3164 match', {
         message: rawMessage.substring(0, 100),
-        testPattern: '/^(\\S+\\s+\\d+\\s+\\d+:\\d+:\\d+)\\s+(\\S+)\\s+(.+)$/'
+        testPattern: '/^(\\S+\\s+\\d+\\s+\\d+:\\d+:\\d+)\\s+(\\S+)\\s+(.+)$/',
+        firstChars: Array.from(rawMessage.substring(0, 30))
+          .map(c => `${c}(${c.charCodeAt(0)})`)
+          .join(' '),
       });
 
       const rfc3164Match = rawMessage.match(/^(\S+\s+\d+\s+\d+:\d+:\d+)\s+(\S+)\s+(.+)$/);

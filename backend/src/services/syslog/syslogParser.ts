@@ -37,6 +37,15 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
 
       // Remove PRI from message
       rawMessage = rawMessage.substring(priMatch[0].length);
+
+      // Debug: Log the message after PRI removal with character codes
+      logger.debug('After PRI removal', {
+        message: rawMessage.substring(0, 100),
+        length: rawMessage.length,
+        firstChars: Array.from(rawMessage.substring(0, 20))
+          .map(c => `${c}(${c.charCodeAt(0)})`)
+          .join(' '),
+      });
     }
 
     // Try RFC 5424 format first (has VERSION after PRI)
@@ -54,8 +63,15 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
       result.appName = appName !== '-' ? appName : null;
       result.processId = procId !== '-' ? procId : null;
       result.message = message;
+
+      logger.debug('RFC 5424 matched successfully');
     } else {
       // Try RFC 3164 format: TIMESTAMP HOSTNAME TAG: MESSAGE
+      logger.debug('Attempting RFC 3164 match', {
+        message: rawMessage.substring(0, 100),
+        testPattern: '/^(\\S+\\s+\\d+\\s+\\d+:\\d+:\\d+)\\s+(\\S+)\\s+(.+)$/'
+      });
+
       const rfc3164Match = rawMessage.match(/^(\S+\s+\d+\s+\d+:\d+:\d+)\s+(\S+)\s+(.+)$/);
 
       if (rfc3164Match) {
@@ -87,7 +103,12 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
         }
       } else {
         logger.warn('RFC 3164 match failed', {
-          original: originalMessage.substring(0, 80)
+          original: originalMessage.substring(0, 80),
+          afterPRI: rawMessage.substring(0, 80),
+          messageLength: rawMessage.length,
+          startsWithDigit: /^\d/.test(rawMessage),
+          containsColon: rawMessage.includes(':'),
+          firstSpace: rawMessage.indexOf(' ')
         });
       }
     }

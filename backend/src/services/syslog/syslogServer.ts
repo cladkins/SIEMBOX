@@ -112,6 +112,7 @@ export class SyslogServer {
         facility: parsed.facility,
         severity: parsed.severity,
         hostname: parsed.hostname,
+        app_name: parsed.appName,
       });
 
       logger.debug('Raw log stored', { id: rawLog.id, hostname: parsed.hostname });

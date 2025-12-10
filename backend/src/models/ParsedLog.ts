@@ -9,6 +9,7 @@ export interface ParsedLog {
   source_ip: string;
   event_type: string | null;
   created_at: Date;
+  app_name?: string | null; // From joined raw_logs table
 }
 
 export interface CreateParsedLogParams {
@@ -49,6 +50,7 @@ export class ParsedLogModel {
     offset?: number;
     sourceIp?: string;
     eventType?: string;
+    appName?: string;
     search?: string;
     startTime?: Date;
     endTime?: Date;
@@ -58,34 +60,45 @@ export class ParsedLogModel {
     let paramIndex = 1;
 
     if (options?.sourceIp) {
-      conditions.push(`source_ip = $${paramIndex++}`);
+      conditions.push(`pl.source_ip = $${paramIndex++}`);
       params.push(options.sourceIp);
     }
 
     if (options?.eventType) {
-      conditions.push(`event_type = $${paramIndex++}`);
+      conditions.push(`pl.event_type = $${paramIndex++}`);
       params.push(options.eventType);
     }
 
+    if (options?.appName) {
+      conditions.push(`rl.app_name = $${paramIndex++}`);
+      params.push(options.appName);
+    }
+
     if (options?.search) {
-      conditions.push(`parsed_data::text ILIKE $${paramIndex++}`);
+      conditions.push(`pl.parsed_data::text ILIKE $${paramIndex++}`);
       params.push(`%${options.search}%`);
     }
 
     if (options?.startTime) {
-      conditions.push(`timestamp >= $${paramIndex++}`);
+      conditions.push(`pl.timestamp >= $${paramIndex++}`);
       params.push(options.startTime);
     }
 
     if (options?.endTime) {
-      conditions.push(`timestamp <= $${paramIndex++}`);
+      conditions.push(`pl.timestamp <= $${paramIndex++}`);
       params.push(options.endTime);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     // Get total count
-    const countResult = await query(`SELECT COUNT(*) FROM parsed_logs ${whereClause}`, params);
+    const countResult = await query(
+      `SELECT COUNT(*)
+       FROM parsed_logs pl
+       LEFT JOIN raw_logs rl ON pl.raw_log_id = rl.id
+       ${whereClause}`,
+      params
+    );
     const total = parseInt(countResult.rows[0].count, 10);
 
     // Get logs
@@ -94,8 +107,11 @@ export class ParsedLogModel {
 
     params.push(limit, offset);
     const logsResult = await query(
-      `SELECT * FROM parsed_logs ${whereClause}
-       ORDER BY created_at DESC
+      `SELECT pl.*, rl.app_name
+       FROM parsed_logs pl
+       LEFT JOIN raw_logs rl ON pl.raw_log_id = rl.id
+       ${whereClause}
+       ORDER BY pl.created_at DESC
        LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
       params
     );

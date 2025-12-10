@@ -34,6 +34,15 @@
           />
         </el-form-item>
 
+        <el-form-item label="Source">
+          <el-input
+            v-model="filters.app_name"
+            placeholder="e.g., NGINX"
+            clearable
+            style="width: 180px"
+          />
+        </el-form-item>
+
         <el-form-item label="Severity">
           <el-select
             v-model="filters.severity"
@@ -86,6 +95,12 @@
               </template>
             </el-table-column>
             <el-table-column prop="source_ip" label="Source IP" width="150" />
+            <el-table-column prop="app_name" label="Source" width="150">
+              <template #default="{ row }">
+                <el-tag v-if="row.app_name" type="success" size="small">{{ row.app_name }}</el-tag>
+                <el-text v-else type="info" size="small">N/A</el-text>
+              </template>
+            </el-table-column>
             <el-table-column prop="event_type" label="Event Type" width="180">
               <template #default="{ row }">
                 <el-tag v-if="row.event_type" size="small">{{ row.event_type }}</el-tag>
@@ -185,6 +200,7 @@ const filters = reactive({
   search: '',
   source_ip: '',
   event_type: '',
+  app_name: '',
   severity: null as number | null,
 });
 
@@ -215,6 +231,10 @@ const buildQueryParams = () => {
 
   if (filters.event_type) {
     params.event_type = filters.event_type;
+  }
+
+  if (filters.app_name) {
+    params.app_name = filters.app_name;
   }
 
   if (filters.severity !== null && filters.severity !== undefined) {

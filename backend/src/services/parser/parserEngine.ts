@@ -157,8 +157,23 @@ export class ParserEngine {
     message: string
   ): { fields: Record<string, any>; event_type?: string } | null {
     try {
+      // Strip common prefixes before parsing JSON
+      // Some applications prefix their JSON logs with labels like "Authentik Server: {...}"
+      let jsonString = message.trim();
+
+      // Try to find JSON object/array in the message
+      const jsonStart = jsonString.search(/[{\[]/);
+      if (jsonStart > 0) {
+        // There's text before the JSON, strip it
+        jsonString = jsonString.substring(jsonStart);
+        logger.debug('Stripped prefix from JSON message', {
+          original: message.substring(0, 50),
+          stripped: jsonString.substring(0, 50)
+        });
+      }
+
       // Try to parse message as JSON
-      const parsed = JSON.parse(message);
+      const parsed = JSON.parse(jsonString);
 
       if (typeof parsed !== 'object' || parsed === null) {
         return null;

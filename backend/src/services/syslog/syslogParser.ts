@@ -38,6 +38,9 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
       // Remove PRI from message
       rawMessage = rawMessage.substring(priMatch[0].length);
 
+      // Strip trailing newline/carriage return characters that break regex matching
+      rawMessage = rawMessage.replace(/[\r\n]+$/, '');
+
       // Debug: Log the message after PRI removal with character codes
       logger.info('DEBUG: After PRI removal', {
         message: rawMessage.substring(0, 100),

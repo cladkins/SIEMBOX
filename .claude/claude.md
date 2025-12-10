@@ -320,6 +320,14 @@ console.log(match ? match.groups : "No match");
 - Code changes are tested by deploying to the remote Docker environment
 - Focus on code development and Git operations only
 
+**Pre-v1.0 Database Schema Management:**
+- SIEMBox is currently in pre-v1.0 development
+- Database schema changes are made directly in `backend/migrations/001_initial_schema.sql`
+- Users may need to reset their database when pulling schema changes (see PRE-V1-DATABASE.md)
+- **DO NOT create new migration files (002, 003, etc.) for schema changes**
+- Keep the schema simple - all tables/columns in the base file
+- After v1.0 release, we'll implement proper migration tracking for production users
+
 **Git Workflow:**
 - All completed changes must be submitted to GitHub
 - After completing a feature or fix, create a commit with an appropriate message

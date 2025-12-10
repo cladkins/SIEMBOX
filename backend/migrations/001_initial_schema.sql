@@ -92,6 +92,17 @@ CREATE TABLE IF NOT EXISTS alerts (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- IP whitelist for admin access control and rule exceptions
+CREATE TABLE IF NOT EXISTS ip_whitelist (
+    id SERIAL PRIMARY KEY,
+    ip_address CIDR NOT NULL,
+    description TEXT,
+    rule_id VARCHAR(50),
+    created_by INTEGER REFERENCES users(id),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_raw_logs_timestamp ON raw_logs(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_raw_logs_source_ip ON raw_logs(source_ip);
@@ -119,6 +130,9 @@ CREATE INDEX IF NOT EXISTS idx_alerts_rule_id ON alerts(rule_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 
+CREATE INDEX IF NOT EXISTS idx_ip_whitelist_cidr ON ip_whitelist USING GIST (ip_address inet_ops);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ip_whitelist_unique ON ip_whitelist (ip_address);
+
 -- Comments for documentation
 COMMENT ON TABLE users IS 'User accounts with role-based access control';
 COMMENT ON TABLE sessions IS 'Active user sessions for authentication';
@@ -133,3 +147,9 @@ COMMENT ON COLUMN parsers.parser_type IS 'Type of parser: regex, grok, or json';
 COMMENT ON COLUMN parsers.priority IS 'Parser priority (lower = higher priority)';
 COMMENT ON COLUMN detection_rules.severity IS 'Alert severity: low, medium, high, or critical';
 COMMENT ON COLUMN alerts.status IS 'Alert status: new, investigating, closed, or false_positive';
+
+COMMENT ON TABLE ip_whitelist IS 'IP addresses whitelisted for admin interface access and rule exceptions';
+COMMENT ON COLUMN ip_whitelist.ip_address IS 'IP address or CIDR block (e.g., 192.0.2.100 or 192.0.2.0/24)';
+COMMENT ON COLUMN ip_whitelist.description IS 'Human-readable description of why this IP is whitelisted';
+COMMENT ON COLUMN ip_whitelist.rule_id IS 'Optional: Associate whitelist entry with specific rule (e.g., AUTH-011)';
+COMMENT ON COLUMN ip_whitelist.created_by IS 'User who added this whitelist entry';

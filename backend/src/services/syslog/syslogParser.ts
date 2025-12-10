@@ -75,7 +75,19 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
           .join(' '),
       });
 
-      const rfc3164Match = rawMessage.match(/^(\S+\s+\d+\s+\d+:\d+:\d+)\s+(\S+)\s+(.+)$/);
+      // Test the regex match and log详细 details
+      const rfc3164Pattern = /^(\S+\s+\d+\s+\d+:\d+:\d+)\s+(\S+)\s+(.+)$/;
+      const rfc3164Match = rawMessage.match(rfc3164Pattern);
+
+      logger.info('DEBUG: Regex match result', {
+        matched: !!rfc3164Match,
+        messageType: typeof rawMessage,
+        hasNewline: rawMessage.includes('\n'),
+        hasCarriageReturn: rawMessage.includes('\r'),
+        endsWithDollar: /\$$/. test(rawMessage),
+        firstTenChars: rawMessage.substring(0, 10),
+        lastTenChars: rawMessage.substring(rawMessage.length - 10),
+      });
 
       if (rfc3164Match) {
         const [, timestamp, hostname, rest] = rfc3164Match;

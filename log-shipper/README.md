@@ -89,7 +89,7 @@ Now tell the shipper which log files to monitor:
    - **Type**: file
    - **File Path**: Full path to log file or wildcard pattern
      - Single file: `/var/log/nginx/access.log`
-     - Wildcard: `/etc/komodo/stacks/npm/data/logs/*.log`
+     - Wildcard: `/etc/app/stacks/npm/data/logs/*.log`
      - Multiple: `/var/log/app-*.log`
    - **Tag**: Friendly name (e.g., `nginx-access`)
    - **Facility**: local0 (or choose different for each source)
@@ -106,7 +106,7 @@ The log shipper supports glob patterns for file paths:
 - `/path/*/*.log` - All .log files in any subdirectory
 - `/logs/app-[0-9].log` - Bracket expressions (app-0.log through app-9.log)
 
-**Example:** `/etc/komodo/stacks/npm/data/logs/*.log` will tail all .log files in that directory.
+**Example:** `/etc/app/stacks/npm/data/logs/*.log` will tail all .log files in that directory.
 
 **Note:** Wildcards are expanded when the shipper starts or configuration updates. New files created after startup won't be picked up until the next configuration poll or restart.
 

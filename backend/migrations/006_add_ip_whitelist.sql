@@ -22,7 +22,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ip_whitelist_unique ON ip_whitelist (ip_ad
 
 -- Add comment to table
 COMMENT ON TABLE ip_whitelist IS 'IP addresses whitelisted for admin interface access and rule exceptions';
-COMMENT ON COLUMN ip_whitelist.ip_address IS 'IP address or CIDR block (e.g., 192.168.1.100 or 192.168.1.0/24)';
+COMMENT ON COLUMN ip_whitelist.ip_address IS 'IP address or CIDR block (e.g., 192.0.2.100 or 192.0.2.0/24)';
 COMMENT ON COLUMN ip_whitelist.description IS 'Human-readable description of why this IP is whitelisted';
 COMMENT ON COLUMN ip_whitelist.rule_id IS 'Optional: Associate whitelist entry with specific rule (e.g., AUTH-011)';
 COMMENT ON COLUMN ip_whitelist.created_by IS 'User who added this whitelist entry';

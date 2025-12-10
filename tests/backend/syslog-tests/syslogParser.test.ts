@@ -35,7 +35,7 @@ describe('Syslog Parser', () => {
         // Assert
         // The raw_message field in the database should contain only the extracted message
         expect(result.message).toBe(fixture.expected_message);
-        expect(result.message).not.toContain('komodo');
+        expect(result.message).not.toContain('test-host');
         expect(result.message).not.toContain('NGINX');
         expect(result.message).not.toContain('<134>');
       });
@@ -105,7 +105,7 @@ describe('Syslog Parser', () => {
     describe('Priority (PRI) calculation', () => {
       it('should correctly calculate facility and severity from priority 134', () => {
         // Arrange & Act
-        const result = parseSyslogMessage('<134>Dec 09 20:36:20 komodo NGINX: test message');
+        const result = parseSyslogMessage('<134>Dec 09 20:36:20 test-host NGINX: test message');
 
         // Assert
         // Priority 134 = facility 16 (local0), severity 6 (info)
@@ -116,7 +116,7 @@ describe('Syslog Parser', () => {
 
       it('should correctly calculate facility and severity from priority 85', () => {
         // Arrange & Act
-        const result = parseSyslogMessage('<85>Dec 09 20:36:20 komodo sshd: test message');
+        const result = parseSyslogMessage('<85>Dec 09 20:36:20 test-host sshd: test message');
 
         // Assert
         // Priority 85 = facility 10 (authpriv), severity 5 (notice)
@@ -126,7 +126,7 @@ describe('Syslog Parser', () => {
 
       it('should correctly calculate facility and severity from priority 86', () => {
         // Arrange & Act
-        const result = parseSyslogMessage('<86>Dec 09 20:36:20 komodo sudo: test message');
+        const result = parseSyslogMessage('<86>Dec 09 20:36:20 test-host sudo: test message');
 
         // Assert
         // Priority 86 = facility 10 (authpriv), severity 6 (info)
@@ -138,7 +138,7 @@ describe('Syslog Parser', () => {
     describe('Timestamp parsing', () => {
       it('should parse BSD syslog timestamp format (RFC 3164)', () => {
         // Arrange & Act
-        const result = parseSyslogMessage('<134>Dec 09 20:36:20 komodo NGINX: test message');
+        const result = parseSyslogMessage('<134>Dec 09 20:36:20 test-host NGINX: test message');
 
         // Assert
         expect(result.timestamp).toBeInstanceOf(Date);
@@ -151,7 +151,7 @@ describe('Syslog Parser', () => {
 
       it('should use current year for BSD syslog timestamp', () => {
         // Arrange & Act
-        const result = parseSyslogMessage('<134>Jan 01 00:00:00 komodo NGINX: test message');
+        const result = parseSyslogMessage('<134>Jan 01 00:00:00 test-host NGINX: test message');
 
         // Assert
         const currentYear = new Date().getFullYear();
@@ -177,7 +177,7 @@ describe('Syslog Parser', () => {
 
         for (const { abbr, month } of months) {
           // Act
-          const result = parseSyslogMessage(`<134>${abbr} 15 12:30:45 komodo NGINX: test message`);
+          const result = parseSyslogMessage(`<134>${abbr} 15 12:30:45 test-host NGINX: test message`);
 
           // Assert
           expect(result.timestamp.getMonth()).toBe(month);
@@ -211,7 +211,7 @@ describe('Syslog Parser', () => {
     describe('TAG and process ID extraction', () => {
       it('should extract TAG without process ID', () => {
         // Arrange & Act
-        const result = parseSyslogMessage('<134>Dec 09 20:36:20 komodo NGINX: test message');
+        const result = parseSyslogMessage('<134>Dec 09 20:36:20 test-host NGINX: test message');
 
         // Assert
         expect(result.appName).toBe('NGINX');
@@ -220,7 +220,7 @@ describe('Syslog Parser', () => {
 
       it('should extract TAG with process ID in brackets', () => {
         // Arrange & Act
-        const result = parseSyslogMessage('<134>Dec 09 20:36:20 komodo sshd[1234]: test message');
+        const result = parseSyslogMessage('<134>Dec 09 20:36:20 test-host sshd[1234]: test message');
 
         // Assert
         expect(result.appName).toBe('sshd');
@@ -229,7 +229,7 @@ describe('Syslog Parser', () => {
 
       it('should handle multiple digit process IDs', () => {
         // Arrange & Act
-        const result = parseSyslogMessage('<134>Dec 09 20:36:20 komodo test[999999]: test message');
+        const result = parseSyslogMessage('<134>Dec 09 20:36:20 test-host test[999999]: test message');
 
         // Assert
         expect(result.appName).toBe('test');
@@ -243,7 +243,7 @@ describe('Syslog Parser', () => {
         const testMessage = 'This is the actual log message content';
 
         // Act
-        const result = parseSyslogMessage(`<134>Dec 09 20:36:20 komodo NGINX: ${testMessage}`);
+        const result = parseSyslogMessage(`<134>Dec 09 20:36:20 test-host NGINX: ${testMessage}`);
 
         // Assert
         expect(result.message).toBe(testMessage);
@@ -251,10 +251,10 @@ describe('Syslog Parser', () => {
 
       it('should handle messages with special characters', () => {
         // Arrange
-        const specialMessage = 'Error: [ERR_001] Connection failed @ 192.168.1.1 (retry: 3x)';
+        const specialMessage = 'Error: [ERR_001] Connection failed @ 192.0.2.1 (retry: 3x)';
 
         // Act
-        const result = parseSyslogMessage(`<134>Dec 09 20:36:20 komodo NGINX: ${specialMessage}`);
+        const result = parseSyslogMessage(`<134>Dec 09 20:36:20 test-host NGINX: ${specialMessage}`);
 
         // Assert
         expect(result.message).toBe(specialMessage);
@@ -265,7 +265,7 @@ describe('Syslog Parser', () => {
         const messageWithSpaces = '  Multiple   spaces  should  be  preserved  ';
 
         // Act
-        const result = parseSyslogMessage(`<134>Dec 09 20:36:20 komodo NGINX: ${messageWithSpaces}`);
+        const result = parseSyslogMessage(`<134>Dec 09 20:36:20 test-host NGINX: ${messageWithSpaces}`);
 
         // Assert
         expect(result.message).toBe(messageWithSpaces);
@@ -276,7 +276,7 @@ describe('Syslog Parser', () => {
         const longMessage = 'A'.repeat(2000);
 
         // Act
-        const result = parseSyslogMessage(`<134>Dec 09 20:36:20 komodo NGINX: ${longMessage}`);
+        const result = parseSyslogMessage(`<134>Dec 09 20:36:20 test-host NGINX: ${longMessage}`);
 
         // Assert
         expect(result.message).toBe(longMessage);
@@ -287,7 +287,7 @@ describe('Syslog Parser', () => {
     describe('Error handling', () => {
       it('should handle message without PRI gracefully', () => {
         // Arrange & Act
-        const result = parseSyslogMessage('Dec 09 20:36:20 komodo NGINX: test message');
+        const result = parseSyslogMessage('Dec 09 20:36:20 test-host NGINX: test message');
 
         // Assert
         expect(result.facility).toBeNull();

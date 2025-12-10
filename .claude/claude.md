@@ -166,7 +166,7 @@ After commit `0f58032`, the system stores **only the extracted message portion**
 Example:
 ```
 Syslog Server Receives:
-<134>Dec 09 20:36:20 komodo NGINX: [09/Dec/2025:20:35:53 +0000] - 200 200 - GET
+<134>Dec 09 20:36:20 webserver NGINX: [09/Dec/2025:20:35:53 +0000] - 200 200 - GET
 
 Stage 1 Extracts:
 raw_message = "[09/Dec/2025:20:35:53 +0000] - 200 200 - GET"
@@ -237,7 +237,7 @@ docker logs siembox-backend | grep -i "parser"
 
 Step 6: Validate parser with test data
 ```javascript
-// Create test script based on test-nginx-komodo-patterns.js
+// Create test script based on test-nginx-patterns.js
 const testMessage = "[actual raw_message from database]";
 const pattern = /your-parser-pattern/;
 const match = testMessage.match(pattern);
@@ -259,7 +259,7 @@ console.log(match ? match.groups : "No match");
    SELECT DISTINCT LEFT(raw_message, 100) FROM raw_logs WHERE app_name = 'YourApp' LIMIT 10;
    ```
 2. **Design the parser pattern**: Match against the extracted message (NOT the syslog header)
-3. **Create test script**: Use `backend/test-nginx-komodo-patterns.js` as template
+3. **Create test script**: Use `backend/test-nginx-patterns.js` as template
 4. **Validate pattern**: Run tests to confirm field extraction works
 5. **Set appropriate priority**: Custom parsers should have priority 40-50 range
 6. **Add to database**: Create migration file or use parsers UI/API

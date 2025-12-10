@@ -6,48 +6,48 @@
 export const SYSLOG_FIXTURES = {
   // NGINX access logs
   nginx_access_1: {
-    raw_syslog: '<134>Dec 09 20:36:20 komodo NGINX: [09/Dec/2025:20:35:53 +0000] - 200 200 - GET',
+    raw_syslog: '<134>Dec 09 20:36:20 test-host NGINX: [09/Dec/2025:20:35:53 +0000] - 200 200 - GET',
     expected_message: '[09/Dec/2025:20:35:53 +0000] - 200 200 - GET',
     expected_parsed_syslog: {
       facility: 16, // local0
       severity: 6, // info
-      hostname: 'komodo',
+      hostname: 'test-host',
       appName: 'NGINX',
       processId: null,
     },
   },
 
   nginx_access_2: {
-    raw_syslog: '<134>Dec 09 20:36:19 komodo NGINX: [09/Dec/2025:20:12:14 +0000] 301 - GET http w',
+    raw_syslog: '<134>Dec 09 20:36:19 test-host NGINX: [09/Dec/2025:20:12:14 +0000] 301 - GET http w',
     expected_message: '[09/Dec/2025:20:12:14 +0000] 301 - GET http w',
     expected_parsed_syslog: {
       facility: 16,
       severity: 6,
-      hostname: 'komodo',
+      hostname: 'test-host',
       appName: 'NGINX',
       processId: null,
     },
   },
 
   nginx_error: {
-    raw_syslog: '<134>Dec 09 20:36:19 komodo NGINX: 2025/12/08 19:37:36 [error] 1484#1484: *17597',
+    raw_syslog: '<134>Dec 09 20:36:19 test-host NGINX: 2025/12/08 19:37:36 [error] 1484#1484: *17597',
     expected_message: '2025/12/08 19:37:36 [error] 1484#1484: *17597',
     expected_parsed_syslog: {
       facility: 16,
       severity: 6,
-      hostname: 'komodo',
+      hostname: 'test-host',
       appName: 'NGINX',
       processId: null,
     },
   },
 
   nginx_minimal: {
-    raw_syslog: '<134>Dec 09 19:52:03 komodo NGINX: 68.218.17.107 -',
-    expected_message: '68.218.17.107 -',
+    raw_syslog: '<134>Dec 09 19:52:03 test-host NGINX: 203.0.113.50 -',
+    expected_message: '203.0.113.50 -',
     expected_parsed_syslog: {
       facility: 16,
       severity: 6,
-      hostname: 'komodo',
+      hostname: 'test-host',
       appName: 'NGINX',
       processId: null,
     },
@@ -55,36 +55,36 @@ export const SYSLOG_FIXTURES = {
 
   // Non-NGINX logs for negative testing
   apache_access: {
-    raw_syslog: '<134>Dec 09 20:36:20 komodo APACHE: 192.168.1.1 - - [09/Dec/2025:20:36:20 +0000] "GET / HTTP/1.1" 200 1234',
-    expected_message: '192.168.1.1 - - [09/Dec/2025:20:36:20 +0000] "GET / HTTP/1.1" 200 1234',
+    raw_syslog: '<134>Dec 09 20:36:20 test-host APACHE: 192.0.2.1 - - [09/Dec/2025:20:36:20 +0000] "GET / HTTP/1.1" 200 1234',
+    expected_message: '192.0.2.1 - - [09/Dec/2025:20:36:20 +0000] "GET / HTTP/1.1" 200 1234',
     expected_parsed_syslog: {
       facility: 16,
       severity: 6,
-      hostname: 'komodo',
+      hostname: 'test-host',
       appName: 'APACHE',
       processId: null,
     },
   },
 
   ssh_login: {
-    raw_syslog: '<85>Dec 09 20:36:20 komodo sshd[1234]: Failed password for root from 192.168.1.100 port 52894 ssh2',
-    expected_message: 'Failed password for root from 192.168.1.100 port 52894 ssh2',
+    raw_syslog: '<85>Dec 09 20:36:20 test-host sshd[1234]: Failed password for root from 192.0.2.100 port 52894 ssh2',
+    expected_message: 'Failed password for root from 192.0.2.100 port 52894 ssh2',
     expected_parsed_syslog: {
       facility: 10, // authpriv
       severity: 5, // notice
-      hostname: 'komodo',
+      hostname: 'test-host',
       appName: 'sshd',
       processId: '1234',
     },
   },
 
   sudo_command: {
-    raw_syslog: '<86>Dec 09 20:36:20 komodo sudo: root : TTY=pts/0 ; PWD=/home/root ; USER=root ; COMMAND=/bin/ls',
+    raw_syslog: '<86>Dec 09 20:36:20 test-host sudo: root : TTY=pts/0 ; PWD=/home/root ; USER=root ; COMMAND=/bin/ls',
     expected_message: 'root : TTY=pts/0 ; PWD=/home/root ; USER=root ; COMMAND=/bin/ls',
     expected_parsed_syslog: {
       facility: 10,
       severity: 6,
-      hostname: 'komodo',
+      hostname: 'test-host',
       appName: 'sudo',
       processId: null,
     },
@@ -105,10 +105,10 @@ export const NGINX_PARSER_FIXTURES = {
   },
 
   access_log_full: {
-    message: '192.168.1.100 - john [09/Dec/2025:20:35:53 +0000] "GET /api/users HTTP/1.1" 200 1234 "https://example.com" "Mozilla/5.0"',
+    message: '192.0.2.100 - john [09/Dec/2025:20:35:53 +0000] "GET /api/users HTTP/1.1" 200 1234 "https://example.com" "Mozilla/5.0"',
     should_match: true,
     expected_fields: {
-      client_ip: '192.168.1.100',
+      client_ip: '192.0.2.100',
       remote_user: 'john',
       timestamp: '[09/Dec/2025:20:35:53 +0000]',
       method: 'GET',
@@ -132,7 +132,7 @@ export const NGINX_PARSER_FIXTURES = {
   },
 
   access_log_minimal: {
-    message: '68.218.17.107 -',
+    message: '203.0.113.50 -',
     should_match: false, // Too minimal, likely malformed
   },
 
@@ -173,7 +173,7 @@ export const NGINX_PARSER_FIXTURES = {
 
   // Non-NGINX logs (negative cases)
   apache_log: {
-    message: '192.168.1.1 - - [09/Dec/2025:20:36:20 +0000] "GET / HTTP/1.1" 200 1234',
+    message: '192.0.2.1 - - [09/Dec/2025:20:36:20 +0000] "GET / HTTP/1.1" 200 1234',
     should_match: false,
   },
 
@@ -183,7 +183,7 @@ export const NGINX_PARSER_FIXTURES = {
   },
 
   ssh_log: {
-    message: 'Failed password for root from 192.168.1.100 port 52894 ssh2',
+    message: 'Failed password for root from 192.0.2.100 port 52894 ssh2',
     should_match: false,
   },
 
@@ -204,7 +204,7 @@ export const NGINX_PARSER_FIXTURES = {
   },
 
   very_long_user_agent: {
-    message: '192.168.1.100 - - [09/Dec/2025:20:35:53 +0000] "GET / HTTP/1.1" 200 1234 "-" "' +
+    message: '192.0.2.100 - - [09/Dec/2025:20:35:53 +0000] "GET / HTTP/1.1" 200 1234 "-" "' +
              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
              'Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59 ' +
              'SomeVeryLongUserAgentStringThatShouldStillParse/1.0' + '"',
@@ -232,15 +232,15 @@ export const NEGATIVE_TEST_CASES = {
   ],
 
   apache_variations: [
-    '192.168.1.1 - - [09/Dec/2025:20:36:20 +0000] "GET / HTTP/1.1" 200 1234',
-    '192.168.1.1 - frank [09/Dec/2025:10:15:30 +0000] "GET /path HTTP/1.0" 200 1043',
-    '10.0.0.1 - - [01/Jan/2020:12:00:00 +0000] "POST /api HTTP/1.1" 201 512',
+    '192.0.2.1 - - [09/Dec/2025:20:36:20 +0000] "GET / HTTP/1.1" 200 1234',
+    '192.0.2.1 - frank [09/Dec/2025:10:15:30 +0000] "GET /path HTTP/1.0" 200 1043',
+    '192.0.2.2 - - [01/Jan/2020:12:00:00 +0000] "POST /api HTTP/1.1" 201 512',
   ],
 
   ssh_variations: [
-    'Failed password for invalid user admin from 192.168.1.100 port 54321 ssh2',
-    'Accepted publickey for user from 192.168.1.100 port 54321 ssh2',
-    'Invalid user admin from 192.168.1.100 port 54321',
+    'Failed password for invalid user admin from 192.0.2.100 port 54321 ssh2',
+    'Accepted publickey for user from 192.0.2.100 port 54321 ssh2',
+    'Invalid user admin from 192.0.2.100 port 54321',
   ],
 
   system_logs: [

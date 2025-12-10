@@ -40,14 +40,14 @@ VALUES (
   }',
   '[
     {
-      "raw_message": "<13>Nov 29 19:44:35 UCG-Max [LAN_LOCAL-RET-2147483647] DESCR=\"no rule description\" IN=br0 OUT= MAC=01:00:5e:00:00:fb:5e:07:7d:96:02:d7:08:00 SRC=192.168.1.158 DST=224.0.0.251 LEN=473 TOS=00 PREC=0x00 TTL=255 ID=62191 PROTO=UDP SPT=5353 DPT=5353 LEN=453 MARK=1a0000",
+      "raw_message": "<13>Nov 29 19:44:35 UCG-Max [LAN_LOCAL-RET-2147483647] DESCR=\"no rule description\" IN=br0 OUT= MAC=01:00:5e:00:00:fb:5e:07:7d:96:02:d7:08:00 SRC=192.0.2.158 DST=224.0.0.251 LEN=473 TOS=00 PREC=0x00 TTL=255 ID=62191 PROTO=UDP SPT=5353 DPT=5353 LEN=453 MARK=1a0000",
       "expected_fields": {
         "rule_name": "LAN_LOCAL-RET-2147483647",
         "rule_description": "no rule description",
         "in_interface": "br0",
         "out_interface": "",
-        "source_ip": "192.168.1.158",
-        "client_ip": "192.168.1.158",
+        "source_ip": "192.0.2.158",
+        "client_ip": "192.0.2.158",
         "dest_ip": "224.0.0.251",
         "destination_ip": "224.0.0.251",
         "protocol": "UDP",
@@ -55,7 +55,7 @@ VALUES (
       }
     },
     {
-      "raw_message": "<12>Nov 29 20:15:42 UCG-Max [WAN_IN-DROP-4000] DESCR=\"Block external traffic\" IN=eth4 OUT=br0 SRC=203.0.113.50 DST=192.168.1.100 PROTO=TCP SPT=443 DPT=80",
+      "raw_message": "<12>Nov 29 20:15:42 UCG-Max [WAN_IN-DROP-4000] DESCR=\"Block external traffic\" IN=eth4 OUT=br0 SRC=203.0.113.50 DST=192.0.2.100 PROTO=TCP SPT=443 DPT=80",
       "expected_fields": {
         "rule_name": "WAN_IN-DROP-4000",
         "rule_description": "Block external traffic",
@@ -63,8 +63,8 @@ VALUES (
         "out_interface": "br0",
         "source_ip": "203.0.113.50",
         "client_ip": "203.0.113.50",
-        "dest_ip": "192.168.1.100",
-        "destination_ip": "192.168.1.100",
+        "dest_ip": "192.0.2.100",
+        "destination_ip": "192.0.2.100",
         "protocol": "TCP",
         "service": "unifi-firewall"
       }
@@ -115,7 +115,7 @@ VALUES (
   }',
   '[
     {
-      "raw_message": "<28>Nov 29 15:51:19 UCG-Max UCG-Max ubnt-idsips-daemon[2402]: 2025-11-29T15:51:19.543-0600 Warn: error handling event: ipset[ips] add failed ip1:156.218.17.179, port1:52686, ip2:192.168.1.194, port2:80, proto:tcp, err1:ipset v7.10: Element cannot be added to the set: it''s already added",
+      "raw_message": "<28>Nov 29 15:51:19 UCG-Max UCG-Max ubnt-idsips-daemon[2402]: 2025-11-29T15:51:19.543-0600 Warn: error handling event: ipset[ips] add failed ip1:198.51.100.179, port1:52686, ip2:192.0.2.194, port2:80, proto:tcp, err1:ipset v7.10: Element cannot be added to the set: it''s already added",
       "expected_fields": {
         "severity": "Warn",
         "log_level": "Warn",
@@ -127,9 +127,9 @@ VALUES (
         "client_ip": "156.218.17.179",
         "external_port": "52686",
         "source_port": "52686",
-        "internal_ip": "192.168.1.194",
-        "dest_ip": "192.168.1.194",
-        "destination_ip": "192.168.1.194",
+        "internal_ip": "192.0.2.194",
+        "dest_ip": "192.0.2.194",
+        "destination_ip": "192.0.2.194",
         "internal_port": "80",
         "dest_port": "80",
         "protocol": "tcp",

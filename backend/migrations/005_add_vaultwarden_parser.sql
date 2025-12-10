@@ -46,67 +46,67 @@ VALUES (
   }',
   '[
     {
-      "raw_message": "[2025-12-03 12:34:56.789][vaultwarden::api::identity][WARN] Failed login attempt from IP: 192.168.1.100, Email: admin@example.com",
+      "raw_message": "[2025-12-03 12:34:56.789][vaultwarden::api::identity][WARN] Failed login attempt from IP: 192.0.2.100, Email: admin@example.com",
       "expected_fields": {
         "timestamp": "2025-12-03 12:34:56.789",
         "module": "vaultwarden::api::identity",
         "log_level": "WARN",
         "message": "Failed login attempt",
-        "client_ip": "192.168.1.100",
-        "source_ip": "192.168.1.100",
+        "client_ip": "192.0.2.100",
+        "source_ip": "192.0.2.100",
         "email": "admin@example.com",
         "user": "admin@example.com",
         "service": "vaultwarden"
       }
     },
     {
-      "raw_message": "[2025-12-03 12:35:10.123][vaultwarden::api::identity][INFO] Successful login from IP: 192.168.1.100, Email: admin@example.com",
+      "raw_message": "[2025-12-03 12:35:10.123][vaultwarden::api::identity][INFO] Successful login from IP: 192.0.2.100, Email: admin@example.com",
       "expected_fields": {
         "timestamp": "2025-12-03 12:35:10.123",
         "module": "vaultwarden::api::identity",
         "log_level": "INFO",
         "message": "Successful login",
-        "client_ip": "192.168.1.100",
-        "source_ip": "192.168.1.100",
+        "client_ip": "192.0.2.100",
+        "source_ip": "192.0.2.100",
         "email": "admin@example.com",
         "user": "admin@example.com",
         "service": "vaultwarden"
       }
     },
     {
-      "raw_message": "[2025-12-03 12:36:22.456][vaultwarden::api::core][INFO] Vault accessed by admin@example.com from 192.168.1.100",
+      "raw_message": "[2025-12-03 12:36:22.456][vaultwarden::api::core][INFO] Vault accessed by admin@example.com from 192.0.2.100",
       "expected_fields": {
         "timestamp": "2025-12-03 12:36:22.456",
         "module": "vaultwarden::api::core",
         "log_level": "INFO",
         "message": "Vault accessed",
         "admin_email": "admin@example.com",
-        "admin_ip": "192.168.1.100",
+        "admin_ip": "192.0.2.100",
         "service": "vaultwarden"
       }
     },
     {
-      "raw_message": "[2025-12-03 12:37:45.789][vaultwarden::api::core][WARN] Vault export initiated by admin@example.com from 192.168.1.100",
+      "raw_message": "[2025-12-03 12:37:45.789][vaultwarden::api::core][WARN] Vault export initiated by admin@example.com from 192.0.2.100",
       "expected_fields": {
         "timestamp": "2025-12-03 12:37:45.789",
         "module": "vaultwarden::api::core",
         "log_level": "WARN",
         "message": "Vault export initiated",
         "admin_email": "admin@example.com",
-        "admin_ip": "192.168.1.100",
+        "admin_ip": "192.0.2.100",
         "service": "vaultwarden",
         "action": "vault_export"
       }
     },
     {
-      "raw_message": "[2025-12-03 12:38:30.012][vaultwarden::api::admin][INFO] Admin action: \"User deleted\" by admin@example.com from 192.168.1.10",
+      "raw_message": "[2025-12-03 12:38:30.012][vaultwarden::api::admin][INFO] Admin action: \"User deleted\" by admin@example.com from 192.0.2.10",
       "expected_fields": {
         "timestamp": "2025-12-03 12:38:30.012",
         "module": "vaultwarden::api::admin",
         "log_level": "INFO",
         "message": "Admin action: \"User deleted\"",
         "admin_email": "admin@example.com",
-        "admin_ip": "192.168.1.10",
+        "admin_ip": "192.0.2.10",
         "service": "vaultwarden"
       }
     },
@@ -123,14 +123,14 @@ VALUES (
       }
     },
     {
-      "raw_message": "[2025-12-03 12:40:00.678][vaultwarden::api::identity][INFO] New device registered for admin@example.com from 192.168.1.100, Device: Chrome/Desktop",
+      "raw_message": "[2025-12-03 12:40:00.678][vaultwarden::api::identity][INFO] New device registered for admin@example.com from 192.0.2.100, Device: Chrome/Desktop",
       "expected_fields": {
         "timestamp": "2025-12-03 12:40:00.678",
         "module": "vaultwarden::api::identity",
         "log_level": "INFO",
         "message": "New device registered",
-        "client_ip": "192.168.1.100",
-        "source_ip": "192.168.1.100",
+        "client_ip": "192.0.2.100",
+        "source_ip": "192.0.2.100",
         "email": "admin@example.com",
         "user": "admin@example.com",
         "device": "Chrome/Desktop",

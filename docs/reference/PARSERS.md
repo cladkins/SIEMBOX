@@ -11,7 +11,7 @@ This document contains community-contributed log parsers for SIEMBox. These pars
 - [Built-in Parsers](#built-in-parsers)
   - [SSH Authentication](#ssh-authentication)
   - [Apache/Nginx Access Log](#apachenginx-access-log)
-  - [NGINX Komodo Custom Format](#nginx-komodo-custom-format)
+  - [NGINX Custom Format](#nginx-custom-format)
   - [Linux Sudo](#linux-sudo)
   - [Generic Syslog](#generic-syslog)
   - [JSON Parser](#json-parser)
@@ -30,7 +30,7 @@ SIEMBox processes syslog messages in two stages:
 
 **Stage 1: Syslog Extraction** - The syslog server (`backend/src/services/syslog/syslogParser.ts`) receives messages like:
 ```
-<134>Dec 09 20:36:20 komodo NGINX: [09/Dec/2025:20:35:53 +0000] - 200 200 - GET
+<134>Dec 09 20:36:20 webserver NGINX: [09/Dec/2025:20:35:53 +0000] - 200 200 - GET
 ```
 
 It extracts the **message portion only** and stores it in `raw_logs.raw_message`:
@@ -68,7 +68,7 @@ LIMIT 10;
 ```
 message_preview: [09/Dec/2025:20:35:53 +0000] - 200 200 - GET
 app_name: NGINX
-hostname: komodo
+hostname: webserver
 ```
 
 #### 2. Design Your Regex Pattern
@@ -94,7 +94,7 @@ Create a pattern that matches the **extracted message** format:
 
 #### 3. Create a Test Script
 
-Use `backend/test-nginx-komodo-patterns.js` as a template:
+Use `backend/test-nginx-patterns.js` as a template:
 
 ```javascript
 const testSamples = [
@@ -127,13 +127,13 @@ Priority determines matching order (lower number = higher priority):
 
 - **1-20:** Critical system parsers (SSH, auth logs)
 - **30-50:** Application parsers (web servers, databases)
-- **40-50:** Custom format variants (nginx-komodo, custom apps)
+- **40-50:** Custom format variants (nginx-custom, custom apps)
 - **100-500:** Generic parsers
 - **1000+:** Fallback parsers (generic syslog)
 
 **Priority Strategy:**
 - Custom parsers should have **higher priority** than standard parsers
-- Example: `nginx-komodo-timestamp-first` (45) before `standard-nginx-access` (40)
+- Example: `nginx-custom-timestamp-first` (45) before `standard-nginx-access` (40)
 - This prevents false matches on partial patterns
 
 #### 5. Add Parser to Database
@@ -374,7 +374,7 @@ Parses SSH authentication logs for both successful and failed login attempts.
 
 **Example Log:**
 ```
-Nov 29 19:30:15 server1 sshd[12345]: Failed password for root from 192.168.1.100 port 54321
+Nov 29 19:30:15 server1 sshd[12345]: Failed password for root from 192.0.2.100 port 54321
 ```
 
 **Parsed Fields:**
@@ -385,7 +385,7 @@ Nov 29 19:30:15 server1 sshd[12345]: Failed password for root from 192.168.1.100
   "pid": "12345",
   "event": "Failed password",
   "user": "root",
-  "source_ip": "192.168.1.100",
+  "source_ip": "192.0.2.100",
   "source_port": "54321"
 }
 ```
@@ -426,13 +426,13 @@ Parses standard Apache and Nginx combined access log format.
 
 **Example Log:**
 ```
-192.168.1.50 - - [29/Nov/2025:19:45:23 +0000] "GET /api/users HTTP/1.1" 200 1234
+192.0.2.50 - - [29/Nov/2025:19:45:23 +0000] "GET /api/users HTTP/1.1" 200 1234
 ```
 
 **Parsed Fields:**
 ```json
 {
-  "client_ip": "192.168.1.50",
+  "client_ip": "192.0.2.50",
   "timestamp": "29/Nov/2025:19:45:23 +0000",
   "method": "GET",
   "path": "/api/users",
@@ -450,9 +450,9 @@ Parses standard Apache and Nginx combined access log format.
 
 ---
 
-### NGINX Komodo Custom Format
+### NGINX Custom Format
 
-Parses custom NGINX log formats from komodo system (192.168.1.194) that use non-standard formatting.
+Parses custom NGINX log formats that use non-standard formatting.
 
 **Background:**
 This parser handles NGINX logs with custom `log_format` directives that don't follow the standard combined format. After syslog extraction, these logs start with timestamps instead of client IPs.
@@ -460,8 +460,8 @@ This parser handles NGINX logs with custom `log_format` directives that don't fo
 #### Parser 1: Timestamp-First Access Logs
 
 **Configuration:**
-- **Name:** `nginx-komodo-timestamp-first`
-- **Description:** `Parses custom NGINX access logs from komodo that start with timestamp`
+- **Name:** `nginx-custom-timestamp-first`
+- **Description:** `Parses custom NGINX access logs that start with timestamp`
 - **Parser Type:** `Regex`
 - **Priority:** `45` (higher than standard NGINX parser)
 
@@ -479,7 +479,7 @@ This parser handles NGINX logs with custom `log_format` directives that don't fo
 | `method` | HTTP method |
 | `protocol` | Protocol (http/https/ws/wss) |
 | `request_uri` | Request URI/path |
-| `service` | Always "nginx-komodo" |
+| `service` | Always "nginx-custom" |
 
 **Example Logs:**
 ```
@@ -494,7 +494,7 @@ This parser handles NGINX logs with custom `log_format` directives that don't fo
   "status_code": "200",
   "upstream_status": "200",
   "method": "GET",
-  "service": "nginx-komodo"
+  "service": "nginx-custom"
 }
 ```
 
@@ -520,7 +520,7 @@ This parser handles NGINX logs with custom `log_format` directives that don't fo
 | `worker_id` | NGINX worker process ID |
 | `connection_id` | Connection identifier |
 | `error_message` | Full error message |
-| `service` | Always "nginx-komodo" |
+| `service` | Always "nginx-custom" |
 
 **Example Logs:**
 ```
@@ -537,7 +537,7 @@ This parser handles NGINX logs with custom `log_format` directives that don't fo
   "worker_id": "1484",
   "connection_id": "17597",
   "error_message": "upstream timed out",
-  "service": "nginx-komodo"
+  "service": "nginx-custom"
 }
 ```
 
@@ -559,12 +559,12 @@ This parser handles NGINX logs with custom `log_format` directives that don't fo
 |------------|-------------|
 | `client_ip` | Client IP address |
 | `message` | Additional content if present |
-| `service` | Always "nginx-komodo" |
+| `service` | Always "nginx-custom" |
 
 **Example Logs:**
 ```
 68.218.17.107 -
-192.168.1.100 - some additional content
+192.0.2.100 - some additional content
 ```
 
 **Use Cases:**
@@ -747,7 +747,7 @@ Parses Ubiquiti UniFi (UCG-Max) firewall rule logs.
 
 **Example Log:**
 ```
-<13>Nov 29 19:44:35 UCG-Max [LAN_LOCAL-RET-2147483647] DESCR="no rule description" IN=br0 OUT= MAC=01:00:5e:00:00:fb:5e:07:7d:96:02:d7:08:00 SRC=192.168.1.158 DST=224.0.0.251 LEN=473 TOS=00 PREC=0x00 TTL=255 ID=62191 PROTO=UDP SPT=5353 DPT=5353 LEN=453 MARK=1a0000
+<13>Nov 29 19:44:35 UCG-Max [LAN_LOCAL-RET-2147483647] DESCR="no rule description" IN=br0 OUT= MAC=01:00:5e:00:00:fb:5e:07:7d:96:02:d7:08:00 SRC=192.0.2.158 DST=224.0.0.251 LEN=473 TOS=00 PREC=0x00 TTL=255 ID=62191 PROTO=UDP SPT=5353 DPT=5353 LEN=453 MARK=1a0000
 ```
 
 **Parsed Fields:**
@@ -757,7 +757,7 @@ Parses Ubiquiti UniFi (UCG-Max) firewall rule logs.
   "rule_description": "no rule description",
   "in_interface": "br0",
   "out_interface": "",
-  "source_ip": "192.168.1.158",
+  "source_ip": "192.0.2.158",
   "dest_ip": "224.0.0.251",
   "protocol": "UDP"
 }
@@ -795,7 +795,7 @@ ubnt-idsips-daemon\[\d+\]:\s+[\d-]+T[\d:.-]+\s+(\w+):\s+(.+?):\s+ipset\[(\w+)\]\
 
 **Example Log:**
 ```
-<28>Nov 29 15:51:19 UCG-Max UCG-Max ubnt-idsips-daemon[2402]: 2025-11-29T15:51:19.543-0600 Warn: error handling event: ipset[ips] add failed ip1:156.218.17.179, port1:52686, ip2:192.168.1.194, port2:80, proto:tcp, err1:ipset v7.10: Element cannot be added to the set: it's already added
+<28>Nov 29 15:51:19 UCG-Max UCG-Max ubnt-idsips-daemon[2402]: 2025-11-29T15:51:19.543-0600 Warn: error handling event: ipset[ips] add failed ip1:198.51.100.179, port1:52686, ip2:192.0.2.194, port2:80, proto:tcp, err1:ipset v7.10: Element cannot be added to the set: it's already added
 ```
 
 **Parsed Fields:**
@@ -807,7 +807,7 @@ ubnt-idsips-daemon\[\d+\]:\s+[\d-]+T[\d:.-]+\s+(\w+):\s+(.+?):\s+ipset\[(\w+)\]\
   "action": "add",
   "external_ip": "156.218.17.179",
   "external_port": "52686",
-  "internal_ip": "192.168.1.194",
+  "internal_ip": "192.0.2.194",
   "internal_port": "80",
   "protocol": "tcp"
 }

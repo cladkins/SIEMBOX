@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS raw_logs (
     facility INTEGER,
     severity INTEGER,
     hostname VARCHAR(255),
+    app_name VARCHAR(255),
     created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -94,6 +95,7 @@ CREATE TABLE IF NOT EXISTS alerts (
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_raw_logs_timestamp ON raw_logs(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_raw_logs_source_ip ON raw_logs(source_ip);
+CREATE INDEX IF NOT EXISTS idx_raw_logs_app_name ON raw_logs(app_name);
 CREATE INDEX IF NOT EXISTS idx_raw_logs_created_at ON raw_logs(created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_parsed_logs_timestamp ON parsed_logs(timestamp DESC);

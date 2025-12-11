@@ -36,13 +36,16 @@ export class ParserEngine {
 
         if (result) {
           // Parser matched, store parsed log
+          // Use parser.event_type if set, otherwise use auto-determined event type
+          const eventType = parser.event_type || result.event_type || null;
+
           const parsedLog = await ParsedLogModel.create({
             raw_log_id: rawLog.id,
             parser_id: parser.id,
             parsed_data: result.fields,
             timestamp: rawLog.timestamp,
             source_ip: rawLog.source_ip,
-            event_type: result.event_type || null,
+            event_type: eventType,
           });
 
           logger.debug('Log parsed successfully', {

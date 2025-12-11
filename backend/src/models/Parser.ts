@@ -10,6 +10,7 @@ export interface Parser {
   pattern: string;
   field_mappings: Record<string, string>;
   test_samples: any[] | null;
+  event_type: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -23,13 +24,14 @@ export interface CreateParserParams {
   pattern: string;
   field_mappings: Record<string, string>;
   test_samples?: any[];
+  event_type?: string;
 }
 
 export class ParserModel {
   static async create(params: CreateParserParams): Promise<Parser> {
     const result = await query(
-      `INSERT INTO parsers (name, description, enabled, priority, parser_type, pattern, field_mappings, test_samples)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO parsers (name, description, enabled, priority, parser_type, pattern, field_mappings, test_samples, event_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [
         params.name,
@@ -40,6 +42,7 @@ export class ParserModel {
         params.pattern,
         JSON.stringify(params.field_mappings),
         params.test_samples ? JSON.stringify(params.test_samples) : null,
+        params.event_type ?? null,
       ]
     );
 
@@ -104,6 +107,10 @@ export class ParserModel {
     if (params.test_samples !== undefined) {
       updates.push(`test_samples = $${paramIndex++}`);
       values.push(JSON.stringify(params.test_samples));
+    }
+    if (params.event_type !== undefined) {
+      updates.push(`event_type = $${paramIndex++}`);
+      values.push(params.event_type);
     }
 
     if (updates.length === 0) {

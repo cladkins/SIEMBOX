@@ -77,6 +77,17 @@
           </el-col>
         </el-row>
 
+        <el-form-item label="Event Type">
+          <el-input
+            v-model="parserForm.event_type"
+            placeholder="e.g., ssh_auth, http_request, dns_query (optional)"
+            clearable
+          />
+          <el-text size="small" type="info">
+            Categorizes parsed logs in the UI. Leave blank for auto-detection based on parser name.
+          </el-text>
+        </el-form-item>
+
         <el-form-item label="Pattern" prop="pattern">
           <el-input
             v-model="parserForm.pattern"
@@ -182,6 +193,7 @@ const parserForm = reactive({
   priority: 100,
   pattern: '',
   field_mappings: {} as Record<string, string>,
+  event_type: '',
   enabled: true,
 });
 
@@ -228,6 +240,7 @@ function editParser(parser: any) {
     priority: parser.priority,
     pattern: parser.pattern,
     field_mappings: { ...parser.field_mappings },
+    event_type: parser.event_type || '',
     enabled: parser.enabled,
   });
 
@@ -243,6 +256,7 @@ function resetForm() {
     priority: 100,
     pattern: '',
     field_mappings: {},
+    event_type: '',
     enabled: true,
   });
   mappingKeys.value = [];

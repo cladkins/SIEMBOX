@@ -107,25 +107,53 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
         //   "Authentik Server: message"
         //   "nginx[a1b2c3d4]: message" (with shipper ID)
         //   "sshd[1234][a1b2c3d4]: message" (with both process ID and shipper ID)
-        const tagMatch = rest.match(/^(.+?)(?:\[(\d+)\])?(?:\[([0-9a-f]{8})\])?:\s*(.*)$/);
-        if (tagMatch) {
-          const [, appName, procId, shipperId, message] = tagMatch;
-          result.appName = appName.trim();
-          result.processId = procId || null;
-          result.shipperId = shipperId || null;
-          result.message = message;
 
-          logger.debug('Syslog parsed successfully', {
-            original: originalMessage.substring(0, 80),
-            extracted: message.substring(0, 80),
-            appName,
-            hostname: result.hostname
-          });
+        // Try to match with process ID and/or shipper ID
+        // Pattern: appname[digits][8hexchars] or appname[digits] or appname[8hexchars] or appname
+        const tagWithBothMatch = rest.match(/^(.+?)\[(\d+)\]\[([0-9a-f]{8})\]:\s*(.*)$/);
+        const tagWithProcIdMatch = rest.match(/^(.+?)\[(\d+)\]:\s*(.*)$/);
+        const tagWithShipperMatch = rest.match(/^(.+?)\[([0-9a-f]{8})\]:\s*(.*)$/);
+        const tagPlainMatch = rest.match(/^(.+?):\s*(.*)$/);
+
+        if (tagWithBothMatch) {
+          const [, appName, procId, shipperId, message] = tagWithBothMatch;
+          result.appName = appName.trim();
+          result.processId = procId;
+          result.shipperId = shipperId;
+          result.message = message;
+        } else if (tagWithShipperMatch) {
+          const [, appName, shipperId, message] = tagWithShipperMatch;
+          result.appName = appName.trim();
+          result.processId = null;
+          result.shipperId = shipperId;
+          result.message = message;
+        } else if (tagWithProcIdMatch) {
+          const [, appName, procId, message] = tagWithProcIdMatch;
+          result.appName = appName.trim();
+          result.processId = procId;
+          result.shipperId = null;
+          result.message = message;
+        } else if (tagPlainMatch) {
+          const [, appName, message] = tagPlainMatch;
+          result.appName = appName.trim();
+          result.processId = null;
+          result.shipperId = null;
+          result.message = message;
         } else {
           result.message = rest;
           logger.warn('Could not extract TAG from syslog', {
             original: originalMessage.substring(0, 80),
             rest: rest.substring(0, 80)
+          });
+        }
+
+        // Log successful parsing
+        if (result.appName) {
+          logger.debug('Syslog parsed successfully', {
+            original: originalMessage.substring(0, 80),
+            extracted: result.message.substring(0, 80),
+            appName: result.appName,
+            hostname: result.hostname
           });
         }
       } else {

@@ -1,6 +1,16 @@
 # SIEMBox Log Shipper
 
-Universal log forwarder for sending logs from any source to SIEMBox via syslog. Deploy this lightweight container on any machine to forward logs from files, Docker containers, or systemd journals.
+**Authenticated managed log forwarder** for SIEMBox. Deploy this lightweight container on any machine to forward logs from files, Docker containers, or systemd journals.
+
+## 🔒 Security Notice
+
+**ALL log shippers MUST authenticate with an API key.** This ensures:
+- ✅ Centralized management and tracking
+- ✅ Audit trail of which shippers are sending logs
+- ✅ Ability to revoke access if compromised
+- ✅ Visibility in the SIEMBox UI
+
+The log shipper is **managed only** - there is no standalone/unauthenticated mode.
 
 ## 📚 Documentation
 
@@ -12,8 +22,9 @@ Universal log forwarder for sending logs from any source to SIEMBox via syslog. 
 ## Features
 
 - **Centralized Management**: Configure and manage shippers from the SIEMBox web UI
+- **API Authentication**: All shippers authenticate with unique API keys
 - **Auto-Registration**: Shippers automatically register and poll for configuration updates
-- **File Tailing**: Monitor and forward any log file
+- **File Tailing**: Monitor and forward any log file with glob pattern support
 - **Docker Container Logs**: Forward logs from specific Docker containers
 - **Systemd Journal**: Forward systemd journal logs (host system logs)
 - **Multiple Sources**: Monitor multiple log sources simultaneously
@@ -22,20 +33,7 @@ Universal log forwarder for sending logs from any source to SIEMBox via syslog. 
 - **Lightweight**: Based on Alpine Linux (~15MB image)
 - **Custom Tags**: Tag logs by source for easy filtering in SIEMBox
 
-## Deployment Modes
-
-### Managed Mode (Recommended)
-
-In managed mode, the shipper is configured entirely from the SIEMBox web UI. This is the recommended approach for centralized management.
-
-**Advantages:**
-- Configure everything from one central UI
-- No manual file editing required
-- Real-time configuration updates
-- Monitor shipper status and health
-- Easy to manage multiple shippers
-
-**Quick Start:**
+## Quick Start
 
 ### Step 1: Create Shipper in SIEMBox UI
 
@@ -51,7 +49,7 @@ Create a docker-compose.yml file on your target machine:
 ```yaml
 services:
   siembox-log-shipper:
-    image: siembox-log-shipper:managed
+    image: siembox-log-shipper:latest
     container_name: siembox-log-shipper
     restart: unless-stopped
     network_mode: host
@@ -98,7 +96,7 @@ Now tell the shipper which log files to monitor:
 
 **The shipper will automatically pick up the configuration within 30 seconds and start forwarding logs!**
 
-#### Wildcard Pattern Support
+### Wildcard Pattern Support
 
 The log shipper supports glob patterns for file paths:
 - `*.log` - All .log files in the directory
@@ -110,49 +108,17 @@ The log shipper supports glob patterns for file paths:
 
 **Note:** Wildcards are expanded when the shipper starts or configuration updates. New files created after startup won't be picked up until the next configuration poll or restart.
 
-### Important Notes:
+## Important Notes
 
 - **Volume mounts** in docker-compose.yml give the container access to directories
 - **Log sources** in the UI tell the shipper which specific files to tail
 - File paths in sources must match the paths INSIDE the container (same as host if you use matching mounts)
 - You can add/edit/remove sources anytime through the UI without restarting the container
-
-### Standalone Mode
-
-In standalone mode, the shipper is configured using a local `.env` file. This is useful for simple deployments or when SIEMBox is not accessible during setup.
-
-**Setup:**
-
-1. **Copy Configuration Files**
-   ```bash
-   cp .env.example .env
-   ```
-
-2. **Edit `.env` File**
-
-   Set your SIEMBox server IP and configure sources:
-   ```bash
-   SIEM_HOST=192.168.1.100
-   SIEM_PORT=514
-
-   # Example: Monitor Nginx access logs
-   SOURCE_1_TYPE=file
-   SOURCE_1_FILE_PATH=/logs/nginx/access.log
-   SOURCE_1_TAG=nginx-access
-   SOURCE_1_FACILITY=local0
-   SOURCE_1_ENABLED=true
-   ```
-
-3. **Deploy**
-   ```bash
-   docker compose up -d
-   ```
+- **API key is required** - shippers without valid API keys will not be accepted
 
 ## Configuration
 
 ### Environment Variables
-
-#### Managed Mode
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -161,43 +127,25 @@ In standalone mode, the shipper is configured using a local `.env` file. This is
 | `CONFIG_POLL_INTERVAL` | `30` | How often to check for config updates (seconds) |
 | `HEARTBEAT_INTERVAL` | `60` | How often to send heartbeat (seconds) |
 
-#### Standalone Mode
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SIEM_HOST` | `192.168.1.76` | SIEMBox server IP address |
-| `SIEM_PORT` | `514` | Syslog port (UDP/TCP) |
-| `SOURCE_N_TYPE` | - | Source type: `file`, `docker`, or `journal` |
-| `SOURCE_N_FILE_PATH` | - | Path to log file (for file sources) |
-| `SOURCE_N_CONTAINER_NAME` | - | Container name (for docker sources) |
-| `SOURCE_N_JOURNAL_UNIT` | - | Systemd unit (for journal sources) |
-| `SOURCE_N_TAG` | - | Log tag for identification |
-| `SOURCE_N_FACILITY` | `local0` | Syslog facility |
-| `SOURCE_N_ENABLED` | `true` | Enable/disable source |
-
 ### Source Types
 
 #### File Sources
 Monitor and forward log files in real-time.
 
-**Example:**
-```bash
-SOURCE_1_TYPE=file
-SOURCE_1_FILE_PATH=/var/log/nginx/access.log
-SOURCE_1_TAG=nginx-access
-SOURCE_1_FACILITY=local0
-```
+**Configured in the SIEMBox UI:**
+- Type: file
+- File Path: `/var/log/nginx/access.log`
+- Tag: `nginx-access`
+- Facility: `local0`
 
 #### Docker Container Sources
 Forward logs from running Docker containers.
 
-**Example:**
-```bash
-SOURCE_2_TYPE=docker
-SOURCE_2_CONTAINER_NAME=nginx
-SOURCE_2_TAG=nginx-container
-SOURCE_2_FACILITY=local1
-```
+**Configured in the SIEMBox UI:**
+- Type: docker
+- Container Name: `nginx`
+- Tag: `nginx-container`
+- Facility: `local1`
 
 **Requirements:**
 - Mount Docker socket: `-v /var/run/docker.sock:/var/run/docker.sock:ro`
@@ -205,13 +153,11 @@ SOURCE_2_FACILITY=local1
 #### Systemd Journal Sources
 Forward logs from systemd services.
 
-**Example:**
-```bash
-SOURCE_3_TYPE=journal
-SOURCE_3_JOURNAL_UNIT=nginx.service
-SOURCE_3_TAG=nginx-systemd
-SOURCE_3_FACILITY=local2
-```
+**Configured in the SIEMBox UI:**
+- Type: journal
+- Journal Unit: `nginx.service`
+- Tag: `nginx-systemd`
+- Facility: `local2`
 
 **Requirements:**
 - Mount journal directory: `-v /var/log/journal:/var/log/journal:ro`
@@ -223,8 +169,8 @@ The shipper needs access to log files and Docker socket depending on your source
 ```yaml
 volumes:
   # For file sources
-  - /var/log:/host-logs:ro
-  - /path/to/app/logs:/app-logs:ro
+  - /var/log:/var/log:ro
+  - /path/to/app/logs:/path/to/app/logs:ro
 
   # For Docker sources
   - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -233,11 +179,7 @@ volumes:
   - /var/log/journal:/var/log/journal:ro
 ```
 
-In managed mode, volumes are configured in the SIEMBox UI and automatically applied.
-
 ## Monitoring
-
-### Managed Mode
 
 In the SIEMBox UI, you can monitor:
 - **Status**: Online/Offline/Pending
@@ -259,7 +201,7 @@ docker logs -f siembox-log-shipper
 
 ### Health Check
 
-The managed shipper includes a health check:
+The shipper includes a health check:
 ```bash
 docker inspect siembox-log-shipper | jq '.[0].State.Health'
 ```
@@ -336,6 +278,7 @@ This means the shipper can't access the file. **This is usually a volume mount i
 
 **Option 1: Check the Logs page in SIEMBox UI**
 - Navigate to the "Logs" menu in the web interface
+- Filter by the source tag you configured
 - You should see logs appearing in real-time
 
 **Option 2: Query the database directly**
@@ -368,7 +311,7 @@ docker logs siembox-backend -f
 
 ## Architecture
 
-### Managed Mode Flow
+### Managed Flow
 
 ```
 ┌─────────────┐
@@ -377,10 +320,10 @@ docker logs siembox-backend -f
        │
        ↓
 ┌─────────────┐
-│ SIEMBox API │ (Store configuration)
+│ SIEMBox API │ (Authenticate & store configuration)
 └──────┬──────┘
        ↑
-       │ Register & Poll (every 30s)
+       │ Register & Poll (every 30s) + API Key
        │
 ┌──────┴──────┐
 │ Log Shipper │ (Auto-applies config)
@@ -392,23 +335,11 @@ docker logs siembox-backend -f
 └─────────────┘
 ```
 
-### Components
-
-- **shipper-managed.sh**: Managed shipper agent with auto-registration
-- **shipper.sh**: Standalone shipper with local config
-- **Dockerfile.managed**: Container image for managed mode
-- **Dockerfile**: Container image for standalone mode
-
 ## Building
 
-Build the managed shipper image:
+Build the shipper image:
 ```bash
-docker build -f Dockerfile.managed -t siembox-log-shipper:managed .
-```
-
-Build the standalone shipper image:
-```bash
-docker build -f Dockerfile -t siembox-log-shipper:latest .
+docker build -t siembox-log-shipper:latest .
 ```
 
 ## License

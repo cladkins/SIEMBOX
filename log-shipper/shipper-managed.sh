@@ -40,11 +40,41 @@ generate_shipper_id() {
     echo -n "$api_key" | sha256sum 2>/dev/null | cut -c1-8 || echo -n "$api_key" | md5sum 2>/dev/null | cut -c1-8
 }
 
+# Save configuration to cache file
+save_cached_config() {
+    local config="$1"
+    if [ -n "$config" ]; then
+        echo "$config" > "$CACHED_CONFIG_FILE" 2>/dev/null
+        if [ $? -eq 0 ]; then
+            log_debug "Configuration cached to $CACHED_CONFIG_FILE"
+            return 0
+        else
+            log_warn "Failed to cache configuration"
+            return 1
+        fi
+    fi
+}
+
+# Load configuration from cache file
+load_cached_config() {
+    if [ -f "$CACHED_CONFIG_FILE" ]; then
+        local cached_config=$(cat "$CACHED_CONFIG_FILE" 2>/dev/null)
+        if [ -n "$cached_config" ]; then
+            log_info "Loaded cached configuration from $CACHED_CONFIG_FILE"
+            echo "$cached_config"
+            return 0
+        fi
+    fi
+    log_debug "No cached configuration available"
+    return 1
+}
+
 # Global variables
 CURRENT_CONFIG=""
 TAILING_PIDS=()
 LAST_HEARTBEAT=0
 SHIPPER_ID="" # Short identifier derived from API key for log attribution
+CACHED_CONFIG_FILE="/tmp/siembox-cached-config.json" # Fallback config cache
 
 # Send log to SIEMBox via syslog
 send_log() {
@@ -429,9 +459,17 @@ main() {
         log_debug "First 200 chars: $(echo "$config" | head -c 200)"
         log_debug "Config type check: $(echo "$config" | jq type 2>/dev/null || echo 'jq parse failed')"
         CURRENT_CONFIG="$config"
+        save_cached_config "$config"
         apply_config "$config"
     else
-        log_error "Initial registration failed, retrying in ${CONFIG_POLL_INTERVAL}s..."
+        log_warn "Initial registration failed - checking for cached configuration..."
+        if cached_config=$(load_cached_config); then
+            log_info "Using cached configuration (API key may be invalid - creating ghost shipper)"
+            CURRENT_CONFIG="$cached_config"
+            apply_config "$cached_config"
+        else
+            log_error "No cached configuration available, retrying in ${CONFIG_POLL_INTERVAL}s..."
+        fi
     fi
 
     log_info ""
@@ -447,13 +485,30 @@ main() {
 
         # Fetch latest config
         if new_config=$(fetch_config "$SHIPPER_API_KEY"); then
+            # Successfully fetched config - save to cache for future fallback
+            save_cached_config "$new_config"
+
             if config_changed "$new_config"; then
                 log_info "Configuration changed, applying new configuration..."
                 CURRENT_CONFIG="$new_config"
                 apply_config "$new_config"
             fi
         else
-            log_warn "Failed to fetch configuration, retrying..."
+            # Config fetch failed - continue with cached config if available
+            if [ -z "$CURRENT_CONFIG" ]; then
+                # No current config loaded, try to load from cache
+                log_warn "Failed to fetch configuration - attempting to load cached config..."
+                if cached_config=$(load_cached_config); then
+                    log_info "Using cached configuration (API key may be invalid - creating ghost shipper)"
+                    CURRENT_CONFIG="$cached_config"
+                    apply_config "$cached_config"
+                else
+                    log_error "No cached configuration available, will retry on next poll..."
+                fi
+            else
+                # Already running with a config (either current or cached), continue using it
+                log_warn "Failed to fetch configuration - continuing with existing config (ghost shipper mode)"
+            fi
         fi
     done
 }

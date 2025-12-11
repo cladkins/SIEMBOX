@@ -353,3 +353,118 @@ SELECT
   (SELECT COUNT(*) FROM alerts) as alerts;
 "
 ```
+
+## Log Shipper Management
+
+### API Key Rotation
+
+Log shippers use API keys for authentication and configuration management. When rotating API keys:
+
+**Safe Rotation Process:**
+
+1. **Generate New API Key** in SIEMBox UI (Shippers page → Edit shipper → Generate new key)
+2. **Note the Shipper ID** - This 8-character hash identifies the shipper in logs
+3. **Update Environment Variable** on the shipper host:
+   ```bash
+   # Update docker-compose.yml or .env file
+   SHIPPER_API_KEY=new_api_key_here
+   ```
+4. **Restart Shipper** to apply new API key:
+   ```bash
+   docker-compose restart log-shipper
+   ```
+
+**What Happens During Rotation:**
+
+- ✅ **No log gaps**: Shipper continues using cached configuration until restart
+- ✅ **Automatic recovery**: After restart with new key, shipper re-registers and updates cache
+- ⚠️ **Ghost shipper period**: Between key rotation and shipper restart, shipper operates with old cached config
+
+### Ghost Shipper Detection
+
+**What is a Ghost Shipper?**
+
+A "ghost shipper" is a log shipper that continues sending logs but cannot fetch configuration updates due to an invalid API key. This occurs when:
+- API key was deleted in SIEMBox
+- API key was rotated but shipper wasn't updated
+- Shipper was copied/cloned with old credentials
+
+**How Ghost Shippers Work:**
+
+The managed log shipper (`shipper-managed.sh`) uses **configuration caching** for operational resilience:
+
+1. **Valid API Key**: Shipper fetches config from API, caches it locally, sends logs normally
+2. **Invalid API Key**: Shipper cannot fetch new config, but continues using cached config
+3. **Result**: Logs keep flowing (no gaps), but shipper appears as "unknown source" in UI
+
+**Detecting Ghost Shippers:**
+
+Navigate to **Shippers** page in the UI. If ghost shippers exist, you'll see:
+- **Yellow alert banner** at the top: "Unknown sources detected"
+- **"View Unknown Sources" button** to see details
+- **Table showing**: Shipper ID, log count, first/last seen, source IPs, hostnames, app names
+
+**Via Database Query:**
+
+```bash
+docker-compose exec postgres psql -U siembox -d siembox -c "
+SELECT
+  shipper_id,
+  COUNT(*) as log_count,
+  MIN(created_at) as first_seen,
+  MAX(created_at) as last_seen,
+  array_agg(DISTINCT source_ip) as source_ips,
+  array_agg(DISTINCT hostname) as hostnames
+FROM raw_logs
+WHERE shipper_id IS NOT NULL
+  AND shipper_id NOT IN (
+    SELECT SUBSTRING(ENCODE(SHA256(api_key::bytea), 'hex'), 1, 8)
+    FROM log_shippers
+  )
+GROUP BY shipper_id;
+"
+```
+
+**Remediating Ghost Shippers:**
+
+**Option 1: Re-register the shipper**
+```bash
+# On the ghost shipper host:
+# 1. Get new API key from SIEMBox UI (Shippers page → Add Shipper)
+# 2. Update environment variable
+export SHIPPER_API_KEY=new_valid_key
+
+# 3. Restart shipper
+docker-compose restart log-shipper
+```
+
+**Option 2: Stop unauthorized shipper**
+```bash
+# If the ghost shipper is unauthorized/unknown:
+# 1. Identify the source IP from ghost shipper details
+# 2. Locate the physical/virtual machine
+# 3. Stop the shipper container
+docker-compose stop log-shipper  # or docker stop <container_name>
+```
+
+**Option 3: Clean up historical data**
+```sql
+-- Delete logs from specific ghost shipper (use with caution!)
+DELETE FROM raw_logs WHERE shipper_id = 'a1b2c3d4';
+```
+
+**Why Ghost Shippers Exist:**
+
+This design balances **security** with **operational resilience**:
+- ✅ **Prevents log gaps**: API key issues don't stop log collection
+- ✅ **Visibility**: Administrators can identify misconfigured/unauthorized shippers
+- ✅ **Continuity**: Temporary network/API issues don't disrupt logging
+- ⚠️ **Trade-off**: Shippers with invalid keys continue operating until detected
+
+**Best Practices:**
+
+1. **Monitor regularly**: Check Shippers page for "Unknown Sources" alert
+2. **Rotate carefully**: Update shipper credentials immediately after rotation
+3. **Unique API keys**: Use different API keys for each shipper (easier to track)
+4. **Document shippers**: Maintain inventory of authorized shippers and their locations
+5. **Automate cleanup**: Set up alerts for ghost shipper detection

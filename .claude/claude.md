@@ -139,6 +139,86 @@ PostgreSQL is used with JSONB columns for flexible log storage. Key tables inclu
 - Input validation on all endpoints
 - See `SECURITY.md` for comprehensive security guidelines
 
+## Log Shipper Architecture
+
+### Shipper Authentication and Configuration Management
+
+SIEMBox uses a **managed log shipper** (`shipper-managed.sh`) that balances security with operational resilience through a configuration caching system.
+
+**Key Design Principles:**
+
+1. **Authentication-Required Configuration**: Shippers must register with a valid API key to fetch configuration
+2. **Cached Configuration Fallback**: If API key validation fails (invalid, expired, or rotated), shipper continues using last-known-good cached configuration
+3. **Ghost Shipper Detection**: Shippers operating with invalid API keys create "ghost shippers" - visible in the UI for administrators to identify and remediate
+
+**Configuration Flow:**
+
+```
+Initial Startup:
+1. Shipper generates 8-char ID from API key: SHA256(api_key)[0:8]
+2. Attempts registration: POST /api/shippers/register
+   ├─ Success: Receives config, caches it, starts log transmission
+   └─ Failure: Loads cached config (if exists), continues as ghost shipper
+
+Polling Loop (every 30s):
+1. Attempts config fetch: GET /api/shippers/config/:api_key
+   ├─ Success: Updates cache, applies new config if changed
+   └─ Failure: Continues with existing config (cached or current)
+```
+
+**Ghost Shipper Behavior:**
+
+When a shipper's API key becomes invalid (deleted, rotated, expired):
+- ✅ **Logs continue flowing** via syslog (UDP/TCP port 514)
+- ✅ **Shipper ID remains in logs** (`raw_logs.shipper_id` column)
+- ✅ **Ghost shipper appears in UI** (detected via `/api/shippers/unknown-sources`)
+- ⚠️ **Configuration updates blocked** (cannot fetch new config without valid API key)
+- ⚠️ **Heartbeat fails** (shows as "last seen" timestamp not updating)
+
+**Why This Design:**
+
+- **Security**: Requires initial authentication to access configuration
+- **Resilience**: Temporary API issues don't stop log collection
+- **Visibility**: Administrators can identify unauthorized or misconfigured shippers
+- **Operational Continuity**: API key rotation doesn't create log gaps
+
+**Configuration Cache:**
+
+- Location: `/tmp/siembox-cached-config.json` (or Docker volume mount)
+- Saved: On every successful config fetch or registration
+- Loaded: When config fetch fails (404/network error)
+- Contains: Log sources, syslog server details, facility/tag mappings
+
+**Testing Ghost Shipper Detection:**
+
+```bash
+# 1. Start shipper with valid API key
+docker run -e SHIPPER_API_KEY=valid_key siembox-log-shipper
+
+# 2. Delete/change API key in SIEMBox UI or database
+
+# 3. Shipper continues sending logs (ghost shipper mode)
+
+# 4. Check UI: Navigate to Shippers page → See "Unknown Sources" alert
+
+# 5. Query database:
+SELECT shipper_id, COUNT(*) FROM raw_logs
+WHERE shipper_id NOT IN (
+  SELECT SUBSTRING(ENCODE(SHA256(api_key::bytea), 'hex'), 1, 8)
+  FROM log_shippers
+) GROUP BY shipper_id;
+```
+
+### Historical Context
+
+**Commit `2846356` (Dec 10, 2024)**: Removed unauthenticated `shipper.sh`, enforced API key requirement
+- **Before**: Two shipper modes (managed/unmanaged), logs could flow without authentication
+- **After**: Single managed shipper with mandatory API authentication
+
+**Current Implementation**: Cached configuration system (this update)
+- **Purpose**: Restore ghost shipper detection capability while maintaining security
+- **Benefit**: Administrators can identify misconfigured/unauthorized shippers instead of silently losing logs
+
 ## Syslog Parsing Architecture
 
 ### Two-Stage Parsing Pipeline

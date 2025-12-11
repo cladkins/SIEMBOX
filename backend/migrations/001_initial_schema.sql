@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS raw_logs (
     severity INTEGER,
     hostname VARCHAR(255),
     app_name VARCHAR(255),
+    shipper_id VARCHAR(50), -- Short identifier from log shipper for tracing logs back to source
     created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -134,6 +135,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_ip_whitelist_cidr ON ip_whitelist USING GIST (ip_address inet_ops);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ip_whitelist_unique ON ip_whitelist (ip_address);
 
+CREATE INDEX IF NOT EXISTS idx_raw_logs_shipper_id ON raw_logs(shipper_id);
+
 -- Comments for documentation
 COMMENT ON TABLE users IS 'User accounts with role-based access control';
 COMMENT ON TABLE sessions IS 'Active user sessions for authentication';
@@ -147,6 +150,7 @@ COMMENT ON COLUMN users.role IS 'Access level: admin, analyst, or viewer';
 COMMENT ON COLUMN parsers.parser_type IS 'Type of parser: regex, grok, or json';
 COMMENT ON COLUMN parsers.priority IS 'Parser priority (lower = higher priority)';
 COMMENT ON COLUMN parsers.event_type IS 'Optional event type to assign to parsed logs (e.g., ssh_failed_login, http_request, authentik_login). If null, event type is auto-determined from parser name and extracted fields';
+COMMENT ON COLUMN raw_logs.shipper_id IS 'Short identifier (8-char hash) from log shipper for tracing logs back to their source. Extracted from syslog TAG field in format tag[SHIPPERID]';
 COMMENT ON COLUMN detection_rules.severity IS 'Alert severity: low, medium, high, or critical';
 COMMENT ON COLUMN alerts.status IS 'Alert status: new, investigating, closed, or false_positive';
 

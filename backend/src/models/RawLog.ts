@@ -9,6 +9,7 @@ export interface RawLog {
   severity: number | null;
   hostname: string | null;
   app_name: string | null;
+  shipper_id: string | null;
   created_at: Date;
 }
 
@@ -20,13 +21,14 @@ export interface CreateRawLogParams {
   severity?: number | null;
   hostname?: string | null;
   app_name?: string | null;
+  shipper_id?: string | null;
 }
 
 export class RawLogModel {
   static async create(params: CreateRawLogParams): Promise<RawLog> {
     const result = await query(
-      `INSERT INTO raw_logs (timestamp, raw_message, source_ip, facility, severity, hostname, app_name)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO raw_logs (timestamp, raw_message, source_ip, facility, severity, hostname, app_name, shipper_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
       [
         params.timestamp,
@@ -36,6 +38,7 @@ export class RawLogModel {
         params.severity ?? null,
         params.hostname ?? null,
         params.app_name ?? null,
+        params.shipper_id ?? null,
       ]
     );
 

@@ -7,6 +7,7 @@ export interface ParsedSyslog {
   hostname: string | null;
   appName: string | null;
   processId: string | null;
+  shipperId: string | null;
   message: string;
 }
 
@@ -24,6 +25,7 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
     hostname: null,
     appName: null,
     processId: null,
+    shipperId: null,
     message: rawMessage,
   };
 
@@ -98,14 +100,19 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
         result.timestamp = parseTimestamp(timestamp) || new Date();
         result.hostname = hostname;
 
-        // Extract TAG (app name and optionally process ID)
+        // Extract TAG (app name and optionally process ID and/or shipper ID)
         // Support both single-word and multi-word TAGs
-        // Examples: "sshd[1234]: message" or "Authentik Server: message"
-        const tagMatch = rest.match(/^(.+?)(?:\[(\d+)\])?:\s*(.*)$/);
+        // Examples:
+        //   "sshd[1234]: message"
+        //   "Authentik Server: message"
+        //   "nginx[a1b2c3d4]: message" (with shipper ID)
+        //   "sshd[1234][a1b2c3d4]: message" (with both process ID and shipper ID)
+        const tagMatch = rest.match(/^(.+?)(?:\[(\d+)\])?(?:\[([0-9a-f]{8})\])?:\s*(.*)$/);
         if (tagMatch) {
-          const [, appName, procId, message] = tagMatch;
+          const [, appName, procId, shipperId, message] = tagMatch;
           result.appName = appName.trim();
           result.processId = procId || null;
+          result.shipperId = shipperId || null;
           result.message = message;
 
           logger.debug('Syslog parsed successfully', {

@@ -72,6 +72,46 @@ router.get('/', async (_req: Request, res: Response) => {
   }
 });
 
+// Get unknown sources (shipper IDs in raw_logs but not in log_shippers)
+router.get('/unknown-sources', async (_req: Request, res: Response) => {
+  try {
+    // Query for shipper_ids in raw_logs that don't have a matching log_shipper
+    const result = await query(`
+      SELECT DISTINCT
+        rl.shipper_id,
+        COUNT(*) as log_count,
+        MIN(rl.created_at) as first_seen,
+        MAX(rl.created_at) as last_seen,
+        ARRAY_AGG(DISTINCT rl.source_ip) as source_ips,
+        ARRAY_AGG(DISTINCT rl.hostname) as hostnames,
+        ARRAY_AGG(DISTINCT rl.app_name) as app_names
+      FROM raw_logs rl
+      WHERE rl.shipper_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM log_shippers ls
+          WHERE LOWER(SUBSTRING(MD5(ls.api_key), 1, 8)) = LOWER(rl.shipper_id)
+             OR LOWER(SUBSTRING(ENCODE(SHA256(ls.api_key::bytea), 'hex'), 1, 8)) = LOWER(rl.shipper_id)
+        )
+      GROUP BY rl.shipper_id
+      ORDER BY MAX(rl.created_at) DESC
+    `);
+
+    const unknownSources = result.rows.map((row: any) => ({
+      shipper_id: row.shipper_id,
+      log_count: parseInt(row.log_count, 10),
+      first_seen: row.first_seen,
+      last_seen: row.last_seen,
+      source_ips: row.source_ips.filter((ip: string | null) => ip !== null),
+      hostnames: row.hostnames.filter((h: string | null) => h !== null),
+      app_names: row.app_names.filter((a: string | null) => a !== null),
+    }));
+
+    res.json(unknownSources);
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch unknown sources');
+  }
+});
+
 // Get single shipper with full config
 router.get('/:id', async (req: Request, res: Response) => {
   try {

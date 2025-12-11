@@ -34,10 +34,17 @@ log_debug() {
     echo -e "${BLUE}[DEBUG]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1" >&2
 }
 
+# Generate short shipper ID from API key (first 8 chars of SHA256)
+generate_shipper_id() {
+    local api_key="$1"
+    echo -n "$api_key" | sha256sum 2>/dev/null | cut -c1-8 || echo -n "$api_key" | md5sum 2>/dev/null | cut -c1-8
+}
+
 # Global variables
 CURRENT_CONFIG=""
 TAILING_PIDS=()
 LAST_HEARTBEAT=0
+SHIPPER_ID="" # Short identifier derived from API key for log attribution
 
 # Send log to SIEMBox via syslog
 send_log() {
@@ -77,10 +84,17 @@ send_log() {
     # Calculate priority
     pri=$((fac * 8 + sev))
 
-    # RFC 3164 syslog format
+    # RFC 3164 syslog format with shipper identification
+    # Include SHIPPER_ID in the tag so we can trace logs back to their source
     timestamp=$(date '+%b %d %H:%M:%S')
     hostname=$(hostname)
-    syslog_msg="<${pri}>${timestamp} ${hostname} ${tag}: ${message}"
+
+    # If SHIPPER_ID is set, append it to the tag in brackets [SHIPPERID]
+    if [ -n "$SHIPPER_ID" ]; then
+        syslog_msg="<${pri}>${timestamp} ${hostname} ${tag}[${SHIPPER_ID}]: ${message}"
+    else
+        syslog_msg="<${pri}>${timestamp} ${hostname} ${tag}: ${message}"
+    fi
 
     # Send via netcat
     echo "$syslog_msg" | nc -u -w1 ${siem_host} ${siem_port} 2>/dev/null || true
@@ -390,6 +404,10 @@ main() {
         log_error "SHIPPER_API_KEY environment variable is required"
         exit 1
     fi
+
+    # Generate shipper ID for log attribution
+    SHIPPER_ID=$(generate_shipper_id "$SHIPPER_API_KEY")
+    log_info "Shipper ID: $SHIPPER_ID"
 
     # Install required tools if not present
     if ! command -v nc &> /dev/null; then

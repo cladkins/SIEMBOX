@@ -1,5 +1,24 @@
 <template>
   <div class="shippers">
+    <!-- Unknown Sources Alert -->
+    <el-alert
+      v-if="unknownSources.length > 0"
+      type="warning"
+      :title="`${unknownSources.length} Unknown Source${unknownSources.length > 1 ? 's' : ''} Detected`"
+      :closable="false"
+      style="margin-bottom: 20px"
+    >
+      <template #default>
+        <div style="margin-bottom: 10px">
+          Logs are being received from shipper(s) not registered in this SIEM instance.
+          This typically occurs after a database reset or when a shipper container retains its configuration.
+        </div>
+        <el-button size="small" @click="showUnknownSources" type="primary">
+          View Unknown Sources
+        </el-button>
+      </template>
+    </el-alert>
+
     <el-row :gutter="20">
       <el-col :span="24">
         <el-card>
@@ -309,6 +328,62 @@
         <el-button type="primary" @click="saveVolume" :loading="saving">Add</el-button>
       </template>
     </el-dialog>
+
+    <!-- Unknown Sources Dialog -->
+    <el-dialog v-model="unknownSourcesDialogVisible" title="Unknown Sources Detected" width="900px">
+      <el-alert type="info" :closable="false" style="margin-bottom: 20px">
+        These shipper IDs are present in your logs but don't match any registered shippers.
+        This typically happens when log shipper containers retain their configuration after
+        a SIEM database reset.
+      </el-alert>
+
+      <el-table :data="unknownSources" stripe>
+        <el-table-column prop="shipper_id" label="Shipper ID" width="120">
+          <template #default="{ row }">
+            <el-tag>{{ row.shipper_id }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="log_count" label="Log Count" width="120" sortable />
+        <el-table-column label="First Seen" width="180">
+          <template #default="{ row }">
+            {{ formatDate(row.first_seen) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="Last Seen" width="180">
+          <template #default="{ row }">
+            {{ formatDate(row.last_seen) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="Source IPs" min-width="150">
+          <template #default="{ row }">
+            <el-tag v-for="ip in row.source_ips" :key="ip" size="small" style="margin: 2px">
+              {{ ip }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Hostnames" min-width="150">
+          <template #default="{ row }">
+            <el-tag v-for="host in row.hostnames" :key="host" size="small" type="info" style="margin: 2px">
+              {{ host }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="App Names" min-width="200">
+          <template #default="{ row }">
+            <el-tag v-for="app in row.app_names.slice(0, 3)" :key="app" size="small" type="success" style="margin: 2px">
+              {{ app }}
+            </el-tag>
+            <el-tag v-if="row.app_names.length > 3" size="small" type="info">
+              +{{ row.app_names.length - 3 }} more
+            </el-tag>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <template #footer>
+        <el-button @click="unknownSourcesDialogVisible = false">Close</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -330,11 +405,13 @@ const loading = ref(false);
 const saving = ref(false);
 const shippers = ref<any[]>([]);
 const currentShipper = ref<any>(null);
+const unknownSources = ref<any[]>([]);
 
 const shipperDialogVisible = ref(false);
 const viewDialogVisible = ref(false);
 const sourceDialogVisible = ref(false);
 const volumeDialogVisible = ref(false);
+const unknownSourcesDialogVisible = ref(false);
 const editingShipper = ref(false);
 
 const shipperForm = reactive({
@@ -361,6 +438,7 @@ const volumeForm = reactive({
 
 onMounted(() => {
   fetchShippers();
+  fetchUnknownSources();
 });
 
 async function fetchShippers() {
@@ -373,6 +451,19 @@ async function fetchShippers() {
   } finally {
     loading.value = false;
   }
+}
+
+async function fetchUnknownSources() {
+  try {
+    const response = await api.getUnknownSources();
+    unknownSources.value = response.data;
+  } catch (error) {
+    console.error('Failed to fetch unknown sources:', error);
+  }
+}
+
+function showUnknownSources() {
+  unknownSourcesDialogVisible.value = true;
 }
 
 function showCreateShipper() {

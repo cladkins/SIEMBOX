@@ -112,6 +112,7 @@ export const api = {
   createShipper: (data: any) => apiClient.post('/shippers', data),
   updateShipper: (id: number, data: any) => apiClient.put(`/shippers/${id}`, data),
   deleteShipper: (id: number) => apiClient.delete(`/shippers/${id}`),
+  getUnknownSources: () => apiClient.get('/shippers/unknown-sources'),
 
   // Shipper Sources
   getShipperSources: (shipperId: number) => apiClient.get(`/shippers/${shipperId}/sources`),

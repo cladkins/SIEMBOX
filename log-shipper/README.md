@@ -44,31 +44,33 @@ The log shipper is **managed only** - there is no standalone/unauthenticated mod
 
 ### Step 2: Deploy the Shipper Container
 
-Create a docker-compose.yml file on your target machine:
+Use the provided `compose.yml` file from the SIEMBox repository:
 
-```yaml
-services:
-  siembox-log-shipper:
-    image: siembox-log-shipper:latest
-    container_name: siembox-log-shipper
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      - SHIPPER_API_KEY=paste-your-api-key-here
-      - SIEMBOX_API_URL=http://your-siembox-ip:3001/api
-    volumes:
-      # Mount directories containing log files you want to monitor
-      - /var/log:/var/log:ro                                    # System logs
-      - /path/to/app/logs:/path/to/app/logs:ro                 # Application logs
-      # For Docker container logs (optional)
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+```bash
+# Copy the log-shipper directory to your target machine
+scp -r log-shipper/ user@target-machine:/opt/siembox-shipper/
+cd /opt/siembox-shipper/
+
+# Create .env file with your settings
+cat > .env <<EOF
+SHIPPER_API_KEY=paste-your-api-key-here
+SIEMBOX_API_URL=http://your-siembox-ip:3001/api
+CONFIG_POLL_INTERVAL=30
+HEARTBEAT_INTERVAL=60
+EOF
+
+# Edit compose.yml to configure volume mounts for your log files
+nano compose.yml
 ```
 
-**IMPORTANT:** Update the volumes section to match where your log files are located on the host machine.
+**IMPORTANT:** Update the `volumes` section in `compose.yml` to match where your log files are located on the host machine.
 
 Deploy the shipper:
 ```bash
 docker compose up -d
+
+# Or if using older docker-compose command:
+docker-compose up -d
 ```
 
 ### Step 3: Verify Shipper is Online
@@ -110,7 +112,7 @@ The log shipper supports glob patterns for file paths:
 
 ## Important Notes
 
-- **Volume mounts** in docker-compose.yml give the container access to directories
+- **Volume mounts** in compose.yml give the container access to directories
 - **Log sources** in the UI tell the shipper which specific files to tail
 - File paths in sources must match the paths INSIDE the container (same as host if you use matching mounts)
 - You can add/edit/remove sources anytime through the UI without restarting the container
@@ -250,7 +252,7 @@ This means the shipper can't access the file. **This is usually a volume mount i
    ls -la /var/log/nginx/access.log
    ```
 
-2. **Add the volume mount to docker-compose.yml:**
+2. **Add the volume mount to compose.yml:**
    ```yaml
    volumes:
      - /var/log/nginx:/var/log/nginx:ro

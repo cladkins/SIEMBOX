@@ -15,12 +15,12 @@ RUN apk add --no-cache \
     jq
 
 # Copy managed shipper script
-COPY shipper-managed.sh /usr/local/bin/shipper-managed
-RUN chmod +x /usr/local/bin/shipper-managed
+COPY shipper-managed.sh /usr/local/bin/shipper
+RUN chmod +x /usr/local/bin/shipper
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD pgrep -f shipper-managed || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD pgrep -f shipper || exit 1
 
 # Run managed shipper (requires API authentication)
-CMD ["/usr/local/bin/shipper-managed"]
+CMD ["/usr/local/bin/shipper"]

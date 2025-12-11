@@ -56,11 +56,11 @@ SIEMBox is a lightweight, self-hosted Security Information and Event Management 
 
 ### Documentation
 - `README.md` - Main project readme
-- `API.md` - Complete REST API documentation
+- `docs/reference/API.md` - Complete REST API documentation (symlinked at root)
 - `DEPLOYMENT.md` - Installation and configuration guide
-- `PARSERS.md` - Parser creation and community parsers
-- `RULES.md` - Detection rule documentation
-- `SECURITY.md` - Security hardening guide
+- `docs/reference/PARSERS.md` - Parser creation and community parsers (symlinked at root)
+- `docs/reference/RULES.md` - Detection rule documentation (symlinked at root)
+- `docs/reference/SECURITY.md` - Security hardening guide (symlinked at root)
 - `docs/operations/TROUBLESHOOTING.md` - Common issues and solutions
 - `CONTRIBUTING.md` - Contribution guidelines
 - `docs/guides/PRE-V1-DATABASE.md` - Pre-v1.0 database schema management

@@ -99,10 +99,12 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
         result.hostname = hostname;
 
         // Extract TAG (app name and optionally process ID)
-        const tagMatch = rest.match(/^(\S+?)(?:\[(\d+)\])?:\s*(.*)$/);
+        // Support both single-word and multi-word TAGs
+        // Examples: "sshd[1234]: message" or "Authentik Server: message"
+        const tagMatch = rest.match(/^(.+?)(?:\[(\d+)\])?:\s*(.*)$/);
         if (tagMatch) {
           const [, appName, procId, message] = tagMatch;
-          result.appName = appName;
+          result.appName = appName.trim();
           result.processId = procId || null;
           result.message = message;
 

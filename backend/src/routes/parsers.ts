@@ -141,6 +141,7 @@ router.post('/test', async (req: Request, res: Response) => {
       pattern,
       field_mappings,
       test_samples: null,
+      event_type: null,
       created_at: new Date(),
       updated_at: new Date(),
     };

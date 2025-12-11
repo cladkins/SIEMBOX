@@ -204,6 +204,7 @@ VALUES (
     43,
     '^(?<client_ip>[\d.]+)\s+-\s*(?<message>.*)?',
     '{"client_ip": "client_ip", "message": "message", "service": "nginx-komodo"}',
+    'http_request',
     true
 )
 ON CONFLICT (name) DO NOTHING;

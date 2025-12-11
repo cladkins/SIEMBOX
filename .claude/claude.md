@@ -61,8 +61,10 @@ SIEMBox is a lightweight, self-hosted Security Information and Event Management 
 - `PARSERS.md` - Parser creation and community parsers
 - `RULES.md` - Detection rule documentation
 - `SECURITY.md` - Security hardening guide
-- `TROUBLESHOOTING.md` - Common issues and solutions
+- `docs/operations/TROUBLESHOOTING.md` - Common issues and solutions
 - `CONTRIBUTING.md` - Contribution guidelines
+- `docs/guides/PRE-V1-DATABASE.md` - Pre-v1.0 database schema management
+- `docs/operations/SHIPPER-DIAGNOSTICS.md` - Log shipper diagnostics
 
 ## Development Workflow
 
@@ -403,7 +405,7 @@ console.log(match ? match.groups : "No match");
 **Pre-v1.0 Database Schema Management:**
 - SIEMBox is currently in pre-v1.0 development
 - Database schema changes are made directly in `backend/migrations/001_initial_schema.sql`
-- Users may need to reset their database when pulling schema changes (see PRE-V1-DATABASE.md)
+- Users may need to reset their database when pulling schema changes (see docs/guides/PRE-V1-DATABASE.md)
 - **DO NOT create new migration files (002, 003, etc.) for schema changes**
 - Keep the schema simple - all tables/columns in the base file
 - After v1.0 release, we'll implement proper migration tracking for production users
@@ -421,7 +423,7 @@ console.log(match ? match.groups : "No match");
   - `PARSERS.md` for new parsers or parser features
   - `RULES.md` for new detection rules
   - `DEPLOYMENT.md` for deployment or configuration changes
-  - `TROUBLESHOOTING.md` for common issues and solutions
+  - `docs/operations/TROUBLESHOOTING.md` for common issues and solutions
   - Backend/Frontend READMEs for component-specific changes
 - Include inline code comments for complex logic
 - Update code examples in documentation to reflect changes

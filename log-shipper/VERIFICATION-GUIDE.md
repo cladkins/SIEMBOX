@@ -5,7 +5,7 @@
 **Related Documentation:**
 - [Quick Reference](./QUICK-REFERENCE.md) - Common commands
 - [Deployment Verification](./DEPLOYMENT-VERIFICATION.md) - Full deployment guide
-- [Troubleshooting](../TROUBLESHOOTING.md) - General troubleshooting
+- [Troubleshooting](../docs/operations/TROUBLESHOOTING.md) - General troubleshooting
 
 ---
 

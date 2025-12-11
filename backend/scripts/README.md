@@ -4,7 +4,7 @@ This directory contains utility scripts for database maintenance, validation, an
 
 ## Available Scripts
 
-### 1. Fix Vaultwarden Parser (`fix_vaultwarden_parser.sql`)
+### 1. Fix Vaultwarden Parser (`utilities/fix_vaultwarden_parser.sql`)
 
 **Purpose**: Updates the existing vaultwarden-access parser in the database with the corrected JavaScript-compatible regex pattern.
 
@@ -13,10 +13,10 @@ This directory contains utility scripts for database maintenance, validation, an
 **Usage**:
 ```bash
 # Using psql
-psql -h localhost -U siembox -d siembox -f backend/scripts/fix_vaultwarden_parser.sql
+psql -h localhost -U siembox -d siembox -f backend/scripts/utilities/fix_vaultwarden_parser.sql
 
 # Using Docker
-docker exec -i siembox-postgres psql -U siembox -d siembox < backend/scripts/fix_vaultwarden_parser.sql
+docker exec -i siembox-postgres psql -U siembox -d siembox < backend/scripts/utilities/fix_vaultwarden_parser.sql
 ```
 
 **What it does**:
@@ -24,14 +24,14 @@ docker exec -i siembox-postgres psql -U siembox -d siembox < backend/scripts/fix
 2. Verifies the update was successful
 3. Checks for any other parsers with Python-style regex syntax
 
-### 2. Validate All Parsers (`validate-parsers.ts`)
+### 2. Validate All Parsers (`utilities/validate-parsers.ts`)
 
 **Purpose**: Comprehensive validation of all parsers in the database for JavaScript regex compatibility and test sample coverage.
 
 **Usage**:
 ```bash
 # From project root
-npx ts-node backend/scripts/validate-parsers.ts
+npx ts-node backend/scripts/utilities/validate-parsers.ts
 
 # With custom database connection
 POSTGRES_HOST=localhost \
@@ -39,7 +39,7 @@ POSTGRES_PORT=5432 \
 POSTGRES_DB=siembox \
 POSTGRES_USER=siembox \
 POSTGRES_PASSWORD=siembox \
-npx ts-node backend/scripts/validate-parsers.ts
+npx ts-node backend/scripts/utilities/validate-parsers.ts
 ```
 
 **What it validates**:
@@ -53,14 +53,14 @@ npx ts-node backend/scripts/validate-parsers.ts
 - `0` - All parsers valid
 - `1` - One or more parsers failed validation
 
-### 3. Validate All Detection Rules (`validate-rules.ts`)
+### 3. Validate All Detection Rules (`utilities/validate-rules.ts`)
 
 **Purpose**: Comprehensive validation of all detection rules in the database for correct JSON structure, condition syntax, and regex patterns.
 
 **Usage**:
 ```bash
 # From project root
-npx ts-node backend/scripts/validate-rules.ts
+npx ts-node backend/scripts/utilities/validate-rules.ts
 
 # With custom database connection
 POSTGRES_HOST=localhost \
@@ -68,7 +68,7 @@ POSTGRES_PORT=5432 \
 POSTGRES_DB=siembox \
 POSTGRES_USER=siembox \
 POSTGRES_PASSWORD=siembox \
-npx ts-node backend/scripts/validate-rules.ts
+npx ts-node backend/scripts/utilities/validate-rules.ts
 ```
 
 **What it validates**:
@@ -83,17 +83,17 @@ npx ts-node backend/scripts/validate-rules.ts
 - `0` - All rules valid
 - `1` - One or more rules failed validation
 
-### 4. Comprehensive Validation Query (`validate_all_parsers_and_rules.sql`)
+### 4. Comprehensive Validation Query (`utilities/validate_all_parsers_and_rules.sql`)
 
 **Purpose**: SQL-based validation report that can be run directly in psql without TypeScript dependencies.
 
 **Usage**:
 ```bash
 # Using psql
-psql -h localhost -U siembox -d siembox -f backend/scripts/validate_all_parsers_and_rules.sql
+psql -h localhost -U siembox -d siembox -f backend/scripts/utilities/validate_all_parsers_and_rules.sql
 
 # Using Docker
-docker exec -i siembox-postgres psql -U siembox -d siembox < backend/scripts/validate_all_parsers_and_rules.sql
+docker exec -i siembox-postgres psql -U siembox -d siembox < backend/scripts/utilities/validate_all_parsers_and_rules.sql
 ```
 
 **What it reports**:
@@ -113,28 +113,28 @@ docker exec -i siembox-postgres psql -U siembox -d siembox < backend/scripts/val
 ### After Fresh Database Setup
 ```bash
 # Validate all parsers
-npx ts-node backend/scripts/validate-parsers.ts
+npx ts-node backend/scripts/utilities/validate-parsers.ts
 
 # Validate all rules
-npx ts-node backend/scripts/validate-rules.ts
+npx ts-node backend/scripts/utilities/validate-rules.ts
 ```
 
 ### After Migration 005 Has Already Run
 ```bash
 # Fix the vaultwarden parser
-psql -h localhost -U siembox -d siembox -f backend/scripts/fix_vaultwarden_parser.sql
+psql -h localhost -U siembox -d siembox -f backend/scripts/utilities/fix_vaultwarden_parser.sql
 
 # Validate the fix worked
-npx ts-node backend/scripts/validate-parsers.ts
+npx ts-node backend/scripts/utilities/validate-parsers.ts
 ```
 
 ### Troubleshooting Parser Errors
 ```bash
 # Get detailed SQL report
-psql -h localhost -U siembox -d siembox -f backend/scripts/validate_all_parsers_and_rules.sql
+psql -h localhost -U siembox -d siembox -f backend/scripts/utilities/validate_all_parsers_and_rules.sql
 
 # Run TypeScript validation for detailed error messages
-npx ts-node backend/scripts/validate-parsers.ts
+npx ts-node backend/scripts/utilities/validate-parsers.ts
 ```
 
 ### CI/CD Pipeline Integration
@@ -143,10 +143,10 @@ npx ts-node backend/scripts/validate-parsers.ts
 # Add to your CI/CD pipeline
 
 echo "Validating parsers..."
-npx ts-node backend/scripts/validate-parsers.ts || exit 1
+npx ts-node backend/scripts/utilities/validate-parsers.ts || exit 1
 
 echo "Validating detection rules..."
-npx ts-node backend/scripts/validate-rules.ts || exit 1
+npx ts-node backend/scripts/utilities/validate-rules.ts || exit 1
 
 echo "All validations passed!"
 ```
@@ -215,4 +215,4 @@ To add new validation scripts:
 
 - [PARSERS.md](../../docs/PARSERS.md) - Parser creation guide
 - [RULES.md](../../docs/RULES.md) - Detection rule documentation
-- [TROUBLESHOOTING.md](../../TROUBLESHOOTING.md) - Common issues and solutions
+- [TROUBLESHOOTING.md](../../docs/operations/TROUBLESHOOTING.md) - Common issues and solutions

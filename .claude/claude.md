@@ -18,6 +18,7 @@ SIEMBox is a lightweight, self-hosted Security Information and Event Management 
 /backend          - Express API server
 /frontend         - Vue.js web interface
 /log-shipper      - Universal log forwarder component
+/analysis         - Claude Code deep-dive analysis reports (git-ignored)
 ```
 
 ## Key Components
@@ -370,6 +371,29 @@ console.log(match ? match.groups : "No match");
 - Environment variables configured via `.env`
 - Log shipper runs as separate container
 - See `DEPLOYMENT.md` for production considerations
+
+## Analysis Documents
+
+When Claude Code performs deep-dive investigations (like the agent-organizer), comprehensive analysis documents are generated and stored in the `/analysis` directory. These documents provide:
+
+- Root cause analysis of complex issues
+- Architectural deep-dives and recommendations
+- Diagnostic flowcharts and data flow diagrams
+- Implementation strategies with confidence metrics
+- Technical context for major decisions
+
+**Important Notes:**
+- The `/analysis` directory is git-ignored (local-only reference material)
+- Analysis docs are named descriptively (e.g., `PARSER_REGRESSION_ANALYSIS.md`)
+- These documents complement code comments and serve as historical context
+- Not all investigations generate analysis docs - only comprehensive deep-dives
+- Summary documents (like `PARSER_FIX_SUMMARY.md`) may be committed to provide context
+
+**When to Request Analysis:**
+- Complex bugs affecting multiple systems
+- Architectural decisions requiring trade-off analysis
+- Performance issues needing root cause investigation
+- Pre-implementation planning for major features
 
 ## Contributing
 

@@ -68,3 +68,6 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+
+# Analysis documents (Claude Code deep-dive reports)
+analysis/

@@ -76,6 +76,9 @@ router.get('/', async (_req: Request, res: Response) => {
 router.get('/unknown-sources', async (_req: Request, res: Response) => {
   try {
     // Query for shipper_ids in raw_logs that don't have a matching log_shipper
+    // NOTE: API keys are stored as 64-char hex strings. We must use decode(api_key, 'hex')
+    // to convert them to binary before hashing, matching the shipper script's behavior:
+    // echo -n "$api_key" | xxd -r -p | sha256sum | cut -c1-8
     const result = await query(`
       SELECT DISTINCT
         rl.shipper_id,
@@ -89,8 +92,8 @@ router.get('/unknown-sources', async (_req: Request, res: Response) => {
       WHERE rl.shipper_id IS NOT NULL
         AND NOT EXISTS (
           SELECT 1 FROM log_shippers ls
-          WHERE LOWER(SUBSTRING(MD5(ls.api_key), 1, 8)) = LOWER(rl.shipper_id)
-             OR LOWER(SUBSTRING(ENCODE(SHA256(ls.api_key::bytea), 'hex'), 1, 8)) = LOWER(rl.shipper_id)
+          WHERE LOWER(SUBSTRING(MD5(decode(ls.api_key, 'hex')), 1, 8)) = LOWER(rl.shipper_id)
+             OR LOWER(SUBSTRING(ENCODE(SHA256(decode(ls.api_key, 'hex')), 'hex'), 1, 8)) = LOWER(rl.shipper_id)
         )
       GROUP BY rl.shipper_id
       ORDER BY MAX(rl.created_at) DESC

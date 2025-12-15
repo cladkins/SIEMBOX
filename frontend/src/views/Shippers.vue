@@ -333,8 +333,11 @@
     <el-dialog v-model="unknownSourcesDialogVisible" title="Unknown Sources Detected" width="900px">
       <el-alert type="info" :closable="false" style="margin-bottom: 20px">
         These shipper IDs are present in your logs but don't match any registered shippers.
-        This typically happens when log shipper containers retain their configuration after
-        a SIEM database reset.
+        This can happen when: (1) log shipper containers retain their configuration after
+        a SIEM database reset, (2) old/historical logs remain from previous shipper configurations,
+        or (3) shippers are running with incorrect/outdated API keys.
+        Check the "Last Seen" timestamp - if it's old, these are likely historical logs that will
+        be removed by retention policies, or you can delete them manually.
       </el-alert>
 
       <el-table :data="unknownSources" stripe>

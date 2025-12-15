@@ -35,9 +35,11 @@ log_debug() {
 }
 
 # Generate short shipper ID from API key (first 8 chars of SHA256)
+# NOTE: API key is a 64-char hex string. We must decode it to binary before hashing
+# to match the backend's computation: SHA256(decode(api_key, 'hex'))
 generate_shipper_id() {
     local api_key="$1"
-    echo -n "$api_key" | sha256sum 2>/dev/null | cut -c1-8 || echo -n "$api_key" | md5sum 2>/dev/null | cut -c1-8
+    echo -n "$api_key" | xxd -r -p | sha256sum 2>/dev/null | cut -c1-8 || echo -n "$api_key" | xxd -r -p | md5sum 2>/dev/null | cut -c1-8
 }
 
 # Save configuration to cache file

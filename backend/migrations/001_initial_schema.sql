@@ -1,6 +1,9 @@
 -- SIEMBox Initial Database Schema
 -- This file contains all the tables needed for the SIEM system
 
+-- Enable pgcrypto extension for cryptographic functions (MD5, SHA256)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- Users table for authentication and access control
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,

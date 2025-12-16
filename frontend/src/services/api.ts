@@ -136,4 +136,14 @@ export const api = {
   // Shipper Activity Log
   getShipperActivity: (id: number, limit?: number) =>
     apiClient.get(`/shippers/${id}/activity`, { params: { limit } }),
+
+  // Settings - IP Whitelist Management
+  getIpWhitelist: () => apiClient.get('/settings/ip-whitelist'),
+  addIpWhitelist: (data: any) => apiClient.post('/settings/ip-whitelist', data),
+  updateIpWhitelist: (id: number, data: any) =>
+    apiClient.put(`/settings/ip-whitelist/${id}`, data),
+  deleteIpWhitelist: (id: number) =>
+    apiClient.delete(`/settings/ip-whitelist/${id}`),
+  checkIpWhitelist: (ip: string) =>
+    apiClient.post('/settings/ip-whitelist/check', { ip_address: ip }),
 };

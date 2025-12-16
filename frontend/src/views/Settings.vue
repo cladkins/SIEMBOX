@@ -126,6 +126,65 @@
             <el-icon><Delete /></el-icon> Run Cleanup Now
           </el-button>
         </el-card>
+
+        <el-card style="margin-top: 20px">
+          <template #header>
+            <div class="card-header">
+              <span>IP Whitelist Management</span>
+              <el-button type="primary" size="small" @click="showAddIpDialog" :icon="Plus">
+                Add IP
+              </el-button>
+            </div>
+          </template>
+
+          <el-alert type="info" :closable="false" style="margin-bottom: 15px">
+            Control which IPs can send logs to this SIEM. Supports CIDR notation (e.g., 192.168.1.0/24).
+            Leave empty to allow all IPs.
+          </el-alert>
+
+          <el-table :data="ipWhitelist" v-loading="ipLoading" stripe>
+            <el-table-column prop="ip_address" label="IP Address / CIDR" min-width="180">
+              <template #default="{ row }">
+                <el-tag>{{ row.ip_address }}</el-tag>
+              </template>
+            </el-table-column>
+
+            <el-table-column prop="description" label="Description" min-width="250" />
+
+            <el-table-column prop="rule_id" label="Linked Rule" width="120">
+              <template #default="{ row }">
+                <el-text v-if="row.rule_id" type="primary" size="small">#{{ row.rule_id }}</el-text>
+                <el-text v-else type="info" size="small">All Rules</el-text>
+              </template>
+            </el-table-column>
+
+            <el-table-column label="Added" width="180">
+              <template #default="{ row }">
+                <el-text size="small">{{ formatDate(row.created_at) }}</el-text>
+              </template>
+            </el-table-column>
+
+            <el-table-column label="Actions" width="180" align="center">
+              <template #default="{ row }">
+                <el-button
+                  size="small"
+                  @click="editIpWhitelist(row)"
+                  :icon="Edit"
+                >
+                  Edit
+                </el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  @click="deleteIpWhitelistConfirm(row)"
+                  :icon="Delete"
+                >
+                  Delete
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
       </el-col>
 
       <el-col :span="8">
@@ -224,6 +283,54 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- IP Whitelist Dialog -->
+    <el-dialog
+      v-model="ipWhitelistDialogVisible"
+      :title="ipWhitelistForm.id ? 'Edit IP Whitelist Entry' : 'Add IP to Whitelist'"
+      width="600px"
+    >
+      <el-form :model="ipWhitelistForm" label-width="130px">
+        <el-form-item label="IP Address / CIDR" required>
+          <el-input
+            v-model="ipWhitelistForm.ip_address"
+            placeholder="192.168.1.0/24 or 10.0.0.5"
+            :disabled="!!ipWhitelistForm.id"
+          />
+          <el-text size="small" type="info">
+            Use CIDR notation for ranges (e.g., 192.168.1.0/24) or single IPs (10.0.0.5)
+          </el-text>
+        </el-form-item>
+
+        <el-form-item label="Description">
+          <el-input
+            v-model="ipWhitelistForm.description"
+            type="textarea"
+            :rows="2"
+            placeholder="e.g., Production servers in data center A"
+          />
+        </el-form-item>
+
+        <el-form-item label="Link to Rule">
+          <el-input-number
+            v-model="ipWhitelistForm.rule_id"
+            :min="1"
+            placeholder="Optional"
+            style="width: 150px"
+          />
+          <el-text size="small" type="info" style="margin-left: 10px">
+            Optional: Link to specific detection rule
+          </el-text>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="ipWhitelistDialogVisible = false">Cancel</el-button>
+        <el-button type="primary" @click="saveIpWhitelist" :loading="saving">
+          {{ ipWhitelistForm.id ? 'Update' : 'Add' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -231,7 +338,7 @@
 import { ref, onMounted, reactive } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Check, Delete, Refresh } from '@element-plus/icons-vue';
+import { Check, Delete, Refresh, Plus, Edit } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
 
 const loading = ref(false);
@@ -240,6 +347,8 @@ const cleaning = ref(false);
 const statsLoading = ref(false);
 const syslogLoading = ref(false);
 const syslogSaving = ref(false);
+const ipLoading = ref(false);
+const ipWhitelistDialogVisible = ref(false);
 
 const retentionForm = reactive({
   raw_logs_days: 30,
@@ -253,13 +362,22 @@ const syslogForm = reactive({
   syslog_port: 514,
 });
 
+const ipWhitelistForm = reactive({
+  id: null as number | null,
+  ip_address: '',
+  description: '',
+  rule_id: null as number | null,
+});
+
 const statistics = ref<any>(null);
 const syslogStatus = ref<any>(null);
+const ipWhitelist = ref<any[]>([]);
 
 onMounted(() => {
   fetchRetentionSettings();
   fetchSyslogSettings();
   fetchStatistics();
+  fetchIpWhitelist();
 });
 
 async function fetchRetentionSettings() {
@@ -374,6 +492,92 @@ const formatNumber = (num: number): string => {
 const formatDate = (date: string): string => {
   return format(new Date(date), 'MMM dd, yyyy HH:mm');
 };
+
+// IP Whitelist Management Functions
+async function fetchIpWhitelist() {
+  ipLoading.value = true;
+  try {
+    const response = await api.getIpWhitelist();
+    ipWhitelist.value = response.data;
+  } catch (error) {
+    ElMessage.error('Failed to fetch IP whitelist');
+  } finally {
+    ipLoading.value = false;
+  }
+}
+
+function showAddIpDialog() {
+  ipWhitelistForm.id = null;
+  ipWhitelistForm.ip_address = '';
+  ipWhitelistForm.description = '';
+  ipWhitelistForm.rule_id = null;
+  ipWhitelistDialogVisible.value = true;
+}
+
+function editIpWhitelist(entry: any) {
+  ipWhitelistForm.id = entry.id;
+  ipWhitelistForm.ip_address = entry.ip_address;
+  ipWhitelistForm.description = entry.description || '';
+  ipWhitelistForm.rule_id = entry.rule_id;
+  ipWhitelistDialogVisible.value = true;
+}
+
+async function saveIpWhitelist() {
+  if (!ipWhitelistForm.ip_address) {
+    ElMessage.warning('Please enter an IP address or CIDR');
+    return;
+  }
+
+  saving.value = true;
+  try {
+    if (ipWhitelistForm.id) {
+      // Update existing entry (description and rule_id only)
+      await api.updateIpWhitelist(ipWhitelistForm.id, {
+        description: ipWhitelistForm.description,
+        rule_id: ipWhitelistForm.rule_id,
+      });
+      ElMessage.success('IP whitelist entry updated');
+    } else {
+      // Add new entry
+      await api.addIpWhitelist(ipWhitelistForm);
+      ElMessage.success('IP address added to whitelist');
+    }
+    ipWhitelistDialogVisible.value = false;
+    fetchIpWhitelist();
+  } catch (error: any) {
+    if (error.response?.status === 409) {
+      ElMessage.error('This IP address already exists in the whitelist');
+    } else if (error.response?.status === 400) {
+      ElMessage.error('Invalid IP address or CIDR format');
+    } else {
+      ElMessage.error('Failed to save IP whitelist entry');
+    }
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function deleteIpWhitelistConfirm(entry: any) {
+  try {
+    await ElMessageBox.confirm(
+      `Are you sure you want to remove "${entry.ip_address}" from the whitelist?`,
+      'Confirm Delete',
+      {
+        confirmButtonText: 'Delete',
+        cancelButtonText: 'Cancel',
+        type: 'warning',
+      }
+    );
+
+    await api.deleteIpWhitelist(entry.id);
+    ElMessage.success('IP address removed from whitelist');
+    fetchIpWhitelist();
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error('Failed to delete IP whitelist entry');
+    }
+  }
+}
 </script>
 
 <style scoped>

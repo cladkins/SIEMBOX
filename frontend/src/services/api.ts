@@ -106,6 +106,11 @@ export const api = {
   runManualCleanup: (data: any) => apiClient.post('/settings/retention/cleanup', data),
   getRetentionStatistics: () => apiClient.get('/settings/retention/stats'),
 
+  // Settings - Syslog
+  getSyslogSettings: () => apiClient.get('/settings/syslog'),
+  updateSyslogSettings: (data: any) => apiClient.put('/settings/syslog', data),
+  getSyslogStatus: () => apiClient.get('/settings/syslog/status'),
+
   // Log Shippers
   getShippers: () => apiClient.get('/shippers'),
   getShipper: (id: number) => apiClient.get(`/shippers/${id}`),

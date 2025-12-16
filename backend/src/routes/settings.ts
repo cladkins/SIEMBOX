@@ -117,7 +117,10 @@ router.get('/retention/stats', authorize('admin'), async (_req: Request, res: Re
         (SELECT COUNT(*) FROM alerts WHERE created_at < NOW() - INTERVAL '365 days') as alerts_older_365d,
         (SELECT pg_size_pretty(pg_total_relation_size('raw_logs'))) as raw_logs_size,
         (SELECT pg_size_pretty(pg_total_relation_size('parsed_logs'))) as parsed_logs_size,
-        (SELECT pg_size_pretty(pg_total_relation_size('alerts'))) as alerts_size
+        (SELECT pg_size_pretty(pg_total_relation_size('alerts'))) as alerts_size,
+        (SELECT MIN(timestamp) FROM raw_logs) as oldest_raw_log,
+        (SELECT MIN(timestamp) FROM parsed_logs) as oldest_parsed_log,
+        (SELECT MIN(created_at) FROM alerts) as oldest_alert
     `);
 
     res.json(stats.rows[0]);
@@ -175,6 +178,72 @@ router.put('/syslog', authorize('admin'), async (req: Request, res: Response) =>
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to update syslog settings');
+  }
+});
+
+// Get syslog server status (for verification)
+router.get('/syslog/status', authorize('admin'), async (_req: Request, res: Response) => {
+  try {
+    // Get actual listening port from environment
+    const actualListeningPort = process.env.SYSLOG_PORT
+      ? parseInt(process.env.SYSLOG_PORT)
+      : 514;
+
+    // Get configured port from database
+    const configResult = await query(
+      `SELECT value FROM system_settings WHERE key = 'syslog_port'`
+    );
+    const configuredPort = configResult.rows.length > 0
+      ? parseInt(configResult.rows[0].value)
+      : 514;
+
+    // Check recent log activity (last 5 minutes)
+    const activityResult = await query(`
+      SELECT
+        COUNT(*) as total_logs,
+        MAX(created_at) as last_log_time,
+        COUNT(DISTINCT source_ip) as unique_sources
+      FROM raw_logs
+      WHERE created_at > NOW() - INTERVAL '5 minutes'
+    `);
+
+    const activity = activityResult.rows[0];
+    const lastLogTime = activity.last_log_time;
+    const logsReceivedLast5Min = parseInt(activity.total_logs, 10);
+
+    // Determine status
+    let status: 'healthy' | 'warning' | 'error';
+    let statusMessage: string;
+
+    const portsMatch = actualListeningPort === configuredPort;
+    const hasRecentLogs = logsReceivedLast5Min > 0;
+
+    if (portsMatch && hasRecentLogs) {
+      status = 'healthy';
+      statusMessage = 'Syslog receiver is active and receiving logs';
+    } else if (!portsMatch && hasRecentLogs) {
+      status = 'warning';
+      statusMessage = 'Configuration port mismatch, but logs are being received';
+    } else if (!portsMatch) {
+      status = 'error';
+      statusMessage = 'Configuration port mismatch - shippers may be misconfigured';
+    } else {
+      status = 'warning';
+      statusMessage = 'No logs received in the last 5 minutes';
+    }
+
+    res.json({
+      actual_listening_port: actualListeningPort,
+      configured_port: configuredPort,
+      ports_match: portsMatch,
+      last_log_received: lastLogTime,
+      logs_received_last_5min: logsReceivedLast5Min,
+      unique_sources_last_5min: parseInt(activity.unique_sources, 10),
+      status,
+      status_message: statusMessage,
+    });
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch syslog status');
   }
 });
 

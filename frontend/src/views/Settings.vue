@@ -70,6 +70,50 @@
 
         <el-card style="margin-top: 20px">
           <template #header>
+            <span>Syslog Server Configuration</span>
+          </template>
+
+          <el-alert type="info" :closable="false" style="margin-bottom: 20px">
+            These settings tell log shippers where to send logs. The syslog receiver must be restarted to listen on a different port.
+          </el-alert>
+
+          <el-form :model="syslogForm" label-width="200px" v-loading="syslogLoading">
+            <el-form-item label="Syslog Host">
+              <el-input
+                v-model="syslogForm.syslog_host"
+                placeholder="localhost or 0.0.0.0"
+                style="width: 300px"
+              />
+              <br />
+              <el-text size="small" type="info">
+                IP address or hostname where syslog server listens
+              </el-text>
+            </el-form-item>
+
+            <el-form-item label="Syslog Port">
+              <el-input-number
+                v-model="syslogForm.syslog_port"
+                :min="1"
+                :max="65535"
+                style="width: 150px"
+              />
+              <br />
+              <el-text size="small" type="info">
+                Port number for syslog receiver (default: 514)
+              </el-text>
+            </el-form-item>
+
+            <el-form-item>
+              <el-button type="primary" @click="saveSyslogSettings" :loading="syslogSaving">
+                <el-icon><Check /></el-icon> Save Settings
+              </el-button>
+              <el-button @click="fetchSyslogSettings">Reset</el-button>
+            </el-form-item>
+          </el-form>
+        </el-card>
+
+        <el-card style="margin-top: 20px">
+          <template #header>
             <span>Manual Cleanup</span>
           </template>
 
@@ -88,48 +132,91 @@
         <el-card>
           <template #header>
             <div class="card-header">
-              <span>Database Statistics</span>
+              <span>System Information</span>
               <el-button size="small" @click="fetchStatistics" :icon="Refresh" circle />
             </div>
           </template>
 
           <div v-loading="statsLoading">
-            <el-descriptions :column="1" border v-if="statistics">
-              <el-descriptions-item label="Raw Logs">
-                <strong>{{ formatNumber(statistics.total_raw_logs) }}</strong>
-                <br />
-                <el-text size="small" type="info">{{ statistics.raw_logs_size }}</el-text>
+            <el-descriptions :column="1" border v-if="statistics || syslogStatus">
+              <!-- Syslog Status Section -->
+              <template v-if="syslogStatus">
+                <el-descriptions-item label="Syslog Receiver">
+                  <el-tag
+                    :type="syslogStatus.status === 'healthy' ? 'success' : syslogStatus.status === 'warning' ? 'warning' : 'danger'"
+                    size="small"
+                  >
+                    {{ syslogStatus.status }}
+                  </el-tag>
+                  <br />
+                  <el-text size="small" type="info">{{ syslogStatus.status_message }}</el-text>
+                  <br />
+                  <el-text size="small" type="info">Port {{ syslogStatus.actual_listening_port }}</el-text>
+                </el-descriptions-item>
+
+                <el-descriptions-item label="Last Log Received">
+                  <strong>{{ syslogStatus.last_log_received ? formatDate(syslogStatus.last_log_received) : 'Never' }}</strong>
+                  <br />
+                  <el-text size="small" type="info">
+                    {{ formatNumber(syslogStatus.logs_received_last_5min) }} logs in last 5 min
+                  </el-text>
+                </el-descriptions-item>
+              </template>
+
+              <!-- Port Mismatch Warning -->
+              <el-descriptions-item v-if="syslogStatus && !syslogStatus.ports_match">
+                <el-alert type="warning" :closable="false" show-icon>
+                  <template #title>
+                    <el-text size="small">
+                      Configuration port ({{ syslogStatus.configured_port }}) doesn't match listening port ({{ syslogStatus.actual_listening_port }})
+                    </el-text>
+                  </template>
+                </el-alert>
               </el-descriptions-item>
 
-              <el-descriptions-item label="Parsed Logs">
-                <strong>{{ formatNumber(statistics.total_parsed_logs) }}</strong>
-                <br />
-                <el-text size="small" type="info">{{ statistics.parsed_logs_size }}</el-text>
+              <!-- Divider between Syslog and Database Stats -->
+              <el-descriptions-item v-if="syslogStatus && statistics">
+                <el-divider />
               </el-descriptions-item>
 
-              <el-descriptions-item label="Alerts">
-                <strong>{{ formatNumber(statistics.total_alerts) }}</strong>
-                <br />
-                <el-text size="small" type="info">{{ statistics.alerts_size }}</el-text>
-              </el-descriptions-item>
+              <!-- Database Statistics Section -->
+              <template v-if="statistics">
+                <el-descriptions-item label="Raw Logs">
+                  <strong>{{ formatNumber(statistics.total_raw_logs) }}</strong>
+                  <br />
+                  <el-text size="small" type="info">{{ statistics.raw_logs_size }}</el-text>
+                </el-descriptions-item>
 
-              <el-descriptions-item label="Oldest Raw Log">
-                <el-text size="small">
-                  {{ statistics.oldest_raw_log ? formatDate(statistics.oldest_raw_log) : 'N/A' }}
-                </el-text>
-              </el-descriptions-item>
+                <el-descriptions-item label="Parsed Logs">
+                  <strong>{{ formatNumber(statistics.total_parsed_logs) }}</strong>
+                  <br />
+                  <el-text size="small" type="info">{{ statistics.parsed_logs_size }}</el-text>
+                </el-descriptions-item>
 
-              <el-descriptions-item label="Oldest Parsed Log">
-                <el-text size="small">
-                  {{ statistics.oldest_parsed_log ? formatDate(statistics.oldest_parsed_log) : 'N/A' }}
-                </el-text>
-              </el-descriptions-item>
+                <el-descriptions-item label="Alerts">
+                  <strong>{{ formatNumber(statistics.total_alerts) }}</strong>
+                  <br />
+                  <el-text size="small" type="info">{{ statistics.alerts_size }}</el-text>
+                </el-descriptions-item>
 
-              <el-descriptions-item label="Oldest Alert">
-                <el-text size="small">
-                  {{ statistics.oldest_alert ? formatDate(statistics.oldest_alert) : 'N/A' }}
-                </el-text>
-              </el-descriptions-item>
+                <el-descriptions-item label="Oldest Raw Log">
+                  <el-text size="small">
+                    {{ statistics.oldest_raw_log ? formatDate(statistics.oldest_raw_log) : 'N/A' }}
+                  </el-text>
+                </el-descriptions-item>
+
+                <el-descriptions-item label="Oldest Parsed Log">
+                  <el-text size="small">
+                    {{ statistics.oldest_parsed_log ? formatDate(statistics.oldest_parsed_log) : 'N/A' }}
+                  </el-text>
+                </el-descriptions-item>
+
+                <el-descriptions-item label="Oldest Alert">
+                  <el-text size="small">
+                    {{ statistics.oldest_alert ? formatDate(statistics.oldest_alert) : 'N/A' }}
+                  </el-text>
+                </el-descriptions-item>
+              </template>
             </el-descriptions>
 
             <el-empty v-else description="No statistics available" />
@@ -151,6 +238,8 @@ const loading = ref(false);
 const saving = ref(false);
 const cleaning = ref(false);
 const statsLoading = ref(false);
+const syslogLoading = ref(false);
+const syslogSaving = ref(false);
 
 const retentionForm = reactive({
   raw_logs_days: 30,
@@ -159,10 +248,17 @@ const retentionForm = reactive({
   auto_cleanup_enabled: true,
 });
 
+const syslogForm = reactive({
+  syslog_host: '',
+  syslog_port: 514,
+});
+
 const statistics = ref<any>(null);
+const syslogStatus = ref<any>(null);
 
 onMounted(() => {
   fetchRetentionSettings();
+  fetchSyslogSettings();
   fetchStatistics();
 });
 
@@ -222,11 +318,48 @@ async function runManualCleanup() {
   }
 }
 
+async function fetchSyslogSettings() {
+  syslogLoading.value = true;
+  try {
+    const response = await api.getSyslogSettings();
+    Object.assign(syslogForm, response.data);
+  } catch (error) {
+    ElMessage.error('Failed to fetch syslog settings');
+  } finally {
+    syslogLoading.value = false;
+  }
+}
+
+async function saveSyslogSettings() {
+  syslogSaving.value = true;
+  try {
+    await api.updateSyslogSettings(syslogForm);
+    ElMessage.success('Syslog settings saved successfully');
+    // Refresh status after saving
+    await fetchSyslogStatus();
+  } catch (error) {
+    ElMessage.error('Failed to save syslog settings');
+  } finally {
+    syslogSaving.value = false;
+  }
+}
+
+async function fetchSyslogStatus() {
+  try {
+    const response = await api.getSyslogStatus();
+    syslogStatus.value = response.data;
+  } catch (error) {
+    console.error('Failed to fetch syslog status', error);
+  }
+}
+
 async function fetchStatistics() {
   statsLoading.value = true;
   try {
     const response = await api.getRetentionStatistics();
     statistics.value = response.data;
+    // Also refresh syslog status when refreshing statistics
+    await fetchSyslogStatus();
   } catch (error) {
     ElMessage.error('Failed to fetch statistics');
   } finally {

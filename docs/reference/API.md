@@ -1169,7 +1169,10 @@ Get cleanup statistics and database sizes (admin only).
   "alerts_older_365d": 1200,
   "raw_logs_size": "2.5 GB",
   "parsed_logs_size": "1.8 GB",
-  "alerts_size": "156 MB"
+  "alerts_size": "156 MB",
+  "oldest_raw_log": "2025-11-15T10:30:00Z",
+  "oldest_parsed_log": "2025-11-15T10:32:00Z",
+  "oldest_alert": "2025-11-16T08:45:00Z"
 }
 ```
 
@@ -1216,6 +1219,35 @@ Update syslog server settings (admin only).
 
 **Errors:**
 - `400` - Missing syslog_host
+
+---
+
+### GET /api/settings/syslog/status
+
+Get syslog server status and health information (admin only).
+
+**Authentication:** Required (Admin)
+
+**Response (200):**
+```json
+{
+  "actual_listening_port": 514,
+  "configured_port": 514,
+  "ports_match": true,
+  "last_log_received": "2025-12-15T20:35:42Z",
+  "logs_received_last_5min": 1234,
+  "unique_sources_last_5min": 5,
+  "status": "healthy",
+  "status_message": "Syslog receiver is active and receiving logs"
+}
+```
+
+**Status Values:**
+- `healthy` - Receiver active, ports match, logs being received
+- `warning` - Port mismatch with logs, or no recent logs
+- `error` - Port mismatch with no logs
+
+**Note:** Used by the Settings UI to display syslog receiver health and activity.
 
 ---
 

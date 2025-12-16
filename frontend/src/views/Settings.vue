@@ -151,13 +151,6 @@
 
             <el-table-column prop="description" label="Description" min-width="250" />
 
-            <el-table-column prop="rule_id" label="Linked Rule" width="120">
-              <template #default="{ row }">
-                <el-text v-if="row.rule_id" type="primary" size="small">#{{ row.rule_id }}</el-text>
-                <el-text v-else type="info" size="small">All Rules</el-text>
-              </template>
-            </el-table-column>
-
             <el-table-column label="Added" width="180">
               <template #default="{ row }">
                 <el-text size="small">{{ formatDate(row.created_at) }}</el-text>
@@ -233,11 +226,6 @@
                 </el-alert>
               </el-descriptions-item>
 
-              <!-- Divider between Syslog and Database Stats -->
-              <el-descriptions-item v-if="syslogStatus && statistics">
-                <el-divider />
-              </el-descriptions-item>
-
               <!-- Database Statistics Section -->
               <template v-if="statistics">
                 <el-descriptions-item label="Raw Logs">
@@ -310,18 +298,6 @@
             placeholder="e.g., Production servers in data center A"
           />
         </el-form-item>
-
-        <el-form-item label="Link to Rule">
-          <el-input-number
-            v-model="ipWhitelistForm.rule_id"
-            :min="1"
-            placeholder="Optional"
-            style="width: 150px"
-          />
-          <el-text size="small" type="info" style="margin-left: 10px">
-            Optional: Link to specific detection rule
-          </el-text>
-        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -366,7 +342,6 @@ const ipWhitelistForm = reactive({
   id: null as number | null,
   ip_address: '',
   description: '',
-  rule_id: null as number | null,
 });
 
 const statistics = ref<any>(null);
@@ -510,7 +485,6 @@ function showAddIpDialog() {
   ipWhitelistForm.id = null;
   ipWhitelistForm.ip_address = '';
   ipWhitelistForm.description = '';
-  ipWhitelistForm.rule_id = null;
   ipWhitelistDialogVisible.value = true;
 }
 
@@ -518,7 +492,6 @@ function editIpWhitelist(entry: any) {
   ipWhitelistForm.id = entry.id;
   ipWhitelistForm.ip_address = entry.ip_address;
   ipWhitelistForm.description = entry.description || '';
-  ipWhitelistForm.rule_id = entry.rule_id;
   ipWhitelistDialogVisible.value = true;
 }
 
@@ -531,10 +504,9 @@ async function saveIpWhitelist() {
   saving.value = true;
   try {
     if (ipWhitelistForm.id) {
-      // Update existing entry (description and rule_id only)
+      // Update existing entry (description only)
       await api.updateIpWhitelist(ipWhitelistForm.id, {
         description: ipWhitelistForm.description,
-        rule_id: ipWhitelistForm.rule_id,
       });
       ElMessage.success('IP whitelist entry updated');
     } else {

@@ -17,6 +17,11 @@ Detailed documentation for parsers by application category.
 - **[CRITICAL-APPLICATION-PARSERS.md](parsers/CRITICAL-APPLICATION-PARSERS.md)** - Vaultwarden, Nextcloud, Pi-hole parsers
 - **[REVERSE-PROXY-PARSERS.md](parsers/REVERSE-PROXY-PARSERS.md)** - NGINX Proxy Manager, Traefik, Caddy parsers
 
+### `/guides` - User Guides
+User-facing guides for managing and using SIEMBox features.
+
+- **[USER-MANAGEMENT.md](guides/USER-MANAGEMENT.md)** - User account and role management guide
+
 ### `/operations` - Operational Guides
 Day-to-day operations, troubleshooting, and deployment procedures.
 
@@ -75,6 +80,7 @@ Archived documentation including resolved incidents, completed phases, and super
 1. [DEPLOYMENT.md](../DEPLOYMENT.md) - Installation and configuration
 2. [operations/TROUBLESHOOTING.md](operations/TROUBLESHOOTING.md) - Issue resolution
 3. [operations/RULE-DEPLOYMENT-CHECKLIST.md](operations/RULE-DEPLOYMENT-CHECKLIST.md) - Pre-deployment checklist
+4. [guides/USER-MANAGEMENT.md](guides/USER-MANAGEMENT.md) - User account management
 
 ### For Architecture Review
 1. [architecture/PARSER-RULE-IMPLEMENTATION-SPEC.md](architecture/PARSER-RULE-IMPLEMENTATION-SPEC.md) - System design
@@ -106,6 +112,7 @@ See [../DEPLOYMENT.md](../DEPLOYMENT.md) for quick start and [operations/TROUBLE
 ## 🔍 Documentation Index by Topic
 
 ### Authentication & Access Control
+- [guides/USER-MANAGEMENT.md](guides/USER-MANAGEMENT.md) - User account and role management
 - [parsers/AUTHENTICATION-PARSERS.md](parsers/AUTHENTICATION-PARSERS.md)
 - [reference/RULES.md](reference/RULES.md) - AUTH-* and ACCESS-* rules
 - [SECURITY.md](../SECURITY.md)

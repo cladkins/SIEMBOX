@@ -96,6 +96,7 @@ export const api = {
 
   // Users
   getUsers: () => apiClient.get('/users'),
+  getUser: (id: number) => apiClient.get(`/users/${id}`),
   createUser: (data: any) => apiClient.post('/users', data),
   updateUser: (id: number, data: any) => apiClient.put(`/users/${id}`, data),
   deleteUser: (id: number) => apiClient.delete(`/users/${id}`),

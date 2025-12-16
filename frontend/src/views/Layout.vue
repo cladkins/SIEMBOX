@@ -35,6 +35,10 @@
           <el-icon><Upload /></el-icon>
           <span>Log Shippers</span>
         </el-menu-item>
+        <el-menu-item index="/users" v-if="authStore.user?.role === 'admin'">
+          <el-icon><User /></el-icon>
+          <span>Users</span>
+        </el-menu-item>
         <el-menu-item index="/settings">
           <el-icon><Tools /></el-icon>
           <span>Settings</span>
@@ -64,7 +68,7 @@
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload } from '@element-plus/icons-vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();
@@ -79,6 +83,7 @@ const pageTitle = computed(() => {
     '/parsers': 'Parsers',
     '/rules': 'Detection Rules',
     '/shippers': 'Log Shippers',
+    '/users': 'User Management',
     '/settings': 'Settings',
   };
   return titles[route.path] || 'SIEMBox';

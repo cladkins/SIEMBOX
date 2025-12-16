@@ -297,22 +297,31 @@ router.get('/:id/volumes', async (req: Request, res: Response) => {
 router.post('/:id/volumes', async (req: Request, res: Response) => {
   try {
     const shipper_id = parseInt(req.params.id);
-    const { host_path, container_path, mode } = req.body;
+    const { host_path, container_path, read_only } = req.body;
 
     if (!host_path || !container_path) {
       throw new ApiError(400, 'host_path and container_path are required');
     }
 
+    // Convert read_only boolean to mode string
+    const mode = read_only === false ? 'rw' : 'ro';
+
     const volume = await ShipperVolumeModel.create({
       shipper_id,
       host_path,
       container_path,
-      mode: mode || 'ro',
+      mode,
     });
 
     await ShipperActivityModel.log(shipper_id, 'volume_added', `Added volume: ${host_path}`);
 
-    res.status(201).json(volume);
+    // Convert mode back to read_only for response
+    const response = {
+      ...volume,
+      read_only: volume.mode === 'ro'
+    };
+
+    res.status(201).json(response);
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to add volume');

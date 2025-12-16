@@ -59,12 +59,21 @@ export class LogShipperModel {
     return result.rows[0];
   }
 
-  // Find all shippers
-  static async findAll(): Promise<LogShipper[]> {
+  // Find all shippers with sources count
+  static async findAll(): Promise<any[]> {
     const result = await pool.query(
-      'SELECT * FROM log_shippers ORDER BY created_at DESC'
+      `SELECT
+        ls.*,
+        (SELECT COUNT(*) FROM shipper_sources WHERE shipper_id = ls.id) as sources_count
+       FROM log_shippers ls
+       ORDER BY ls.created_at DESC`
     );
-    return result.rows;
+
+    // Convert sources_count to sources array for consistency with frontend
+    return result.rows.map(shipper => ({
+      ...shipper,
+      sources: Array(parseInt(shipper.sources_count, 10)).fill(null)
+    }));
   }
 
   // Find shipper by ID
@@ -227,12 +236,16 @@ export class ShipperVolumeModel {
   }
 
   // Find volumes by shipper ID
-  static async findByShipperId(shipperId: number): Promise<ShipperVolume[]> {
+  static async findByShipperId(shipperId: number): Promise<any[]> {
     const result = await pool.query(
       'SELECT * FROM shipper_volumes WHERE shipper_id = $1 ORDER BY id',
       [shipperId]
     );
-    return result.rows;
+    // Convert mode to read_only for frontend compatibility
+    return result.rows.map(volume => ({
+      ...volume,
+      read_only: volume.mode === 'ro'
+    }));
   }
 
   // Delete volume

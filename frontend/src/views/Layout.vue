@@ -10,31 +10,40 @@
         background-color="#304156"
         text-color="#bfcbd9"
         active-text-color="#409EFF"
+        :default-openeds="['siem']"
       >
         <el-menu-item index="/">
           <el-icon><Monitor /></el-icon>
           <span>Dashboard</span>
         </el-menu-item>
-        <el-menu-item index="/alerts">
-          <el-icon><Bell /></el-icon>
-          <span>Alerts</span>
-        </el-menu-item>
-        <el-menu-item index="/logs">
-          <el-icon><Document /></el-icon>
-          <span>Logs</span>
-        </el-menu-item>
-        <el-menu-item index="/parsers">
-          <el-icon><Setting /></el-icon>
-          <span>Parsers</span>
-        </el-menu-item>
-        <el-menu-item index="/rules">
-          <el-icon><Files /></el-icon>
-          <span>Detection Rules</span>
-        </el-menu-item>
-        <el-menu-item index="/shippers">
-          <el-icon><Upload /></el-icon>
-          <span>Log Shippers</span>
-        </el-menu-item>
+
+        <el-sub-menu index="siem">
+          <template #title>
+            <el-icon><Grid /></el-icon>
+            <span>SIEM</span>
+          </template>
+          <el-menu-item index="/alerts">
+            <el-icon><Bell /></el-icon>
+            <span>Alerts</span>
+          </el-menu-item>
+          <el-menu-item index="/logs">
+            <el-icon><Document /></el-icon>
+            <span>Logs</span>
+          </el-menu-item>
+          <el-menu-item index="/parsers">
+            <el-icon><Setting /></el-icon>
+            <span>Parsers</span>
+          </el-menu-item>
+          <el-menu-item index="/rules">
+            <el-icon><Files /></el-icon>
+            <span>Detection Rules</span>
+          </el-menu-item>
+          <el-menu-item index="/shippers">
+            <el-icon><Upload /></el-icon>
+            <span>Log Shippers</span>
+          </el-menu-item>
+        </el-sub-menu>
+
         <el-menu-item index="/users" v-if="authStore.user?.role === 'admin'">
           <el-icon><User /></el-icon>
           <span>Users</span>
@@ -68,7 +77,7 @@
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User } from '@element-plus/icons-vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();

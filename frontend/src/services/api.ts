@@ -132,4 +132,8 @@ export const api = {
 
   // Shipper API Key Management
   regenerateShipperKey: (id: number) => apiClient.post(`/shippers/${id}/regenerate-key`),
+
+  // Shipper Activity Log
+  getShipperActivity: (id: number, limit?: number) =>
+    apiClient.get(`/shippers/${id}/activity`, { params: { limit } }),
 };

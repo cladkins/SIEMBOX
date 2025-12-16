@@ -239,6 +239,35 @@
             </template>
           </el-table-column>
         </el-table>
+
+        <!-- Activity Log Section -->
+        <div class="section-header">
+          <h3>Activity Log</h3>
+          <el-text size="small" type="info">Configuration change history</el-text>
+        </div>
+
+        <el-table
+          :data="activityLog"
+          stripe
+          v-loading="activityLoading"
+          :empty-text="activityLog.length === 0 ? 'No activity recorded yet' : 'Loading...'"
+        >
+          <el-table-column label="Timestamp" width="180">
+            <template #default="{ row }">
+              <el-text size="small">{{ formatDate(row.created_at) }}</el-text>
+            </template>
+          </el-table-column>
+
+          <el-table-column label="Action" width="150">
+            <template #default="{ row }">
+              <el-tag :type="getActivityType(row.activity_type)" size="small">
+                {{ formatActivityType(row.activity_type) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+
+          <el-table-column prop="message" label="Description" min-width="300" />
+        </el-table>
       </div>
     </el-dialog>
 
@@ -420,6 +449,8 @@ const saving = ref(false);
 const shippers = ref<any[]>([]);
 const currentShipper = ref<any>(null);
 const unknownSources = ref<any[]>([]);
+const activityLog = ref<any[]>([]);
+const activityLoading = ref(false);
 
 const shipperDialogVisible = ref(false);
 const viewDialogVisible = ref(false);
@@ -517,10 +548,26 @@ async function viewShipper(shipper: any) {
     const response = await api.getShipper(shipper.id);
     currentShipper.value = response.data;
     viewDialogVisible.value = true;
+
+    // Fetch activity log
+    fetchShipperActivity(shipper.id);
   } catch (error) {
     ElMessage.error('Failed to load shipper details');
   } finally {
     loading.value = false;
+  }
+}
+
+async function fetchShipperActivity(shipperId: number) {
+  activityLoading.value = true;
+  try {
+    const response = await api.getShipperActivity(shipperId, 50);
+    activityLog.value = response.data;
+  } catch (error) {
+    console.error('Failed to fetch activity log:', error);
+    activityLog.value = [];
+  } finally {
+    activityLoading.value = false;
   }
 }
 
@@ -744,6 +791,27 @@ function getStatusType(status: string) {
 const formatDate = (date: string): string => {
   return format(new Date(date), 'MMM dd, yyyy HH:mm');
 };
+
+function getActivityType(type: string): string {
+  const types: Record<string, string> = {
+    created: 'success',
+    config_updated: 'primary',
+    source_added: 'success',
+    source_updated: 'warning',
+    source_deleted: 'danger',
+    volume_added: 'success',
+    volume_deleted: 'danger',
+    key_regenerated: 'warning',
+  };
+  return types[type] || 'info';
+}
+
+function formatActivityType(type: string): string {
+  return type
+    .split('_')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
 </script>
 
 <style scoped>

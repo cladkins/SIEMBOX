@@ -127,8 +127,19 @@
                 <el-button :icon="CopyDocument" @click="copyApiKey(currentShipper.api_key)">
                   Copy
                 </el-button>
+                <el-button
+                  type="warning"
+                  :icon="Refresh"
+                  @click="regenerateApiKey(currentShipper)"
+                  :loading="saving"
+                >
+                  Regenerate
+                </el-button>
               </template>
             </el-input>
+            <el-text size="small" type="warning" style="margin-top: 5px; display: block;">
+              Warning: Regenerating the key will immediately invalidate the old key.
+            </el-text>
           </el-descriptions-item>
           <el-descriptions-item label="Hostname">
             {{ currentShipper.hostname || 'N/A' }}
@@ -532,6 +543,40 @@ async function deleteShipperConfirm(shipper: any) {
     if (error !== 'cancel') {
       ElMessage.error('Failed to delete shipper');
     }
+  }
+}
+
+async function regenerateApiKey(shipper: any) {
+  try {
+    await ElMessageBox.confirm(
+      `Regenerating the API key will immediately invalidate the old key. The shipper "${shipper.name}" will need to be updated with the new key. Are you sure?`,
+      'Confirm API Key Regeneration',
+      {
+        confirmButtonText: 'Regenerate Key',
+        cancelButtonText: 'Cancel',
+        type: 'warning',
+      }
+    );
+
+    saving.value = true;
+    const response = await api.regenerateShipperKey(shipper.id);
+
+    // Update currentShipper with new key
+    currentShipper.value.api_key = response.data.api_key;
+
+    ElMessage.success({
+      message: 'API key regenerated successfully. The new key has been copied to your clipboard.',
+      duration: 5000,
+    });
+
+    // Auto-copy new key to clipboard for convenience
+    copyApiKey(response.data.api_key);
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error('Failed to regenerate API key');
+    }
+  } finally {
+    saving.value = false;
   }
 }
 

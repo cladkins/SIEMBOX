@@ -129,4 +129,7 @@ export const api = {
   getShipperVolumes: (shipperId: number) => apiClient.get(`/shippers/${shipperId}/volumes`),
   createShipperVolume: (shipperId: number, data: any) => apiClient.post(`/shippers/${shipperId}/volumes`, data),
   deleteShipperVolume: (shipperId: number, volumeId: number) => apiClient.delete(`/shippers/${shipperId}/volumes/${volumeId}`),
+
+  // Shipper API Key Management
+  regenerateShipperKey: (id: number) => apiClient.post(`/shippers/${id}/regenerate-key`),
 };

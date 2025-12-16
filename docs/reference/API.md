@@ -1417,6 +1417,41 @@ Delete log shipper.
 
 ---
 
+### POST /api/shippers/:id/regenerate-key
+
+Regenerate API key for log shipper (admin only).
+
+**Authentication:** Required (Admin)
+
+**Response (200):**
+```json
+{
+  "api_key": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6a7b8c9d0e1f2"
+}
+```
+
+**Security Behavior:**
+- Immediately invalidates the old API key
+- Generates a new 64-character hexadecimal API key
+- Shipper must be reconfigured with the new key to continue operation
+- Ghost shippers will be created if old key is not replaced (logs continue via syslog, but configuration updates blocked)
+
+**Use Cases:**
+- API key rotation for security compliance
+- Response to potential key compromise
+- Revoking access for decommissioned shipper instances
+
+**Frontend Integration:**
+- Auto-copies new key to clipboard
+- Displays warning about immediate invalidation
+- Shows confirmation dialog before regeneration
+
+**Errors:**
+- `404` - Shipper not found
+- `403` - Insufficient permissions (requires admin role)
+
+---
+
 ### GET /api/shippers/:id/sources
 
 Get all log sources for shipper.

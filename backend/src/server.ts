@@ -5,6 +5,7 @@ import pool from './config/database';
 import { SyslogServer } from './services/syslog/syslogServer';
 import { CleanupService } from './services/cleanup/cleanupService';
 import { importRules } from './scripts/import-rules';
+import { startAutoDiscoveryJob, stopAutoDiscoveryJob } from './jobs/autoDiscovery';
 
 dotenv.config();
 
@@ -41,6 +42,9 @@ const startServer = async () => {
     cleanupService = new CleanupService(CLEANUP_INTERVAL_HOURS);
     cleanupService.start();
 
+    // Start auto-discovery job
+    startAutoDiscoveryJob();
+
     // Start Express API server
     app.listen(PORT, () => {
       logger.info(`SIEMBox API server running on http://${HOST}:${PORT}`);
@@ -48,6 +52,7 @@ const startServer = async () => {
       logger.info(`Health check: http://${HOST}:${PORT}/health`);
       logger.info(`Syslog server listening on port ${SYSLOG_PORT} (UDP/TCP)`);
       logger.info(`Cleanup service running (interval: ${CLEANUP_INTERVAL_HOURS} hours)`);
+      logger.info(`Auto-discovery job running (interval: 6 hours)`);
     });
   } catch (error) {
     logger.error('Failed to start server:', error);
@@ -64,6 +69,7 @@ process.on('SIGTERM', async () => {
   if (cleanupService) {
     cleanupService.stop();
   }
+  stopAutoDiscoveryJob();
   pool.end(() => {
     logger.info('Database pool closed');
     process.exit(0);
@@ -78,6 +84,7 @@ process.on('SIGINT', async () => {
   if (cleanupService) {
     cleanupService.stop();
   }
+  stopAutoDiscoveryJob();
   pool.end(() => {
     logger.info('Database pool closed');
     process.exit(0);

@@ -16,6 +16,7 @@ import rulesRoutes from './routes/rules';
 import alertsRoutes from './routes/alerts';
 import settingsRoutes from './routes/settings';
 import shippersRoutes from './routes/shippers';
+import assetsRoutes from './routes/assets';
 
 const app: Application = express();
 
@@ -84,6 +85,7 @@ app.use('/api/rules', authenticate, rulesRoutes);
 app.use('/api/alerts', authenticate, alertsRoutes);
 app.use('/api/settings', authenticate, settingsRoutes);
 app.use('/api/shippers', shippersRoutes); // Some endpoints public for shipper registration
+app.use('/api/assets', assetsRoutes); // Asset discovery and management
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

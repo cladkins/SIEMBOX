@@ -159,18 +159,25 @@ export class AutoDiscoveryService {
       console.log('[Auto-Discovery] Starting asset enrichment from parsed logs...');
 
       // Query parsed logs for user agents, authentication events, etc.
+      // Use CTE to avoid nested aggregates
       const query = `
+        WITH event_counts AS (
+          SELECT
+            source_ip,
+            COALESCE(event_type, 'unknown') as event_type,
+            COUNT(*) as count,
+            MAX(timestamp) as last_activity
+          FROM parsed_logs
+          WHERE timestamp >= NOW() - INTERVAL '7 days'
+            AND source_ip IS NOT NULL
+          GROUP BY source_ip, event_type
+        )
         SELECT
-          pl.source_ip as ip_address,
-          jsonb_object_agg(
-            COALESCE(pl.event_type, 'unknown'),
-            COUNT(*)
-          ) as event_types,
-          MAX(pl.timestamp) as last_activity
-        FROM parsed_logs pl
-        WHERE pl.timestamp >= NOW() - INTERVAL '7 days'
-          AND pl.source_ip IS NOT NULL
-        GROUP BY pl.source_ip
+          source_ip as ip_address,
+          jsonb_object_agg(event_type, count) as event_types,
+          MAX(last_activity) as last_activity
+        FROM event_counts
+        GROUP BY source_ip
       `;
 
       const result = await pool.query(query);

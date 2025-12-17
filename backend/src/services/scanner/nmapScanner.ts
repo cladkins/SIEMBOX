@@ -40,7 +40,7 @@ export class NmapScanner {
       action: 'scan.asset.create',
       resourceType: 'scan',
       resourceId: scanId,
-      ipAddress: 'system',
+      ipAddress: '127.0.0.1',
       userAgent: 'nmap-scanner',
       responseStatus: 202,
       details: {
@@ -136,25 +136,69 @@ export class NmapScanner {
     let assetsDiscovered = 0;
     let servicesDiscovered = 0;
 
-    // Handle both array and single host result
-    const hosts = Array.isArray(results) ? results : [results];
+    // Debug: Log the structure of results
+    console.log('[NMAP] Raw results structure:', JSON.stringify(results, null, 2));
+
+    // node-nmap returns results with different structure depending on scan type
+    // Extract hosts from the results object
+    let hosts: any[] = [];
+
+    if (Array.isArray(results)) {
+      hosts = results;
+    } else if (results && Array.isArray(results.host)) {
+      // XML parser returns { host: [...] }
+      hosts = results.host;
+    } else if (results && results.host) {
+      // Single host result
+      hosts = [results.host];
+    } else if (results) {
+      // Try treating the results object itself as a single host
+      hosts = [results];
+    }
 
     console.log(`[NMAP] Processing ${hosts.length} hosts from scan ${scanId}`);
 
     for (const host of hosts) {
       try {
+        // node-nmap uses 'up' status in host.status or host.state
+        const hostStatus = host.status || host.state || (host.address ? 'up' : 'down');
+        const isUp = hostStatus === 'up' || hostStatus.state === 'up';
+
         // Skip if host is down
-        if (!host || host.status !== 'up') {
+        if (!host || !isUp) {
+          console.log(`[NMAP] Skipping host - status: ${hostStatus}`);
           continue;
         }
 
+        // Extract IP address - node-nmap can use different field names
+        const ipAddress = host.ip ||
+                         (host.address && typeof host.address === 'string' ? host.address : null) ||
+                         (host.address && host.address.addr ? host.address.addr : null) ||
+                         (Array.isArray(host.address) && host.address[0] ? host.address[0].addr : null);
+
+        if (!ipAddress) {
+          console.log('[NMAP] Skipping host - no IP address found');
+          continue;
+        }
+
+        // Extract hostname
+        const hostname = host.hostname?.[0]?.hostname ||
+                        host.hostname?.name ||
+                        (Array.isArray(host.hostnames) && host.hostnames[0]?.name) ||
+                        null;
+
+        // Extract MAC address
+        const macAddress = host.mac ||
+                          (host.address && Array.isArray(host.address) && host.address.find((a: any) => a.addrtype === 'mac')?.addr) ||
+                          null;
+
         // Extract asset information
         const asset = {
-          ip_address: host.ip,
-          hostname: host.hostname?.[0]?.hostname || null,
-          mac_address: host.mac || null,
-          os_type: host.osNmap?.osClass?.[0]?.type || null,
-          os_version: host.osNmap?.osMatch?.[0]?.name || null,
+          ip_address: ipAddress,
+          hostname: hostname,
+          mac_address: macAddress,
+          os_type: host.osNmap?.osClass?.[0]?.type || host.os?.osmatch?.[0]?.osclass?.[0]?.type || null,
+          os_version: host.osNmap?.osMatch?.[0]?.name || host.os?.osmatch?.[0]?.name || null,
           asset_type: AssetType.SERVER,
           criticality: AssetCriticality.MEDIUM,
           status: AssetStatus.ACTIVE,
@@ -172,24 +216,34 @@ export class NmapScanner {
         const createdAsset = await AssetRepository.create(asset);
         assetsDiscovered++;
 
-        // Process ports/services
-        if (host.openPorts && Array.isArray(host.openPorts)) {
-          for (const portInfo of host.openPorts) {
+        // Process ports/services - handle different port field structures
+        const ports = host.openPorts || host.ports?.port || [];
+        const portArray = Array.isArray(ports) ? ports : [ports];
+
+        if (portArray.length > 0) {
+          for (const portInfo of portArray) {
             try {
+              // Handle different port object structures
+              const portId = portInfo.port || portInfo.portid;
+              const protocol = portInfo.protocol || 'tcp';
+              const serviceName = portInfo.service || portInfo.service?.name || null;
+              const serviceVersion = portInfo.version || portInfo.service?.version || null;
+              const product = portInfo.product || portInfo.service?.product || null;
+
               const service = {
                 asset_id: createdAsset.id,
-                port: portInfo.port,
-                protocol: portInfo.protocol || 'tcp',
-                service_name: portInfo.service || null,
-                service_version: portInfo.version || null,
+                port: parseInt(portId, 10),
+                protocol: protocol,
+                service_name: serviceName,
+                service_version: serviceVersion,
                 state: ServiceState.OPEN,
-                banner: portInfo.product ? `${portInfo.product} ${portInfo.version || ''}`.trim() : null,
+                banner: product ? `${product} ${serviceVersion || ''}`.trim() : null,
               };
 
               await AssetRepository.upsertService(service);
               servicesDiscovered++;
             } catch (error) {
-              console.error(`[NMAP] Failed to store service ${portInfo.port}/${portInfo.protocol}:`, error);
+              console.error(`[NMAP] Failed to store service:`, error);
             }
           }
         }
@@ -212,7 +266,7 @@ export class NmapScanner {
       action: 'scan.asset.complete',
       resourceType: 'scan',
       resourceId: scanId,
-      ipAddress: 'system',
+      ipAddress: '127.0.0.1',
       userAgent: 'nmap-scanner',
       responseStatus: 200,
       details: {

@@ -383,4 +383,132 @@ router.post('/ip-whitelist/check', authorize('admin'), async (req: Request, res:
   }
 });
 
+// ===========================
+// Auto-Discovery Settings
+// ===========================
+
+// Get auto-discovery settings
+router.get('/auto-discovery', authorize('admin'), async (_req: Request, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT key, value, description
+       FROM system_settings
+       WHERE key IN ('auto_discovery_enabled', 'auto_discovery_interval_minutes', 'stale_asset_threshold_days')`
+    );
+
+    const settings: Record<string, any> = {
+      auto_discovery_enabled: 'true',
+      auto_discovery_interval_minutes: '360',
+      stale_asset_threshold_days: '30',
+    };
+
+    result.rows.forEach((row) => {
+      settings[row.key] = row.value;
+    });
+
+    // Parse to appropriate types for frontend
+    res.json({
+      enabled: settings.auto_discovery_enabled === 'true',
+      interval_minutes: parseInt(settings.auto_discovery_interval_minutes),
+      stale_threshold_days: parseInt(settings.stale_asset_threshold_days),
+    });
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch auto-discovery settings');
+  }
+});
+
+// Update auto-discovery settings
+router.put('/auto-discovery', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const { enabled, interval_minutes, stale_threshold_days } = req.body;
+
+    // Validation
+    if (interval_minutes !== undefined) {
+      const intervalNum = parseInt(interval_minutes);
+      if (isNaN(intervalNum) || intervalNum < 5 || intervalNum > 10080) {
+        throw new ApiError(400, 'Interval must be between 5 minutes and 7 days (10080 minutes)');
+      }
+    }
+
+    if (stale_threshold_days !== undefined) {
+      const thresholdNum = parseInt(stale_threshold_days);
+      if (isNaN(thresholdNum) || thresholdNum < 1 || thresholdNum > 365) {
+        throw new ApiError(400, 'Stale threshold must be between 1 and 365 days');
+      }
+    }
+
+    const settings = [];
+
+    if (enabled !== undefined) {
+      settings.push({
+        key: 'auto_discovery_enabled',
+        value: enabled ? 'true' : 'false',
+      });
+    }
+
+    if (interval_minutes !== undefined) {
+      settings.push({
+        key: 'auto_discovery_interval_minutes',
+        value: interval_minutes.toString(),
+      });
+    }
+
+    if (stale_threshold_days !== undefined) {
+      settings.push({
+        key: 'stale_asset_threshold_days',
+        value: stale_threshold_days.toString(),
+      });
+    }
+
+    for (const setting of settings) {
+      await query(
+        `UPDATE system_settings
+         SET value = $1, updated_by = $2, updated_at = NOW()
+         WHERE key = $3`,
+        [setting.value, req.user?.id || null, setting.key]
+      );
+    }
+
+    // Log the update
+    if (interval_minutes !== undefined) {
+      console.log(`[Auto-Discovery Settings] Interval updated to ${interval_minutes} minutes by user ${req.user?.username}`);
+    }
+    if (enabled !== undefined) {
+      console.log(`[Auto-Discovery Settings] Status ${enabled ? 'enabled' : 'disabled'} by user ${req.user?.username}`);
+    }
+
+    res.json({
+      message: 'Auto-discovery settings updated successfully',
+      settings: {
+        enabled: enabled !== undefined ? enabled : undefined,
+        interval_minutes,
+        stale_threshold_days,
+      },
+    });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to update auto-discovery settings');
+  }
+});
+
+// Get auto-discovery statistics
+router.get('/auto-discovery/stats', authorize('admin'), async (_req: Request, res: Response) => {
+  try {
+    const stats = await query(`
+      SELECT
+        COUNT(*) FILTER (WHERE discovery_method = 'log_correlation') as auto_discovered_assets,
+        COUNT(*) FILTER (WHERE status = 'offline') as offline_assets,
+        MAX(last_seen) as last_discovery_time,
+        COUNT(*) FILTER (WHERE last_seen > NOW() - INTERVAL '24 hours') as assets_seen_24h,
+        COUNT(*) FILTER (WHERE last_seen > NOW() - INTERVAL '7 days') as assets_seen_7d,
+        COUNT(*) FILTER (WHERE first_seen > NOW() - INTERVAL '30 days') as new_assets_30d
+      FROM assets
+    `);
+
+    res.json(stats.rows[0]);
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch auto-discovery statistics');
+  }
+});
+
 export default router;

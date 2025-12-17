@@ -424,3 +424,36 @@ COMMENT ON COLUMN asset_vulnerabilities.evidence IS 'Scan evidence/proof of vuln
 
 COMMENT ON COLUMN vulnerability_scans.scan_type IS 'Scan type: asset_discovery, vulnerability';
 COMMENT ON COLUMN vulnerability_scans.status IS 'Scan status: queued, running, completed, failed';
+
+-- ========================================
+-- SYSTEM SETTINGS
+-- ========================================
+
+-- System settings table for configurable parameters
+CREATE TABLE IF NOT EXISTS system_settings (
+    id SERIAL PRIMARY KEY,
+    key VARCHAR(255) UNIQUE NOT NULL,
+    value TEXT NOT NULL,
+    description TEXT,
+    updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Insert default auto-discovery settings
+INSERT INTO system_settings (key, value, description)
+VALUES
+    ('auto_discovery_enabled', 'true', 'Enable automatic asset discovery from logs'),
+    ('auto_discovery_interval_minutes', '360', 'Interval in minutes between auto-discovery runs (360 = 6 hours)'),
+    ('stale_asset_threshold_days', '30', 'Days before marking an asset as offline')
+ON CONFLICT (key) DO NOTHING;
+
+-- Indexes for system settings
+CREATE INDEX IF NOT EXISTS idx_system_settings_key ON system_settings(key);
+
+-- Comments for system settings
+COMMENT ON TABLE system_settings IS 'System-wide configuration settings for SIEMBox';
+COMMENT ON COLUMN system_settings.key IS 'Unique setting identifier';
+COMMENT ON COLUMN system_settings.value IS 'Setting value stored as text (parse as needed)';
+COMMENT ON COLUMN system_settings.description IS 'Human-readable description of the setting';
+COMMENT ON COLUMN system_settings.updated_by IS 'User who last updated this setting';

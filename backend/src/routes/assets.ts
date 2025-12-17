@@ -13,6 +13,7 @@ import { validateAssetScanRequest, handleValidationErrors } from '../middleware/
 import { AssetRepository } from '../services/assets/assetRepository';
 import { NmapScanner } from '../services/scanner/nmapScanner';
 import { AutoDiscoveryService } from '../services/assets/autoDiscoveryService';
+import { ScanRepository } from '../services/assets/scanRepository';
 import { AssetStatus, AssetCriticality, AssetType } from '../models/Asset';
 
 const router = express.Router();
@@ -252,6 +253,40 @@ router.post(
 );
 
 /**
+ * GET /api/assets/scans/active
+ * Get active scans (queued or running)
+ */
+router.get('/scans/active', authenticate, async (_req: Request, res: Response) => {
+  try {
+    const scans = await ScanRepository.getActiveScans();
+    res.json({ scans, total: scans.length });
+  } catch (error: any) {
+    console.error('Get active scans error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve active scans',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/assets/scans/statistics
+ * Get scan statistics
+ */
+router.get('/scans/statistics', authenticate, async (_req: Request, res: Response) => {
+  try {
+    const stats = await ScanRepository.getStatistics();
+    res.json(stats);
+  } catch (error: any) {
+    console.error('Get scan statistics error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve scan statistics',
+      message: error.message,
+    });
+  }
+});
+
+/**
  * GET /api/assets/scans/:scanId
  * Get scan status and results
  */
@@ -264,7 +299,7 @@ router.get('/scans/:scanId', authenticate, async (req: Request, res: Response): 
       return;
     }
 
-    const scan = await NmapScanner.getScanStatus(scanId);
+    const scan = await ScanRepository.getScanById(scanId);
 
     if (!scan) {
       res.status(404).json({ error: 'Scan not found' });
@@ -273,9 +308,9 @@ router.get('/scans/:scanId', authenticate, async (req: Request, res: Response): 
 
     res.json(scan);
   } catch (error: any) {
-    console.error('Get scan status error:', error);
+    console.error('Get scan error:', error);
     res.status(500).json({
-      error: 'Failed to retrieve scan status',
+      error: 'Failed to retrieve scan',
       message: error.message,
     });
   }
@@ -283,14 +318,26 @@ router.get('/scans/:scanId', authenticate, async (req: Request, res: Response): 
 
 /**
  * GET /api/assets/scans
- * Get recent scans
+ * Get all scans with filtering and pagination
  */
 router.get('/scans', authenticate, async (req: Request, res: Response) => {
   try {
-    const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
-    const scans = await NmapScanner.getRecentScans(limit);
+    const filters = {
+      status: req.query.status as string,
+      scan_type: req.query.scan_type as string,
+      limit: parseInt(req.query.limit as string) || 50,
+      offset: parseInt(req.query.offset as string) || 0,
+    };
 
-    res.json({ scans });
+    const result = await ScanRepository.getScans(filters);
+
+    res.json({
+      scans: result.scans,
+      total: result.total,
+      limit: filters.limit,
+      offset: filters.offset,
+      hasMore: filters.offset + filters.limit < result.total,
+    });
   } catch (error: any) {
     console.error('Get scans error:', error);
     res.status(500).json({

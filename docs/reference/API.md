@@ -17,6 +17,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Users](#users-endpoints)
   - [Settings](#settings-endpoints)
   - [Log Shippers](#log-shippers-endpoints)
+  - [Assets](#assets-endpoints)
 
 ---
 
@@ -1854,6 +1855,237 @@ Regenerate shipper API key (invalidates old key).
 
 ---
 
+## Assets Endpoints
+
+### GET /api/assets/scans
+
+Get all vulnerability scans with filtering and pagination.
+
+**Authentication:** Required
+
+**Query Parameters:**
+- `status` (optional) - Filter by scan status: `queued`, `running`, `completed`, `failed`
+- `scan_type` (optional) - Filter by scan type: `asset_discovery`, `vulnerability`
+- `limit` (optional) - Results per page (default: 50)
+- `offset` (optional) - Pagination offset (default: 0)
+
+**Response (200):**
+```json
+{
+  "scans": [
+    {
+      "id": 1,
+      "scan_type": "asset_discovery",
+      "target": "192.168.1.0/24",
+      "status": "completed",
+      "started_at": "2025-12-17T10:00:00Z",
+      "completed_at": "2025-12-17T10:05:23Z",
+      "duration_seconds": 323,
+      "assets_discovered": 15,
+      "vulnerabilities_found": 0,
+      "initiated_by": 1,
+      "initiated_by_username": "admin",
+      "scan_options": {
+        "scan_type": "port",
+        "description": "Network scan"
+      },
+      "error_message": null,
+      "results_summary": {},
+      "created_at": "2025-12-17T10:00:00Z",
+      "updated_at": "2025-12-17T10:05:23Z"
+    }
+  ],
+  "total": 42,
+  "limit": 50,
+  "offset": 0,
+  "hasMore": false
+}
+```
+
+---
+
+### GET /api/assets/scans/:scanId
+
+Get detailed information about a specific scan.
+
+**Authentication:** Required
+
+**URL Parameters:**
+- `scanId` - Scan ID
+
+**Response (200):**
+```json
+{
+  "id": 1,
+  "scan_type": "asset_discovery",
+  "target": "192.168.1.0/24",
+  "status": "completed",
+  "started_at": "2025-12-17T10:00:00Z",
+  "completed_at": "2025-12-17T10:05:23Z",
+  "duration_seconds": 323,
+  "assets_discovered": 15,
+  "vulnerabilities_found": 0,
+  "initiated_by": 1,
+  "initiated_by_username": "admin",
+  "scan_options": {
+    "scan_type": "port",
+    "description": "Network scan"
+  },
+  "error_message": null,
+  "results_summary": {},
+  "created_at": "2025-12-17T10:00:00Z",
+  "updated_at": "2025-12-17T10:05:23Z"
+}
+```
+
+**Errors:**
+- `404` - Scan not found
+
+---
+
+### GET /api/assets/scans/active
+
+Get all active scans (queued or running).
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+{
+  "scans": [
+    {
+      "id": 5,
+      "scan_type": "asset_discovery",
+      "target": "192.168.2.0/24",
+      "status": "running",
+      "started_at": "2025-12-17T11:30:00Z",
+      "completed_at": null,
+      "duration_seconds": null,
+      "assets_discovered": 0,
+      "vulnerabilities_found": 0,
+      "initiated_by": 2,
+      "initiated_by_username": "analyst",
+      "scan_options": {},
+      "error_message": null,
+      "results_summary": null,
+      "created_at": "2025-12-17T11:30:00Z",
+      "updated_at": "2025-12-17T11:30:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+---
+
+### GET /api/assets/scans/statistics
+
+Get scan statistics and metrics.
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+{
+  "total_scans": "127",
+  "completed_scans": "115",
+  "failed_scans": "5",
+  "active_scans": "2",
+  "total_assets_discovered": "458",
+  "total_vulnerabilities_found": "142",
+  "avg_scan_duration": 285.7,
+  "last_scan_time": "2025-12-17T11:30:00Z"
+}
+```
+
+---
+
+### GET /api/settings/auto-discovery
+
+Get auto-discovery configuration settings.
+
+**Authentication:** Required (Admin only)
+
+**Response (200):**
+```json
+{
+  "enabled": true,
+  "interval_minutes": 360,
+  "stale_threshold_days": 30
+}
+```
+
+**Settings:**
+- `enabled` - Whether auto-discovery is enabled
+- `interval_minutes` - Time between auto-discovery runs (5-10080 minutes)
+- `stale_threshold_days` - Days before marking assets as offline (1-365 days)
+
+---
+
+### PUT /api/settings/auto-discovery
+
+Update auto-discovery configuration settings.
+
+**Authentication:** Required (Admin only)
+
+**Request Body:**
+```json
+{
+  "enabled": true,
+  "interval_minutes": 180,
+  "stale_threshold_days": 14
+}
+```
+
+**All fields are optional** - only include settings you want to update.
+
+**Validation:**
+- `interval_minutes` - Must be between 5 and 10080 (5 minutes to 7 days)
+- `stale_threshold_days` - Must be between 1 and 365
+
+**Response (200):**
+```json
+{
+  "message": "Auto-discovery settings updated successfully",
+  "settings": {
+    "enabled": true,
+    "interval_minutes": 180,
+    "stale_threshold_days": 14
+  }
+}
+```
+
+**Errors:**
+- `400` - Invalid parameter values
+- `403` - Not authorized (admin only)
+
+**Notes:**
+- Changing `interval_minutes` causes the auto-discovery job to reschedule
+- Setting `enabled: false` stops auto-discovery but preserves the interval setting
+- Changes take effect immediately (no restart required)
+
+---
+
+### GET /api/settings/auto-discovery/stats
+
+Get auto-discovery statistics.
+
+**Authentication:** Required (Admin only)
+
+**Response (200):**
+```json
+{
+  "auto_discovered_assets": "342",
+  "offline_assets": "28",
+  "last_discovery_time": "2025-12-17T06:00:00Z",
+  "assets_seen_24h": "298",
+  "assets_seen_7d": "320",
+  "new_assets_30d": "45"
+}
+```
+
+---
+
 ## Integration Examples
 
 ### JavaScript/TypeScript (Axios)
@@ -1948,4 +2180,4 @@ Webhook notifications are on the roadmap. Planned features:
 
 ---
 
-**Last Updated:** 2025-12-02
+**Last Updated:** 2025-12-17

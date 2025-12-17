@@ -4,17 +4,72 @@
  * Periodically runs asset discovery from log correlation.
  * Marks stale assets as offline and enriches asset data.
  *
- * Runs every 6 hours by default.
+ * Default interval: 6 hours (configurable via system_settings)
  */
 
 import { AutoDiscoveryService } from '../services/assets/autoDiscoveryService';
+import { pool } from '../config/database';
+
+let intervalId: NodeJS.Timeout | null = null;
+let currentIntervalMinutes = 360; // Track current interval to detect changes
+
+/**
+ * Get auto-discovery settings from database
+ */
+async function getAutoDiscoverySettings(): Promise<{
+  enabled: boolean;
+  intervalMinutes: number;
+  staleThresholdDays: number;
+}> {
+  try {
+    const result = await pool.query(`
+      SELECT key, value
+      FROM system_settings
+      WHERE key IN ('auto_discovery_enabled', 'auto_discovery_interval_minutes', 'stale_asset_threshold_days')
+    `);
+
+    const settings: Record<string, string> = {
+      auto_discovery_enabled: 'true',
+      auto_discovery_interval_minutes: '360',
+      stale_asset_threshold_days: '30',
+    };
+
+    result.rows.forEach((row) => {
+      settings[row.key] = row.value;
+    });
+
+    return {
+      enabled: settings.auto_discovery_enabled === 'true',
+      intervalMinutes: parseInt(settings.auto_discovery_interval_minutes) || 360,
+      staleThresholdDays: parseInt(settings.stale_asset_threshold_days) || 30,
+    };
+  } catch (error) {
+    console.error('[Auto-Discovery Job] Failed to fetch settings, using defaults:', error);
+    return {
+      enabled: true,
+      intervalMinutes: 360,
+      staleThresholdDays: 30,
+    };
+  }
+}
 
 /**
  * Run auto-discovery cycle
  */
 export async function runAutoDiscovery(): Promise<void> {
   const startTime = Date.now();
-  console.log('[Auto-Discovery Job] Starting auto-discovery cycle...');
+
+  // Check if auto-discovery is enabled
+  const settings = await getAutoDiscoverySettings();
+
+  if (!settings.enabled) {
+    console.log('[Auto-Discovery Job] Auto-discovery is disabled via settings');
+    return;
+  }
+
+  console.log('[Auto-Discovery Job] Starting auto-discovery cycle...', {
+    staleThresholdDays: settings.staleThresholdDays,
+  });
 
   try {
     const result = await AutoDiscoveryService.runFullDiscovery();
@@ -32,22 +87,43 @@ export async function runAutoDiscovery(): Promise<void> {
   }
 }
 
-// Run every 6 hours (21600000 milliseconds)
-const INTERVAL_MS = 6 * 60 * 60 * 1000;
-
-let intervalId: NodeJS.Timeout | null = null;
-
 /**
- * Start the auto-discovery job
+ * Start the auto-discovery job with dynamic scheduling
  */
-export function startAutoDiscoveryJob(): void {
-  console.log('[Auto-Discovery Job] Starting background job (interval: 6 hours)');
+export async function startAutoDiscoveryJob(): Promise<void> {
+  // Get initial settings
+  const settings = await getAutoDiscoverySettings();
+  currentIntervalMinutes = settings.intervalMinutes;
+
+  const intervalMs = currentIntervalMinutes * 60 * 1000;
+
+  console.log('[Auto-Discovery Job] Starting background job', {
+    enabled: settings.enabled,
+    intervalMinutes: currentIntervalMinutes,
+    staleThresholdDays: settings.staleThresholdDays,
+  });
 
   // Run immediately on startup
   runAutoDiscovery();
 
-  // Then run every 6 hours
-  intervalId = setInterval(runAutoDiscovery, INTERVAL_MS);
+  // Schedule recurring runs with interval check
+  intervalId = setInterval(async () => {
+    // Check if interval changed
+    const currentSettings = await getAutoDiscoverySettings();
+
+    if (currentSettings.intervalMinutes !== currentIntervalMinutes) {
+      console.log(
+        `[Auto-Discovery Job] Interval changed from ${currentIntervalMinutes} to ${currentSettings.intervalMinutes} minutes, rescheduling...`
+      );
+      // Reschedule with new interval
+      stopAutoDiscoveryJob();
+      startAutoDiscoveryJob();
+      return;
+    }
+
+    // Run the discovery cycle
+    runAutoDiscovery();
+  }, intervalMs);
 }
 
 /**

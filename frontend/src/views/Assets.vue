@@ -305,12 +305,12 @@ let scanPollingInterval: number | null = null;
 async function loadScans() {
   try {
     // Load recent scans (last 10)
-    const recentResponse = await api.get('/assets/scans?limit=10');
+    const recentResponse = await api.getScans({ limit: 10 });
     recentScans.value = recentResponse.data.scans || [];
     console.log('[Assets] Loaded recent scans:', recentScans.value.length);
 
     // Load active scans
-    const activeResponse = await api.get('/assets/scans/active');
+    const activeResponse = await api.getActiveScans();
     activeScans.value = activeResponse.data || [];
     console.log('[Assets] Loaded active scans:', activeScans.value.length, activeScans.value);
   } catch (error: any) {

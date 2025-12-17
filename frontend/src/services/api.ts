@@ -147,4 +147,13 @@ export const api = {
     apiClient.delete(`/settings/ip-whitelist/${id}`),
   checkIpWhitelist: (ip: string) =>
     apiClient.post('/settings/ip-whitelist/check', { ip_address: ip }),
+
+  // Settings - General
+  getSettings: () => apiClient.get('/settings'),
+  updateSetting: (key: string, data: any) => apiClient.put(`/settings/${key}`, data),
+
+  // Asset Scans
+  getScans: (params?: any) => apiClient.get('/assets/scans', { params }),
+  getScan: (id: number) => apiClient.get(`/assets/scans/${id}`),
+  getActiveScans: () => apiClient.get('/assets/scans/active'),
 };

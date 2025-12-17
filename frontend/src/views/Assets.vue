@@ -17,6 +17,65 @@
         </div>
       </template>
 
+      <!-- Recent Scans Section -->
+      <div class="recent-scans" v-if="recentScans.length > 0 || activeScans.length > 0">
+        <h3>Recent Scans</h3>
+
+        <!-- Active Scans (with progress indicator) -->
+        <div v-if="activeScans.length > 0" class="active-scans">
+          <el-alert type="info" :closable="false" style="margin-bottom: 10px">
+            <strong>{{ activeScans.length }} scan(s) in progress...</strong>
+          </el-alert>
+
+          <el-table :data="activeScans" style="width: 100%; margin-bottom: 20px">
+            <el-table-column prop="id" label="Scan ID" width="80" />
+            <el-table-column prop="target" label="Target" width="200" />
+            <el-table-column prop="scan_type" label="Type" width="120" />
+            <el-table-column prop="status" label="Status" width="100">
+              <template #default="{ row }">
+                <el-tag type="warning">{{ row.status }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="started_at" label="Started" width="180">
+              <template #default="{ row }">
+                {{ formatDate(row.started_at) }}
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <!-- Recent Completed Scans -->
+        <el-collapse>
+          <el-collapse-item title="View Recent Scans" name="scans">
+            <el-table :data="recentScans" style="width: 100%">
+              <el-table-column prop="id" label="ID" width="70" />
+              <el-table-column prop="target" label="Target" width="150" />
+              <el-table-column prop="status" label="Status" width="100">
+                <template #default="{ row }">
+                  <el-tag :type="getScanStatusColor(row.status)">{{ row.status }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="assets_discovered" label="Assets Found" width="120" />
+              <el-table-column prop="duration_seconds" label="Duration" width="100">
+                <template #default="{ row }">
+                  {{ row.duration_seconds ? `${row.duration_seconds}s` : '-' }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="completed_at" label="Completed" width="180">
+                <template #default="{ row }">
+                  {{ row.completed_at ? formatDate(row.completed_at) : '-' }}
+                </template>
+              </el-table-column>
+              <el-table-column label="Actions" width="100">
+                <template #default="{ row }">
+                  <el-button link size="small" @click="showScanDetails(row)">Details</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-collapse-item>
+        </el-collapse>
+      </div>
+
       <!-- Filters -->
       <div class="filters">
         <el-input
@@ -167,15 +226,46 @@
         <el-button type="primary" @click="triggerScan" :loading="scanLoading">Trigger Scan</el-button>
       </template>
     </el-dialog>
+
+    <!-- Scan Details Dialog -->
+    <el-dialog v-model="showScanDetailsDialog" title="Scan Details" width="700px">
+      <div v-if="selectedScan">
+        <el-descriptions :column="2" border>
+          <el-descriptions-item label="Scan ID">{{ selectedScan.id }}</el-descriptions-item>
+          <el-descriptions-item label="Type">{{ selectedScan.scan_type }}</el-descriptions-item>
+          <el-descriptions-item label="Target">{{ selectedScan.target }}</el-descriptions-item>
+          <el-descriptions-item label="Status">
+            <el-tag :type="getScanStatusColor(selectedScan.status)">{{ selectedScan.status }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="Started">{{ formatDate(selectedScan.started_at) }}</el-descriptions-item>
+          <el-descriptions-item label="Completed">{{ selectedScan.completed_at ? formatDate(selectedScan.completed_at) : 'In progress' }}</el-descriptions-item>
+          <el-descriptions-item label="Duration">{{ selectedScan.duration_seconds ? `${selectedScan.duration_seconds}s` : '-' }}</el-descriptions-item>
+          <el-descriptions-item label="Assets Found">{{ selectedScan.assets_discovered || 0 }}</el-descriptions-item>
+          <el-descriptions-item label="Initiated By" :span="2">{{ selectedScan.initiated_by_username || 'System' }}</el-descriptions-item>
+        </el-descriptions>
+
+        <div v-if="selectedScan.error_message" style="margin-top: 20px">
+          <el-alert type="error" :closable="false">
+            <strong>Error:</strong> {{ selectedScan.error_message }}
+          </el-alert>
+        </div>
+
+        <div v-if="selectedScan.scan_options" style="margin-top: 20px">
+          <h4>Scan Options:</h4>
+          <pre>{{ JSON.stringify(selectedScan.scan_options, null, 2) }}</pre>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import assetService, { type Asset, type AssetWithServices } from '@/services/assetService';
 import { useAuthStore } from '@/stores/auth';
+import { api } from '@/services/api';
 
 const authStore = useAuthStore();
 const canTriggerScans = computed(() => ['admin', 'analyst', 'operator'].includes(authStore.user?.role || ''));
@@ -203,6 +293,63 @@ const scanForm = ref({
   scanType: 'ping',
   targets: ''
 });
+
+// Scan status tracking
+const recentScans = ref<any[]>([]);
+const activeScans = ref<any[]>([]);
+const showScanDetailsDialog = ref(false);
+const selectedScan = ref<any>(null);
+let scanPollingInterval: number | null = null;
+
+// Load scans function
+async function loadScans() {
+  try {
+    // Load recent scans (last 10)
+    const recentResponse = await api.get('/assets/scans?limit=10');
+    recentScans.value = recentResponse.data.scans || [];
+
+    // Load active scans
+    const activeResponse = await api.get('/assets/scans/active');
+    activeScans.value = activeResponse.data || [];
+  } catch (error) {
+    console.error('Failed to load scans:', error);
+  }
+}
+
+// Show scan details
+function showScanDetails(scan: any) {
+  selectedScan.value = scan;
+  showScanDetailsDialog.value = true;
+}
+
+// Get scan status color
+function getScanStatusColor(status: string) {
+  const colors: Record<string, string> = {
+    completed: 'success',
+    running: 'warning',
+    queued: 'info',
+    failed: 'danger'
+  };
+  return colors[status] || '';
+}
+
+// Start polling for active scans
+function startScanPolling() {
+  loadScans(); // Initial load
+  scanPollingInterval = window.setInterval(() => {
+    if (activeScans.value.length > 0) {
+      loadScans(); // Poll while scans are active
+    }
+  }, 5000); // Poll every 5 seconds
+}
+
+// Stop polling
+function stopScanPolling() {
+  if (scanPollingInterval) {
+    clearInterval(scanPollingInterval);
+    scanPollingInterval = null;
+  }
+}
 
 async function loadAssets() {
   loading.value = true;
@@ -266,6 +413,8 @@ async function triggerScan() {
     ElMessage.success(`Scan initiated (ID: ${result.scanId})`);
     showScanDialog.value = false;
     scanForm.value.targets = '';
+    loadScans(); // Refresh scan list
+    startScanPolling(); // Start polling
   } catch (error: any) {
     ElMessage.error(error.response?.data?.error || 'Failed to trigger scan');
     console.error(error);
@@ -309,6 +458,11 @@ function formatDate(date: string) {
 
 onMounted(() => {
   loadAssets();
+  startScanPolling();
+});
+
+onUnmounted(() => {
+  stopScanPolling();
 });
 </script>
 
@@ -331,6 +485,23 @@ onMounted(() => {
 .header-actions {
   display: flex;
   gap: 10px;
+}
+
+.recent-scans {
+  margin-bottom: 20px;
+  padding: 15px;
+  background-color: #f5f7fa;
+  border-radius: 4px;
+}
+
+.recent-scans h3 {
+  margin: 0 0 15px 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.active-scans {
+  margin-bottom: 15px;
 }
 
 .filters {

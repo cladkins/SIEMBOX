@@ -6,7 +6,7 @@ export interface User {
   username: string;
   email: string;
   password_hash: string;
-  role: 'admin' | 'analyst' | 'viewer';
+  role: 'admin' | 'analyst' | 'viewer' | 'operator';
   enabled: boolean;
   last_login: Date | null;
   created_at: Date;
@@ -17,7 +17,7 @@ export interface UserSafe {
   id: number;
   username: string;
   email: string;
-  role: 'admin' | 'analyst' | 'viewer';
+  role: 'admin' | 'analyst' | 'viewer' | 'operator';
   enabled: boolean;
   last_login: Date | null;
   created_at: Date;
@@ -28,7 +28,7 @@ export interface CreateUserParams {
   username: string;
   email: string;
   password: string;
-  role?: 'admin' | 'analyst' | 'viewer';
+  role?: 'admin' | 'analyst' | 'viewer' | 'operator';
   enabled?: boolean;
 }
 

@@ -11,7 +11,7 @@ declare global {
         id: number;
         username: string;
         email: string;
-        role: 'admin' | 'analyst' | 'viewer';
+        role: 'admin' | 'analyst' | 'viewer' | 'operator';
       };
     }
   }
@@ -112,7 +112,7 @@ export const optionalAuthenticate = async (
  * Role-based authorization middleware
  * Requires specific roles to access route
  */
-export const authorize = (...allowedRoles: ('admin' | 'analyst' | 'viewer')[]) => {
+export const authorize = (...allowedRoles: ('admin' | 'analyst' | 'viewer' | 'operator')[]) => {
   return (req: Request, _res: Response, next: NextFunction) => {
     if (!req.user) {
       return next(new ApiError(401, 'Authentication required'));
@@ -137,3 +137,8 @@ export const requireAdmin = authorize('admin');
  * Require admin or analyst role
  */
 export const requireAnalyst = authorize('admin', 'analyst');
+
+/**
+ * Require operator role or higher
+ */
+export const requireOperator = authorize('admin', 'operator');

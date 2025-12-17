@@ -307,12 +307,19 @@ async function loadScans() {
     // Load recent scans (last 10)
     const recentResponse = await api.get('/assets/scans?limit=10');
     recentScans.value = recentResponse.data.scans || [];
+    console.log('[Assets] Loaded recent scans:', recentScans.value.length);
 
     // Load active scans
     const activeResponse = await api.get('/assets/scans/active');
     activeScans.value = activeResponse.data || [];
-  } catch (error) {
-    console.error('Failed to load scans:', error);
+    console.log('[Assets] Loaded active scans:', activeScans.value.length, activeScans.value);
+  } catch (error: any) {
+    console.error('[Assets] Failed to load scans:', error);
+    console.error('[Assets] Error details:', {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data
+    });
   }
 }
 
@@ -335,11 +342,10 @@ function getScanStatusColor(status: string) {
 
 // Start polling for active scans
 function startScanPolling() {
+  console.log('[Assets] Starting scan polling...');
   loadScans(); // Initial load
   scanPollingInterval = window.setInterval(() => {
-    if (activeScans.value.length > 0) {
-      loadScans(); // Poll while scans are active
-    }
+    loadScans(); // Always poll to catch new scans
   }, 5000); // Poll every 5 seconds
 }
 

@@ -5,7 +5,8 @@ import router from '@/router';
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(localStorage.getItem('token'));
-  const user = ref<any>(null);
+  const userJson = localStorage.getItem('user');
+  const user = ref<any>(userJson ? JSON.parse(userJson) : null);
 
   const isAuthenticated = computed(() => !!token.value);
 
@@ -15,6 +16,7 @@ export const useAuthStore = defineStore('auth', () => {
       token.value = response.data.token;
       user.value = response.data.user;
       localStorage.setItem('token', token.value!);
+      localStorage.setItem('user', JSON.stringify(user.value));
       router.push('/');
     } catch (error) {
       throw error;
@@ -25,6 +27,7 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = null;
     user.value = null;
     localStorage.removeItem('token');
+    localStorage.removeItem('user');
     router.push('/login');
   };
 

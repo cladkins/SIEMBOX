@@ -43,7 +43,7 @@ function hasRequiredRole(userRole: string, requiredRole: UserRole): boolean {
  * Requires user to have specified role or higher in hierarchy
  */
 export const requireScanPermission = (requiredRole: UserRole, resourceType?: string) => {
-  return async (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, _res: Response, next: NextFunction) => {
     try {
       // Ensure user is authenticated
       if (!req.user) {
@@ -163,7 +163,7 @@ export const logScanOperation = async (req: Request, _res: Response, next: NextF
             ipAddress: req.ip || req.socket.remoteAddress || 'unknown',
             userAgent: req.headers['user-agent'] || 'unknown',
             requestBody: redactSensitiveFields(req.body),
-            responseStatus: res.statusCode,
+            responseStatus: _res.statusCode,
             details: {
               method: req.method,
               path: req.path,

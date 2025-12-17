@@ -5,11 +5,11 @@ import { Request, Response, NextFunction } from 'express';
  * Validation error handler middleware
  * Returns structured validation errors to client
  */
-export const handleValidationErrors = (req: Request, res: Response, next: NextFunction) => {
+export const handleValidationErrors = (req: Request, res: Response, next: NextFunction): void => {
   const errors = validationResult(req);
 
   if (!errors.isEmpty()) {
-    return res.status(400).json({
+    res.status(400).json({
       error: 'Validation failed',
       details: errors.array().map((err) => ({
         field: err.type === 'field' ? err.path : 'unknown',
@@ -17,6 +17,7 @@ export const handleValidationErrors = (req: Request, res: Response, next: NextFu
         value: err.type === 'field' ? err.value : undefined,
       })),
     });
+    return;
   }
 
   next();
@@ -52,13 +53,13 @@ export const validateAssetScanRequest: ValidationChain[] = [
 
         // Validate IP octets
         const octets = ip.split('.').map(Number);
-        if (octets.some((octet) => octet < 0 || octet > 255)) {
+        if (octets.some((octet: number) => octet < 0 || octet > 255)) {
           throw new Error('Invalid IP address octets');
         }
       } else {
         // Validate single IP octets
         const octets = value.split('.').map(Number);
-        if (octets.length !== 4 || octets.some((octet) => octet < 0 || octet > 255)) {
+        if (octets.length !== 4 || octets.some((octet: number) => octet < 0 || octet > 255)) {
           throw new Error('Invalid IP address');
         }
       }
@@ -313,7 +314,7 @@ export const validateAssetUpdate: ValidationChain[] = [
  * Custom validator to check if at least one of the specified fields is present
  */
 export const requireAtLeastOne = (fields: string[]) => {
-  return body().custom((value, { req }) => {
+  return body().custom((_value, { req }) => {
     const hasField = fields.some((field) => req.body[field] !== undefined);
     if (!hasField) {
       throw new Error(`At least one of the following fields is required: ${fields.join(', ')}`);

@@ -34,7 +34,7 @@ export const scanRateLimiter = rateLimit({
     return req.user?.role === 'admin';
   },
 
-  handler: (req, res) => {
+  handler: (_req, res) => {
     res.status(429).json({
       error: 'Too many scan requests',
       message: 'You have exceeded the rate limit of 10 scans per 15 minutes. Please try again later.',
@@ -61,7 +61,7 @@ export const assetScanRateLimiter = rateLimit({
     return req.user?.role === 'admin';
   },
 
-  handler: (req, res) => {
+  handler: (_req, res) => {
     res.status(429).json({
       error: 'Too many asset scans',
       message: 'You have exceeded the rate limit of 15 asset scans per 10 minutes. Please try again later.',
@@ -88,7 +88,7 @@ export const vulnScanRateLimiter = rateLimit({
     return req.user?.role === 'admin';
   },
 
-  handler: (req, res) => {
+  handler: (_req, res) => {
     res.status(429).json({
       error: 'Too many vulnerability scans',
       message:
@@ -115,7 +115,7 @@ export const credentialRateLimiter = rateLimit({
   // Even admins are rate limited for credential operations
   skip: () => false,
 
-  handler: (req, res) => {
+  handler: (_req, res) => {
     res.status(429).json({
       error: 'Too many credential operations',
       message:
@@ -143,7 +143,7 @@ export const auditLogRateLimiter = rateLimit({
     return req.user?.role === 'admin';
   },
 
-  handler: (req, res) => {
+  handler: (_req, res) => {
     res.status(429).json({
       error: 'Too many audit log queries',
       message:

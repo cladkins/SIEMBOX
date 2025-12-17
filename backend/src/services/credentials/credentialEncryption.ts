@@ -180,7 +180,8 @@ export class CredentialEncryption {
    */
   static validateEncryptionKey(): boolean {
     try {
-      const key = this.getEncryptionKey();
+      // Validate key exists and has correct length
+      this.getEncryptionKey();
 
       // Test encryption/decryption
       const testData = 'test-validation';

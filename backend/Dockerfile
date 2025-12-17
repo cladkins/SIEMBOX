@@ -24,6 +24,9 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+# Install NMAP for asset discovery scanning
+RUN apk add --no-cache nmap
+
 # Install production dependencies only
 COPY package*.json ./
 RUN npm ci --only=production

@@ -145,27 +145,7 @@ git log --oneline -5
 # d6a5ea8 feat: implement comprehensive security foundation for scanning features
 ```
 
-### 2. Update Dependencies
-
-**Backend** - Install NMAP and additional dependencies:
-```bash
-cd backend
-npm install
-```
-
-Verify node-nmap is installed:
-```bash
-npm ls node-nmap
-# Should show: node-nmap@2.x.x
-```
-
-**Frontend** - Refresh dependencies:
-```bash
-cd frontend
-npm install
-```
-
-### 3. Database Migration - Pre-v1.0 Schema Changes
+### 2. Database Migration - Pre-v1.0 Schema Changes
 
 SIEMBox is pre-v1.0, and database schema changes require careful handling. Choose one approach:
 
@@ -243,7 +223,7 @@ grep CREDENTIAL_ENCRYPTION_KEY .env
 # Should show: CREDENTIAL_ENCRYPTION_KEY=<64 hex characters>
 ```
 
-### 5. Update Environment Configuration
+### 4. Update Environment Configuration
 
 Ensure `.env` includes required variables:
 
@@ -251,7 +231,7 @@ Ensure `.env` includes required variables:
 # Database
 DATABASE_URL=postgresql://siembox:siembox@postgres:5432/siembox
 
-# Encryption (added in step 4)
+# Encryption (added in step 3)
 CREDENTIAL_ENCRYPTION_KEY=<your-generated-key>
 
 # NMAP settings (optional, defaults work)
@@ -263,13 +243,24 @@ AUTO_DISCOVERY_INTERVAL=360  # 6 hours in minutes
 STALE_ASSET_THRESHOLD=30     # days
 ```
 
-### 6. Rebuild and Restart Containers
+### 5. Build and Start Containers
+
+**IMPORTANT**: You MUST rebuild the containers because:
+- Backend Dockerfile now installs NMAP binary (`apk add nmap`)
+- Backend package.json includes node-nmap dependency
+- Docker build automatically runs `npm ci` for all dependencies
 
 ```bash
-# Build images with latest code
+# Build images with latest code and dependencies
 docker compose build
 
-# Restart all services
+# This automatically:
+# - Installs all npm dependencies (including node-nmap)
+# - Installs NMAP binary in backend container
+# - Builds TypeScript to JavaScript
+# - Creates production images
+
+# Start all services
 docker compose up -d
 
 # Wait for services to be ready
@@ -280,7 +271,7 @@ docker compose logs --tail=50 backend
 docker compose logs --tail=50 frontend
 ```
 
-### 7. Verify Deployment Success
+### 6. Verify Deployment Success
 
 **Backend health check:**
 ```bash

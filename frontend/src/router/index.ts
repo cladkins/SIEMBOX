@@ -54,6 +54,24 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/Users.vue'),
         meta: { requiresAdmin: true },
       },
+      {
+        path: 'assets',
+        name: 'Assets',
+        component: () => import('@/views/Assets.vue'),
+        meta: { allowedRoles: ['admin', 'analyst', 'operator'] },
+      },
+      {
+        path: 'vulnerability-scanning',
+        name: 'VulnerabilityScanning',
+        component: () => import('@/views/VulnerabilityScanning.vue'),
+        meta: { allowedRoles: ['admin', 'operator'] },
+      },
+      {
+        path: 'vulnerability-management',
+        name: 'VulnerabilityManagement',
+        component: () => import('@/views/VulnerabilityManagement.vue'),
+        meta: { allowedRoles: ['admin', 'operator'] },
+      },
     ],
   },
 ];
@@ -68,6 +86,7 @@ router.beforeEach((to, _from, next) => {
   const authStore = useAuthStore();
   const requiresAuth = to.matched.some((record) => record.meta.requiresAuth);
   const requiresAdmin = to.matched.some((record) => record.meta.requiresAdmin);
+  const allowedRoles = to.matched.find((record) => record.meta.allowedRoles)?.meta.allowedRoles as string[] | undefined;
 
   if (requiresAuth && !authStore.isAuthenticated) {
     next('/login');
@@ -75,6 +94,8 @@ router.beforeEach((to, _from, next) => {
     next('/');
   } else if (requiresAdmin && authStore.user?.role !== 'admin') {
     next('/'); // Redirect non-admins to dashboard
+  } else if (allowedRoles && !allowedRoles.includes(authStore.user?.role || '')) {
+    next('/'); // Redirect users without proper role to dashboard
   } else {
     next();
   }

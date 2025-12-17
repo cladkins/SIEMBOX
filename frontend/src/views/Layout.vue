@@ -44,6 +44,25 @@
           </el-menu-item>
         </el-sub-menu>
 
+        <el-sub-menu index="assets" v-if="authStore.user?.role === 'admin' || authStore.user?.role === 'analyst' || authStore.user?.role === 'operator'">
+          <template #title>
+            <el-icon><Monitor /></el-icon>
+            <span>Assets & Vulnerabilities</span>
+          </template>
+          <el-menu-item index="/assets">
+            <el-icon><Box /></el-icon>
+            <span>Assets</span>
+          </el-menu-item>
+          <el-menu-item index="/vulnerability-scanning" v-if="authStore.user?.role === 'admin' || authStore.user?.role === 'operator'">
+            <el-icon><Search /></el-icon>
+            <span>Vulnerability Scanning</span>
+          </el-menu-item>
+          <el-menu-item index="/vulnerability-management" v-if="authStore.user?.role === 'admin' || authStore.user?.role === 'operator'">
+            <el-icon><Warning /></el-icon>
+            <span>Vulnerability Management</span>
+          </el-menu-item>
+        </el-sub-menu>
+
         <el-menu-item index="/users" v-if="authStore.user?.role === 'admin'">
           <el-icon><User /></el-icon>
           <span>Users</span>
@@ -77,7 +96,7 @@
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid } from '@element-plus/icons-vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();
@@ -92,6 +111,9 @@ const pageTitle = computed(() => {
     '/parsers': 'Parsers',
     '/rules': 'Detection Rules',
     '/shippers': 'Log Shippers',
+    '/assets': 'Asset Inventory',
+    '/vulnerability-scanning': 'Vulnerability Scanning',
+    '/vulnerability-management': 'Vulnerability Management',
     '/users': 'User Management',
     '/settings': 'Settings',
   };

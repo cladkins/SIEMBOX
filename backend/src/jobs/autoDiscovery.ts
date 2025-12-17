@@ -8,7 +8,7 @@
  */
 
 import { AutoDiscoveryService } from '../services/assets/autoDiscoveryService';
-import { pool } from '../config/database';
+import pool from '../config/database';
 
 let intervalId: NodeJS.Timeout | null = null;
 let currentIntervalMinutes = 360; // Track current interval to detect changes
@@ -34,7 +34,7 @@ async function getAutoDiscoverySettings(): Promise<{
       stale_asset_threshold_days: '30',
     };
 
-    result.rows.forEach((row) => {
+    result.rows.forEach((row: { key: string; value: string }) => {
       settings[row.key] = row.value;
     });
 

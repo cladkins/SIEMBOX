@@ -5,7 +5,7 @@
  * Provides filtering, pagination, and detailed scan information.
  */
 
-import { pool } from '../../config/database';
+import pool from '../../config/database';
 
 export interface ScanFilters {
   status?: string;

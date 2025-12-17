@@ -249,7 +249,7 @@ CREATE TABLE IF NOT EXISTS vulnerabilities (
     title VARCHAR(500),
     description TEXT,
     remediation TEXT,
-    references TEXT[],
+    "references" TEXT[],
     published_date DATE,
     last_modified_date DATE,
     cwe_id VARCHAR(20),

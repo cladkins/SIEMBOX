@@ -287,38 +287,9 @@ router.get('/scans/statistics', authenticate, async (_req: Request, res: Respons
 });
 
 /**
- * GET /api/assets/scans/:scanId
- * Get scan status and results
- */
-router.get('/scans/:scanId', authenticate, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const scanId = parseInt(req.params.scanId);
-
-    if (isNaN(scanId)) {
-      res.status(400).json({ error: 'Invalid scan ID' });
-      return;
-    }
-
-    const scan = await ScanRepository.getScanById(scanId);
-
-    if (!scan) {
-      res.status(404).json({ error: 'Scan not found' });
-      return;
-    }
-
-    res.json(scan);
-  } catch (error: any) {
-    console.error('Get scan error:', error);
-    res.status(500).json({
-      error: 'Failed to retrieve scan',
-      message: error.message,
-    });
-  }
-});
-
-/**
  * GET /api/assets/scans
  * Get all scans with filtering and pagination
+ * IMPORTANT: Must come BEFORE /scans/:scanId to avoid route conflicts
  */
 router.get('/scans', authenticate, async (req: Request, res: Response) => {
   try {
@@ -342,6 +313,37 @@ router.get('/scans', authenticate, async (req: Request, res: Response) => {
     console.error('Get scans error:', error);
     res.status(500).json({
       error: 'Failed to retrieve scans',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/assets/scans/:scanId
+ * Get scan status and results
+ * IMPORTANT: Must come AFTER /scans to avoid catching query parameters
+ */
+router.get('/scans/:scanId', authenticate, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const scanId = parseInt(req.params.scanId);
+
+    if (isNaN(scanId)) {
+      res.status(400).json({ error: 'Invalid scan ID' });
+      return;
+    }
+
+    const scan = await ScanRepository.getScanById(scanId);
+
+    if (!scan) {
+      res.status(404).json({ error: 'Scan not found' });
+      return;
+    }
+
+    res.json(scan);
+  } catch (error: any) {
+    console.error('Get scan error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve scan',
       message: error.message,
     });
   }

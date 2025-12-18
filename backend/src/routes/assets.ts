@@ -293,6 +293,8 @@ router.get('/scans/statistics', authenticate, async (_req: Request, res: Respons
  */
 router.get('/scans', authenticate, async (req: Request, res: Response) => {
   try {
+    console.log('[ASSETS] GET /scans route hit with query:', req.query);
+
     const filters = {
       status: req.query.status as string,
       scan_type: req.query.scan_type as string,
@@ -325,9 +327,11 @@ router.get('/scans', authenticate, async (req: Request, res: Response) => {
  */
 router.get('/scans/:scanId', authenticate, async (req: Request, res: Response): Promise<void> => {
   try {
+    console.log('[ASSETS] GET /scans/:scanId route hit with param:', req.params.scanId, 'query:', req.query);
     const scanId = parseInt(req.params.scanId);
 
     if (isNaN(scanId)) {
+      console.log('[ASSETS] Invalid scanId, returning 400');
       res.status(400).json({ error: 'Invalid scan ID' });
       return;
     }

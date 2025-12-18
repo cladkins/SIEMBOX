@@ -17,13 +17,18 @@
         </div>
       </template>
 
-      <!-- Recent Scans Section -->
-      <div class="recent-scans" v-if="recentScans.length > 0 || activeScans.length > 0">
-        <h3>Recent Scans</h3>
+      <!-- Scan Status Section - Always visible -->
+      <div class="recent-scans">
+        <div class="scans-header">
+          <h3>Asset Discovery Scans</h3>
+          <el-tag v-if="activeScans.length > 0" type="warning" effect="dark">
+            {{ activeScans.length }} Active
+          </el-tag>
+        </div>
 
         <!-- Active Scans (with progress indicator) -->
         <div v-if="activeScans.length > 0" class="active-scans">
-          <el-alert type="info" :closable="false" style="margin-bottom: 10px">
+          <el-alert type="warning" :closable="false" style="margin-bottom: 10px">
             <strong>{{ activeScans.length }} scan(s) in progress...</strong>
           </el-alert>
 
@@ -44,8 +49,19 @@
           </el-table>
         </div>
 
+        <!-- No Scans Message -->
+        <div v-if="activeScans.length === 0 && recentScans.length === 0" class="no-scans">
+          <el-empty description="No scans yet">
+            <template #default>
+              <el-text type="info">
+                Trigger a scan using the button above to discover network assets
+              </el-text>
+            </template>
+          </el-empty>
+        </div>
+
         <!-- Recent Completed Scans -->
-        <el-collapse>
+        <el-collapse v-if="recentScans.length > 0">
           <el-collapse-item title="View Recent Scans" name="scans">
             <el-table :data="recentScans" style="width: 100%">
               <el-table-column prop="id" label="ID" width="70" />
@@ -500,10 +516,22 @@ onUnmounted(() => {
   border-radius: 4px;
 }
 
-.recent-scans h3 {
-  margin: 0 0 15px 0;
+.scans-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.scans-header h3 {
+  margin: 0;
   font-size: 16px;
   font-weight: 600;
+}
+
+.no-scans {
+  text-align: center;
+  padding: 20px;
 }
 
 .active-scans {

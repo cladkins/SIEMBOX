@@ -311,7 +311,7 @@ async function loadScans() {
 
     // Load active scans
     const activeResponse = await api.getActiveScans();
-    activeScans.value = activeResponse.data || [];
+    activeScans.value = activeResponse.data.scans || [];
     console.log('[Assets] Loaded active scans:', activeScans.value.length, activeScans.value);
   } catch (error: any) {
     console.error('[Assets] Failed to load scans:', error);

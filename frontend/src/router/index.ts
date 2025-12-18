@@ -55,7 +55,7 @@ const routes: RouteRecordRaw[] = [
         meta: { requiresAdmin: true },
       },
       {
-        path: 'assets',
+        path: 'asset-inventory',
         name: 'Assets',
         component: () => import('@/views/Assets.vue'),
         meta: { allowedRoles: ['admin', 'analyst', 'operator'] },

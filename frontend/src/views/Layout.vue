@@ -49,7 +49,7 @@
             <el-icon><Monitor /></el-icon>
             <span>Assets & Vulnerabilities</span>
           </template>
-          <el-menu-item index="/assets">
+          <el-menu-item index="/asset-inventory">
             <el-icon><Box /></el-icon>
             <span>Assets</span>
           </el-menu-item>
@@ -111,7 +111,7 @@ const pageTitle = computed(() => {
     '/parsers': 'Parsers',
     '/rules': 'Detection Rules',
     '/shippers': 'Log Shippers',
-    '/assets': 'Asset Inventory',
+    '/asset-inventory': 'Asset Inventory',
     '/vulnerability-scanning': 'Vulnerability Scanning',
     '/vulnerability-management': 'Vulnerability Management',
     '/users': 'User Management',

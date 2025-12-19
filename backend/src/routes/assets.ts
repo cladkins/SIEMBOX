@@ -21,8 +21,9 @@ const router = express.Router();
 /**
  * GET /api/assets
  * Get all assets with filtering and pagination
+ * No authentication required - read-only operation
  */
-router.get('/', authenticate, async (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const filters = {
       status: req.query.status as AssetStatus | undefined,
@@ -54,8 +55,9 @@ router.get('/', authenticate, async (req: Request, res: Response) => {
 /**
  * GET /api/assets/statistics
  * Get asset discovery statistics
+ * No authentication required - read-only operation
  */
-router.get('/statistics', authenticate, async (_req: Request, res: Response) => {
+router.get('/statistics', async (_req: Request, res: Response) => {
   try {
     const stats = await AutoDiscoveryService.getStatistics();
     res.json(stats);
@@ -71,8 +73,9 @@ router.get('/statistics', authenticate, async (_req: Request, res: Response) => 
 /**
  * GET /api/assets/:id
  * Get asset by ID with services
+ * No authentication required - read-only operation
  */
-router.get('/:id', authenticate, async (req: Request, res: Response): Promise<void> => {
+router.get('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
     const assetId = parseInt(req.params.id);
 
@@ -192,8 +195,9 @@ router.delete('/:id', authenticate, async (req: Request, res: Response): Promise
 /**
  * GET /api/assets/:id/services
  * Get services for an asset
+ * No authentication required - read-only operation
  */
-router.get('/:id/services', authenticate, async (req: Request, res: Response): Promise<void> => {
+router.get('/:id/services', async (req: Request, res: Response): Promise<void> => {
   try {
     const assetId = parseInt(req.params.id);
 

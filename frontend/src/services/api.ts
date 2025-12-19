@@ -15,6 +15,8 @@ apiClient.interceptors.request.use(
   (config) => {
     // Public endpoints that don't require authentication
     const publicEndpoints = [
+      '/assets',
+      '/assets/statistics',
       '/assets/scans',
       '/assets/scans/active',
       '/assets/scans/statistics'

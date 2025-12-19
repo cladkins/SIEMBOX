@@ -7,9 +7,6 @@
 
 import express, { Request, Response } from 'express';
 import { authenticate } from '../middleware/auth';
-import { requireAssetScanPermission } from '../middleware/scanPermissions';
-import { scanRateLimiter } from '../middleware/rateLimiter';
-import { validateAssetScanRequest, handleValidationErrors } from '../middleware/scanValidation';
 import { AssetRepository } from '../services/assets/assetRepository';
 import { NmapScanner } from '../services/scanner/nmapScanner';
 import { AutoDiscoveryService } from '../services/assets/autoDiscoveryService';
@@ -340,7 +337,7 @@ router.post(
       const scanId = await NmapScanner.scan({
         targets,
         scanType: scanType || 'port',
-        userId: null, // No user tracking for unauthenticated scans
+        userId: 0, // System user for unauthenticated scans
         description,
       });
 

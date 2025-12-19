@@ -329,15 +329,10 @@ router.get('/:id/services', async (req: Request, res: Response): Promise<void> =
 /**
  * POST /api/assets/scan
  * Trigger asset discovery scan
- * Requires Analyst role or higher
+ * No authentication required
  */
 router.post(
   '/scan',
-  authenticate,
-  requireAssetScanPermission,
-  scanRateLimiter,
-  validateAssetScanRequest,
-  handleValidationErrors,
   async (req: Request, res: Response) => {
     try {
       const { targets, scanType, description } = req.body;
@@ -345,7 +340,7 @@ router.post(
       const scanId = await NmapScanner.scan({
         targets,
         scanType: scanType || 'port',
-        userId: req.user!.id,
+        userId: null, // No user tracking for unauthenticated scans
         description,
       });
 
@@ -367,30 +362,25 @@ router.post(
 /**
  * POST /api/assets/discover
  * Trigger auto-discovery from logs
- * Requires Analyst role or higher
+ * No authentication required
  */
-router.post(
-  '/discover',
-  authenticate,
-  requireAssetScanPermission,
-  async (_req: Request, res: Response) => {
-    try {
-      const result = await AutoDiscoveryService.runFullDiscovery();
+router.post('/discover', async (_req: Request, res: Response) => {
+  try {
+    const result = await AutoDiscoveryService.runFullDiscovery();
 
-      res.json({
-        message: 'Auto-discovery completed',
-        discovered: result.discovered,
-        staleMarked: result.staleMarked,
-        enriched: result.enriched,
-      });
-    } catch (error: any) {
-      console.error('Auto-discovery error:', error);
-      res.status(500).json({
-        error: 'Failed to run auto-discovery',
-        message: error.message,
-      });
-    }
+    res.json({
+      message: 'Auto-discovery completed',
+      discovered: result.discovered,
+      staleMarked: result.staleMarked,
+      enriched: result.enriched,
+    });
+  } catch (error: any) {
+    console.error('Auto-discovery error:', error);
+    res.status(500).json({
+      error: 'Failed to run auto-discovery',
+      message: error.message,
+    });
   }
-);
+});
 
 export default router;

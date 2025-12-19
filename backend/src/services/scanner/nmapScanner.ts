@@ -109,13 +109,26 @@ export class NmapScanner {
 
       // Handle scan errors
       scan.on('error', async (error: any) => {
-        console.error(`[NMAP] Scan ${scanId} error:`, error);
-        console.error(`[NMAP] Error type:`, typeof error);
-        console.error(`[NMAP] Error string:`, String(error));
-        console.error(`[NMAP] Error stack:`, error?.stack);
-        const errorMsg = error?.message || error?.toString() || JSON.stringify(error) || 'Unknown error';
-        console.error(`[NMAP] Final error message:`, errorMsg);
-        await this.updateScanStatus(scanId, 'failed', undefined, new Date(), errorMsg);
+        const errorStr = String(error);
+        console.error(`[NMAP] Scan ${scanId} stderr output:`, errorStr);
+
+        // Ignore common nmap warnings that aren't fatal errors
+        const nonFatalPatterns = [
+          /RTTVAR has grown/i,
+          /decreasing to/i,
+          /Warning/i,
+          /packet_trace/i,
+        ];
+
+        const isFatal = !nonFatalPatterns.some(pattern => pattern.test(errorStr));
+
+        if (isFatal) {
+          console.error(`[NMAP] FATAL error detected, marking scan as failed`);
+          const errorMsg = error?.message || error?.toString() || JSON.stringify(error) || 'Unknown error';
+          await this.updateScanStatus(scanId, 'failed', undefined, new Date(), errorMsg);
+        } else {
+          console.log(`[NMAP] Non-fatal warning ignored, scan will continue`);
+        }
       });
 
       // Start the scan

@@ -51,8 +51,11 @@ export class NmapScanner {
     });
 
     // Execute scan asynchronously (don't await)
-    this.executeScan(scanId, options).catch((error) => {
+    this.executeScan(scanId, options).catch(async (error) => {
       console.error(`[NMAP] Scan ${scanId} failed:`, error);
+      console.error(`[NMAP] Error stack:`, error?.stack);
+      const errorMsg = error?.message || error?.toString() || 'Scan execution failed';
+      await this.updateScanStatus(scanId, 'failed', undefined, new Date(), errorMsg);
     });
 
     return scanId;
@@ -77,6 +80,17 @@ export class NmapScanner {
 
       console.log(`[NMAP] Scan ${scanId} command: nmap ${nmapOptions} ${targetString}`);
 
+      // Check if nmap is available
+      console.log(`[NMAP] Checking nmap availability...`);
+      const { execSync } = require('child_process');
+      try {
+        const nmapVersion = execSync('which nmap && nmap --version', { encoding: 'utf-8' });
+        console.log(`[NMAP] Found nmap:`, nmapVersion);
+      } catch (nmapCheckError: any) {
+        console.error(`[NMAP] NMAP not found or not executable:`, nmapCheckError.message);
+        throw new Error(`NMAP is not installed or not accessible: ${nmapCheckError.message}`);
+      }
+
       // Create NMAP scan instance
       const scan = new nmap.NmapScan(targetString, nmapOptions);
 
@@ -96,7 +110,12 @@ export class NmapScanner {
       // Handle scan errors
       scan.on('error', async (error: any) => {
         console.error(`[NMAP] Scan ${scanId} error:`, error);
-        await this.updateScanStatus(scanId, 'failed', undefined, new Date(), error.message || 'Unknown error');
+        console.error(`[NMAP] Error type:`, typeof error);
+        console.error(`[NMAP] Error string:`, String(error));
+        console.error(`[NMAP] Error stack:`, error?.stack);
+        const errorMsg = error?.message || error?.toString() || JSON.stringify(error) || 'Unknown error';
+        console.error(`[NMAP] Final error message:`, errorMsg);
+        await this.updateScanStatus(scanId, 'failed', undefined, new Date(), errorMsg);
       });
 
       // Start the scan

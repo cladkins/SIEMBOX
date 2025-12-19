@@ -337,7 +337,7 @@ router.post(
       const scanId = await NmapScanner.scan({
         targets,
         scanType: scanType || 'port',
-        userId: 0, // System user for unauthenticated scans
+        userId: 1, // Default to admin user for system scans
         description,
       });
 

@@ -60,6 +60,8 @@ export class ScanRepository {
     const total = parseInt(countResult.rows[0].count);
 
     // Get paginated results with user info
+    // NOTE: Excludes scan_options and results_summary to reduce payload size
+    // These large JSONB fields are only included in the detail endpoint
     const query = `
       SELECT
         vs.id,
@@ -72,9 +74,7 @@ export class ScanRepository {
         vs.assets_discovered,
         vs.vulnerabilities_found,
         vs.initiated_by,
-        vs.scan_options,
         vs.error_message,
-        vs.results_summary,
         vs.created_at,
         vs.updated_at,
         u.username as initiated_by_username
@@ -127,6 +127,7 @@ export class ScanRepository {
    * Get active scans (queued or running)
    */
   static async getActiveScans(): Promise<ScanResult[]> {
+    // NOTE: Excludes scan_options and results_summary to reduce payload size
     const query = `
       SELECT
         vs.id,
@@ -139,9 +140,7 @@ export class ScanRepository {
         vs.assets_discovered,
         vs.vulnerabilities_found,
         vs.initiated_by,
-        vs.scan_options,
         vs.error_message,
-        vs.results_summary,
         vs.created_at,
         vs.updated_at,
         u.username as initiated_by_username

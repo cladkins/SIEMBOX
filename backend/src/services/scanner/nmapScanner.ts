@@ -94,9 +94,17 @@ export class NmapScanner {
       // Create NMAP scan instance
       const scan = new nmap.NmapScan(targetString, nmapOptions);
 
+      // Set timeout for scan (15 minutes max)
+      const scanTimeout = setTimeout(async () => {
+        console.error(`[NMAP] Scan ${scanId} timed out after 15 minutes`);
+        await this.updateScanStatus(scanId, 'failed', undefined, new Date(), 'Scan timed out after 15 minutes');
+      }, 15 * 60 * 1000);
+
       // Handle scan completion
       scan.on('complete', async (data: any) => {
+        clearTimeout(scanTimeout);
         console.log(`[NMAP] Scan ${scanId} completed. Processing results...`);
+        console.log(`[NMAP] Raw data received:`, JSON.stringify(data).substring(0, 500));
         try {
           await this.processScanResults(scanId, data, options.userId);
           await this.updateScanStatus(scanId, 'completed', undefined, new Date());
@@ -132,7 +140,9 @@ export class NmapScanner {
       });
 
       // Start the scan
+      console.log(`[NMAP] Starting scan execution for scan ${scanId}...`);
       scan.startScan();
+      console.log(`[NMAP] Scan ${scanId} startScan() called, waiting for events...`);
     } catch (error: any) {
       console.error(`[NMAP] Scan ${scanId} execution error:`, error);
       await this.updateScanStatus(scanId, 'failed', undefined, new Date(), error.message);

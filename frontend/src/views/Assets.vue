@@ -317,25 +317,39 @@ const showScanDetailsDialog = ref(false);
 const selectedScan = ref<any>(null);
 let scanPollingInterval: number | null = null;
 
-// Load scans function
+// Load scans function with graceful error handling
 async function loadScans() {
   try {
     // Load recent scans (last 10)
-    const recentResponse = await api.getScans({ limit: 10 });
-    recentScans.value = recentResponse.data.scans || [];
-    console.log('[Assets] Loaded recent scans:', recentScans.value.length);
+    try {
+      const recentResponse = await api.getScans({ limit: 10 });
+      recentScans.value = recentResponse.data.scans || [];
+      console.log('[Assets] Loaded recent scans:', recentScans.value.length);
+    } catch (recentError: any) {
+      console.warn('[Assets] Failed to load recent scans:', {
+        status: recentError.response?.status,
+        message: recentError.response?.data?.error || recentError.message
+      });
+      recentScans.value = [];
+    }
 
     // Load active scans
-    const activeResponse = await api.getActiveScans();
-    activeScans.value = activeResponse.data.scans || [];
-    console.log('[Assets] Loaded active scans:', activeScans.value.length, activeScans.value);
+    try {
+      const activeResponse = await api.getActiveScans();
+      activeScans.value = activeResponse.data.scans || [];
+      console.log('[Assets] Loaded active scans:', activeScans.value.length);
+    } catch (activeError: any) {
+      console.warn('[Assets] Failed to load active scans:', {
+        status: activeError.response?.status,
+        message: activeError.response?.data?.error || activeError.message
+      });
+      activeScans.value = [];
+    }
   } catch (error: any) {
-    console.error('[Assets] Failed to load scans:', error);
-    console.error('[Assets] Error details:', {
-      message: error.message,
-      status: error.response?.status,
-      data: error.response?.data
-    });
+    console.error('[Assets] Unexpected error while loading scans:', error);
+    // Gracefully degrade - set empty scan lists rather than breaking
+    recentScans.value = [];
+    activeScans.value = [];
   }
 }
 

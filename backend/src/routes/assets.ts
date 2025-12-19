@@ -215,6 +215,113 @@ router.get('/:id/services', authenticate, async (req: Request, res: Response): P
 });
 
 /**
+ * GET /api/assets/scans/active
+ * Get active scans (queued or running)
+ * No authentication required - read-only operation for system visibility
+ */
+router.get('/scans/active', async (_req: Request, res: Response) => {
+  try {
+    const scans = await ScanRepository.getActiveScans();
+    res.json({ scans, total: scans.length });
+  } catch (error: any) {
+    console.error('Get active scans error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve active scans',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/assets/scans/statistics
+ * Get scan statistics
+ * No authentication required - read-only operation for system visibility
+ */
+router.get('/scans/statistics', async (_req: Request, res: Response) => {
+  try {
+    const stats = await ScanRepository.getStatistics();
+    res.json(stats);
+  } catch (error: any) {
+    console.error('Get scan statistics error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve scan statistics',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/assets/scans
+ * Get all scans with filtering and pagination
+ * IMPORTANT: Must come BEFORE /scans/:scanId to prevent route conflicts
+ * Query parameters should not be interpreted as path parameters
+ * No authentication required - read-only operation for system visibility
+ */
+router.get('/scans', async (req: Request, res: Response) => {
+  try {
+    console.log('[ASSETS] GET /scans route hit with query:', req.query);
+
+    const filters = {
+      status: req.query.status as string,
+      scan_type: req.query.scan_type as string,
+      limit: parseInt(req.query.limit as string) || 50,
+      offset: parseInt(req.query.offset as string) || 0,
+    };
+
+    const result = await ScanRepository.getScans(filters);
+
+    res.json({
+      scans: result.scans,
+      total: result.total,
+      limit: filters.limit,
+      offset: filters.offset,
+      hasMore: filters.offset + filters.limit < result.total,
+    });
+  } catch (error: any) {
+    console.error('Get scans error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve scans',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/assets/scans/:scanId
+ * Get scan status and results
+ * IMPORTANT: Must come AFTER /scans and /scans/active and /scans/statistics
+ * More specific routes must be defined first to avoid catching them as parameters
+ * No authentication required - read-only operation for system visibility
+ */
+router.get('/scans/:scanId', async (req: Request, res: Response): Promise<void> => {
+  try {
+    console.log('[ASSETS] GET /scans/:scanId route hit with param:', req.params.scanId, 'query:', req.query);
+    const scanId = parseInt(req.params.scanId);
+
+    if (isNaN(scanId)) {
+      console.log('[ASSETS] Invalid scanId, returning 400');
+      res.status(400).json({ error: 'Invalid scan ID' });
+      return;
+    }
+
+    const scan = await ScanRepository.getScanById(scanId);
+
+    if (!scan) {
+      res.status(404).json({ error: 'Scan not found' });
+      return;
+    }
+
+    res.json(scan);
+  } catch (error: any) {
+    console.error('Get scan error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve scan',
+      message: error.message,
+    });
+  }
+});
+
+/**
  * POST /api/assets/scan
  * Trigger asset discovery scan
  * Requires Analyst role or higher
@@ -251,107 +358,6 @@ router.post(
     }
   }
 );
-
-/**
- * GET /api/assets/scans/active
- * Get active scans (queued or running)
- */
-router.get('/scans/active', authenticate, async (_req: Request, res: Response) => {
-  try {
-    const scans = await ScanRepository.getActiveScans();
-    res.json({ scans, total: scans.length });
-  } catch (error: any) {
-    console.error('Get active scans error:', error);
-    res.status(500).json({
-      error: 'Failed to retrieve active scans',
-      message: error.message,
-    });
-  }
-});
-
-/**
- * GET /api/assets/scans/statistics
- * Get scan statistics
- */
-router.get('/scans/statistics', authenticate, async (_req: Request, res: Response) => {
-  try {
-    const stats = await ScanRepository.getStatistics();
-    res.json(stats);
-  } catch (error: any) {
-    console.error('Get scan statistics error:', error);
-    res.status(500).json({
-      error: 'Failed to retrieve scan statistics',
-      message: error.message,
-    });
-  }
-});
-
-/**
- * GET /api/assets/scans
- * Get all scans with filtering and pagination
- * IMPORTANT: Must come BEFORE /scans/:scanId to avoid route conflicts
- */
-router.get('/scans', authenticate, async (req: Request, res: Response) => {
-  try {
-    console.log('[ASSETS] GET /scans route hit with query:', req.query);
-
-    const filters = {
-      status: req.query.status as string,
-      scan_type: req.query.scan_type as string,
-      limit: parseInt(req.query.limit as string) || 50,
-      offset: parseInt(req.query.offset as string) || 0,
-    };
-
-    const result = await ScanRepository.getScans(filters);
-
-    res.json({
-      scans: result.scans,
-      total: result.total,
-      limit: filters.limit,
-      offset: filters.offset,
-      hasMore: filters.offset + filters.limit < result.total,
-    });
-  } catch (error: any) {
-    console.error('Get scans error:', error);
-    res.status(500).json({
-      error: 'Failed to retrieve scans',
-      message: error.message,
-    });
-  }
-});
-
-/**
- * GET /api/assets/scans/:scanId
- * Get scan status and results
- * IMPORTANT: Must come AFTER /scans to avoid catching query parameters
- */
-router.get('/scans/:scanId', authenticate, async (req: Request, res: Response): Promise<void> => {
-  try {
-    console.log('[ASSETS] GET /scans/:scanId route hit with param:', req.params.scanId, 'query:', req.query);
-    const scanId = parseInt(req.params.scanId);
-
-    if (isNaN(scanId)) {
-      console.log('[ASSETS] Invalid scanId, returning 400');
-      res.status(400).json({ error: 'Invalid scan ID' });
-      return;
-    }
-
-    const scan = await ScanRepository.getScanById(scanId);
-
-    if (!scan) {
-      res.status(404).json({ error: 'Scan not found' });
-      return;
-    }
-
-    res.json(scan);
-  } catch (error: any) {
-    console.error('Get scan error:', error);
-    res.status(500).json({
-      error: 'Failed to retrieve scan',
-      message: error.message,
-    });
-  }
-});
 
 /**
  * POST /api/assets/discover

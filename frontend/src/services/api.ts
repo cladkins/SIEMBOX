@@ -13,17 +13,15 @@ const apiClient: AxiosInstance = axios.create({
 // Request interceptor
 apiClient.interceptors.request.use(
   (config) => {
-    // Public endpoints that don't require authentication
-    const publicEndpoints = [
-      '/assets',
-      '/assets/statistics',
+    // Public endpoints that don't require authentication (GET only)
+    const publicGetEndpoints = [
       '/assets/scans',
       '/assets/scans/active',
       '/assets/scans/statistics'
     ];
 
-    // Check if this is a public endpoint (exact match or starts with for parameterized routes)
-    const isPublicEndpoint = publicEndpoints.some(endpoint =>
+    // Check if this is a public GET endpoint
+    const isPublicEndpoint = config.method?.toUpperCase() === 'GET' && publicGetEndpoints.some(endpoint =>
       config.url === endpoint ||
       config.url?.startsWith(endpoint + '/') ||
       config.url?.startsWith(endpoint + '?')

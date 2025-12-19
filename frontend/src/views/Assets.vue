@@ -9,7 +9,7 @@
               <el-icon><Search /></el-icon>
               Trigger Scan
             </el-button>
-            <el-button @click="loadAssets">
+            <el-button @click="refreshAll">
               <el-icon><Refresh /></el-icon>
               Refresh
             </el-button>
@@ -446,11 +446,10 @@ async function triggerScan() {
   try {
     const targets = scanForm.value.targets.split('\n').map(t => t.trim()).filter(t => t);
     const result = await assetService.triggerScan(targets, scanForm.value.scanType);
-    ElMessage.success(`Scan initiated (ID: ${result.scanId})`);
+    ElMessage.success(`Scan initiated (ID: ${result.scanId}). Use the Refresh button to check status.`);
     showScanDialog.value = false;
     scanForm.value.targets = '';
-    loadScans(); // Refresh scan list
-    startScanPolling(); // Start polling
+    loadScans(); // Refresh scan list once
   } catch (error: any) {
     ElMessage.error(error.response?.data?.error || 'Failed to trigger scan');
     console.error(error);
@@ -492,9 +491,15 @@ function formatDate(date: string) {
   return new Date(date).toLocaleString();
 }
 
+function refreshAll() {
+  loadAssets();
+  loadScans();
+}
+
 onMounted(() => {
   loadAssets();
-  startScanPolling();
+  loadScans(); // Load scans once on mount
+  // Polling disabled - use manual refresh button instead
 });
 
 onUnmounted(() => {

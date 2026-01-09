@@ -46,16 +46,35 @@ docker compose up -d
 
 📖 **[Complete Documentation Index](./docs/README.md)** - Full documentation navigation
 
+### Quick Links
+
+| I want to... | Go to... |
+|-------------|----------|
+| 🚀 Deploy SIEMBox | [Deployment Guide](./DEPLOYMENT.md) |
+| 💻 Start developing | [Getting Started (Development)](./docs/guides/GETTING_STARTED_DEVELOPMENT.md) |
+| 📤 Set up log forwarding | [Log Shipper Setup](./log-shipper/README.md) |
+| 🔍 Search APIs | [API Reference](./API.md) |
+| 🛡️ Secure my installation | [Security Hardening](./SECURITY.md) |
+| 🐛 Fix an issue | [Troubleshooting Guide](./docs/operations/TROUBLESHOOTING.md) |
+
 ### Getting Started
+
+**For Users:**
 - **[Deployment Guide](./DEPLOYMENT.md)** - Installation, configuration, and setup
 - **[Log Shipper Setup](./log-shipper/README.md)** - Universal log forwarder configuration
+- **[Security Hardening](./SECURITY.md)** - Comprehensive security guide
+
+**For Developers:**
+- **[Getting Started (Development)](./docs/guides/GETTING_STARTED_DEVELOPMENT.md)** - Complete setup guide for developers
+- **[Backend Development](./backend/README.md)** - Backend API development guide
+- **[Frontend Development](./frontend/README.md)** - Frontend UI development guide
+- **[Contributing Guide](./CONTRIBUTING.md)** - How to contribute to SIEMBox
 
 ### Log Shipper Documentation
 - **[Log Shipper README](./log-shipper/README.md)** - Setup and configuration
-- **[Verification Guide](./log-shipper/VERIFICATION-GUIDE.md)** - How to verify logs are flowing
+- **[Verification Guide](./log-shipper/VERIFICATION-GUIDE.md)** - Verify logs are flowing correctly
 - **[Quick Reference](./log-shipper/QUICK-REFERENCE.md)** - Common commands and troubleshooting
-- **[Deployment Verification](./log-shipper/DEPLOYMENT-VERIFICATION.md)** - Step-by-step deployment guide
-- **[Technical Details](./log-shipper/INCIDENT-REPORT-PROCESS-MANAGEMENT.md)** - Process management architecture
+- **[Deployment Verification](./log-shipper/DEPLOYMENT-VERIFICATION.md)** - Step-by-step deployment checklist
 
 ### Reference Documentation
 - **[API Reference](./API.md)** - Complete REST API documentation
@@ -64,14 +83,10 @@ docker compose up -d
 - **[Parser Documentation](./docs/parsers/)** - Application-specific parser guides
 - **[Architecture Documentation](./docs/architecture/)** - System design and specifications
 
-### Operations & Security
-- **[Security Hardening](./SECURITY.md)** - Comprehensive security guide
-- **[Troubleshooting](./docs/operations/TROUBLESHOOTING.md)** - Common issues and solutions
+### Operations & Troubleshooting
+- **[Troubleshooting Guide](./docs/operations/TROUBLESHOOTING.md)** - Common issues and solutions
+- **[Log Shipper Diagnostics](./docs/operations/SHIPPER-DIAGNOSTICS.md)** - Debug log forwarding issues
 - **[Operations Guides](./docs/operations/)** - Operational documentation and checklists
-
-### Development
-- **[Contributing Guide](./CONTRIBUTING.md)** - How to contribute
-- **[Backend API](./backend/README.md)** - Backend development documentation
 
 ## Architecture
 

@@ -70,16 +70,9 @@ SIEMBox is a lightweight, self-hosted Security Information and Event Management 
 ## Development Workflow
 
 ### Branch Strategy
-- **Main branch**: Not specified (typically `main` or `master`)
+- **Main branch**: `main`
 - **Current branch**: `develop` - active development branch
 - Use `develop` branch for creating pull requests unless directed otherwise
-
-### Recent Changes
-The project recently added:
-- Syslog server settings configuration
-- Severity filtering for logs
-- Improved documentation
-- Log shipper configuration enhancements
 
 ### Running the Project
 ```bash
@@ -218,7 +211,7 @@ WHERE shipper_id NOT IN (
 - **Before**: Two shipper modes (managed/unmanaged), logs could flow without authentication
 - **After**: Single managed shipper with mandatory API authentication
 
-**Current Implementation**: Cached configuration system (this update)
+**Current Implementation** (as of Dec 2024): Cached configuration system
 - **Purpose**: Restore ghost shipper detection capability while maintaining security
 - **Benefit**: Administrators can identify misconfigured/unauthorized shippers instead of silently losing logs
 
@@ -270,7 +263,7 @@ Parser pattern: ^\[(?<timestamp>[^\]]+)\]...
 
 3. **Ignoring parser priority**: Lower priority numbers match first
    - Custom parsers should have higher priority (lower numbers) than generic parsers
-   - Example: `nginx-custom` (priority 45) before `standard-nginx` (priority 40)
+   - Example: `nginx-custom` (priority 30) before `standard-nginx` (priority 40)
 
 4. **Not testing edge cases**: Logs may have optional fields or truncated content
    - Use optional regex groups: `(?<field>...)?`
@@ -344,8 +337,8 @@ console.log(match ? match.groups : "No match");
 2. **Design the parser pattern**: Match against the extracted message (NOT the syslog header)
 3. **Create test script**: Use `backend/test-nginx-patterns.js` as template
 4. **Validate pattern**: Run tests to confirm field extraction works
-5. **Set appropriate priority**: Custom parsers should have priority 40-50 range
-6. **Add to database**: Create migration file or use parsers UI/API
+5. **Set appropriate priority**: Custom parsers should have priority 30-40 range (lower numbers match first)
+6. **Add to database**: Use parsers UI/API, or add directly to `001_initial_schema.sql` if needed during pre-v1.0 development
 7. **Test in production**: Monitor `parsed_logs` table for successful parsing
 8. **Document**: Add to `PARSERS.md` with examples and field descriptions
 

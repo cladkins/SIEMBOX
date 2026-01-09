@@ -68,6 +68,8 @@ docker compose up -d
 - **[Getting Started (Development)](./docs/guides/GETTING_STARTED_DEVELOPMENT.md)** - Complete setup guide for developers
 - **[Backend Development](./backend/README.md)** - Backend API development guide
 - **[Frontend Development](./frontend/README.md)** - Frontend UI development guide
+- **[Testing Strategies](./docs/reference/TESTING_STRATEGIES.md)** - PostgreSQL testing and mocking strategies
+- **[Testing Quick Start](./docs/reference/TESTING_QUICK_START.md)** - Quick-start test templates
 - **[Contributing Guide](./CONTRIBUTING.md)** - How to contribute to SIEMBox
 
 ### Log Shipper Documentation

@@ -9,6 +9,8 @@ Core technical documentation for SIEMBox features and capabilities.
 
 - **[PARSERS.md](reference/PARSERS.md)** - Parser creation, community parsers, and log processing guide
 - **[RULES.md](reference/RULES.md)** - Detection rule documentation and examples
+- **[TESTING_STRATEGIES.md](reference/TESTING_STRATEGIES.md)** - PostgreSQL testing and mocking strategies for Node.js
+- **[TESTING_QUICK_START.md](reference/TESTING_QUICK_START.md)** - Quick-start test templates and patterns
 
 ### `/parsers` - Application-Specific Parser Documentation
 Detailed documentation for parsers by application category.
@@ -65,6 +67,7 @@ Archived documentation including resolved incidents, completed phases, and super
 2. Read [CONTRIBUTING.md](../CONTRIBUTING.md) for contribution guidelines
 3. Review [SECURITY.md](../SECURITY.md) for security practices
 4. Explore [DEPLOYMENT.md](../DEPLOYMENT.md) for setup instructions
+5. Review [reference/TESTING_QUICK_START.md](reference/TESTING_QUICK_START.md) for test setup
 
 ### For Parser Development
 1. [reference/PARSERS.md](reference/PARSERS.md) - Parser creation guide

@@ -2,6 +2,12 @@
 
 This guide will help you set up your development environment and start contributing to SIEMBox.
 
+> 📚 **Component-Specific Guides:**
+> - [Backend Development Guide](../../backend/README.md) - API development, services, models
+> - [Frontend Development Guide](../../frontend/README.md) - Vue.js components, state management
+> - [Testing Guide](./TESTING_GUIDE.md) - Running tests and writing test cases
+> - [FAQ](../../FAQ.md) - Common development questions
+
 ## Prerequisites
 
 Before you begin, ensure you have the following installed:

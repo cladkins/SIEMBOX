@@ -2,6 +2,13 @@
 
 The SIEMBox backend is a Node.js/TypeScript application that provides the core SIEM functionality including log ingestion, parsing, detection rules, alerting, and a REST API.
 
+> 📚 **Related Documentation:**
+> - [Getting Started (Development)](../docs/guides/GETTING_STARTED_DEVELOPMENT.md) - Complete development setup
+> - [API Documentation](../API.md) - Full REST API reference
+> - [API Quick Reference](../docs/reference/API_QUICK_REFERENCE.md) - Common API operations
+> - [Testing Guide](../docs/guides/TESTING_GUIDE.md) - Backend testing practices
+> - [Frontend Development](../frontend/README.md) - Frontend component guide
+
 ## Tech Stack
 
 - **Node.js 20** - Runtime environment

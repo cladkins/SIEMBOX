@@ -2,6 +2,8 @@
 
 Common questions and answers about SIEMBox installation, configuration, and usage.
 
+> 💡 **New to SIEMBox?** Check out the [Glossary](./GLOSSARY.md) for technical terms and the [Getting Started Guide](./docs/guides/GETTING_STARTED_DEVELOPMENT.md) for development setup.
+
 ## Table of Contents
 
 - [General Questions](#general-questions)
@@ -621,6 +623,10 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) and [docs/guides/GETTING_STARTED_DEVELO
 
 See [docs/guides/GETTING_STARTED_DEVELOPMENT.md](./docs/guides/GETTING_STARTED_DEVELOPMENT.md) for complete setup instructions.
 
+**Component-specific guides:**
+- [Backend Development Guide](./backend/README.md) - API development, services, models
+- [Frontend Development Guide](./frontend/README.md) - Vue.js components, state management
+
 **Quick start:**
 ```bash
 # Backend
@@ -636,9 +642,12 @@ npm run dev
 
 ### Where can I find API documentation?
 
-See [API.md](./API.md) for complete REST API reference.
+**Complete reference:** [API.md](./API.md) - Full REST API documentation
+**Quick reference:** [API Quick Reference](./docs/reference/API_QUICK_REFERENCE.md) - Common operations with curl, JavaScript, and Python examples
 
 ### How do I run tests?
+
+See [Testing Guide](./docs/guides/TESTING_GUIDE.md) for comprehensive testing documentation.
 
 **Backend:**
 ```bash

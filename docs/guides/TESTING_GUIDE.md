@@ -704,3 +704,16 @@ When contributing to SIEMBox:
 5. ✅ Document test setup if complex
 
 See [CONTRIBUTING.md](../../CONTRIBUTING.md) for full guidelines.
+
+---
+
+## See Also
+
+**Development Guides:**
+- [Getting Started (Development)](./GETTING_STARTED_DEVELOPMENT.md) - Complete development setup
+- [Backend Development Guide](../../backend/README.md) - API development and architecture
+- [Frontend Development Guide](../../frontend/README.md) - Vue.js component development
+
+**Reference Documentation:**
+- [FAQ](../../FAQ.md) - Common testing questions
+- [Glossary](../../GLOSSARY.md) - Testing terminology

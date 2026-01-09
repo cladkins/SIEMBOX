@@ -2,6 +2,12 @@
 
 The SIEMBox frontend is a modern Vue.js 3 single-page application (SPA) that provides a comprehensive web interface for security event management.
 
+> 📚 **Related Documentation:**
+> - [Getting Started (Development)](../docs/guides/GETTING_STARTED_DEVELOPMENT.md) - Complete development setup
+> - [Backend Development](../backend/README.md) - API development guide
+> - [API Documentation](../API.md) - REST API reference for integration
+> - [Testing Guide](../docs/guides/TESTING_GUIDE.md) - Frontend testing practices
+
 ## Tech Stack
 
 - **Vue.js 3.4.5** - Progressive JavaScript framework

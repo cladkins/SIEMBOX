@@ -546,8 +546,16 @@ WebSocket support for real-time updates is planned for future releases. This wil
 
 ## Need More Details?
 
-- **Complete API Docs**: [API.md](../../API.md)
-- **Parser Guide**: [PARSERS.md](../../PARSERS.md)
-- **Rules Guide**: [RULES.md](../../RULES.md)
-- **Development Guide**: [backend/README.md](../../backend/README.md)
-- **Troubleshooting**: [docs/operations/TROUBLESHOOTING.md](../operations/TROUBLESHOOTING.md)
+**API Documentation:**
+- **Complete API Docs**: [API.md](../../API.md) - Full REST API reference
+- **Backend Development**: [backend/README.md](../../backend/README.md) - API development guide
+
+**Application Guides:**
+- **Parser Guide**: [PARSERS.md](../../PARSERS.md) - Creating and managing parsers
+- **Rules Guide**: [RULES.md](../../RULES.md) - Detection rule configuration
+- **Getting Started**: [Getting Started (Development)](../guides/GETTING_STARTED_DEVELOPMENT.md) - Development setup
+
+**Support:**
+- **FAQ**: [FAQ.md](../../FAQ.md) - Frequently asked questions
+- **Glossary**: [GLOSSARY.md](../../GLOSSARY.md) - Technical terminology
+- **Troubleshooting**: [docs/operations/TROUBLESHOOTING.md](../operations/TROUBLESHOOTING.md) - Common issues

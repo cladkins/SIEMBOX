@@ -2,6 +2,8 @@
 
 A comprehensive glossary of terms used in SIEMBox documentation and the SIEM security domain.
 
+> 💡 **Quick Links:** [FAQ](./FAQ.md) | [Getting Started](./docs/guides/GETTING_STARTED_DEVELOPMENT.md) | [API Reference](./API.md)
+
 ## Table of Contents
 
 - [SIEM & Security Terms](#siem--security-terms)
@@ -402,11 +404,20 @@ A database of discovered network hosts, their services, and attributes, automati
 
 If you encounter a term not listed here, check:
 
+**Reference Documentation:**
 - **[API Documentation](./API.md)** - API-specific terminology
+- **[API Quick Reference](./docs/reference/API_QUICK_REFERENCE.md)** - Common API operations
 - **[Parser Guide](./PARSERS.md)** - Parser pattern syntax
 - **[Rules Guide](./RULES.md)** - Detection rule terminology
-- **[Architecture Docs](./docs/architecture/)** - System design terms
+
+**Development Guides:**
+- **[Getting Started (Development)](./docs/guides/GETTING_STARTED_DEVELOPMENT.md)** - Development setup
 - **[Backend README](./backend/README.md)** - Backend development terms
 - **[Frontend README](./frontend/README.md)** - Frontend development terms
+- **[Testing Guide](./docs/guides/TESTING_GUIDE.md)** - Testing terminology
+
+**Other Resources:**
+- **[FAQ](./FAQ.md)** - Frequently asked questions
+- **[Architecture Docs](./docs/architecture/)** - System design terms
 
 Or ask in [GitHub Discussions](https://github.com/cladkins/SIEMBOX/discussions).

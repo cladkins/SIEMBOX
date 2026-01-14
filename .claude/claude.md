@@ -70,9 +70,9 @@ SIEMBox is a lightweight, self-hosted Security Information and Event Management 
 ## Development Workflow
 
 ### Branch Strategy
-- **Main branch**: `main`
-- **Current branch**: `develop` - active development branch
-- Use `develop` branch for creating pull requests unless directed otherwise
+- **Main branch**: `main` - all development happens here
+- Feature branches can be created from `main` for larger changes
+- All pull requests target `main`
 
 ### Running the Project
 ```bash
@@ -406,7 +406,7 @@ When Claude Code performs deep-dive investigations (like the agent-organizer), c
 - This is an active security project - prioritize security best practices
 - The project uses TypeScript throughout - maintain type safety
 - Docker Compose is the primary deployment method
-- The `develop` branch is the active development branch
+- All development happens on the `main` branch
 - Parser and rule contributions are encouraged
 - Documentation is comprehensive - reference existing docs when needed
 - Avoid over-engineering - keep solutions focused and simple
@@ -430,7 +430,7 @@ When Claude Code performs deep-dive investigations (like the agent-organizer), c
 **Git Workflow:**
 - All completed changes must be submitted to GitHub
 - After completing a feature or fix, create a commit with an appropriate message
-- Push changes to the appropriate branch (typically `develop`)
+- Push changes to `main` branch (or a feature branch for larger changes)
 - Follow the Git Safety Protocol outlined in the bash tool instructions
 
 **Documentation Requirements:**

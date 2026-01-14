@@ -346,6 +346,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_scan_duration ON vulnerability_scans;
 CREATE TRIGGER trg_scan_duration
 BEFORE UPDATE ON vulnerability_scans
 FOR EACH ROW
@@ -376,6 +377,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_risk_score ON asset_vulnerabilities;
 CREATE TRIGGER trg_risk_score
 BEFORE INSERT OR UPDATE ON asset_vulnerabilities
 FOR EACH ROW

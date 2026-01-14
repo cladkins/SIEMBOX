@@ -334,6 +334,9 @@ router.post(
     try {
       const { targets, scanType, description } = req.body;
 
+      console.log(`[ASSETS] POST /scan - received body:`, JSON.stringify(req.body));
+      console.log(`[ASSETS] Targets:`, JSON.stringify(targets), `Type:`, typeof targets);
+
       const scanId = await NmapScanner.scan({
         targets,
         scanType: scanType || 'port',

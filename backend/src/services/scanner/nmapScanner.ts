@@ -67,7 +67,9 @@ export class NmapScanner {
    */
   private static async executeScan(scanId: number, options: ScanOptions): Promise<void> {
     try {
-      console.log(`[NMAP] Starting scan ${scanId} for targets: ${options.targets.join(', ')}`);
+      console.log(`[NMAP] Starting scan ${scanId}`);
+      console.log(`[NMAP] Targets received (array):`, JSON.stringify(options.targets));
+      console.log(`[NMAP] Targets type:`, typeof options.targets, Array.isArray(options.targets));
 
       // Update scan status to 'running'
       await this.updateScanStatus(scanId, 'running', new Date());
@@ -78,6 +80,7 @@ export class NmapScanner {
       // Join targets into space-separated string
       const targetString = options.targets.join(' ');
 
+      console.log(`[NMAP] Target string for nmap:`, JSON.stringify(targetString));
       console.log(`[NMAP] Scan ${scanId} command: nmap ${nmapOptions} ${targetString}`);
 
       // Check if nmap is available
@@ -120,17 +123,28 @@ export class NmapScanner {
         const errorStr = String(error);
         console.error(`[NMAP] Scan ${scanId} stderr output:`, errorStr);
 
-        // Ignore common nmap warnings that aren't fatal errors
+        // Fatal error patterns that should always fail the scan
+        const fatalPatterns = [
+          /Failed to resolve/i,
+          /No targets were specified/i,
+          /Could not resolve/i,
+          /QUITTING/i,
+          /Segmentation fault/i,
+        ];
+
+        // Non-fatal warning patterns that can be ignored
         const nonFatalPatterns = [
           /RTTVAR has grown/i,
           /decreasing to/i,
-          /Warning/i,
           /packet_trace/i,
+          /^Warning:.*timeout/i,  // Only timeout warnings, not all warnings
         ];
 
-        const isFatal = !nonFatalPatterns.some(pattern => pattern.test(errorStr));
+        // Check for fatal errors first
+        const hasFatalError = fatalPatterns.some(pattern => pattern.test(errorStr));
+        const isNonFatal = !hasFatalError && nonFatalPatterns.some(pattern => pattern.test(errorStr));
 
-        if (isFatal) {
+        if (hasFatalError || !isNonFatal) {
           console.error(`[NMAP] FATAL error detected, marking scan as failed`);
           const errorMsg = error?.message || error?.toString() || JSON.stringify(error) || 'Unknown error';
           await this.updateScanStatus(scanId, 'failed', undefined, new Date(), errorMsg);

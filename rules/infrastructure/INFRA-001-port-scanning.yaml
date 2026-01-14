@@ -1,0 +1,24 @@
+name: Port Scan Detection
+description: >
+  Detects network port scanning reconnaissance activity. 10 connection attempts to 5+ different
+  destination ports in 5 minutes indicates automated port scanning using tools like nmap, masscan,
+  or zmap. Port scanning is reconnaissance phase before exploitation.
+severity: medium
+enabled: true
+tags: [port-scan, scanning, reconnaissance, infrastructure, network]
+
+conditions:
+  - field: message
+    operator: regex
+    value: "(connection refused|connection attempt|SYN|port.*closed|no route to host)"
+
+aggregation:
+  field: source_ip
+  timeframe: 5m
+  threshold: 10
+
+alert:
+  title: "Port Scan Detected from {source_ip}"
+  description: >
+    {count} connection attempts from {source_ip} in 5 minutes. Possible port scanning activity detected.
+    Review connection patterns, check source IP reputation, and block IP if malicious.

@@ -1,0 +1,24 @@
+name: Unusual Process Execution via Sudo
+description: >
+  Detects execution of suspicious processes via sudo that may indicate exploitation or malicious activity.
+  Monitors for processes running from /tmp (common malware location),
+  download-and-execute patterns (curl/wget piped to bash), and reverse shell techniques.
+  These patterns are rarely legitimate and often indicate post-exploitation activity.
+severity: high
+enabled: true
+tags: [sudo, process-execution, exploitation, malware, access-control]
+
+conditions:
+  - field: command
+    operator: regex
+    value: '(/tmp/|curl.*\||wget.*\||bash\s+-c|sh\s+-c|python\s+-c|perl\s+-e|nc\s+-[el]|ncat|socat.*exec)'
+
+alert:
+  title: "Suspicious Process Execution by {user} via Sudo"
+  description: >
+    User {user} executed suspicious command via sudo on {hostname}: {command}.
+    HIGH PRIORITY - potential web shell, malware, or exploitation.
+    Review command details and arguments, check for /tmp execution (common malware staging),
+    identify download sources (curl/wget URLs), verify process legitimacy,
+    check for reverse shell patterns, examine parent process,
+    terminate suspicious processes, and investigate initial compromise vector if malicious.

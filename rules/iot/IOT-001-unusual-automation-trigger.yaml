@@ -1,0 +1,28 @@
+name: Unusual Smart Device Automation Trigger
+description: >
+  Detects automation triggers during unexpected times or with unexpected trigger types.
+  Security-related automations triggered during late hours (1am-5am) or via non-scheduled methods
+  may indicate unauthorized access to Home Assistant or tampering with smart home controls.
+severity: medium
+enabled: true
+tags: [iot, home-assistant, automation, smart-home, physical-security]
+
+conditions:
+  - field: event_type
+    operator: equals
+    value: "automation_triggered"
+  - field: trigger_type
+    operator: not_equals
+    value: "scheduled"
+  - field: timestamp
+    operator: regex
+    value: "T0[1-5]:"
+
+alert:
+  title: "Unusual Smart Home Automation Trigger: {automation_name}"
+  description: >
+    Automation '{automation_name}' triggered at unusual hour via non-scheduled trigger from {client_ip}.
+    Review automation details and trigger source, verify if scheduled or unexpected trigger,
+    check for unauthorized access to Home Assistant, review what devices were controlled,
+    verify no physical security implications,
+    and investigate if persistent pattern occurs.

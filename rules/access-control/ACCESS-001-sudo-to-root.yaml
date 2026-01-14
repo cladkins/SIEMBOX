@@ -1,0 +1,28 @@
+name: Sudo to Root by Non-Admin User
+description: >
+  Detects sudo privilege escalation to root by users not in admin group.
+  In properly configured systems, only designated administrators should have sudo privileges to root.
+  This rule requires maintaining an admin user whitelist.
+  Detection of non-admin sudo to root indicates either misconfigured permissions
+  or compromised user account attempting privilege escalation.
+severity: high
+enabled: true
+tags: [sudo, privilege-escalation, root, access-control, linux]
+
+conditions:
+  - field: target_user
+    operator: equals
+    value: "root"
+  - field: user
+    operator: not_equals
+    value: "admin"
+
+alert:
+  title: "Non-Admin User {user} Executed Sudo to Root"
+  description: >
+    User {user} executed sudo command as root on {hostname}: {command}.
+    This user is not in the admin whitelist.
+    Verify user identity and authorization, review command being executed,
+    check if legitimate administrative task, investigate if user account compromised,
+    review sudo configuration (/etc/sudoers), revoke sudo access if unauthorized,
+    and audit all actions taken as root by this user.

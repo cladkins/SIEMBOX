@@ -1,0 +1,27 @@
+name: Multiple Device Registrations
+description: Detects rapid registration of multiple devices/clients to password vault. 3 device registrations in 1 hour is unusual - legitimate users typically register devices infrequently. May indicate account compromise or credential sharing.
+severity: high
+enabled: true
+tags: [vaultwarden, password-manager, device-registration, anomaly]
+
+conditions:
+  - field: service
+    operator: equals
+    value: "vaultwarden"
+  - field: event
+    operator: contains
+    value: "device registered"
+
+aggregation:
+  field: user
+  timeframe: 1h
+  threshold: 3
+
+alert:
+  title: "Multiple Vaultwarden Device Registrations: {user}"
+  description: >
+    {count} device registrations for user {user} in 1 hour.
+    Legitimate users typically register devices infrequently.
+    Identify user and devices registered, verify legitimate user activity,
+    check device types and IP addresses, contact user to confirm device registrations,
+    review for suspicious geographic locations, and force re-authentication if suspicious.

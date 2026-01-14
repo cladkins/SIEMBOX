@@ -1,0 +1,32 @@
+name: Distributed Brute Force Attack
+description: >
+  Detects coordinated brute force attacks from multiple IPs targeting same account.
+  10 failed attempts from 3+ different IPs targeting same account within 15 minutes indicates distributed/botnet attack.
+  This is more sophisticated than single-source attacks.
+severity: high
+enabled: true
+tags: [authentication, brute-force, distributed-attack, botnet, credential-stuffing]
+
+conditions:
+  - field: event
+    operator: contains
+    value: "Failed password"
+  - field: user
+    operator: exists
+    value: true
+
+aggregation:
+  field: user
+  timeframe: 15m
+  threshold: 10
+  distinct_count: source_ip >= 3
+  # Implementation note: Count distinct source_ip values attacking same user
+
+alert:
+  title: "Distributed Brute Force Attack Targeting User {user}"
+  description: >
+    {count} failed authentication attempts from {distinct_count} different IP addresses targeting account {user} in 15 minutes.
+    This indicates a distributed botnet attack.
+    Identify targeted account, implement account lockout if available,
+    review source IP geographic distribution, and consider temporary service restriction.
+    Alert user if personal account targeted.

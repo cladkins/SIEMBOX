@@ -1,0 +1,30 @@
+name: Directory Enumeration Detection
+description: >
+  Detects automated directory and file scanning based on 404 response patterns.
+  20 404 responses in 5 minutes indicates use of scanning tools like dirbuster, gobuster, or nikto.
+  Attackers enumerate directories to discover hidden admin interfaces, backup files, or unprotected resources.
+  Legitimate users rarely generate this many missing page requests.
+severity: medium
+enabled: true
+tags: [web, scanning, reconnaissance, reverse-proxy, enumeration]
+
+conditions:
+  - field: status_code
+    operator: equals
+    value: "404"
+
+aggregation:
+  field: client_ip
+  timeframe: 5m
+  threshold: 20
+
+alert:
+  title: "Directory Enumeration from {client_ip}"
+  description: >
+    {count} HTTP 404 responses from {client_ip} in 5 minutes indicates automated directory scanning.
+    Requested paths: {path}.
+    Review requested paths for patterns (admin, backup, config, .git, .env),
+    identify scanner type (dirbuster, nikto, gobuster),
+    check source IP reputation, verify no sensitive paths were discovered (200 responses),
+    consider rate limiting or IP blocking,
+    and monitor for escalation to exploitation attempts if scanner discovers valid paths.

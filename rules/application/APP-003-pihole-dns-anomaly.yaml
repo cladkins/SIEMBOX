@@ -1,0 +1,27 @@
+name: Pi-hole DNS Query Anomaly
+description: >
+  Detects unusual DNS query patterns that may indicate malware C2 or DNS abuse.
+  100+ DNS queries in 5 minutes from single IP exceeds normal behavior
+  and may indicate malware beaconing, DNS abuse, or compromised device.
+severity: medium
+enabled: true
+tags: [pihole, dns, malware, c2-beacon, anomaly-detection]
+
+conditions:
+  - field: query_type
+    operator: equals
+    value: "A"
+
+aggregation:
+  field: client_ip
+  timeframe: 5m
+  threshold: 100
+
+alert:
+  title: "Pi-hole DNS Query Anomaly from {client_ip}"
+  description: >
+    {count} DNS A record queries from {client_ip} in 5 minutes exceeds normal behavior.
+    Identify source device generating queries, review domains being queried,
+    check for malware C2 patterns, verify device is not compromised,
+    review device for suspicious processes, block suspicious domains at Pi-hole,
+    and consider device quarantine if malware suspected.

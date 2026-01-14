@@ -1,0 +1,36 @@
+name: Successful Login After Failed Attempts
+description: >
+  Detects successful authentication immediately following multiple failures, indicating potential brute force success.
+  Any successful login after 3+ failures within 10 minutes is highly suspicious.
+  Legitimate users typically don't succeed after multiple failures without a password reset.
+severity: critical
+enabled: true
+tags: [authentication, brute-force, ssh, compromise, critical]
+
+conditions:
+  - field: event
+    operator: contains
+    value: "Accepted"
+  - field: source_ip
+    operator: exists
+    value: true
+
+aggregation:
+  field: source_ip
+  timeframe: 10m
+  threshold: 1
+  # Note: This requires custom logic to check for 3+ prior failures
+  # Implementation should query for Failed password events from same source_ip
+  # within 10 minutes BEFORE this successful login
+
+alert:
+  title: "CRITICAL: Successful Login After Multiple Failures from {source_ip}"
+  description: >
+    Successful authentication from {source_ip} after {count} prior failed attempts within 10 minutes.
+    This indicates potential brute force success.
+    IMMEDIATE VERIFICATION REQUIRED.
+    Verify if legitimate user or compromise.
+    Check if user was expected to log in.
+    Review all actions taken during session.
+    Consider session termination if suspicious.
+    Force password reset if compromised.

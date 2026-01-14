@@ -1,0 +1,30 @@
+name: Unusual Vault Access Geolocation
+description: >
+  Detects vault access from unexpected geographic locations.
+  Single event detection for access outside user's typical country.
+  Requires GeoIP data enrichment.
+  May indicate account compromise or credential theft, especially if concurrent with normal location access.
+severity: high
+enabled: true
+tags: [vaultwarden, password-manager, geolocation, anomaly, travel]
+
+conditions:
+  - field: service
+    operator: equals
+    value: "vaultwarden"
+  - field: event
+    operator: equals
+    value: "vault_unlock"
+  - field: country
+    operator: not_equals
+    value: "{user_home_country}"
+    # Implementation note: Requires GeoIP enrichment and user home country baseline
+
+alert:
+  title: "Unusual Geographic Vault Access: {user} from {country}"
+  description: >
+    Vault access by {user} from {source_ip} in {country}.
+    This is outside user's normal geographic location.
+    Verify user travel status, contact user immediately to confirm,
+    check for concurrent logins from different locations, review all vault items accessed,
+    consider session termination if suspicious, and enable geographic restrictions if available.

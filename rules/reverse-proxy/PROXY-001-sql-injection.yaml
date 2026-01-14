@@ -1,0 +1,24 @@
+name: SQL Injection Attempt
+description: >
+  Detects SQL injection attack patterns in HTTP requests targeting web applications.
+  Monitors URL paths and parameters for common SQL injection signatures including quotes, SQL keywords (UNION, SELECT, OR),
+  comment indicators, and SQL operators.
+  Even failed attempts indicate active reconnaissance and should be investigated.
+severity: high
+enabled: true
+tags: [web, sql-injection, attack, reverse-proxy, exploitation]
+
+conditions:
+  - field: path
+    operator: regex
+    value: '(''|"|;|--|\bOR\b|\bUNION\b|\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bDROP\b|0x[0-9a-f]+|\*\s*FROM\s*|\bAND\b.*=)'
+
+alert:
+  title: "SQL Injection Attempt from {client_ip}"
+  description: >
+    SQL injection pattern detected from {client_ip} to {path}.
+    Method: {method}, Status: {status_code}, User-Agent: {user_agent}.
+    Review full request including parameters, check response code (200/5xx indicates potential success),
+    identify targeted application, verify database integrity, block source IP,
+    and check for data exfiltration.
+    Even 4xx responses indicate attack reconnaissance.

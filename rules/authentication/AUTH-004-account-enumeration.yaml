@@ -1,0 +1,29 @@
+name: Account Enumeration Attempt
+description: >
+  Detects attempts to identify valid usernames by testing multiple accounts.
+  10 attempts to test 5+ different usernames from single IP indicates enumeration reconnaissance.
+  Legitimate users know their username - this is attacker behavior.
+severity: medium
+enabled: true
+tags: [authentication, reconnaissance, enumeration, ssh, attack]
+
+conditions:
+  - field: event
+    operator: contains
+    value: "Invalid user"
+
+aggregation:
+  field: source_ip
+  timeframe: 10m
+  threshold: 10
+  distinct_count: user >= 5
+  # Implementation note: Count distinct user values from same source_ip
+
+alert:
+  title: "Account Enumeration from {source_ip}"
+  description: >
+    {count} attempts to test {distinct_count} different usernames from {source_ip} in 10 minutes.
+    This indicates reconnaissance to discover valid accounts.
+    Log all tested usernames, check if any valid users were discovered,
+    review source IP reputation, consider IP blocking to prevent further reconnaissance,
+    and monitor for escalation to brute force.

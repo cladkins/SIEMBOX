@@ -1,0 +1,25 @@
+name: HTTP Method Abuse
+description: >
+  Detects unusual HTTP methods that may indicate vulnerability research or exploitation attempts.
+  Methods like TRACE, TRACK, DEBUG are rarely used legitimately and often disabled in production.
+  CONNECT is used for proxying and tunneling.
+  OPTIONS is legitimate for CORS but can be used for reconnaissance.
+  These methods may reveal server information or enable attacks.
+severity: medium
+enabled: true
+tags: [web, http-methods, reconnaissance, reverse-proxy, vulnerability-research]
+
+conditions:
+  - field: method
+    operator: regex
+    value: "(TRACE|TRACK|DEBUG|CONNECT)"
+
+alert:
+  title: "Unusual HTTP Method {method} from {client_ip}"
+  description: >
+    Unusual HTTP method {method} detected from {client_ip} to {path}.
+    Status: {status_code}.
+    Identify specific method used and its purpose, review request headers for additional reconnaissance indicators,
+    verify if method is enabled/necessary on server, disable unnecessary HTTP methods in web server configuration,
+    check if method revealed sensitive information (server version, internals),
+    monitor for follow-up exploitation attempts, and log for security audit trail.

@@ -1,73 +1,73 @@
-# Project management documentation (internal use only)
-project-management/
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+.env.production
+config.local.*
+secrets.*
 
-# Dependencies
+# Node.js
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-
-# Environment variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# IDE files
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Logs
-logs
-*.log
-
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
-
-# Coverage directory used by tools like istanbul
-coverage/
+pnpm-debug.log*
+lerna-debug.log*
+.pnpm-store/
 
 # Build outputs
 dist/
 build/
-out/
+*.tsbuildinfo
 
-# Temporary folders
-tmp/
-temp/
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+# Logs
+logs/
+*.log
 
 # Database
 *.db
 *.sqlite
 *.sqlite3
+pgdata/
+postgres-data/
 
-# Docker
-.dockerignore 
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+coverage/
+.nyc_output/
+
+# SSL Certificates & Keys
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+*.pfx
+
+# Docker volumes (local testing)
+volumes/
+docker-compose.override.yml
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Analysis documents (Claude Code deep-dive reports)
+analysis/

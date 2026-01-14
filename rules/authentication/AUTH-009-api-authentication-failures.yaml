@@ -1,0 +1,30 @@
+name: API Authentication Failures
+description: >
+  Detects repeated API authentication failures indicating token theft or API abuse.
+  APIs typically have higher failure tolerance than interactive auth.
+  10 failures in 10 minutes indicates brute force or token guessing attempts.
+severity: medium
+enabled: true
+tags: [api, authentication, token-abuse, brute-force]
+
+conditions:
+  - field: message
+    operator: contains
+    value: "API authentication failed"
+  - field: status_code
+    operator: equals
+    value: "401"
+
+aggregation:
+  field: source_ip
+  timeframe: 10m
+  threshold: 10
+
+alert:
+  title: "API Authentication Failures from {source_ip}"
+  description: >
+    {count} API authentication failures from {source_ip} in 10 minutes.
+    May indicate expired tokens, misconfigured automation, or token guessing attack.
+    Identify targeted API endpoint, review API token usage patterns,
+    check for any successful authentications, verify source IP legitimacy,
+    consider API rate limiting, and rotate API tokens if compromised.

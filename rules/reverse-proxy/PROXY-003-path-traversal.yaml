@@ -1,0 +1,24 @@
+name: Path Traversal Attempt
+description: >
+  Detects path traversal attacks attempting to access files outside web application root directory.
+  Monitors for directory traversal sequences (../) in both standard and URL-encoded formats.
+  Attackers use path traversal to read sensitive files like /etc/passwd, configuration files, or application source code.
+  Even failed attempts indicate reconnaissance.
+severity: medium
+enabled: true
+tags: [web, path-traversal, attack, reverse-proxy, file-access]
+
+conditions:
+  - field: path
+    operator: regex
+    value: '(\.\./|\.\.\/|\.\.\\\/|\.\.\%2f|\.\.\%5c|\.\.\%255c|\.\.\%c0\%af)'
+
+alert:
+  title: "Path Traversal Attempt from {client_ip}"
+  description: >
+    Path traversal pattern detected from {client_ip}: {path}.
+    Method: {method}, Status: {status_code}.
+    Review full requested path, check response code (200 = successful file access = CRITICAL ESCALATION),
+    verify sensitive files not served, review application logs, block IP if persistent attempts,
+    review web server configuration for path validation,
+    and ensure proper input sanitization in application code.

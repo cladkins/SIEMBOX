@@ -1,0 +1,29 @@
+name: High Request Rate DoS Attack
+description: >
+  Detects excessive HTTP request rates indicating denial-of-service attack or abuse.
+  100 requests per minute from single IP exceeds normal homelab user behavior (typically 20-30 req/min).
+  May indicate DoS attack, web scraping, automated attacks, or compromised API credentials.
+severity: high
+enabled: true
+tags: [web, dos, attack, reverse-proxy, availability, rate-limiting]
+
+conditions:
+  - field: client_ip
+    operator: exists
+    value: true
+
+aggregation:
+  field: client_ip
+  timeframe: 1m
+  threshold: 100
+
+alert:
+  title: "High Request Rate DoS from {client_ip}"
+  description: >
+    {count} requests in 1 minute from {client_ip}.
+    Potential DoS attack in progress.
+    Review request patterns and endpoints ({path}),
+    check server resource utilization (CPU, memory, bandwidth),
+    implement rate limiting immediately if not present, block IP if clearly malicious,
+    monitor for distributed attacks from multiple IPs, and consider enabling DDoS protection.
+    Legitimate users rarely exceed 30 req/min.

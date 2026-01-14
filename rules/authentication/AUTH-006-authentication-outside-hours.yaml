@@ -1,0 +1,25 @@
+name: Authentication Outside Normal Hours
+description: >
+  Detects successful authentication during unusual hours (00:00-06:00 local time).
+  Low severity because some users have irregular schedules, but worth logging for pattern analysis and anomaly detection.
+  Can help establish baseline behavior and identify compromised accounts.
+severity: low
+enabled: true
+tags: [authentication, anomaly, after-hours, baseline, informational]
+
+conditions:
+  - field: event
+    operator: contains
+    value: "Accepted"
+  - field: timestamp
+    operator: regex
+    value: "T0[0-5]:"
+    # Matches timestamps between midnight and 6am (00:00-05:59)
+
+alert:
+  title: "After-Hours Authentication: {user} from {source_ip}"
+  description: >
+    Login detected for user {user} from {source_ip} between midnight and 6am local time.
+    Review user identity and typical schedule, check what actions were performed,
+    verify geographic location matches user, document as baseline if recurring pattern,
+    and investigate if unusual for that specific user.

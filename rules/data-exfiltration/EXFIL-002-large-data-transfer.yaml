@@ -1,0 +1,31 @@
+name: Large Data Transfer Detection
+description: >
+  Detects unusually large data transfers that may indicate exfiltration.
+  5GB+ transfer in 1 hour is unusual for homelab services.
+  This rule counts large file transfers as a proxy for total volume since SUM aggregation may not be available
+  in current implementation.
+severity: high
+enabled: true
+tags: [exfiltration, data-transfer, bandwidth, nextcloud, immich]
+
+conditions:
+  - field: response_size
+    operator: greater_than
+    value: "52428800"
+  - field: status_code
+    operator: equals
+    value: "200"
+
+aggregation:
+  field: client_ip
+  timeframe: 1h
+  threshold: 100
+
+alert:
+  title: "Large Data Transfer Detected from {client_ip}"
+  description: >
+    {count} large file transfers (50MB+) from {client_ip} in 1 hour indicates potential data exfiltration
+    (estimated total >5GB).
+    Review what data was transferred, verify legitimate operation or exfiltration attempt,
+    check for compromised credentials, monitor for continued large transfers,
+    and implement bandwidth throttling if needed.

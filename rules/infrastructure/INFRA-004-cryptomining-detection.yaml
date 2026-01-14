@@ -1,0 +1,25 @@
+name: Cryptocurrency Mining Detection
+description: >
+  Detects cryptocurrency mining activity based on known miner process names.
+  Cryptomining on homelab infrastructure indicates system compromise and resource theft.
+  Common miners include XMRig (Monero), ethminer (Ethereum), cpuminer, cgminer.
+  Mining processes consume CPU/GPU resources and often indicate broader compromise requiring full investigation.
+severity: high
+enabled: true
+tags: [cryptomining, malware, infrastructure, resource-theft, compromise]
+
+conditions:
+  - field: message
+    operator: regex
+    value: "(xmrig|minergate|ethminer|cpuminer|cgminer|bfgminer|minerd|claymore|phoenixminer|t-rex|lolminer)"
+
+alert:
+  title: "Cryptocurrency Mining Detected: {program}"
+  description: >
+    Unauthorized mining process detected on {hostname}: {message}.
+    HIGH PRIORITY - resource theft and likely system compromise.
+    Terminate mining process immediately, identify how miner was installed (check /tmp, /var/tmp, home directories),
+    check for persistence mechanisms (cron, systemd timers, rc.local),
+    review recent system access logs and sudo commands, scan for additional malware and backdoors,
+    investigate initial compromise vector (SSH brute force, web exploit, credential theft),
+    and restore from clean backup if necessary.

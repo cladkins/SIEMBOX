@@ -1,0 +1,25 @@
+name: Command Injection Attempt
+description: >
+  Detects command injection attack patterns in HTTP requests.
+  Monitors for shell metacharacters, command separators, and common shell commands in URL paths and parameters.
+  Command injection successful execution leads to complete system compromise.
+  Patterns include semicolons, pipes, backticks, command substitution, and common utilities like curl, wget, bash.
+severity: high
+enabled: true
+tags: [web, command-injection, attack, reverse-proxy, exploitation]
+
+conditions:
+  - field: path
+    operator: regex
+    value: '(;\s*(ls|cat|curl|wget|bash|sh|cmd\.exe|powershell)|\||&&|`|\$\(|%0a|%0d|\|\s*(cat|ls|id|whoami|uname))'
+
+alert:
+  title: "Command Injection Attempt from {client_ip}"
+  description: >
+    Command injection pattern detected from {client_ip} to {path}.
+    Method: {method}, Status: {status_code}.
+    HIGH PRIORITY - potential system compromise.
+    Check if command executed (5xx error, unusual response time),
+    review system process list for unexpected processes, examine system logs for command execution,
+    block IP immediately, search for persistence mechanisms,
+    and consider system quarantine if successful exploitation suspected.

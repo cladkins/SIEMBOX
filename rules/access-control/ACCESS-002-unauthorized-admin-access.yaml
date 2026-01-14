@@ -1,0 +1,25 @@
+name: Unauthorized Administrative Access
+description: >
+  Detects access to administrative interfaces from IP addresses outside approved whitelist.
+  Admin interfaces should only be accessible from local network, VPN, or specific public IPs.
+  Access from unexpected IPs may indicate compromised credentials, credential stuffing, or exposed admin interface.
+  Requires maintaining admin IP whitelist configuration.
+severity: medium
+enabled: true
+tags: [admin-access, access-control, authentication, web, privilege]
+
+conditions:
+  - field: path
+    operator: regex
+    value: "(/admin|/administration|/manage|/dashboard|/wp-admin|/phpmyadmin|/portainer|/traefik)"
+
+alert:
+  title: "Admin Interface Access from {client_ip}"
+  description: >
+    Administrative interface access detected: {client_ip} accessed {path}.
+    Method: {method}, Status: {status_code}, User-Agent: {user_agent}.
+    NOTE: This rule requires IP whitelist feature implementation.
+    Review source IP geographic location, verify if legitimate admin access,
+    check what admin actions were performed if authenticated, contact admin to confirm if unexpected,
+    review for credential compromise indicators, consider session termination if suspicious,
+    enforce VPN requirement for admin access, and add legitimate IPs to whitelist.

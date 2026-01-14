@@ -1,0 +1,30 @@
+name: Cross-Service Authentication Failures
+description: >
+  Detects same IP failing authentication across multiple different services, indicating credential stuffing attack.
+  15 failures across 3+ different services indicates attacker using breached password lists
+  to test credentials across your infrastructure.
+severity: high
+enabled: true
+tags: [authentication, credential-stuffing, brute-force, attack, lateral-movement]
+
+conditions:
+  - field: message
+    operator: contains
+    value: "authentication failed"
+
+aggregation:
+  field: source_ip
+  timeframe: 15m
+  threshold: 15
+  distinct_count: service >= 3
+  # Implementation note: Count distinct service values from same source_ip
+
+alert:
+  title: "Credential Stuffing Attack from {source_ip}"
+  description: >
+    {count} failed authentication attempts from {source_ip} across {distinct_count} different services in 15 minutes.
+    This indicates credential stuffing using breached password databases.
+    High priority - potential credential stuffing.
+    Identify all services targeted, review if any authentications succeeded,
+    check source IP reputation/geolocation, consider blocking IP immediately,
+    verify users' passwords not in breach databases, and recommend password changes if compromised.

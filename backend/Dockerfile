@@ -1,47 +1,47 @@
-# SIEM BOX - Backend Dockerfile
-FROM python:3.11-slim
+# Multi-stage build for SIEMBox Backend
 
-# Set working directory
+# Stage 1: Build
+FROM node:20-alpine AS builder
+
 WORKDIR /app
 
-# Install system dependencies including vulnerability scanning tools
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libpq-dev \
-    curl \
-    nmap \
-    wget \
-    gnupg \
-    && rm -rf /var/lib/apt/lists/*
+# Copy package files
+COPY package*.json ./
+COPY tsconfig.json ./
 
-# Install Trivy vulnerability scanner (apt-key deprecated on newer Debian)
-RUN mkdir -p /etc/apt/keyrings \
-    && wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /etc/apt/keyrings/trivy.gpg \
-    && echo "deb [signed-by=/etc/apt/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | tee /etc/apt/sources.list.d/trivy.list \
-    && apt-get update \
-    && apt-get install -y trivy \
-    && rm -rf /var/lib/apt/lists/*
+# Install dependencies
+RUN npm ci
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+# Copy source code
+COPY src ./src
+COPY migrations ./migrations
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Build TypeScript
+RUN npm run build
 
-# Copy application code
-COPY . .
+# Stage 2: Production
+FROM node:20-alpine
 
-# Create non-root user
-RUN useradd --create-home --shell /bin/bash siembox
-RUN chown -R siembox:siembox /app
-USER siembox
+WORKDIR /app
 
-# Expose port
-EXPOSE 8000
+# Install NMAP for asset discovery scanning
+RUN apk add --no-cache nmap
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/api/v1/health/ || exit 1
+# Install production dependencies only
+COPY package*.json ./
+RUN npm ci --only=production
 
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Copy built files from builder
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/migrations ./migrations
+
+# Create logs directory
+RUN mkdir -p logs
+
+# Expose ports
+EXPOSE 3000
+EXPOSE 514/udp
+EXPOSE 514/tcp
+
+# Run migrations and start server
+CMD ["sh", "-c", "node dist/scripts/migrate.js && node dist/server.js"]

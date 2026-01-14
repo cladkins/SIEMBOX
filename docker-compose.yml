@@ -1,96 +1,77 @@
-# SIEM BOX - Docker Compose Configuration
-
 services:
   # PostgreSQL Database
   postgres:
-    image: postgres:14-alpine
+    image: postgres:15-alpine
     container_name: siembox-postgres
     environment:
-      POSTGRES_DB: siembox
-      POSTGRES_USER: siembox
-      POSTGRES_PASSWORD: siembox
-      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+      POSTGRES_DB: ${DB_NAME:-siembox}
+      POSTGRES_USER: ${DB_USER:-siembox}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+      - postgres-data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-    networks:
-      - siembox-network
-    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U siembox -d siembox"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-siembox}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - siembox-network
+    restart: unless-stopped
 
-  # FastAPI Backend with Vulnerability Scanning
+  # Backend API and Syslog Server
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: siembox-backend
     environment:
-      DATABASE_URL: postgresql://siembox:siembox@postgres:5432/siembox
-      DEBUG: "false"
-      LOG_LEVEL: INFO
-      SECRET_KEY: "your-secret-key-change-in-production"
-    ports:
-      - "8000:8000"
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: ${PORT:-3001}
+      HOST: 0.0.0.0
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-siembox}
+      DB_USER: ${DB_USER:-siembox}
+      DB_PASSWORD: ${DB_PASSWORD:-changeme}
+      JWT_SECRET: ${JWT_SECRET:-change-this-secret-key}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-changeme}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
     volumes:
-      - vulnerability_data:/app/vulnerability_data
-      - trivy_cache:/root/.cache/trivy
-    networks:
-      - siembox-network
+      - ./rules:/app/rules:ro  # Mount rules directory as read-only
+    ports:
+      - "3001:3001"
+      - "514:514/udp"  # Syslog UDP
+      - "514:514/tcp"  # Syslog TCP
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - siembox-network
     restart: unless-stopped
-    # Enable privileged mode for network scanning capabilities
-    privileged: true
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
 
-  # React Frontend
+  # Frontend (Vue.js + Nginx)
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/api}
     container_name: siembox-frontend
-    command: sh -c 'while ! curl -s -f http://backend:8000/api/v1/health; do echo "Waiting for backend..."; sleep 1; done; nginx -g "daemon off;"'
     ports:
       - "3000:80"
+    depends_on:
+      - backend
     networks:
       - siembox-network
-    depends_on:
-      backend:
-        condition: service_healthy
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:80/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
 
 volumes:
-  postgres_data:
-    driver: local
-  vulnerability_data:
-    driver: local
-  trivy_cache:
+  postgres-data:
     driver: local
 
 networks:
   siembox-network:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16

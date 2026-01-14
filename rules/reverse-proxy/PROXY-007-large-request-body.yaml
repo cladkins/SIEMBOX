@@ -1,0 +1,24 @@
+name: Large Request Body DoS
+description: >
+  Detects unusually large HTTP request bodies that may indicate DoS attack or upload abuse.
+  50MB requests are unusual for most homelab services.
+  May indicate bandwidth exhaustion DoS, storage exhaustion attack, or abuse of upload functionality.
+  Adjust threshold based on legitimate use cases like Nextcloud file uploads or photo library syncs.
+severity: medium
+enabled: true
+tags: [web, dos, upload-abuse, reverse-proxy, availability]
+
+conditions:
+  - field: request_size
+    operator: greater_than
+    value: "52428800"
+
+alert:
+  title: "Large Request Body from {client_ip}"
+  description: >
+    Large HTTP request detected: {request_size} bytes from {client_ip} to {path}.
+    Method: {method}, Status: {status_code}.
+    Identify target endpoint, verify if legitimate upload operation (Nextcloud, Immich, Paperless),
+    check if request completed successfully, monitor disk space and bandwidth utilization,
+    review for repeated large requests indicating DoS, implement request size limits if not present,
+    and consider rate limiting for upload endpoints if abuse detected.

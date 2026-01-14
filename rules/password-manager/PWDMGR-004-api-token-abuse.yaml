@@ -1,0 +1,30 @@
+name: API Token Abuse
+description: >
+  Detects excessive API access to vault indicating automated credential harvesting.
+  50 API calls in 10 minutes exceeds normal client sync behavior and indicates automated access or token abuse.
+  May indicate compromised API token being used to harvest credentials.
+severity: high
+enabled: true
+tags: [vaultwarden, password-manager, api, token-abuse, credential-theft]
+
+conditions:
+  - field: service
+    operator: equals
+    value: "vaultwarden"
+  - field: path
+    operator: contains
+    value: "/api/"
+
+aggregation:
+  field: source_ip
+  timeframe: 10m
+  threshold: 50
+
+alert:
+  title: "Vaultwarden API Token Abuse from {source_ip}"
+  description: >
+    {count} API calls to Vaultwarden from {source_ip} in 10 minutes.
+    Exceeds normal client sync behavior.
+    Identify API endpoints being accessed, review authentication method (token vs session),
+    check what vault data was accessed, verify source IP matches known devices,
+    consider API rate limiting, revoke API tokens if compromised, and force re-authentication of all clients.

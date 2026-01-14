@@ -1,0 +1,29 @@
+name: Admin Interface Access from Unusual IP
+description: >
+  Detects administrative interface access from IP addresses outside the normal whitelist.
+  Administrative interfaces should be restricted to known admin IPs.
+  Access from unusual locations warrants investigation, though may be legitimate remote access.
+severity: medium
+enabled: true
+tags: [admin, access-control, web, authentication, policy-violation]
+
+conditions:
+  - field: path
+    operator: regex
+    value: "/admin|/administration|/manage|/console"
+  - field: client_ip
+    operator: not_in_whitelist
+    value: true
+    # Implementation note: Requires IP whitelist configuration for known admin IPs
+
+alert:
+  title: "Admin Interface Access from Unusual IP: {client_ip}"
+  description: >
+    Administrative interface access to {path} from {client_ip}.
+    This IP is not in the known admin whitelist.
+    User: {user}.
+    Verify if legitimate admin or policy violation.
+    Check user identity and authorization level.
+    Review actions taken during session.
+    Update whitelist if legitimate new admin IP.
+    Consider access restriction if unauthorized.

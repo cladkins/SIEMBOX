@@ -1,0 +1,25 @@
+name: Malicious User Agent Detection
+description: >
+  Detects known security scanner and attack tool user agents.
+  Security tools like sqlmap, nikto, nmap, metasploit, and burp suite should never access production homelab services
+  except during authorized penetration testing.
+  Detection of these user agents indicates unauthorized security scanning or active exploitation attempts.
+severity: medium
+enabled: true
+tags: [web, scanning, user-agent, reverse-proxy, reconnaissance]
+
+conditions:
+  - field: user_agent
+    operator: regex
+    value: "(sqlmap|nikto|nmap|nessus|masscan|metasploit|burp|burpsuite|zap|zaproxy|acunetix|openvas|w3af|wpscan|dirbuster|gobuster|wfuzz|hydra|havij)"
+
+alert:
+  title: "Security Scanner User-Agent from {client_ip}"
+  description: >
+    Known attack tool detected: {user_agent} from {client_ip} accessing {path}.
+    Method: {method}, Status: {status_code}.
+    Verify if authorized security testing, review source IP and timing,
+    check what endpoints were accessed, review for actual exploitation attempts beyond scanning,
+    block IP if unauthorized, monitor for actual attack patterns,
+    and document for security metrics.
+    If not your authorized testing, this is reconnaissance for future attacks.

@@ -217,7 +217,8 @@ export class NmapScanner {
     for (const host of hosts) {
       try {
         // node-nmap uses 'up' status in host.status or host.state
-        const hostStatus = host.status || host.state || (host.address ? 'up' : 'down');
+        // Also check for host.ip since some result formats use that instead of host.address
+        const hostStatus = host.status || host.state || (host.address || host.ip ? 'up' : 'down');
         const isUp = hostStatus === 'up' || hostStatus.state === 'up';
 
         // Skip if host is down
@@ -237,8 +238,9 @@ export class NmapScanner {
           continue;
         }
 
-        // Extract hostname
-        const hostname = host.hostname?.[0]?.hostname ||
+        // Extract hostname - handle various formats from node-nmap
+        const hostname = (typeof host.hostname === 'string' ? host.hostname : null) ||
+                        host.hostname?.[0]?.hostname ||
                         host.hostname?.name ||
                         (Array.isArray(host.hostnames) && host.hostnames[0]?.name) ||
                         null;

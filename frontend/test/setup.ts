@@ -3,7 +3,20 @@
  */
 
 import { expect, afterEach, beforeAll, afterAll } from 'vitest';
+import { config } from '@vue/test-utils';
+import ElementPlus from 'element-plus';
 import { server } from './mocks/server';
+
+// Register Element Plus globally for all tests
+config.global.plugins = [ElementPlus];
+
+// Stub Element Plus components to avoid rendering issues in tests
+config.global.stubs = {
+  // Stub complex components that cause issues in happy-dom
+  'el-date-picker': true,
+  'el-time-picker': true,
+  'el-upload': true,
+};
 
 // Extend expect with custom matchers if needed
 // import * as matchers from '@testing-library/jest-dom/matchers';

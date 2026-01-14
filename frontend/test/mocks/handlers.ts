@@ -189,4 +189,77 @@ export const handlers = [
       rulesEnabled: 42,
     });
   }),
+
+  // Shippers endpoints
+  http.get(`${API_BASE}/shippers`, () => {
+    return HttpResponse.json({
+      shippers: [
+        {
+          id: 1,
+          name: 'Test Shipper',
+          description: 'Test Description',
+          status: 'online',
+          api_key: 'test-key-123',
+          sources: [],
+          volumes: [],
+          last_seen: new Date().toISOString(),
+        },
+      ],
+      total: 1,
+    });
+  }),
+
+  http.get(`${API_BASE}/shippers/unknown-sources`, () => {
+    return HttpResponse.json({
+      sources: [],
+    });
+  }),
+
+  http.get(`${API_BASE}/shippers/:id`, ({ params }) => {
+    return HttpResponse.json({
+      id: parseInt(params.id as string),
+      name: 'Test Shipper',
+      description: 'Test Description',
+      status: 'online',
+      api_key: 'test-key-123',
+      sources: [],
+      volumes: [],
+      last_seen: new Date().toISOString(),
+    });
+  }),
+
+  http.get(`${API_BASE}/shippers/:id/activity`, ({ params, request }) => {
+    const url = new URL(request.url);
+    const limit = parseInt(url.searchParams.get('limit') || '50');
+
+    return HttpResponse.json({
+      activities: [
+        {
+          id: 1,
+          shipper_id: parseInt(params.id as string),
+          activity_type: 'created',
+          message: 'Shipper was created',
+          metadata: {},
+          created_at: '2025-12-15T10:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+  }),
+
+  // Users endpoints
+  http.get(`${API_BASE}/users`, () => {
+    return HttpResponse.json({
+      users: [
+        {
+          id: 1,
+          username: 'admin',
+          email: 'admin@siembox.local',
+          role: 'Admin',
+          created_at: '2025-01-01T00:00:00Z',
+        },
+      ],
+      total: 1,
+    });
+  }),
 ];

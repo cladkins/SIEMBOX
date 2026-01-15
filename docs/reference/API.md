@@ -2120,10 +2120,10 @@ Get overview of available Nuclei vulnerability templates including categories an
 ```json
 {
   "categories": [
-    { "id": "cves", "name": "CVEs", "description": "Known CVE vulnerabilities from the National Vulnerability Database", "count": 5234, "path": "/root/.local/nuclei-templates/cves" },
-    { "id": "vulnerabilities", "name": "Vulnerabilities", "description": "General vulnerability detection templates", "count": 1420, "path": "/root/.local/nuclei-templates/vulnerabilities" },
-    { "id": "exposures", "name": "Exposures", "description": "Sensitive data exposure detection", "count": 892, "path": "/root/.local/nuclei-templates/exposures" },
-    { "id": "misconfiguration", "name": "Misconfigurations", "description": "Security misconfigurations", "count": 634, "path": "/root/.local/nuclei-templates/misconfiguration" }
+    { "id": "cves", "name": "CVEs", "description": "Known CVE vulnerabilities from the National Vulnerability Database", "count": 5234, "path": "/root/nuclei-templates/cves" },
+    { "id": "vulnerabilities", "name": "Vulnerabilities", "description": "General vulnerability detection templates", "count": 1420, "path": "/root/nuclei-templates/vulnerabilities" },
+    { "id": "exposures", "name": "Exposures", "description": "Sensitive data exposure detection", "count": 892, "path": "/root/nuclei-templates/exposures" },
+    { "id": "misconfiguration", "name": "Misconfigurations", "description": "Security misconfigurations", "count": 634, "path": "/root/nuclei-templates/misconfiguration" }
   ],
   "stats": {
     "totalTemplates": 9500,
@@ -2139,7 +2139,7 @@ Get overview of available Nuclei vulnerability templates including categories an
   },
   "templatesDirectory": {
     "exists": true,
-    "path": "/root/.local/nuclei-templates"
+    "path": "/root/nuclei-templates"
   }
 }
 ```
@@ -2156,8 +2156,8 @@ Get template categories.
 ```json
 {
   "categories": [
-    { "id": "cves", "name": "CVEs", "description": "Known CVE vulnerabilities", "count": 5234, "path": "/root/.local/nuclei-templates/cves" },
-    { "id": "vulnerabilities", "name": "Vulnerabilities", "description": "General vulnerability checks", "count": 1420, "path": "/root/.local/nuclei-templates/vulnerabilities" }
+    { "id": "cves", "name": "CVEs", "description": "Known CVE vulnerabilities", "count": 5234, "path": "/root/nuclei-templates/cves" },
+    { "id": "vulnerabilities", "name": "Vulnerabilities", "description": "General vulnerability checks", "count": 1420, "path": "/root/nuclei-templates/vulnerabilities" }
   ]
 }
 ```

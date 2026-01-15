@@ -9,8 +9,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
 
-// Default template directory (Nuclei's default location)
-const TEMPLATES_DIR = process.env.NUCLEI_TEMPLATES_DIR || '/root/.local/nuclei-templates';
+// Default template directory (Nuclei's default location in container)
+const TEMPLATES_DIR = process.env.NUCLEI_TEMPLATES_DIR || '/root/nuclei-templates';
 
 /**
  * Template category with metadata

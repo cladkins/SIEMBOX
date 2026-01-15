@@ -41,7 +41,7 @@ services:
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
     volumes:
       - ./rules:/app/rules:ro  # Mount rules directory as read-only
-      - nuclei-templates:/root/.local/nuclei-templates  # Nuclei vulnerability templates
+      - ./nuclei-templates:/root/nuclei-templates  # Nuclei vulnerability templates (bind mount for easy customization)
     ports:
       - "3001:3001"
       - "514:514/udp"  # Syslog UDP
@@ -71,8 +71,6 @@ services:
 
 volumes:
   postgres-data:
-    driver: local
-  nuclei-templates:
     driver: local
 
 networks:

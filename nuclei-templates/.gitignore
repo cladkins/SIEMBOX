@@ -1,0 +1,32 @@
+# Ignore downloaded Nuclei templates (they're auto-downloaded)
+# Keep custom templates and README
+
+# Ignore all template directories except custom
+cves/
+vulnerabilities/
+exposures/
+misconfiguration/
+technologies/
+default-logins/
+takeovers/
+file/
+network/
+dns/
+ssl/
+headless/
+fuzzing/
+workflows/
+helpers/
+iot/
+cloud/
+code/
+javascript/
+dast/
+http/
+
+# Keep custom templates
+!custom/
+
+# Keep README
+!README.md
+!.gitignore

@@ -2112,19 +2112,206 @@ Get dashboard summary of vulnerabilities.
 
 ### GET /api/vulnerabilities/templates
 
-Get available Nuclei vulnerability templates.
+Get overview of available Nuclei vulnerability templates including categories and statistics.
 
 **Authentication:** Not required (read-only operation)
 
 **Response (200):**
 ```json
 {
-  "templates": [
-    { "id": "cves", "name": "CVE Templates", "description": "Known CVE vulnerabilities", "count": 5200 },
-    { "id": "default", "name": "Default Templates", "description": "All default templates", "count": 8500 },
-    { "id": "critical", "name": "Critical Only", "description": "Critical severity only", "count": 450 },
-    { "id": "high", "name": "High & Critical", "description": "High and critical severity", "count": 1200 }
+  "categories": [
+    { "id": "cves", "name": "CVEs", "description": "Known CVE vulnerabilities from the National Vulnerability Database", "count": 5234, "path": "/root/.local/nuclei-templates/cves" },
+    { "id": "vulnerabilities", "name": "Vulnerabilities", "description": "General vulnerability detection templates", "count": 1420, "path": "/root/.local/nuclei-templates/vulnerabilities" },
+    { "id": "exposures", "name": "Exposures", "description": "Sensitive data exposure detection", "count": 892, "path": "/root/.local/nuclei-templates/exposures" },
+    { "id": "misconfiguration", "name": "Misconfigurations", "description": "Security misconfigurations", "count": 634, "path": "/root/.local/nuclei-templates/misconfiguration" }
+  ],
+  "stats": {
+    "totalTemplates": 9500,
+    "categories": 15,
+    "tags": 450,
+    "severityCounts": {
+      "critical": 1200,
+      "high": 2800,
+      "medium": 3500,
+      "low": 1500,
+      "info": 500
+    }
+  },
+  "templatesDirectory": {
+    "exists": true,
+    "path": "/root/.local/nuclei-templates"
+  }
+}
+```
+
+---
+
+### GET /api/vulnerabilities/templates/categories
+
+Get template categories.
+
+**Authentication:** Not required (read-only operation)
+
+**Response (200):**
+```json
+{
+  "categories": [
+    { "id": "cves", "name": "CVEs", "description": "Known CVE vulnerabilities", "count": 5234, "path": "/root/.local/nuclei-templates/cves" },
+    { "id": "vulnerabilities", "name": "Vulnerabilities", "description": "General vulnerability checks", "count": 1420, "path": "/root/.local/nuclei-templates/vulnerabilities" }
   ]
+}
+```
+
+---
+
+### GET /api/vulnerabilities/templates/tags
+
+Get available template tags with counts.
+
+**Authentication:** Not required (read-only operation)
+
+**Response (200):**
+```json
+{
+  "tags": [
+    { "name": "cve", "count": 5234 },
+    { "name": "rce", "count": 890 },
+    { "name": "sqli", "count": 456 },
+    { "name": "xss", "count": 320 },
+    { "name": "lfi", "count": 245 }
+  ]
+}
+```
+
+---
+
+### GET /api/vulnerabilities/templates/search
+
+Search templates by name, CVE, or description.
+
+**Authentication:** Not required (read-only operation)
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `q` | string | required | Search query |
+| `limit` | integer | 100 | Maximum results |
+
+**Response (200):**
+```json
+{
+  "templates": [
+    {
+      "id": "CVE-2021-44228",
+      "name": "Apache Log4j RCE",
+      "author": "pdteam",
+      "severity": "critical",
+      "description": "Apache Log4j2 JNDI RCE vulnerability",
+      "tags": ["cve", "rce", "log4j", "critical"],
+      "cveId": "CVE-2021-44228",
+      "cvssScore": 10.0,
+      "category": "cves"
+    }
+  ],
+  "total": 1,
+  "query": "log4j"
+}
+```
+
+---
+
+### GET /api/vulnerabilities/templates/category/:categoryId
+
+Get templates by category.
+
+**Authentication:** Not required (read-only operation)
+
+**Path Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `categoryId` | string | Category ID (e.g., "cves", "vulnerabilities") |
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | integer | 100 | Maximum results |
+
+**Response (200):**
+```json
+{
+  "templates": [
+    {
+      "id": "CVE-2021-44228",
+      "name": "Apache Log4j RCE",
+      "severity": "critical",
+      "tags": ["cve", "rce", "log4j"],
+      "category": "cves"
+    }
+  ],
+  "total": 5234,
+  "category": "cves"
+}
+```
+
+---
+
+### GET /api/vulnerabilities/templates/tag/:tag
+
+Get templates by tag.
+
+**Authentication:** Not required (read-only operation)
+
+**Path Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `tag` | string | Template tag (e.g., "rce", "sqli", "xss") |
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | integer | 100 | Maximum results |
+
+**Response (200):**
+```json
+{
+  "templates": [
+    {
+      "id": "CVE-2021-44228",
+      "name": "Apache Log4j RCE",
+      "severity": "critical",
+      "tags": ["cve", "rce", "log4j"],
+      "category": "cves"
+    }
+  ],
+  "total": 890,
+  "tag": "rce"
+}
+```
+
+---
+
+### POST /api/vulnerabilities/templates/refresh
+
+Refresh the template cache.
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+{
+  "message": "Template cache refreshed",
+  "stats": {
+    "totalTemplates": 9500,
+    "categories": 15,
+    "tags": 450,
+    "severityCounts": {
+      "critical": 1200,
+      "high": 2800,
+      "medium": 3500,
+      "low": 1500,
+      "info": 500
+    }
+  }
 }
 ```
 

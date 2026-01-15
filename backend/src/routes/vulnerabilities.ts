@@ -9,6 +9,7 @@ import express, { Request, Response } from 'express';
 import { authenticate } from '../middleware/auth';
 import { NucleiScanner } from '../services/scanner/nucleiScanner';
 import { VulnerabilityProcessor } from '../services/scanner/vulnerabilityProcessor';
+import { TemplateService } from '../services/scanner/templateService';
 
 const router = express.Router();
 
@@ -35,27 +36,165 @@ router.get('/summary', async (_req: Request, res: Response) => {
 
 /**
  * GET /api/vulnerabilities/templates
- * Get available Nuclei templates
+ * Get available Nuclei templates overview
  * No authentication required - read-only operation
  */
 router.get('/templates', async (_req: Request, res: Response) => {
   try {
-    // TODO: Import NucleiScanner once created
-    // const templates = await NucleiScanner.getTemplates();
+    const [categories, stats, dirCheck] = await Promise.all([
+      TemplateService.getCategories(),
+      TemplateService.getStats(),
+      TemplateService.checkTemplatesDirectory(),
+    ]);
 
-    // Placeholder response until scanner is ready
     res.json({
-      templates: [
-        { id: 'cves', name: 'CVE Templates', description: 'Known CVE vulnerabilities', count: 0 },
-        { id: 'default', name: 'Default Templates', description: 'All default templates', count: 0 },
-        { id: 'critical', name: 'Critical Only', description: 'Critical severity only', count: 0 },
-        { id: 'high', name: 'High & Critical', description: 'High and critical severity', count: 0 },
-      ],
+      categories,
+      stats,
+      templatesDirectory: dirCheck,
     });
   } catch (error: any) {
     console.error('[VULN] Get templates error:', error);
     res.status(500).json({
       error: 'Failed to retrieve templates',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/vulnerabilities/templates/categories
+ * Get template categories
+ * No authentication required - read-only operation
+ */
+router.get('/templates/categories', async (_req: Request, res: Response) => {
+  try {
+    const categories = await TemplateService.getCategories();
+    res.json({ categories });
+  } catch (error: any) {
+    console.error('[VULN] Get template categories error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve template categories',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/vulnerabilities/templates/tags
+ * Get available template tags
+ * No authentication required - read-only operation
+ */
+router.get('/templates/tags', async (_req: Request, res: Response) => {
+  try {
+    const tags = await TemplateService.getTags();
+    res.json({ tags });
+  } catch (error: any) {
+    console.error('[VULN] Get template tags error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve template tags',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/vulnerabilities/templates/search
+ * Search templates by query
+ * No authentication required - read-only operation
+ */
+router.get('/templates/search', async (req: Request, res: Response) => {
+  try {
+    const query = req.query.q as string || '';
+    const limit = parseInt(req.query.limit as string) || 100;
+
+    if (!query) {
+      res.status(400).json({ error: 'Query parameter "q" is required' });
+      return;
+    }
+
+    const templates = await TemplateService.searchTemplates(query, limit);
+    res.json({
+      templates,
+      total: templates.length,
+      query,
+    });
+  } catch (error: any) {
+    console.error('[VULN] Search templates error:', error);
+    res.status(500).json({
+      error: 'Failed to search templates',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/vulnerabilities/templates/category/:categoryId
+ * Get templates by category
+ * No authentication required - read-only operation
+ */
+router.get('/templates/category/:categoryId', async (req: Request, res: Response) => {
+  try {
+    const categoryId = req.params.categoryId;
+    const limit = parseInt(req.query.limit as string) || 100;
+
+    const templates = await TemplateService.getTemplatesByCategory(categoryId, limit);
+    res.json({
+      templates,
+      total: templates.length,
+      category: categoryId,
+    });
+  } catch (error: any) {
+    console.error('[VULN] Get templates by category error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve templates by category',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/vulnerabilities/templates/tag/:tag
+ * Get templates by tag
+ * No authentication required - read-only operation
+ */
+router.get('/templates/tag/:tag', async (req: Request, res: Response) => {
+  try {
+    const tag = req.params.tag;
+    const limit = parseInt(req.query.limit as string) || 100;
+
+    const templates = await TemplateService.getTemplatesByTag(tag, limit);
+    res.json({
+      templates,
+      total: templates.length,
+      tag,
+    });
+  } catch (error: any) {
+    console.error('[VULN] Get templates by tag error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve templates by tag',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * POST /api/vulnerabilities/templates/refresh
+ * Refresh template cache
+ * Authentication required
+ */
+router.post('/templates/refresh', authenticate, async (_req: Request, res: Response) => {
+  try {
+    TemplateService.clearCache();
+    const stats = await TemplateService.getStats();
+
+    res.json({
+      message: 'Template cache refreshed',
+      stats,
+    });
+  } catch (error: any) {
+    console.error('[VULN] Refresh templates error:', error);
+    res.status(500).json({
+      error: 'Failed to refresh templates',
       message: error.message,
     });
   }
@@ -207,7 +346,20 @@ router.post('/scans', authenticate, async (req: Request, res: Response) => {
     } else if (templates === 'cves' || templates === 'default') {
       templateSelection.cves = true;
     } else if (Array.isArray(templates)) {
-      templateSelection.templates = templates;
+      // Check if templates are category paths (end with /)
+      const categoryPaths = templates.filter((t: string) => t.endsWith('/'));
+      const specificTemplates = templates.filter((t: string) => !t.endsWith('/'));
+
+      if (categoryPaths.length > 0) {
+        // Use -t for each category directory
+        templateSelection.templates = categoryPaths;
+      }
+      if (specificTemplates.length > 0) {
+        templateSelection.templates = [
+          ...(templateSelection.templates || []),
+          ...specificTemplates
+        ];
+      }
     } else if (typeof templates === 'string') {
       templateSelection.tags = templates.split(',');
     } else {

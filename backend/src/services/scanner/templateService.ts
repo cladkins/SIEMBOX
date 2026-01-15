@@ -426,11 +426,12 @@ export class TemplateService {
     const { spawn } = require('child_process');
 
     return new Promise((resolve) => {
-      console.log('[TemplateService] Starting template download...');
+      console.log('[TemplateService] Starting template download to:', TEMPLATES_DIR);
 
       // Nuclei's -update-templates only updates official templates
       // Custom templates in custom/ directory are not affected
-      const nucleiProcess = spawn('nuclei', ['-update-templates'], {
+      // Use -ud to specify the target directory
+      const nucleiProcess = spawn('nuclei', ['-update-templates', '-ud', TEMPLATES_DIR], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 

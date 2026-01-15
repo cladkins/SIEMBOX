@@ -18,6 +18,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Settings](#settings-endpoints)
   - [Log Shippers](#log-shippers-endpoints)
   - [Assets](#assets-endpoints)
+  - [Vulnerabilities](#vulnerabilities-endpoints)
 
 ---
 
@@ -2083,6 +2084,429 @@ Get auto-discovery statistics.
   "new_assets_30d": "45"
 }
 ```
+
+---
+
+## Vulnerabilities Endpoints
+
+### GET /api/vulnerabilities/summary
+
+Get dashboard summary of vulnerabilities.
+
+**Authentication:** Not required (read-only operation)
+
+**Response (200):**
+```json
+{
+  "critical_open": "5",
+  "high_open": "12",
+  "medium_open": "25",
+  "low_open": "30",
+  "info_open": "50",
+  "affected_assets": "15",
+  "unique_cves": "42"
+}
+```
+
+---
+
+### GET /api/vulnerabilities/templates
+
+Get available Nuclei vulnerability templates.
+
+**Authentication:** Not required (read-only operation)
+
+**Response (200):**
+```json
+{
+  "templates": [
+    { "id": "cves", "name": "CVE Templates", "description": "Known CVE vulnerabilities", "count": 5200 },
+    { "id": "default", "name": "Default Templates", "description": "All default templates", "count": 8500 },
+    { "id": "critical", "name": "Critical Only", "description": "Critical severity only", "count": 450 },
+    { "id": "high", "name": "High & Critical", "description": "High and critical severity", "count": 1200 }
+  ]
+}
+```
+
+---
+
+### GET /api/vulnerabilities/scans
+
+Get all vulnerability scans with filtering and pagination.
+
+**Authentication:** Not required (read-only operation)
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | integer | 50 | Results per page |
+
+**Response (200):**
+```json
+{
+  "scans": [
+    {
+      "id": 1,
+      "scan_type": "vulnerability",
+      "target": "192.168.1.100",
+      "status": "completed",
+      "started_at": "2025-01-14T10:00:00Z",
+      "completed_at": "2025-01-14T10:15:23Z",
+      "duration_seconds": 923,
+      "vulnerabilities_found": 15,
+      "error_message": null,
+      "created_at": "2025-01-14T10:00:00Z",
+      "initiated_by_username": "admin"
+    }
+  ],
+  "total": 42,
+  "limit": 50,
+  "offset": 0,
+  "hasMore": false
+}
+```
+
+---
+
+### GET /api/vulnerabilities/scans/active
+
+Get active vulnerability scans (queued or running).
+
+**Authentication:** Not required (read-only operation)
+
+**Response (200):**
+```json
+{
+  "scans": [
+    {
+      "id": 5,
+      "scan_type": "vulnerability",
+      "target": "192.168.1.0/24",
+      "status": "running",
+      "started_at": "2025-01-14T11:30:00Z",
+      "vulnerabilities_found": 0,
+      "initiated_by_username": "analyst"
+    }
+  ],
+  "total": 1
+}
+```
+
+---
+
+### GET /api/vulnerabilities/scans/:scanId
+
+Get detailed information about a specific vulnerability scan.
+
+**Authentication:** Not required (read-only operation)
+
+**URL Parameters:**
+- `scanId` - Scan ID
+
+**Response (200):**
+```json
+{
+  "id": 1,
+  "scan_type": "vulnerability",
+  "target": "192.168.1.100",
+  "status": "completed",
+  "started_at": "2025-01-14T10:00:00Z",
+  "completed_at": "2025-01-14T10:15:23Z",
+  "duration_seconds": 923,
+  "vulnerabilities_found": 15,
+  "error_message": null,
+  "results_summary": {
+    "vulnerabilitiesFound": 15,
+    "severityCounts": {
+      "critical": 2,
+      "high": 5,
+      "medium": 5,
+      "low": 2,
+      "info": 1
+    },
+    "completedAt": "2025-01-14T10:15:23Z"
+  },
+  "created_at": "2025-01-14T10:00:00Z"
+}
+```
+
+**Errors:**
+- `404` - Scan not found
+
+---
+
+### GET /api/vulnerabilities/scans/:scanId/status
+
+Get vulnerability scan status (for polling).
+
+**Authentication:** Not required (read-only operation)
+
+**URL Parameters:**
+- `scanId` - Scan ID
+
+**Response (200):**
+```json
+{
+  "id": 1,
+  "status": "completed",
+  "progress": 100,
+  "vulnerabilities_found": 15,
+  "started_at": "2025-01-14T10:00:00Z",
+  "completed_at": "2025-01-14T10:15:23Z",
+  "error_message": null
+}
+```
+
+**Progress Values:**
+- `0` - Queued
+- `50` - Running
+- `100` - Completed
+
+**Errors:**
+- `404` - Scan not found
+
+---
+
+### POST /api/vulnerabilities/scans
+
+Trigger a new vulnerability scan using Nuclei.
+
+**Authentication:** Required
+
+**Request Body:**
+```json
+{
+  "target": "192.168.1.100",
+  "templates": "cves",
+  "severity": ["critical", "high"],
+  "description": "Weekly vulnerability scan",
+  "timeout": 1800000,
+  "rateLimit": 50
+}
+```
+
+**Request Body Fields:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `target` | string | Yes | Target URL, IP address, or CIDR range |
+| `templates` | string/array | No | Template selection: `all`, `cves`, `default`, or array of specific templates |
+| `severity` | array | No | Filter by severity: `critical`, `high`, `medium`, `low`, `info` |
+| `description` | string | No | Description for this scan |
+| `timeout` | integer | No | Scan timeout in milliseconds (default: 30 minutes) |
+| `rateLimit` | integer | No | Maximum requests per second |
+
+**Template Selection Options:**
+- `"all"` - Use all available templates
+- `"cves"` - Use only CVE templates (default)
+- `"default"` - Use default template set
+- `["tag1", "tag2"]` - Use templates matching specific tags
+
+**Response (202):**
+```json
+{
+  "message": "Vulnerability scan initiated",
+  "scanId": 15,
+  "status": "queued",
+  "target": "192.168.1.100",
+  "templateSelection": {
+    "cves": true,
+    "severities": ["critical", "high"]
+  }
+}
+```
+
+**Errors:**
+- `400` - Missing target
+
+---
+
+### POST /api/vulnerabilities/scans/:scanId/cancel
+
+Cancel a running vulnerability scan.
+
+**Authentication:** Required
+
+**URL Parameters:**
+- `scanId` - Scan ID
+
+**Response (200):**
+```json
+{
+  "message": "Scan cancelled successfully",
+  "scanId": 15
+}
+```
+
+**Errors:**
+- `404` - Scan not found or not running
+
+---
+
+### GET /api/vulnerabilities
+
+Get all vulnerabilities with filtering and pagination.
+
+**Authentication:** Not required (read-only operation)
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `severity` | string | - | Filter by severity: `critical`, `high`, `medium`, `low`, `info` |
+| `status` | string | - | Filter by status: `open`, `patched`, `false_positive`, `accepted` |
+| `cve_id` | string | - | Filter by CVE ID |
+| `search` | string | - | Search in vulnerability title and description |
+| `limit` | integer | 50 | Results per page |
+| `offset` | integer | 0 | Pagination offset |
+
+**Response (200):**
+```json
+{
+  "vulnerabilities": [
+    {
+      "id": 1,
+      "cve_id": "CVE-2021-44228",
+      "title": "Log4Shell RCE",
+      "description": "Remote code execution vulnerability in Log4j",
+      "severity": "critical",
+      "cvss_score": 10.0,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+      "remediation": "Upgrade to Log4j 2.17.0 or later",
+      "references": ["https://nvd.nist.gov/vuln/detail/CVE-2021-44228"],
+      "cwe_id": "CWE-917",
+      "created_at": "2025-01-14T10:15:00Z"
+    }
+  ],
+  "total": 42,
+  "limit": 50,
+  "offset": 0,
+  "hasMore": false
+}
+```
+
+---
+
+### GET /api/vulnerabilities/:id
+
+Get vulnerability by ID with affected assets.
+
+**Authentication:** Not required (read-only operation)
+
+**URL Parameters:**
+- `id` - Vulnerability ID
+
+**Response (200):**
+```json
+{
+  "id": 1,
+  "cve_id": "CVE-2021-44228",
+  "title": "Log4Shell RCE",
+  "description": "Remote code execution vulnerability in Log4j",
+  "severity": "critical",
+  "cvss_score": 10.0,
+  "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+  "remediation": "Upgrade to Log4j 2.17.0 or later",
+  "references": ["https://nvd.nist.gov/vuln/detail/CVE-2021-44228"],
+  "cwe_id": "CWE-917",
+  "affected_assets": [
+    {
+      "asset_id": 5,
+      "ip_address": "192.168.1.100",
+      "hostname": "webserver01",
+      "status": "open",
+      "first_detected": "2025-01-14T10:15:00Z"
+    }
+  ],
+  "created_at": "2025-01-14T10:15:00Z"
+}
+```
+
+**Errors:**
+- `404` - Vulnerability not found
+
+---
+
+### GET /api/vulnerabilities/asset/:assetId
+
+Get vulnerabilities for a specific asset.
+
+**Authentication:** Not required (read-only operation)
+
+**URL Parameters:**
+- `assetId` - Asset ID
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `status` | string | - | Filter by status: `open`, `patched`, `false_positive`, `accepted` |
+| `severity` | string | - | Filter by severity |
+| `limit` | integer | 50 | Results per page |
+| `offset` | integer | 0 | Pagination offset |
+
+**Response (200):**
+```json
+{
+  "asset_id": 5,
+  "vulnerabilities": [
+    {
+      "id": 1,
+      "cve_id": "CVE-2021-44228",
+      "title": "Log4Shell RCE",
+      "severity": "critical",
+      "cvss_score": 10.0,
+      "status": "open",
+      "evidence": "Template: CVE-2021-44228\nMatched at: http://192.168.1.100:8080/api",
+      "first_detected": "2025-01-14T10:15:00Z",
+      "last_detected": "2025-01-14T10:15:00Z",
+      "remediation": "Upgrade to Log4j 2.17.0 or later"
+    }
+  ],
+  "total": 5
+}
+```
+
+**Errors:**
+- `400` - Invalid asset ID
+
+---
+
+### PATCH /api/vulnerabilities/:assetId/:vulnId
+
+Update vulnerability status for an asset.
+
+**Authentication:** Required
+
+**URL Parameters:**
+- `assetId` - Asset ID
+- `vulnId` - Vulnerability ID
+
+**Request Body:**
+```json
+{
+  "status": "patched",
+  "notes": "Applied security patch on 2025-01-14"
+}
+```
+
+**Valid Status Values:**
+- `open` - Vulnerability is active and unaddressed
+- `patched` - Vulnerability has been patched
+- `false_positive` - Determined to be a false positive
+- `accepted` - Risk accepted (with documentation)
+
+**Response (200):**
+```json
+{
+  "message": "Vulnerability status updated",
+  "asset_id": 5,
+  "vulnerability_id": 1,
+  "status": "patched",
+  "notes": "Applied security patch on 2025-01-14"
+}
+```
+
+**Errors:**
+- `400` - Invalid asset ID, vulnerability ID, or status
+- `404` - Asset-vulnerability mapping not found
 
 ---
 

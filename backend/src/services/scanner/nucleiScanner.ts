@@ -9,7 +9,6 @@ import { spawn, ChildProcess } from 'child_process';
 import { AuditService } from '../audit/auditService';
 import pool from '../../config/database';
 import {
-  NucleiScanConfig,
   NucleiResult,
   NucleiError,
   NucleiErrorCode,
@@ -400,7 +399,7 @@ export class NucleiScanner {
    * Store vulnerability in database
    */
   private static async storeVulnerability(
-    scanId: number,
+    _scanId: number,
     vuln: ProcessedNucleiVulnerability
   ): Promise<void> {
     const client = await pool.connect();
@@ -438,7 +437,7 @@ export class NucleiScanner {
           vuln.title,
           vuln.description,
           vuln.remediation,
-          vuln.references.length > 0 ? vuln.references : null,
+          vuln.references && vuln.references.length > 0 ? vuln.references : null,
           vuln.cweId,
           JSON.stringify({
             nuclei_template: vuln.templateId,

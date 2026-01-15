@@ -147,7 +147,7 @@ function buildNucleiArgs(options) {
   const args = [];
 
   args.push('-target', options.target);
-  args.push('-json');
+  args.push('-jsonl');
   args.push('-silent');
 
   const ts = options.templateSelection;

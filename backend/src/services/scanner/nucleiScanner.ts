@@ -210,8 +210,8 @@ export class NucleiScanner {
     // Target
     args.push('-target', options.target);
 
-    // JSON output
-    args.push('-json');
+    // JSON Lines output (Nuclei v3.x uses -jsonl instead of -json)
+    args.push('-jsonl');
 
     // Silent mode (no banner/progress to stdout)
     args.push('-silent');

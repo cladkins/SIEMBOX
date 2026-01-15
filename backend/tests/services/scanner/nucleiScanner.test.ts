@@ -61,7 +61,7 @@ describe('NucleiScanner', () => {
 
       expect(args).toContain('-target');
       expect(args).toContain('http://example.com');
-      expect(args).toContain('-json');
+      expect(args).toContain('-jsonl');
       expect(args).toContain('-silent');
       expect(args).toContain('-update-templates');
     });

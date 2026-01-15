@@ -413,6 +413,85 @@ export class TemplateService {
   }
 
   /**
+   * Download/update Nuclei templates
+   * Uses -update-templates which only downloads new/updated templates
+   * Custom templates in the 'custom/' directory are preserved
+   */
+  static async downloadTemplates(): Promise<{
+    success: boolean;
+    message: string;
+    output?: string;
+    error?: string;
+  }> {
+    const { spawn } = require('child_process');
+
+    return new Promise((resolve) => {
+      console.log('[TemplateService] Starting template download...');
+
+      // Nuclei's -update-templates only updates official templates
+      // Custom templates in custom/ directory are not affected
+      const nucleiProcess = spawn('nuclei', ['-update-templates'], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      nucleiProcess.stdout?.on('data', (data: Buffer) => {
+        const output = data.toString();
+        stdout += output;
+        console.log('[TemplateService]', output.trim());
+      });
+
+      nucleiProcess.stderr?.on('data', (data: Buffer) => {
+        const output = data.toString();
+        stderr += output;
+        // Nuclei outputs info to stderr, not always errors
+        console.log('[TemplateService]', output.trim());
+      });
+
+      nucleiProcess.on('close', (code: number | null) => {
+        // Clear cache so new templates are picked up
+        this.clearCache();
+
+        if (code === 0) {
+          console.log('[TemplateService] Template download completed successfully');
+          resolve({
+            success: true,
+            message: 'Templates downloaded/updated successfully',
+            output: stdout + stderr,
+          });
+        } else {
+          console.error('[TemplateService] Template download failed with code:', code);
+          resolve({
+            success: false,
+            message: `Template download failed with exit code ${code}`,
+            error: stderr || stdout,
+          });
+        }
+      });
+
+      nucleiProcess.on('error', (error: Error) => {
+        console.error('[TemplateService] Template download error:', error);
+        resolve({
+          success: false,
+          message: 'Failed to start template download',
+          error: error.message,
+        });
+      });
+
+      // Timeout after 5 minutes
+      setTimeout(() => {
+        nucleiProcess.kill('SIGTERM');
+        resolve({
+          success: false,
+          message: 'Template download timed out after 5 minutes',
+        });
+      }, 5 * 60 * 1000);
+    });
+  }
+
+  /**
    * Get summary statistics
    */
   static async getStats(): Promise<{

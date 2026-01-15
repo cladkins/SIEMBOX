@@ -201,6 +201,42 @@ router.post('/templates/refresh', authenticate, async (_req: Request, res: Respo
 });
 
 /**
+ * POST /api/vulnerabilities/templates/download
+ * Download/update Nuclei templates from official repository
+ * Only downloads new or updated templates, preserves custom templates
+ * Authentication required
+ */
+router.post('/templates/download', authenticate, async (_req: Request, res: Response) => {
+  try {
+    console.log('[VULN] Starting template download...');
+
+    const result = await TemplateService.downloadTemplates();
+
+    if (result.success) {
+      // Get updated stats after download
+      const stats = await TemplateService.getStats();
+
+      res.json({
+        message: result.message,
+        stats,
+        output: result.output,
+      });
+    } else {
+      res.status(500).json({
+        error: result.message,
+        details: result.error,
+      });
+    }
+  } catch (error: any) {
+    console.error('[VULN] Download templates error:', error);
+    res.status(500).json({
+      error: 'Failed to download templates',
+      message: error.message,
+    });
+  }
+});
+
+/**
  * GET /api/vulnerabilities/scans/active
  * Get active vulnerability scans
  * No authentication required - read-only operation

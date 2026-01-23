@@ -469,29 +469,53 @@ export class TemplateService {
 
     try {
       // Step 1: Download the tarball
-      console.log('[TemplateService] Downloading templates from GitHub...');
+      console.log('[TemplateService] Step 1: Downloading templates from GitHub...');
+      console.log('[TemplateService] URL:', tarballUrl);
+      console.log('[TemplateService] Destination:', tempTarball);
       await this.downloadFile(tarballUrl, tempTarball);
-      console.log('[TemplateService] Download complete, extracting...');
+
+      // Verify download
+      const stats = await fs.promises.stat(tempTarball);
+      console.log('[TemplateService] Step 1 complete: Downloaded', (stats.size / 1024 / 1024).toFixed(2), 'MB');
 
       // Step 2: Create temp extract directory
+      console.log('[TemplateService] Step 2: Creating extract directory:', tempExtractDir);
       await fs.promises.mkdir(tempExtractDir, { recursive: true });
+      console.log('[TemplateService] Step 2 complete: Directory created');
 
       // Step 3: Extract tarball using tar command (available in Alpine)
+      console.log('[TemplateService] Step 3: Extracting tarball...');
       await new Promise<void>((resolve, reject) => {
         exec(`tar -xzf ${tempTarball} -C ${tempExtractDir}`, (error, _stdout, stderr) => {
           if (error) {
+            console.error('[TemplateService] tar stderr:', stderr);
             reject(new Error(`tar extraction failed: ${stderr || error.message}`));
           } else {
             resolve();
           }
         });
       });
+      console.log('[TemplateService] Step 3 complete: Extraction finished');
 
       // Step 4: Move contents from extracted directory to templates directory
       // The tarball extracts to nuclei-templates-main/
       const extractedDir = path.join(tempExtractDir, 'nuclei-templates-main');
-      const entries = await fs.promises.readdir(extractedDir, { withFileTypes: true });
+      console.log('[TemplateService] Step 4: Moving templates from', extractedDir, 'to', TEMPLATES_DIR);
 
+      // Check if extracted directory exists
+      try {
+        await fs.promises.access(extractedDir);
+      } catch {
+        // List what's in the extract dir to debug
+        const extractContents = await fs.promises.readdir(tempExtractDir);
+        console.error('[TemplateService] Expected nuclei-templates-main not found. Contents:', extractContents);
+        throw new Error(`Extracted directory not found. Contents: ${extractContents.join(', ')}`);
+      }
+
+      const entries = await fs.promises.readdir(extractedDir, { withFileTypes: true });
+      console.log('[TemplateService] Found', entries.length, 'items to move');
+
+      let movedCount = 0;
       for (const entry of entries) {
         if (entry.name.startsWith('.')) continue; // Skip hidden files
         const src = path.join(extractedDir, entry.name);
@@ -501,6 +525,7 @@ export class TemplateService {
         if (entry.name === 'custom') {
           try {
             await fs.promises.access(dest);
+            console.log('[TemplateService] Preserving existing custom/ directory');
             continue; // Skip if custom/ already exists
           } catch { /* dest doesn't exist, safe to copy */ }
         }
@@ -510,26 +535,41 @@ export class TemplateService {
           await fs.promises.rm(dest, { recursive: true, force: true });
         } catch { /* ignore */ }
 
-        // Move the file/directory
-        await fs.promises.rename(src, dest);
+        // Move the file/directory - use copy+delete for cross-device support
+        try {
+          await fs.promises.rename(src, dest);
+        } catch (renameErr: any) {
+          // If rename fails (cross-device), fall back to copy
+          if (renameErr.code === 'EXDEV') {
+            console.log('[TemplateService] Cross-device move, using copy for:', entry.name);
+            await this.copyRecursive(src, dest);
+          } else {
+            throw renameErr;
+          }
+        }
+        movedCount++;
       }
+      console.log('[TemplateService] Step 4 complete: Moved', movedCount, 'items');
 
       // Step 5: Clean up temp files
+      console.log('[TemplateService] Step 5: Cleaning up temp files...');
       await fs.promises.rm(tempTarball, { force: true });
       await fs.promises.rm(tempExtractDir, { recursive: true, force: true });
+      console.log('[TemplateService] Step 5 complete: Cleanup done');
 
       // Clear cache and load templates
       this.clearCache();
       const templates = await this.getAllTemplates();
 
-      console.log('[TemplateService] Initial template download completed successfully');
+      console.log('[TemplateService] SUCCESS: Downloaded', templates.length, 'templates');
       return {
         success: true,
         message: `Templates downloaded successfully (${templates.length} templates)`,
         output: 'Downloaded from GitHub tarball and extracted',
       };
     } catch (error: any) {
-      console.error('[TemplateService] Template download error:', error);
+      console.error('[TemplateService] FAILED at step - Error:', error.message);
+      console.error('[TemplateService] Full error:', error);
 
       // Clean up on error
       try {
@@ -539,7 +579,7 @@ export class TemplateService {
 
       return {
         success: false,
-        message: 'Failed to download templates',
+        message: `Failed to download templates: ${error.message}`,
         error: error.message,
       };
     }
@@ -550,41 +590,62 @@ export class TemplateService {
    */
   private static async downloadFile(url: string, destPath: string): Promise<void> {
     return new Promise((resolve, reject) => {
+      console.log('[TemplateService] downloadFile: Starting download...');
       const file = fs.createWriteStream(destPath);
       let downloadTimeout: NodeJS.Timeout;
+      let bytesReceived = 0;
+
+      file.on('error', (err) => {
+        console.error('[TemplateService] downloadFile: File write error:', err);
+        reject(err);
+      });
 
       const makeRequest = (requestUrl: string, redirectCount = 0) => {
         if (redirectCount > 5) {
+          console.error('[TemplateService] downloadFile: Too many redirects');
           reject(new Error('Too many redirects'));
           return;
         }
 
+        console.log('[TemplateService] downloadFile: Requesting', requestUrl.substring(0, 80) + '...');
         const request = https.get(requestUrl, (response) => {
+          console.log('[TemplateService] downloadFile: Got response status', response.statusCode);
+
           // Handle redirects
           if (response.statusCode === 301 || response.statusCode === 302) {
             const redirectUrl = response.headers.location;
             if (redirectUrl) {
-              console.log('[TemplateService] Following redirect to:', redirectUrl.substring(0, 80) + '...');
+              console.log('[TemplateService] downloadFile: Following redirect to:', redirectUrl.substring(0, 80) + '...');
               makeRequest(redirectUrl, redirectCount + 1);
               return;
             }
           }
 
           if (response.statusCode !== 200) {
+            console.error('[TemplateService] downloadFile: Bad status code:', response.statusCode);
             reject(new Error(`Download failed with status ${response.statusCode}`));
             return;
           }
+
+          const contentLength = response.headers['content-length'];
+          console.log('[TemplateService] downloadFile: Content-Length:', contentLength || 'unknown');
+
+          response.on('data', (chunk) => {
+            bytesReceived += chunk.length;
+          });
 
           response.pipe(file);
 
           file.on('finish', () => {
             clearTimeout(downloadTimeout);
             file.close();
+            console.log('[TemplateService] downloadFile: Complete, received', (bytesReceived / 1024 / 1024).toFixed(2), 'MB');
             resolve();
           });
         });
 
         request.on('error', (error) => {
+          console.error('[TemplateService] downloadFile: Request error:', error);
           clearTimeout(downloadTimeout);
           fs.unlink(destPath, () => {}); // Delete incomplete file
           reject(error);
@@ -593,6 +654,7 @@ export class TemplateService {
 
       // 10 minute timeout for download
       downloadTimeout = setTimeout(() => {
+        console.error('[TemplateService] downloadFile: Timeout after 10 minutes');
         file.close();
         fs.unlink(destPath, () => {});
         reject(new Error('Download timed out after 10 minutes'));
@@ -600,6 +662,22 @@ export class TemplateService {
 
       makeRequest(url);
     });
+  }
+
+  /**
+   * Recursively copy a directory (for cross-device moves)
+   */
+  private static async copyRecursive(src: string, dest: string): Promise<void> {
+    const stat = await fs.promises.stat(src);
+    if (stat.isDirectory()) {
+      await fs.promises.mkdir(dest, { recursive: true });
+      const entries = await fs.promises.readdir(src);
+      for (const entry of entries) {
+        await this.copyRecursive(path.join(src, entry), path.join(dest, entry));
+      }
+    } else {
+      await fs.promises.copyFile(src, dest);
+    }
   }
 
   /**

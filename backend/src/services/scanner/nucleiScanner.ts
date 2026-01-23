@@ -166,25 +166,40 @@ export class NucleiScanner {
         stderrData += errorOutput;
 
         // Parse stats output for progress tracking
-        // Format: "[0:01:23] | Templates: 1500/6489 (23.1%) | Hosts: 1/1 (100%) | RPS: 150 | Requests: 12500"
-        const statsMatch = errorOutput.match(/Templates:\s*(\d+)\/(\d+)\s*\(([0-9.]+)%\).*?Hosts:\s*(\d+)\/(\d+).*?Requests:\s*(\d+)/);
-        if (statsMatch) {
-          const [, templatesCompleted, templatesTotalParsed, percentComplete, hostsCompleted, hostsTotal, requests] = statsMatch;
-          templatesTotal = parseInt(templatesTotalParsed, 10);
+        // Nuclei v3 outputs JSON stats: {"duration":"0:00:05","errors":"103","hosts":"1","matched":"0","percent":"110","requests":"106","rps":"20","startedAt":"...","templates":"82","total":"96"}
+        const lines = errorOutput.split('\n').filter(line => line.trim());
+        let statsFound = false;
 
-          // Throttle database updates to every 3 seconds
-          const now = Date.now();
-          if (now - lastProgressUpdate >= 3000) {
-            lastProgressUpdate = now;
-            await this.updateScanProgress(scanId, {
-              templatesCompleted: parseInt(templatesCompleted, 10),
-              templatesTotal: parseInt(templatesTotalParsed, 10),
-              percentComplete: parseFloat(percentComplete),
-              hostsCompleted: parseInt(hostsCompleted, 10),
-              hostsTotal: parseInt(hostsTotal, 10),
-              requests: parseInt(requests, 10),
-              vulnerabilitiesFound: results.length,
-            }).catch(err => console.error('[Nuclei] Failed to update progress:', err));
+        for (const line of lines) {
+          // Try to parse JSON stats
+          if (line.startsWith('{') && line.includes('"templates"')) {
+            try {
+              const stats = JSON.parse(line);
+              if (stats.templates !== undefined && stats.total !== undefined) {
+                statsFound = true;
+                const templatesCompleted = parseInt(stats.templates, 10) || 0;
+                const totalTemplates = parseInt(stats.total, 10) || 0;
+                templatesTotal = totalTemplates;
+
+                // Throttle database updates to every 3 seconds
+                const now = Date.now();
+                if (now - lastProgressUpdate >= 3000) {
+                  lastProgressUpdate = now;
+                  const percentComplete = totalTemplates > 0 ? (templatesCompleted / totalTemplates) * 100 : 0;
+                  await this.updateScanProgress(scanId, {
+                    templatesCompleted,
+                    templatesTotal: totalTemplates,
+                    percentComplete: Math.min(100, percentComplete),
+                    hostsCompleted: parseInt(stats.hosts, 10) || 0,
+                    hostsTotal: parseInt(stats.hosts, 10) || 1,
+                    requests: parseInt(stats.requests, 10) || 0,
+                    vulnerabilitiesFound: results.length,
+                  }).catch(err => console.error('[Nuclei] Failed to update progress:', err));
+                }
+              }
+            } catch {
+              // Not valid JSON, continue
+            }
           }
         }
 
@@ -205,7 +220,7 @@ export class NucleiScanner {
         }
 
         // Log non-stats output for debugging
-        if (!statsMatch && errorOutput.trim()) {
+        if (!statsFound && errorOutput.trim()) {
           console.log(`[Nuclei] stderr:`, errorOutput.trim());
         }
       });

@@ -138,6 +138,8 @@ export class NucleiScanner {
 
       const results: NucleiResult[] = [];
       let stderrData = '';
+      let templatesTotal = 0;
+      let lastProgressUpdate = 0;
 
       // Handle stdout (JSON results)
       nucleiProcess.stdout?.on('data', (data: Buffer) => {
@@ -158,11 +160,54 @@ export class NucleiScanner {
         }
       });
 
-      // Handle stderr (errors and warnings)
-      nucleiProcess.stderr?.on('data', (data: Buffer) => {
+      // Handle stderr (errors, warnings, and stats)
+      nucleiProcess.stderr?.on('data', async (data: Buffer) => {
         const errorOutput = data.toString();
         stderrData += errorOutput;
-        console.error(`[Nuclei] stderr:`, errorOutput);
+
+        // Parse stats output for progress tracking
+        // Format: "[0:01:23] | Templates: 1500/6489 (23.1%) | Hosts: 1/1 (100%) | RPS: 150 | Requests: 12500"
+        const statsMatch = errorOutput.match(/Templates:\s*(\d+)\/(\d+)\s*\(([0-9.]+)%\).*?Hosts:\s*(\d+)\/(\d+).*?Requests:\s*(\d+)/);
+        if (statsMatch) {
+          const [, templatesCompleted, templatesTotalParsed, percentComplete, hostsCompleted, hostsTotal, requests] = statsMatch;
+          templatesTotal = parseInt(templatesTotalParsed, 10);
+
+          // Throttle database updates to every 3 seconds
+          const now = Date.now();
+          if (now - lastProgressUpdate >= 3000) {
+            lastProgressUpdate = now;
+            await this.updateScanProgress(scanId, {
+              templatesCompleted: parseInt(templatesCompleted, 10),
+              templatesTotal: parseInt(templatesTotalParsed, 10),
+              percentComplete: parseFloat(percentComplete),
+              hostsCompleted: parseInt(hostsCompleted, 10),
+              hostsTotal: parseInt(hostsTotal, 10),
+              requests: parseInt(requests, 10),
+              vulnerabilitiesFound: results.length,
+            }).catch(err => console.error('[Nuclei] Failed to update progress:', err));
+          }
+        }
+
+        // Also capture "Templates loaded" message for initial count
+        const loadedMatch = errorOutput.match(/Templates loaded[^:]*:\s*(\d+)/i);
+        if (loadedMatch) {
+          templatesTotal = parseInt(loadedMatch[1], 10);
+          console.log(`[Nuclei] Templates loaded: ${templatesTotal}`);
+          await this.updateScanProgress(scanId, {
+            templatesCompleted: 0,
+            templatesTotal,
+            percentComplete: 0,
+            hostsCompleted: 0,
+            hostsTotal: 1,
+            requests: 0,
+            vulnerabilitiesFound: 0,
+          }).catch(err => console.error('[Nuclei] Failed to update initial progress:', err));
+        }
+
+        // Log non-stats output for debugging
+        if (!statsMatch && errorOutput.trim()) {
+          console.log(`[Nuclei] stderr:`, errorOutput.trim());
+        }
       });
 
       // Handle process completion
@@ -216,8 +261,9 @@ export class NucleiScanner {
     // JSON Lines output (Nuclei v3.x uses -jsonl instead of -json)
     args.push('-jsonl');
 
-    // Silent mode (no banner/progress to stdout)
-    args.push('-silent');
+    // Enable stats output for progress tracking (outputs to stderr)
+    args.push('-stats');
+    args.push('-stats-interval', '5');
 
     // Template selection
     const ts = options.templateSelection;
@@ -578,6 +624,50 @@ export class NucleiScanner {
     } catch (error) {
       console.error('[Nuclei] Failed to update scan status:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Update scan progress during execution
+   */
+  private static async updateScanProgress(
+    scanId: number,
+    progress: {
+      templatesCompleted: number;
+      templatesTotal: number;
+      percentComplete: number;
+      hostsCompleted: number;
+      hostsTotal: number;
+      requests: number;
+      vulnerabilitiesFound: number;
+    }
+  ): Promise<void> {
+    try {
+      const query = `
+        UPDATE vulnerability_scans
+        SET
+          results_summary = COALESCE(results_summary, '{}'::jsonb) || $2::jsonb,
+          vulnerabilities_found = $3,
+          updated_at = NOW()
+        WHERE id = $1
+      `;
+
+      const progressSummary = {
+        progress: {
+          templatesCompleted: progress.templatesCompleted,
+          templatesTotal: progress.templatesTotal,
+          percentComplete: progress.percentComplete,
+          hostsCompleted: progress.hostsCompleted,
+          hostsTotal: progress.hostsTotal,
+          requests: progress.requests,
+          lastUpdate: new Date().toISOString(),
+        }
+      };
+
+      await pool.query(query, [scanId, JSON.stringify(progressSummary), progress.vulnerabilitiesFound]);
+    } catch (error) {
+      console.error('[Nuclei] Failed to update scan progress:', error);
+      // Don't throw - progress update failures shouldn't stop the scan
     }
   }
 

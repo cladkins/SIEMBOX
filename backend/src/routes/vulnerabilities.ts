@@ -238,15 +238,18 @@ router.post('/templates/download', authenticate, async (_req: Request, res: Resp
 
 /**
  * GET /api/vulnerabilities/scans/active
- * Get active vulnerability scans
+ * Get active vulnerability scans (queued or running)
  * No authentication required - read-only operation
  */
 router.get('/scans/active', async (_req: Request, res: Response) => {
   try {
-    // TODO: Import VulnerabilityRepository once created
-    // const scans = await VulnerabilityRepository.getActiveScans();
+    // Get all scans and filter to active ones (queued or running)
+    const allScans = await NucleiScanner.getRecentScans(50);
+    const activeScans = allScans.filter(
+      (scan: any) => scan.status === 'queued' || scan.status === 'running'
+    );
 
-    res.json({ scans: [], total: 0 });
+    res.json({ scans: activeScans, total: activeScans.length });
   } catch (error: any) {
     console.error('[VULN] Get active scans error:', error);
     res.status(500).json({
@@ -339,13 +342,26 @@ router.get('/scans/:scanId/status', async (req: Request, res: Response): Promise
       return;
     }
 
+    // Extract progress from results_summary if available
+    const resultsSummary = status.results_summary || {};
+    const progress = resultsSummary.progress || {};
+
     res.json({
       id: status.id,
       status: status.status,
-      progress: status.status === 'completed' ? 100 : status.status === 'running' ? 50 : 0,
+      progress: {
+        templatesCompleted: progress.templatesCompleted || 0,
+        templatesTotal: progress.templatesTotal || 0,
+        percentComplete: status.status === 'completed' ? 100 : (progress.percentComplete || 0),
+        hostsCompleted: progress.hostsCompleted || 0,
+        hostsTotal: progress.hostsTotal || 0,
+        requests: progress.requests || 0,
+        lastUpdate: progress.lastUpdate || null,
+      },
       vulnerabilities_found: status.vulnerabilities_found || 0,
       started_at: status.started_at,
       completed_at: status.completed_at,
+      duration_seconds: status.duration_seconds,
       error_message: status.error_message,
     });
   } catch (error: any) {

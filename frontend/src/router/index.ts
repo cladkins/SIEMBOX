@@ -72,6 +72,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/VulnerabilityManagement.vue'),
         meta: { allowedRoles: ['admin', 'operator'] },
       },
+      {
+        path: 'templates',
+        name: 'Templates',
+        component: () => import('@/views/Templates.vue'),
+        meta: { allowedRoles: ['admin', 'analyst', 'operator'] },
+      },
     ],
   },
 ];

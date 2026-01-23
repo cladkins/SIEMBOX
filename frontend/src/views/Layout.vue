@@ -61,6 +61,10 @@
             <el-icon><Warning /></el-icon>
             <span>Vulnerability Management</span>
           </el-menu-item>
+          <el-menu-item index="/templates">
+            <el-icon><Collection /></el-icon>
+            <span>Templates</span>
+          </el-menu-item>
         </el-sub-menu>
 
         <el-menu-item index="/users" v-if="authStore.user?.role === 'admin'">
@@ -96,7 +100,7 @@
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning } from '@element-plus/icons-vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();
@@ -114,6 +118,7 @@ const pageTitle = computed(() => {
     '/asset-inventory': 'Asset Inventory',
     '/vulnerability-scanning': 'Vulnerability Scanning',
     '/vulnerability-management': 'Vulnerability Management',
+    '/templates': 'Nuclei Templates',
     '/users': 'User Management',
     '/settings': 'Settings',
   };

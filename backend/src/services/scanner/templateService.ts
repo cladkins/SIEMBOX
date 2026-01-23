@@ -8,6 +8,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
+import * as https from 'https';
+import { exec } from 'child_process';
 
 // Default template directory (Nuclei's default location in container)
 const TEMPLATES_DIR = process.env.NUCLEI_TEMPLATES_DIR || '/root/nuclei-templates';
@@ -450,7 +452,8 @@ export class TemplateService {
   }
 
   /**
-   * Clone nuclei-templates repository for initial download
+   * Download nuclei-templates tarball for initial download
+   * Uses Node.js https to download and tar to extract (no git required)
    */
   private static async cloneTemplates(): Promise<{
     success: boolean;
@@ -458,106 +461,144 @@ export class TemplateService {
     output?: string;
     error?: string;
   }> {
-    const { spawn } = require('child_process');
+    console.log('[TemplateService] Initial download - downloading nuclei-templates to:', TEMPLATES_DIR);
 
-    return new Promise((resolve) => {
-      console.log('[TemplateService] Initial download - cloning nuclei-templates to:', TEMPLATES_DIR);
+    const tarballUrl = 'https://github.com/projectdiscovery/nuclei-templates/archive/refs/heads/main.tar.gz';
+    const tempTarball = '/tmp/nuclei-templates.tar.gz';
+    const tempExtractDir = '/tmp/nuclei-templates-extract';
 
-      // Use git clone with depth=1 for faster download
-      // Clone to a temp directory first, then move contents to preserve custom/ directory
-      const tempDir = `${TEMPLATES_DIR}/.nuclei-clone-temp`;
-      const gitProcess = spawn('git', [
-        'clone',
-        '--depth=1',
-        'https://github.com/projectdiscovery/nuclei-templates.git',
-        tempDir
-      ], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+    try {
+      // Step 1: Download the tarball
+      console.log('[TemplateService] Downloading templates from GitHub...');
+      await this.downloadFile(tarballUrl, tempTarball);
+      console.log('[TemplateService] Download complete, extracting...');
 
-      let stdout = '';
-      let stderr = '';
+      // Step 2: Create temp extract directory
+      await fs.promises.mkdir(tempExtractDir, { recursive: true });
 
-      gitProcess.stdout?.on('data', (data: Buffer) => {
-        const output = data.toString();
-        stdout += output;
-        console.log('[TemplateService]', output.trim());
-      });
-
-      gitProcess.stderr?.on('data', (data: Buffer) => {
-        const output = data.toString();
-        stderr += output;
-        // Git outputs progress to stderr
-        console.log('[TemplateService]', output.trim());
-      });
-
-      gitProcess.on('close', async (code: number | null) => {
-        if (code === 0) {
-          try {
-            // Move template directories from temp to target
-            // This preserves any existing custom/ directory and README
-            const entries = await fs.promises.readdir(tempDir, { withFileTypes: true });
-            for (const entry of entries) {
-              if (entry.name === '.git') continue; // Skip .git directory
-              const src = path.join(tempDir, entry.name);
-              const dest = path.join(TEMPLATES_DIR, entry.name);
-              // Remove destination if exists (except custom/)
-              if (entry.name !== 'custom') {
-                try {
-                  await fs.promises.rm(dest, { recursive: true, force: true });
-                } catch { /* ignore */ }
-              }
-              await fs.promises.rename(src, dest);
-            }
-            // Clean up temp directory
-            await fs.promises.rm(tempDir, { recursive: true, force: true });
-
-            // Clear cache so new templates are picked up
-            this.clearCache();
-
-            // Load templates to get count
-            const templates = await this.getAllTemplates();
-            console.log('[TemplateService] Initial template download completed successfully');
-            resolve({
-              success: true,
-              message: `Templates downloaded successfully (${templates.length} templates)`,
-              output: stdout + stderr,
-            });
-          } catch (error: any) {
-            console.error('[TemplateService] Error moving templates:', error);
-            resolve({
-              success: false,
-              message: 'Failed to move downloaded templates',
-              error: error.message,
-            });
+      // Step 3: Extract tarball using tar command (available in Alpine)
+      await new Promise<void>((resolve, reject) => {
+        exec(`tar -xzf ${tempTarball} -C ${tempExtractDir}`, (error, _stdout, stderr) => {
+          if (error) {
+            reject(new Error(`tar extraction failed: ${stderr || error.message}`));
+          } else {
+            resolve();
           }
-        } else {
-          console.error('[TemplateService] Git clone failed with code:', code);
-          resolve({
-            success: false,
-            message: `Template download failed with exit code ${code}`,
-            error: stderr || stdout,
-          });
+        });
+      });
+
+      // Step 4: Move contents from extracted directory to templates directory
+      // The tarball extracts to nuclei-templates-main/
+      const extractedDir = path.join(tempExtractDir, 'nuclei-templates-main');
+      const entries = await fs.promises.readdir(extractedDir, { withFileTypes: true });
+
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue; // Skip hidden files
+        const src = path.join(extractedDir, entry.name);
+        const dest = path.join(TEMPLATES_DIR, entry.name);
+
+        // Preserve custom/ directory if it exists
+        if (entry.name === 'custom') {
+          try {
+            await fs.promises.access(dest);
+            continue; // Skip if custom/ already exists
+          } catch { /* dest doesn't exist, safe to copy */ }
         }
-      });
 
-      gitProcess.on('error', (error: Error) => {
-        console.error('[TemplateService] Git clone error:', error);
-        resolve({
-          success: false,
-          message: 'Failed to start template download (git not available?)',
-          error: error.message,
-        });
-      });
+        // Remove destination if exists
+        try {
+          await fs.promises.rm(dest, { recursive: true, force: true });
+        } catch { /* ignore */ }
 
-      // Timeout after 10 minutes for initial clone (larger download)
-      setTimeout(() => {
-        gitProcess.kill('SIGTERM');
-        resolve({
-          success: false,
-          message: 'Template download timed out after 10 minutes',
+        // Move the file/directory
+        await fs.promises.rename(src, dest);
+      }
+
+      // Step 5: Clean up temp files
+      await fs.promises.rm(tempTarball, { force: true });
+      await fs.promises.rm(tempExtractDir, { recursive: true, force: true });
+
+      // Clear cache and load templates
+      this.clearCache();
+      const templates = await this.getAllTemplates();
+
+      console.log('[TemplateService] Initial template download completed successfully');
+      return {
+        success: true,
+        message: `Templates downloaded successfully (${templates.length} templates)`,
+        output: 'Downloaded from GitHub tarball and extracted',
+      };
+    } catch (error: any) {
+      console.error('[TemplateService] Template download error:', error);
+
+      // Clean up on error
+      try {
+        await fs.promises.rm(tempTarball, { force: true });
+        await fs.promises.rm(tempExtractDir, { recursive: true, force: true });
+      } catch { /* ignore cleanup errors */ }
+
+      return {
+        success: false,
+        message: 'Failed to download templates',
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Download a file from a URL following redirects
+   */
+  private static async downloadFile(url: string, destPath: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const file = fs.createWriteStream(destPath);
+      let downloadTimeout: NodeJS.Timeout;
+
+      const makeRequest = (requestUrl: string, redirectCount = 0) => {
+        if (redirectCount > 5) {
+          reject(new Error('Too many redirects'));
+          return;
+        }
+
+        const request = https.get(requestUrl, (response) => {
+          // Handle redirects
+          if (response.statusCode === 301 || response.statusCode === 302) {
+            const redirectUrl = response.headers.location;
+            if (redirectUrl) {
+              console.log('[TemplateService] Following redirect to:', redirectUrl.substring(0, 80) + '...');
+              makeRequest(redirectUrl, redirectCount + 1);
+              return;
+            }
+          }
+
+          if (response.statusCode !== 200) {
+            reject(new Error(`Download failed with status ${response.statusCode}`));
+            return;
+          }
+
+          response.pipe(file);
+
+          file.on('finish', () => {
+            clearTimeout(downloadTimeout);
+            file.close();
+            resolve();
+          });
         });
+
+        request.on('error', (error) => {
+          clearTimeout(downloadTimeout);
+          fs.unlink(destPath, () => {}); // Delete incomplete file
+          reject(error);
+        });
+      };
+
+      // 10 minute timeout for download
+      downloadTimeout = setTimeout(() => {
+        file.close();
+        fs.unlink(destPath, () => {});
+        reject(new Error('Download timed out after 10 minutes'));
       }, 10 * 60 * 1000);
+
+      makeRequest(url);
     });
   }
 

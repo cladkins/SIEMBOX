@@ -16,6 +16,9 @@ import {
   NucleiSeverity,
 } from '../../types/nucleiTypes';
 
+// Template directory (must match templateService.ts)
+const TEMPLATES_DIR = process.env.NUCLEI_TEMPLATES_DIR || '/root/nuclei-templates';
+
 /**
  * Scan options interface
  */
@@ -262,8 +265,8 @@ export class NucleiScanner {
       args.push('-rate-limit', options.rateLimit.toString());
     }
 
-    // Enable automatic template updates (ensures latest templates)
-    args.push('-update-templates');
+    // Specify template directory (critical - tells Nuclei where to find templates)
+    args.push('-ud', TEMPLATES_DIR);
 
     return args;
   }

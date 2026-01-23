@@ -10,6 +10,7 @@ import pool from '../../config/database';
 export interface ScanFilters {
   status?: string;
   scan_type?: string;
+  excludeTypes?: string[];
   limit?: number;
   offset?: number;
 }
@@ -50,6 +51,13 @@ export class ScanRepository {
     if (filters.scan_type) {
       conditions.push(`vs.scan_type = $${paramCount++}`);
       params.push(filters.scan_type);
+    }
+
+    // Exclude specific scan types (e.g., exclude 'vulnerability' from asset scans page)
+    if (filters.excludeTypes && filters.excludeTypes.length > 0) {
+      const placeholders = filters.excludeTypes.map(() => `$${paramCount++}`).join(', ');
+      conditions.push(`vs.scan_type NOT IN (${placeholders})`);
+      params.push(...filters.excludeTypes);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -125,9 +133,19 @@ export class ScanRepository {
 
   /**
    * Get active scans (queued or running)
+   * @param excludeTypes - Optional array of scan_type values to exclude (e.g., ['vulnerability'])
    */
-  static async getActiveScans(): Promise<ScanResult[]> {
+  static async getActiveScans(excludeTypes?: string[]): Promise<ScanResult[]> {
     // NOTE: Excludes scan_options and results_summary to reduce payload size
+    let whereClause = `vs.status IN ('queued', 'running')`;
+    const params: any[] = [];
+
+    if (excludeTypes && excludeTypes.length > 0) {
+      const placeholders = excludeTypes.map((_, i) => `$${i + 1}`).join(', ');
+      whereClause += ` AND vs.scan_type NOT IN (${placeholders})`;
+      params.push(...excludeTypes);
+    }
+
     const query = `
       SELECT
         vs.id,
@@ -146,11 +164,11 @@ export class ScanRepository {
         u.username as initiated_by_username
       FROM vulnerability_scans vs
       LEFT JOIN users u ON vs.initiated_by = u.id
-      WHERE vs.status IN ('queued', 'running')
+      WHERE ${whereClause}
       ORDER BY vs.created_at DESC
     `;
 
-    const result = await pool.query(query);
+    const result = await pool.query(query, params);
     return result.rows;
   }
 

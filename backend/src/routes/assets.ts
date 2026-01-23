@@ -69,12 +69,14 @@ router.get('/statistics', async (_req: Request, res: Response) => {
 
 /**
  * GET /api/assets/scans/active
- * Get active scans (queued or running)
+ * Get active asset discovery scans (queued or running)
+ * Excludes vulnerability scans - those are shown on the Vulnerability Scanning page
  * No authentication required - read-only operation for system visibility
  */
 router.get('/scans/active', async (_req: Request, res: Response) => {
   try {
-    const scans = await ScanRepository.getActiveScans();
+    // Exclude vulnerability scans - they should only appear on the Vulnerability Scanning page
+    const scans = await ScanRepository.getActiveScans(['vulnerability']);
     res.json({ scans, total: scans.length });
   } catch (error: any) {
     console.error('Get active scans error:', error);
@@ -105,7 +107,8 @@ router.get('/scans/statistics', async (_req: Request, res: Response) => {
 
 /**
  * GET /api/assets/scans
- * Get all scans with filtering and pagination
+ * Get asset discovery scans with filtering and pagination
+ * Excludes vulnerability scans by default - those are shown on the Vulnerability Scanning page
  * IMPORTANT: Must come BEFORE /scans/:scanId to prevent route conflicts
  * Query parameters should not be interpreted as path parameters
  * No authentication required - read-only operation for system visibility
@@ -119,6 +122,7 @@ router.get('/scans', async (req: Request, res: Response) => {
       scan_type: req.query.scan_type as string,
       limit: parseInt(req.query.limit as string) || 50,
       offset: parseInt(req.query.offset as string) || 0,
+      excludeTypes: ['vulnerability'], // Exclude vulnerability scans on the assets page
     };
 
     const result = await ScanRepository.getScans(filters);

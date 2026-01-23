@@ -236,16 +236,24 @@ export class NucleiScanner {
         if (code === 0 || code === null) {
           // Process results
           try {
+            console.log(`[Nuclei] Starting processScanResults for scan ${scanId}...`);
             await this.processScanResults(scanId, results, options.userId, options.target);
+            console.log(`[Nuclei] processScanResults completed, now updating status to completed...`);
             await this.updateScanStatus(scanId, 'completed', undefined, new Date());
-            console.log(`[Nuclei] Scan ${scanId} completed successfully`);
+            console.log(`[Nuclei] Scan ${scanId} completed successfully - status updated`);
           } catch (error: any) {
             console.error(`[Nuclei] Scan ${scanId} result processing failed:`, error);
-            await this.updateScanStatus(scanId, 'failed', undefined, new Date(), error.message);
+            console.error(`[Nuclei] Error stack:`, error?.stack);
+            try {
+              await this.updateScanStatus(scanId, 'failed', undefined, new Date(), error.message);
+            } catch (statusError: any) {
+              console.error(`[Nuclei] Also failed to update status to failed:`, statusError);
+            }
           }
         } else {
           // Scan failed
           const errorMsg = stderrData || `Nuclei exited with code ${code}`;
+          console.log(`[Nuclei] Scan ${scanId} failed with exit code ${code}, updating status...`);
           await this.updateScanStatus(scanId, 'failed', undefined, new Date(), errorMsg);
         }
       });
@@ -373,9 +381,12 @@ export class NucleiScanner {
     console.log(`[Nuclei] Severity breakdown:`, severityCounts);
 
     // Update scan summary
+    console.log(`[Nuclei] Updating scan summary for scan ${scanId}...`);
     await this.updateScanSummary(scanId, vulnerabilitiesFound, severityCounts);
+    console.log(`[Nuclei] Scan summary updated for scan ${scanId}`);
 
     // Log completion audit event
+    console.log(`[Nuclei] Logging audit event for scan ${scanId}...`);
     await AuditService.log({
       userId,
       action: 'scan.vulnerability.complete',
@@ -389,6 +400,7 @@ export class NucleiScanner {
         severityCounts,
       },
     });
+    console.log(`[Nuclei] processScanResults completed for scan ${scanId}`);
   }
 
   /**
@@ -606,6 +618,7 @@ export class NucleiScanner {
     completedAt?: Date,
     errorMessage?: string
   ): Promise<void> {
+    console.log(`[Nuclei] updateScanStatus called: scanId=${scanId}, status=${status}, completedAt=${completedAt}`);
     try {
       const fields: string[] = ['status = $2', 'updated_at = NOW()'];
       const params: any[] = [scanId, status];
@@ -635,7 +648,12 @@ export class NucleiScanner {
         WHERE id = $1
       `;
 
-      await pool.query(query, params);
+      console.log(`[Nuclei] Executing status update query for scan ${scanId}...`);
+      console.log(`[Nuclei] Query: ${query.replace(/\s+/g, ' ').trim()}`);
+      console.log(`[Nuclei] Params:`, params);
+
+      const result = await pool.query(query, params);
+      console.log(`[Nuclei] Status update query completed, rowCount: ${result.rowCount}`);
     } catch (error) {
       console.error('[Nuclei] Failed to update scan status:', error);
       throw error;
@@ -694,6 +712,7 @@ export class NucleiScanner {
     vulnerabilitiesFound: number,
     severityCounts: Record<string, number>
   ): Promise<void> {
+    console.log(`[Nuclei] updateScanSummary called: scanId=${scanId}, vulnsFound=${vulnerabilitiesFound}`);
     try {
       const query = `
         UPDATE vulnerability_scans
@@ -710,7 +729,9 @@ export class NucleiScanner {
         completedAt: new Date().toISOString(),
       };
 
-      await pool.query(query, [scanId, vulnerabilitiesFound, JSON.stringify(summary)]);
+      console.log(`[Nuclei] Executing scan summary update for scan ${scanId}...`);
+      const result = await pool.query(query, [scanId, vulnerabilitiesFound, JSON.stringify(summary)]);
+      console.log(`[Nuclei] Scan summary update completed, rowCount: ${result.rowCount}`);
     } catch (error) {
       console.error('[Nuclei] Failed to update scan summary:', error);
       throw error;

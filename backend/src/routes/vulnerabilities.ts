@@ -465,10 +465,57 @@ router.post('/scans/:scanId/cancel', authenticate, async (req: Request, res: Res
 
     console.log('[VULN] POST /scans/:scanId/cancel with ID:', scanId);
 
+    // First check if the scan exists and its current status
+    const scanStatus = await NucleiScanner.getScanStatus(scanId);
+
+    if (!scanStatus) {
+      res.status(404).json({ error: 'Scan not found' });
+      return;
+    }
+
+    // If scan already completed/failed/cancelled, return success with appropriate message
+    if (scanStatus.status === 'completed') {
+      res.json({
+        message: 'Scan already completed',
+        scanId,
+        status: 'completed',
+      });
+      return;
+    }
+
+    if (scanStatus.status === 'failed') {
+      res.json({
+        message: 'Scan already failed',
+        scanId,
+        status: 'failed',
+      });
+      return;
+    }
+
+    if (scanStatus.status === 'cancelled') {
+      res.json({
+        message: 'Scan already cancelled',
+        scanId,
+        status: 'cancelled',
+      });
+      return;
+    }
+
+    // Try to cancel the running scan
     const cancelled = await NucleiScanner.cancelScan(scanId);
 
     if (!cancelled) {
-      res.status(404).json({ error: 'Scan not found or not running' });
+      // Scan might have just finished - check status again
+      const updatedStatus = await NucleiScanner.getScanStatus(scanId);
+      if (updatedStatus && updatedStatus.status !== 'running' && updatedStatus.status !== 'queued') {
+        res.json({
+          message: `Scan already ${updatedStatus.status}`,
+          scanId,
+          status: updatedStatus.status,
+        });
+        return;
+      }
+      res.status(404).json({ error: 'Scan process not found - may have already finished' });
       return;
     }
 

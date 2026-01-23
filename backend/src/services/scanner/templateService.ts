@@ -413,8 +413,21 @@ export class TemplateService {
   }
 
   /**
+   * Check if templates directory has actual template files
+   */
+  private static async hasTemplates(): Promise<boolean> {
+    try {
+      const count = await this.countTemplatesInDirectory(TEMPLATES_DIR);
+      return count > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Download/update Nuclei templates
-   * Uses -update-templates which only downloads new/updated templates
+   * For initial download: clones the nuclei-templates repository
+   * For updates: uses nuclei -update-templates
    * Custom templates in the 'custom/' directory are preserved
    */
   static async downloadTemplates(): Promise<{
@@ -423,14 +436,146 @@ export class TemplateService {
     output?: string;
     error?: string;
   }> {
+    // Check if templates already exist
+    const templatesExist = await this.hasTemplates();
+    console.log('[TemplateService] Templates exist:', templatesExist);
+
+    if (!templatesExist) {
+      // Initial download: clone the nuclei-templates repository
+      return this.cloneTemplates();
+    }
+
+    // Update existing templates
+    return this.updateTemplates();
+  }
+
+  /**
+   * Clone nuclei-templates repository for initial download
+   */
+  private static async cloneTemplates(): Promise<{
+    success: boolean;
+    message: string;
+    output?: string;
+    error?: string;
+  }> {
     const { spawn } = require('child_process');
 
     return new Promise((resolve) => {
-      console.log('[TemplateService] Starting template download to:', TEMPLATES_DIR);
+      console.log('[TemplateService] Initial download - cloning nuclei-templates to:', TEMPLATES_DIR);
 
-      // Nuclei's -update-templates only updates official templates
-      // Custom templates in custom/ directory are not affected
-      // Use -ud to specify the target directory
+      // Use git clone with depth=1 for faster download
+      // Clone to a temp directory first, then move contents to preserve custom/ directory
+      const tempDir = `${TEMPLATES_DIR}/.nuclei-clone-temp`;
+      const gitProcess = spawn('git', [
+        'clone',
+        '--depth=1',
+        'https://github.com/projectdiscovery/nuclei-templates.git',
+        tempDir
+      ], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      gitProcess.stdout?.on('data', (data: Buffer) => {
+        const output = data.toString();
+        stdout += output;
+        console.log('[TemplateService]', output.trim());
+      });
+
+      gitProcess.stderr?.on('data', (data: Buffer) => {
+        const output = data.toString();
+        stderr += output;
+        // Git outputs progress to stderr
+        console.log('[TemplateService]', output.trim());
+      });
+
+      gitProcess.on('close', async (code: number | null) => {
+        if (code === 0) {
+          try {
+            // Move template directories from temp to target
+            // This preserves any existing custom/ directory and README
+            const entries = await fs.promises.readdir(tempDir, { withFileTypes: true });
+            for (const entry of entries) {
+              if (entry.name === '.git') continue; // Skip .git directory
+              const src = path.join(tempDir, entry.name);
+              const dest = path.join(TEMPLATES_DIR, entry.name);
+              // Remove destination if exists (except custom/)
+              if (entry.name !== 'custom') {
+                try {
+                  await fs.promises.rm(dest, { recursive: true, force: true });
+                } catch { /* ignore */ }
+              }
+              await fs.promises.rename(src, dest);
+            }
+            // Clean up temp directory
+            await fs.promises.rm(tempDir, { recursive: true, force: true });
+
+            // Clear cache so new templates are picked up
+            this.clearCache();
+
+            // Load templates to get count
+            const templates = await this.getAllTemplates();
+            console.log('[TemplateService] Initial template download completed successfully');
+            resolve({
+              success: true,
+              message: `Templates downloaded successfully (${templates.length} templates)`,
+              output: stdout + stderr,
+            });
+          } catch (error: any) {
+            console.error('[TemplateService] Error moving templates:', error);
+            resolve({
+              success: false,
+              message: 'Failed to move downloaded templates',
+              error: error.message,
+            });
+          }
+        } else {
+          console.error('[TemplateService] Git clone failed with code:', code);
+          resolve({
+            success: false,
+            message: `Template download failed with exit code ${code}`,
+            error: stderr || stdout,
+          });
+        }
+      });
+
+      gitProcess.on('error', (error: Error) => {
+        console.error('[TemplateService] Git clone error:', error);
+        resolve({
+          success: false,
+          message: 'Failed to start template download (git not available?)',
+          error: error.message,
+        });
+      });
+
+      // Timeout after 10 minutes for initial clone (larger download)
+      setTimeout(() => {
+        gitProcess.kill('SIGTERM');
+        resolve({
+          success: false,
+          message: 'Template download timed out after 10 minutes',
+        });
+      }, 10 * 60 * 1000);
+    });
+  }
+
+  /**
+   * Update existing templates using nuclei
+   */
+  private static async updateTemplates(): Promise<{
+    success: boolean;
+    message: string;
+    output?: string;
+    error?: string;
+  }> {
+    const { spawn } = require('child_process');
+
+    return new Promise((resolve) => {
+      console.log('[TemplateService] Updating templates in:', TEMPLATES_DIR);
+
+      // Use nuclei -update-templates with -ud to specify the target directory
       const nucleiProcess = spawn('nuclei', ['-update-templates', '-ud', TEMPLATES_DIR], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -451,32 +596,34 @@ export class TemplateService {
         console.log('[TemplateService]', output.trim());
       });
 
-      nucleiProcess.on('close', (code: number | null) => {
+      nucleiProcess.on('close', async (code: number | null) => {
         // Clear cache so new templates are picked up
         this.clearCache();
 
         if (code === 0) {
-          console.log('[TemplateService] Template download completed successfully');
+          // Load templates to get count
+          const templates = await this.getAllTemplates();
+          console.log('[TemplateService] Template update completed successfully');
           resolve({
             success: true,
-            message: 'Templates downloaded/updated successfully',
+            message: `Templates updated successfully (${templates.length} templates)`,
             output: stdout + stderr,
           });
         } else {
-          console.error('[TemplateService] Template download failed with code:', code);
+          console.error('[TemplateService] Template update failed with code:', code);
           resolve({
             success: false,
-            message: `Template download failed with exit code ${code}`,
+            message: `Template update failed with exit code ${code}`,
             error: stderr || stdout,
           });
         }
       });
 
       nucleiProcess.on('error', (error: Error) => {
-        console.error('[TemplateService] Template download error:', error);
+        console.error('[TemplateService] Template update error:', error);
         resolve({
           success: false,
-          message: 'Failed to start template download',
+          message: 'Failed to start template update',
           error: error.message,
         });
       });
@@ -486,7 +633,7 @@ export class TemplateService {
         nucleiProcess.kill('SIGTERM');
         resolve({
           success: false,
-          message: 'Template download timed out after 5 minutes',
+          message: 'Template update timed out after 5 minutes',
         });
       }, 5 * 60 * 1000);
     });

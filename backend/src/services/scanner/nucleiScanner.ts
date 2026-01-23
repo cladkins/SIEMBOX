@@ -633,8 +633,9 @@ export class NucleiScanner {
         fields.push(`completed_at = $${paramIndex++}`);
         params.push(completedAt);
 
-        // Calculate duration_seconds from started_at
-        fields.push(`duration_seconds = EXTRACT(EPOCH FROM ($${paramIndex - 1}::timestamp - started_at))::integer`);
+        // Calculate duration_seconds using NOW() - started_at to avoid parameter type issues
+        // The completedAt we're setting is essentially NOW() anyway
+        fields.push(`duration_seconds = EXTRACT(EPOCH FROM (NOW() - started_at))::integer`);
       }
 
       if (errorMessage) {

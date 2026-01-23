@@ -395,6 +395,9 @@ export class NmapScanner {
       if (completedAt) {
         fields.push(`completed_at = $${paramIndex++}`);
         params.push(completedAt);
+
+        // Calculate duration_seconds from started_at
+        fields.push(`duration_seconds = EXTRACT(EPOCH FROM ($${paramIndex - 1}::timestamp - started_at))::integer`);
       }
 
       if (errorMessage) {

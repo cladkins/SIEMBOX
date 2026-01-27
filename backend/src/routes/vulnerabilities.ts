@@ -560,15 +560,116 @@ router.get('/', async (req: Request, res: Response) => {
 
     console.log('[VULN] GET / with filters:', filters);
 
-    // TODO: Import VulnerabilityRepository once created
-    // const result = await VulnerabilityRepository.getVulnerabilities(filters);
+    // Build dynamic query with filters
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (filters.severity) {
+      conditions.push(`v.severity = $${paramIndex++}`);
+      params.push(filters.severity);
+    }
+
+    if (filters.status) {
+      conditions.push(`av.status = $${paramIndex++}`);
+      params.push(filters.status);
+    }
+
+    if (filters.cve_id) {
+      conditions.push(`v.cve_id ILIKE $${paramIndex++}`);
+      params.push(`%${filters.cve_id}%`);
+    }
+
+    if (filters.search) {
+      conditions.push(`(v.cve_id ILIKE $${paramIndex} OR v.title ILIKE $${paramIndex} OR v.description ILIKE $${paramIndex})`);
+      params.push(`%${filters.search}%`);
+      paramIndex++;
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    // Get total count
+    const countQuery = `
+      SELECT COUNT(DISTINCT av.id) as total
+      FROM asset_vulnerabilities av
+      JOIN vulnerabilities v ON av.vulnerability_id = v.id
+      JOIN assets a ON av.asset_id = a.id
+      ${whereClause}
+    `;
+
+    const countResult = await VulnerabilityProcessor.queryRaw(countQuery, params);
+    const total = parseInt(countResult.rows[0]?.total || '0', 10);
+
+    // Get vulnerabilities with asset info
+    params.push(filters.limit, filters.offset);
+    const query = `
+      SELECT
+        av.id,
+        av.asset_id,
+        a.ip_address as asset_ip,
+        a.hostname as asset_hostname,
+        v.cve_id,
+        v.title as name,
+        v.severity,
+        v.cvss_score,
+        v.cvss_vector,
+        v.description,
+        v.remediation as solution,
+        v."references",
+        v.cwe_id,
+        av.status,
+        av.evidence,
+        av.first_detected as discovered_at,
+        av.last_detected as last_seen,
+        av.notes,
+        v.metadata
+      FROM asset_vulnerabilities av
+      JOIN vulnerabilities v ON av.vulnerability_id = v.id
+      JOIN assets a ON av.asset_id = a.id
+      ${whereClause}
+      ORDER BY
+        CASE v.severity
+          WHEN 'critical' THEN 1
+          WHEN 'high' THEN 2
+          WHEN 'medium' THEN 3
+          WHEN 'low' THEN 4
+          ELSE 5
+        END,
+        av.first_detected DESC
+      LIMIT $${paramIndex++} OFFSET $${paramIndex}
+    `;
+
+    const result = await VulnerabilityProcessor.queryRaw(query, params);
+
+    // Transform results
+    const vulnerabilities = result.rows.map((row: any) => ({
+      id: row.id,
+      asset_id: row.asset_id,
+      asset_ip: row.asset_ip,
+      asset_hostname: row.asset_hostname,
+      cve_id: row.cve_id,
+      name: row.name,
+      severity: row.severity,
+      cvss_score: row.cvss_score ? parseFloat(row.cvss_score) : null,
+      cvss_vector: row.cvss_vector,
+      description: row.description,
+      solution: row.solution,
+      references: row.references,
+      cwe_id: row.cwe_id,
+      status: row.status,
+      evidence: row.evidence,
+      discovered_at: row.discovered_at,
+      last_seen: row.last_seen,
+      notes: row.notes,
+      template_id: row.metadata?.nuclei_template || null,
+    }));
 
     res.json({
-      vulnerabilities: [],
-      total: 0,
+      vulnerabilities,
+      total,
       limit: filters.limit,
       offset: filters.offset,
-      hasMore: false,
+      hasMore: filters.offset + vulnerabilities.length < total,
     });
   } catch (error: any) {
     console.error('[VULN] Get vulnerabilities error:', error);

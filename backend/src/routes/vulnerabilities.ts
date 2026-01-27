@@ -41,11 +41,17 @@ router.get('/summary', async (_req: Request, res: Response) => {
  */
 router.get('/templates', async (_req: Request, res: Response) => {
   try {
+    console.log('[VULN] GET /templates - fetching template data...');
+
     const [categories, stats, dirCheck] = await Promise.all([
       TemplateService.getCategories(),
       TemplateService.getStats(),
       TemplateService.checkTemplatesDirectory(),
     ]);
+
+    console.log('[VULN] Templates directory check:', JSON.stringify(dirCheck));
+    console.log('[VULN] Categories found:', categories.length);
+    console.log('[VULN] Stats:', JSON.stringify(stats));
 
     res.json({
       categories,

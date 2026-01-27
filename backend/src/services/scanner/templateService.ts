@@ -64,10 +64,15 @@ export class TemplateService {
    * Check if templates directory exists and is accessible
    */
   static async checkTemplatesDirectory(): Promise<{ exists: boolean; path: string; error?: string }> {
+    console.log('[TemplateService] Checking templates directory:', TEMPLATES_DIR);
     try {
       await fs.promises.access(TEMPLATES_DIR, fs.constants.R_OK);
+      // Also check if directory has any contents
+      const entries = await fs.promises.readdir(TEMPLATES_DIR);
+      console.log('[TemplateService] Directory exists with', entries.length, 'entries');
       return { exists: true, path: TEMPLATES_DIR };
     } catch (error: any) {
+      console.log('[TemplateService] Directory check failed:', error.message);
       return {
         exists: false,
         path: TEMPLATES_DIR,

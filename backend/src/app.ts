@@ -34,11 +34,16 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
-// Rate limiting
+// Rate limiting - generous global limit for normal API usage
+// Specific rate limiters are applied to scan endpoints in their routes
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  max: 1000, // Limit each IP to 1000 requests per windowMs (generous for UI polling)
   message: 'Too many requests from this IP, please try again later.',
+  skip: (req: Request) => {
+    // Skip rate limiting for authenticated admin users
+    return (req as any).user?.role === 'admin';
+  },
 });
 
 app.use('/api/', limiter);

@@ -129,15 +129,16 @@ export class TemplateService {
 
   /**
    * Get default categories when templates aren't downloaded yet
+   * These match the actual top-level directories in nuclei-templates v10+
    */
   private static getDefaultCategories(): TemplateCategory[] {
     return [
-      { id: 'cves', name: 'CVE Templates', description: 'Known CVE vulnerabilities', count: 0, path: '' },
-      { id: 'vulnerabilities', name: 'Vulnerabilities', description: 'General vulnerability checks', count: 0, path: '' },
-      { id: 'exposures', name: 'Exposures', description: 'Sensitive data exposures', count: 0, path: '' },
-      { id: 'misconfiguration', name: 'Misconfigurations', description: 'Security misconfigurations', count: 0, path: '' },
-      { id: 'technologies', name: 'Technologies', description: 'Technology detection', count: 0, path: '' },
-      { id: 'default-logins', name: 'Default Logins', description: 'Default credential checks', count: 0, path: '' },
+      { id: 'http', name: 'HTTP', description: 'HTTP-based vulnerability detection', count: 0, path: '' },
+      { id: 'network', name: 'Network', description: 'Network service vulnerability detection', count: 0, path: '' },
+      { id: 'dns', name: 'DNS', description: 'DNS-related vulnerability detection', count: 0, path: '' },
+      { id: 'ssl', name: 'SSL', description: 'SSL/TLS configuration checks', count: 0, path: '' },
+      { id: 'file', name: 'File', description: 'File-based vulnerability detection', count: 0, path: '' },
+      { id: 'headless', name: 'Headless', description: 'Browser-based detection templates', count: 0, path: '' },
     ];
   }
 

@@ -165,8 +165,9 @@ function buildNucleiArgs(options) {
       args.push('-tags', ts.tags.join(','));
     }
 
+    // CVE templates - use tags since cves/ directory doesn't exist in Nuclei v10+
     if (ts.cves) {
-      args.push('-t', 'cves/');
+      args.push('-tags', 'cve');
     }
 
     if (ts.severities && ts.severities.length > 0) {

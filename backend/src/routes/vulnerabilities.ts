@@ -380,7 +380,7 @@ router.get('/scans/:scanId/status', async (req: Request, res: Response): Promise
  */
 router.post('/scans', authenticate, async (req: Request, res: Response) => {
   try {
-    const { target, templates, severity, description, timeout, rateLimit } = req.body;
+    const { target, templates, tags, severity, description, timeout, rateLimit } = req.body;
 
     console.log('[VULN] POST /scans - received body:', JSON.stringify(req.body));
 
@@ -414,9 +414,13 @@ router.post('/scans', authenticate, async (req: Request, res: Response) => {
       }
     } else if (typeof templates === 'string') {
       templateSelection.tags = templates.split(',');
+    } else if (tags && Array.isArray(tags) && tags.length > 0) {
+      // Tags passed directly from frontend (tag mode)
+      templateSelection.tags = tags;
     } else {
-      // Default to CVE templates
-      templateSelection.cves = true;
+      // Default to common vulnerability tags (cves/ directory doesn't exist in Nuclei v10+)
+      // Use tags instead of directory path
+      templateSelection.tags = ['cve', 'rce', 'sqli', 'xss', 'lfi'];
     }
 
     // Add severity filter if provided

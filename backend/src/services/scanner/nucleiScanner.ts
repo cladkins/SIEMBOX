@@ -307,9 +307,10 @@ export class NucleiScanner {
         args.push('-tags', ts.tags.join(','));
       }
 
-      // CVE templates
+      // CVE templates - use tags since cves/ directory doesn't exist in Nuclei v10+
+      // CVE templates are distributed across http/cves/, network/cves/, etc.
       if (ts.cves) {
-        args.push('-t', 'cves/');
+        args.push('-tags', 'cve');
       }
 
       // Severity filter

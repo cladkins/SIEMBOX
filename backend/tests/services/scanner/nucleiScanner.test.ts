@@ -119,8 +119,10 @@ describe('NucleiScanner', () => {
 
       const args = buildNucleiArgs(options);
 
-      expect(args).toContain('-t');
-      expect(args).toContain('cves/');
+      // In Nuclei v10+, cves/ directory doesn't exist at root level
+      // CVE templates are found via -tags cve instead
+      expect(args).toContain('-tags');
+      expect(args).toContain('cve');
     });
 
     it('should include severity filter', () => {

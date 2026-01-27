@@ -483,48 +483,47 @@ export class NucleiScanner {
     try {
       await client.query('BEGIN');
 
-      // Upsert vulnerability (if CVE exists)
-      let vulnerabilityId: number | null = null;
+      // Upsert vulnerability - use CVE ID if available, otherwise generate ID from template
+      // This ensures non-CVE findings (misconfigs, exposures, etc.) are also stored
+      const vulnIdentifier = vuln.cveId || `NUCLEI-${vuln.templateId}`;
 
-      if (vuln.cveId) {
-        const vulnQuery = `
-          INSERT INTO vulnerabilities (
-            cve_id, cvss_score, cvss_vector, severity, title, description,
-            remediation, "references", cwe_id, metadata, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-          ON CONFLICT (cve_id) DO UPDATE SET
-            cvss_score = COALESCE(EXCLUDED.cvss_score, vulnerabilities.cvss_score),
-            cvss_vector = COALESCE(EXCLUDED.cvss_vector, vulnerabilities.cvss_vector),
-            severity = COALESCE(EXCLUDED.severity, vulnerabilities.severity),
-            title = COALESCE(EXCLUDED.title, vulnerabilities.title),
-            description = COALESCE(EXCLUDED.description, vulnerabilities.description),
-            remediation = COALESCE(EXCLUDED.remediation, vulnerabilities.remediation),
-            "references" = COALESCE(EXCLUDED."references", vulnerabilities."references"),
-            cwe_id = COALESCE(EXCLUDED.cwe_id, vulnerabilities.cwe_id),
-            metadata = COALESCE(EXCLUDED.metadata, vulnerabilities.metadata),
-            updated_at = NOW()
-          RETURNING id
-        `;
+      const vulnQuery = `
+        INSERT INTO vulnerabilities (
+          cve_id, cvss_score, cvss_vector, severity, title, description,
+          remediation, "references", cwe_id, metadata, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+        ON CONFLICT (cve_id) DO UPDATE SET
+          cvss_score = COALESCE(EXCLUDED.cvss_score, vulnerabilities.cvss_score),
+          cvss_vector = COALESCE(EXCLUDED.cvss_vector, vulnerabilities.cvss_vector),
+          severity = COALESCE(EXCLUDED.severity, vulnerabilities.severity),
+          title = COALESCE(EXCLUDED.title, vulnerabilities.title),
+          description = COALESCE(EXCLUDED.description, vulnerabilities.description),
+          remediation = COALESCE(EXCLUDED.remediation, vulnerabilities.remediation),
+          "references" = COALESCE(EXCLUDED."references", vulnerabilities."references"),
+          cwe_id = COALESCE(EXCLUDED.cwe_id, vulnerabilities.cwe_id),
+          metadata = COALESCE(EXCLUDED.metadata, vulnerabilities.metadata),
+          updated_at = NOW()
+        RETURNING id
+      `;
 
-        const vulnResult = await client.query(vulnQuery, [
-          vuln.cveId,
-          vuln.cvssScore,
-          vuln.cvssVector,
-          vuln.severity,
-          vuln.title,
-          vuln.description,
-          vuln.remediation,
-          vuln.references && vuln.references.length > 0 ? vuln.references : null,
-          vuln.cweId,
-          JSON.stringify({
-            nuclei_template: vuln.templateId,
-            matched_at: vuln.matchedAt,
-            raw_result: vuln.rawResult,
-          }),
-        ]);
+      const vulnResult = await client.query(vulnQuery, [
+        vulnIdentifier,
+        vuln.cvssScore,
+        vuln.cvssVector,
+        vuln.severity,
+        vuln.title,
+        vuln.description,
+        vuln.remediation,
+        vuln.references && vuln.references.length > 0 ? vuln.references : null,
+        vuln.cweId,
+        JSON.stringify({
+          nuclei_template: vuln.templateId,
+          matched_at: vuln.matchedAt,
+          raw_result: vuln.rawResult,
+        }),
+      ]);
 
-        vulnerabilityId = vulnResult.rows[0].id;
-      }
+      const vulnerabilityId = vulnResult.rows[0].id;
 
       // Find or create asset for this target
       const assetQuery = `
@@ -539,25 +538,23 @@ export class NucleiScanner {
       const assetResult = await client.query(assetQuery, [vuln.target]);
       const assetId = assetResult.rows[0].id;
 
-      // Link asset to vulnerability (if we have a vulnerability record)
-      if (vulnerabilityId) {
-        const linkQuery = `
-          INSERT INTO asset_vulnerabilities (
-            asset_id, vulnerability_id, status, evidence,
-            first_detected, last_detected, updated_at
-          ) VALUES ($1, $2, 'open', $3, NOW(), NOW(), NOW())
-          ON CONFLICT (asset_id, vulnerability_id) DO UPDATE SET
-            last_detected = NOW(),
-            evidence = COALESCE(EXCLUDED.evidence, asset_vulnerabilities.evidence),
-            updated_at = NOW()
-        `;
+      // Link asset to vulnerability
+      const linkQuery = `
+        INSERT INTO asset_vulnerabilities (
+          asset_id, vulnerability_id, status, evidence,
+          first_detected, last_detected, updated_at
+        ) VALUES ($1, $2, 'open', $3, NOW(), NOW(), NOW())
+        ON CONFLICT (asset_id, vulnerability_id) DO UPDATE SET
+          last_detected = NOW(),
+          evidence = COALESCE(EXCLUDED.evidence, asset_vulnerabilities.evidence),
+          updated_at = NOW()
+      `;
 
-        await client.query(linkQuery, [
-          assetId,
-          vulnerabilityId,
-          `Template: ${vuln.templateId}\nMatched at: ${vuln.matchedAt}\nEvidence: ${vuln.evidence}`,
-        ]);
-      }
+      await client.query(linkQuery, [
+        assetId,
+        vulnerabilityId,
+        `Template: ${vuln.templateId}\nMatched at: ${vuln.matchedAt}\nEvidence: ${vuln.evidence}`,
+      ]);
 
       await client.query('COMMIT');
     } catch (error) {

@@ -366,7 +366,7 @@ const debouncedSearch = () => {
 // Methods
 async function loadOverview() {
   try {
-    const response = await api.get('/api/vulnerabilities/templates');
+    const response = await api.get('/vulnerabilities/templates');
     categories.value = response.data.categories || [];
     stats.value = response.data.stats || stats.value;
   } catch (error: any) {
@@ -376,7 +376,7 @@ async function loadOverview() {
 
 async function loadTags() {
   try {
-    const response = await api.get('/api/vulnerabilities/templates/tags');
+    const response = await api.get('/vulnerabilities/templates/tags');
     tags.value = response.data.tags || [];
   } catch (error: any) {
     console.error('Failed to load tags:', error);
@@ -386,7 +386,7 @@ async function loadTags() {
 async function searchTemplates() {
   loading.value = true;
   try {
-    const response = await api.get('/api/vulnerabilities/templates/search', {
+    const response = await api.get('/vulnerabilities/templates/search', {
       params: { q: searchQuery.value, limit: 500 }
     });
     templates.value = response.data.templates || [];
@@ -406,7 +406,7 @@ async function handleCategoryChange() {
 
   loading.value = true;
   try {
-    const response = await api.get(`/api/vulnerabilities/templates/category/${selectedCategory.value}`, {
+    const response = await api.get(`/vulnerabilities/templates/category/${selectedCategory.value}`, {
       params: { limit: 500 }
     });
     templates.value = response.data.templates || [];
@@ -427,7 +427,7 @@ async function handleSeverityChange() {
   loading.value = true;
   try {
     // Use search with severity filter
-    const response = await api.get('/api/vulnerabilities/templates/search', {
+    const response = await api.get('/vulnerabilities/templates/search', {
       params: { q: selectedSeverity.value, limit: 500 }
     });
     // Filter by severity since API search is text-based
@@ -450,7 +450,7 @@ function searchByTag(tag: string) {
 async function refreshTemplates() {
   loading.value = true;
   try {
-    await api.post('/api/vulnerabilities/templates/refresh');
+    await api.post('/vulnerabilities/templates/refresh');
     await loadOverview();
     await loadTags();
     ElMessage.success('Templates refreshed');

@@ -93,7 +93,11 @@
               </el-col>
             </el-row>
 
-            <el-empty v-else description="No data available" />
+            <el-alert v-else-if="overviewError" type="error" :closable="false" show-icon>
+              {{ overviewError }}
+            </el-alert>
+
+            <el-empty v-else-if="!overviewLoading" description="No data available" />
           </div>
         </el-card>
 
@@ -358,6 +362,9 @@ const jobsLoading = ref(false);
 const errorsLoading = ref(false);
 const activityLoading = ref(false);
 
+// Error states
+const overviewError = ref('');
+
 // Filters
 const userSearch = ref('');
 const jobsFilter = ref('');
@@ -377,11 +384,13 @@ const activeJobs = computed(() => {
 // Methods
 async function fetchOverview() {
   overviewLoading.value = true;
+  overviewError.value = '';
   try {
     const response = await api.getAdminOverview();
     overview.value = response.data;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to fetch overview:', error);
+    overviewError.value = error.response?.data?.message || error.message || 'Failed to load system overview';
   } finally {
     overviewLoading.value = false;
   }

@@ -71,38 +71,57 @@ router.get('/overview', async (_req: Request, res: Response) => {
       },
     };
 
-    // Aggregated metrics
-    const metricsQueries = await Promise.all([
+    // Aggregated metrics - wrap each in try/catch for resilience
+    const safeQuery = async (sql: string, defaultValue: any = { rows: [{ count: '0' }] }) => {
+      try {
+        return await query(sql);
+      } catch (err) {
+        logger.warn(`Admin overview query failed: ${sql}`, err);
+        return defaultValue;
+      }
+    };
+
+    const [
+      usersResult,
+      activeUsersResult,
+      alertsTodayResult,
+      criticalAlertsResult,
+      assetsResult,
+      vulnsResult,
+      scansResult,
+      dbSizeResult,
+      errorsResult,
+    ] = await Promise.all([
       // Total users
-      query('SELECT COUNT(*) as count FROM users'),
+      safeQuery('SELECT COUNT(*) as count FROM users'),
       // Active users (logged in within 24h)
-      query('SELECT COUNT(DISTINCT user_id) as count FROM sessions WHERE expires_at > NOW()'),
+      safeQuery('SELECT COUNT(DISTINCT user_id) as count FROM sessions WHERE expires_at > NOW()'),
       // Alerts today
-      query(`SELECT COUNT(*) as count FROM alerts WHERE created_at > NOW() - INTERVAL '24 hours'`),
+      safeQuery(`SELECT COUNT(*) as count FROM alerts WHERE created_at > NOW() - INTERVAL '24 hours'`),
       // Critical alerts (new or investigating)
-      query(`SELECT COUNT(*) as count FROM alerts WHERE severity = 'critical' AND status IN ('new', 'investigating')`),
+      safeQuery(`SELECT COUNT(*) as count FROM alerts WHERE severity = 'critical' AND status IN ('new', 'investigating')`),
       // Total assets
-      query('SELECT COUNT(*) as count FROM assets'),
+      safeQuery('SELECT COUNT(*) as count FROM assets'),
       // Open vulnerabilities
-      query(`SELECT COUNT(*) as count FROM asset_vulnerabilities WHERE status = 'open'`),
+      safeQuery(`SELECT COUNT(*) as count FROM asset_vulnerabilities WHERE status = 'open'`),
       // Active scans
-      query(`SELECT COUNT(*) as count FROM vulnerability_scans WHERE status IN ('queued', 'running')`),
+      safeQuery(`SELECT COUNT(*) as count FROM vulnerability_scans WHERE status IN ('queued', 'running')`),
       // Database size
-      query(`SELECT pg_database_size(current_database()) / 1024 / 1024 as size_mb`),
-      // Recent errors (last hour)
-      query(`SELECT COUNT(*) as count FROM application_errors WHERE timestamp > NOW() - INTERVAL '1 hour'`),
+      safeQuery(`SELECT pg_database_size(current_database()) / 1024 / 1024 as size_mb`, { rows: [{ size_mb: '0' }] }),
+      // Recent errors (last hour) - table may not exist yet
+      safeQuery(`SELECT COUNT(*) as count FROM application_errors WHERE timestamp > NOW() - INTERVAL '1 hour'`),
     ]);
 
     const metrics = {
-      totalUsers: parseInt(metricsQueries[0].rows[0]?.count || '0', 10),
-      activeUsers24h: parseInt(metricsQueries[1].rows[0]?.count || '0', 10),
-      alertsToday: parseInt(metricsQueries[2].rows[0]?.count || '0', 10),
-      criticalAlerts: parseInt(metricsQueries[3].rows[0]?.count || '0', 10),
-      totalAssets: parseInt(metricsQueries[4].rows[0]?.count || '0', 10),
-      openVulnerabilities: parseInt(metricsQueries[5].rows[0]?.count || '0', 10),
-      activeScans: parseInt(metricsQueries[6].rows[0]?.count || '0', 10),
-      dbSizeMB: parseInt(metricsQueries[7].rows[0]?.size_mb || '0', 10),
-      recentErrors: parseInt(metricsQueries[8].rows[0]?.count || '0', 10),
+      totalUsers: parseInt(usersResult.rows[0]?.count || '0', 10),
+      activeUsers24h: parseInt(activeUsersResult.rows[0]?.count || '0', 10),
+      alertsToday: parseInt(alertsTodayResult.rows[0]?.count || '0', 10),
+      criticalAlerts: parseInt(criticalAlertsResult.rows[0]?.count || '0', 10),
+      totalAssets: parseInt(assetsResult.rows[0]?.count || '0', 10),
+      openVulnerabilities: parseInt(vulnsResult.rows[0]?.count || '0', 10),
+      activeScans: parseInt(scansResult.rows[0]?.count || '0', 10),
+      dbSizeMB: parseInt(dbSizeResult.rows[0]?.size_mb || '0', 10),
+      recentErrors: parseInt(errorsResult.rows[0]?.count || '0', 10),
     };
 
     res.json({ system, health, metrics });

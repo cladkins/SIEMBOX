@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../utils/logger';
+import { ErrorLogService } from '../services/errors/errorLogService';
 
 export class ApiError extends Error {
   statusCode: number;
@@ -19,6 +20,15 @@ export const errorHandler = (
   res: Response,
   _next: NextFunction
 ) => {
+  // Build error context for logging
+  const errorContext = {
+    endpoint: req.path,
+    method: req.method,
+    userId: req.user?.id,
+    userAgent: req.get('User-Agent'),
+    ip: req.ip,
+  };
+
   if (err instanceof ApiError) {
     logger.error('API Error:', {
       statusCode: err.statusCode,
@@ -27,12 +37,25 @@ export const errorHandler = (
       method: req.method,
     });
 
+    // Log operational errors (4xx) only if they're server-related or security issues
+    // Skip logging common client errors like 404, 400, 401
+    if (err.statusCode >= 500 || err.statusCode === 403) {
+      ErrorLogService.logError(err, errorContext).catch(() => {
+        // Silently ignore logging failures
+      });
+    }
+
     return res.status(err.statusCode).json({
       status: 'error',
       statusCode: err.statusCode,
       message: err.message,
     });
   }
+
+  // Log all unexpected errors to the database
+  ErrorLogService.logError(err, errorContext).catch(() => {
+    // Silently ignore logging failures
+  });
 
   logger.error('Unexpected error:', {
     error: err.message,

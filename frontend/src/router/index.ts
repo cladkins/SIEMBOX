@@ -78,6 +78,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/Templates.vue'),
         meta: { allowedRoles: ['admin', 'analyst', 'operator'] },
       },
+      {
+        path: 'admin',
+        name: 'AdminDashboard',
+        component: () => import('@/views/AdminDashboard.vue'),
+        meta: { requiresAdmin: true },
+      },
     ],
   },
 ];

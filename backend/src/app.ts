@@ -18,6 +18,7 @@ import settingsRoutes from './routes/settings';
 import shippersRoutes from './routes/shippers';
 import assetsRoutes from './routes/assets';
 import vulnerabilitiesRoutes from './routes/vulnerabilities';
+import adminRoutes from './routes/admin';
 
 const app: Application = express();
 
@@ -93,6 +94,7 @@ app.use('/api/settings', authenticate, settingsRoutes);
 app.use('/api/shippers', shippersRoutes); // Some endpoints public for shipper registration
 app.use('/api/assets', assetsRoutes); // Asset discovery and management
 app.use('/api/vulnerabilities', vulnerabilitiesRoutes); // Vulnerability scanning and management
+app.use('/api/admin', adminRoutes); // Admin dashboard (requires admin role)
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

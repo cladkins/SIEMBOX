@@ -428,6 +428,41 @@ COMMENT ON COLUMN vulnerability_scans.scan_type IS 'Scan type: asset_discovery, 
 COMMENT ON COLUMN vulnerability_scans.status IS 'Scan status: queued, running, completed, failed';
 
 -- ========================================
+-- APPLICATION ERROR LOGGING
+-- ========================================
+
+-- Application errors for admin dashboard visibility
+CREATE TABLE IF NOT EXISTS application_errors (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    error_type VARCHAR(100) NOT NULL,
+    message TEXT NOT NULL,
+    human_message TEXT,
+    category VARCHAR(50),
+    severity VARCHAR(20) DEFAULT 'error',
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    endpoint VARCHAR(255),
+    context JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes for application errors
+CREATE INDEX IF NOT EXISTS idx_app_errors_timestamp ON application_errors(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_app_errors_category ON application_errors(category);
+CREATE INDEX IF NOT EXISTS idx_app_errors_severity ON application_errors(severity);
+CREATE INDEX IF NOT EXISTS idx_app_errors_user ON application_errors(user_id);
+
+-- Comments for application errors
+COMMENT ON TABLE application_errors IS 'Application errors captured for admin dashboard visibility';
+COMMENT ON COLUMN application_errors.error_type IS 'Error class name or code (e.g., ECONNREFUSED, JsonWebTokenError)';
+COMMENT ON COLUMN application_errors.message IS 'Technical error message';
+COMMENT ON COLUMN application_errors.human_message IS 'Human-readable explanation of the error';
+COMMENT ON COLUMN application_errors.category IS 'Error category: database, auth, network, scanner, parser, etc.';
+COMMENT ON COLUMN application_errors.severity IS 'Error severity: info, warning, error, critical';
+COMMENT ON COLUMN application_errors.endpoint IS 'API endpoint where error occurred';
+COMMENT ON COLUMN application_errors.context IS 'Additional context (request body, stack trace, etc.)';
+
+-- ========================================
 -- SYSTEM SETTINGS
 -- ========================================
 

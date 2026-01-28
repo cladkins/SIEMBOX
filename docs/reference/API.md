@@ -19,6 +19,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Log Shippers](#log-shippers-endpoints)
   - [Assets](#assets-endpoints)
   - [Vulnerabilities](#vulnerabilities-endpoints)
+  - [Admin Dashboard](#admin-dashboard-endpoints)
 
 ---
 
@@ -2697,6 +2698,277 @@ Update vulnerability status for an asset.
 
 ---
 
+## Admin Dashboard Endpoints
+
+All admin endpoints require authentication with the **admin** role.
+
+### GET /api/admin/overview
+
+Get system health status and aggregated metrics for the admin dashboard.
+
+**Authentication:** Required (Admin)
+
+**Response (200):**
+```json
+{
+  "system": {
+    "version": "0.1.0",
+    "uptime": 86400,
+    "nodeVersion": "v20.10.0",
+    "environment": "production"
+  },
+  "health": {
+    "database": "healthy",
+    "syslog": "healthy",
+    "shippers": {
+      "online": 2,
+      "offline": 0,
+      "error": 0
+    }
+  },
+  "metrics": {
+    "totalUsers": 5,
+    "activeUsers24h": 2,
+    "alertsToday": 15,
+    "criticalAlerts": 0,
+    "totalAssets": 42,
+    "openVulnerabilities": 3,
+    "activeScans": 1,
+    "dbSizeMB": 256,
+    "recentErrors": 0
+  }
+}
+```
+
+**Health Status Values:**
+- `healthy` - Component is working normally
+- `warning` - Component has issues but is functional
+- `unhealthy` - Component is not working
+
+---
+
+### GET /api/admin/users/search
+
+Search users with recent activity metrics.
+
+**Authentication:** Required (Admin)
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `q` | string | - | Search query (username or email) |
+| `limit` | integer | 20 | Maximum results |
+
+**Response (200):**
+```json
+{
+  "users": [
+    {
+      "id": 1,
+      "username": "admin",
+      "email": "admin@example.com",
+      "role": "admin",
+      "enabled": true,
+      "last_login": "2026-01-28T10:30:00Z",
+      "created_at": "2025-01-01T00:00:00Z",
+      "active_sessions": 1,
+      "actions_24h": 45
+    }
+  ],
+  "total": 1
+}
+```
+
+---
+
+### GET /api/admin/users/:id/activity
+
+Get full activity log for a specific user.
+
+**Authentication:** Required (Admin)
+
+**URL Parameters:**
+- `id` - User ID
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | integer | 50 | Maximum results |
+| `offset` | integer | 0 | Pagination offset |
+
+**Response (200):**
+```json
+{
+  "user": {
+    "id": 2,
+    "username": "analyst1",
+    "email": "analyst@example.com",
+    "role": "analyst",
+    "enabled": true,
+    "last_login": "2026-01-28T09:00:00Z",
+    "created_at": "2025-06-15T00:00:00Z"
+  },
+  "activity": [
+    {
+      "id": 1234,
+      "timestamp": "2026-01-28T10:30:00Z",
+      "action": "alert_update",
+      "resource_type": "alert",
+      "resource_id": 567,
+      "ip_address": "192.168.1.100",
+      "user_agent": "Mozilla/5.0...",
+      "response_status": 200,
+      "details": {}
+    }
+  ],
+  "summary": {
+    "totalActions": 1523,
+    "actions24h": 45,
+    "actions7d": 234,
+    "errors": 2
+  },
+  "pagination": {
+    "limit": 50,
+    "offset": 0
+  }
+}
+```
+
+**Errors:**
+- `400` - Invalid user ID
+- `404` - User not found
+
+---
+
+### GET /api/admin/errors
+
+Get recent application errors with human-readable messages.
+
+**Authentication:** Required (Admin)
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `hours` | integer | 24 | Time window in hours |
+| `limit` | integer | 50 | Maximum results |
+| `offset` | integer | 0 | Pagination offset |
+
+**Response (200):**
+```json
+{
+  "errors": [
+    {
+      "id": 1,
+      "timestamp": "2026-01-28T10:30:00Z",
+      "error_type": "ECONNREFUSED",
+      "message": "connect ECONNREFUSED 127.0.0.1:5432",
+      "human_message": "Database connection refused",
+      "category": "database",
+      "severity": "error",
+      "user_id": null,
+      "endpoint": "/api/logs",
+      "context": {
+        "method": "GET"
+      },
+      "resolution": "Check PostgreSQL is running and accepting connections"
+    }
+  ],
+  "summary": {
+    "total": 5,
+    "byCategory": {
+      "database": 2,
+      "auth": 3
+    },
+    "bySeverity": {
+      "error": 4,
+      "warning": 1
+    }
+  }
+}
+```
+
+**Error Categories:**
+- `database` - Database connection or query errors
+- `auth` - Authentication and authorization errors
+- `network` - Network connectivity issues
+- `scanner` - Vulnerability scanner errors
+- `parser` - Log parsing errors
+- `application` - General application errors
+
+**Severity Levels:**
+- `critical` - System-breaking issues
+- `error` - Errors that affect functionality
+- `warning` - Issues that may need attention
+- `info` - Informational messages
+
+---
+
+### GET /api/admin/jobs
+
+Get unified view of all background jobs (scans).
+
+**Authentication:** Required (Admin)
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `status` | string | - | Filter by status: `queued`, `running`, `completed`, `failed` |
+| `limit` | integer | 50 | Maximum results |
+| `offset` | integer | 0 | Pagination offset |
+
+**Response (200):**
+```json
+{
+  "jobs": [
+    {
+      "id": 15,
+      "type": "vulnerability",
+      "target": "192.168.1.0/24",
+      "status": "running",
+      "started_at": "2026-01-28T10:00:00Z",
+      "completed_at": null,
+      "duration_seconds": null,
+      "assets_discovered": 0,
+      "vulnerabilities_found": 3,
+      "error_message": null,
+      "initiated_by": 1,
+      "initiated_by_username": "admin",
+      "created_at": "2026-01-28T10:00:00Z",
+      "updated_at": "2026-01-28T10:05:00Z",
+      "results_summary": {
+        "progress": {
+          "percentComplete": 45
+        }
+      }
+    }
+  ],
+  "counts": {
+    "queued": 0,
+    "running": 1,
+    "completed": 42,
+    "failed": 2
+  },
+  "total": 45,
+  "pagination": {
+    "limit": 50,
+    "offset": 0
+  }
+}
+```
+
+**Job Types:**
+- `asset_discovery` - Nmap network discovery scans
+- `vulnerability` - Nuclei vulnerability scans
+
+**Job Statuses:**
+- `queued` - Waiting to start
+- `running` - Currently executing
+- `completed` - Finished successfully
+- `failed` - Finished with errors
+- `cancelled` - Cancelled by user
+
+---
+
 ## Integration Examples
 
 ### JavaScript/TypeScript (Axios)
@@ -2791,4 +3063,4 @@ Webhook notifications are on the roadmap. Planned features:
 
 ---
 
-**Last Updated:** 2025-12-17
+**Last Updated:** 2026-01-28

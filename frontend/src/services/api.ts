@@ -174,4 +174,21 @@ export const api = {
   getScans: (params?: any) => apiClient.get('/assets/scans', { params }),
   getScan: (id: number) => apiClient.get(`/assets/scans/${id}`),
   getActiveScans: () => apiClient.get('/assets/scans/active'),
+
+  // Admin Dashboard
+  getAdminOverview: () => apiClient.get('/admin/overview'),
+  searchAdminUsers: (query?: string, limit?: number) =>
+    apiClient.get('/admin/users/search', { params: { q: query, limit } }),
+  getUserActivity: (userId: number, limit?: number, offset?: number) =>
+    apiClient.get(`/admin/users/${userId}/activity`, { params: { limit, offset } }),
+  getAdminErrors: (hours?: number, limit?: number, offset?: number) =>
+    apiClient.get('/admin/errors', { params: { hours, limit, offset } }),
+  getAdminJobs: (status?: string, limit?: number, offset?: number) =>
+    apiClient.get('/admin/jobs', { params: { status, limit, offset } }),
+
+  // Generic methods
+  get: (url: string, config?: any) => apiClient.get(url, config),
+  post: (url: string, data?: any) => apiClient.post(url, data),
+  put: (url: string, data?: any) => apiClient.put(url, data),
+  delete: (url: string) => apiClient.delete(url),
 };

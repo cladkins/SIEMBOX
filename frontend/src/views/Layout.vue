@@ -71,6 +71,10 @@
           <el-icon><User /></el-icon>
           <span>Users</span>
         </el-menu-item>
+        <el-menu-item index="/admin" v-if="authStore.user?.role === 'admin'">
+          <el-icon><DataAnalysis /></el-icon>
+          <span>Admin Dashboard</span>
+        </el-menu-item>
         <el-menu-item index="/settings">
           <el-icon><Tools /></el-icon>
           <span>Settings</span>
@@ -100,7 +104,7 @@
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection } from '@element-plus/icons-vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();
@@ -120,6 +124,7 @@ const pageTitle = computed(() => {
     '/vulnerability-management': 'Vulnerability Management',
     '/templates': 'Nuclei Templates',
     '/users': 'User Management',
+    '/admin': 'Admin Dashboard',
     '/settings': 'Settings',
   };
   return titles[route.path] || 'SIEMBox';

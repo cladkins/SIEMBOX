@@ -673,6 +673,7 @@ router.get('/', async (req: Request, res: Response) => {
       last_seen: row.last_seen,
       notes: row.notes,
       template_id: row.metadata?.nuclei_template || null,
+      metadata: row.metadata || null,
     }));
 
     res.json({

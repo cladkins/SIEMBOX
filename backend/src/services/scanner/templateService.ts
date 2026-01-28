@@ -383,9 +383,16 @@ export class TemplateService {
   static async getTemplatesByCategory(categoryId: string, limit: number = 100): Promise<TemplateInfo[]> {
     const templates = await this.getAllTemplates();
 
-    return templates
-      .filter(t => t.category === categoryId)
-      .slice(0, limit);
+    console.log(`[TemplateService] getTemplatesByCategory: Looking for '${categoryId}' in ${templates.length} templates`);
+
+    // Get unique categories for debugging
+    const uniqueCategories = [...new Set(templates.map(t => t.category))];
+    console.log(`[TemplateService] Unique categories in templates:`, uniqueCategories.slice(0, 20));
+
+    const filtered = templates.filter(t => t.category === categoryId);
+    console.log(`[TemplateService] Found ${filtered.length} templates for category '${categoryId}'`);
+
+    return filtered.slice(0, limit);
   }
 
   /**

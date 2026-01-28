@@ -141,9 +141,20 @@ router.get('/templates/search', async (req: Request, res: Response) => {
 router.get('/templates/category/:categoryId', async (req: Request, res: Response) => {
   try {
     const categoryId = req.params.categoryId;
-    const limit = parseInt(req.query.limit as string) || 100;
+    const limit = parseInt(req.query.limit as string) || 500; // Increase default limit
+
+    console.log(`[VULN] GET /templates/category/${categoryId} with limit ${limit}`);
 
     const templates = await TemplateService.getTemplatesByCategory(categoryId, limit);
+
+    console.log(`[VULN] Found ${templates.length} templates for category '${categoryId}'`);
+    if (templates.length === 0) {
+      // Debug: log a sample of categories from loaded templates
+      const allTemplates = await TemplateService.searchTemplates('', 10);
+      const sampleCategories = allTemplates.map(t => t.category);
+      console.log(`[VULN] Sample categories in templates:`, sampleCategories);
+    }
+
     res.json({
       templates,
       total: templates.length,

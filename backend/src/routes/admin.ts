@@ -41,33 +41,48 @@ router.get('/overview', async (_req: Request, res: Response) => {
     }
 
     // Syslog receiver health (check if logs received recently)
-    const syslogResult = await query(
-      `SELECT
-         COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '5 minutes') as recent_count,
-         MAX(created_at) as last_log
-       FROM raw_logs`
-    );
-    const syslogHealth = parseInt(syslogResult.rows[0]?.recent_count || '0', 10) > 0
-      ? 'healthy'
-      : 'warning';
+    let syslogHealth = 'unknown';
+    try {
+      const syslogResult = await query(
+        `SELECT
+           COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '5 minutes') as recent_count,
+           MAX(created_at) as last_log
+         FROM raw_logs`
+      );
+      syslogHealth = parseInt(syslogResult.rows[0]?.recent_count || '0', 10) > 0
+        ? 'healthy'
+        : 'warning';
+    } catch (err) {
+      logger.warn('Failed to check syslog health:', err);
+    }
 
     // Shipper health
-    const shipperResult = await query(
-      `SELECT
-         COUNT(*) FILTER (WHERE last_seen > NOW() - INTERVAL '5 minutes') as online,
-         COUNT(*) FILTER (WHERE last_seen <= NOW() - INTERVAL '5 minutes' AND last_seen > NOW() - INTERVAL '1 hour') as offline,
-         COUNT(*) FILTER (WHERE last_seen <= NOW() - INTERVAL '1 hour' OR last_seen IS NULL) as error
-       FROM log_shippers
-       WHERE enabled = true`
-    );
+    let shippersOnline = 0;
+    let shippersOffline = 0;
+    let shippersError = 0;
+    try {
+      const shipperResult = await query(
+        `SELECT
+           COUNT(*) FILTER (WHERE last_seen > NOW() - INTERVAL '5 minutes') as online,
+           COUNT(*) FILTER (WHERE last_seen <= NOW() - INTERVAL '5 minutes' AND last_seen > NOW() - INTERVAL '1 hour') as offline,
+           COUNT(*) FILTER (WHERE last_seen <= NOW() - INTERVAL '1 hour' OR last_seen IS NULL) as error
+         FROM log_shippers
+         WHERE enabled = true`
+      );
+      shippersOnline = parseInt(shipperResult.rows[0]?.online || '0', 10);
+      shippersOffline = parseInt(shipperResult.rows[0]?.offline || '0', 10);
+      shippersError = parseInt(shipperResult.rows[0]?.error || '0', 10);
+    } catch (err) {
+      logger.warn('Failed to check shipper health:', err);
+    }
 
     const health = {
       database: dbHealth,
       syslog: syslogHealth,
       shippers: {
-        online: parseInt(shipperResult.rows[0]?.online || '0', 10),
-        offline: parseInt(shipperResult.rows[0]?.offline || '0', 10),
-        error: parseInt(shipperResult.rows[0]?.error || '0', 10),
+        online: shippersOnline,
+        offline: shippersOffline,
+        error: shippersError,
       },
     };
 

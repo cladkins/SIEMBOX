@@ -170,10 +170,16 @@ export const api = {
   getSettings: () => apiClient.get('/settings'),
   updateSetting: (key: string, data: any) => apiClient.put(`/settings/${key}`, data),
 
-  // Asset Scans
+  // Assets
+  getAssets: (params?: any) => apiClient.get('/assets', { params }),
+  getAssetStatistics: () => apiClient.get('/assets/statistics'),
   getScans: (params?: any) => apiClient.get('/assets/scans', { params }),
   getScan: (id: number) => apiClient.get(`/assets/scans/${id}`),
   getActiveScans: () => apiClient.get('/assets/scans/active'),
+
+  // Vulnerabilities
+  getVulnerabilities: (params?: any) => apiClient.get('/vulnerabilities', { params }),
+  getVulnerabilitySummary: () => apiClient.get('/vulnerabilities/summary'),
 
   // Admin Dashboard
   getAdminOverview: () => apiClient.get('/admin/overview'),

@@ -4,7 +4,7 @@
 
 This guide walks through deploying and testing the Asset Discovery Phase 0 & 1 implementation. The features enable automated network asset discovery, NMAP scanning, and vulnerability baseline management within SIEMBox.
 
-**Status**: Phase 0 & 1 complete and committed to `develop` branch
+**Status**: Phase 0 & 1 complete and committed to `main` branch
 **Target**: Testing on remote Docker environment
 **Database Impact**: Pre-v1.0 schema changes (database reset recommended)
 
@@ -115,7 +115,7 @@ Statistics & Metadata:
 ### Access Requirements
 - SSH access to remote Docker server
 - Admin user credentials for SIEMBox
-- Git access to pull latest `develop` branch
+- Git access to pull latest `main` branch
 
 ### Database Backup (Highly Recommended)
 Before schema changes, create a backup:
@@ -132,8 +132,8 @@ On your remote Docker server:
 ```bash
 cd /path/to/SIEMBox
 git fetch origin
-git checkout develop
-git pull origin develop
+git checkout main
+git pull origin main
 ```
 
 Verify you're on the correct branch and commits:

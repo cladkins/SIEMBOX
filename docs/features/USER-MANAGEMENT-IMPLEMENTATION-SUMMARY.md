@@ -295,7 +295,7 @@ Potential improvements for future releases:
 - ⏳ Integration testing not performed
 
 ### Deployment Steps
-1. Push changes to develop branch
+1. Push changes to main branch
 2. Deploy to Docker environment
 3. Run `docker compose build frontend`
 4. Run `docker compose up -d`

@@ -130,7 +130,7 @@ Run the migration script to create tables: `cd backend && npm run migrate`
 
 **Pre-v1.0 (current):**
 ```bash
-git pull origin develop
+git pull origin main
 docker compose down
 docker compose build
 docker compose up -d

@@ -30,7 +30,7 @@ This deployment includes a CRITICAL fix for process management that completely p
 ```bash
 # On remote Docker host
 cd /path/to/SIEMBox
-git pull origin develop
+git pull origin main
 
 # Rebuild log shipper
 docker compose build log-shipper

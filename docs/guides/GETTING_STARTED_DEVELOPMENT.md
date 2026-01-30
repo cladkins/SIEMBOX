@@ -62,8 +62,8 @@ If you prefer to run services individually for development:
 git clone https://github.com/cladkins/SIEMBOX.git
 cd SIEMBOX
 
-# Checkout develop branch
-git checkout develop
+# Ensure you're on main branch
+git checkout main
 ```
 
 ### Step 2: Database Setup
@@ -207,9 +207,9 @@ Find something to work on:
 ### 2. Create a Branch
 
 ```bash
-# Create feature branch from develop
-git checkout develop
-git pull origin develop
+# Create feature branch from main
+git checkout main
+git pull origin main
 git checkout -b feature/your-feature-name
 
 # Or for bug fixes
@@ -295,7 +295,7 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>"
 git push origin feature/your-feature-name
 
 # Create pull request on GitHub
-# Target branch: develop (not main!)
+# Target branch: main
 ```
 
 **Pull Request Template:**

@@ -24,6 +24,7 @@ services:
     volumes:
       # For Docker container log monitoring
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /etc/komodo/stacks/npm/data/logs:/etc/komodo/stacks/npm/data/logs
 
       # For file-based log sources (example: nginx logs)
       # - /var/log/nginx:/var/log/nginx:ro

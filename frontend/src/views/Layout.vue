@@ -1,16 +1,19 @@
 <template>
   <el-container class="layout-container">
-    <el-aside width="200px">
+    <el-aside :width="isCollapsed ? '64px' : '220px'" class="sidebar">
       <div class="logo">
-        <h2>SIEMBox</h2>
+        <h2 v-if="!isCollapsed">SIEMBox</h2>
+        <el-icon v-else :size="24"><Monitor /></el-icon>
       </div>
       <el-menu
         :default-active="activeMenu"
         :router="true"
+        :collapse="isCollapsed"
         background-color="#304156"
         text-color="#bfcbd9"
         active-text-color="#409EFF"
         :default-openeds="['siem']"
+        class="sidebar-menu"
       >
         <el-menu-item index="/">
           <el-icon><Monitor /></el-icon>
@@ -80,6 +83,12 @@
           <span>Settings</span>
         </el-menu-item>
       </el-menu>
+      <div class="collapse-btn" @click="toggleCollapse">
+        <el-icon :size="20">
+          <Fold v-if="!isCollapsed" />
+          <Expand v-else />
+        </el-icon>
+      </div>
     </el-aside>
 
     <el-container>
@@ -101,13 +110,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis } from '@element-plus/icons-vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();
+
+const isCollapsed = ref(false);
+
+const toggleCollapse = () => {
+  isCollapsed.value = !isCollapsed.value;
+};
 
 const activeMenu = computed(() => route.path);
 
@@ -140,9 +155,22 @@ const handleLogout = () => {
   height: 100vh;
 }
 
-.el-aside {
+.sidebar {
   background-color: #304156;
   color: #fff;
+  display: flex;
+  flex-direction: column;
+  transition: width 0.3s ease;
+  overflow: hidden;
+}
+
+.sidebar-menu {
+  flex: 1;
+  border-right: none;
+}
+
+.sidebar-menu:not(.el-menu--collapse) {
+  width: 220px;
 }
 
 .logo {
@@ -151,12 +179,35 @@ const handleLogout = () => {
   justify-content: center;
   height: 60px;
   background-color: #263445;
+  flex-shrink: 0;
 }
 
 .logo h2 {
   color: #fff;
   font-size: 20px;
   margin: 0;
+  white-space: nowrap;
+}
+
+.logo .el-icon {
+  color: #fff;
+}
+
+.collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 48px;
+  cursor: pointer;
+  background-color: #263445;
+  color: #bfcbd9;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+.collapse-btn:hover {
+  background-color: #1f2d3d;
+  color: #409EFF;
 }
 
 .el-header {

@@ -1,16 +1,19 @@
 <template>
   <el-container class="layout-container">
-    <el-aside width="200px">
+    <el-aside :width="isCollapsed ? '64px' : '220px'" class="sidebar">
       <div class="logo">
-        <h2>SIEMBox</h2>
+        <h2 v-if="!isCollapsed">SIEMBox</h2>
+        <el-icon v-else :size="24"><Monitor /></el-icon>
       </div>
       <el-menu
         :default-active="activeMenu"
         :router="true"
-        background-color="#304156"
+        :collapse="isCollapsed"
+        :background-color="themeStore.isDark ? '#1d1d1d' : '#304156'"
         text-color="#bfcbd9"
         active-text-color="#409EFF"
         :default-openeds="['siem']"
+        class="sidebar-menu"
       >
         <el-menu-item index="/">
           <el-icon><Monitor /></el-icon>
@@ -80,6 +83,12 @@
           <span>Settings</span>
         </el-menu-item>
       </el-menu>
+      <div class="collapse-btn" @click="toggleCollapse">
+        <el-icon :size="20">
+          <Fold v-if="!isCollapsed" />
+          <Expand v-else />
+        </el-icon>
+      </div>
     </el-aside>
 
     <el-container>
@@ -87,6 +96,12 @@
         <div class="header-content">
           <span class="page-title">{{ pageTitle }}</span>
           <div class="user-actions">
+            <el-switch
+              v-model="themeStore.isDark"
+              :active-action-icon="Moon"
+              :inactive-action-icon="Sunny"
+              class="theme-switch"
+            />
             <span class="username">{{ authStore.user?.username || 'User' }}</span>
             <el-button @click="handleLogout" type="danger" size="small">Logout</el-button>
           </div>
@@ -101,13 +116,21 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis } from '@element-plus/icons-vue';
+import { useThemeStore } from '@/stores/theme';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();
+const themeStore = useThemeStore();
+
+const isCollapsed = ref(false);
+
+const toggleCollapse = () => {
+  isCollapsed.value = !isCollapsed.value;
+};
 
 const activeMenu = computed(() => route.path);
 
@@ -140,9 +163,22 @@ const handleLogout = () => {
   height: 100vh;
 }
 
-.el-aside {
-  background-color: #304156;
+.sidebar {
+  background-color: var(--siembox-sidebar-bg);
   color: #fff;
+  display: flex;
+  flex-direction: column;
+  transition: width 0.3s ease, background-color 0.3s;
+  overflow: hidden;
+}
+
+.sidebar-menu {
+  flex: 1;
+  border-right: none;
+}
+
+.sidebar-menu:not(.el-menu--collapse) {
+  width: 220px;
 }
 
 .logo {
@@ -150,21 +186,46 @@ const handleLogout = () => {
   align-items: center;
   justify-content: center;
   height: 60px;
-  background-color: #263445;
+  background-color: var(--siembox-sidebar-header);
+  flex-shrink: 0;
+  transition: background-color 0.3s;
 }
 
 .logo h2 {
   color: #fff;
   font-size: 20px;
   margin: 0;
+  white-space: nowrap;
+}
+
+.logo .el-icon {
+  color: #fff;
+}
+
+.collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 48px;
+  cursor: pointer;
+  background-color: var(--siembox-sidebar-header);
+  color: #bfcbd9;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+.collapse-btn:hover {
+  background-color: #1f2d3d;
+  color: #409EFF;
 }
 
 .el-header {
-  background-color: #fff;
+  background-color: var(--siembox-header-bg);
   display: flex;
   align-items: center;
-  box-shadow: 0 1px 4px rgba(0, 21, 41, 0.08);
+  box-shadow: var(--siembox-shadow);
   padding: 0 20px;
+  transition: background-color 0.3s;
 }
 
 .header-content {
@@ -177,6 +238,7 @@ const handleLogout = () => {
 .page-title {
   font-size: 18px;
   font-weight: 500;
+  color: var(--siembox-text-color);
 }
 
 .user-actions {
@@ -185,12 +247,18 @@ const handleLogout = () => {
   gap: 15px;
 }
 
+.theme-switch {
+  --el-switch-on-color: #409EFF;
+  --el-switch-off-color: #dcdfe6;
+}
+
 .username {
-  color: #606266;
+  color: var(--siembox-text-secondary);
 }
 
 .el-main {
-  background-color: #f5f7fa;
+  background-color: var(--siembox-bg-color);
   padding: 20px;
+  transition: background-color 0.3s;
 }
 </style>

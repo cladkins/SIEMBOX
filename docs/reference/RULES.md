@@ -1146,37 +1146,70 @@ Too many alerts = alerts ignored = real threats missed.
 
 ## Contributing Rules
 
+We welcome community detection rule contributions! If you've created a rule that detects interesting threats in your environment, share it with the community.
+
+### How to Contribute a Rule
+
+1. **Develop your rule** using the template in this document
+2. **Test thoroughly** with real log data from your environment
+3. **Tune thresholds** to minimize false positives
+4. **Create a pull request** with:
+   - Rule YAML file with complete configuration
+   - Clear documentation of what it detects
+   - Example logs and expected alert output
+   - Tuning guidance for different environments
+   - Response recommendations for analysts
+
+### Rule Development Checklist
+
+- [ ] Rule name is clear and action-oriented
+- [ ] Description explains what threat it detects
+- [ ] Severity level is appropriate (critical/high/medium/low)
+- [ ] Conditions are tested and work correctly
+- [ ] Aggregation timeframe and threshold are reasonable
+- [ ] False positive rate is acceptable for your environment
+- [ ] Alert message includes helpful context
+- [ ] Documentation includes tuning guidance
+- [ ] Rule tested with multiple log samples
+- [ ] Response playbook or recommendations documented
+
+### Rule Quality Guidelines
+
+- **Keep logic simple**: Complex rules are harder to understand and maintain
+- **Avoid regex overuse**: Consider structured field conditions instead
+- **Document assumptions**: Note what environment/config the rule assumes
+- **Provide examples**: Include real log samples that trigger the rule
+- **Include context**: Alert messages should give analysts enough info to respond
+- **Tune carefully**: Balance detection sensitivity with false positive rate
+- **Test edge cases**: Consider incomplete logs, truncated fields, etc.
+
 ### Submission Process
 
-1. Create rule file with:
-   - Clear rule name
-   - Accurate description
-   - Appropriate severity
-   - Tested conditions
-   - Alert templates
+1. Create rule in YAML format (see template above)
+2. Test with real logs from your environment
+3. Document expected behavior and tuning guidance
+4. Submit pull request with:
+   - Rule file(s) in `/rules/[category]/` directory
+   - Updated `/docs/reference/RULES.md` with rule documentation
+   - Example logs and alert output
 
-2. Test thoroughly with:
-   - Real log data
-   - Verify detection works
-   - Check for false positives
+### Performance Considerations
 
-3. Document:
-   - What it detects
-   - Tuning guidance
-   - Response recommendations
+- Rules are evaluated on every incoming log
+- Keep conditions simple to avoid CPU overhead
+- Use aggregation to batch evaluations when appropriate
+- Test with realistic log volume before contributing
 
-4. Submit to:
-   - Fork repository
-   - Add to `/rules/[category]/` directory
-   - Create pull request
+### Community Rule Standards
 
-### Guidelines
+Contributed rules will be evaluated for:
+- **Accuracy**: Does it detect what it claims?
+- **Performance**: Does it impact log processing speed?
+- **Clarity**: Can operators understand what it does?
+- **Usefulness**: Is this a threat worth detecting?
+- **Documentation**: Is it well explained?
 
-- Keep logic simple and clear
-- Use regex sparingly (performance)
-- Document threshold rationale
-- Provide real-world examples
-- Include false positive mitigation
+We may request changes to align with SIEMBox standards. This is a collaborative process!
 
 ---
 

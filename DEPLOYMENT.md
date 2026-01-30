@@ -11,7 +11,6 @@
 ```bash
 git clone https://github.com/cladkins/SIEMBOX.git
 cd SIEMBOX
-git checkout develop
 ```
 
 ### 2. Create Environment File
@@ -37,36 +36,27 @@ VITE_API_URL=/api
 CLEANUP_INTERVAL_HOURS=24
 ```
 
-### 3. Build and Start Services
+### 3. Deploy Services
 
-```bash
-# Build images
-docker-compose build
+SIEMBox is deployed via Docker Compose. Follow your deployment platform's documentation to deploy the containers (this may be Kubernetes, Docker Swarm, Portainer, or your custom infrastructure).
 
-# Start all services
-docker-compose up -d
+The docker-compose.yml file in the repository defines all required services:
+- PostgreSQL database
+- Backend API (port 3001)
+- Frontend web interface (port 3000)
+- Syslog server (port 514/UDP and TCP)
 
-# Check status
-docker-compose ps
+Your deployment platform will handle building images and managing the containers.
 
-# View logs
-docker-compose logs -f
-```
+### 4. Verify Database Initialization
 
-### 4. Initialize Database and Seed Data
+The database migrations and seed data import run automatically when the backend container starts. This includes:
+- Running all database migrations
+- Importing 19 pre-built parsers
+- Seeding 40+ detection rules
+- Creating default admin user
 
-The database migrations and seed data import run automatically when the backend starts. Wait for the backend to be healthy:
-
-```bash
-# Check backend logs to ensure migrations and seeding completed
-docker-compose logs backend | grep -i migration
-docker-compose logs backend | grep -i seed
-
-# You should see messages about:
-# - Migrations being applied (including parser imports)
-# - Detection rules being seeded from YAML files
-# - Successful import counts
-```
+The process is fully automated and requires no manual intervention. Monitor your deployment logs to verify completion.
 
 On first startup, SIEMBox automatically:
 - Runs all database migrations (including 18+ parsers)
@@ -77,193 +67,182 @@ On first startup, SIEMBox automatically:
 
 ### 5. Access the Application
 
-- Frontend: http://your-server-ip:3000
-- API: http://your-server-ip:3001
-- Default login: `admin` / (password from DEFAULT_ADMIN_PASSWORD)
+Once SIEMBox is running:
+
+- **Frontend (Web UI):** http://your-server-ip:3000
+- **Backend API:** http://your-server-ip:3001
+- **Syslog Listener:** your-server-ip:514 (UDP and TCP)
+- **Default Credentials:** admin / (password from DEFAULT_ADMIN_PASSWORD environment variable)
 
 ### 6. Send Test Syslog
 
+To verify logs are being ingested correctly, send a test syslog message from any machine on your network:
+
 ```bash
-# From any machine, send a test syslog message
+# Using logger utility
 logger -n your-server-ip -P 514 "Test message from logger"
 
-# Or using netcat
+# Or using netcat (if available)
 echo "<134>$(date '+%b %d %H:%M:%S') testhost test: This is a test message" | nc -u your-server-ip 514
 ```
 
+Check the SIEMBox UI to confirm the test message appears in the log viewer.
+
 ## Troubleshooting
 
-### Error: "init-minimal-db.sql" mounting issue
+### Database Connection Errors
 
-If you see an error about `init-minimal-db.sql`, you have a local docker-compose override file that needs to be removed:
+**Symptoms:** Backend container fails to start or reports "Connection refused"
 
-```bash
-# Remove any override files
-rm -f docker-compose.override.yml
+**Root Cause:** Usually PostgreSQL hasn't finished initializing
 
-# Or check what's trying to mount it
-grep -r "init-minimal-db.sql" .
-```
+**Solution:**
+1. Check that PostgreSQL container is running and healthy
+2. Wait 10-15 seconds and check again
+3. Review deployment logs for initialization progress
 
-**Important:** The database initialization happens through the backend migration system, NOT through mounted SQL files.
+### Port Conflicts
 
-### Backend won't start / Database connection errors
+**Symptoms:** Containers won't start or "port already in use" errors
 
-```bash
-# Check if postgres is healthy
-docker-compose ps postgres
+**Ports Required by SIEMBox:**
+- **3000:** Frontend web interface (HTTP)
+- **3001:** Backend API (HTTP)
+- **514:** Syslog listener (UDP and TCP)
+- **5432:** PostgreSQL database (internal only unless exposed)
 
-# Restart postgres if needed
-docker-compose restart postgres
+**Solution:**
+1. Verify no other services are using these ports
+2. Ensure firewall rules allow traffic on these ports
+3. Check your deployment platform's port mappings
 
-# Wait 10 seconds, then restart backend
-docker-compose restart backend
-```
+### Logs Not Being Received
 
-### Port 514 permission errors
+**Symptoms:** Syslog listener is running but no logs appear in the UI
 
-Port 514 requires elevated privileges. The docker-compose handles this through container port mapping.
+**Solutions:**
+1. Verify source machine can reach your-server-ip:514
+2. Confirm firewall allows UDP/TCP on port 514
+3. Test with manual syslog message (see section 6 above)
+4. Check SIEMBox logs for parsing errors
 
-If you still have issues:
-```bash
-# On the host, ensure no other service is using port 514
-sudo netstat -tulpn | grep :514
+### Container Won't Start
 
-# Restart the backend service
-docker-compose restart backend
-```
+Review your deployment platform's logs for the specific error message. Common issues:
+- Database not ready (wait 10-15 seconds)
+- Port already in use (check for conflicts)
+- Insufficient disk space
+- Network connectivity issues
 
-### View Application Logs
+### Authentication Issues
 
-```bash
-# All services
-docker-compose logs -f
+**Problem:** Can't log in with admin credentials
 
-# Specific service
-docker-compose logs -f backend
-docker-compose logs -f frontend
-docker-compose logs -f postgres
+**Solution:**
+1. Verify DEFAULT_ADMIN_PASSWORD is set correctly
+2. Wait for first-run initialization to complete
+3. Check database is running and initialized
+4. Review backend logs for authentication errors
 
-# Last 100 lines
-docker-compose logs --tail=100 backend
-```
+### Need Help?
 
-### Reset Everything
-
-```bash
-# Stop and remove all containers, volumes, and networks
-docker-compose down -v
-
-# Remove images
-docker-compose down --rmi all
-
-# Start fresh
-docker-compose up -d --build
-```
+If you encounter issues not covered here:
+1. Check [GitHub Issues](https://github.com/cladkins/SIEMBOX/issues)
+2. Review [Troubleshooting Guide](./docs/operations/TROUBLESHOOTING.md)
+3. Search [GitHub Discussions](https://github.com/cladkins/SIEMBOX/discussions)
 
 ## Updating
 
-```bash
-# Pull latest code
-git pull origin develop
+To update SIEMBox to the latest version:
 
-# Rebuild and restart
-docker-compose down
-docker-compose up -d --build
+1. Pull latest code from the repository
+2. Review any changes to `.env.example` and update your `.env` if needed
+3. Rebuild and restart containers (through your deployment platform)
+4. Migrations run automatically on backend startup
 
-# Migrations run automatically on backend startup
-```
+Note: Do not run docker-compose commands directly. Your deployment environment will handle container updates.
 
 ## Database Migrations and Seeding
 
-### Automatic Process
+### Automatic Initialization
 
-Migrations and seeding happen automatically on backend startup:
+When the backend container starts for the first time, it automatically:
 
-1. **Migrations** (run in order from `backend/migrations/`):
-   - `001_initial_schema.sql` - Core tables
-   - `002_seed_data.sql` - Default admin user
-   - `003_system_settings.sql` - Retention settings
-   - `004_*.sql` through `006_*.sql` - Additional schema updates
-   - `007_import_phase2_parsers.sql` - **11 Phase 2 parsers** (reverse proxy, auth, apps)
+1. **Runs all database migrations** from `/backend/migrations/`:
+   - Creates database schema (tables, indexes, constraints)
+   - Imports 19 built-in parsers
+   - Configures retention policies
+   - Sets up system tables
 
-2. **Seed Data** (automatic on first run):
-   - Checks if detection_rules table is empty
-   - If empty, imports **40+ YAML rules** from `rules/` directory
-   - If rules exist, skips import (idempotent)
+2. **Seeds detection rules** (on first run only):
+   - Checks if rules table is empty
+   - If empty, imports 40+ detection rules from `/rules/` directory
+   - If rules already exist, skips import (prevents duplication)
 
-3. **Health Check**:
-   ```bash
-   # Check seed status
-   curl http://localhost:3001/health/seed-status
+3. **Creates default admin user** with credentials from environment variables
 
-   # Expected response:
-   # {
-   #   "parsers": 18,
-   #   "rules": 48,
-   #   "seeded": true
-   # }
-   ```
+**This entire process is automatic and requires no manual intervention.**
 
-### Manual Operations (if needed)
+### Verify Initialization Completed
+
+You can verify that initialization was successful by checking the health endpoint:
 
 ```bash
-# Access the backend container
-docker-compose exec backend sh
-
-# Run migrations manually
-npm run migrate
-
-# Re-seed detection rules (only imports new rules)
-npm run seed-data
-
-# Import specific rules from YAML
-npm run import-rules
+curl http://your-server-ip:3001/health/seed-status
 ```
 
-### Verify Automatic Seeding
-
-```bash
-# Check backend startup logs
-docker-compose logs backend | tail -50
-
-# You should see:
-# [info] Starting database migrations...
-# [info] Migration completed: 007_import_phase2_parsers.sql
-# [info] All migrations completed successfully!
-# [info] Initializing seed data...
-# [info] Seeding detection rules from YAML files...
-# [info] Successfully seeded 40 detection rules
-# [info] Seed data initialization complete
+Expected response:
+```json
+{
+  "parsers": 19,
+  "rules": 40,
+  "seeded": true
+}
 ```
+
+### Advanced: Manual Operations
+
+For advanced users, if you need to manually run migrations or reimport rules, refer to the backend container documentation. These operations should rarely be needed in normal operation.
 
 ## Backup and Restore
 
-### Backup Database
+### Backup Your Database
+
+Regular backups are essential. Your deployment platform should provide backup capabilities.
+
+**To backup manually:**
+
+You can execute backup commands in your PostgreSQL container through your deployment platform's exec/shell interface:
 
 ```bash
-# Create backup
-docker-compose exec postgres pg_dump -U siembox siembox > backup_$(date +%Y%m%d).sql
+# Create SQL backup
+pg_dump -U siembox siembox > backup_$(date +%Y%m%d).sql
 
-# Backup with custom format (recommended)
-docker-compose exec postgres pg_dump -U siembox -Fc siembox > backup_$(date +%Y%m%d).dump
+# Or use custom format (recommended for compression)
+pg_dump -U siembox -Fc siembox > backup_$(date +%Y%m%d).dump
 ```
 
-### Restore Database
+Copy the backup file to secure storage.
+
+### Restore from Backup
+
+To restore from a backup:
+
+1. Ensure the backend container is stopped (through your deployment platform)
+2. Access the PostgreSQL container
+3. Run restore command:
 
 ```bash
-# Stop backend to prevent connections
-docker-compose stop backend
+# From SQL backup
+psql -U siembox siembox < backup_20240101.sql
 
-# Restore from SQL backup
-cat backup_20231125.sql | docker-compose exec -T postgres psql -U siembox siembox
-
-# Restore from custom format
-docker-compose exec -T postgres pg_restore -U siembox -d siembox -c < backup_20231125.dump
-
-# Start backend
-docker-compose start backend
+# From custom format backup
+pg_restore -U siembox -d siembox -c < backup_20240101.dump
 ```
+
+4. Restart the backend container
+
+**Note:** Restores will overwrite existing data. Verify you have multiple backup copies before restoring.
 
 ## Performance Tuning
 
@@ -325,17 +304,23 @@ sudo ufw allow 3000/tcp
 
 ## Monitoring
 
-### Check Container Health
+Monitor SIEMBox to ensure smooth operation and capacity planning.
 
+### Container Health
+
+Your deployment platform should provide container monitoring. Check:
+- All containers are running and healthy
+- CPU and memory usage is reasonable
+- No restart loops (indicates errors)
+
+### Database Monitoring
+
+You can access the PostgreSQL container to check database statistics.
+
+**Check database size:**
 ```bash
-docker-compose ps
-docker stats
-```
-
-### Database Size
-
-```bash
-docker-compose exec postgres psql -U siembox -d siembox -c "
+# From PostgreSQL container
+psql -U siembox -d siembox -c "
 SELECT
   pg_size_pretty(pg_total_relation_size('raw_logs')) as raw_logs_size,
   pg_size_pretty(pg_total_relation_size('parsed_logs')) as parsed_logs_size,
@@ -343,10 +328,9 @@ SELECT
 "
 ```
 
-### Log Counts
-
+**Check log counts:**
 ```bash
-docker-compose exec postgres psql -U siembox -d siembox -c "
+psql -U siembox -d siembox -c "
 SELECT
   (SELECT COUNT(*) FROM raw_logs) as raw_logs,
   (SELECT COUNT(*) FROM parsed_logs) as parsed_logs,
@@ -354,117 +338,76 @@ SELECT
 "
 ```
 
+### Log Retention
+
+SIEMBox automatically cleans old logs according to retention policies. Configure retention via the Settings page in the web UI:
+- Raw logs: Default 30 days
+- Parsed logs: Default 90 days
+- Alerts: Default 365 days
+
 ## Log Shipper Management
+
+### Setting Up Log Shippers
+
+Log shippers forward logs from remote sources to SIEMBox. Each shipper requires an API key for authentication.
+
+**To add a new shipper:**
+1. In SIEMBox UI, navigate to Shippers page
+2. Click "Add Shipper" and generate an API key
+3. Note the Shipper ID (8-character identifier)
+4. Deploy the shipper container with this API key
+5. Verify logs appear in SIEMBox
+
+See [Log Shipper README](./log-shipper/README.md) for detailed setup instructions.
 
 ### API Key Rotation
 
-Log shippers use API keys for authentication and configuration management. When rotating API keys:
+When rotating shipper API keys:
 
-**Safe Rotation Process:**
+1. Generate new API key in SIEMBox UI
+2. Update the shipper's API key environment variable
+3. Restart the shipper container
 
-1. **Generate New API Key** in SIEMBox UI (Shippers page → Edit shipper → Generate new key)
-2. **Note the Shipper ID** - This 8-character hash identifies the shipper in logs
-3. **Update Environment Variable** on the shipper host:
-   ```bash
-   # Update docker-compose.yml or .env file
-   SHIPPER_API_KEY=new_api_key_here
-   ```
-4. **Restart Shipper** to apply new API key:
-   ```bash
-   docker-compose restart log-shipper
-   ```
+The shipper will briefly operate with cached configuration, then re-register with the new key.
 
-**What Happens During Rotation:**
-
-- ✅ **No log gaps**: Shipper continues using cached configuration until restart
-- ✅ **Automatic recovery**: After restart with new key, shipper re-registers and updates cache
-- ⚠️ **Ghost shipper period**: Between key rotation and shipper restart, shipper operates with old cached config
+**Important:** Update shippers promptly after rotating keys to avoid losing log configuration updates.
 
 ### Ghost Shipper Detection
 
 **What is a Ghost Shipper?**
 
-A "ghost shipper" is a log shipper that continues sending logs but cannot fetch configuration updates due to an invalid API key. This occurs when:
-- API key was deleted in SIEMBox
+A "ghost shipper" is a log shipper with an invalid or expired API key that continues sending logs but cannot receive configuration updates. This can occur when:
+- API key was deleted
 - API key was rotated but shipper wasn't updated
-- Shipper was copied/cloned with old credentials
-
-**How Ghost Shippers Work:**
-
-The managed log shipper (`shipper-managed.sh`) uses **configuration caching** for operational resilience:
-
-1. **Valid API Key**: Shipper fetches config from API, caches it locally, sends logs normally
-2. **Invalid API Key**: Shipper cannot fetch new config, but continues using cached config
-3. **Result**: Logs keep flowing (no gaps), but shipper appears as "unknown source" in UI
-
-**Detecting Ghost Shippers:**
-
-Navigate to **Shippers** page in the UI. If ghost shippers exist, you'll see:
-- **Yellow alert banner** at the top: "Unknown sources detected"
-- **"View Unknown Sources" button** to see details
-- **Table showing**: Shipper ID, log count, first/last seen, source IPs, hostnames, app names
-
-**Via Database Query:**
-
-```bash
-docker-compose exec postgres psql -U siembox -d siembox -c "
-SELECT
-  shipper_id,
-  COUNT(*) as log_count,
-  MIN(created_at) as first_seen,
-  MAX(created_at) as last_seen,
-  array_agg(DISTINCT source_ip) as source_ips,
-  array_agg(DISTINCT hostname) as hostnames
-FROM raw_logs
-WHERE shipper_id IS NOT NULL
-  AND shipper_id NOT IN (
-    SELECT SUBSTRING(ENCODE(SHA256(api_key::bytea), 'hex'), 1, 8)
-    FROM log_shippers
-  )
-GROUP BY shipper_id;
-"
-```
-
-**Remediating Ghost Shippers:**
-
-**Option 1: Re-register the shipper**
-```bash
-# On the ghost shipper host:
-# 1. Get new API key from SIEMBox UI (Shippers page → Add Shipper)
-# 2. Update environment variable
-export SHIPPER_API_KEY=new_valid_key
-
-# 3. Restart shipper
-docker-compose restart log-shipper
-```
-
-**Option 2: Stop unauthorized shipper**
-```bash
-# If the ghost shipper is unauthorized/unknown:
-# 1. Identify the source IP from ghost shipper details
-# 2. Locate the physical/virtual machine
-# 3. Stop the shipper container
-docker-compose stop log-shipper  # or docker stop <container_name>
-```
-
-**Option 3: Clean up historical data**
-```sql
--- Delete logs from specific ghost shipper (use with caution!)
-DELETE FROM raw_logs WHERE shipper_id = 'a1b2c3d4';
-```
+- Shipper container was cloned/copied with old credentials
 
 **Why Ghost Shippers Exist:**
 
-This design balances **security** with **operational resilience**:
-- ✅ **Prevents log gaps**: API key issues don't stop log collection
-- ✅ **Visibility**: Administrators can identify misconfigured/unauthorized shippers
-- ✅ **Continuity**: Temporary network/API issues don't disrupt logging
-- ⚠️ **Trade-off**: Shippers with invalid keys continue operating until detected
+SIEMBox uses configuration caching so that temporary API key issues don't cause log loss. This provides:
+- **Resilience**: Logs continue flowing even if API key is invalid
+- **Visibility**: Administrators can identify misconfigured shippers in the UI
+- **Continuity**: Network/API issues don't disrupt log collection
+
+**How to Detect Ghost Shippers:**
+
+In the SIEMBox UI, navigate to the **Shippers** page. If unknown sources are detected, you'll see:
+- A yellow warning banner: "Unknown sources detected"
+- Details showing shipper ID, log count, timestamps, and source IPs
+
+**How to Remediate:**
+
+1. **Identify the source IP** from the ghost shipper details in the UI
+2. **Locate the shipper** on your network
+3. **Update the API key** to a current valid key from SIEMBox
+4. **Restart the shipper** container
+5. **Verify** it no longer appears as an unknown source
 
 **Best Practices:**
 
-1. **Monitor regularly**: Check Shippers page for "Unknown Sources" alert
-2. **Rotate carefully**: Update shipper credentials immediately after rotation
-3. **Unique API keys**: Use different API keys for each shipper (easier to track)
-4. **Document shippers**: Maintain inventory of authorized shippers and their locations
-5. **Automate cleanup**: Set up alerts for ghost shipper detection
+1. Monitor Shippers page regularly for unknown sources
+2. Update shipper API keys immediately after rotation
+3. Use unique API keys for each shipper for easier tracking
+4. Document all shipper locations and configurations
+5. Test API key rotation in non-production first
+
+For detailed shipper diagnostics and troubleshooting, see [Log Shipper Diagnostics](./docs/operations/SHIPPER-DIAGNOSTICS.md).

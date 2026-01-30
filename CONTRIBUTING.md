@@ -6,19 +6,13 @@ Thank you for your interest in contributing to SIEMBox! This document provides g
 
 ### Branches
 
-- `main` - Production-ready code
-- `develop` - Active development (default branch for all work)
-- Feature branches - Create from `develop` for new features
+- `main` - All development happens here
 
 ### Getting Started
 
 1. Fork the repository (if external contributor)
 2. Clone your fork or the main repository
-3. Checkout the `develop` branch:
-   ```bash
-   git checkout develop
-   ```
-4. Create a new feature branch:
+3. Create a new feature branch from `main`:
    ```bash
    git checkout -b feature/your-feature-name
    ```
@@ -164,7 +158,7 @@ Never commit:
 2. Run linting and formatting
 3. Test your changes thoroughly
 4. Update documentation if needed
-5. Create a pull request to the `develop` branch
+5. Create a pull request to the `main` branch
 6. Fill out the PR template completely
 7. Wait for code review
 
@@ -175,7 +169,7 @@ Never commit:
 - [ ] Documentation updated (if needed)
 - [ ] No secrets or sensitive data committed
 - [ ] Commit messages follow conventional format
-- [ ] PR targets `develop` branch
+- [ ] PR targets `main` branch
 
 ## Code Review
 

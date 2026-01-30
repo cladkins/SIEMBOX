@@ -20,25 +20,20 @@ Poll for Updates (every CONFIG_POLL_INTERVAL seconds)
 Send Heartbeat (every HEARTBEAT_INTERVAL seconds)
 ```
 
-## Your Configuration
+## Shipper Configuration
 
-Based on your docker-compose.yml:
+When you set up a log shipper, you configure:
 
-- **API Key**: `f25d8cc2a7994ab3626e677169b5a53e9c478327373c09302c7aab8cbc5c9031`
-- **Backend URL**: `http://192.168.1.76:3001/api`
-- **Config Poll**: Every 30 seconds
-- **Heartbeat**: Every 60 seconds
-- **Network**: Host mode
+- **API Key**: Unique identifier for shipper authentication
+- **Backend URL**: SIEMBox API endpoint (typically http://siembox-server:3001/api)
+- **Config Poll**: How often shipper checks for config updates (default 30 seconds)
+- **Heartbeat**: How often shipper reports status to backend (default 60 seconds)
 
-**Volume Mounts**:
-- `/etc/komodo/stacks/npm/data/logs` → `/etc/komodo/stacks/npm/data/logs` (ro)
-- `/var/run/docker.sock` → `/var/run/docker.sock` (ro)
-
-**UI Configuration** (from screenshot):
-- **Log Source**: file type
-- **Path**: `/etc/komodo/stacks/npm/data/logs/*.log`
-- **Tag**: `NGINX`
-- **Facility**: `local0`
+**Log Sources** configured via the SIEMBox UI:
+- **Source Type**: file, journald, or docker
+- **Source Path**: Location of logs to collect (e.g., `/var/log/nginx/*.log`)
+- **Tag**: Label for logs (e.g., `NGINX`)
+- **Facility**: Syslog facility level (default `local0`)
 
 ## Common Issues & Solutions
 
@@ -75,80 +70,58 @@ Based on your docker-compose.yml:
 - Source is disabled (`enabled = false`)
 
 **Solution**:
-Check the database directly:
-```sql
--- Find your shipper ID
-SELECT id, name, api_key FROM log_shippers
-WHERE api_key = 'f25d8cc2a7994ab3626e677169b5a53e9c478327373c09302c7aab8cbc5c9031';
-
--- Check sources (replace {shipper_id} with the ID from above)
-SELECT * FROM shipper_sources WHERE shipper_id = {shipper_id};
-```
+1. In SIEMBox UI, go to Shippers page
+2. Find your shipper
+3. Verify sources are configured and enabled
+4. If not, create a new source with correct path
+5. Shipper will fetch new config on next poll (within 30 seconds)
 
 ### Issue 2: Files Not Found in Container
 
 **Symptom**: Shipper logs show "No files found matching pattern"
 
-**Diagnosis**:
-Check if files exist inside the container:
-```bash
-docker exec siembox-log-shipper ls -la /etc/komodo/stacks/npm/data/logs/
-```
-
 **Possible Causes**:
-- Volume mount is incorrect
-- Path doesn't exist on host
-- No log files match the glob pattern `*.log`
+- Volume mount is incorrect or missing
+- Source path doesn't exist on the system
+- No log files match the glob pattern
+- File permissions prevent reading
 
 **Solution**:
-1. Verify files exist on host:
-   ```bash
-   ls -la /etc/komodo/stacks/npm/data/logs/
-   ```
-
-2. Check volume mounts are active:
-   ```bash
-   docker inspect siembox-log-shipper | jq '.[0].Mounts'
-   ```
-
-3. Test glob pattern expansion:
-   ```bash
-   docker exec siembox-log-shipper sh -c 'ls -la /etc/komodo/stacks/npm/data/logs/*.log'
-   ```
+1. Verify the source path exists on your system and contains log files
+2. Check that the path is correctly configured in SIEMBox UI
+3. Verify the shipper container has access to the directory (via volume mount)
+4. Check file permissions allow reading by the shipper process
+5. For Docker container logs, ensure `/var/run/docker.sock` is mounted
 
 ### Issue 3: File Permissions
 
 **Symptom**: Shipper can see files but can't read them
 
 **Diagnosis**:
-Check file permissions inside container:
-```bash
-docker exec siembox-log-shipper sh -c 'ls -la /etc/komodo/stacks/npm/data/logs/ && id'
-```
+Verify the source path has readable permissions for the shipper process.
 
 **Solution**:
-Files must be readable by the user running the shipper (typically root in Alpine).
+Files must be readable by the shipper user (typically root in the container). Ensure:
+- Source files have world-readable permissions (or user-readable)
+- Parent directories are traversable (executable)
+- Volume mounts preserve permissions
 
 ### Issue 4: Shipper Not Fetching Configuration
 
 **Symptom**: Shipper logs show connection errors or HTTP failures
 
-**Diagnosis**:
-Test connectivity from inside the container:
-```bash
-docker exec siembox-log-shipper curl -v http://192.168.1.76:3001/api/shippers/config/f25d8cc2a7994ab3626e677169b5a53e9c478327373c09302c7aab8cbc5c9031
-```
-
 **Possible Causes**:
-- Network connectivity issue
-- Backend not running
-- Firewall blocking
-- Using host network mode but backend is in bridge network
+- Network connectivity issue between shipper and SIEMBox
+- Backend API is not running
+- Firewall blocking the connection
+- Incorrect backend URL in shipper configuration
 
 **Solution**:
-Since you're using `network_mode: host`, the container should have full host network access. Verify:
-1. Backend is accessible from host: `curl http://192.168.1.76:3001/api/health`
-2. No firewall rules blocking localhost
+1. Verify backend API is accessible from the network where shipper runs
+2. Test with: `curl http://your-siembox-ip:3001/api/health`
+3. Check firewall rules allow port 3001
+4. Verify shipper environment variables point to correct backend URL
+5. Check SIEMBox logs for connection errors
 
 ### Issue 5: Configuration Format Error
 
@@ -181,104 +154,74 @@ The shipper expects this exact structure:
 
 Follow these steps in order:
 
-### Step 1: Check Shipper Container Logs
+### Step 1: Verify Configuration
 
+In the SIEMBox UI:
+1. Navigate to Shippers page
+2. Find your shipper
+3. Verify sources are configured with:
+   - Correct source path
+   - Proper file pattern (e.g., `*.log`)
+   - Correct tag and facility
+   - Source is enabled (not disabled)
+
+### Step 2: Check Backend Connectivity
+
+From a machine on your network, verify SIEMBox is accessible:
 ```bash
-docker logs -f siembox-log-shipper
+curl http://your-siembox-ip:3001/api/health
 ```
 
-**Look for**:
-- `[INFO] SIEMBox Managed Log Shipper Starting` - Container started
-- `[INFO] Successfully registered with SIEMBox` - Initial registration worked
-- `[DEBUG] Registration returned X bytes` - Config was received
-- `[INFO] Found N source(s)` - Sources were parsed
-- `[INFO] Tailing file: /path/to/file` - File tailing started
-- `[WARN] No files found matching pattern` - Glob expansion failed
-- `[ERROR] Failed to fetch config` - API call failed
-
-### Step 2: Test API Endpoint
-
-```bash
-./test-shipper-config-api.sh
+Expected response:
+```json
+{"status": "ok"}
 ```
 
-This script will:
-- Call the configuration API endpoint
-- Display the HTTP status code
-- Pretty-print the JSON response
-- Show number of sources
-- Display SIEM connection info
+### Step 3: Verify Shipper Container
 
-### Step 3: Verify File Access
+Through your deployment platform's logs/shell:
+- Check shipper container is running
+- Review startup logs for errors
+- Verify environment variables (SHIPPER_API_KEY, SIEM_HOST, SIEM_PORT)
 
-```bash
-# On the host
-ls -la /etc/komodo/stacks/npm/data/logs/
+### Step 4: Test Source Paths
 
-# Inside container
-docker exec siembox-log-shipper ls -la /etc/komodo/stacks/npm/data/logs/
+Verify the source paths exist and are accessible:
+- For file sources: Ensure files exist at the configured path
+- For Docker sources: Ensure Docker socket is mounted
+- For journald sources: Ensure journal is accessible
 
-# Test glob pattern
-docker exec siembox-log-shipper sh -c 'ls -la /etc/komodo/stacks/npm/data/logs/*.log'
+### Step 5: Monitor Log Flow
+
+Once configured:
+1. Send test log to source (e.g., write to monitored file)
+2. Check SIEMBox UI for received logs
+3. Monitor shipper for errors
 ```
 
-### Step 4: Check Database State
+### Step 4: Check Configuration Delivery
 
-```bash
-# Connect to PostgreSQL
-docker exec -it siembox-postgres psql -U siembox -d siembox
+Once sources are configured in the SIEMBox UI, verify they are being delivered to the shipper:
 
-# Check shipper
-SELECT id, name, api_key, status, last_seen FROM log_shippers;
+1. The shipper polls for configuration every 30 seconds
+2. After configuring sources, wait 30-60 seconds
+3. Check shipper logs for "Applying configuration" message
+4. Look for "Found N source(s)" in logs
+5. Verify "Tailing file:" messages appear
 
-# Check sources (use the shipper ID from above)
-SELECT * FROM shipper_sources WHERE shipper_id = {your_shipper_id};
+## Log Analysis
 
-# Check volumes
-SELECT * FROM shipper_volumes WHERE shipper_id = {your_shipper_id};
-```
+Review shipper logs for key messages indicating status:
 
-### Step 5: Manual Configuration Test
-
-If the API isn't returning configuration, you can test the shipper manually:
-
-1. Create a test config file:
-   ```yaml
-   # /tmp/test-config.json
-   {
-     "sources": [
-       {
-         "source_type": "file",
-         "file_path": "/etc/komodo/stacks/npm/data/logs/*.log",
-         "tag": "NGINX",
-         "facility": "local0",
-         "enabled": true
-       }
-     ],
-     "siem_host": "192.168.1.76",
-     "siem_port": 514
-   }
-   ```
-
-2. Inject it into the container to test:
-   ```bash
-   docker exec siembox-log-shipper sh -c 'cat > /tmp/test-config.json' < /tmp/test-config.json
-   ```
-
-## Debug Mode
-
-The managed shipper has extensive debug logging. Check logs for these patterns:
-
-```bash
-# Filter for configuration-related logs
-docker logs siembox-log-shipper 2>&1 | grep -E "(DEBUG|apply_config|source)"
-
-# Filter for file tailing
-docker logs siembox-log-shipper 2>&1 | grep -E "(Tailing|tail_file|No files)"
-
-# Filter for API calls
-docker logs siembox-log-shipper 2>&1 | grep -E "(Fetching|register|HTTP)"
-```
+**Looking for in logs:**
+- `Performing initial registration...` - Shipper starting up
+- `Successfully registered with SIEMBox` - API key valid and registration worked
+- `Applying configuration` - Configuration received from backend
+- `Found N source(s)` - Sources parsed successfully
+- `Tailing file:` - File monitoring active
+- `No files found matching pattern` - Path issue
+- `Failed to fetch config` - Connection or API key error
+- `Successfully sent N logs` - Logs being forwarded
 
 ## Key Log Messages
 
@@ -293,23 +236,23 @@ docker logs siembox-log-shipper 2>&1 | grep -E "(Fetching|register|HTTP)"
 
 ## Expected Working Output
 
-When everything is working, you should see:
+When everything is working correctly, you should see these key messages in shipper logs:
 
 ```
-[INFO] 2025-12-10 16:30:00 =========================================
-[INFO] 2025-12-10 16:30:00 SIEMBox Managed Log Shipper Starting
-[INFO] 2025-12-10 16:30:00 =========================================
-[INFO] 2025-12-10 16:30:00 Version: 1.0.0
-[INFO] 2025-12-10 16:30:00 API URL: http://192.168.1.76:3001/api
-[INFO] 2025-12-10 16:30:00 Poll Interval: 30s
-[INFO] 2025-12-10 16:30:00
-[INFO] 2025-12-10 16:30:00 Performing initial registration...
-[INFO] 2025-12-10 16:30:01 Successfully registered with SIEMBox
-[INFO] 2025-12-10 16:30:01 Applying configuration (SIEM: 192.168.1.76:514)
-[INFO] 2025-12-10 16:30:01 Found 1 source(s)
-[INFO] 2025-12-10 16:30:01 Tailing file: /etc/komodo/stacks/npm/data/logs/nginx.log (tag: NGINX, pattern: /etc/komodo/stacks/npm/data/logs/*.log)
-[INFO] 2025-12-10 16:30:01
-[INFO] 2025-12-10 16:30:01 Log shipper running. Polling for configuration updates...
+[INFO] SIEMBox Managed Log Shipper Starting
+[INFO] Performing initial registration...
+[INFO] Successfully registered with SIEMBox
+[INFO] Applying configuration (SIEM: your-siembox-ip:514)
+[INFO] Found N source(s)
+[INFO] Tailing file: /path/to/logs (tag: TAGNAME)
+[INFO] Log shipper running. Polling for configuration updates...
+[INFO] Successfully sent N logs to SIEM
+```
+
+Once you see these messages:
+1. Logs should start appearing in SIEMBox UI
+2. Check raw log viewer to confirm logs are being received
+3. Verify parser tags match your configured tags
 ```
 
 ## Next Steps

@@ -22,23 +22,17 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed deployment instructions.
 # Clone and configure
 git clone https://github.com/cladkins/SIEMBOX.git
 cd SIEMBOX
-git checkout develop
 
 # Create .env file (see .env.example)
 cp .env.example .env
 nano .env
 
-# Build and start
-docker compose up -d
-
-# That's it! SIEMBox automatically:
-# - Runs database migrations
-# - Imports 19 parsers (Nginx, Traefik, Caddy, Authelia, Vaultwarden, UniFi, etc.)
-# - Seeds 40+ detection rules
-# - Creates default admin user
+# Deploy to your environment
+# See DEPLOYMENT.md for full instructions
 
 # Access the UI
-# Frontend: http://localhost:3000
+# Frontend: http://your-server-ip:3000
+# API: http://your-server-ip:3001
 # Default login: admin / changeme
 ```
 

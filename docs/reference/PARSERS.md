@@ -817,18 +817,39 @@ ubnt-idsips-daemon\[\d+\]:\s+[\d-]+T[\d:.-]+\s+(\w+):\s+(.+?):\s+ipset\[(\w+)\]\
 
 ## Contributing Parsers
 
-Have a parser to share? Please submit a pull request with:
-1. Parser configuration (name, type, pattern, field mappings)
-2. Example log samples
-3. Expected parsed output
-4. Any relevant detection rules
+We welcome community parser contributions! If you've created a parser for a log source not yet supported by SIEMBox, share it with the community.
+
+### How to Contribute a Parser
+
+1. **Develop and test your parser** using the guide in this document
+2. **Create a pull request** with:
+   - Parser configuration (name, type, pattern, field mappings)
+   - Multiple example log samples showing different scenarios
+   - Expected parsed output for each sample
+   - Any relevant detection rules that work with this parser
+3. **Include documentation** with:
+   - What log source this parser handles
+   - Required parser type (regex/grok/JSON)
+   - Performance considerations (if any)
+   - Special configuration notes
 
 ### Parser Guidelines
-- Use descriptive names that include the vendor/product
-- Set appropriate priority (lower = higher priority)
-- Include comprehensive field mappings
-- Test with multiple log samples
-- Document any special considerations
+
+- **Naming**: Use descriptive names that include vendor/product (e.g., "nginx-custom-timestamp")
+- **Priority**: Set appropriate priority (1-20 for critical, 30-50 for applications, 100+ for fallback)
+- **Field Mappings**: Include comprehensive, consistent field names
+- **Testing**: Test with multiple log samples covering edge cases
+- **Documentation**: Clearly explain what the parser does and when to use it
+- **Performance**: Avoid complex regex that could cause slowdowns
+- **Compatibility**: Ensure pattern works with extracted messages (not full syslog lines)
+
+### Submission Tips
+
+- Include real log samples from your environment (sanitized if needed)
+- Test that the parser doesn't interfere with existing parsers
+- Document any dependencies or assumptions
+- Provide examples of what the parser detects (e.g., "Detects SSH brute force")
+- Be prepared to update based on feedback
 
 ---
 

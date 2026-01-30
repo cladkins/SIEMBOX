@@ -23,30 +23,29 @@ Comprehensive troubleshooting guide for diagnosing and resolving common issues i
 
 ## Quick Diagnostics
 
-### Health Check Commands
+### Health Check Steps
 
-Run these first to identify which component is failing:
+Run these steps to identify which component is failing:
 
+1. **Check container status** - Verify all containers are running (use your deployment platform)
+2. **Review container logs** - Check logs for PostgreSQL, backend API, and frontend
+3. **Test API health** - Try accessing: `http://your-siembox-ip:3001/api/health`
+4. **Verify port access** - Ensure ports 3000, 3001, 514 are accessible from expected networks
+5. **Check database connection** - Try connecting to PostgreSQL if accessible
+6. **Verify syslog reception** - Send test syslog message and check for receipt
+
+**For Docker deployments specifically:**
 ```bash
-# Check all container status
-docker-compose ps
+# Check container status
+docker ps | grep siembox
 
-# View logs from all services
-docker-compose logs --tail=100
+# View logs
+docker logs siembox-backend
+docker logs siembox-postgres
+docker logs siembox-frontend
 
-# Check specific service
-docker-compose logs -f backend
-docker-compose logs -f postgres
-docker-compose logs -f frontend
-
-# Check container health
-docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-
-# Test database connectivity
-docker exec siembox-backend node -e "const {query} = require('./dist/config/database'); query('SELECT 1').then(() => console.log('DB OK')).catch(e => console.error(e));"
-
-# Check if ports are listening
-netstat -tuln | grep -E "514|3000|3001|5432"
+# Test API endpoint
+curl http://localhost:3001/api/health
 ```
 
 ### Common Error Patterns
@@ -67,140 +66,99 @@ netstat -tuln | grep -E "514|3000|3001|5432"
 ### Issue: Container Won't Start
 
 **Symptoms:**
-- Container exits immediately
-- `docker-compose ps` shows `Exit 1` or similar
+- Containers are in a failed state
+- Service is unreachable or repeatedly restarting
+- Logs show startup errors
 
-**Diagnosis:**
-```bash
-# Check container logs
-docker-compose logs <service-name>
+**Common Causes and Solutions:**
 
-# Check for port conflicts
-sudo netstat -tulpn | grep -E "514|3000|3001|5432"
+**Port Already in Use**
+- Check what's using ports 3000, 3001, or 514 on your system
+- Either stop the conflicting service or change SIEMBox ports
+- Verify port mappings in your deployment configuration
 
-# Verify docker-compose.yml syntax
-docker-compose config
-```
+**Missing or Invalid Environment Variables**
+- Verify `.env` file exists and is readable
+- Check that all required variables are set:
+  - `DB_PASSWORD` - Database password
+  - `JWT_SECRET` - JWT signing key
+  - `DEFAULT_ADMIN_PASSWORD` - Admin credentials
+- Use `.env.example` as a template
+- Invalid values (e.g., empty passwords) will cause startup failures
 
-**Solutions:**
+**Database Connection Issues**
+- Ensure PostgreSQL container/service is healthy and responding
+- Verify database name, user, and password in `.env` match your configuration
+- Check network connectivity between backend and database
+- For remote databases, verify firewall rules allow access on port 5432
 
-**Port Already in Use:**
-```bash
-# Find process using port
-sudo lsof -i :3001
+**Insufficient System Resources**
+- Check available disk space (logs grow quickly)
+- Verify sufficient RAM (minimum 2GB recommended)
+- Check system CPU isn't overloaded
 
-# Kill process or change port
-# Option 1: Kill process
-sudo kill <PID>
-
-# Option 2: Change port in docker-compose.yml
-ports:
-  - "3002:3001"  # Use different host port
-```
-
-**Missing Environment Variables:**
-```bash
-# Verify .env file exists
-ls -la .env
-
-# Check required variables
-grep -E "DB_PASSWORD|JWT_SECRET|DEFAULT_ADMIN_PASSWORD" .env
-
-# If missing, copy from example
-cp .env.example .env
-nano .env
-```
-
-**Permission Errors:**
-```bash
-# Fix volume permissions
-sudo chown -R 999:999 /var/lib/docker/volumes/siembox_postgres-data
-
-# Reset and recreate
-docker-compose down -v
-docker-compose up -d
-```
+**Permission Errors**
+- Ensure the deployment user has proper permissions for volumes/directories
+- Verify Docker/container engine has permission to access mounted paths
+- Check file permissions on log directories
 
 ---
 
-### Issue: Database Migration Failures
+### Issue: Database Initialization Failures
 
 **Symptoms:**
-- Backend logs show migration errors
-- Tables don't exist
-- "relation does not exist" errors
+- Backend logs show migration or initialization errors
+- Tables don't exist in database
+- "Relation does not exist" errors in API responses
+- Parsers or rules not loading
 
-**Diagnosis:**
-```bash
-# Check if migrations ran
-docker-compose logs backend | grep -i migration
+**Common Causes:**
 
-# Connect to database and check tables
-docker exec siembox-postgres psql -U siembox -d siembox -c "\dt"
-```
+1. **PostgreSQL not ready** - Database hasn't finished initializing
+   - Solution: Wait 15-20 seconds and check if backend recovers
 
-**Solutions:**
+2. **Database connection issues** - Backend can't connect to database
+   - Verify database is running and accessible
+   - Check DB_HOST, DB_USER, DB_PASSWORD in .env
+   - Verify network connectivity between containers/services
 
-**Migrations Didn't Run:**
-```bash
-# Run migrations manually
-docker-compose exec backend npm run migrate
+3. **Corrupted database state** - Previous failed migration left database in bad state
+   - Solution: Back up data, then reset database and re-run migrations
+   - Check database logs for corruption indicators
 
-# If that fails, check migration script
-docker-compose exec backend sh
+4. **Insufficient permissions** - Database user lacks required permissions
+   - Verify database user has CREATE TABLE, INSERT, UPDATE permissions
+   - May need to run migrations as database superuser
+
+**How Initialization Works:**
+
+On first start, the backend automatically:
+1. Checks if database is ready
+2. Runs all pending migrations (in order)
+3. Imports seed data (parsers, rules)
+4. Creates indexes and constraints
+
+This should complete in 30-60 seconds. If not:
+- Check backend container logs for specific error message
+- Verify database container is healthy
+- Ensure sufficient disk space
 cd src/scripts
 node migrate.js
 ```
 
 **Database Not Ready:**
-```bash
-# Ensure postgres is healthy
-docker-compose ps postgres
+**Recovery Steps:**
 
-# Restart backend after postgres is up
-docker-compose restart backend
+1. Verify PostgreSQL is running and healthy
+2. Wait 15-30 seconds for initialization
+3. Check backend logs for initialization progress
+4. If migrations are stuck, restart the backend service
+5. As a last resort, reset database and re-run all migrations
 
-# Watch backend logs for successful migration
-docker-compose logs -f backend | grep "Migration"
-```
-
-**Corrupted Database:**
-```bash
-# Nuclear option: Start fresh
-docker-compose down -v
-docker volume rm siembox_postgres-data
-docker-compose up -d
-
-# Wait for migrations, then check
-sleep 30
-docker-compose logs backend | grep "Migration"
-```
-
----
-
-### Issue: "init-minimal-db.sql" Error
-
-**Symptoms:**
-```
-Error: Cannot find /path/to/init-minimal-db.sql
-```
-
-**Cause:**
-- Old docker-compose.override.yml file
-- Database initialization has moved to migration system
-
-**Solution:**
-```bash
-# Remove override file
-rm -f docker-compose.override.yml
-
-# Check for any custom compose files
-ls -la docker-compose*.yml
-
-# Restart
-docker-compose down
-docker-compose up -d
-```
+**Important:** Database reset should only be done if:
+- This is a test/development environment
+- You have backed up all important data
+- You understand the data will be permanently deleted
 
 ---
 
@@ -210,48 +168,41 @@ docker-compose up -d
 
 **Diagnosis Checklist:**
 
-1. **Is syslog server running?**
-```bash
-# Check backend logs for syslog startup
-docker-compose logs backend | grep -i syslog
+1. **Verify syslog server is running** - Check backend logs for syslog initialization message
+2. **Test network connectivity** - Verify you can reach port 514 from log source
+3. **Send test log** - Manually send test syslog and check if received
+4. **Check UI and database** - Verify log appears in SIEMBox
 
-# Should see: "Syslog server listening on port 514 (UDP and TCP)"
+**Diagnostic Tests:**
+
+**Test 1: Verify Backend Connectivity**
+```bash
+curl http://your-siembox-ip:3001/api/health
+# Should return: {"status": "ok"}
 ```
 
-2. **Is port 514 accessible?**
+**Test 2: Send Manual Syslog**
+From any machine on your network:
 ```bash
-# Check if port is listening
-sudo netstat -uln | grep 514  # UDP
-sudo netstat -tln | grep 514  # TCP
+# Method 1: Using logger (if available)
+logger -n your-siembox-ip -P 514 "Test message"
 
-# Test from log source
-echo "Test message" | nc -u <siembox-ip> 514
+# Method 2: Using netcat
+echo "<134>$(date '+%b %d %H:%M:%S') testhost test: Test message" | nc -u your-siembox-ip 514
 ```
 
-3. **Are logs being sent?**
-```bash
-# Test syslog manually
-logger -n <siembox-ip> -P 514 "Test from logger command"
+**Test 3: Check for Received Logs**
+In SIEMBox UI:
+- Go to Logs page
+- Look for log with your test message
+- If not visible, check filters/time range
 
-# Or using netcat
-echo "<134>$(date '+%b %d %H:%M:%S') testhost test: Manual test message" | nc -u <siembox-ip> 514
-```
+**Common Causes and Solutions:**
 
-4. **Check database for logs:**
-```bash
-# Count raw logs
-docker exec siembox-postgres psql -U siembox -d siembox -c "SELECT COUNT(*) FROM raw_logs;"
-
-# View recent logs
-docker exec siembox-postgres psql -U siembox -d siembox -c "SELECT timestamp, source_ip, LEFT(raw_message, 100) FROM raw_logs ORDER BY timestamp DESC LIMIT 10;"
-```
-
-**Common Solutions:**
-
-**Firewall Blocking Port 514:**
-```bash
-# Check firewall status
-sudo ufw status
+**Firewall Blocking Port 514**
+- Verify port 514 is open for UDP and TCP traffic
+- Check firewall rules on both source and destination
+- Test from local network first, then external
 
 # Allow syslog from specific network
 sudo ufw allow from 192.168.1.0/24 to any port 514
@@ -292,100 +243,104 @@ docker-compose logs backend | grep -i "error\|invalid"
 ### Issue: Logs Received But Not Parsed
 
 **Symptoms:**
-- Logs appear in raw_logs table
-- No entries in parsed_logs table
+- Raw logs visible in SIEMBox UI
+- No parsed fields extracted
+- Parsed logs table is empty
+
+**Root Cause:** No parser matches your log format
 
 **Diagnosis:**
-```bash
-# Check raw logs count
-docker exec siembox-postgres psql -U siembox -d siembox -c "SELECT COUNT(*) FROM raw_logs;"
 
-# Check parsed logs count
-docker exec siembox-postgres psql -U siembox -d siembox -c "SELECT COUNT(*) FROM parsed_logs;"
-
-# View sample raw log
-docker exec siembox-postgres psql -U siembox -d siembox -c "SELECT raw_message FROM raw_logs ORDER BY timestamp DESC LIMIT 1;"
-
-# Check if parsers are enabled
-docker exec siembox-postgres psql -U siembox -d siembox -c "SELECT id, name, enabled, priority FROM parsers ORDER BY priority;"
-```
+1. View a sample raw log in SIEMBox UI to see the format
+2. Check Parsers page to see available parsers
+3. Verify parser is enabled and has correct pattern
+4. Test parser pattern against sample log
 
 **Solutions:**
 
-**No Matching Parser:**
-```bash
-# Create parser that matches your log format
-# Use the parser builder in UI or create via API
+**Create New Parser:**
 
-# Test parser against sample log
-curl -X POST http://localhost:3001/api/parsers/test \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{
-    "parser_type": "regex",
-    "pattern": "your pattern here",
-    "field_mappings": {...},
-    "sample": "your sample log here"
-  }'
-```
+1. Go to Parsers page in SIEMBox UI
+2. Click "Add Parser"
+3. Choose parser type (regex/grok/JSON)
+4. Enter pattern that matches your log format
+5. Map extracted fields to field names
+6. Test with sample log
+7. Set appropriate priority (lower = matches first)
+8. Save and enable
 
-**Parser Disabled:**
-```bash
-# Enable parser
-docker exec siembox-postgres psql -U siembox -d siembox -c \
-  "UPDATE parsers SET enabled = true WHERE id = <parser-id>;"
+See [PARSERS.md](../../PARSERS.md) for detailed parser creation guide.
 
-# Restart backend to reload parsers
-docker-compose restart backend
-```
+**Enable Existing Parser:**
 
-**Parser Priority Issue:**
-```bash
-# Lower priority number = higher precedence
-# Generic syslog parser has priority 1000 (lowest)
-# Specific parsers should be < 100
+1. Go to Parsers page
+2. Find parser for your log type
+3. Check "Enabled" checkbox
+4. Save
+5. New logs will be parsed on next ingestion
 
-# Update parser priority
-docker exec siembox-postgres psql -U siembox -d siembox -c \
-  "UPDATE parsers SET priority = 10 WHERE id = <parser-id>;"
-```
+**Adjust Parser Priority:**
+
+1. Go to Parsers page
+2. Look at "Priority" column (lower number = higher priority)
+3. If multiple parsers match, first one (lowest priority) wins
+4. Adjust priorities to ensure correct parser matches
+5. Save changes
 
 ---
 
 ## Log Shipper Issues
 
-### Issue: Shipper Shows as "Offline"
+### Issue: Shipper Shows as "Offline" or "Unknown Source"
 
-**Diagnosis:**
-```bash
-# Check shipper container logs
-docker logs siembox-log-shipper
+**Symptoms:**
+- Shipper appears offline in SIEMBox UI
+- Shipper shows as "Unknown Source" (ghost shipper)
+- No logs being received from shipper
 
-# Check shipper status in database
-docker exec siembox-postgres psql -U siembox -d siembox -c \
-  "SELECT id, name, status, last_seen FROM log_shippers;"
+**Common Causes:**
 
-# Verify API key
-docker exec siembox-log-shipper env | grep SHIPPER_API_KEY
-```
+1. **Invalid API Key** - Shipper API key is incorrect or expired
+2. **Network Connectivity** - Shipper can't reach SIEMBox API
+3. **Backend Down** - SIEMBox API is not responding
+4. **Shipper Misconfiguration** - Log sources not configured
 
 **Solutions:**
 
-**Incorrect API Key:**
-```bash
-# Get correct API key from SIEMBox UI or database
-docker exec siembox-postgres psql -U siembox -d siembox -c \
-  "SELECT id, name, api_key FROM log_shippers WHERE id = <shipper-id>;"
+**Check Shipper Configuration:**
+1. In SIEMBox UI, go to Shippers page
+2. Find the offline shipper
+3. Verify API key hasn't expired or been deleted
+4. Verify log sources are configured and enabled
+5. Note the Shipper ID (8-character hash)
 
-# Update shipper environment
-# Edit docker-compose.yml or .env and restart
-docker-compose restart siembox-log-shipper
-```
+**Verify Network Connectivity:**
+1. From the shipper host, test:
+   ```bash
+   curl http://your-siembox-ip:3001/api/health
+   ```
+2. Should return `{"status": "ok"}`
+3. If not reachable:
+   - Check SIEMBox is running
+   - Verify firewall allows port 3001
+   - Check routing between networks
 
-**Network Connectivity:**
-```bash
-# Test connectivity from shipper to SIEMBox API
-docker exec siembox-log-shipper curl -v http://<siembox-ip>:3001/api/shippers/config/<api-key>
+**Update Shipper API Key:**
+1. In SIEMBox UI, generate new API key for shipper
+2. Update shipper's SHIPPER_API_KEY environment variable
+3. Restart shipper container
+4. Wait 30-60 seconds for re-registration
+5. Shipper should no longer show as offline
+
+**Investigate Ghost Shipper:**
+
+If shipper shows as "Unknown Source":
+- Shipper is sending logs with invalid API key
+- Logs continue due to cached configuration
+- This is normal during API key rotation
+- Once shipper is updated and restarted, it will re-register with correct key
+
+See [SHIPPER-DIAGNOSTICS.md](./SHIPPER-DIAGNOSTICS.md) for detailed shipper troubleshooting.
 
 # Check DNS resolution
 docker exec siembox-log-shipper nslookup <siembox-hostname>

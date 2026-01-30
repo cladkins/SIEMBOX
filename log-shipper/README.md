@@ -44,34 +44,43 @@ The log shipper is **managed only** - there is no standalone/unauthenticated mod
 
 ### Step 2: Deploy the Shipper Container
 
-Use the provided `compose.yml` file from the SIEMBox repository:
+#### Option A: Using Pre-built Image (Recommended)
 
 ```bash
-# Copy the log-shipper directory to your target machine
-scp -r log-shipper/ user@target-machine:/opt/siembox-shipper/
-cd /opt/siembox-shipper/
+# Create a directory for the shipper
+mkdir siembox-shipper && cd siembox-shipper
+
+# Download the production compose file
+curl -O https://raw.githubusercontent.com/cladkins/SIEMBOX/main/log-shipper/compose.prod.yaml
 
 # Create .env file with your settings
 cat > .env <<EOF
 SHIPPER_API_KEY=paste-your-api-key-here
 SIEMBOX_API_URL=http://your-siembox-ip:3001/api
-CONFIG_POLL_INTERVAL=30
-HEARTBEAT_INTERVAL=60
 EOF
 
-# Edit compose.yml to configure volume mounts for your log files
-nano compose.yml
+# Start the shipper
+docker compose -f compose.prod.yaml up -d
 ```
 
-**IMPORTANT:** Update the `volumes` section in `compose.yml` to match where your log files are located on the host machine.
+#### Option B: Build from Source
 
-Deploy the shipper:
 ```bash
-docker compose up -d
+# Clone the repository
+git clone https://github.com/cladkins/SIEMBOX.git
+cd SIEMBOX/log-shipper
 
-# Or if using older docker-compose command:
-docker-compose up -d
+# Create .env file with your settings
+cat > .env <<EOF
+SHIPPER_API_KEY=paste-your-api-key-here
+SIEMBOX_API_URL=http://your-siembox-ip:3001/api
+EOF
+
+# Build and start
+docker compose up -d --build
 ```
+
+**IMPORTANT:** Update the `volumes` section in the compose file to match where your log files are located on the host machine.
 
 ### Step 3: Verify Shipper is Online
 
@@ -337,9 +346,21 @@ docker logs siembox-backend -f
 └─────────────┘
 ```
 
-## Building
+## Container Image
 
-Build the shipper image:
+The log shipper image is available on GitHub Container Registry:
+
+```
+ghcr.io/cladkins/siembox-log-shipper:latest
+```
+
+### Available Tags
+- `latest` - Most recent build from main branch
+- `1.0.0`, `1.0`, `1` - Semantic version tags from releases
+
+### Building from Source
+
+To build the shipper image locally:
 ```bash
 docker build -t siembox-log-shipper:latest .
 ```

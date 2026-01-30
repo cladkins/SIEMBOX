@@ -1,19 +1,21 @@
-# SIEMBox Log Shipper - Development Compose File
-# Builds container from source code
+# SIEMBox Log Shipper - Production Compose File
+# Uses pre-built image from GitHub Container Registry (GHCR)
 #
-# For production deployments using pre-built GHCR images, use:
+# Usage:
 #   docker compose -f compose.prod.yaml up -d
+#
+# Required environment variables:
+#   SHIPPER_API_KEY - Get from SIEMBox UI -> Shippers page
+#   SIEMBOX_API_URL - Your SIEMBox server URL (e.g., http://192.168.1.100:3001/api)
 
 services:
   log-shipper:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/cladkins/siembox-log-shipper:${SIEMBOX_VERSION:-latest}
     container_name: siembox-log-shipper
     restart: unless-stopped
 
     environment:
-      # REQUIRED: API key from SIEMBox (get this from SIEMBox UI → Shippers page)
+      # REQUIRED: API key from SIEMBox (get this from SIEMBox UI -> Shippers page)
       SHIPPER_API_KEY: ${SHIPPER_API_KEY}
 
       # REQUIRED: SIEMBox API URL (change to your SIEMBox server IP/hostname)
@@ -30,11 +32,9 @@ services:
     volumes:
       # For Docker container log monitoring
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /etc/komodo/stacks/npm/data/logs:/etc/komodo/stacks/npm/data/logs
-      - /var/log/journal:/var/log/journal:ro
 
-      # For file-based log sources (example: nginx logs)
-      # - /var/log/nginx:/var/log/nginx:ro
+      # For system logs
+      # - /var/log:/var/log:ro
 
       # For custom application logs
       # - /path/to/your/logs:/logs:ro

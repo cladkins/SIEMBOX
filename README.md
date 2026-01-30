@@ -16,10 +16,31 @@ A lightweight, self-hosted Security Information and Event Management (SIEM) syst
 
 ## Quick Start
 
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed deployment instructions.
+### Option 1: Using Pre-built Images (Recommended)
 
 ```bash
-# Clone and configure
+# Download compose file
+curl -O https://raw.githubusercontent.com/cladkins/SIEMBOX/main/compose.prod.yaml
+
+# Create .env file
+cat > .env << EOF
+DB_PASSWORD=your_secure_password
+JWT_SECRET=your_jwt_secret_32_chars_min
+DEFAULT_ADMIN_PASSWORD=your_admin_password
+EOF
+
+# Start SIEMBox
+docker compose -f compose.prod.yaml up -d
+
+# Access the UI
+# Frontend: http://your-server-ip:3000
+# Default login: admin / your_admin_password
+```
+
+### Option 2: Build from Source
+
+```bash
+# Clone repository
 git clone https://github.com/cladkins/SIEMBOX.git
 cd SIEMBOX
 
@@ -27,14 +48,11 @@ cd SIEMBOX
 cp .env.example .env
 nano .env
 
-# Deploy to your environment
-# See DEPLOYMENT.md for full instructions
-
-# Access the UI
-# Frontend: http://your-server-ip:3000
-# API: http://your-server-ip:3001
-# Default login: admin / changeme
+# Build and start
+docker compose up -d --build
 ```
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed deployment instructions.
 
 ## Documentation
 

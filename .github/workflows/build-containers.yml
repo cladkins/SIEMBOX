@@ -17,6 +17,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ${{ github.repository_owner }}/siembox
+  NUCLEI_VERSION: 3.7.0
 
 jobs:
   build-backend:
@@ -64,6 +65,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            NUCLEI_VERSION=${{ env.NUCLEI_VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

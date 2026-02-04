@@ -66,8 +66,7 @@ router.get('/overview', async (_req: Request, res: Response) => {
            COUNT(*) FILTER (WHERE last_seen > NOW() - INTERVAL '5 minutes') as online,
            COUNT(*) FILTER (WHERE last_seen <= NOW() - INTERVAL '5 minutes' AND last_seen > NOW() - INTERVAL '1 hour') as offline,
            COUNT(*) FILTER (WHERE last_seen <= NOW() - INTERVAL '1 hour' OR last_seen IS NULL) as error
-         FROM log_shippers
-         WHERE enabled = true`
+         FROM log_shippers`
       );
       shippersOnline = parseInt(shipperResult.rows[0]?.online || '0', 10);
       shippersOffline = parseInt(shipperResult.rows[0]?.offline || '0', 10);

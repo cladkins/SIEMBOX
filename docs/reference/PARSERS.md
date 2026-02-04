@@ -15,6 +15,8 @@ This document contains community-contributed log parsers for SIEMBox. These pars
   - [Linux Sudo](#linux-sudo)
   - [Generic Syslog](#generic-syslog)
   - [JSON Parser](#json-parser)
+- [Standard Format Parsers](#standard-format-parsers)
+  - [CEF (Common Event Format)](#cef-common-event-format)
 - [Community Parsers](#community-parsers)
   - [Ubiquiti UniFi](#ubiquiti-unifi)
     - [Firewall Logs](#unifi-firewall)
@@ -712,6 +714,130 @@ All JSON fields are automatically extracted:
 - Cloud service logs
 - Container logs (Docker, Kubernetes)
 - API gateway logs
+
+---
+
+## Standard Format Parsers
+
+### CEF (Common Event Format)
+
+CEF (Common Event Format) is a standard log format developed by ArcSight (now Micro Focus) and widely adopted by security vendors. SIEMBox includes built-in parsers for CEF logs.
+
+#### CEF Format Overview
+
+```
+CEF:Version|Device Vendor|Device Product|Device Version|Signature ID|Name|Severity|Extension
+```
+
+**Example CEF Messages:**
+```
+CEF:0|Security|threatmanager|1.0|100|worm successfully stopped|10|src=10.0.0.1 dst=2.1.2.2 spt=1232
+
+CEF:0|Trend Micro|OSSEC HIDS|1.0.1|535|New ossec agent connected|4|src=192.168.1.100 suser=admin
+
+CEF:0|Palo Alto Networks|PAN-OS|10.0|threat|THREAT|8|src=10.1.1.1 dst=8.8.8.8 act=block-url msg=Malware URL blocked
+```
+
+#### CEF Standard Parser
+
+Parses basic CEF format logs.
+
+**Configuration:**
+- **Name:** `cef-standard`
+- **Description:** `Parses Common Event Format (CEF) logs used by security products`
+- **Parser Type:** `Regex`
+- **Priority:** `5`
+- **Event Type:** `cef_event`
+
+**Pattern:**
+```regex
+^CEF:(?<cef_version>\d+)\|(?<device_vendor>[^|]*)\|(?<device_product>[^|]*)\|(?<device_version>[^|]*)\|(?<signature_id>[^|]*)\|(?<event_name>[^|]*)\|(?<severity>[^|]*)\|(?<extension>.*)$
+```
+
+**Extracted Fields:**
+| Field | Description | Example |
+|-------|-------------|---------|
+| `cef_version` | CEF format version | `0` |
+| `device_vendor` | Vendor name | `Palo Alto Networks` |
+| `device_product` | Product name | `PAN-OS` |
+| `device_version` | Product version | `10.0` |
+| `signature_id` | Event/signature identifier | `threat` |
+| `event_name` | Human-readable event name | `THREAT` |
+| `severity` | Severity level (0-10) | `8` |
+| `extension` | Key=value pairs | `src=10.1.1.1 dst=8.8.8.8` |
+
+#### CEF with Syslog Header Parser
+
+Parses CEF logs that include a syslog header prefix (common when CEF is transported via syslog).
+
+**Configuration:**
+- **Name:** `cef-syslog`
+- **Description:** `Parses CEF logs with syslog header prefix`
+- **Parser Type:** `Regex`
+- **Priority:** `4`
+- **Event Type:** `cef_event`
+
+**Example Input:**
+```
+Jan 18 11:07:53 hostname CEF:0|Security|Product|1.0|100|Event|5|src=10.0.0.1
+```
+
+**Additional Fields:**
+| Field | Description |
+|-------|-------------|
+| `syslog_timestamp` | Syslog timestamp |
+| `syslog_host` | Syslog hostname |
+
+#### CEF Extension Fields
+
+Common CEF extension key=value pairs that may appear in the extension field:
+
+| Key | Full Name | Description | Example |
+|-----|-----------|-------------|---------|
+| `src` | Source IP | Source IP address | `10.0.0.1` |
+| `dst` | Destination IP | Destination IP address | `192.168.1.1` |
+| `spt` | Source Port | Source port number | `45123` |
+| `dpt` | Destination Port | Destination port number | `443` |
+| `act` | Action | Action taken | `block`, `allow` |
+| `msg` | Message | Human-readable message | `Malware detected` |
+| `suser` | Source User | Source username | `admin` |
+| `duser` | Destination User | Destination username | `root` |
+| `fname` | Filename | File name involved | `malware.exe` |
+| `request` | Request URL | HTTP request URL | `/api/login` |
+| `outcome` | Outcome | Result of the action | `success`, `failure` |
+| `reason` | Reason | Reason for the action | `policy violation` |
+| `cs1-cs6` | Custom Strings | Vendor-specific strings | varies |
+| `cn1-cn3` | Custom Numbers | Vendor-specific numbers | varies |
+
+#### Products Using CEF Format
+
+CEF is supported by many security products including:
+- **ArcSight** (Micro Focus)
+- **Trend Micro** (Deep Security, OSSEC)
+- **Palo Alto Networks** (PAN-OS)
+- **Fortinet** (FortiGate)
+- **Check Point**
+- **McAfee** (ESM)
+- **Cisco** (Firepower, ASA)
+- **CrowdStrike**
+- **Carbon Black**
+- **Symantec** (Endpoint Protection)
+
+#### Configuring CEF Sources
+
+To send CEF logs to SIEMBox:
+
+1. Configure your security product to output CEF format
+2. Set the syslog destination to your SIEMBox server (port 514)
+3. CEF logs will be automatically detected and parsed
+
+**Example: Palo Alto PAN-OS**
+```
+set shared log-settings syslog <profile> server <server> transport UDP
+set shared log-settings syslog <profile> server <server> port 514
+set shared log-settings syslog <profile> server <server> format BSD
+set shared log-settings syslog <profile> server <server> facility LOG_USER
+```
 
 ---
 

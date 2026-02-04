@@ -611,13 +611,13 @@ async function regenerateApiKey(shipper: any) {
     // Update currentShipper with new key
     currentShipper.value.api_key = response.data.api_key;
 
+    // Auto-copy new key to clipboard for convenience (non-blocking)
+    copyApiKey(response.data.api_key);
+
     ElMessage.success({
-      message: 'API key regenerated successfully. The new key has been copied to your clipboard.',
+      message: 'API key regenerated successfully.',
       duration: 5000,
     });
-
-    // Auto-copy new key to clipboard for convenience
-    copyApiKey(response.data.api_key);
   } catch (error: any) {
     if (error !== 'cancel') {
       ElMessage.error('Failed to regenerate API key');
@@ -774,9 +774,43 @@ async function deleteVolume(volume: any) {
   }
 }
 
-function copyApiKey(apiKey: string) {
-  navigator.clipboard.writeText(apiKey);
-  ElMessage.success('API key copied to clipboard');
+async function copyApiKey(apiKey: string) {
+  // Check if clipboard API is available (requires HTTPS or localhost)
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(apiKey);
+      ElMessage.success('API key copied to clipboard');
+    } catch (err) {
+      fallbackCopyToClipboard(apiKey);
+    }
+  } else {
+    fallbackCopyToClipboard(apiKey);
+  }
+}
+
+function fallbackCopyToClipboard(text: string) {
+  // Fallback for non-secure contexts (HTTP)
+  const textArea = document.createElement('textarea');
+  textArea.value = text;
+  textArea.style.position = 'fixed';
+  textArea.style.left = '-999999px';
+  textArea.style.top = '-999999px';
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+
+  try {
+    const successful = document.execCommand('copy');
+    if (successful) {
+      ElMessage.success('API key copied to clipboard');
+    } else {
+      ElMessage.warning('Copy failed. Please select and copy the API key manually.');
+    }
+  } catch (err) {
+    ElMessage.warning('Copy not supported. Please select and copy the API key manually.');
+  }
+
+  document.body.removeChild(textArea);
 }
 
 function getStatusType(status: string) {

@@ -1,6 +1,9 @@
 <template>
   <div class="dashboard">
-    <!-- Statistics Cards -->
+    <!-- Section: Alerts -->
+    <div class="section-header">
+      <h3>Security Alerts</h3>
+    </div>
     <el-row :gutter="20" class="stats-row">
       <el-col :xs="24" :sm="12" :md="6">
         <el-card class="stat-card total">
@@ -9,7 +12,7 @@
               <el-icon :size="40"><Bell /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ statistics?.total || 0 }}</div>
+              <div class="stat-value">{{ alertStats?.total || 0 }}</div>
               <div class="stat-label">Total Alerts (24h)</div>
             </div>
           </div>
@@ -23,7 +26,7 @@
               <el-icon :size="40"><WarningFilled /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ statistics?.critical_count || 0 }}</div>
+              <div class="stat-value">{{ alertStats?.critical_count || 0 }}</div>
               <div class="stat-label">Critical Alerts</div>
             </div>
           </div>
@@ -37,7 +40,7 @@
               <el-icon :size="40"><Warning /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ statistics?.high_count || 0 }}</div>
+              <div class="stat-value">{{ alertStats?.high_count || 0 }}</div>
               <div class="stat-label">High Severity</div>
             </div>
           </div>
@@ -51,8 +54,70 @@
               <el-icon :size="40"><Document /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ statistics?.new_count || 0 }}</div>
+              <div class="stat-value">{{ alertStats?.new_count || 0 }}</div>
               <div class="stat-label">New Alerts</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <!-- Section: Assets & Vulnerabilities -->
+    <div class="section-header">
+      <h3>Assets & Vulnerabilities</h3>
+    </div>
+    <el-row :gutter="20" class="stats-row">
+      <el-col :xs="24" :sm="12" :md="6">
+        <el-card class="stat-card assets">
+          <div class="stat-content">
+            <div class="stat-icon">
+              <el-icon :size="40"><Monitor /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">{{ assetStats?.total || 0 }}</div>
+              <div class="stat-label">Total Assets</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+
+      <el-col :xs="24" :sm="12" :md="6">
+        <el-card class="stat-card assets-online">
+          <div class="stat-content">
+            <div class="stat-icon">
+              <el-icon :size="40"><CircleCheck /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">{{ assetStats?.online || 0 }}</div>
+              <div class="stat-label">Online Assets</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+
+      <el-col :xs="24" :sm="12" :md="6">
+        <el-card class="stat-card vulns-critical">
+          <div class="stat-content">
+            <div class="stat-icon">
+              <el-icon :size="40"><WarnTriangleFilled /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">{{ vulnStats?.critical || 0 }}</div>
+              <div class="stat-label">Critical Vulns</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+
+      <el-col :xs="24" :sm="12" :md="6">
+        <el-card class="stat-card vulns-total">
+          <div class="stat-content">
+            <div class="stat-icon">
+              <el-icon :size="40"><DataBoard /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">{{ vulnStats?.total || 0 }}</div>
+              <div class="stat-label">Total Vulnerabilities</div>
             </div>
           </div>
         </el-card>
@@ -136,18 +201,22 @@
 import { ref, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAlertsStore } from '@/stores/alerts';
+import { api } from '@/services/api';
 import { Chart, registerables } from 'chart.js';
 import { format } from 'date-fns';
-import { Bell, WarningFilled, Warning, Document } from '@element-plus/icons-vue';
+import { Bell, WarningFilled, Warning, Document, Monitor, CircleCheck, WarnTriangleFilled, DataBoard } from '@element-plus/icons-vue';
 
 Chart.register(...registerables);
 
 const router = useRouter();
 const alertsStore = useAlertsStore();
 
-const statistics = computed(() => alertsStore.statistics);
+const alertStats = computed(() => alertsStore.statistics);
 const recentAlerts = computed(() => alertsStore.alerts.slice(0, 10));
 const loading = ref(false);
+
+const assetStats = ref<any>(null);
+const vulnStats = ref<any>(null);
 
 const severityChart = ref<HTMLCanvasElement>();
 const statusChart = ref<HTMLCanvasElement>();
@@ -165,6 +234,8 @@ const loadData = async () => {
     await Promise.all([
       alertsStore.fetchStatistics(),
       alertsStore.fetchAlerts({ limit: 10 }),
+      loadAssetStats(),
+      loadVulnStats(),
     ]);
   } catch (error) {
     console.error('Failed to load dashboard data:', error);
@@ -173,8 +244,28 @@ const loadData = async () => {
   }
 };
 
+const loadAssetStats = async () => {
+  try {
+    const response = await api.getAssetStatistics();
+    assetStats.value = response.data;
+  } catch (error) {
+    console.error('Failed to load asset statistics:', error);
+    assetStats.value = { total: 0, online: 0, offline: 0 };
+  }
+};
+
+const loadVulnStats = async () => {
+  try {
+    const response = await api.getVulnerabilitySummary();
+    vulnStats.value = response.data;
+  } catch (error) {
+    console.error('Failed to load vulnerability statistics:', error);
+    vulnStats.value = { total: 0, critical: 0, high: 0, medium: 0, low: 0 };
+  }
+};
+
 const createCharts = () => {
-  if (!statistics.value) return;
+  if (!alertStats.value) return;
 
   // Severity Chart
   if (severityChart.value) {
@@ -185,10 +276,10 @@ const createCharts = () => {
         datasets: [
           {
             data: [
-              statistics.value.critical_count,
-              statistics.value.high_count,
-              statistics.value.medium_count,
-              statistics.value.low_count,
+              alertStats.value.critical_count,
+              alertStats.value.high_count,
+              alertStats.value.medium_count,
+              alertStats.value.low_count,
             ],
             backgroundColor: ['#f56c6c', '#e6a23c', '#409eff', '#67c23a'],
           },
@@ -215,9 +306,9 @@ const createCharts = () => {
         datasets: [
           {
             data: [
-              statistics.value.new_count,
-              statistics.value.investigating_count,
-              statistics.value.closed_count,
+              alertStats.value.new_count,
+              alertStats.value.investigating_count,
+              alertStats.value.closed_count,
             ],
             backgroundColor: ['#409eff', '#e6a23c', '#67c23a'],
           },
@@ -278,12 +369,28 @@ const viewAlert = (alert: any) => {
   padding: 0;
 }
 
+.section-header {
+  margin-bottom: 15px;
+  margin-top: 10px;
+}
+
+.section-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--siembox-text-color, #303133);
+  margin: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--siembox-border-color, #dcdfe6);
+}
+
 .stats-row {
   margin-bottom: 20px;
 }
 
 .stat-card {
   margin-bottom: 20px;
+  background-color: var(--siembox-card-bg, #fff);
+  transition: background-color 0.3s;
 }
 
 .stat-content {
@@ -303,7 +410,8 @@ const viewAlert = (alert: any) => {
   color: #409eff;
 }
 
-.stat-card.critical .stat-icon {
+.stat-card.critical .stat-icon,
+.stat-card.vulns-critical .stat-icon {
   background: rgba(245, 108, 108, 0.1);
   color: #f56c6c;
 }
@@ -318,6 +426,21 @@ const viewAlert = (alert: any) => {
   color: #67c23a;
 }
 
+.stat-card.assets .stat-icon {
+  background: rgba(64, 158, 255, 0.1);
+  color: #409eff;
+}
+
+.stat-card.assets-online .stat-icon {
+  background: rgba(103, 194, 58, 0.1);
+  color: #67c23a;
+}
+
+.stat-card.vulns-total .stat-icon {
+  background: rgba(144, 147, 153, 0.1);
+  color: #909399;
+}
+
 .stat-info {
   flex: 1;
 }
@@ -325,12 +448,12 @@ const viewAlert = (alert: any) => {
 .stat-value {
   font-size: 32px;
   font-weight: bold;
-  color: #303133;
+  color: var(--siembox-text-color, #303133);
 }
 
 .stat-label {
   font-size: 14px;
-  color: #909399;
+  color: var(--siembox-text-secondary, #909399);
   margin-top: 5px;
 }
 

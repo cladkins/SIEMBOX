@@ -2,9 +2,70 @@
 
 ## Prerequisites
 - Docker and Docker Compose installed
-- Port 80, 514, 3000, and 5432 available
+- Ports 514, 3000, 3001, and 5432 available
 
-## Initial Deployment
+## Deployment Options
+
+SIEMBox can be deployed in two ways:
+1. **Pre-built Images** (Recommended) - Use images from GitHub Container Registry
+2. **Build from Source** - Clone repo and build containers locally
+
+---
+
+## Option 1: Pre-built Images (Recommended)
+
+### 1. Download Compose File
+
+```bash
+# Create a directory for SIEMBox
+mkdir siembox && cd siembox
+
+# Download the production compose file
+curl -O https://raw.githubusercontent.com/cladkins/SIEMBOX/main/compose.prod.yaml
+
+# Download the rules directory (required for detection rules)
+curl -L https://github.com/cladkins/SIEMBOX/archive/main.tar.gz | tar -xz --strip-components=1 SIEMBOX-main/rules
+```
+
+### 2. Create Environment File
+
+Create a `.env` file:
+
+```bash
+# Database Configuration
+DB_NAME=siembox
+DB_USER=siembox
+DB_PASSWORD=your_secure_password_here
+
+# Backend Configuration
+JWT_SECRET=your_jwt_secret_key_here
+DEFAULT_ADMIN_PASSWORD=your_admin_password_here
+NODE_ENV=production
+LOG_LEVEL=info
+
+# Optional: Specify version (default: latest)
+# SIEMBOX_VERSION=1.0.0
+```
+
+### 3. Start SIEMBox
+
+```bash
+docker compose -f compose.prod.yaml up -d
+```
+
+### 4. Verify Deployment
+
+```bash
+# Check containers are running
+docker compose -f compose.prod.yaml ps
+
+# Check backend health
+curl http://localhost:3001/health
+```
+
+---
+
+## Option 2: Build from Source
 
 ### 1. Clone and Configure
 
@@ -36,17 +97,36 @@ VITE_API_URL=/api
 CLEANUP_INTERVAL_HOURS=24
 ```
 
-### 3. Deploy Services
+### 3. Build and Deploy
 
-SIEMBox is deployed via Docker Compose. Follow your deployment platform's documentation to deploy the containers (this may be Kubernetes, Docker Swarm, Portainer, or your custom infrastructure).
+```bash
+docker compose up -d --build
+```
 
-The docker-compose.yml file in the repository defines all required services:
-- PostgreSQL database
-- Backend API (port 3001)
-- Frontend web interface (port 3000)
-- Syslog server (port 514/UDP and TCP)
+---
 
-Your deployment platform will handle building images and managing the containers.
+## Container Images
+
+SIEMBox containers are available on GitHub Container Registry:
+
+| Image | Description |
+|-------|-------------|
+| `ghcr.io/cladkins/siembox-backend` | Backend API + Syslog server |
+| `ghcr.io/cladkins/siembox-frontend` | Vue.js web interface |
+| `ghcr.io/cladkins/siembox-log-shipper` | Log forwarding agent |
+
+### Available Tags
+- `latest` - Most recent build from main branch
+- `1.0.0`, `1.0`, `1` - Semantic version tags from releases
+
+---
+
+## Services Overview
+
+The compose file defines these services:
+- **PostgreSQL** - Database (port 5432, internal)
+- **Backend** - API server (port 3001) + Syslog (port 514/UDP+TCP)
+- **Frontend** - Web interface (port 3000)
 
 ### 4. Verify Database Initialization
 
@@ -278,15 +358,15 @@ Configure in Settings UI:
 4. **Restrict port 514** to trusted networks only
 5. **Regular backups** of PostgreSQL database
 6. **Monitor disk space** - logs can grow quickly
-7. **Update regularly** - `git pull && docker-compose up -d --build`
+7. **Update regularly** - `git pull && docker compose up -d --build`
 
 ## Network Configuration
 
 SIEMBox requires these ports:
-- **80**: Frontend web interface
+- **3000**: Frontend web interface
+- **3001**: Backend API
 - **514/UDP**: Syslog ingestion (UDP)
 - **514/TCP**: Syslog ingestion (TCP)
-- **3000**: Backend API
 - **5432**: PostgreSQL (only needed if accessing externally)
 
 ### Firewall Rules Example (UFW)

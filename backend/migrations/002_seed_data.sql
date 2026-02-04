@@ -322,6 +322,58 @@ VALUES (
 ON CONFLICT (name) DO NOTHING;
 
 -- ============================================================================
+-- STANDARD FORMAT PARSERS: CEF, LEEF, etc.
+-- ============================================================================
+
+-- CEF (Common Event Format) Parser
+-- Format: CEF:Version|Device Vendor|Device Product|Device Version|Signature ID|Name|Severity|Extension
+-- Example: CEF:0|Security|threatmanager|1.0|100|worm successfully stopped|10|src=10.0.0.1 dst=2.1.2.2 spt=1232
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, event_type, enabled)
+VALUES (
+    'cef-standard',
+    'Parses Common Event Format (CEF) logs used by security products like ArcSight, Trend Micro, and many SIEM integrations',
+    'regex',
+    5,
+    '^CEF:(?<cef_version>\d+)\|(?<device_vendor>[^|]*)\|(?<device_product>[^|]*)\|(?<device_version>[^|]*)\|(?<signature_id>[^|]*)\|(?<event_name>[^|]*)\|(?<severity>[^|]*)\|(?<extension>.*)$',
+    '{"cef_version": "cef_version", "device_vendor": "device_vendor", "device_product": "device_product", "device_version": "device_version", "signature_id": "signature_id", "event_name": "event_name", "severity": "severity", "extension": "extension", "format": "cef"}',
+    'cef_event',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- CEF with Syslog Header Parser
+-- Format: <PRI>TIMESTAMP HOSTNAME CEF:Version|...
+-- Example: <14>Jan 18 11:07:53 hostname CEF:0|Security|Product|1.0|100|Event|5|src=10.0.0.1
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, event_type, enabled)
+VALUES (
+    'cef-syslog',
+    'Parses CEF logs that include a syslog header prefix (common when CEF is transported via syslog)',
+    'regex',
+    4,
+    '^(?:(?<syslog_timestamp>\w+\s+\d+\s+[\d:]+)\s+(?<syslog_host>\S+)\s+)?CEF:(?<cef_version>\d+)\|(?<device_vendor>[^|]*)\|(?<device_product>[^|]*)\|(?<device_version>[^|]*)\|(?<signature_id>[^|]*)\|(?<event_name>[^|]*)\|(?<severity>[^|]*)\|(?<extension>.*)$',
+    '{"syslog_timestamp": "syslog_timestamp", "syslog_host": "syslog_host", "cef_version": "cef_version", "device_vendor": "device_vendor", "device_product": "device_product", "device_version": "device_version", "signature_id": "signature_id", "event_name": "event_name", "severity": "severity", "extension": "extension", "format": "cef"}',
+    'cef_event',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- CEF Extension Field Extractor (for common fields)
+-- This parser extracts common CEF extension key=value pairs
+-- Applied after the main CEF parser to extract structured fields from the extension
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, event_type, enabled)
+VALUES (
+    'cef-extension-fields',
+    'Extracts common CEF extension fields (src, dst, spt, dpt, act, msg, etc.) from CEF logs',
+    'regex',
+    6,
+    '(?:^|.*\|)(?=.*(?:src=(?<src_ip>[\d.]+)|dst=(?<dst_ip>[\d.]+)|spt=(?<src_port>\d+)|dpt=(?<dst_port>\d+)|act=(?<action>[^\s]+)|msg=(?<message>[^=]*(?=\s+\w+=|$))|suser=(?<src_user>[^\s]+)|duser=(?<dst_user>[^\s]+)|fname=(?<filename>[^\s]+)|request=(?<request_url>[^\s]+)|cs1=(?<custom_string1>[^\s]+)|cs2=(?<custom_string2>[^\s]+)|cn1=(?<custom_number1>\d+)|cn2=(?<custom_number2>\d+)|outcome=(?<outcome>[^\s]+)|reason=(?<reason>[^\s]+))).*',
+    '{"source_ip": "src_ip", "destination_ip": "dst_ip", "source_port": "src_port", "destination_port": "dst_port", "action": "action", "message": "message", "source_user": "src_user", "destination_user": "dst_user", "filename": "filename", "request_url": "request_url", "custom_string1": "custom_string1", "custom_string2": "custom_string2", "custom_number1": "custom_number1", "custom_number2": "custom_number2", "outcome": "outcome", "reason": "reason"}',
+    'cef_event',
+    false
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- ============================================================================
 -- DETECTION RULES
 -- ============================================================================
 

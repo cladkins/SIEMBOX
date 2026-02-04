@@ -144,6 +144,36 @@ router.get('/scans', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/assets/scans/:scanId/cancel
+ * Cancel a running scan
+ * Requires authentication
+ */
+router.post('/scans/:scanId/cancel', authenticate, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const scanId = parseInt(req.params.scanId);
+
+    if (isNaN(scanId)) {
+      res.status(400).json({ error: 'Invalid scan ID' });
+      return;
+    }
+
+    const cancelled = await NmapScanner.cancelScan(scanId);
+
+    if (cancelled) {
+      res.json({ message: 'Scan cancelled successfully', scanId });
+    } else {
+      res.status(400).json({ error: 'Scan could not be cancelled (may not be running or already completed)' });
+    }
+  } catch (error: any) {
+    console.error('Cancel scan error:', error);
+    res.status(500).json({
+      error: 'Failed to cancel scan',
+      message: error.message,
+    });
+  }
+});
+
+/**
  * GET /api/assets/scans/:scanId
  * Get scan status and results
  * IMPORTANT: Must come AFTER /scans and /scans/active and /scans/statistics

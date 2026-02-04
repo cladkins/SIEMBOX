@@ -30,8 +30,8 @@
                       </el-tag>
                     </div>
                     <div class="health-item">
-                      <el-tag :type="overview.health.shippers.online > 0 ? 'success' : 'warning'" size="small">
-                        {{ overview.health.shippers.online }} Shipper{{ overview.health.shippers.online !== 1 ? 's' : '' }}
+                      <el-tag :type="overview.health.shippers.online > 0 ? 'success' : overview.health.shippers.total > 0 ? 'warning' : 'info'" size="small">
+                        {{ overview.health.shippers.online }}/{{ overview.health.shippers.total }} Shipper{{ overview.health.shippers.total !== 1 ? 's' : '' }} Online
                       </el-tag>
                     </div>
                   </div>

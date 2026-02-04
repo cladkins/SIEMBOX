@@ -79,6 +79,8 @@ router.get('/unknown-sources', async (_req: Request, res: Response) => {
     // NOTE: API keys are stored as 64-char hex strings. We must use decode(api_key, 'hex')
     // to convert them to binary before hashing, matching the shipper script's behavior:
     // echo -n "$api_key" | xxd -r -p | sha256sum | cut -c1-8
+    //
+    // The query now includes NULL checks to prevent decode() from failing on empty/NULL api_keys
     const result = await query(`
       SELECT DISTINCT
         rl.shipper_id,
@@ -90,13 +92,20 @@ router.get('/unknown-sources', async (_req: Request, res: Response) => {
         ARRAY_AGG(DISTINCT rl.app_name) as app_names
       FROM raw_logs rl
       WHERE rl.shipper_id IS NOT NULL
+        AND rl.shipper_id != ''
         AND NOT EXISTS (
           SELECT 1 FROM log_shippers ls
-          WHERE LOWER(SUBSTRING(MD5(decode(ls.api_key, 'hex')), 1, 8)) = LOWER(rl.shipper_id)
-             OR LOWER(SUBSTRING(ENCODE(SHA256(decode(ls.api_key, 'hex')), 'hex'), 1, 8)) = LOWER(rl.shipper_id)
+          WHERE ls.api_key IS NOT NULL
+            AND ls.api_key != ''
+            AND LENGTH(ls.api_key) = 64
+            AND (
+              LOWER(SUBSTRING(MD5(decode(ls.api_key, 'hex')), 1, 8)) = LOWER(rl.shipper_id)
+              OR LOWER(SUBSTRING(ENCODE(SHA256(decode(ls.api_key, 'hex')), 'hex'), 1, 8)) = LOWER(rl.shipper_id)
+            )
         )
       GROUP BY rl.shipper_id
       ORDER BY MAX(rl.created_at) DESC
+      LIMIT 100
     `);
 
     const unknownSources = result.rows.map((row: any) => ({
@@ -110,7 +119,8 @@ router.get('/unknown-sources', async (_req: Request, res: Response) => {
     }));
 
     res.json(unknownSources);
-  } catch (error) {
+  } catch (error: any) {
+    console.error('[Shippers] Failed to fetch unknown sources:', error.message);
     throw new ApiError(500, 'Failed to fetch unknown sources');
   }
 });

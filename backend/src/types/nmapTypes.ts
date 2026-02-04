@@ -281,7 +281,7 @@ export interface NmapScanProgress {
   /** Scan ID */
   scan_id: number;
   /** Current status */
-  status: 'queued' | 'running' | 'completed' | 'failed';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timeout';
   /** Progress percentage (0-100) */
   progress: number;
   /** Current host being scanned */

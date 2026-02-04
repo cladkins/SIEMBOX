@@ -176,6 +176,7 @@ export const api = {
   getScans: (params?: any) => apiClient.get('/assets/scans', { params }),
   getScan: (id: number) => apiClient.get(`/assets/scans/${id}`),
   getActiveScans: () => apiClient.get('/assets/scans/active'),
+  cancelScan: (id: number) => apiClient.post(`/assets/scans/${id}/cancel`),
 
   // Vulnerabilities
   getVulnerabilities: (params?: any) => apiClient.get('/vulnerabilities', { params }),

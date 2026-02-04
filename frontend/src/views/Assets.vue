@@ -46,6 +46,19 @@
                 {{ formatDate(row.started_at) }}
               </template>
             </el-table-column>
+            <el-table-column label="Actions" width="100">
+              <template #default="{ row }">
+                <el-button
+                  link
+                  type="danger"
+                  size="small"
+                  @click="cancelScan(row.id)"
+                  :loading="cancellingScans.has(row.id)"
+                >
+                  Cancel
+                </el-button>
+              </template>
+            </el-table-column>
           </el-table>
         </div>
 
@@ -315,6 +328,7 @@ const recentScans = ref<any[]>([]);
 const activeScans = ref<any[]>([]);
 const showScanDetailsDialog = ref(false);
 const selectedScan = ref<any>(null);
+const cancellingScans = ref<Set<number>>(new Set());
 let scanPollingInterval: number | null = null;
 
 // Load scans function with graceful error handling
@@ -365,9 +379,34 @@ function getScanStatusColor(status: string) {
     completed: 'success',
     running: 'warning',
     queued: 'info',
-    failed: 'danger'
+    failed: 'danger',
+    cancelled: 'info',
+    timeout: 'danger'
   };
   return colors[status] || '';
+}
+
+// Cancel a running scan
+async function cancelScan(scanId: number) {
+  try {
+    await ElMessageBox.confirm(
+      'Are you sure you want to cancel this scan?',
+      'Cancel Scan',
+      { type: 'warning' }
+    );
+
+    cancellingScans.value.add(scanId);
+    await api.cancelScan(scanId);
+    ElMessage.success('Scan cancelled successfully');
+    await loadScans();
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.response?.data?.error || 'Failed to cancel scan');
+      console.error(error);
+    }
+  } finally {
+    cancellingScans.value.delete(scanId);
+  }
 }
 
 // Start polling for active scans

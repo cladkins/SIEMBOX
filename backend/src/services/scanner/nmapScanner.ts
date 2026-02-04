@@ -26,6 +26,9 @@ export interface ScanOptions {
  * NMAP Scanner class
  */
 export class NmapScanner {
+  // Track active scans for cancellation
+  private static activeScans: Map<number, { scan: any; timeout: NodeJS.Timeout; completed: boolean }> = new Map();
+
   /**
    * Initiate a new scan
    * Returns scan ID for tracking progress
@@ -97,15 +100,48 @@ export class NmapScanner {
       // Create NMAP scan instance
       const scan = new nmap.NmapScan(targetString, nmapOptions);
 
+      // Track scan state to prevent race conditions
+      const scanState = { scan, timeout: null as NodeJS.Timeout | null, completed: false };
+
       // Set timeout for scan (15 minutes max)
       const scanTimeout = setTimeout(async () => {
+        // Only process timeout if scan hasn't already completed
+        if (scanState.completed) {
+          console.log(`[NMAP] Scan ${scanId} timeout fired but scan already completed, ignoring`);
+          return;
+        }
+
         console.error(`[NMAP] Scan ${scanId} timed out after 15 minutes`);
-        await this.updateScanStatus(scanId, 'failed', undefined, new Date(), 'Scan timed out after 15 minutes');
+        scanState.completed = true;
+        this.activeScans.delete(scanId);
+
+        // Try to cancel the nmap process
+        try {
+          if (scan.cancelScan) {
+            scan.cancelScan();
+          }
+        } catch (e) {
+          console.log(`[NMAP] Could not cancel scan process: ${e}`);
+        }
+
+        await this.updateScanStatus(scanId, 'timeout', undefined, new Date(), 'Scan timed out after 15 minutes');
       }, 15 * 60 * 1000);
+
+      scanState.timeout = scanTimeout;
+      this.activeScans.set(scanId, scanState as any);
 
       // Handle scan completion
       scan.on('complete', async (data: any) => {
+        // Only process completion if not already handled (timeout or cancel)
+        if (scanState.completed) {
+          console.log(`[NMAP] Scan ${scanId} complete event fired but already handled, ignoring`);
+          return;
+        }
+
+        scanState.completed = true;
         clearTimeout(scanTimeout);
+        this.activeScans.delete(scanId);
+
         console.log(`[NMAP] Scan ${scanId} completed. Processing results...`);
         console.log(`[NMAP] Raw data received:`, JSON.stringify(data).substring(0, 500));
         try {
@@ -120,6 +156,12 @@ export class NmapScanner {
 
       // Handle scan errors
       scan.on('error', async (error: any) => {
+        // If already completed/cancelled, ignore errors
+        if (scanState.completed) {
+          console.log(`[NMAP] Scan ${scanId} error event fired but already handled, ignoring`);
+          return;
+        }
+
         const errorStr = String(error);
         console.error(`[NMAP] Scan ${scanId} stderr output:`, errorStr);
 
@@ -145,6 +187,10 @@ export class NmapScanner {
         const isNonFatal = !hasFatalError && nonFatalPatterns.some(pattern => pattern.test(errorStr));
 
         if (hasFatalError || !isNonFatal) {
+          scanState.completed = true;
+          clearTimeout(scanTimeout);
+          this.activeScans.delete(scanId);
+
           console.error(`[NMAP] FATAL error detected, marking scan as failed`);
           const errorMsg = error?.message || error?.toString() || JSON.stringify(error) || 'Unknown error';
           await this.updateScanStatus(scanId, 'failed', undefined, new Date(), errorMsg);
@@ -503,6 +549,100 @@ export class NmapScanner {
       return result.rows;
     } catch (error) {
       console.error('[NMAP] Failed to get recent scans:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Cancel a running scan
+   */
+  static async cancelScan(scanId: number): Promise<boolean> {
+    try {
+      // Check if scan exists and is running
+      const scan = await this.getScanStatus(scanId);
+      if (!scan) {
+        console.error(`[NMAP] Scan ${scanId} not found`);
+        return false;
+      }
+
+      if (scan.status !== 'running' && scan.status !== 'queued') {
+        console.log(`[NMAP] Scan ${scanId} is not running (status: ${scan.status})`);
+        return false;
+      }
+
+      // Check if we have an active reference to this scan
+      const activeScan = this.activeScans.get(scanId);
+      if (activeScan) {
+        activeScan.completed = true;
+
+        // Clear the timeout
+        if (activeScan.timeout) {
+          clearTimeout(activeScan.timeout);
+        }
+
+        // Try to cancel the nmap process
+        try {
+          if (activeScan.scan && activeScan.scan.cancelScan) {
+            activeScan.scan.cancelScan();
+          }
+        } catch (e) {
+          console.log(`[NMAP] Could not cancel scan process: ${e}`);
+        }
+
+        this.activeScans.delete(scanId);
+      }
+
+      // Update status to cancelled
+      await this.updateScanStatus(scanId, 'cancelled', undefined, new Date(), 'Scan cancelled by user');
+      console.log(`[NMAP] Scan ${scanId} cancelled successfully`);
+      return true;
+    } catch (error) {
+      console.error(`[NMAP] Failed to cancel scan ${scanId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Clean up stale scans
+   * Marks scans stuck in 'running' or 'queued' state for longer than maxAgeMinutes as timed out
+   */
+  static async cleanupStaleScans(maxAgeMinutes: number = 60): Promise<number> {
+    try {
+      const query = `
+        UPDATE vulnerability_scans
+        SET
+          status = 'timeout',
+          completed_at = NOW(),
+          error_message = $2,
+          updated_at = NOW()
+        WHERE status IN ('running', 'queued')
+          AND started_at < NOW() - INTERVAL '1 minute' * $1
+        RETURNING id
+      `;
+
+      const errorMessage = `Scan marked as timed out by cleanup service (exceeded ${maxAgeMinutes} minutes)`;
+      const result = await pool.query(query, [maxAgeMinutes, errorMessage]);
+
+      if (result.rows.length > 0) {
+        const scanIds = result.rows.map(r => r.id);
+        console.log(`[NMAP] Cleanup: Marked ${result.rows.length} stale scans as timed out: ${scanIds.join(', ')}`);
+
+        // Remove any active tracking for these scans
+        for (const row of result.rows) {
+          const activeScan = this.activeScans.get(row.id);
+          if (activeScan) {
+            activeScan.completed = true;
+            if (activeScan.timeout) {
+              clearTimeout(activeScan.timeout);
+            }
+            this.activeScans.delete(row.id);
+          }
+        }
+      }
+
+      return result.rows.length;
+    } catch (error) {
+      console.error('[NMAP] Failed to cleanup stale scans:', error);
       throw error;
     }
   }

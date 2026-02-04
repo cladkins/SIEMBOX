@@ -1,5 +1,6 @@
 import { query } from '../../config/database';
 import { logger } from '../../utils/logger';
+import { NmapScanner } from '../scanner/nmapScanner';
 
 export class CleanupService {
   private intervalId: NodeJS.Timeout | null = null;
@@ -43,15 +44,19 @@ export class CleanupService {
    */
   async runCleanup(): Promise<void> {
     try {
-      logger.info('Starting automated log cleanup');
+      logger.info('Starting automated cleanup');
 
-      // Check if auto cleanup is enabled
+      // Always clean up stale scans (regardless of auto cleanup setting)
+      // This prevents orphaned scans from accumulating
+      await this.cleanupStaleScans();
+
+      // Check if auto cleanup is enabled for logs
       const enabledResult = await query(
         `SELECT value FROM system_settings WHERE key = 'retention_auto_cleanup_enabled'`
       );
 
       if (enabledResult.rows.length === 0 || enabledResult.rows[0].value !== 'true') {
-        logger.info('Auto cleanup is disabled, skipping');
+        logger.info('Auto log cleanup is disabled, skipping log cleanup');
         return;
       }
 
@@ -94,6 +99,22 @@ export class CleanupService {
       logger.info('Automated log cleanup completed', results);
     } catch (error) {
       logger.error('Error during automated cleanup:', error);
+    }
+  }
+
+  /**
+   * Clean up stale scans that have been running for too long
+   * Runs every cleanup cycle regardless of auto cleanup setting
+   */
+  private async cleanupStaleScans(): Promise<void> {
+    try {
+      // Mark scans running longer than 60 minutes as timed out
+      const cleanedUp = await NmapScanner.cleanupStaleScans(60);
+      if (cleanedUp > 0) {
+        logger.info(`Cleaned up ${cleanedUp} stale scans`);
+      }
+    } catch (error) {
+      logger.error('Error cleaning up stale scans:', error);
     }
   }
 

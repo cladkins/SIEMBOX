@@ -57,20 +57,25 @@ router.get('/overview', async (_req: Request, res: Response) => {
     }
 
     // Shipper health
+    // NOTE: Uses 3-minute threshold to match the Log Shippers page (calculateStatus function)
+    // which considers a shipper offline if no heartbeat for 3 minutes (2x heartbeat interval + buffer)
+    let shippersTotal = 0;
     let shippersOnline = 0;
     let shippersOffline = 0;
-    let shippersError = 0;
+    let shippersPending = 0;
     try {
       const shipperResult = await query(
         `SELECT
-           COUNT(*) FILTER (WHERE last_seen > NOW() - INTERVAL '5 minutes') as online,
-           COUNT(*) FILTER (WHERE last_seen <= NOW() - INTERVAL '5 minutes' AND last_seen > NOW() - INTERVAL '1 hour') as offline,
-           COUNT(*) FILTER (WHERE last_seen <= NOW() - INTERVAL '1 hour' OR last_seen IS NULL) as error
+           COUNT(*) as total,
+           COUNT(*) FILTER (WHERE last_seen > NOW() - INTERVAL '3 minutes') as online,
+           COUNT(*) FILTER (WHERE last_seen <= NOW() - INTERVAL '3 minutes' AND last_seen IS NOT NULL) as offline,
+           COUNT(*) FILTER (WHERE last_seen IS NULL) as pending
          FROM log_shippers`
       );
+      shippersTotal = parseInt(shipperResult.rows[0]?.total || '0', 10);
       shippersOnline = parseInt(shipperResult.rows[0]?.online || '0', 10);
       shippersOffline = parseInt(shipperResult.rows[0]?.offline || '0', 10);
-      shippersError = parseInt(shipperResult.rows[0]?.error || '0', 10);
+      shippersPending = parseInt(shipperResult.rows[0]?.pending || '0', 10);
     } catch (err) {
       logger.warn('Failed to check shipper health:', err);
     }
@@ -79,9 +84,10 @@ router.get('/overview', async (_req: Request, res: Response) => {
       database: dbHealth,
       syslog: syslogHealth,
       shippers: {
+        total: shippersTotal,
         online: shippersOnline,
         offline: shippersOffline,
-        error: shippersError,
+        pending: shippersPending,
       },
     };
 

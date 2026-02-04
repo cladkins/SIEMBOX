@@ -5,6 +5,70 @@ import { authorize } from '../middleware/auth';
 
 const router = Router();
 
+// ===========================
+// General Settings (all settings combined)
+// ===========================
+
+// Get all settings
+router.get('/', authorize('admin'), async (_req: Request, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT key as setting_key, value as setting_value, description, updated_at
+       FROM system_settings
+       ORDER BY key`
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch settings');
+  }
+});
+
+// Update a single setting by key
+router.put('/:key', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const { key } = req.params;
+    const { setting_value } = req.body;
+
+    if (setting_value === undefined) {
+      throw new ApiError(400, 'setting_value is required');
+    }
+
+    // Validate the setting exists
+    const existing = await query(
+      `SELECT key FROM system_settings WHERE key = $1`,
+      [key]
+    );
+
+    if (existing.rows.length === 0) {
+      throw new ApiError(404, `Setting "${key}" not found`);
+    }
+
+    // Update the setting
+    await query(
+      `UPDATE system_settings
+       SET value = $1, updated_by = $2, updated_at = NOW()
+       WHERE key = $3`,
+      [setting_value.toString(), req.user?.id || null, key]
+    );
+
+    console.log(`[Settings] Updated ${key} to ${setting_value} by user ${req.user?.username}`);
+
+    res.json({
+      message: 'Setting updated successfully',
+      key,
+      value: setting_value,
+    });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to update setting');
+  }
+});
+
+// ===========================
+// Retention Settings
+// ===========================
+
 // Get retention settings
 router.get('/retention', authorize('admin'), async (_req: Request, res: Response) => {
   try {

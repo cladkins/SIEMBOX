@@ -425,7 +425,7 @@ COMMENT ON COLUMN asset_vulnerabilities.risk_score IS 'Calculated: criticality Ã
 COMMENT ON COLUMN asset_vulnerabilities.evidence IS 'Scan evidence/proof of vulnerability';
 
 COMMENT ON COLUMN vulnerability_scans.scan_type IS 'Scan type: asset_discovery, vulnerability';
-COMMENT ON COLUMN vulnerability_scans.status IS 'Scan status: queued, running, completed, failed';
+COMMENT ON COLUMN vulnerability_scans.status IS 'Scan status: queued, running, completed, failed, cancelled, timeout';
 
 -- ========================================
 -- APPLICATION ERROR LOGGING

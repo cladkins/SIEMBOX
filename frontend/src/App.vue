@@ -23,10 +23,15 @@ useThemeStore();
   --siembox-header-bg: #fff;
   --siembox-text-color: #303133;
   --siembox-text-secondary: #606266;
+  --siembox-text-tertiary: #909399;
   --siembox-border-color: #dcdfe6;
   --siembox-sidebar-bg: #304156;
   --siembox-sidebar-header: #263445;
   --siembox-card-bg: #fff;
+  --siembox-highlight-bg: #ecf5ff;
+  --siembox-success-bg: #f0f9eb;
+  --siembox-danger-bg: #fef0f0;
+  --siembox-danger-border: #fde2e2;
   --siembox-shadow: 0 1px 4px rgba(0, 21, 41, 0.08);
 }
 
@@ -36,10 +41,15 @@ html.dark {
   --siembox-header-bg: #1d1d1d;
   --siembox-text-color: #e5eaf3;
   --siembox-text-secondary: #a3a6ad;
+  --siembox-text-tertiary: #8b8d94;
   --siembox-border-color: #414243;
   --siembox-sidebar-bg: #1d1d1d;
   --siembox-sidebar-header: #141414;
   --siembox-card-bg: #1d1d1d;
+  --siembox-highlight-bg: rgba(64, 158, 255, 0.16);
+  --siembox-success-bg: rgba(103, 194, 58, 0.16);
+  --siembox-danger-bg: rgba(245, 108, 108, 0.16);
+  --siembox-danger-border: rgba(245, 108, 108, 0.4);
   --siembox-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
 }
 

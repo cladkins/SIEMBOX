@@ -573,7 +573,7 @@ onUnmounted(() => {
 
 .stat-box {
   padding: 10px;
-  background: #f5f7fa;
+  background: var(--siembox-bg-color);
   border-radius: 4px;
   height: 100%;
 }
@@ -581,7 +581,7 @@ onUnmounted(() => {
 .stat-title {
   font-weight: 600;
   margin-bottom: 10px;
-  color: #303133;
+  color: var(--siembox-text-color);
 }
 
 .health-indicators {
@@ -613,7 +613,7 @@ onUnmounted(() => {
 
 .metric-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--siembox-text-tertiary);
 }
 
 .text-danger {
@@ -636,7 +636,7 @@ onUnmounted(() => {
 }
 
 .info-label {
-  color: #909399;
+  color: var(--siembox-text-tertiary);
   font-size: 13px;
 }
 
@@ -645,7 +645,7 @@ onUnmounted(() => {
 }
 
 .active-jobs {
-  background: #f0f9eb;
+  background: var(--siembox-success-bg);
   padding: 15px;
   border-radius: 4px;
   margin-bottom: 15px;
@@ -673,7 +673,7 @@ onUnmounted(() => {
 
 .job-target {
   font-size: 13px;
-  color: #606266;
+  color: var(--siembox-text-secondary);
 }
 
 .job-counts {
@@ -699,7 +699,7 @@ onUnmounted(() => {
 
 .error-item {
   padding: 10px;
-  background: #fafafa;
+  background: var(--siembox-bg-color);
   border-radius: 4px;
 }
 
@@ -725,7 +725,7 @@ onUnmounted(() => {
 .error-code {
   display: block;
   font-size: 11px;
-  background: #f5f7fa;
+  background: var(--siembox-bg-color);
   padding: 8px;
   border-radius: 4px;
   white-space: pre-wrap;

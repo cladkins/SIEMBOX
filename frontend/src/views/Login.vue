@@ -107,20 +107,20 @@ const handleLogin = async () => {
 
 .card-header h1 {
   margin: 0 0 10px 0;
-  color: #303133;
+  color: var(--siembox-text-color);
   font-size: 28px;
 }
 
 .card-header p {
   margin: 0;
-  color: #909399;
+  color: var(--siembox-text-tertiary);
   font-size: 14px;
 }
 
 .login-footer {
   text-align: center;
   margin-top: 20px;
-  color: #909399;
+  color: var(--siembox-text-tertiary);
   font-size: 12px;
 }
 </style>

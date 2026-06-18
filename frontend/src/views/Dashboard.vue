@@ -377,7 +377,7 @@ const viewAlert = (alert: any) => {
 .section-header h3 {
   font-size: 16px;
   font-weight: 600;
-  color: var(--siembox-text-color, #303133);
+  color: var(--siembox-text-color);
   margin: 0;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--siembox-border-color, #dcdfe6);
@@ -438,7 +438,7 @@ const viewAlert = (alert: any) => {
 
 .stat-card.vulns-total .stat-icon {
   background: rgba(144, 147, 153, 0.1);
-  color: #909399;
+  color: var(--siembox-text-tertiary);
 }
 
 .stat-info {
@@ -448,7 +448,7 @@ const viewAlert = (alert: any) => {
 .stat-value {
   font-size: 32px;
   font-weight: bold;
-  color: var(--siembox-text-color, #303133);
+  color: var(--siembox-text-color);
 }
 
 .stat-label {

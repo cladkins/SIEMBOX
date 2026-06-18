@@ -531,7 +531,7 @@ onUnmounted(() => {
 .recent-scans {
   margin-bottom: 20px;
   padding: 15px;
-  background-color: #f5f7fa;
+  background-color: var(--siembox-bg-color);
   border-radius: 4px;
 }
 

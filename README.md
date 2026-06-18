@@ -16,13 +16,31 @@ A lightweight, self-hosted Security Information and Event Management (SIEM) syst
 
 ## Quick Start
 
-### Option 1: Using Pre-built Images (Recommended)
+SIEMBox runs as two parts:
+
+- **The main stack** — the server: web UI, API, syslog listener, and database. Deploy this once, on your SIEMBox host.
+- **The log shipper** — an *optional* lightweight forwarder you install on **other** machines to push their logs to the main stack.
+
+---
+
+### Main stack
+
+Two compose files live at the repo root:
+
+| File | Use it for |
+|------|-----------|
+| `compose.prod.yaml` | **Recommended.** Runs pre-built images from GHCR. |
+| `compose.yaml` | Builds the images locally from source (development). |
+
+Once it's up, the **web UI is at `http://<your-server-ip>:8420`** and the API is on port **8421**.
+
+#### Option 1: Pre-built images (recommended)
 
 ```bash
-# Download compose file
+# Download the production compose file
 curl -O https://raw.githubusercontent.com/cladkins/SIEMBOX/main/compose.prod.yaml
 
-# Create .env file
+# Create a .env file with your secrets
 cat > .env << EOF
 DB_PASSWORD=your_secure_password
 JWT_SECRET=your_jwt_secret_32_chars_min
@@ -31,28 +49,55 @@ EOF
 
 # Start SIEMBox
 docker compose -f compose.prod.yaml up -d
-
-# Access the UI
-# Frontend: http://your-server-ip:8420
-# Default login: admin / your_admin_password
 ```
 
-### Option 2: Build from Source
+Then open `http://<your-server-ip>:8420` and log in as `admin` with the password you set.
+
+#### Option 2: Build from source
 
 ```bash
-# Clone repository
 git clone https://github.com/cladkins/SIEMBOX.git
 cd SIEMBOX
-
-# Create .env file (see .env.example)
-cp .env.example .env
-nano .env
-
-# Build and start
+cp .env.example .env        # then edit .env
 docker compose up -d --build
 ```
 
 See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed deployment instructions.
+
+---
+
+### Log shipper (optional)
+
+The **log shipper** is a small container you install on any host whose logs you want in SIEMBox (a web server, a NAS, a Docker host…). It authenticates to the main stack with an API key and forwards log files, Docker container logs, and systemd journals over the network — it does **not** need the rest of the SIEMBox stack running locally.
+
+Two compose files live in [`log-shipper/`](./log-shipper):
+
+| File | Use it for |
+|------|-----------|
+| `log-shipper/compose.prod.yaml` | **Recommended — standalone.** Pre-built image; needs only this file + a `.env`. |
+| `log-shipper/compose.yaml` | Builds the shipper image locally from source. |
+
+```bash
+# 1. In the SIEMBox UI: Log Shippers -> Add Shipper -> copy the API key.
+
+# 2. On the host you want to collect logs from:
+mkdir siembox-shipper && cd siembox-shipper
+curl -O https://raw.githubusercontent.com/cladkins/SIEMBOX/main/log-shipper/compose.prod.yaml
+
+# 3. Point it at your SIEMBox server (note the backend port, 8421):
+cat > .env << EOF
+SHIPPER_API_KEY=paste-your-api-key-here
+SIEMBOX_API_URL=http://your-siembox-ip:8421/api
+EOF
+
+# 4. Edit compose.prod.yaml and uncomment the volume mounts for the logs
+#    you want to ship (Docker socket, /var/log paths, etc.).
+
+# 5. Start it
+docker compose -f compose.prod.yaml up -d
+```
+
+The shipper should show as **online** in the UI within ~30 seconds. Full setup, log-source configuration, and troubleshooting are in the **[Log Shipper README](./log-shipper/README.md)**.
 
 ## Documentation
 

@@ -456,7 +456,7 @@ async function deleteParser(parser: any) {
 }
 
 pre {
-  background: #f5f7fa;
+  background: var(--siembox-bg-color);
   padding: 15px;
   border-radius: 4px;
   overflow-x: auto;

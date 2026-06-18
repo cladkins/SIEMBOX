@@ -283,11 +283,11 @@ const formatDate = (date: string) => {
 
 .matched-data h4 {
   margin-bottom: 10px;
-  color: #303133;
+  color: var(--siembox-text-color);
 }
 
 .matched-data pre {
-  background: #f5f7fa;
+  background: var(--siembox-bg-color);
   padding: 15px;
   border-radius: 4px;
   overflow-x: auto;

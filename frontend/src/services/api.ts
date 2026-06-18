@@ -188,6 +188,17 @@ export const api = {
   deleteScheduledScan: (id: number) => apiClient.delete(`/scheduled-scans/${id}`),
   runScheduledScan: (id: number) => apiClient.post(`/scheduled-scans/${id}/run`),
 
+  // Notifications - Channels
+  getNotificationChannels: () => apiClient.get('/notifications/channels'),
+  createNotificationChannel: (data: any) => apiClient.post('/notifications/channels', data),
+  updateNotificationChannel: (id: number, data: any) => apiClient.put(`/notifications/channels/${id}`, data),
+  deleteNotificationChannel: (id: number) => apiClient.delete(`/notifications/channels/${id}`),
+  testNotificationChannel: (id: number) => apiClient.post(`/notifications/channels/${id}/test`),
+
+  // Notifications - Settings
+  getNotificationSettings: () => apiClient.get('/notifications/settings'),
+  updateNotificationSettings: (data: any) => apiClient.put('/notifications/settings', data),
+
   // Admin Dashboard
   getAdminOverview: () => apiClient.get('/admin/overview'),
   searchAdminUsers: (query?: string, limit?: number) =>

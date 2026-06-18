@@ -4,6 +4,7 @@ import { ParsedLog } from '../../models/ParsedLog';
 import { logger } from '../../utils/logger';
 import { query } from '../../config/database';
 import { ErrorLogService } from '../errors/errorLogService';
+import { NotificationService } from '../notifications/notificationService';
 
 interface RuleCondition {
   field: string;
@@ -410,6 +411,13 @@ export class RulesEngine {
         title,
         description,
         matched_data: variables,
+      });
+
+      void NotificationService.notifyAlert({
+        severity: rule.severity,
+        ruleName: rule.name,
+        title,
+        description,
       });
 
       logger.info('Alert created', { rule: rule.name, title });

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Multi-stage build for SIEMBox Backend
 
 # Stage 1: Build
@@ -9,8 +10,8 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.json ./
 
-# Install dependencies
-RUN npm ci
+# Install dependencies (npm cache persisted across builds via BuildKit)
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 # Copy source code
 COPY src ./src
@@ -27,11 +28,13 @@ WORKDIR /app
 # Install NMAP for asset discovery scanning
 RUN apk add --no-cache nmap
 
-# Install Nuclei for vulnerability scanning
-# Using wget to download the latest release binary
+# Install Nuclei for vulnerability scanning.
+# Pin the version and download per-arch (TARGETARCH is provided automatically
+# by Buildx) so native arm64 builds get an arm64 binary instead of amd64.
+ARG TARGETARCH
+ARG NUCLEI_VERSION=3.9.0
 RUN apk add --no-cache wget unzip && \
-    NUCLEI_VERSION=$(wget -qO- "https://api.github.com/repos/projectdiscovery/nuclei/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/') && \
-    wget -q "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip" -O /tmp/nuclei.zip && \
+    wget -q "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_${TARGETARCH}.zip" -O /tmp/nuclei.zip && \
     unzip /tmp/nuclei.zip -d /usr/local/bin && \
     rm /tmp/nuclei.zip && \
     chmod +x /usr/local/bin/nuclei && \
@@ -42,7 +45,7 @@ RUN nuclei -update-templates -silent
 
 # Install production dependencies only
 COPY package*.json ./
-RUN npm ci --only=production
+RUN --mount=type=cache,target=/root/.npm npm ci --only=production
 
 # Copy built files from builder
 COPY --from=builder /app/dist ./dist

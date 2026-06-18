@@ -280,8 +280,8 @@ tail_file_source() {
     fi
 }
 
-# Start tailing a Docker container
-tail_docker_source() {
+# Tail a single running container's logs to SIEMBox.
+tail_one_docker_container() {
     local container="$1"
     local tag="$2"
     local facility="$3"
@@ -321,6 +321,82 @@ tail_docker_source() {
     log_debug "Started reader process $reader_pid for $container"
 
     # Cleanup pipe in background after a moment (both processes have it open)
+    (sleep 1; rm -f "$pipe" 2>/dev/null) &
+}
+
+# Tail one container, or every running container when the name is blank / "*" /
+# "all" (each line tagged with its own container name).
+tail_docker_source() {
+    local container="$1"
+    local tag="$2"
+    local facility="$3"
+    local siem_host="$4"
+    local siem_port="$5"
+
+    if [ -z "$container" ] || [ "$container" = "null" ] || [ "$container" = "*" ] || [ "$container" = "all" ]; then
+        local names
+        names=$(docker ps --format '{{.Names}}' 2>/dev/null)
+        if [ -z "$names" ]; then
+            log_warn "No running containers found to tail"
+            return
+        fi
+        log_info "Tailing all running containers (each tagged with its name)"
+        while IFS= read -r c; do
+            [ -n "$c" ] && tail_one_docker_container "$c" "$c" "$facility" "$siem_host" "$siem_port"
+        done <<< "$names"
+        return
+    fi
+
+    tail_one_docker_container "$container" "$tag" "$facility" "$siem_host" "$siem_port"
+}
+
+# Tail the host's systemd journal via journalctl. Requires journalctl in the
+# image and the journal mounted (e.g. /var/log/journal). Only new entries are
+# forwarded (-n 0); an optional unit filter narrows it to a single service.
+tail_journal_source() {
+    local unit="$1"
+    local tag="$2"
+    local facility="$3"
+    local siem_host="$4"
+    local siem_port="$5"
+
+    if ! command -v journalctl >/dev/null 2>&1; then
+        log_warn "journalctl not available in this image; cannot read the systemd journal"
+        return
+    fi
+
+    local args=(-f -o cat --no-pager -n 0)
+    if [ -d /var/log/journal ] && [ -n "$(ls -A /var/log/journal 2>/dev/null)" ]; then
+        args+=(-D /var/log/journal)
+    elif [ -d /run/log/journal ] && [ -n "$(ls -A /run/log/journal 2>/dev/null)" ]; then
+        args+=(-D /run/log/journal)
+    fi
+    if [ -n "$unit" ] && [ "$unit" != "null" ]; then
+        args+=(-u "$unit")
+    fi
+
+    log_info "Tailing systemd journal (unit: ${unit:-all}, tag: $tag)"
+
+    local pipe="/tmp/shipper-journal-pipe-$$-$RANDOM"
+    mkfifo "$pipe" 2>/dev/null || {
+        log_error "Failed to create named pipe for journal"
+        return
+    }
+
+    journalctl "${args[@]}" > "$pipe" 2>/dev/null &
+    local journal_pid=$!
+    TAILING_PIDS+=($journal_pid)
+    log_debug "Started journalctl process $journal_pid"
+
+    (
+        set -m
+        while IFS= read -r line; do
+            send_log "$line" "$tag" "$facility" "info" "$siem_host" "$siem_port"
+        done < "$pipe"
+    ) &
+    local reader_pid=$!
+    TAILING_PIDS+=($reader_pid)
+
     (sleep 1; rm -f "$pipe" 2>/dev/null) &
 }
 
@@ -391,6 +467,10 @@ apply_config() {
             docker)
                 local container_name=$(echo "$source" | jq -r '.container_name')
                 tail_docker_source "$container_name" "$tag" "$facility" "$siem_host" "$siem_port"
+                ;;
+            journal)
+                local journal_unit=$(echo "$source" | jq -r '.journal_unit // ""')
+                tail_journal_source "$journal_unit" "$tag" "$facility" "$siem_host" "$siem_port"
                 ;;
             *)
                 log_warn "Unsupported source type: $source_type"

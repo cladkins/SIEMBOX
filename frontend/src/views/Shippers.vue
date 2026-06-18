@@ -160,9 +160,14 @@
         <!-- Log Sources Section -->
         <div class="section-header">
           <h3>Log Sources</h3>
-          <el-button size="small" type="primary" @click="showAddSource" :icon="Plus">
-            Add Source
-          </el-button>
+          <div>
+            <el-button size="small" @click="addSystemLogFiles" :icon="Plus">
+              Add System Log Files
+            </el-button>
+            <el-button size="small" type="primary" @click="showAddSource" :icon="Plus">
+              Add Source
+            </el-button>
+          </div>
         </div>
 
         <el-table :data="currentShipper.sources" stripe style="margin-bottom: 20px">
@@ -296,17 +301,21 @@
         <el-form-item
           v-if="sourceForm.source_type === 'docker'"
           label="Container Name"
-          required
         >
-          <el-input v-model="sourceForm.container_name" placeholder="nginx" />
+          <el-input v-model="sourceForm.container_name" placeholder="nginx (or * / all for every container)" />
+          <el-text size="small" type="info">
+            Leave blank (or enter <code>*</code> / <code>all</code>) to ship logs from ALL running containers — each is tagged with its own container name.
+          </el-text>
         </el-form-item>
 
         <el-form-item
           v-if="sourceForm.source_type === 'journal'"
-          label="Journal Unit"
-          required
+          label="Unit filter (optional)"
         >
-          <el-input v-model="sourceForm.journal_unit" placeholder="nginx.service" />
+          <el-input v-model="sourceForm.journal_unit" placeholder="ssh.service" />
+          <el-text size="small" type="info">
+            Leave blank to ship the entire system journal. Requires mounting the host's <code>/var/log/journal</code> (read-only) into the shipper.
+          </el-text>
         </el-form-item>
 
         <el-form-item label="Tag" required>
@@ -639,6 +648,52 @@ function showAddSource() {
   sourceDialogVisible.value = true;
 }
 
+async function addSystemLogFiles() {
+  try {
+    await ElMessageBox.confirm(
+      'This will add three File sources (/var/log/syslog, /var/log/messages, /var/log/auth.log). ' +
+        'The shipper safely skips files that do not exist on the host. ' +
+        'This also requires mounting /var/log into the shipper.',
+      'Add System Log Files',
+      {
+        confirmButtonText: 'Add',
+        cancelButtonText: 'Cancel',
+        type: 'info',
+      }
+    );
+  } catch (error) {
+    return;
+  }
+
+  const systemLogFiles = [
+    { file_path: '/var/log/syslog', tag: 'system-syslog' },
+    { file_path: '/var/log/messages', tag: 'system-messages' },
+    { file_path: '/var/log/auth.log', tag: 'system-auth' },
+  ];
+
+  saving.value = true;
+  try {
+    for (const file of systemLogFiles) {
+      await api.createShipperSource(currentShipper.value.id, {
+        source_type: 'file',
+        file_path: file.file_path,
+        tag: file.tag,
+        facility: 'local0',
+        enabled: true,
+      });
+    }
+    ElMessage.success('System log file sources added successfully');
+
+    // Refresh shipper details
+    const response = await api.getShipper(currentShipper.value.id);
+    currentShipper.value = response.data;
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || 'Failed to add system log file sources');
+  } finally {
+    saving.value = false;
+  }
+}
+
 function editSource(source: any) {
   sourceForm.id = source.id;
   sourceForm.source_type = source.source_type;
@@ -659,16 +714,6 @@ async function saveSource() {
 
   if (sourceForm.source_type === 'file' && !sourceForm.file_path) {
     ElMessage.warning('Please enter a file path');
-    return;
-  }
-
-  if (sourceForm.source_type === 'docker' && !sourceForm.container_name) {
-    ElMessage.warning('Please enter a container name');
-    return;
-  }
-
-  if (sourceForm.source_type === 'journal' && !sourceForm.journal_unit) {
-    ElMessage.warning('Please enter a journal unit');
     return;
   }
 

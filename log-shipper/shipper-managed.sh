@@ -238,6 +238,10 @@ tail_file_source() {
 
     # Tail each file that matched the pattern
     for file_path in "${expanded_files[@]}"; do
+        if [ ! -e "$file_path" ]; then
+            log_warn "File not found: $file_path (is the host path mounted into the shipper?)"
+            continue
+        fi
         if [ ! -f "$file_path" ]; then
             log_warn "Skipping non-regular file: $file_path"
             continue
@@ -333,7 +337,11 @@ tail_docker_source() {
     local siem_host="$4"
     local siem_port="$5"
 
-    if [ -z "$container" ] || [ "$container" = "null" ] || [ "$container" = "*" ] || [ "$container" = "all" ]; then
+    # Treat blank / "*" / "all" (and forgiving variants like "* / all") as
+    # "every running container".
+    local container_norm
+    container_norm=$(printf '%s' "$container" | tr -d '[:space:]')
+    if [ -z "$container_norm" ] || [ "$container_norm" = "null" ] || [ "$container_norm" = "*" ] || [ "$container_norm" = "all" ] || [ "$container_norm" = "*/all" ]; then
         local names
         names=$(docker ps --format '{{.Names}}' 2>/dev/null)
         if [ -z "$names" ]; then

@@ -37,10 +37,10 @@ services:
       # --- Pick the log sources you need and uncomment them ---
       #
       # Docker container logs (read other containers' stdout/stderr):
-       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       #
       # systemd journal (sshd, docker, etc.):
-       - /var/log/journal:/var/log/journal:ro
+      - /var/log/journal:/var/log/journal:ro
       #
       # File-based logs — mount the directories/files your apps write to:
       # - /var/log/nginx:/var/log/nginx:ro

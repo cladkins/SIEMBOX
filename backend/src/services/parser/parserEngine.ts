@@ -3,6 +3,7 @@ import { RawLog } from '../../models/RawLog';
 import { ParsedLogModel } from '../../models/ParsedLog';
 import { logger } from '../../utils/logger';
 import { RulesEngine } from '../rules/rulesEngine';
+import { ErrorLogService } from '../errors/errorLogService';
 
 export class ParserEngine {
   private parsers: Parser[] = [];
@@ -22,6 +23,7 @@ export class ParserEngine {
       await this.rulesEngine.initialize();
     } catch (error) {
       logger.error('Failed to initialize parser engine:', error);
+      ErrorLogService.logBackgroundError('parser-engine', error, { dedupeKey: 'initialize' });
       throw error;
     }
   }

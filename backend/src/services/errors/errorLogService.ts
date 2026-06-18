@@ -8,6 +8,11 @@
 import { query } from '../../config/database';
 import { logger } from '../../utils/logger';
 
+// Throttle for background/async errors (scans, jobs, syslog, engines) so a
+// high-frequency failure cannot flood the application_errors table.
+const recentBackgroundErrors = new Map<string, number>();
+const BACKGROUND_ERROR_TTL_MS = 60_000;
+
 interface ErrorContext {
   endpoint?: string;
   method?: string;
@@ -183,6 +188,42 @@ export class ErrorLogService {
       logger.error('Failed to log error to database:', logError);
       return null;
     }
+  }
+
+  /**
+   * Log a background/async error (scans, jobs, syslog, engines) to the
+   * dashboard's error log. Throttled per source + dedupeKey so high-frequency
+   * paths cannot flood the table. Fire-and-forget — never throws.
+   */
+  static logBackgroundError(
+    source: string,
+    error: unknown,
+    context: ErrorContext & { dedupeKey?: string } = {}
+  ): void {
+    const errObj =
+      error instanceof Error
+        ? error
+        : new Error(typeof error === 'string' ? error : String(error));
+
+    const { dedupeKey, ...rest } = context;
+    const key = `${source}:${dedupeKey ?? errObj.message}`;
+    const now = Date.now();
+    const last = recentBackgroundErrors.get(key);
+    if (last && now - last < BACKGROUND_ERROR_TTL_MS) {
+      return;
+    }
+    if (recentBackgroundErrors.size > 1000) {
+      recentBackgroundErrors.clear();
+    }
+    recentBackgroundErrors.set(key, now);
+
+    void this.logError(errObj, {
+      ...rest,
+      source,
+      endpoint: rest.endpoint ?? `background:${source}`,
+    }).catch(() => {
+      // Never let logging break background work
+    });
   }
 
   /**

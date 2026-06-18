@@ -9,6 +9,7 @@
 
 import { AutoDiscoveryService } from '../services/assets/autoDiscoveryService';
 import pool from '../config/database';
+import { ErrorLogService } from '../services/errors/errorLogService';
 
 let intervalId: NodeJS.Timeout | null = null;
 let currentIntervalMinutes = 360; // Track current interval to detect changes
@@ -84,6 +85,7 @@ export async function runAutoDiscovery(): Promise<void> {
     });
   } catch (error) {
     console.error('[Auto-Discovery Job] Cycle failed:', error);
+    ErrorLogService.logBackgroundError('auto-discovery-job', error);
   }
 }
 

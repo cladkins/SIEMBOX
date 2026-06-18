@@ -63,8 +63,8 @@ router.get('/overview', async (_req: Request, res: Response) => {
     try {
       const shipperResult = await query(
         `SELECT
-           COUNT(*) FILTER (WHERE last_seen > NOW() - INTERVAL '5 minutes') as online,
-           COUNT(*) FILTER (WHERE last_seen <= NOW() - INTERVAL '5 minutes' AND last_seen > NOW() - INTERVAL '1 hour') as offline,
+           COUNT(*) FILTER (WHERE last_seen > NOW() - INTERVAL '3 minutes') as online,
+           COUNT(*) FILTER (WHERE last_seen <= NOW() - INTERVAL '3 minutes' AND last_seen > NOW() - INTERVAL '1 hour') as offline,
            COUNT(*) FILTER (WHERE last_seen <= NOW() - INTERVAL '1 hour' OR last_seen IS NULL) as error
          FROM log_shippers`
       );

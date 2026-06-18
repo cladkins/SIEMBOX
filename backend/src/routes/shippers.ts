@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { LogShipperModel, ShipperSourceModel, ShipperVolumeModel, ShipperActivityModel } from '../models/LogShipper';
 import { ApiError } from '../middleware/errorHandler';
 import { query } from '../config/database';
+import { logger } from '../utils/logger';
 import crypto from 'crypto';
 
 const router = Router();
@@ -79,8 +80,18 @@ router.get('/unknown-sources', async (_req: Request, res: Response) => {
     // NOTE: API keys are stored as 64-char hex strings. We must use decode(api_key, 'hex')
     // to convert them to binary before hashing, matching the shipper script's behavior:
     // echo -n "$api_key" | xxd -r -p | sha256sum | cut -c1-8
+    // Pre-compute each shipper's possible short IDs in a CTE. The WHERE filter
+    // runs before the SELECT projection, so decode() only ever sees valid hex —
+    // a single malformed api_key can no longer abort the whole query (#17).
     const result = await query(`
-      SELECT DISTINCT
+      WITH shipper_hashes AS (
+        SELECT
+          LOWER(SUBSTRING(MD5(decode(api_key, 'hex')), 1, 8)) AS md5_id,
+          LOWER(SUBSTRING(ENCODE(SHA256(decode(api_key, 'hex')), 'hex'), 1, 8)) AS sha256_id
+        FROM log_shippers
+        WHERE api_key ~ '^([0-9a-fA-F]{2})+$'
+      )
+      SELECT
         rl.shipper_id,
         COUNT(*) as log_count,
         MIN(rl.created_at) as first_seen,
@@ -91,9 +102,9 @@ router.get('/unknown-sources', async (_req: Request, res: Response) => {
       FROM raw_logs rl
       WHERE rl.shipper_id IS NOT NULL
         AND NOT EXISTS (
-          SELECT 1 FROM log_shippers ls
-          WHERE LOWER(SUBSTRING(MD5(decode(ls.api_key, 'hex')), 1, 8)) = LOWER(rl.shipper_id)
-             OR LOWER(SUBSTRING(ENCODE(SHA256(decode(ls.api_key, 'hex')), 'hex'), 1, 8)) = LOWER(rl.shipper_id)
+          SELECT 1 FROM shipper_hashes sh
+          WHERE LOWER(rl.shipper_id) = sh.md5_id
+             OR LOWER(rl.shipper_id) = sh.sha256_id
         )
       GROUP BY rl.shipper_id
       ORDER BY MAX(rl.created_at) DESC
@@ -111,6 +122,7 @@ router.get('/unknown-sources', async (_req: Request, res: Response) => {
 
     res.json(unknownSources);
   } catch (error) {
+    logger.error('Failed to fetch unknown sources:', error);
     throw new ApiError(500, 'Failed to fetch unknown sources');
   }
 });

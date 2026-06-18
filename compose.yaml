@@ -37,7 +37,7 @@ services:
     container_name: siembox-backend
     environment:
       NODE_ENV: ${NODE_ENV:-production}
-      PORT: ${PORT:-3001}
+      PORT: ${PORT:-8421}
       HOST: 0.0.0.0
       DB_HOST: postgres
       DB_PORT: 5432
@@ -52,7 +52,7 @@ services:
       - ./rules:/app/rules:ro  # Mount rules directory as read-only
       - ./nuclei-templates:/root/nuclei-templates  # Nuclei vulnerability templates (bind mount for easy customization)
     ports:
-      - "3001:3001"
+      - "8421:8421"
       - "514:514/udp"  # Syslog UDP
       - "514:514/tcp"  # Syslog TCP
     depends_on:
@@ -71,7 +71,7 @@ services:
         VITE_API_URL: ${VITE_API_URL:-/api}
     container_name: siembox-frontend
     ports:
-      - "3000:80"
+      - "8420:80"
     depends_on:
       - backend
     networks:

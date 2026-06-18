@@ -9,7 +9,7 @@ import { startAutoDiscoveryJob, stopAutoDiscoveryJob } from './jobs/autoDiscover
 
 dotenv.config();
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8421;
 const HOST = process.env.HOST || '0.0.0.0';
 const SYSLOG_PORT = process.env.SYSLOG_PORT ? parseInt(process.env.SYSLOG_PORT) : 514;
 const CLEANUP_INTERVAL_HOURS = process.env.CLEANUP_INTERVAL_HOURS

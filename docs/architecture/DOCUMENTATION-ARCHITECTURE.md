@@ -581,7 +581,7 @@ Via UI:
 
 OR via API:
 ```bash
-curl -X POST http://localhost:3001/api/parsers \
+curl -X POST http://localhost:8421/api/parsers \
   -H "Authorization: Bearer TOKEN" \
   -d @parser.json
 ```
@@ -1009,7 +1009,7 @@ services:
     network_mode: host
     environment:
       - SHIPPER_API_KEY=paste-your-api-key-here
-      - SIEMBOX_API_URL=http://192.168.1.100:3001/api
+      - SIEMBOX_API_URL=http://192.168.1.100:8421/api
     volumes:
       - /var/log/[app]:/var/log/[app]:ro
       # Add other log paths as needed
@@ -1071,7 +1071,7 @@ Expected: Count > 0 and increasing
 
 **Via API:**
 ```bash
-curl -X POST http://localhost:3001/api/parsers \
+curl -X POST http://localhost:8421/api/parsers \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -d @parser.json
@@ -1173,7 +1173,7 @@ After setup, verify everything works:
 
 3. **SIEMBox not accessible**
    ```bash
-   docker exec siembox-log-shipper curl -v http://192.168.1.100:3001/api/health
+   docker exec siembox-log-shipper curl -v http://192.168.1.100:8421/api/health
    ```
    Solution: Check SIEMBox is running and accessible
 
@@ -1657,8 +1657,8 @@ services:
     environment:
       # Required - your SIEMBox API key from the UI
       - SHIPPER_API_KEY=your-key-here
-      # Optional - defaults to localhost:3001
-      - SIEMBOX_API_URL=http://192.168.1.100:3001/api
+      # Optional - defaults to localhost:8421
+      - SIEMBOX_API_URL=http://192.168.1.100:8421/api
     volumes:
       # Read-only access to log directory
       - /var/log/app:/var/log/app:ro
@@ -1909,7 +1909,7 @@ services:
     network_mode: host
     environment:
       - SHIPPER_API_KEY=your-api-key
-      - SIEMBOX_API_URL=http://localhost:3001/api
+      - SIEMBOX_API_URL=http://localhost:8421/api
     volumes:
       - /var/log:/var/log:ro
       # Docker logs from other containers
@@ -1930,7 +1930,7 @@ services:
     network_mode: host
     environment:
       - SHIPPER_API_KEY=server-unique-key
-      - SIEMBOX_API_URL=http://central-siembox:3001/api
+      - SIEMBOX_API_URL=http://central-siembox:8421/api
     volumes:
       - /var/log:/var/log:ro
       # Application-specific logs

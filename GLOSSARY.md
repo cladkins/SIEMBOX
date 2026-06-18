@@ -303,8 +303,8 @@ A connection-oriented protocol that guarantees delivery. Syslog can use TCP port
 ### Port
 A numerical identifier for a specific service on a host. Common SIEMBox ports:
 - **514**: Syslog (UDP/TCP)
-- **3000**: Frontend (HTTP)
-- **3001**: Backend API (HTTP)
+- **8420**: Frontend (HTTP)
+- **8421**: Backend API (HTTP)
 - **5432**: PostgreSQL (internal)
 
 ### Reverse Proxy
@@ -414,7 +414,6 @@ If you encounter a term not listed here, check:
 - **[Getting Started (Development)](./docs/guides/GETTING_STARTED_DEVELOPMENT.md)** - Development setup
 - **[Backend README](./backend/README.md)** - Backend development terms
 - **[Frontend README](./frontend/README.md)** - Frontend development terms
-- **[Testing Guide](./docs/guides/TESTING_GUIDE.md)** - Testing terminology
 
 **Other Resources:**
 - **[FAQ](./FAQ.md)** - Frequently asked questions

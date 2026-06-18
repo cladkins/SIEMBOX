@@ -561,7 +561,6 @@ jobs:
 
 ## Resources
 
-- **Full Testing Guide**: `docs/guides/VITEST_VUE_TESTING_GUIDE.md`
 - Vitest Docs: https://vitest.dev
 - Vue Test Utils: https://test-utils.vuejs.org
 - MSW: https://mswjs.io

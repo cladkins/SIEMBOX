@@ -2,7 +2,7 @@
 
 ## Prerequisites
 - Docker and Docker Compose installed
-- Ports 514, 3000, 3001, and 5432 available
+- Ports 514, 8420, 8421, and 5432 available
 
 ## Deployment Options
 
@@ -60,7 +60,7 @@ docker compose -f compose.prod.yaml up -d
 docker compose -f compose.prod.yaml ps
 
 # Check backend health
-curl http://localhost:3001/health
+curl http://localhost:8421/health
 ```
 
 ---
@@ -125,8 +125,8 @@ SIEMBox containers are available on GitHub Container Registry:
 
 The compose file defines these services:
 - **PostgreSQL** - Database (port 5432, internal)
-- **Backend** - API server (port 3001) + Syslog (port 514/UDP+TCP)
-- **Frontend** - Web interface (port 3000)
+- **Backend** - API server (port 8421) + Syslog (port 514/UDP+TCP)
+- **Frontend** - Web interface (port 8420)
 
 ### 4. Verify Database Initialization
 
@@ -149,8 +149,8 @@ On first startup, SIEMBox automatically:
 
 Once SIEMBox is running:
 
-- **Frontend (Web UI):** http://your-server-ip:3000
-- **Backend API:** http://your-server-ip:3001
+- **Frontend (Web UI):** http://your-server-ip:8420
+- **Backend API:** http://your-server-ip:8421
 - **Syslog Listener:** your-server-ip:514 (UDP and TCP)
 - **Default Credentials:** admin / (password from DEFAULT_ADMIN_PASSWORD environment variable)
 
@@ -186,8 +186,8 @@ Check the SIEMBox UI to confirm the test message appears in the log viewer.
 **Symptoms:** Containers won't start or "port already in use" errors
 
 **Ports Required by SIEMBox:**
-- **3000:** Frontend web interface (HTTP)
-- **3001:** Backend API (HTTP)
+- **8420:** Frontend web interface (HTTP)
+- **8421:** Backend API (HTTP)
 - **514:** Syslog listener (UDP and TCP)
 - **5432:** PostgreSQL database (internal only unless exposed)
 
@@ -268,7 +268,7 @@ When the backend container starts for the first time, it automatically:
 You can verify that initialization was successful by checking the health endpoint:
 
 ```bash
-curl http://your-server-ip:3001/health/seed-status
+curl http://your-server-ip:8421/health/seed-status
 ```
 
 Expected response:
@@ -363,8 +363,8 @@ Configure in Settings UI:
 ## Network Configuration
 
 SIEMBox requires these ports:
-- **3000**: Frontend web interface
-- **3001**: Backend API
+- **8420**: Frontend web interface
+- **8421**: Backend API
 - **514/UDP**: Syslog ingestion (UDP)
 - **514/TCP**: Syslog ingestion (TCP)
 - **5432**: PostgreSQL (only needed if accessing externally)
@@ -379,7 +379,7 @@ sudo ufw allow 80/tcp
 sudo ufw allow from 192.168.1.0/24 to any port 514
 
 # Optional: API access
-sudo ufw allow 3000/tcp
+sudo ufw allow 8420/tcp
 ```
 
 ## Monitoring

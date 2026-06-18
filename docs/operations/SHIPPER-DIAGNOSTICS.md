@@ -25,7 +25,7 @@ Send Heartbeat (every HEARTBEAT_INTERVAL seconds)
 When you set up a log shipper, you configure:
 
 - **API Key**: Unique identifier for shipper authentication
-- **Backend URL**: SIEMBox API endpoint (typically http://siembox-server:3001/api)
+- **Backend URL**: SIEMBox API endpoint (typically http://siembox-server:8421/api)
 - **Config Poll**: How often shipper checks for config updates (default 30 seconds)
 - **Heartbeat**: How often shipper reports status to backend (default 60 seconds)
 
@@ -118,8 +118,8 @@ Files must be readable by the shipper user (typically root in the container). En
 
 **Solution**:
 1. Verify backend API is accessible from the network where shipper runs
-2. Test with: `curl http://your-siembox-ip:3001/api/health`
-3. Check firewall rules allow port 3001
+2. Test with: `curl http://your-siembox-ip:8421/api/health`
+3. Check firewall rules allow port 8421
 4. Verify shipper environment variables point to correct backend URL
 5. Check SIEMBox logs for connection errors
 
@@ -169,7 +169,7 @@ In the SIEMBox UI:
 
 From a machine on your network, verify SIEMBox is accessible:
 ```bash
-curl http://your-siembox-ip:3001/api/health
+curl http://your-siembox-ip:8421/api/health
 ```
 
 Expected response:

@@ -1041,7 +1041,7 @@ docker exec -it siembox-postgres psql -U siembox -d siembox
 
 ```bash
 # Set SIEMBox URL and token
-SIEMBOX_URL="http://localhost:3001"
+SIEMBOX_URL="http://localhost:8421"
 TOKEN="your-api-token"
 
 # Import each parser

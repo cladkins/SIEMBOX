@@ -38,13 +38,13 @@ Pre-deployment verification checklist for:
 docker compose logs backend | grep -i "log received"
 
 # Check log counts
-curl http://localhost:3001/api/logs/stats
+curl http://localhost:8421/api/logs/stats
 ```
 
 ### Check Alert Status
 ```bash
 # View recent alerts
-curl http://localhost:3001/api/alerts?limit=10
+curl http://localhost:8421/api/alerts?limit=10
 
 # Check alert counts by severity
 docker compose exec postgres psql -U siembox -d siembox -c "

@@ -6,7 +6,6 @@ The SIEMBox backend is a Node.js/TypeScript application that provides the core S
 > - [Getting Started (Development)](../docs/guides/GETTING_STARTED_DEVELOPMENT.md) - Complete development setup
 > - [API Documentation](../API.md) - Full REST API reference
 > - [API Quick Reference](../docs/reference/API_QUICK_REFERENCE.md) - Common API operations
-> - [Testing Guide](../docs/guides/TESTING_GUIDE.md) - Backend testing practices
 > - [Frontend Development](../frontend/README.md) - Frontend component guide
 
 ## Tech Stack
@@ -172,7 +171,7 @@ Create `.env` file in backend directory:
 ```bash
 # Server
 NODE_ENV=development
-PORT=3001
+PORT=8421
 HOST=0.0.0.0
 
 # Database
@@ -208,7 +207,7 @@ CLEANUP_INTERVAL_HOURS=24
 # Start development server with hot reload
 npm run dev
 
-# Server will start on http://localhost:3001
+# Server will start on http://localhost:8421
 ```
 
 The dev server uses `tsx` to run TypeScript directly with watch mode.
@@ -567,7 +566,7 @@ VALUES (
 
 ```bash
 # Use test endpoint
-curl -X POST http://localhost:3001/api/parsers/test \
+curl -X POST http://localhost:8421/api/parsers/test \
   -H "Content-Type: application/json" \
   -d '{
     "pattern": "your-regex-pattern",
@@ -726,10 +725,10 @@ docker build -t siembox-backend .
 
 ```bash
 # Basic health check
-curl http://localhost:3001/health
+curl http://localhost:8421/health
 
 # Database status
-curl http://localhost:3001/health/database-status
+curl http://localhost:8421/health/database-status
 ```
 
 ### Logging

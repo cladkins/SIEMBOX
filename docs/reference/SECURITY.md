@@ -215,8 +215,8 @@ sudo netfilter-persistent save
 │ Management Network (10.0.1.0/24)                        │
 │           ▼                                              │
 │  ┌──────────────────┐                                   │
-│  │ SIEMBox          │  Port 3000 (Frontend)             │
-│  │ Frontend/Backend │  Port 3001 (API)                  │
+│  │ SIEMBox          │  Port 8420 (Frontend)             │
+│  │ Frontend/Backend │  Port 8421 (API)                  │
 │  │ PostgreSQL       │  Port 5432 (DB)                   │
 │  └──────────────────┘  Port 514 (Syslog)                │
 │           ▲                                              │
@@ -248,8 +248,8 @@ sudo netfilter-persistent save
 | 80 | TCP | Internal | HTTP (redirect to 443) | Reverse proxy only |
 | 443 | TCP | External | HTTPS Web UI/API | Reverse proxy |
 | 514 | UDP/TCP | Internal | Syslog ingestion | Internal networks |
-| 3000 | TCP | Internal | Frontend (dev) | Reverse proxy only |
-| 3001 | TCP | Internal | Backend API | Frontend container |
+| 8420 | TCP | Internal | Frontend (dev) | Reverse proxy only |
+| 8421 | TCP | Internal | Backend API | Frontend container |
 | 5432 | TCP | Internal | PostgreSQL | Backend container |
 
 *Only if managing remotely. Use bastion host or VPN for production.
@@ -291,7 +291,7 @@ $ActionSendStreamDriverAuthMode x509/name
 ```bash
 # 1. Change default admin password on first login
 # Via API:
-curl -X PUT http://localhost:3001/api/auth/me/password \
+curl -X PUT http://localhost:8421/api/auth/me/password \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -303,7 +303,7 @@ curl -X PUT http://localhost:3001/api/auth/me/password \
 **Create Least-Privilege Accounts:**
 ```bash
 # Create analyst account (not admin)
-curl -X POST http://localhost:3001/api/users \
+curl -X POST http://localhost:8421/api/users \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -315,7 +315,7 @@ curl -X POST http://localhost:3001/api/users \
   }'
 
 # Create read-only viewer
-curl -X POST http://localhost:3001/api/users \
+curl -X POST http://localhost:8421/api/users \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -352,7 +352,7 @@ curl -X POST http://localhost:3001/api/users \
 **Session Management:**
 ```bash
 # Force logout all users (admin only)
-curl -X POST http://localhost:3001/api/auth/cleanup \
+curl -X POST http://localhost:8421/api/auth/cleanup \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 
 # Monitor active sessions (check database)
@@ -428,7 +428,7 @@ server {
 
     # Proxy to SIEMBox frontend
     location / {
-        proxy_pass http://localhost:3000;
+        proxy_pass http://localhost:8420;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -442,7 +442,7 @@ server {
 
     # API endpoint
     location /api {
-        proxy_pass http://localhost:3001/api;
+        proxy_pass http://localhost:8421/api;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -930,7 +930,7 @@ docker stats siembox-backend siembox-postgres siembox-frontend
 df -h /var/lib/docker/volumes/
 
 # Network connections
-netstat -tuln | grep -E "514|3000|3001|5432"
+netstat -tuln | grep -E "514|8420|8421|5432"
 
 # Failed login attempts
 docker logs siembox-backend | grep "Invalid username or password" | wc -l
@@ -954,7 +954,7 @@ services:
   grafana:
     image: grafana/grafana:latest
     ports:
-      - "3002:3000"
+      - "3002:8420"
     volumes:
       - grafana-data:/var/lib/grafana
     networks:
@@ -993,7 +993,7 @@ alert:
 services:
   backend:
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8421/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1058,7 +1058,7 @@ docker exec siembox-postgres psql -U siembox -d siembox -c \
   "SELECT * FROM users WHERE enabled = true;"
 
 # Disable suspicious accounts
-curl -X PUT http://localhost:3001/api/users/<user-id> \
+curl -X PUT http://localhost:8421/api/users/<user-id> \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"enabled": false}'
 

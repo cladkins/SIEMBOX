@@ -106,11 +106,11 @@ See backend and frontend READMEs for manual setup instructions.
 ### What ports does SIEMBox use?
 
 - **514** (UDP/TCP): Syslog ingestion
-- **3000** (HTTP): Frontend web interface
-- **3001** (HTTP): Backend API
+- **8420** (HTTP): Frontend web interface
+- **8421** (HTTP): Backend API
 - **5432** (internal): PostgreSQL database
 
-Ports 3000 and 3001 should be accessible from your browser. Port 514 should be accessible from log sources. Port 5432 should be internal-only.
+Ports 8420 and 8421 should be accessible from your browser. Port 514 should be accessible from log sources. Port 5432 should be internal-only.
 
 ### Can I use an existing PostgreSQL database?
 
@@ -136,7 +136,7 @@ docker compose build
 docker compose up -d
 ```
 
-**Note:** May require database reset (see `docs/guides/PRE-V1-DATABASE.md`)
+**Note:** May require database reset
 
 **Post-v1.0:** Upgrades will use proper database migrations without data loss.
 
@@ -203,7 +203,7 @@ server {
     ssl_certificate_key /path/to/key.pem;
 
     location / {
-        proxy_pass http://localhost:3000;
+        proxy_pass http://localhost:8420;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
@@ -244,7 +244,7 @@ A lightweight agent that:
 ```bash
 docker run -d \
   --name siembox-log-shipper \
-  -e SIEMBOX_API_URL=http://your-siembox:3001/api \
+  -e SIEMBOX_API_URL=http://your-siembox:8421/api \
   -e SHIPPER_API_KEY=your-64-char-api-key \
   -v /var/log:/var/log:ro \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
@@ -405,7 +405,7 @@ Not yet. Email/webhook notifications are on the roadmap. For now, monitor alerts
 **Via API:**
 ```bash
 curl -H "Authorization: Bearer YOUR_TOKEN" \
-  "http://siembox:3001/api/alerts?limit=1000" > alerts.json
+  "http://siembox:8421/api/alerts?limit=1000" > alerts.json
 ```
 
 **Via Database:**
@@ -563,7 +563,7 @@ Old key is immediately invalidated.
 1. Check backend is running: `docker ps | grep siembox-backend`
 2. Check backend logs: `docker logs siembox-backend`
 3. Verify API_URL in frontend: Check `.env` file
-4. Test API directly: `curl http://localhost:3001/health`
+4. Test API directly: `curl http://localhost:8421/health`
 
 ### Port 514 "Permission Denied"
 
@@ -646,8 +646,6 @@ npm run dev
 **Quick reference:** [API Quick Reference](./docs/reference/API_QUICK_REFERENCE.md) - Common operations with curl, JavaScript, and Python examples
 
 ### How do I run tests?
-
-See [Testing Guide](./docs/guides/TESTING_GUIDE.md) for comprehensive testing documentation.
 
 **Backend:**
 ```bash

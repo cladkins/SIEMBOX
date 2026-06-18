@@ -15,9 +15,7 @@ The log shipper is **managed only** - there is no standalone/unauthenticated mod
 ## 📚 Documentation
 
 - **[Verification Guide](./VERIFICATION-GUIDE.md)** - Step-by-step guide to verify logs are being sent and received
-- **[Deployment Verification](./DEPLOYMENT-VERIFICATION.md)** - Comprehensive deployment and testing procedures
 - **[Quick Reference](./QUICK-REFERENCE.md)** - Common commands and troubleshooting tips
-- **[Technical Details](./INCIDENT-REPORT-PROCESS-MANAGEMENT.md)** - Process management architecture and implementation
 
 ## Features
 
@@ -56,7 +54,7 @@ curl -O https://raw.githubusercontent.com/cladkins/SIEMBOX/main/log-shipper/comp
 # Create .env file with your settings
 cat > .env <<EOF
 SHIPPER_API_KEY=paste-your-api-key-here
-SIEMBOX_API_URL=http://your-siembox-ip:3001/api
+SIEMBOX_API_URL=http://your-siembox-ip:8421/api
 EOF
 
 # Start the shipper
@@ -73,7 +71,7 @@ cd SIEMBOX/log-shipper
 # Create .env file with your settings
 cat > .env <<EOF
 SHIPPER_API_KEY=paste-your-api-key-here
-SIEMBOX_API_URL=http://your-siembox-ip:3001/api
+SIEMBOX_API_URL=http://your-siembox-ip:8421/api
 EOF
 
 # Build and start
@@ -134,7 +132,7 @@ The log shipper supports glob patterns for file paths:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SHIPPER_API_KEY` | *required* | API key from SIEMBox UI |
-| `SIEMBOX_API_URL` | `http://localhost:3001/api` | SIEMBox API endpoint |
+| `SIEMBOX_API_URL` | `http://localhost:8421/api` | SIEMBox API endpoint |
 | `CONFIG_POLL_INTERVAL` | `30` | How often to check for config updates (seconds) |
 | `HEARTBEAT_INTERVAL` | `60` | How often to send heartbeat (seconds) |
 
@@ -237,7 +235,7 @@ For comprehensive troubleshooting, see:
 
 3. Check network connectivity to SIEMBox:
    ```bash
-   docker exec siembox-log-shipper curl -v http://siembox-ip:3001/api/health
+   docker exec siembox-log-shipper curl -v http://siembox-ip:8421/api/health
    ```
 
 ### Logs not appearing in SIEMBox

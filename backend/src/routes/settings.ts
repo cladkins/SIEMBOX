@@ -5,6 +5,19 @@ import { authorize } from '../middleware/auth';
 
 const router = Router();
 
+// Get all system settings as a key/value list
+// Frontend reads these as [{ setting_key, setting_value }, ...]
+router.get('/', async (_req: Request, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT key AS setting_key, value AS setting_value FROM system_settings ORDER BY key`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch settings');
+  }
+});
+
 // Get retention settings
 router.get('/retention', authorize('admin'), async (_req: Request, res: Response) => {
   try {

@@ -9,6 +9,7 @@ import { spawn, ChildProcess } from 'child_process';
 import { AuditService } from '../audit/auditService';
 import pool from '../../config/database';
 import { ErrorLogService } from '../errors/errorLogService';
+import { NotificationService } from '../notifications/notificationService';
 import {
   NucleiResult,
   NucleiError,
@@ -386,6 +387,9 @@ export class NucleiScanner {
     console.log(`[Nuclei] Updating scan summary for scan ${scanId}...`);
     await this.updateScanSummary(scanId, vulnerabilitiesFound, severityCounts);
     console.log(`[Nuclei] Scan summary updated for scan ${scanId}`);
+
+    // Notify on findings (respects notification preferences / severity threshold).
+    void NotificationService.notifyVulnScan({ target, severityCounts });
 
     // Log completion audit event
     console.log(`[Nuclei] Logging audit event for scan ${scanId}...`);

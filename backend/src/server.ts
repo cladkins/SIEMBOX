@@ -7,6 +7,7 @@ import { CleanupService } from './services/cleanup/cleanupService';
 import { importRules } from './scripts/import-rules';
 import { startAutoDiscoveryJob, stopAutoDiscoveryJob } from './jobs/autoDiscovery';
 import { startScheduledScansJob, stopScheduledScansJob } from './jobs/scheduledScans';
+import { startIngestionHealthJob, stopIngestionHealthJob } from './jobs/ingestionHealth';
 import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
 
 dotenv.config();
@@ -55,6 +56,9 @@ const startServer = async () => {
     // Start scheduled scans job
     startScheduledScansJob();
 
+    // Start ingestion-health monitor (drives ingestion notifications)
+    startIngestionHealthJob();
+
     // Start Express API server
     app.listen(PORT, () => {
       logger.info(`SIEMBox API server running on http://${HOST}:${PORT}`);
@@ -81,6 +85,7 @@ process.on('SIGTERM', async () => {
   }
   stopAutoDiscoveryJob();
   stopScheduledScansJob();
+  stopIngestionHealthJob();
   pool.end(() => {
     logger.info('Database pool closed');
     process.exit(0);
@@ -97,6 +102,7 @@ process.on('SIGINT', async () => {
   }
   stopAutoDiscoveryJob();
   stopScheduledScansJob();
+  stopIngestionHealthJob();
   pool.end(() => {
     logger.info('Database pool closed');
     process.exit(0);

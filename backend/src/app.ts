@@ -20,6 +20,7 @@ import assetsRoutes from './routes/assets';
 import vulnerabilitiesRoutes from './routes/vulnerabilities';
 import adminRoutes from './routes/admin';
 import scheduledScansRoutes from './routes/scheduledScans';
+import notificationsRoutes from './routes/notifications';
 
 const app: Application = express();
 
@@ -97,6 +98,7 @@ app.use('/api/assets', assetsRoutes); // Asset discovery and management
 app.use('/api/vulnerabilities', vulnerabilitiesRoutes); // Vulnerability scanning and management
 app.use('/api/admin', adminRoutes); // Admin dashboard (requires admin role)
 app.use('/api/scheduled-scans', authenticate, scheduledScansRoutes); // Recurring scheduled scans
+app.use('/api/notifications', authenticate, notificationsRoutes); // Notification channels & preferences
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

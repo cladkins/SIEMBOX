@@ -1,6 +1,6 @@
 <template>
   <el-container class="layout-container">
-    <el-aside :width="isCollapsed ? '64px' : '220px'" class="sidebar">
+    <el-aside :width="isCollapsed ? '64px' : '220px'" class="sidebar" :class="{ 'mobile-open': mobileMenuOpen }">
       <div class="logo">
         <h2 v-if="!isCollapsed">SIEMBox</h2>
         <el-icon v-else :size="24"><Monitor /></el-icon>
@@ -91,10 +91,26 @@
       </div>
     </el-aside>
 
+    <div
+      v-if="isMobile && mobileMenuOpen"
+      class="sidebar-backdrop"
+      @click="mobileMenuOpen = false"
+    />
+
     <el-container>
       <el-header>
         <div class="header-content">
-          <span class="page-title">{{ pageTitle }}</span>
+          <div class="header-left">
+            <el-button
+              v-if="isMobile"
+              class="mobile-menu-btn"
+              text
+              @click="mobileMenuOpen = !mobileMenuOpen"
+            >
+              <el-icon :size="22"><Fold /></el-icon>
+            </el-button>
+            <span class="page-title">{{ pageTitle }}</span>
+          </div>
           <div class="user-actions">
             <el-switch
               v-model="themeStore.isDark"
@@ -116,7 +132,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
@@ -131,6 +147,31 @@ const isCollapsed = ref(false);
 const toggleCollapse = () => {
   isCollapsed.value = !isCollapsed.value;
 };
+
+// Mobile responsive sidebar (slide-in overlay below 768px)
+const isMobile = ref(false);
+const mobileMenuOpen = ref(false);
+
+const updateIsMobile = () => {
+  isMobile.value = window.innerWidth <= 768;
+  if (!isMobile.value) {
+    mobileMenuOpen.value = false;
+  }
+};
+
+onMounted(() => {
+  updateIsMobile();
+  window.addEventListener('resize', updateIsMobile);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateIsMobile);
+});
+
+// Close the mobile menu after navigating.
+watch(() => route.path, () => {
+  mobileMenuOpen.value = false;
+});
 
 const activeMenu = computed(() => route.path);
 
@@ -260,5 +301,74 @@ const handleLogout = () => {
   background-color: var(--siembox-bg-color);
   padding: 20px;
   transition: background-color 0.3s;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mobile-menu-btn {
+  color: var(--siembox-text-color);
+  padding: 4px;
+}
+
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 2000;
+}
+
+/* Mobile: the sidebar becomes a slide-in overlay toggled from the header. */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 220px !important;
+    z-index: 2001;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.3);
+  }
+
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-menu:not(.el-menu--collapse) {
+    width: 220px;
+  }
+
+  .collapse-btn {
+    display: none;
+  }
+
+  .el-header {
+    padding: 0 12px;
+  }
+
+  .el-main {
+    padding: 12px;
+  }
+
+  .page-title {
+    font-size: 16px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .username {
+    display: none;
+  }
+
+  .user-actions {
+    gap: 10px;
+  }
 }
 </style>

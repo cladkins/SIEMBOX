@@ -72,4 +72,27 @@ body,
   color: var(--siembox-text-color);
   transition: background-color 0.3s, color 0.3s;
 }
+
+/* Responsive fallbacks: stack page grids, shrink dialogs/cards on phones.
+   Scoped to page content (.el-main) so the header layout is unaffected. */
+@media (max-width: 768px) {
+  .el-main .el-col {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 0 0 100% !important;
+  }
+
+  .el-dialog {
+    width: 92% !important;
+  }
+
+  .el-message-box {
+    width: 90% !important;
+    max-width: 420px;
+  }
+
+  .el-card__body {
+    padding: 14px;
+  }
+}
 </style>

@@ -8,6 +8,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import { AuditService } from '../audit/auditService';
 import pool from '../../config/database';
+import { ErrorLogService } from '../errors/errorLogService';
 import {
   NucleiResult,
   NucleiError,
@@ -617,6 +618,12 @@ export class NucleiScanner {
     errorMessage?: string
   ): Promise<void> {
     console.log(`[Nuclei] updateScanStatus called: scanId=${scanId}, status=${status}, completedAt=${completedAt}`);
+    if (status === 'failed') {
+      ErrorLogService.logBackgroundError('vuln-scan', errorMessage || 'Vulnerability scan failed', {
+        dedupeKey: String(scanId),
+        scanId,
+      });
+    }
     try {
       const fields: string[] = ['status = $2', 'updated_at = NOW()'];
       const params: any[] = [scanId, status];

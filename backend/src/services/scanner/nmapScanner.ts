@@ -10,6 +10,7 @@ import nmap from 'node-nmap';
 import { AssetRepository } from '../assets/assetRepository';
 import { AuditService } from '../audit/auditService';
 import pool from '../../config/database';
+import { ErrorLogService } from '../errors/errorLogService';
 import { AssetType, AssetCriticality, AssetStatus, DiscoveryMethod, ServiceState } from '../../models/Asset';
 
 /**
@@ -382,6 +383,13 @@ export class NmapScanner {
     completedAt?: Date,
     errorMessage?: string
   ): Promise<void> {
+    if (status === 'failed') {
+      ErrorLogService.logBackgroundError('asset-scan', errorMessage || 'Asset discovery scan failed', {
+        dedupeKey: String(scanId),
+        scanId,
+      });
+    }
+
     try {
       const fields: string[] = ['status = $2', 'updated_at = NOW()'];
       const params: any[] = [scanId, status];

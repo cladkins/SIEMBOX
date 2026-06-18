@@ -4,6 +4,7 @@ import { logger } from '../../utils/logger';
 import { parseSyslogMessage } from './syslogParser';
 import { RawLogModel } from '../../models/RawLog';
 import { ParserEngine } from '../parser/parserEngine';
+import { ErrorLogService } from '../errors/errorLogService';
 
 export class SyslogServer {
   private udpServer: dgram.Socket | null = null;
@@ -30,6 +31,7 @@ export class SyslogServer {
       logger.info(`Syslog server started on port ${this.port} (UDP/TCP)`);
     } catch (error) {
       logger.error('Failed to start syslog server:', error);
+      ErrorLogService.logBackgroundError('syslog', error, { dedupeKey: 'start' });
       throw error;
     }
   }
@@ -52,6 +54,7 @@ export class SyslogServer {
 
     this.udpServer.on('error', (err) => {
       logger.error('UDP server error:', err);
+      ErrorLogService.logBackgroundError('syslog', err, { dedupeKey: 'udp-server' });
     });
 
     this.udpServer.bind(this.port, '0.0.0.0', () => {
@@ -92,6 +95,7 @@ export class SyslogServer {
 
     this.tcpServer.on('error', (err) => {
       logger.error('TCP server error:', err);
+      ErrorLogService.logBackgroundError('syslog', err, { dedupeKey: 'tcp-server' });
     });
   }
 

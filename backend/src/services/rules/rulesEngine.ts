@@ -3,6 +3,7 @@ import { AlertModel } from '../../models/Alert';
 import { ParsedLog } from '../../models/ParsedLog';
 import { logger } from '../../utils/logger';
 import { query } from '../../config/database';
+import { ErrorLogService } from '../errors/errorLogService';
 
 interface RuleCondition {
   field: string;
@@ -40,6 +41,7 @@ export class RulesEngine {
       logger.info(`Loaded ${this.rules.length} detection rules`);
     } catch (error) {
       logger.error('Failed to initialize rules engine:', error);
+      ErrorLogService.logBackgroundError('rules-engine', error, { dedupeKey: 'initialize' });
       throw error;
     }
   }
@@ -51,6 +53,7 @@ export class RulesEngine {
       logger.info(`Reloaded ${this.rules.length} detection rules`);
     } catch (error) {
       logger.error('Failed to reload rules:', error);
+      ErrorLogService.logBackgroundError('rules-engine', error, { dedupeKey: 'reload' });
       throw error;
     }
   }

@@ -73,7 +73,35 @@ export const errorHandler = (
   });
 };
 
+// In-memory throttle so repeated or bot-driven 404s don't flood the error log.
+const recentNotFound = new Map<string, number>();
+const NOT_FOUND_LOG_TTL_MS = 60_000;
+
 export const notFoundHandler = (req: Request, res: Response) => {
+  // Record genuine API 404s so they surface in the admin dashboard's error
+  // tracking. Throttle duplicates per method+path and ignore non-API paths.
+  if (req.path.startsWith('/api')) {
+    const key = `${req.method} ${req.path}`;
+    const now = Date.now();
+    const last = recentNotFound.get(key);
+    if (!last || now - last > NOT_FOUND_LOG_TTL_MS) {
+      if (recentNotFound.size > 500) recentNotFound.clear();
+      recentNotFound.set(key, now);
+
+      const notFoundError = new Error(`Route ${req.originalUrl} not found`);
+      notFoundError.name = 'NotFoundError';
+      ErrorLogService.logError(notFoundError, {
+        endpoint: req.path,
+        method: req.method,
+        userId: req.user?.id,
+        userAgent: req.get('User-Agent'),
+        ip: req.ip,
+      }).catch(() => {
+        // Silently ignore logging failures
+      });
+    }
+  }
+
   res.status(404).json({
     status: 'error',
     statusCode: 404,

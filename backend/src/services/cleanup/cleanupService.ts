@@ -1,5 +1,6 @@
 import { query } from '../../config/database';
 import { logger } from '../../utils/logger';
+import { ErrorLogService } from '../errors/errorLogService';
 
 export class CleanupService {
   private intervalId: NodeJS.Timeout | null = null;
@@ -94,6 +95,7 @@ export class CleanupService {
       logger.info('Automated log cleanup completed', results);
     } catch (error) {
       logger.error('Error during automated cleanup:', error);
+      ErrorLogService.logBackgroundError('cleanup', error);
     }
   }
 

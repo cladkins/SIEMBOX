@@ -302,9 +302,9 @@
           v-if="sourceForm.source_type === 'docker'"
           label="Container Name"
         >
-          <el-input v-model="sourceForm.container_name" placeholder="nginx (or * / all for every container)" />
+          <el-input v-model="sourceForm.container_name" placeholder="nginx (leave blank for all containers)" />
           <el-text size="small" type="info">
-            Leave blank (or enter <code>*</code> / <code>all</code>) to ship logs from ALL running containers — each is tagged with its own container name.
+            Leave blank to ship logs from ALL running containers — each is tagged with its own container name.
           </el-text>
         </el-form-item>
 

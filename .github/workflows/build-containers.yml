@@ -10,6 +10,8 @@ on:
       - 'frontend/**'
       - 'log-shipper/**'
       - '.github/workflows/build-containers.yml'
+      # Documentation-only changes shouldn't rebuild/republish the images.
+      - '!**/*.md'
   release:
     types: [published]
   workflow_dispatch:

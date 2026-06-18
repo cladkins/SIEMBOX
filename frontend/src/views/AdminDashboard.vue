@@ -1,6 +1,6 @@
 <template>
   <div class="admin-dashboard">
-    <el-row :gutter="20">
+    <el-row :gutter="20" align="top">
       <!-- Left Column: Overview, User Lookup, Jobs -->
       <el-col :span="16">
         <!-- System Overview -->
@@ -559,10 +559,6 @@ onUnmounted(() => {
 <style scoped>
 .admin-dashboard {
   padding: 0;
-}
-
-.section-card {
-  height: 100%;
 }
 
 .card-header {

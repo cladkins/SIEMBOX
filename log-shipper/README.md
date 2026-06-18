@@ -23,12 +23,12 @@ The log shipper is **managed only** - there is no standalone/unauthenticated mod
 - **API Authentication**: All shippers authenticate with unique API keys
 - **Auto-Registration**: Shippers automatically register and poll for configuration updates
 - **File Tailing**: Monitor and forward any log file with glob pattern support
-- **Docker Container Logs**: Forward logs from specific Docker containers
-- **Systemd Journal**: Forward systemd journal logs (host system logs)
+- **Docker Container Logs**: Forward logs from a specific container, or from all running containers at once
+- **Systemd Journal**: Forward the host's systemd journal — the usual way to ship a Linux server's system logs
 - **Multiple Sources**: Monitor multiple log sources simultaneously
 - **Real-Time Updates**: Configuration changes apply automatically (polls every 30s)
 - **Heartbeat Monitoring**: Track shipper health and last-seen status
-- **Lightweight**: Based on Alpine Linux (~15MB image)
+- **Image**: Debian-slim based; bundles `journalctl` (for the systemd journal) and the Docker CLI
 - **Custom Tags**: Tag logs by source for easy filtering in SIEMBox
 
 ## Quick Start
@@ -105,6 +105,22 @@ Now tell the shipper which log files to monitor:
 
 **The shipper will automatically pick up the configuration within 30 seconds and start forwarding logs!**
 
+### Shipping a Linux server's system logs
+
+Forwarding a host's own system logs is the shipper's most common job. Two ways, depending on how the host logs:
+
+- **Systemd journal (any modern Linux).** Mount the journal, then add a **Systemd Journal** source with the **unit left blank** to ship the entire journal:
+  ```yaml
+  volumes:
+    - /var/log/journal:/var/log/journal:ro
+  ```
+  Add Source → Type **Systemd Journal**, Unit *(blank)*, Tag e.g. `system`. Set a unit such as `ssh.service` to ship just one service.
+- **rsyslog text files.** Mount `/var/log`, then use the **"Add System Log Files"** button on the shipper — it creates File sources for `/var/log/syslog`, `/var/log/messages`, and `/var/log/auth.log` (paths that don't exist on the host are skipped):
+  ```yaml
+  volumes:
+    - /var/log:/var/log:ro
+  ```
+
 ### Wildcard Pattern Support
 
 The log shipper supports glob patterns for file paths:
@@ -152,24 +168,26 @@ Forward logs from running Docker containers.
 
 **Configured in the SIEMBox UI:**
 - Type: docker
-- Container Name: `nginx`
-- Tag: `nginx-container`
+- Container Name: `nginx` — or leave **blank** (or `*` / `all`) to tail **every running container**, each tagged with its own name
+- Tag: `nginx-container` (ignored in all-containers mode)
 - Facility: `local1`
 
 **Requirements:**
 - Mount Docker socket: `-v /var/run/docker.sock:/var/run/docker.sock:ro`
+- New/removed containers are picked up on the next config poll (~30s).
 
 #### Systemd Journal Sources
-Forward logs from systemd services.
+Forward the host's systemd journal — the usual way to ship a Linux server's system logs.
 
 **Configured in the SIEMBox UI:**
 - Type: journal
-- Journal Unit: `nginx.service`
-- Tag: `nginx-systemd`
+- Unit filter: leave **blank** to ship the entire journal, or set a unit such as `ssh.service` to ship a single service
+- Tag: `system`
 - Facility: `local2`
 
 **Requirements:**
-- Mount journal directory: `-v /var/log/journal:/var/log/journal:ro`
+- Mount the journal directory: `-v /var/log/journal:/var/log/journal:ro`
+- Reads the journal with `journalctl`; only new entries are forwarded (existing history is not replayed).
 
 ## Volume Mounts
 

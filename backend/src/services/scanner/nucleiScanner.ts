@@ -823,6 +823,16 @@ export class NucleiScanner {
         return true;
       }
 
+      // No live process for this scan. If the DB still shows it active, it was
+      // orphaned (e.g. the backend restarted mid-scan) — there is nothing to
+      // kill, so mark it cancelled instead of leaving it stuck forever.
+      const status = await this.getScanStatus(scanId);
+      if (status && (status.status === 'running' || status.status === 'queued')) {
+        await this.updateScanStatus(scanId, 'cancelled', undefined, new Date(), 'Scan cancelled by user (no active process)');
+        console.log(`[Nuclei] Orphaned scan ${scanId} marked cancelled`);
+        return true;
+      }
+
       return false;
     } catch (error) {
       console.error('[Nuclei] Failed to cancel scan:', error);

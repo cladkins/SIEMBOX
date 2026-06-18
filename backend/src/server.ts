@@ -6,6 +6,7 @@ import { SyslogServer } from './services/syslog/syslogServer';
 import { CleanupService } from './services/cleanup/cleanupService';
 import { importRules } from './scripts/import-rules';
 import { startAutoDiscoveryJob, stopAutoDiscoveryJob } from './jobs/autoDiscovery';
+import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
 
 dotenv.config();
 
@@ -24,6 +25,11 @@ const startServer = async () => {
     // Test database connection
     await pool.query('SELECT NOW()');
     logger.info('Database connection successful');
+
+    // Mark scans left 'running'/'queued' by a previous process as failed.
+    // Scan workers live in memory, so a restart orphans any in-flight scan —
+    // without this they stay stuck forever and can't be cancelled normally.
+    await reconcileInterruptedScans();
 
     // Auto-import detection rules on first startup
     logger.info('Checking for detection rules to import...');

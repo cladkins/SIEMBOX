@@ -65,7 +65,7 @@ Common extracted fields:
 ## Using These Parsers
 
 ### View in Web Interface
-1. Navigate to http://your-siembox:3000
+1. Navigate to http://your-siembox:8420
 2. Go to **Parsers** page
 3. Search for the application name
 4. View parser details, test patterns, and manage priority
@@ -76,7 +76,7 @@ Common extracted fields:
 echo "your test log message" | nc -u your-siembox 514
 
 # Check if it was parsed
-curl http://your-siembox:3001/api/logs?limit=1
+curl http://your-siembox:8421/api/logs?limit=1
 ```
 
 ### Deploy Custom Parsers

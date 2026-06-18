@@ -6,7 +6,6 @@ The SIEMBox frontend is a modern Vue.js 3 single-page application (SPA) that pro
 > - [Getting Started (Development)](../docs/guides/GETTING_STARTED_DEVELOPMENT.md) - Complete development setup
 > - [Backend Development](../backend/README.md) - API development guide
 > - [API Documentation](../API.md) - REST API reference for integration
-> - [Testing Guide](../docs/guides/TESTING_GUIDE.md) - Frontend testing practices
 
 ## Tech Stack
 
@@ -83,7 +82,7 @@ npm run dev
 # Access at http://localhost:5173
 ```
 
-The dev server will proxy API requests to `http://localhost:3001` (configurable via `VITE_API_URL`).
+The dev server will proxy API requests to `http://localhost:8421` (configurable via `VITE_API_URL`).
 
 ### Building for Production
 
@@ -419,7 +418,7 @@ describe('Login.vue', () => {
 # From project root
 docker compose up -d
 
-# Frontend available at http://localhost:3000
+# Frontend available at http://localhost:8420
 ```
 
 ### Building Docker Image
@@ -435,7 +434,7 @@ Create `.env.local` for local overrides:
 
 ```bash
 # API endpoint (default: /api)
-VITE_API_URL=http://localhost:3001/api
+VITE_API_URL=http://localhost:8421/api
 ```
 
 **Note**: Variables must be prefixed with `VITE_` to be exposed to the app.
@@ -468,14 +467,14 @@ If port 5173 is already in use:
 # Change port in vite.config.ts
 export default defineConfig({
   server: {
-    port: 3000
+    port: 8420
   }
 })
 ```
 
 ### API Connection Issues
 
-1. Verify backend is running on port 3001
+1. Verify backend is running on port 8421
 2. Check `VITE_API_URL` environment variable
 3. Check browser console for CORS errors
 4. Verify network tab in dev tools

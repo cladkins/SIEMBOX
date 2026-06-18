@@ -1,8 +1,12 @@
-# SIEMBox Log Shipper - Development Compose File
-# Builds container from source code
+# SIEMBox Log Shipper — Build-from-source (development) Compose File
+# ==================================================================
+# Builds the shipper image locally from the Dockerfile in this directory.
 #
-# For production deployments using pre-built GHCR images, use:
+# Most users should NOT use this file. To deploy the shipper on a host,
+# use the standalone, pre-built image instead:
 #   docker compose -f compose.prod.yaml up -d
+#
+# Get SHIPPER_API_KEY from: SIEMBox UI -> Shippers -> Add Shipper
 
 services:
   log-shipper:
@@ -13,36 +17,33 @@ services:
     restart: unless-stopped
 
     environment:
-      # REQUIRED: API key from SIEMBox (get this from SIEMBox UI → Shippers page)
+      # REQUIRED — API key from the SIEMBox UI (Shippers -> Add Shipper)
       SHIPPER_API_KEY: ${SHIPPER_API_KEY}
-
-      # REQUIRED: SIEMBox API URL (change to your SIEMBox server IP/hostname)
-      SIEMBOX_API_URL: ${SIEMBOX_API_URL:-http://localhost:3001/api}
-
-      # Optional: Poll interval for configuration updates (seconds)
+      # REQUIRED — URL of your central SIEMBox backend API
+      #   e.g. http://192.168.1.100:8421/api
+      SIEMBOX_API_URL: ${SIEMBOX_API_URL:-http://localhost:8421/api}
+      # Optional tuning
       CONFIG_POLL_INTERVAL: ${CONFIG_POLL_INTERVAL:-30}
-
-      # Optional: Heartbeat interval (seconds)
       HEARTBEAT_INTERVAL: ${HEARTBEAT_INTERVAL:-60}
 
-    # Volume mounts for log files and Docker socket
-    # Uncomment and configure based on your log sources
     volumes:
-      # For Docker container log monitoring
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /etc/komodo/stacks/npm/data/logs:/etc/komodo/stacks/npm/data/logs
-      - /var/log/journal:/var/log/journal:ro
-
-      # For file-based log sources (example: nginx logs)
+      # --- Pick the log sources you need and uncomment them ---
+      #
+      # Docker container logs (read other containers' stdout/stderr):
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
+      #
+      # systemd journal (sshd, docker, etc.):
+      # - /var/log/journal:/var/log/journal:ro
+      #
+      # File-based logs — mount the directories/files your apps write to:
       # - /var/log/nginx:/var/log/nginx:ro
-
-      # For custom application logs
-      # - /path/to/your/logs:/logs:ro
-
-      # For persistent cache storage (recommended)
+      # - /path/to/your/app/logs:/logs:ro
+      #
+      # Persistent send-cache so queued logs survive restarts (recommended):
       - shipper-cache:/tmp
 
-    # Use host network for simplest networking setup
+    # Host networking keeps things simple: the shipper can reach your SIEMBox
+    # server and read host log paths without extra port/network configuration.
     network_mode: host
 
 volumes:

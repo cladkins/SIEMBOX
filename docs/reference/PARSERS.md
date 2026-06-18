@@ -166,7 +166,7 @@ psql -U siembox -d siembox -f backend/migrations/00X_add_your_parser.sql
 **Option B: Via API (for testing)**
 
 ```bash
-curl -X POST http://localhost:3000/api/parsers \
+curl -X POST http://localhost:8420/api/parsers \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{

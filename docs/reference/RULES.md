@@ -887,7 +887,7 @@ Via UI:
 
 Via API:
 ```bash
-curl -X PUT http://localhost:3001/api/rules/AUTH-001 \
+curl -X PUT http://localhost:8421/api/rules/AUTH-001 \
   -H "Authorization: Bearer TOKEN" \
   -d '{"aggregation": {"threshold": 10}}'
 ```

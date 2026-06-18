@@ -4,7 +4,6 @@
 
 **Related Documentation:**
 - [Quick Reference](./QUICK-REFERENCE.md) - Common commands
-- [Deployment Verification](./DEPLOYMENT-VERIFICATION.md) - Full deployment guide
 - [Troubleshooting](../docs/operations/TROUBLESHOOTING.md) - General troubleshooting
 
 ---
@@ -183,7 +182,7 @@ SELECT COUNT(*) as total_logs FROM raw_logs;
 
 ### 8. Verify in SIEMBox Web UI
 
-1. Open browser to `http://<your-host>:3000`
+1. Open browser to `http://<your-host>:8420`
 2. Login (default: admin / changeme)
 3. Navigate to **Logs** page
 4. Check:
@@ -382,8 +381,6 @@ If you're still having issues:
    ```
 
 2. Review documentation:
-   - `DEPLOYMENT-VERIFICATION.md` - Deployment guide
-   - `INCIDENT-REPORT-PROCESS-MANAGEMENT.md` - Technical details
    - `QUICK-REFERENCE.md` - Common commands
 
 3. Check GitHub issues: https://github.com/cladkins/SIEMBOX/issues

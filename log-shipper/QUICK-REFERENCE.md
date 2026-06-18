@@ -4,8 +4,6 @@
 
 **Related Documentation:**
 - [Verification Guide](./VERIFICATION-GUIDE.md) - How to verify logs are flowing
-- [Deployment Verification](./DEPLOYMENT-VERIFICATION.md) - Full deployment guide
-- [Technical Details](./INCIDENT-REPORT-PROCESS-MANAGEMENT.md) - Complete technical analysis
 
 ---
 
@@ -58,7 +56,7 @@ Expected: See syslog messages
 
 ### Check SIEMBox UI
 ```bash
-# Navigate to http://your-siem:3000/logs
+# Navigate to http://your-siem:8420/logs
 # Look for recent logs from shipper
 ```
 
@@ -74,7 +72,6 @@ Expected: No tail processes after shutdown
 - `log-shipper/shipper-managed.sh` - Managed shipper (API-driven)
 - `log-shipper/shipper.sh` - Standalone shipper (config file)
 - `log-shipper/test-process-management.sh` - Verification tests
-- `log-shipper/INCIDENT-REPORT-PROCESS-MANAGEMENT.md` - Full details
 
 ## Testing
 
@@ -125,6 +122,4 @@ docker compose up -d log-shipper
 
 ## Links
 
-- Full Incident Report: `INCIDENT-REPORT-PROCESS-MANAGEMENT.md`
-- Deployment Guide: `DEPLOYMENT-VERIFICATION.md`
 - Test Script: `test-process-management.sh`

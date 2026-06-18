@@ -1,6 +1,6 @@
 # SIEMBox Documentation
 
-Welcome to the SIEMBox documentation. This directory contains comprehensive technical documentation, architecture specifications, operational guides, and project planning materials.
+Welcome to the SIEMBox documentation. This directory contains technical documentation, architecture specifications, and operational guides.
 
 ## 📁 Documentation Structure
 
@@ -9,8 +9,6 @@ Core technical documentation for SIEMBox features and capabilities.
 
 - **[PARSERS.md](reference/PARSERS.md)** - Parser creation, community parsers, and log processing guide
 - **[RULES.md](reference/RULES.md)** - Detection rule documentation and examples
-- **[TESTING_STRATEGIES.md](reference/TESTING_STRATEGIES.md)** - PostgreSQL testing and mocking strategies for Node.js
-- **[TESTING_QUICK_START.md](reference/TESTING_QUICK_START.md)** - Quick-start test templates and patterns
 
 ### `/parsers` - Application-Specific Parser Documentation
 Detailed documentation for parsers by application category.
@@ -38,26 +36,6 @@ System architecture, design decisions, and implementation specifications.
 - **[PARSER-RULE-IMPLEMENTATION-SPEC.md](architecture/PARSER-RULE-IMPLEMENTATION-SPEC.md)** - Parser and rule implementation design
 - **[VAULTWARDEN-PARSER-IMPLEMENTATION.md](architecture/VAULTWARDEN-PARSER-IMPLEMENTATION.md)** - Vaultwarden parser design decisions
 
-### `/archive` - Historical Documentation Archive
-Archived documentation including resolved incidents, completed phases, and superseded guides. See [archive/README.md](archive/README.md) for complete archive index.
-
-#### Resolved Incidents
-- **[incidents/SIEMBOX-DB-001/](archive/incidents/SIEMBOX-DB-001/)** - Database migration incident (2025-12-03, resolved)
-
-#### Completed Implementation Phases
-- **[phase-implementation/](archive/phase-implementation/)** - Phase 3A, 3B, 3C implementation summaries (archived)
-
-#### Superseded Documentation
-- **[DEPLOYMENT-FIX-GUIDE.md](archive/DEPLOYMENT-FIX-GUIDE.md)** - Database initialization bug fix (resolved)
-- **[FRESH-INSTALL-FIX.md](archive/FRESH-INSTALL-FIX.md)** - Volume persistence fix (resolved)
-- **[DEPLOYMENT-GUIDE.md](archive/DEPLOYMENT-GUIDE.md)** - Old deployment guide (consolidated)
-
-#### Historical Materials
-- **[SESSION-HANDOFF.md](archive/SESSION-HANDOFF.md)** - Session continuity tracking
-- **[DOCUMENTATION-MAP.md](archive/DOCUMENTATION-MAP.md)** - Previous documentation structure
-- **[INCIDENT-RESOLUTION-SUMMARY.md](archive/INCIDENT-RESOLUTION-SUMMARY.md)** - Past incident resolutions
-- **[PLAN.md](archive/PLAN.md)** - Original project planning document
-
 ---
 
 ## 🚀 Quick Start Guides
@@ -67,7 +45,6 @@ Archived documentation including resolved incidents, completed phases, and super
 2. Read [CONTRIBUTING.md](../CONTRIBUTING.md) for contribution guidelines
 3. Review [SECURITY.md](../SECURITY.md) for security practices
 4. Explore [DEPLOYMENT.md](../DEPLOYMENT.md) for setup instructions
-5. Review [reference/TESTING_QUICK_START.md](reference/TESTING_QUICK_START.md) for test setup
 
 ### For Parser Development
 1. [reference/PARSERS.md](reference/PARSERS.md) - Parser creation guide
@@ -144,7 +121,6 @@ When contributing to SIEMBox documentation:
 1. **Technical Reference** → Add to `/reference` or `/parsers`
 2. **Operational Guides** → Add to `/operations`
 3. **Architecture/Design** → Add to `/architecture`
-4. **Historical Materials** → Consult with maintainers before adding to `/archive`
 
 Update this README.md when adding new documentation files. Each subdirectory has its own README.md to help with navigation.
 
@@ -170,5 +146,5 @@ Update this README.md when adding new documentation files. Each subdirectory has
 
 ---
 
-**Last Updated:** 2025-12-08
-**Documentation Version:** 3.0 (Cleanup and reorganization)
+**Last Updated:** 2026-06-18
+**Documentation Version:** 3.1 (Default ports 8420/8421; internal planning docs kept local, out of the public repo)

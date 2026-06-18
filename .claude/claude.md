@@ -64,7 +64,6 @@ SIEMBox is a lightweight, self-hosted Security Information and Event Management 
 - `docs/reference/SECURITY.md` - Security hardening guide (symlinked at root)
 - `docs/operations/TROUBLESHOOTING.md` - Common issues and solutions
 - `CONTRIBUTING.md` - Contribution guidelines
-- `docs/guides/PRE-V1-DATABASE.md` - Pre-v1.0 database schema management
 - `docs/operations/SHIPPER-DIAGNOSTICS.md` - Log shipper diagnostics
 
 ## Development Workflow
@@ -80,7 +79,7 @@ SIEMBox is a lightweight, self-hosted Security Information and Event Management 
 docker compose up -d
 
 # Access points
-# Frontend: http://localhost:3000
+# Frontend: http://localhost:8420
 # Default credentials: admin / changeme
 ```
 
@@ -422,7 +421,7 @@ When Claude Code performs deep-dive investigations (like the agent-organizer), c
 **Pre-v1.0 Database Schema Management:**
 - SIEMBox is currently in pre-v1.0 development
 - Database schema changes are made directly in `backend/migrations/001_initial_schema.sql`
-- Users may need to reset their database when pulling schema changes (see docs/guides/PRE-V1-DATABASE.md)
+- Users may need to reset their database when pulling schema changes
 - **DO NOT create new migration files (002, 003, etc.) for schema changes**
 - Keep the schema simple - all tables/columns in the base file
 - After v1.0 release, we'll implement proper migration tracking for production users

@@ -965,7 +965,7 @@ Save each parser JSON to a file:
 
 ```bash
 # Set your SIEMBox URL and token
-SIEMBOX_URL="http://localhost:3001"
+SIEMBOX_URL="http://localhost:8421"
 TOKEN="your-api-token"
 
 # Import each parser

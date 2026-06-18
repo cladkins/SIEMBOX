@@ -33,7 +33,7 @@ EOF
 docker compose -f compose.prod.yaml up -d
 
 # Access the UI
-# Frontend: http://your-server-ip:3000
+# Frontend: http://your-server-ip:8420
 # Default login: admin / your_admin_password
 ```
 
@@ -80,15 +80,12 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed deployment instructions.
 - **[Getting Started (Development)](./docs/guides/GETTING_STARTED_DEVELOPMENT.md)** - Complete setup guide for developers
 - **[Backend Development](./backend/README.md)** - Backend API development guide
 - **[Frontend Development](./frontend/README.md)** - Frontend UI development guide
-- **[Testing Strategies](./docs/reference/TESTING_STRATEGIES.md)** - PostgreSQL testing and mocking strategies
-- **[Testing Quick Start](./docs/reference/TESTING_QUICK_START.md)** - Quick-start test templates
 - **[Contributing Guide](./CONTRIBUTING.md)** - How to contribute to SIEMBox
 
 ### Log Shipper Documentation
 - **[Log Shipper README](./log-shipper/README.md)** - Setup and configuration
 - **[Verification Guide](./log-shipper/VERIFICATION-GUIDE.md)** - Verify logs are flowing correctly
 - **[Quick Reference](./log-shipper/QUICK-REFERENCE.md)** - Common commands and troubleshooting
-- **[Deployment Verification](./log-shipper/DEPLOYMENT-VERIFICATION.md)** - Step-by-step deployment checklist
 
 ### Reference Documentation
 - **[API Reference](./API.md)** - Complete REST API documentation
@@ -125,7 +122,8 @@ MIT License - See LICENSE file for details
 
 ## Roadmap
 
-- [ ] Additional parser types (CEF, LEEF)
+- [x] CEF (Common Event Format) parser
+- [ ] Additional parser types (LEEF)
 - [ ] Threat intelligence integration
 - [ ] Advanced correlation rules
 - [ ] Email/webhook alert notifications

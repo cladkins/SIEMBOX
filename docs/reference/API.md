@@ -2977,7 +2977,7 @@ Get unified view of all background jobs (scans).
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: 'http://siembox:3001/api',
+  baseURL: 'http://siembox:8421/api',
   headers: {
     'Content-Type': 'application/json'
   }
@@ -3007,7 +3007,7 @@ console.log(alerts.data);
 ```python
 import requests
 
-BASE_URL = "http://siembox:3001/api"
+BASE_URL = "http://siembox:8421/api"
 
 # Login
 response = requests.post(f"{BASE_URL}/auth/login", json={
@@ -3032,14 +3032,14 @@ print(alerts.json())
 
 ```bash
 # Login
-TOKEN=$(curl -s -X POST http://siembox:3001/api/auth/login \
+TOKEN=$(curl -s -X POST http://siembox:8421/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"password"}' \
   | jq -r '.token')
 
 # Get alerts
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://siembox:3001/api/alerts?severity=high&status=new"
+  "http://siembox:8421/api/alerts?severity=high&status=new"
 ```
 
 ---

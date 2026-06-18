@@ -4,7 +4,7 @@
 # Run this on your backend server to diagnose the issue
 
 API_KEY="f25d8cc2a7994ab3626e677169b5a53e9c478327373c09302c7aab8cbc5c9031"
-API_URL="http://192.168.1.76:3001/api/shippers/config/${API_KEY}"
+API_URL="http://192.168.1.76:8421/api/shippers/config/${API_KEY}"
 
 echo "========================================="
 echo "SIEMBox Shipper Configuration API Test"

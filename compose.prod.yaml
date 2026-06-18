@@ -33,7 +33,7 @@ services:
     container_name: siembox-backend
     environment:
       NODE_ENV: ${NODE_ENV:-production}
-      PORT: ${PORT:-3001}
+      PORT: ${PORT:-8421}
       HOST: 0.0.0.0
       DB_HOST: postgres
       DB_PORT: 5432
@@ -48,7 +48,7 @@ services:
       - ./rules:/app/rules:ro
       - nuclei-templates:/root/nuclei-templates
     ports:
-      - "3001:3001"
+      - "8421:8421"
       - "514:514/udp"
       - "514:514/tcp"
     depends_on:
@@ -63,7 +63,7 @@ services:
     image: ghcr.io/cladkins/siembox-frontend:${SIEMBOX_VERSION:-latest}
     container_name: siembox-frontend
     ports:
-      - "3000:80"
+      - "8420:80"
     depends_on:
       - backend
     networks:

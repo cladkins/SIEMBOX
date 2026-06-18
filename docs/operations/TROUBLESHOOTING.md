@@ -29,8 +29,8 @@ Run these steps to identify which component is failing:
 
 1. **Check container status** - Verify all containers are running (use your deployment platform)
 2. **Review container logs** - Check logs for PostgreSQL, backend API, and frontend
-3. **Test API health** - Try accessing: `http://your-siembox-ip:3001/api/health`
-4. **Verify port access** - Ensure ports 3000, 3001, 514 are accessible from expected networks
+3. **Test API health** - Try accessing: `http://your-siembox-ip:8421/api/health`
+4. **Verify port access** - Ensure ports 8420, 8421, 514 are accessible from expected networks
 5. **Check database connection** - Try connecting to PostgreSQL if accessible
 6. **Verify syslog reception** - Send test syslog message and check for receipt
 
@@ -45,7 +45,7 @@ docker logs siembox-postgres
 docker logs siembox-frontend
 
 # Test API endpoint
-curl http://localhost:3001/api/health
+curl http://localhost:8421/api/health
 ```
 
 ### Common Error Patterns
@@ -73,7 +73,7 @@ curl http://localhost:3001/api/health
 **Common Causes and Solutions:**
 
 **Port Already in Use**
-- Check what's using ports 3000, 3001, or 514 on your system
+- Check what's using ports 8420, 8421, or 514 on your system
 - Either stop the conflicting service or change SIEMBox ports
 - Verify port mappings in your deployment configuration
 
@@ -177,7 +177,7 @@ node migrate.js
 
 **Test 1: Verify Backend Connectivity**
 ```bash
-curl http://your-siembox-ip:3001/api/health
+curl http://your-siembox-ip:8421/api/health
 # Should return: {"status": "ok"}
 ```
 
@@ -317,12 +317,12 @@ See [PARSERS.md](../../PARSERS.md) for detailed parser creation guide.
 **Verify Network Connectivity:**
 1. From the shipper host, test:
    ```bash
-   curl http://your-siembox-ip:3001/api/health
+   curl http://your-siembox-ip:8421/api/health
    ```
 2. Should return `{"status": "ok"}`
 3. If not reachable:
    - Check SIEMBox is running
-   - Verify firewall allows port 3001
+   - Verify firewall allows port 8421
    - Check routing between networks
 
 **Update Shipper API Key:**
@@ -376,7 +376,7 @@ docker logs siembox-log-shipper | grep -i error
 docker logs siembox-log-shipper | grep -E "File not found|Permission denied"
 
 # List shipper configuration
-curl http://localhost:3001/api/shippers/<shipper-id> \
+curl http://localhost:8421/api/shippers/<shipper-id> \
   -H "Authorization: Bearer $TOKEN" | jq '.sources, .volumes'
 
 # Check if files exist on HOST
@@ -412,7 +412,7 @@ docker inspect siembox-log-shipper | jq '.[0].Mounts'
 # Source path in UI: /logs/access.log  (NOT /var/log/nginx/access.log)
 
 # Update source path in UI or API:
-curl -X PUT http://localhost:3001/api/shippers/sources/<source-id> \
+curl -X PUT http://localhost:8421/api/shippers/sources/<source-id> \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"file_path": "/logs/access.log"}'
@@ -431,11 +431,11 @@ sudo chmod +r /var/log/nginx/access.log
 **Source Disabled:**
 ```bash
 # Check if source is enabled
-curl http://localhost:3001/api/shippers/<shipper-id>/sources \
+curl http://localhost:8421/api/shippers/<shipper-id>/sources \
   -H "Authorization: Bearer $TOKEN" | jq '.[] | {id, enabled, tag}'
 
 # Enable source
-curl -X PUT http://localhost:3001/api/shippers/sources/<source-id> \
+curl -X PUT http://localhost:8421/api/shippers/sources/<source-id> \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"enabled": true}'
@@ -526,7 +526,7 @@ docker exec -i siembox-postgres psql -U siembox -d siembox \
 **Diagnosis:**
 ```bash
 # Test parser with sample log
-curl -X POST http://localhost:3001/api/parsers/<parser-id>/test \
+curl -X POST http://localhost:8421/api/parsers/<parser-id>/test \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"sample": "your actual log message here"}'
@@ -631,7 +631,7 @@ docker exec siembox-postgres psql -U siembox -d siembox -c \
 **Diagnosis:**
 ```bash
 # Check if rule is enabled
-curl http://localhost:3001/api/rules \
+curl http://localhost:8421/api/rules \
   -H "Authorization: Bearer $TOKEN" | jq '.[] | {id, name, enabled}'
 
 # Check parsed logs match rule conditions
@@ -824,7 +824,7 @@ docker exec siembox-postgres psql -U siembox -d siembox -c "VACUUM FULL;"
 **Configure Retention:**
 ```bash
 # Set retention policies via API
-curl -X PUT http://localhost:3001/api/settings/retention \
+curl -X PUT http://localhost:8421/api/settings/retention \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -835,7 +835,7 @@ curl -X PUT http://localhost:3001/api/settings/retention \
   }'
 
 # Trigger manual cleanup
-curl -X POST http://localhost:3001/api/settings/retention/cleanup \
+curl -X POST http://localhost:8421/api/settings/retention/cleanup \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -983,10 +983,10 @@ services:
 **Optimize Queries:**
 ```bash
 # Use pagination (limit/offset)
-curl "http://localhost:3001/api/logs/parsed?limit=50&offset=0"
+curl "http://localhost:8421/api/logs/parsed?limit=50&offset=0"
 
 # Use specific time ranges
-curl "http://localhost:3001/api/logs/parsed?start_date=2025-11-30T00:00:00Z&end_date=2025-11-30T23:59:59Z"
+curl "http://localhost:8421/api/logs/parsed?start_date=2025-11-30T00:00:00Z&end_date=2025-11-30T23:59:59Z"
 ```
 
 ---
@@ -1033,17 +1033,17 @@ docker-compose ps frontend
 docker-compose logs frontend
 
 # Test locally
-curl -I http://localhost:3000
+curl -I http://localhost:8420
 
 # Test from remote
-curl -I http://<server-ip>:3000
+curl -I http://<server-ip>:8420
 ```
 
 **Solutions:**
 
 **Firewall Blocking:**
 ```bash
-sudo ufw allow 3000/tcp
+sudo ufw allow 8420/tcp
 ```
 
 **Wrong Port:**
@@ -1076,7 +1076,7 @@ sudo tail -f /var/log/nginx/error.log
 # Look for errors
 
 # Check if API is accessible
-curl http://localhost:3001/api/auth/me \
+curl http://localhost:8421/api/auth/me \
   -H "Authorization: Bearer $TOKEN"
 
 # Check frontend build
@@ -1100,7 +1100,7 @@ grep VITE_API_URL .env
 # Should be:
 VITE_API_URL=/api  # If using same domain
 # Or:
-VITE_API_URL=http://backend-server:3001/api  # If separate
+VITE_API_URL=http://backend-server:8421/api  # If separate
 ```
 
 ---
@@ -1154,7 +1154,7 @@ services:
 **Diagnosis:**
 ```bash
 # Check if cleanup is enabled
-curl http://localhost:3001/api/settings/retention \
+curl http://localhost:8421/api/settings/retention \
   -H "Authorization: Bearer $TOKEN"
 
 # Check backend logs for cleanup
@@ -1164,7 +1164,7 @@ docker-compose logs backend | grep -i cleanup
 **Solution:**
 ```bash
 # Enable auto cleanup
-curl -X PUT http://localhost:3001/api/settings/retention \
+curl -X PUT http://localhost:8421/api/settings/retention \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -1194,7 +1194,7 @@ docker-compose ps
 echo ""
 
 echo "2. Port Listening:"
-netstat -tuln | grep -E "514|3000|3001|5432"
+netstat -tuln | grep -E "514|8420|8421|5432"
 echo ""
 
 echo "3. Database Connectivity:"

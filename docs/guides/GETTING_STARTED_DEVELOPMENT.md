@@ -5,7 +5,6 @@ This guide will help you set up your development environment and start contribut
 > 📚 **Component-Specific Guides:**
 > - [Backend Development Guide](../../backend/README.md) - API development, services, models
 > - [Frontend Development Guide](../../frontend/README.md) - Vue.js components, state management
-> - [Testing Guide](./TESTING_GUIDE.md) - Running tests and writing test cases
 > - [FAQ](../../FAQ.md) - Common development questions
 
 ## Prerequisites
@@ -44,8 +43,8 @@ docker compose up -d
 docker compose logs -f
 
 # 5. Access the application
-# Frontend: http://localhost:3000
-# Backend API: http://localhost:3001
+# Frontend: http://localhost:8420
+# Backend API: http://localhost:8421
 # Default credentials: admin / changeme
 ```
 
@@ -114,7 +113,7 @@ npm install
 # Create .env file
 cat > .env << EOF
 NODE_ENV=development
-PORT=3001
+PORT=8421
 HOST=0.0.0.0
 
 DB_HOST=localhost
@@ -142,7 +141,7 @@ npm run import-rules
 # Start development server
 npm run dev
 
-# Backend API will be available at http://localhost:3001
+# Backend API will be available at http://localhost:8421
 ```
 
 **Note**: Syslog port changed to 5514 to avoid requiring root privileges. Change back to 514 in production.
@@ -160,7 +159,7 @@ npm install
 
 # Create .env.local file (optional)
 cat > .env.local << EOF
-VITE_API_URL=http://localhost:3001/api
+VITE_API_URL=http://localhost:8421/api
 EOF
 
 # Start development server
@@ -202,7 +201,6 @@ Find something to work on:
 - Browse [GitHub Issues](https://github.com/cladkins/SIEMBOX/issues)
 - Check the [Project Board](https://github.com/cladkins/SIEMBOX/projects)
 - Look for issues labeled `good first issue`
-- Review `/docs/features/` for planned features
 
 ### 2. Create a Branch
 
@@ -362,13 +360,11 @@ See `/docs/reference/RULES.md` for detailed guide.
 
 **Pre-v1.0:**
 - Edit `/backend/migrations/001_initial_schema.sql`
-- Users will need to reset their database (documented in PRE-V1-DATABASE.md)
+- Users will need to reset their database when the schema changes
 
 **Post-v1.0:**
 - Create new migration file (002, 003, etc.)
 - Follow migration best practices
-
-See `/docs/guides/PRE-V1-DATABASE.md` for current approach.
 
 ## Debugging
 
@@ -479,7 +475,6 @@ Follow testing guidelines in:
 When making changes, update relevant documentation:
 
 - **API changes**: Update `/docs/reference/API.md`
-- **New features**: Add to feature docs in `/docs/features/`
 - **Parsers**: Update `/docs/reference/PARSERS.md`
 - **Rules**: Update `/docs/reference/RULES.md`
 - **Configuration**: Update `/DEPLOYMENT.md`
@@ -501,7 +496,7 @@ When making changes, update relevant documentation:
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `NODE_ENV` | Environment | development | No |
-| `PORT` | API server port | 3001 | No |
+| `PORT` | API server port | 8421 | No |
 | `HOST` | Bind address | 0.0.0.0 | No |
 | `DB_HOST` | PostgreSQL host | localhost | Yes |
 | `DB_PORT` | PostgreSQL port | 5432 | Yes |
@@ -547,7 +542,7 @@ SYSLOG_PORT=5514 npm run dev
 **Issue**: Frontend can't connect to backend
 
 **Solution**:
-1. Verify backend is running on port 3001
+1. Verify backend is running on port 8421
 2. Check `VITE_API_URL` in `.env.local`
 3. Check browser console for CORS errors
 

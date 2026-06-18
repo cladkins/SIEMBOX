@@ -5,7 +5,7 @@ Quick reference guide for common SIEMBox API operations. For complete documentat
 ## Base URL
 
 ```
-http://localhost:3001/api
+http://localhost:8421/api
 ```
 
 ## Authentication
@@ -47,12 +47,12 @@ Content-Type: application/json
 
 ```bash
 # Login
-curl -X POST http://localhost:3001/api/auth/login \
+curl -X POST http://localhost:8421/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"changeme"}'
 
 # Logout
-curl -X POST http://localhost:3001/api/auth/logout \
+curl -X POST http://localhost:8421/api/auth/logout \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -61,15 +61,15 @@ curl -X POST http://localhost:3001/api/auth/logout \
 ```bash
 # Get raw logs (latest 100)
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/logs/raw?limit=100"
+  "http://localhost:8421/api/logs/raw?limit=100"
 
 # Get parsed logs with filters
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/logs/parsed?source_ip=192.168.1.100&limit=50"
+  "http://localhost:8421/api/logs/parsed?source_ip=192.168.1.100&limit=50"
 
 # Search logs
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/logs/parsed?search=error&limit=100"
+  "http://localhost:8421/api/logs/parsed?search=error&limit=100"
 ```
 
 ### Parsers
@@ -77,14 +77,14 @@ curl -H "Authorization: Bearer $TOKEN" \
 ```bash
 # List all parsers
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/parsers"
+  "http://localhost:8421/api/parsers"
 
 # Get specific parser
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/parsers/1"
+  "http://localhost:8421/api/parsers/1"
 
 # Create parser
-curl -X POST http://localhost:3001/api/parsers \
+curl -X POST http://localhost:8421/api/parsers \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -97,7 +97,7 @@ curl -X POST http://localhost:3001/api/parsers \
   }'
 
 # Test parser
-curl -X POST http://localhost:3001/api/parsers/test \
+curl -X POST http://localhost:8421/api/parsers/test \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -112,14 +112,14 @@ curl -X POST http://localhost:3001/api/parsers/test \
 ```bash
 # List all rules
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/rules"
+  "http://localhost:8421/api/rules"
 
 # Get specific rule
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/rules/1"
+  "http://localhost:8421/api/rules/1"
 
 # Create rule
-curl -X POST http://localhost:3001/api/rules \
+curl -X POST http://localhost:8421/api/rules \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -137,7 +137,7 @@ curl -X POST http://localhost:3001/api/rules \
   }'
 
 # Reload rules engine
-curl -X POST http://localhost:3001/api/rules/reload \
+curl -X POST http://localhost:8421/api/rules/reload \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -146,18 +146,18 @@ curl -X POST http://localhost:3001/api/rules/reload \
 ```bash
 # Get all alerts
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/alerts"
+  "http://localhost:8421/api/alerts"
 
 # Filter by severity
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/alerts?severity=high"
+  "http://localhost:8421/api/alerts?severity=high"
 
 # Get unacknowledged alerts
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/alerts?acknowledged=false"
+  "http://localhost:8421/api/alerts?acknowledged=false"
 
 # Acknowledge alert
-curl -X PUT http://localhost:3001/api/alerts/1/acknowledge \
+curl -X PUT http://localhost:8421/api/alerts/1/acknowledge \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"notes": "Investigated - false positive"}'
@@ -168,10 +168,10 @@ curl -X PUT http://localhost:3001/api/alerts/1/acknowledge \
 ```bash
 # List users (admin only)
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/users"
+  "http://localhost:8421/api/users"
 
 # Create user (admin only)
-curl -X POST http://localhost:3001/api/users \
+curl -X POST http://localhost:8421/api/users \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -181,7 +181,7 @@ curl -X POST http://localhost:3001/api/users \
   }'
 
 # Update user (admin only)
-curl -X PUT http://localhost:3001/api/users/2 \
+curl -X PUT http://localhost:8421/api/users/2 \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"role": "viewer"}'
@@ -192,18 +192,18 @@ curl -X PUT http://localhost:3001/api/users/2 \
 ```bash
 # List shippers
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/shippers"
+  "http://localhost:8421/api/shippers"
 
 # Get shipper config (shipper uses this)
-curl "http://localhost:3001/api/shippers/config/YOUR_API_KEY"
+curl "http://localhost:8421/api/shippers/config/YOUR_API_KEY"
 
 # Register shipper (shipper uses this)
-curl -X POST http://localhost:3001/api/shippers/register \
+curl -X POST http://localhost:8421/api/shippers/register \
   -H "Content-Type: application/json" \
   -d '{"api_key": "YOUR_64_CHAR_API_KEY"}'
 
 # Regenerate shipper API key (admin only)
-curl -X POST http://localhost:3001/api/shippers/1/regenerate-key \
+curl -X POST http://localhost:8421/api/shippers/1/regenerate-key \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -212,14 +212,14 @@ curl -X POST http://localhost:3001/api/shippers/1/regenerate-key \
 ```bash
 # List assets
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/assets"
+  "http://localhost:8421/api/assets"
 
 # Get asset details
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/assets/1"
+  "http://localhost:8421/api/assets/1"
 
 # Create scan
-curl -X POST http://localhost:3001/api/assets/scans \
+curl -X POST http://localhost:8421/api/assets/scans \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -231,7 +231,7 @@ curl -X POST http://localhost:3001/api/assets/scans \
 
 # Get scan status
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/assets/scans/1"
+  "http://localhost:8421/api/assets/scans/1"
 ```
 
 ### Settings
@@ -239,10 +239,10 @@ curl -H "Authorization: Bearer $TOKEN" \
 ```bash
 # Get settings
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:3001/api/settings"
+  "http://localhost:8421/api/settings"
 
 # Update retention settings (admin only)
-curl -X PUT http://localhost:3001/api/settings \
+curl -X PUT http://localhost:8421/api/settings \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -402,7 +402,7 @@ GET /api/logs/parsed?search=failed%20login
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: 'http://localhost:3001/api',
+  baseURL: 'http://localhost:8421/api',
   headers: {
     'Content-Type': 'application/json'
   }
@@ -438,7 +438,7 @@ await api.put(`/alerts/${alertId}/acknowledge`, {
 
 ```javascript
 // Login
-const loginResponse = await fetch('http://localhost:3001/api/auth/login', {
+const loginResponse = await fetch('http://localhost:8421/api/auth/login', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -449,7 +449,7 @@ const loginResponse = await fetch('http://localhost:3001/api/auth/login', {
 const { token } = await loginResponse.json();
 
 // Get logs
-const logsResponse = await fetch('http://localhost:3001/api/logs/parsed?limit=100', {
+const logsResponse = await fetch('http://localhost:8421/api/logs/parsed?limit=100', {
   headers: { 'Authorization': `Bearer ${token}` }
 });
 const { data: logs } = await logsResponse.json();
@@ -464,7 +464,7 @@ const { data: logs } = await logsResponse.json();
 ```python
 import requests
 
-base_url = 'http://localhost:3001/api'
+base_url = 'http://localhost:8421/api'
 
 # Login
 response = requests.post(f'{base_url}/auth/login', json={
@@ -503,7 +503,7 @@ response = requests.post(f'{base_url}/parsers',
 ```bash
 #!/bin/bash
 
-BASE_URL="http://localhost:3001/api"
+BASE_URL="http://localhost:8421/api"
 
 # Login and get token
 TOKEN=$(curl -s -X POST "$BASE_URL/auth/login" \
@@ -528,7 +528,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 1. **Import Collection**: Create requests for common endpoints
 2. **Set Environment Variables**:
-   - `base_url`: `http://localhost:3001/api`
+   - `base_url`: `http://localhost:8421/api`
    - `token`: `<your-jwt-token>`
 3. **Use Collection Variables**: `{{base_url}}/logs/parsed`
 4. **Set Authorization**: Bearer Token → `{{token}}`

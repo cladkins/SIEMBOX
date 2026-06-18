@@ -52,7 +52,7 @@ COPY --from=builder /app/migrations ./migrations
 RUN mkdir -p logs
 
 # Expose ports
-EXPOSE 3000
+EXPOSE 8421
 EXPOSE 514/udp
 EXPOSE 514/tcp
 

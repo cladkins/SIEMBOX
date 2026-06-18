@@ -536,7 +536,7 @@ const getSeverityType = (severity: string) => {
 .yaml-help {
   margin-top: 10px;
   padding: 10px;
-  background: #f5f7fa;
+  background: var(--siembox-bg-color);
   border-radius: 4px;
   font-size: 12px;
 }

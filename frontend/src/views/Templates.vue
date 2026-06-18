@@ -544,7 +544,7 @@ onMounted(async () => {
 }
 
 .stat-label {
-  color: #909399;
+  color: var(--siembox-text-tertiary);
   font-size: 14px;
   margin-top: 8px;
 }
@@ -580,7 +580,7 @@ onMounted(async () => {
 .categories-section h3,
 .tags-section h3 {
   margin-bottom: 15px;
-  color: #303133;
+  color: var(--siembox-text-color);
 }
 
 .category-card {
@@ -603,7 +603,7 @@ onMounted(async () => {
 .category-name {
   font-size: 16px;
   font-weight: bold;
-  color: #303133;
+  color: var(--siembox-text-color);
 }
 
 .category-count {
@@ -613,7 +613,7 @@ onMounted(async () => {
 }
 
 .category-description {
-  color: #909399;
+  color: var(--siembox-text-tertiary);
   font-size: 12px;
   line-height: 1.4;
 }
@@ -656,7 +656,7 @@ onMounted(async () => {
 }
 
 .template-description {
-  color: #909399;
+  color: var(--siembox-text-tertiary);
   font-size: 12px;
   margin-top: 4px;
 }
@@ -673,7 +673,7 @@ onMounted(async () => {
 }
 
 .more-tags {
-  color: #909399;
+  color: var(--siembox-text-tertiary);
   font-size: 12px;
 }
 

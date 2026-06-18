@@ -6,6 +6,7 @@ import { SyslogServer } from './services/syslog/syslogServer';
 import { CleanupService } from './services/cleanup/cleanupService';
 import { importRules } from './scripts/import-rules';
 import { startAutoDiscoveryJob, stopAutoDiscoveryJob } from './jobs/autoDiscovery';
+import { startScheduledScansJob, stopScheduledScansJob } from './jobs/scheduledScans';
 import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
 
 dotenv.config();
@@ -51,6 +52,9 @@ const startServer = async () => {
     // Start auto-discovery job
     startAutoDiscoveryJob();
 
+    // Start scheduled scans job
+    startScheduledScansJob();
+
     // Start Express API server
     app.listen(PORT, () => {
       logger.info(`SIEMBox API server running on http://${HOST}:${PORT}`);
@@ -76,6 +80,7 @@ process.on('SIGTERM', async () => {
     cleanupService.stop();
   }
   stopAutoDiscoveryJob();
+  stopScheduledScansJob();
   pool.end(() => {
     logger.info('Database pool closed');
     process.exit(0);
@@ -91,6 +96,7 @@ process.on('SIGINT', async () => {
     cleanupService.stop();
   }
   stopAutoDiscoveryJob();
+  stopScheduledScansJob();
   pool.end(() => {
     logger.info('Database pool closed');
     process.exit(0);

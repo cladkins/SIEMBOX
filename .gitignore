@@ -71,3 +71,24 @@ temp/
 
 # Analysis documents (Claude Code deep-dive reports)
 analysis/
+
+# Internal development / planning / process docs
+# Kept on disk for local use, but not tracked or published in the repo.
+# (Full content remains recoverable from git history.)
+/docs/archive/
+/docs/features/
+/NUCLEI_SCANNER_IMPLEMENTATION.md
+/VULNERABILITY_IMPLEMENTATION_SUMMARY.md
+/VULNERABILITY_OPTIMIZATION_GUIDE.md
+/VULNERABILITY_SCHEMA_VALIDATION.md
+/TESTING_GUIDE.md
+/backend/TYPE_DEFINITIONS_SUMMARY.md
+/docs/guides/VITEST_VUE_TESTING_GUIDE.md
+/docs/guides/TESTING_GUIDE.md
+/docs/guides/ASSET_DISCOVERY_TESTING.md
+/docs/guides/PRE-V1-DATABASE.md
+/docs/reference/JEST_TESTING_RESEARCH.md
+/docs/reference/TESTING_QUICK_START.md
+/docs/reference/TESTING_STRATEGIES.md
+/log-shipper/DEPLOYMENT-VERIFICATION.md
+/log-shipper/INCIDENT-REPORT-PROCESS-MANAGEMENT.md

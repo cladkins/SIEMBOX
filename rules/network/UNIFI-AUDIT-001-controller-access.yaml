@@ -1,0 +1,24 @@
+name: UniFi Controller Admin Access
+description: >
+  Administrative access to the UniFi controller (login / configuration). With your
+  trusted LAN in the IP whitelist, normal internal admin access is suppressed, so
+  in practice this alerts on UniFi admin access from outside the trusted network.
+severity: medium
+enabled: true
+tags: [network, unifi, audit, admin-access, authentication]
+
+conditions:
+  - field: UNIFIcategory
+    operator: equals
+    value: "Audit"
+  - field: UNIFIadmin
+    operator: exists
+    value: true
+
+alert:
+  title: "UniFi admin access by {UNIFIadmin} from {source_ip}"
+  description: >
+    UniFi controller accessed by admin '{UNIFIadmin}' from {source_ip}
+    (method: {UNIFIaccessMethod}). Event: {event_name}.
+    If your LAN is whitelisted, this fired because the source is outside it —
+    verify the login is expected and from a known location.

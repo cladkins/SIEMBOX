@@ -1,0 +1,25 @@
+name: UniFi IDS/IPS Threat NOT Blocked
+description: >
+  A UniFi IDS/IPS signature matched but the action was not "blocked" (detected or
+  allowed). A known-bad pattern may have reached an internal host, so this is high
+  severity and warrants investigation of the target and the signature.
+severity: high
+enabled: true
+tags: [network, unifi, ids-ips, threat, unblocked]
+
+conditions:
+  - field: UNIFIpolicyType
+    operator: equals
+    value: "IDS/IPS"
+  - field: act
+    operator: not_equals
+    value: "blocked"
+
+alert:
+  title: "UniFi IPS threat NOT blocked from {source_ip}"
+  description: >
+    UniFi IDS/IPS matched traffic from {source_ip} to {dest_ip} but did not block
+    it (action: {act}).
+    Signature: {UNIFIipsSignature} (risk: {UNIFIrisk}). Destination port {dest_port}, app {app}.
+    Investigate the destination host {dest_ip} for compromise, confirm the IPS
+    policy is set to block this category, and isolate the host if warranted.

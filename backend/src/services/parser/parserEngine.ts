@@ -143,12 +143,18 @@ export class ParserEngine {
 
       const fields: Record<string, any> = {};
 
-      // Map regex groups to field names using field_mappings
+      // Map regex groups to field names using field_mappings.
       if (match.groups) {
-        // Named groups
-        for (const [groupName, fieldName] of Object.entries(parser.field_mappings)) {
-          if (match.groups[groupName] !== undefined) {
-            fields[fieldName] = match.groups[groupName];
+        // field_mappings is documented as {groupName: fieldName}, but several
+        // seeded parsers wrote it reversed as {fieldName: groupName} (e.g. SSH
+        // "source_ip":"src_ip" where the regex group is actually `src_ip`).
+        // Accept BOTH directions so the value is never silently dropped: prefer
+        // {group: field}, then fall back to {field: group}.
+        for (const [a, b] of Object.entries(parser.field_mappings)) {
+          if (match.groups[a] !== undefined) {
+            fields[b] = match.groups[a];
+          } else if (match.groups[b] !== undefined) {
+            fields[a] = match.groups[b];
           }
         }
       } else {

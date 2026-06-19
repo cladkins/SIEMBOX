@@ -13,14 +13,14 @@ conditions:
     value: "(service.*restart|systemd.*restart|Starting.*service|Stopped.*service|restarting)"
 
 aggregation:
-  field: program
+  field: service
   timeframe: 15m
   threshold: 5
 
 alert:
-  title: "Unusual Service Restart Pattern: {program}"
+  title: "Unusual Service Restart Pattern: {service}"
   description: >
-    {count} restarts of {program} in 15 minutes on {hostname}.
+    {count} restarts of {service} in 15 minutes on {host}.
     Identify service and restart reason, review service logs for errors/crashes,
     check for exploitation indicators (segfaults, buffer overflows),
     verify service configuration file integrity, monitor service behavior post-restart,

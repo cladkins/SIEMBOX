@@ -30,6 +30,7 @@ export const FIELD_ALIASES: Record<string, string[]> = {
   method: ['http_method', 'http_verb'],
   path: ['request_uri', 'request_url', 'url', 'uri'],
   status_code: ['status', 'http_status', 'response_code'],
+  response_size: ['body_bytes_sent', 'bytes_sent', 'sent_bytes'],
 };
 
 export interface NormalizeContext {

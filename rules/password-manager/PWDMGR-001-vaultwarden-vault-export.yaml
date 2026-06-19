@@ -4,7 +4,10 @@ description: >
   Vault exports are rare operations that export ALL stored credentials in plaintext format.
   This is a high-risk operation that should be closely monitored and verified as legitimate.
 severity: critical
-enabled: true
+# Unworkable from Vaultwarden's default logs: it does not log vault-export
+# operations to its log stream (only the org/Bitwarden DB event-log, which
+# SIEMBox does not ingest yet). Disabled until that source is available.
+enabled: false
 tags: [vaultwarden, password-manager, data-exfiltration, critical, credential-theft]
 
 conditions:

@@ -286,8 +286,8 @@ VALUES (
     'Parses Vaultwarden authentication and vault access logs for critical security monitoring',
     'regex',
     55,
-    '^\[(?<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})\]\[(?<module>[^\]]+)\]\[(?<log_level>\w+)\]\s+(?<message>(?:(?!(?:\s+(?:for|from(?:\s+IP:)?|by)\s+|,\s+(?:Email|Device):)).)+?)(?:\s+for\s+(?<user_email>\S+))?(?:\s+by\s+(?<admin_email>\S+)\s+from\s+(?<admin_ip>[\d.]+)|(?:\s+from\s+(?:IP:\s+)?(?<client_ip>[\d.]+)(?:,\s+Email:\s+(?<login_email>\S+))?))(?:,\s+Device:\s+(?<device>[^,]+))?$',
-    '{"timestamp": "timestamp", "module": "module", "log_level": "log_level", "message": "message", "client_ip": "client_ip", "source_ip": "client_ip", "user_email": "email", "login_email": "email", "email": "email", "user": "email", "admin_email": "admin_email", "admin_ip": "admin_ip", "device": "device", "service": "vaultwarden", "action": "message", "event": "message"}',
+    '^\[(?<timestamp>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?)\]\[(?<module>[^\]]+)\]\[(?<log_level>\w+)\]\s+(?<message>.*?)(?:\s+for\s+(?<user_email>[^\s,.]+))?(?:\s+by\s+(?<admin_email>\S+)\s+from\s+(?<admin_ip>\d{1,3}(?:\.\d{1,3}){3})|(?:[.,]?\s+(?:from\s+)?(?:IP:\s*)?(?<client_ip>\d{1,3}(?:\.\d{1,3}){3})))?(?:[.,]?\s+(?:Email|Username):\s*(?<login_email>[^\s,]+?)\.?)?(?:,\s+Device:\s+(?<device>[^,]+))?\.?\s*$',
+    '{"timestamp": "timestamp", "module": "module", "log_level": "log_level", "message": "message", "client_ip": "client_ip", "source_ip": "client_ip", "user_email": "email", "login_email": "email", "admin_email": "admin_email", "admin_ip": "admin_ip", "device": "device", "service": "vaultwarden"}',
     'vaultwarden_event',
     true
 )

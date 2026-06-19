@@ -29,7 +29,10 @@ Also: normalizer now aliases `response_size ← body_bytes_sent` (combined-forma
 | 7–9 | authentik / keycloak / authelia | ✅ | AUTH-007 fixed: uniform `event="authentication failed"` derived in postProcessFields (Authelia emits no event; Keycloak=`LOGIN_ERROR`; authentik=action+`success`) |
 | 10 | pihole-query | ✅ | regex fixed (migration 003): matched none of the standard `query[A] domain from client` lines → now emits `query_type`/`domain`/`client_ip` (APP-003, EXFIL-003 live) |
 | 11 | nextcloud-access | ⚠️ partial | APP-004 `status_code` condition removed (parser can't supply it). Parser regex targets a `[time] app.LEVEL: msg {json}` format, but default `nextcloud.log` is pure JSON — needs a real sample to confirm/rewrite the parser |
-| 12–22 | vaultwarden, nginx variants, unifi native | ⏳ pending | next passes |
+| 22 | vaultwarden-access | ✅ | regex matched **nothing** (expected `from IP:`/`Email:`; real 1.30+ logs use `IP:`/`Username:`) → `service` never set → all 5 rules dead. Fixed (migration 007 + seed). AUTH-005 (message literal corrected) and PWDMGR-004 now fire; PWDMGR-001/002/003 **disabled** — Vaultwarden doesn't log vault export / device registration / vault unlock (would need the org event-log feed + GeoIP) |
+| 12–21 | nginx variants, unifi native | ⏳ pending | next passes |
+
+**Policy (per maintainer):** keep rules and build the parser/enrichment to support them; disable only rules that genuinely cannot work from a service's real logs (so far: the three Vaultwarden rules above). HA/Plex/Jellyfin parsers, GeoIP enrichment, and request-size capture are planned builds to light up their currently-dead rules.
 
 **Remaining known gaps:** PROXY-007 (`request_size` — no parser captures request-body size); APP-001/IOT-001/IOT-002 (no Home Assistant parser); APP-002 (no Plex/Jellyfin parser); PWDMGR-003 (`country` — no GeoIP). See **Gaps** below.
 

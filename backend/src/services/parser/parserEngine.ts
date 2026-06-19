@@ -272,14 +272,24 @@ export class ParserEngine {
       }
 
       // Derive event field for authentication and device events
-      if (message.includes('failed login') || message.includes('invalid password')) {
+      // Real Vaultwarden wording (1.30+): "Username or password is incorrect",
+      // "Invalid TOTP code!", "Invalid admin token", "logged in successfully".
+      if (
+        message.includes('username or password is incorrect') ||
+        message.includes('invalid totp code') ||
+        message.includes('invalid admin token') ||
+        message.includes('this user has been disabled') ||
+        message.includes('failed login') ||
+        message.includes('invalid password')
+      ) {
         fields.event = 'login_failure';
-      } else if (message.includes('successful login')) {
+      } else if (
+        message.includes('logged in successfully') ||
+        message.includes('successful login')
+      ) {
         fields.event = 'login_success';
-      } else if (message.includes('device registered') || message.includes('new device')) {
-        fields.event = 'device_registered';
-      } else if (message.includes('api authentication failed')) {
-        fields.event = 'api_auth_failure';
+      } else if (message.includes('did not complete a 2fa login')) {
+        fields.event = 'login_2fa_incomplete';
       }
 
       // Derive path from module (approximation for API monitoring)

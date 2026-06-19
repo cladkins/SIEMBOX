@@ -5,7 +5,10 @@ description: >
   Requires GeoIP data enrichment.
   May indicate account compromise or credential theft, especially if concurrent with normal location access.
 severity: high
-enabled: true
+# Unworkable as written: Vaultwarden logs no "vault_unlock" event, and there is
+# no GeoIP `country` enrichment in the pipeline yet. Re-enable once GeoIP
+# enrichment lands (planned) and a vault-unlock signal exists.
+enabled: false
 tags: [vaultwarden, password-manager, geolocation, anomaly, travel]
 
 conditions:

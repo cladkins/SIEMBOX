@@ -406,6 +406,36 @@ export class RulesEngine {
       const title = this.replaceVariables(alertTemplate.title, variables);
       const description = this.replaceVariables(alertTemplate.description || '', variables);
 
+      // The IP this alert concerns (used for the allow-list and dedup).
+      const alertIp = String(
+        parsedLog.parsed_data['client_ip'] ??
+        parsedLog.parsed_data['source_ip'] ??
+        parsedLog.source_ip ??
+        ''
+      ).trim();
+
+      // Global allow-list: never alert on trusted/whitelisted IPs, so an
+      // operator can silence their own internal hosts with one whitelist entry
+      // instead of editing every rule. (checkIpNotInWhitelist returns true when
+      // the IP is NOT whitelisted.)
+      if (alertIp && !(await this.checkIpNotInWhitelist(alertIp))) {
+        logger.debug('Alert suppressed: whitelisted IP', { rule: rule.name, ip: alertIp });
+        return;
+      }
+
+      // Cooldown: collapse alert storms to a single alert per (rule, title)
+      // within a window, so a sustained condition doesn't emit one alert per log.
+      const cooldownMin = Math.max(aggregation ? this.parseTimeframe(aggregation.timeframe) : 0, 10);
+      const cooldownSince = new Date(Date.now() - cooldownMin * 60 * 1000);
+      const recent = await query(
+        `SELECT 1 FROM alerts WHERE rule_id = $1 AND title = $2 AND created_at >= $3 LIMIT 1`,
+        [rule.id, title, cooldownSince]
+      );
+      if ((recent.rowCount || 0) > 0) {
+        logger.debug('Alert suppressed: duplicate within cooldown', { rule: rule.name, title });
+        return;
+      }
+
       await AlertModel.create({
         rule_id: rule.id,
         parsed_log_id: parsedLog.id,

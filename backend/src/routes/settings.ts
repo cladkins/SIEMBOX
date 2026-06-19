@@ -288,10 +288,13 @@ router.post('/ip-whitelist', authorize('admin'), async (req: Request, res: Respo
       throw new ApiError(400, 'IP address is required');
     }
 
-    // Validate CIDR format by attempting to insert (PostgreSQL will validate)
+    // Normalize to the network address (network() zeroes the host bits) so an
+    // input like "192.168.1.1/24" is accepted as "192.168.1.0/24" instead of
+    // being rejected by the cidr type. Genuinely invalid input still throws
+    // 22P02 -> 400 below.
     const result = await query(
       `INSERT INTO ip_whitelist (ip_address, description, rule_id, created_by)
-       VALUES ($1::cidr, $2, $3, $4)
+       VALUES (network($1::inet)::cidr, $2, $3, $4)
        RETURNING id, ip_address::text, description, rule_id, created_at`,
       [ip_address, description || null, rule_id || null, req.user?.id || null]
     );

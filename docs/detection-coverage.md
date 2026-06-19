@@ -24,9 +24,16 @@ Also: normalizer now aliases `response_size ← body_bytes_sent` (combined-forma
 | 5 | Linux Sudo | ✅ | only `working_dir` was dropped (no rule uses it); ACCESS-001/003 OK |
 | 6 | Apache/Nginx Access | ✅ | reversed mapping fixed → `status_code`/`response_size` emitted |
 | 23 | Generic Syslog | ✅ | INFRA-003 aggregation `program`→`service` fixed |
-| 7–22 | app/proxy/unifi parsers | ⏳ pending | next passes (nginx variants, IdPs, pihole, nextcloud, vaultwarden, unifi-firewall/idsips) |
+| 7–9 | authentik / keycloak / authelia | ✅ | AUTH-007 fixed: uniform `event="authentication failed"` derived in postProcessFields (Authelia emits no event; Keycloak=`LOGIN_ERROR`; authentik=action+`success`) |
+| 10–22 | pihole, nextcloud, vaultwarden, nginx variants, unifi native | ⏳ pending | next passes |
 
-**Remaining known gaps after this pass:** PROXY-007 (`request_size` — no parser captures request-body size); APP-001/IOT-001/IOT-002 (no Home Assistant parser); APP-002 (no Plex/Jellyfin parser); PWDMGR-003 (`country` — no GeoIP); AUTH-007 Authelia branch (`event` not emitted by authelia-access). See **Gaps** below.
+**Remaining known gaps:** PROXY-007 (`request_size` — no parser captures request-body size); APP-001/IOT-001/IOT-002 (no Home Assistant parser); APP-002 (no Plex/Jellyfin parser); PWDMGR-003 (`country` — no GeoIP). See **Gaps** below.
+
+**Queued for next passes (parser-quality issues found in pass 2):**
+- **pihole-query** regex doesn't match the standard dnsmasq `query[A] domain from client` format → APP-003/EXFIL-003 get no `query_type`/`domain`/`client_ip` (needs a parser-pattern migration).
+- **keycloak-event** regex uses lazy `.*?` + optional groups, so `ipAddress` is frequently not captured → AUTH-007 aggregates on the syslog sender rather than the attacker.
+- **nextcloud-access** emits no `status_code` → APP-004's status condition is unsatisfiable as written.
+- **vaultwarden** PWDMGR-001/002 depend on "vault export" / "device registered" log messages that Vaultwarden may not emit by default (PWDMGR-004 `path` is derived from `module` and works).
 
 
 

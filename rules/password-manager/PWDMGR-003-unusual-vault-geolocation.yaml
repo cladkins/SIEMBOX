@@ -1,14 +1,11 @@
 name: Unusual Vault Access Geolocation
 description: >
-  Detects vault access from unexpected geographic locations.
-  Single event detection for access outside user's typical country.
-  Requires GeoIP data enrichment.
-  May indicate account compromise or credential theft, especially if concurrent with normal location access.
+  Detects a successful Vaultwarden login from a country outside the configured
+  home-country list (geo_foreign). A successful master-password login from a
+  foreign country may indicate account compromise or credential theft.
+  Requires GeoIP enrichment (DB-IP lite) and GEOIP_HOME_COUNTRIES to be set.
 severity: high
-# Unworkable as written: Vaultwarden logs no "vault_unlock" event, and there is
-# no GeoIP `country` enrichment in the pipeline yet. Re-enable once GeoIP
-# enrichment lands (planned) and a vault-unlock signal exists.
-enabled: false
+enabled: true
 tags: [vaultwarden, password-manager, geolocation, anomaly, travel]
 
 conditions:
@@ -17,17 +14,16 @@ conditions:
     value: "vaultwarden"
   - field: event
     operator: equals
-    value: "vault_unlock"
-  - field: country
-    operator: not_equals
-    value: "{user_home_country}"
-    # Implementation note: Requires GeoIP enrichment and user home country baseline
+    value: "login_success"
+  - field: geo_foreign
+    operator: equals
+    value: true
 
 alert:
-  title: "Unusual Geographic Vault Access: {user} from {country}"
+  title: "Foreign Vault Login: {user} from {country} ({source_ip})"
   description: >
-    Vault access by {user} from {source_ip} in {country}.
-    This is outside user's normal geographic location.
-    Verify user travel status, contact user immediately to confirm,
-    check for concurrent logins from different locations, review all vault items accessed,
-    consider session termination if suspicious, and enable geographic restrictions if available.
+    Successful Vaultwarden login by {user} from {source_ip} in {country},
+    which is outside the configured home country list.
+    Verify the user's travel status, contact the user to confirm, check for
+    concurrent logins from other locations, review recently accessed vault items,
+    and consider session termination and geographic restrictions if suspicious.

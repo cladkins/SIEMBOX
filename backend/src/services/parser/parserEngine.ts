@@ -101,6 +101,7 @@ export class ParserEngine {
     if (n.includes('authelia')) return 'authelia';
     if (n.includes('authentik')) return 'authentik';
     if (n.includes('keycloak')) return 'keycloak';
+    if (n.includes('home-assistant') || n.includes('homeassistant')) return 'home-assistant';
     if (n.includes('nextcloud')) return 'nextcloud';
     if (n.includes('pihole') || n.includes('pi-hole')) return 'pihole';
     if (n.includes('unifi')) return 'unifi';
@@ -332,6 +333,30 @@ export class ParserEngine {
       if (/error/i.test(String(fields.event ?? ''))) {
         fields.event = 'authentication failed';
       }
+    }
+
+    // Home Assistant core log (home-assistant.log). The actionable lines come
+    // from logger homeassistant.components.http.ban. Pull the client IP out of
+    // the message (three shapes) and derive a uniform `event` marker. service
+    // must be set explicitly because the normalizer otherwise treats `logger`
+    // as the service.
+    if (parserName === 'home-assistant' && fields.message) {
+      const msg = String(fields.message);
+      const ipMatch =
+        msg.match(/Banned IP\s+(\d{1,3}(?:\.\d{1,3}){3})/) ||
+        msg.match(/\bfrom\s+\S+\s+\((\d{1,3}(?:\.\d{1,3}){3})\)/) ||
+        msg.match(/\bfrom\s+(\d{1,3}(?:\.\d{1,3}){3})\b/);
+      if (ipMatch) {
+        fields.client_ip = ipMatch[1];
+        fields.source_ip = ipMatch[1];
+      }
+      const m = msg.toLowerCase();
+      if (m.includes('banned ip') && m.includes('too many login attempts')) {
+        fields.event = 'ip_banned';
+      } else if (m.includes('invalid authentication')) {
+        fields.event = 'login_failure';
+      }
+      fields.service = 'home-assistant';
     }
 
     return fields;

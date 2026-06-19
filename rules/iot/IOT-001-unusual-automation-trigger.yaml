@@ -4,7 +4,11 @@ description: >
   Security-related automations triggered during late hours (1am-5am) or via non-scheduled methods
   may indicate unauthorized access to Home Assistant or tampering with smart home controls.
 severity: medium
-enabled: true
+# DISABLED: event_type=automation_triggered / trigger_type / automation_name are NOT in the
+# default home-assistant.log (they live in HA's logbook/recorder DB, not ingested by SIEMBox).
+# Re-enable only with a structured HA event feed (logbook/MQTT). See APP-005 for the
+# default-log HA brute-force signal.
+enabled: false
 tags: [iot, home-assistant, automation, smart-home, physical-security]
 
 conditions:

@@ -4,7 +4,10 @@ description: >
   5 failed lock access attempts in 10 minutes requires immediate investigation
   as it may indicate physical security threat.
 severity: low
-enabled: true
+# DISABLED: device_type=lock / device_id / device_name / event=access_denied are NOT in the
+# default home-assistant.log. Smart-lock state/access events live in HA's logbook/recorder DB,
+# which SIEMBox does not ingest. Re-enable only with a structured HA event feed (logbook/MQTT).
+enabled: false
 tags: [iot, smart-lock, physical-security, access-control, home-assistant]
 
 conditions:

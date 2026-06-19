@@ -251,6 +251,26 @@ VALUES (
 )
 ON CONFLICT (name) DO NOTHING;
 
+-- Phase 2 Parser: Home Assistant - Core Log (general line)
+-- Matches the default home-assistant.log line shape:
+--   YYYY-MM-DD HH:MM:SS[.mmm] LEVEL (thread) [logger] message
+-- The security signal lives in the message of the http.ban logger; client_ip and
+-- event ('login_failure' / 'ip_banned') are derived in postProcessFields.
+-- NOTE: automation/device/lock events are NOT in the default text log (they go to
+-- HA's logbook/recorder DB), so this parser intentionally only models the text log.
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, event_type, enabled)
+VALUES (
+    'home-assistant',
+    'Parses the default Home Assistant core log (home-assistant.log); surfaces http.ban failed-login and IP-ban events',
+    'regex',
+    22,
+    '^(?<timestamp>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?)\s+(?<log_level>[A-Z]+)\s+\((?<thread>[^)]+)\)\s+\[(?<logger>[^\]]+)\]\s+(?<message>.*)$',
+    '{"timestamp": "timestamp", "log_level": "log_level", "thread": "thread", "logger": "logger", "message": "message", "service": "home-assistant"}',
+    'homeassistant_event',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
 -- Phase 2 Parser: Nextcloud - Access Logs
 INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, event_type, enabled)
 VALUES (

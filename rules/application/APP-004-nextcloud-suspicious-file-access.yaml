@@ -11,9 +11,6 @@ conditions:
   - field: path
     operator: contains
     value: "/files/"
-  - field: status_code
-    operator: equals
-    value: "200"
 
 aggregation:
   field: client_ip

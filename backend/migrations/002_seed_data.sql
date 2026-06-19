@@ -272,8 +272,8 @@ VALUES (
     'Parses Pi-hole DNS query logs for network monitoring and ad blocking',
     'regex',
     30,
-    '^(?<timestamp>\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2})\s+dnsmasq\[\d+\]:\s+(?<query_type>\w+)\s+(?<domain>[^\s]+)\s+(?:is\s+(?<result>[^\s]+))?(?:from\s+(?<client_ip>[\d.]+))?',
-    '{"timestamp": "timestamp", "query_type": "query_type", "domain": "domain", "result": "result", "client_ip": "client_ip", "service": "pihole"}',
+    'dnsmasq\[\d+\]:\s+query\[(?<query_type>[^\]]+)\]\s+(?<domain>\S+)\s+from\s+(?<client_ip>[\d.]+)',
+    '{"query_type": "query_type", "domain": "domain", "client_ip": "client_ip", "service": "pihole"}',
     'dns_query',
     true
 )

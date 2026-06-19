@@ -4,6 +4,8 @@ description: >
   50MB requests are unusual for most homelab services.
   May indicate bandwidth exhaustion DoS, storage exhaustion attack, or abuse of upload functionality.
   Adjust threshold based on legitimate use cases like Nextcloud file uploads or photo library syncs.
+  Requires the access log to include request size (e.g. nginx $request_length): the parser must emit
+  request_length / request_size / bytes_received, which the normalizer maps to request_size.
 severity: medium
 enabled: true
 tags: [web, dos, upload-abuse, reverse-proxy, availability]

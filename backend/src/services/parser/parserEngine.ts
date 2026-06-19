@@ -4,6 +4,7 @@ import { ParsedLogModel } from '../../models/ParsedLog';
 import { logger } from '../../utils/logger';
 import { RulesEngine } from '../rules/rulesEngine';
 import { ErrorLogService } from '../errors/errorLogService';
+import { normalizeParsedData } from '../normalize/fieldNormalizer';
 
 export class ParserEngine {
   private parsers: Parser[] = [];
@@ -41,10 +42,18 @@ export class ParserEngine {
           // Use parser.event_type if set, otherwise use auto-determined event type
           const eventType = parser.event_type || result.event_type || null;
 
+          // Normalize fields to the canonical schema so detection rules match
+          // regardless of which parser (and field spelling) produced the log.
+          const normalizedData = normalizeParsedData(result.fields, {
+            packetSourceIp: rawLog.source_ip,
+            eventType,
+            service: this.deriveService(parser.name),
+          });
+
           const parsedLog = await ParsedLogModel.create({
             raw_log_id: rawLog.id,
             parser_id: parser.id,
-            parsed_data: result.fields,
+            parsed_data: normalizedData,
             timestamp: rawLog.timestamp,
             source_ip: rawLog.source_ip,
             event_type: eventType,
@@ -73,6 +82,28 @@ export class ParserEngine {
     } catch (error) {
       logger.error('Error processing log:', { error, rawLogId: rawLog.id });
     }
+  }
+
+  /**
+   * Best-effort service name derived from the matched parser, used to populate
+   * the canonical `service` field when the parser itself does not emit one
+   * (e.g. the SSH parser implies service "sshd").
+   */
+  private deriveService(parserName: string): string | undefined {
+    const n = (parserName || '').toLowerCase();
+    if (n.includes('ssh')) return 'sshd';
+    if (n.includes('sudo')) return 'sudo';
+    if (n.includes('nginx')) return 'nginx';
+    if (n.includes('traefik')) return 'traefik';
+    if (n.includes('caddy')) return 'caddy';
+    if (n.includes('vaultwarden')) return 'vaultwarden';
+    if (n.includes('authelia')) return 'authelia';
+    if (n.includes('authentik')) return 'authentik';
+    if (n.includes('keycloak')) return 'keycloak';
+    if (n.includes('nextcloud')) return 'nextcloud';
+    if (n.includes('pihole') || n.includes('pi-hole')) return 'pihole';
+    if (n.includes('unifi')) return 'unifi';
+    return undefined;
   }
 
   private applyParser(

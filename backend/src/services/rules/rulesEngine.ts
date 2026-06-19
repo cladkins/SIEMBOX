@@ -378,8 +378,8 @@ export class RulesEngine {
     try {
       // Extract variables for alert title/description
       const variables: Record<string, any> = {
+        source_ip: parsedLog.source_ip, // fallback; normalized parsed_data.source_ip below wins
         ...parsedLog.parsed_data,
-        source_ip: parsedLog.source_ip,
         timestamp: parsedLog.timestamp,
       };
 

@@ -1,0 +1,26 @@
+name: UniFi IDS/IPS Threat Blocked
+description: >
+  A UniFi IDS/IPS signature matched inbound traffic and the gateway blocked it.
+  These are routine on an internet-facing gateway (reputation lists, scanners),
+  so this rule is low severity for visibility and triage. Investigate further if
+  the same source also appears in higher-severity UniFi alerts.
+severity: low
+enabled: true
+tags: [network, unifi, ids-ips, threat, blocked]
+
+conditions:
+  - field: UNIFIpolicyType
+    operator: equals
+    value: "IDS/IPS"
+  - field: act
+    operator: equals
+    value: "blocked"
+
+alert:
+  title: "UniFi IPS blocked {source_ip} ({UNIFIipsSignature})"
+  description: >
+    UniFi IDS/IPS blocked traffic from {source_ip} to {dest_ip}.
+    Signature: {UNIFIipsSignature} (risk: {UNIFIrisk}).
+    Policy: {UNIFIpolicyName}. App: {app}, destination port {dest_port}.
+    The gateway blocked this automatically, so no action is usually required.
+    Investigate if this source recurs or also appears in an unblocked alert.

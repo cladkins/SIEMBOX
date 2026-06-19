@@ -1,0 +1,27 @@
+name: UniFi Sustained IDS/IPS Targeting
+description: >
+  A single source IP triggered many UniFi IDS/IPS detections in a short window,
+  indicating persistent targeting or scanning rather than a one-off hit. This
+  escalates a repeat offender above the per-event alerts.
+severity: critical
+enabled: true
+tags: [network, unifi, ids-ips, threat, scanning, aggregation]
+
+conditions:
+  - field: UNIFIpolicyType
+    operator: equals
+    value: "IDS/IPS"
+
+aggregation:
+  field: source_ip
+  timeframe: 10m
+  threshold: 15
+
+alert:
+  title: "Sustained UniFi IPS targeting from {source_ip}"
+  description: >
+    {count} UniFi IDS/IPS detections from {source_ip} in 10 minutes — persistent
+    targeting or scanning, not a one-off block.
+    Latest signature: {UNIFIipsSignature}; target {dest_ip}.
+    Consider blocking {source_ip} at the firewall edge and reviewing whether any
+    attempts from this source were not blocked.

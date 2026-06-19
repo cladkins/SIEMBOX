@@ -425,8 +425,11 @@ apply_config() {
 
     # If not in config, extract from SIEMBOX_API_URL environment variable
     if [ "$siem_host" = "null" ] || [ -z "$siem_host" ] || [ "$siem_host" = "" ]; then
-        # Extract host from SIEMBOX_API_URL (e.g., http://192.168.1.76:3001/api -> 192.168.1.76)
-        siem_host=$(echo "$SIEMBOX_API_URL" | sed -E 's|^https?://([^:/]+).*|\1|')
+        # Extract just the host from SIEMBOX_API_URL, tolerating a missing
+        # scheme (curl assumes http, so users sometimes omit it):
+        #   http://192.168.1.76:8421/api  ->  192.168.1.76
+        #   192.168.1.76:8421/api         ->  192.168.1.76
+        siem_host=$(echo "$SIEMBOX_API_URL" | sed -E 's#^[a-zA-Z]+://##; s#[:/].*$##')
         log_debug "Extracted SIEM host from SIEMBOX_API_URL: $siem_host"
     fi
 

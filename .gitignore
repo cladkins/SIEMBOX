@@ -92,3 +92,7 @@ analysis/
 /docs/reference/TESTING_STRATEGIES.md
 /log-shipper/DEPLOYMENT-VERIFICATION.md
 /log-shipper/INCIDENT-REPORT-PROCESS-MANAGEMENT.md
+
+# GeoIP database (CC BY 4.0, fetched at deploy time — not committed)
+/data/geoip/
+*.mmdb

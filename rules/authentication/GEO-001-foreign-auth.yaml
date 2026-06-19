@@ -1,0 +1,30 @@
+name: Authentication From Foreign Country
+description: >
+  A login attempt (success or failure) from a country outside the configured
+  home-country list (geo_foreign). General cross-service geo signal driven by
+  GeoIP enrichment. Set GEOIP_HOME_COUNTRIES (e.g. "US,CA"); with no home list
+  nothing is considered foreign and this rule will not fire.
+severity: medium
+enabled: true
+tags: [authentication, geolocation, foreign, anomaly]
+
+conditions:
+  - field: geo_foreign
+    operator: equals
+    value: true
+  - field: event
+    operator: in
+    value: "login_success,login_failure"
+
+aggregation:
+  field: source_ip
+  timeframe: 10m
+  threshold: 3
+
+alert:
+  title: "Foreign Authentication from {source_ip} ({country})"
+  description: >
+    {count} authentication events (success/failure) from {source_ip} in
+    {country} within 10 minutes — outside the configured home country list.
+    Review the source IP reputation, confirm whether any attempt succeeded,
+    and verify the user is not legitimately travelling.

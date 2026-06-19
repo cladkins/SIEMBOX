@@ -37,7 +37,8 @@ Also: normalizer now aliases `response_size ← body_bytes_sent` (combined-forma
 **Existing-parser audit complete.** Build phase (lighting up dead rules):
 - ✅ **Home Assistant** — new `home-assistant` parser (migration 008) for the default `home-assistant.log`; derives `source_ip`/`event` from the `http.ban` logger. New **APP-005** (login brute force) + **APP-006** (IP banned) fire on it. **APP-001 / IOT-001 / IOT-002 disabled** — automation/device/lock events are not in the default text log (HA logbook/recorder DB; would need a logbook/MQTT feed).
 - ✅ **Plex/Jellyfin** — new `jellyfin` + `plex` parsers (migration 009) deriving `event`/`source_ip` from auth-denied (Jellyfin) / `Completed: [ip] 401|403` (Plex) and playback lines. **APP-002** retargeted (`event=playback_start`, agg `source_ip` — the old `action=stream_start`/agg `user` never fired) + new **APP-007** media failed-login brute force, scoped via `service in "jellyfin,plex"` so it doesn't double-fire with Vaultwarden/HA.
-- ⏳ Remaining: **GeoIP enrichment** (PWDMGR-003 + `country` on all logs — source TBD), **request-size** (PROXY-007).
+- ✅ **GeoIP enrichment** — offline DB-IP lite via `mmdb-lib` (`geoipService`, fail-open). `parserEngine` adds `country`/`country_code`/`geo_foreign` (vs `GEOIP_HOME_COUNTRIES`) to every log. New **GEO-001** (foreign auth) + **PWDMGR-003** retargeted & re-enabled (foreign Vaultwarden login). DB fetched on the host via `backend/scripts/update-geoip.sh` (CC BY 4.0 attribution; `docs/geoip.md`).
+- ⏳ Remaining: **request-size** alias for PROXY-007 (small).
 
 **Policy (per maintainer):** keep rules and build the parser/enrichment to support them; disable only rules that genuinely cannot work from a service's real logs (so far: the three Vaultwarden rules above). HA/Plex/Jellyfin parsers, GeoIP enrichment, and request-size capture are planned builds to light up their currently-dead rules.
 

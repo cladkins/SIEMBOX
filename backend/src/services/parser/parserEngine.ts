@@ -5,6 +5,7 @@ import { logger } from '../../utils/logger';
 import { RulesEngine } from '../rules/rulesEngine';
 import { ErrorLogService } from '../errors/errorLogService';
 import { normalizeParsedData } from '../normalize/fieldNormalizer';
+import { geoipService } from '../geoip/geoipService';
 import { parseCefExtension } from './cef';
 
 export class ParserEngine {
@@ -50,6 +51,21 @@ export class ParserEngine {
             eventType,
             service: this.deriveService(parser.name),
           });
+
+          // GeoIP enrichment: derive country/country_code/geo_foreign from the
+          // normalized actor IP. No-op (geo fields stay absent) when the MMDB is
+          // missing or the IP is private/invalid. Never overwrite existing values.
+          const geoIp = normalizedData.source_ip;
+          if (geoIp && normalizedData.country === undefined && normalizedData.country_code === undefined) {
+            const geo = geoipService.lookup(geoIp);
+            if (geo) {
+              normalizedData.country = geo.country_name;
+              normalizedData.country_code = geo.country_code;
+              if (normalizedData.geo_foreign === undefined) {
+                normalizedData.geo_foreign = geoipService.isForeign(geo.country_code);
+              }
+            }
+          }
 
           const parsedLog = await ParsedLogModel.create({
             raw_log_id: rawLog.id,

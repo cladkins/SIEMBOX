@@ -17,6 +17,8 @@ restored, among others:
 
 Also: normalizer now aliases `response_size ← body_bytes_sent` (combined-format nginx), and `createAlert` no longer overwrites `{source_ip}` with the packet sender.
 
+**Rule delivery (important):** `rules/` is a read-only **volume mount** (`./rules:/app/rules` in `compose.prod.yaml`), *not* baked into the image, and `importRules` used to **skip any rule whose name already existed** — so edits to existing rules never reached a running install. `importRules` now **upserts** a rule when its YAML changed (preserving the operator's enabled/disabled toggle). Applying rule changes therefore needs a host `git pull` (to refresh `./rules`) **plus** a backend restart; parser/engine fixes and `migrations/` ship in the image via `docker pull`.
+
 | # | Parser | Verified | Notes / fixes |
 |---|--------|----------|---------------|
 | 1–2 | cef-syslog / cef-standard | ✅ | CEF extension extraction + UNIFI-* rules (earlier PRs) |
@@ -25,7 +27,9 @@ Also: normalizer now aliases `response_size ← body_bytes_sent` (combined-forma
 | 6 | Apache/Nginx Access | ✅ | reversed mapping fixed → `status_code`/`response_size` emitted |
 | 23 | Generic Syslog | ✅ | INFRA-003 aggregation `program`→`service` fixed |
 | 7–9 | authentik / keycloak / authelia | ✅ | AUTH-007 fixed: uniform `event="authentication failed"` derived in postProcessFields (Authelia emits no event; Keycloak=`LOGIN_ERROR`; authentik=action+`success`) |
-| 10–22 | pihole, nextcloud, vaultwarden, nginx variants, unifi native | ⏳ pending | next passes |
+| 10 | pihole-query | ✅ | regex fixed (migration 003): matched none of the standard `query[A] domain from client` lines → now emits `query_type`/`domain`/`client_ip` (APP-003, EXFIL-003 live) |
+| 11 | nextcloud-access | ⚠️ partial | APP-004 `status_code` condition removed (parser can't supply it). Parser regex targets a `[time] app.LEVEL: msg {json}` format, but default `nextcloud.log` is pure JSON — needs a real sample to confirm/rewrite the parser |
+| 12–22 | vaultwarden, nginx variants, unifi native | ⏳ pending | next passes |
 
 **Remaining known gaps:** PROXY-007 (`request_size` — no parser captures request-body size); APP-001/IOT-001/IOT-002 (no Home Assistant parser); APP-002 (no Plex/Jellyfin parser); PWDMGR-003 (`country` — no GeoIP). See **Gaps** below.
 

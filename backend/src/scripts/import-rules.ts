@@ -89,15 +89,29 @@ async function importRule(filePath: string): Promise<boolean> {
       return false;
     }
 
-    // Check if rule already exists
-    const existing = await DetectionRuleModel.findByName(yamlRule.name);
-    if (existing) {
-      logger.info('Rule already exists, skipping', { name: yamlRule.name, id: existing.id });
-      return false;
-    }
-
     // Convert YAML to rule_logic format
     const ruleLogic = convertYAMLToRuleLogic(yamlRule);
+
+    // Upsert: if a rule with this name already exists, re-import it only when the
+    // YAML file actually changed, and preserve the operator's enabled/disabled
+    // toggle (rule logic is YAML-managed; on/off is a UI decision). Without this,
+    // edits to existing rules never reached deployed installs.
+    const existing = await DetectionRuleModel.findByName(yamlRule.name);
+    if (existing) {
+      if (existing.rule_yaml === fileContent) {
+        logger.info('Rule unchanged, skipping', { name: yamlRule.name, id: existing.id });
+        return false;
+      }
+      await DetectionRuleModel.update(existing.id, {
+        description: yamlRule.description || undefined,
+        severity: yamlRule.severity,
+        rule_yaml: fileContent,
+        rule_logic: ruleLogic,
+        tags: yamlRule.tags || [],
+      });
+      logger.info('Rule updated from changed YAML', { name: yamlRule.name, id: existing.id });
+      return true;
+    }
 
     // Create rule in database
     const rule = await DetectionRuleModel.create({

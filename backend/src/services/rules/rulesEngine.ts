@@ -8,8 +8,19 @@ import { NotificationService } from '../notifications/notificationService';
 
 interface RuleCondition {
   field: string;
-  operator: 'equals' | 'contains' | 'regex' | 'greater_than' | 'less_than' | 'not_contains' | 'not_in_whitelist' | 'exists';
-  value: string | number | boolean;
+  operator:
+    | 'equals'
+    | 'not_equals'
+    | 'contains'
+    | 'not_contains'
+    | 'regex'
+    | 'greater_than'
+    | 'less_than'
+    | 'in'
+    | 'not_in'
+    | 'not_in_whitelist'
+    | 'exists';
+  value: string | number | boolean | Array<string | number>;
 }
 
 interface RuleAggregation {
@@ -166,6 +177,23 @@ export class RulesEngine {
         }
         return await this.checkIpNotInWhitelist(fieldValue);
 
+      case 'not_equals':
+        return fieldStr !== valueStr;
+
+      case 'in': {
+        const list = Array.isArray(value)
+          ? value.map((v) => String(v))
+          : valueStr.split(',').map((s) => s.trim());
+        return list.includes(fieldStr);
+      }
+
+      case 'not_in': {
+        const list = Array.isArray(value)
+          ? value.map((v) => String(v))
+          : valueStr.split(',').map((s) => s.trim());
+        return !list.includes(fieldStr);
+      }
+
       default:
         logger.warn(`Unknown operator: ${operator}`);
         return false;
@@ -195,58 +223,41 @@ export class RulesEngine {
     aggregation: RuleAggregation,
     parsedLog: ParsedLog
   ): Promise<boolean> {
-    const timeframeMinutes = this.parseTimeframe(aggregation.timeframe);
     const fieldValue = parsedLog.parsed_data[aggregation.field];
-
-    if (fieldValue === undefined) {
+    if (fieldValue === undefined || fieldValue === null) {
       return false;
     }
 
-    // Query database for matching logs within timeframe
+    const timeframeMinutes = this.parseTimeframe(aggregation.timeframe);
     const startTime = new Date(Date.now() - timeframeMinutes * 60 * 1000);
 
-    // Check if distinct_count is specified
-    if (aggregation.distinct_count) {
-      return await this.evaluateDistinctCountAggregation(
-        rule,
-        aggregation,
-        parsedLog,
-        fieldValue,
-        startTime
-      );
-    }
-
-    // Standard count aggregation
-    const result = await query(
-      `SELECT COUNT(*) FROM parsed_logs
-       WHERE parsed_data->>$1 = $2
-       AND timestamp >= $3`,
-      [aggregation.field, String(fieldValue), startTime]
+    // Count logs that share the aggregation value AND match the rule's own
+    // conditions (not merely any log sharing the value).
+    const { total, distinct } = await this.countMatchingLogs(
+      rule,
+      aggregation,
+      fieldValue,
+      startTime
     );
 
-    const count = parseInt(result.rows[0].count, 10);
+    if (total < aggregation.threshold) {
+      return false;
+    }
 
-    logger.debug('Aggregation check', {
-      rule: rule.name,
-      field: aggregation.field,
-      value: fieldValue,
-      count,
-      threshold: aggregation.threshold,
-    });
+    // Plain count aggregation: total over the threshold is enough.
+    if (!aggregation.distinct_count) {
+      logger.debug('Aggregation check', {
+        rule: rule.name,
+        field: aggregation.field,
+        value: fieldValue,
+        count: total,
+        threshold: aggregation.threshold,
+      });
+      return true;
+    }
 
-    return count >= aggregation.threshold;
-  }
-
-  private async evaluateDistinctCountAggregation(
-    rule: DetectionRule,
-    aggregation: RuleAggregation,
-    _parsedLog: ParsedLog,
-    fieldValue: any,
-    startTime: Date
-  ): Promise<boolean> {
-    // Parse distinct_count: "source_ip >= 3" => field="source_ip", operator=">=", threshold=3
-    const distinctMatch = aggregation.distinct_count!.match(/^(\w+)\s*(>=|>|<=|<|=)\s*(\d+)$/);
-
+    // Distinct-count aggregation: "<field> <op> <n>".
+    const distinctMatch = aggregation.distinct_count.match(/^(\w+)\s*(>=|>|<=|<|=)\s*(\d+)$/);
     if (!distinctMatch) {
       logger.error('Invalid distinct_count format', {
         rule: rule.name,
@@ -258,48 +269,13 @@ export class RulesEngine {
     const [, distinctField, operator, distinctThresholdStr] = distinctMatch;
     const distinctThreshold = parseInt(distinctThresholdStr, 10);
 
-    // Query for both total count and distinct count
-    const result = await query(
-      `SELECT
-         COUNT(*) as total_count,
-         COUNT(DISTINCT parsed_data->>$1) as distinct_count
-       FROM parsed_logs
-       WHERE parsed_data->>$2 = $3
-       AND timestamp >= $4`,
-      [distinctField, aggregation.field, String(fieldValue), startTime]
-    );
-
-    const totalCount = parseInt(result.rows[0].total_count, 10);
-    const distinctCount = parseInt(result.rows[0].distinct_count, 10);
-
-    // Check if total count meets threshold
-    if (totalCount < aggregation.threshold) {
-      logger.debug('Distinct count aggregation: total count below threshold', {
-        rule: rule.name,
-        totalCount,
-        threshold: aggregation.threshold,
-      });
-      return false;
-    }
-
-    // Check if distinct count meets threshold
-    let distinctThresholdMet = false;
+    let met = false;
     switch (operator) {
-      case '>=':
-        distinctThresholdMet = distinctCount >= distinctThreshold;
-        break;
-      case '>':
-        distinctThresholdMet = distinctCount > distinctThreshold;
-        break;
-      case '<=':
-        distinctThresholdMet = distinctCount <= distinctThreshold;
-        break;
-      case '<':
-        distinctThresholdMet = distinctCount < distinctThreshold;
-        break;
-      case '=':
-        distinctThresholdMet = distinctCount === distinctThreshold;
-        break;
+      case '>=': met = distinct >= distinctThreshold; break;
+      case '>': met = distinct > distinctThreshold; break;
+      case '<=': met = distinct <= distinctThreshold; break;
+      case '<': met = distinct < distinctThreshold; break;
+      case '=': met = distinct === distinctThreshold; break;
       default:
         logger.error('Unknown distinct count operator', { operator });
         return false;
@@ -310,14 +286,61 @@ export class RulesEngine {
       aggregationField: aggregation.field,
       aggregationValue: fieldValue,
       distinctField,
-      totalCount,
-      distinctCount,
+      totalCount: total,
+      distinctCount: distinct,
       distinctThreshold,
       operator,
-      thresholdMet: distinctThresholdMet,
+      thresholdMet: met,
     });
 
-    return distinctThresholdMet;
+    return met;
+  }
+
+  /**
+   * Count logs in the window that share the aggregation field value AND match
+   * the rule's own conditions. The earlier implementation counted every log
+   * sharing the value (so "5 failed logins from an IP" was really "5 logs from
+   * an IP"); re-applying the conditions makes the count reflect the rule. Also
+   * returns how many distinct values of the distinct_count field appear among
+   * the matching logs.
+   */
+  private async countMatchingLogs(
+    rule: DetectionRule,
+    aggregation: RuleAggregation,
+    fieldValue: any,
+    startTime: Date
+  ): Promise<{ total: number; distinct: number }> {
+    const conditions = (rule.rule_logic as RuleLogic).conditions || [];
+
+    let distinctField: string | null = null;
+    if (aggregation.distinct_count) {
+      const m = aggregation.distinct_count.match(/^(\w+)\s*(>=|>|<=|<|=)\s*(\d+)$/);
+      if (m) distinctField = m[1];
+    }
+
+    const result = await query(
+      `SELECT parsed_data FROM parsed_logs
+       WHERE parsed_data->>$1 = $2
+       AND timestamp >= $3
+       ORDER BY timestamp DESC
+       LIMIT 50000`,
+      [aggregation.field, String(fieldValue), startTime]
+    );
+
+    let total = 0;
+    const distinctValues = new Set<string>();
+
+    for (const row of result.rows) {
+      const data: Record<string, any> = row.parsed_data || {};
+      if (await this.evaluateConditions(conditions, data)) {
+        total++;
+        if (distinctField && data[distinctField] !== undefined && data[distinctField] !== null) {
+          distinctValues.add(String(data[distinctField]));
+        }
+      }
+    }
+
+    return { total, distinct: distinctValues.size };
   }
 
   private parseTimeframe(timeframe: string): number {
@@ -358,40 +381,19 @@ export class RulesEngine {
       };
 
       if (aggregation) {
-        // Get count for aggregation
         const timeframeMinutes = this.parseTimeframe(aggregation.timeframe);
         const startTime = new Date(Date.now() - timeframeMinutes * 60 * 1000);
         const fieldValue = parsedLog.parsed_data[aggregation.field];
 
+        const { total, distinct } = await this.countMatchingLogs(
+          rule,
+          aggregation,
+          fieldValue,
+          startTime
+        );
+        variables.count = total;
         if (aggregation.distinct_count) {
-          // Get both total count and distinct count
-          const distinctMatch = aggregation.distinct_count.match(/^(\w+)\s*(>=|>|<=|<|=)\s*(\d+)$/);
-          if (distinctMatch) {
-            const [, distinctField] = distinctMatch;
-
-            const result = await query(
-              `SELECT
-                 COUNT(*) as total_count,
-                 COUNT(DISTINCT parsed_data->>$1) as distinct_count
-               FROM parsed_logs
-               WHERE parsed_data->>$2 = $3
-               AND timestamp >= $4`,
-              [distinctField, aggregation.field, String(fieldValue), startTime]
-            );
-
-            variables.count = parseInt(result.rows[0].total_count, 10);
-            variables.distinct_count = parseInt(result.rows[0].distinct_count, 10);
-          }
-        } else {
-          // Standard count aggregation
-          const result = await query(
-            `SELECT COUNT(*) FROM parsed_logs
-             WHERE parsed_data->>$1 = $2
-             AND timestamp >= $3`,
-            [aggregation.field, String(fieldValue), startTime]
-          );
-
-          variables.count = parseInt(result.rows[0].count, 10);
+          variables.distinct_count = distinct;
         }
       }
 

@@ -204,7 +204,10 @@ export class RulesEngine {
     try {
       // Query whitelist table to check if IP is whitelisted
       const result = await query(
-        `SELECT 1 FROM ip_whitelist WHERE ip_address >> $1::inet LIMIT 1`,
+        // `>>=` is "contains or equals", so both a subnet (192.168.1.0/24) and a
+        // single host (192.168.1.76/32) match the given IP. `>>` alone would
+        // miss exact /32 entries.
+        `SELECT 1 FROM ip_whitelist WHERE ip_address >>= $1::inet LIMIT 1`,
         [ipAddress]
       );
 

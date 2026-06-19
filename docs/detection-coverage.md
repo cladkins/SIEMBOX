@@ -30,7 +30,11 @@ Also: normalizer now aliases `response_size ← body_bytes_sent` (combined-forma
 | 10 | pihole-query | ✅ | regex fixed (migration 003): matched none of the standard `query[A] domain from client` lines → now emits `query_type`/`domain`/`client_ip` (APP-003, EXFIL-003 live) |
 | 11 | nextcloud-access | ⚠️ partial | APP-004 `status_code` condition removed (parser can't supply it). Parser regex targets a `[time] app.LEVEL: msg {json}` format, but default `nextcloud.log` is pure JSON — needs a real sample to confirm/rewrite the parser |
 | 22 | vaultwarden-access | ✅ | regex matched **nothing** (expected `from IP:`/`Email:`; real 1.30+ logs use `IP:`/`Username:`) → `service` never set → all 5 rules dead. Fixed (migration 007 + seed). AUTH-005 (message literal corrected) and PWDMGR-004 now fire; PWDMGR-001/002/003 **disabled** — Vaultwarden doesn't log vault export / device registration / vault unlock (would need the org event-log feed + GeoIP) |
-| 12–21 | nginx variants, unifi native | ⏳ pending | next passes |
+| 13,16,18 | standard-nginx / NPM / komodo access | ✅ | combined-format; emit `user_agent`/`path`/`status_code`/`client_ip` → PROXY-001..008. komodo `status_code` was reversed → fixed by the both-directions mapper. No further change needed |
+| 12,15,17 | *-error parsers | ➖ | no rule consumes `nginx_error` (documented; no detections on error logs) |
+| 20,21 | unifi-firewall / unifi-idsips | ➖ legacy | match *legacy* UniFi syslog (`ubnt-idsips-daemon` / iptables LOG); modern UCG-Max ships CEF (covered by UNIFI-* rules). both-directions now also emits `source_ip`/`dest_ip` for the idsips seed rules. Kept for legacy gear |
+
+**Existing-parser audit complete.** Remaining work is *new builds* to light up currently-dead rules: Home Assistant parser (APP-001/IOT-001/IOT-002 — needs rework to match what HA actually logs), Plex/Jellyfin parser (APP-002), GeoIP enrichment (PWDMGR-003 + `country` on all logs), request-size capture (PROXY-007).
 
 **Policy (per maintainer):** keep rules and build the parser/enrichment to support them; disable only rules that genuinely cannot work from a service's real logs (so far: the three Vaultwarden rules above). HA/Plex/Jellyfin parsers, GeoIP enrichment, and request-size capture are planned builds to light up their currently-dead rules.
 

@@ -1,0 +1,25 @@
+name: Home Assistant IP Banned
+description: >
+  Fires when Home Assistant bans a source IP for too many failed logins
+  ("Banned IP <ip> for too many login attempts" from homeassistant.components.http.ban).
+  Single-event, informational: Home Assistant has already taken action, but the ban is
+  worth surfacing for awareness and correlation. Only occurs when login_attempts_threshold
+  is configured (it defaults to -1 = disabled).
+severity: medium
+enabled: true
+tags: [home-assistant, authentication, ip-ban, iot, smart-home]
+
+conditions:
+  - field: service
+    operator: equals
+    value: "home-assistant"
+  - field: event
+    operator: equals
+    value: "ip_banned"
+
+alert:
+  title: "Home Assistant Banned IP {source_ip}"
+  description: >
+    Home Assistant banned {source_ip} for too many failed login attempts.
+    Confirm the ban was warranted, check for a preceding burst of login_failure events
+    from the same IP, and consider a perimeter block if the source is hostile.

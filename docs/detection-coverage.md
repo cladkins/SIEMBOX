@@ -34,7 +34,9 @@ Also: normalizer now aliases `response_size ← body_bytes_sent` (combined-forma
 | 12,15,17 | *-error parsers | ➖ | no rule consumes `nginx_error` (documented; no detections on error logs) |
 | 20,21 | unifi-firewall / unifi-idsips | ➖ legacy | match *legacy* UniFi syslog (`ubnt-idsips-daemon` / iptables LOG); modern UCG-Max ships CEF (covered by UNIFI-* rules). both-directions now also emits `source_ip`/`dest_ip` for the idsips seed rules. Kept for legacy gear |
 
-**Existing-parser audit complete.** Remaining work is *new builds* to light up currently-dead rules: Home Assistant parser (APP-001/IOT-001/IOT-002 — needs rework to match what HA actually logs), Plex/Jellyfin parser (APP-002), GeoIP enrichment (PWDMGR-003 + `country` on all logs), request-size capture (PROXY-007).
+**Existing-parser audit complete.** Build phase (lighting up dead rules):
+- ✅ **Home Assistant** — new `home-assistant` parser (migration 008) for the default `home-assistant.log`; derives `source_ip`/`event` from the `http.ban` logger. New **APP-005** (login brute force) + **APP-006** (IP banned) fire on it. **APP-001 / IOT-001 / IOT-002 disabled** — automation/device/lock events are not in the default text log (HA logbook/recorder DB; would need a logbook/MQTT feed).
+- ⏳ Remaining: **Plex/Jellyfin** (APP-002), **GeoIP enrichment** (PWDMGR-003 + `country` on all logs), **request-size** (PROXY-007).
 
 **Policy (per maintainer):** keep rules and build the parser/enrichment to support them; disable only rules that genuinely cannot work from a service's real logs (so far: the three Vaultwarden rules above). HA/Plex/Jellyfin parsers, GeoIP enrichment, and request-size capture are planned builds to light up their currently-dead rules.
 

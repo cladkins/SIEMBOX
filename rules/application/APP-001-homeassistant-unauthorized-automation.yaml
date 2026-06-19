@@ -5,7 +5,11 @@ description: >
   that could affect physical security, privacy, or safety.
   Single event detection for any automation change.
 severity: medium
-enabled: true
+# DISABLED: automation_triggered / automation_name / user are NOT present in the default
+# home-assistant.log. Automation events live in HA's logbook/recorder database, which
+# SIEMBox does not ingest. Re-enable only with a structured HA event feed (logbook export
+# or MQTT/event-stream shipper). See APP-005 for the default-log HA signal.
+enabled: false
 tags: [home-assistant, automation, iot, smart-home, configuration-change]
 
 conditions:

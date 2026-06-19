@@ -1,0 +1,32 @@
+name: Home Assistant Login Brute Force
+description: >
+  Detects repeated failed authentication attempts against Home Assistant.
+  Home Assistant logs every invalid login via the homeassistant.components.http.ban
+  logger ("Login attempt or request with invalid authentication from ..."). Multiple
+  failures from the same source IP indicate credential brute forcing or a misconfigured
+  client. Home Assistant's own IP-ban defaults to banning after 5 attempts when a
+  login_attempts_threshold is configured.
+severity: high
+enabled: true
+tags: [home-assistant, brute-force, authentication, iot, smart-home]
+
+conditions:
+  - field: service
+    operator: equals
+    value: "home-assistant"
+  - field: event
+    operator: equals
+    value: "login_failure"
+
+aggregation:
+  field: source_ip
+  timeframe: 5m
+  threshold: 5
+
+alert:
+  title: "Home Assistant Brute Force from {source_ip}"
+  description: >
+    {count} failed Home Assistant login attempts from {source_ip} in 5 minutes.
+    Review whether this is a misconfigured companion app/integration or a real
+    brute-force attempt, confirm ip_ban_enabled and a sane login_attempts_threshold
+    are set, and block the source IP at the perimeter if malicious.

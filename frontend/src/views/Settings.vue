@@ -209,8 +209,8 @@
           </template>
 
           <el-alert type="info" :closable="false" style="margin-bottom: 15px">
-            Control which IPs can send logs to this SIEM. Supports CIDR notation (e.g., 192.168.1.0/24).
-            Leave empty to allow all IPs.
+            Trusted IPs that are excluded from detection alerts (e.g. your internal LAN). Supports CIDR
+            notation (e.g., 192.168.1.0/24) and single IPs (10.0.0.5). Leave empty to alert on all sources.
           </el-alert>
 
           <el-table :data="ipWhitelist" v-loading="ipLoading" stripe>

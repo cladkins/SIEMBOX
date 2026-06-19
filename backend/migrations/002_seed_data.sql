@@ -342,6 +342,46 @@ VALUES (
 ON CONFLICT (name) DO NOTHING;
 
 -- ============================================================================
+-- MEDIA SERVER PARSERS: Jellyfin and Plex
+-- ============================================================================
+
+-- Phase 2 Parser: Jellyfin - Server Log
+-- Serilog line shape: "[<ts> +zz:zz] [<LVL>] [<thread>] <Category>: <message>"
+-- The [thread] segment is optional (absent in some versions). Security signal is
+-- the auth-denied line: Authentication request for "<user>" has been denied (IP: "<ip>").
+-- user/client_ip/event ('login_failure'/'playback_start') derived in postProcessFields.
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, event_type, enabled)
+VALUES (
+    'jellyfin',
+    'Parses the Jellyfin server log (log_*.log); surfaces denied-authentication and playback-start events',
+    'regex',
+    21,
+    '^\[(?<timestamp>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?(?:\s*[+-]\d{2}:\d{2})?)\]\s+\[(?<log_level>[A-Z]{3})\]\s+(?:\[(?<thread>[^\]]*)\]\s+)?(?<category>[^:]+):\s+(?<msg>.*)$',
+    '{"timestamp": "timestamp", "log_level": "log_level", "thread": "thread", "category": "category", "msg": "message", "service": "jellyfin"}',
+    'jellyfin_event',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- Phase 2 Parser: Plex Media Server - Server Log
+-- Line shape: "MMM DD, YYYY HH:MM:SS.mmm [0x<hex>] LEVEL - <message>".
+-- Plex auth is delegated to MyPlex; the reliable server-side signals are HTTP
+-- 401/403 (auth fail) and 200 GET /:/timeline?...state=playing (playback) inside
+-- "Completed: [<ip:port>] <status> GET ..." lines. Derived in postProcessFields.
+INSERT INTO parsers (name, description, parser_type, priority, pattern, field_mappings, event_type, enabled)
+VALUES (
+    'plex',
+    'Parses the Plex Media Server log (Plex Media Server.log); surfaces 401/403 auth failures and playback-start (timeline state=playing) events',
+    'regex',
+    19,
+    '^(?<timestamp>[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}\s+\d{2}:\d{2}:\d{2}\.\d{3})\s+\[(?<thread>0x[0-9a-fA-F]+)\]\s+(?<log_level>[A-Z]+)\s+-\s+(?<msg>.*)$',
+    '{"timestamp": "timestamp", "thread": "thread", "log_level": "log_level", "msg": "message", "service": "plex"}',
+    'plex_event',
+    true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- ============================================================================
 -- STANDARD FORMAT PARSERS: CEF, LEEF, etc.
 -- ============================================================================
 

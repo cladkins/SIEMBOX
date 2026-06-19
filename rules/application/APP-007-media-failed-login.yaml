@@ -1,0 +1,31 @@
+name: Media Server Failed Login Brute Force
+description: >
+  Detects repeated failed authentications against Jellyfin or Plex from one source IP.
+  Jellyfin logs every denied login via SessionManager
+  ("Authentication request for \"<user>\" has been denied (IP: \"<ip>\")"); Plex
+  surfaces denied/unauthorized API access as HTTP 401/403 in its "Completed: [ip] ... GET"
+  lines (Plex delegates real auth to MyPlex). Both parsers normalize these to
+  event "login_failure" with source_ip.
+severity: high
+enabled: true
+tags: [plex, jellyfin, brute-force, authentication, media-streaming]
+
+conditions:
+  - field: service
+    operator: in
+    value: "jellyfin,plex"
+  - field: event
+    operator: equals
+    value: "login_failure"
+
+aggregation:
+  field: source_ip
+  timeframe: 5m
+  threshold: 5
+
+alert:
+  title: "Media Server Brute Force from {source_ip}"
+  description: >
+    {count} failed Jellyfin/Plex logins from {source_ip} in 5 minutes.
+    Confirm whether this is a misconfigured client/token or a real brute-force attempt,
+    and block the source IP at the perimeter if malicious.

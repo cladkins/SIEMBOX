@@ -105,6 +105,8 @@ export class ParserEngine {
     if (n.includes('nextcloud')) return 'nextcloud';
     if (n.includes('pihole') || n.includes('pi-hole')) return 'pihole';
     if (n.includes('unifi')) return 'unifi';
+    if (n.includes('jellyfin')) return 'jellyfin';
+    if (n.includes('plex')) return 'plex';
     return undefined;
   }
 
@@ -357,6 +359,65 @@ export class ParserEngine {
         fields.event = 'login_failure';
       }
       fields.service = 'home-assistant';
+    }
+
+    // Jellyfin server log. Two actionable message shapes on the generic line:
+    //   auth fail: Authentication request for "<user>" has been denied (IP: "<ip>")
+    //   playback:  ...SessionManager: Playback start reported by app "<app>" "<ver>" playing "<title>"
+    // The auth line carries user+IP; the playback line carries neither (IP comes
+    // from the packet sender via the normalizer). service is set explicitly
+    // because the normalizer treats the captured `category` as a service synonym.
+    if (parserName === 'jellyfin' && fields.message) {
+      const msg = String(fields.message);
+      const denied = msg.match(
+        /Authentication request for\s+"?(?<user>[^"]+?)"?\s+has been denied\s+\(IP:\s*"?(?<ip>\d{1,3}(?:\.\d{1,3}){3})"?\)/
+      );
+      if (denied && denied.groups) {
+        fields.user = denied.groups.user;
+        fields.client_ip = denied.groups.ip;
+        fields.source_ip = denied.groups.ip;
+        fields.event = 'login_failure';
+      }
+      const play = msg.match(
+        /Playback start reported by app\s+"(?<app>[^"]*)"\s+"(?<appver>[^"]*)"\s+playing\s+"(?<item>[^"]*)"/
+      );
+      if (play && play.groups) {
+        fields.event = 'playback_start';
+        fields.client_app = play.groups.app;
+        fields.media_item = play.groups.item;
+      }
+      fields.service = 'jellyfin';
+    }
+
+    // Plex Media Server log. The reliable per-event line is:
+    //   Completed: [<ip:port>] <status> GET <uri> ...   -> client_ip + status_code
+    // Playback start is a 200 on /:/timeline with state=playing; an auth failure
+    // is a 401/403 (Plex delegates real auth to MyPlex). The username is on a
+    // separate "[Now] User is <name>" line.
+    if (parserName === 'plex' && fields.message) {
+      const msg = String(fields.message);
+      const completed = msg.match(
+        /Completed:\s*\[(?<ip>[0-9a-fA-F:.]+?):\d+\]\s+(?<status>\d{3})\s+(?<method>GET|POST|PUT|DELETE|HEAD)\s+(?<uri>\S+)/
+      );
+      if (completed && completed.groups) {
+        fields.client_ip = completed.groups.ip;
+        fields.source_ip = completed.groups.ip;
+        fields.status_code = completed.groups.status;
+        fields.method = completed.groups.method;
+        fields.request_uri = completed.groups.uri;
+        if (/\/:\/timeline\b/.test(completed.groups.uri) && /[?&]state=playing\b/.test(completed.groups.uri)) {
+          fields.event = 'playback_start';
+        }
+        if (completed.groups.status === '401' || completed.groups.status === '403') {
+          fields.event = 'login_failure';
+        }
+      }
+      const now = msg.match(/\[Now\]\s+User is\s+(?<user>.+?)\s+\(ID:\s*(?<uid>\d+)\)/);
+      if (now && now.groups) {
+        fields.user = now.groups.user;
+        fields.user_id = now.groups.uid;
+      }
+      fields.service = 'plex';
     }
 
     return fields;

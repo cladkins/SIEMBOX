@@ -300,6 +300,30 @@ export class ParserEngine {
       fields.service = 'vaultwarden';
     }
 
+    // SSO / auth portals (Authelia, authentik, Keycloak): derive a uniform
+    // `event` failure/success marker so one cross-IdP rule (AUTH-007) matches
+    // regardless of each vendor's wording. Authelia emits no event at all;
+    // Keycloak's is a type like LOGIN_ERROR; authentik's is an action plus a
+    // success flag.
+    if (parserName === 'authelia-access' && fields.message) {
+      const m = String(fields.message).toLowerCase();
+      if (/unsuccessful|authentication failed|invalid|denied|\bfailed\b/.test(m)) {
+        fields.event = 'authentication failed';
+      } else if (/successful|authenticated/.test(m)) {
+        fields.event = 'authentication success';
+      }
+    } else if (parserName === 'authentik-audit') {
+      const evt = String(fields.event ?? '').toLowerCase();
+      const success = String(fields.success ?? '').toLowerCase();
+      if (success === 'false' || /fail|denied|invalid/.test(evt)) {
+        fields.event = 'authentication failed';
+      }
+    } else if (parserName === 'keycloak-event') {
+      if (/error/i.test(String(fields.event ?? ''))) {
+        fields.event = 'authentication failed';
+      }
+    }
+
     return fields;
   }
 

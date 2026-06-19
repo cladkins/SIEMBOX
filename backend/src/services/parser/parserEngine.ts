@@ -5,6 +5,7 @@ import { logger } from '../../utils/logger';
 import { RulesEngine } from '../rules/rulesEngine';
 import { ErrorLogService } from '../errors/errorLogService';
 import { normalizeParsedData } from '../normalize/fieldNormalizer';
+import { parseCefExtension } from './cef';
 
 export class ParserEngine {
   private parsers: Parser[] = [];
@@ -239,6 +240,16 @@ export class ParserEngine {
   }
 
   private postProcessFields(parserName: string, fields: Record<string, any>): Record<string, any> {
+    // CEF extension parsing: break the raw "key=value key=value ..." extension
+    // into individual fields so src/dst/act/UNIFIipsSignature/etc. become
+    // queryable by rules instead of being trapped in one string. Applies to any
+    // CEF parser (they capture a group named `extension`).
+    if (typeof fields.extension === 'string' && fields.extension.length > 0) {
+      for (const [key, value] of Object.entries(parseCefExtension(fields.extension))) {
+        if (fields[key] === undefined) fields[key] = value;
+      }
+    }
+
     // Post-processing for Vaultwarden parser to derive action, event, and path fields
     if (parserName === 'vaultwarden-access' && fields.message) {
       const message = fields.message.toLowerCase();

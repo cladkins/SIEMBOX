@@ -19,12 +19,12 @@
 
 /** canonical field -> synonyms that should populate it when it is absent. */
 export const FIELD_ALIASES: Record<string, string[]> = {
-  source_ip: ['src_ip', 'client_ip', 'remote_addr', 'remote_ip', 'ip_address', 'source_address', 'caller_ip'],
-  source_port: ['src_port'],
-  dest_ip: ['dst_ip', 'destination_ip', 'dest_address'],
-  dest_port: ['dst_port'],
-  user: ['username', 'user_name', 'remote_user', 'account', 'src_user', 'login_email', 'user_email'],
-  target_user: ['dst_user', 'effective_user'],
+  source_ip: ['src_ip', 'client_ip', 'remote_addr', 'remote_ip', 'ip_address', 'source_address', 'caller_ip', 'src'],
+  source_port: ['src_port', 'spt'],
+  dest_ip: ['dst_ip', 'destination_ip', 'dest_address', 'dst'],
+  dest_port: ['dst_port', 'dpt'],
+  user: ['username', 'user_name', 'remote_user', 'account', 'src_user', 'login_email', 'user_email', 'suser'],
+  target_user: ['dst_user', 'effective_user', 'duser'],
   host: ['hostname', 'syslog_host', 'host_name'],
   service: ['program', 'process', 'process_name', 'application', 'app', 'logger'],
   method: ['http_method', 'http_verb'],

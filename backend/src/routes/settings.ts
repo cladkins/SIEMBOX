@@ -34,7 +34,14 @@ router.get('/retention', authorize('admin'), async (_req: Request, res: Response
 
     result.rows.forEach((row) => {
       const key = row.key.replace('retention_', '');
-      settings[key] = row.value;
+      if (key === 'auto_cleanup_enabled') {
+        // Stored as TEXT; coerce back to a real boolean so the el-switch
+        // (active-value: true) reflects the saved state on reload.
+        settings[key] = row.value === 'true';
+      } else {
+        const n = Number(row.value);
+        settings[key] = Number.isFinite(n) ? n : row.value;
+      }
     });
 
     res.json(settings);
@@ -52,7 +59,13 @@ router.put('/retention', authorize('admin'), async (req: Request, res: Response)
       { key: 'retention_raw_logs_days', value: raw_logs_days },
       { key: 'retention_parsed_logs_days', value: parsed_logs_days },
       { key: 'retention_alerts_days', value: alerts_days },
-      { key: 'retention_auto_cleanup_enabled', value: auto_cleanup_enabled },
+      // Persist a canonical 'true'/'false' string: the column is TEXT and the
+      // cleanup scheduler checks `value === 'true'` exactly, so store it
+      // explicitly rather than relying on the driver's boolean coercion.
+      {
+        key: 'retention_auto_cleanup_enabled',
+        value: auto_cleanup_enabled === true || auto_cleanup_enabled === 'true' ? 'true' : 'false',
+      },
     ];
 
     for (const setting of settings) {

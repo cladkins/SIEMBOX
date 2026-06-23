@@ -2,8 +2,40 @@ import { Router, Request, Response } from 'express';
 import { query } from '../config/database';
 import { ApiError } from '../middleware/errorHandler';
 import { authorize } from '../middleware/auth';
+import { getAiPublicConfig, saveAiConfig, AiProvider } from '../services/ai/aiService';
 
 const router = Router();
+
+// ===========================
+// AI builder configuration
+// ===========================
+
+// Current AI config (never returns the key — only whether/where one is set).
+router.get('/ai', authorize('admin'), async (_req: Request, res: Response) => {
+  try {
+    res.json(await getAiPublicConfig());
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch AI settings');
+  }
+});
+
+// Update AI config. Pass apiKey to set it (encrypted at rest), '' to clear it.
+router.put('/ai', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const { provider, model, baseUrl, apiKey } = req.body ?? {};
+    if (provider && !['anthropic', 'openai', 'ollama'].includes(provider)) {
+      throw new ApiError(400, 'provider must be anthropic, openai, or ollama');
+    }
+    await saveAiConfig({ provider: provider as AiProvider, model, baseUrl, apiKey });
+    res.json(await getAiPublicConfig());
+  } catch (error: any) {
+    if (error instanceof ApiError) throw error;
+    // Most likely CREDENTIAL_ENCRYPTION_KEY is unset when storing a key.
+    throw new ApiError(500, error?.message?.includes('CREDENTIAL_ENCRYPTION_KEY')
+      ? 'Set CREDENTIAL_ENCRYPTION_KEY to store an API key, or use the ANTHROPIC_API_KEY/OPENAI_API_KEY env var instead.'
+      : 'Failed to update AI settings');
+  }
+});
 
 // Get all system settings as a key/value list
 // Frontend reads these as [{ setting_key, setting_value }, ...]

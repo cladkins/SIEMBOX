@@ -14,6 +14,8 @@ import {
   clearCatalogCache,
   parserSignature,
 } from '../services/parser/catalogService';
+import { generateParser } from '../services/ai/aiService';
+import { authorize } from '../middleware/auth';
 import { ApiError } from '../middleware/errorHandler';
 
 const router = Router();
@@ -97,6 +99,22 @@ router.post('/import', async (req: Request, res: Response) => {
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to import parser');
+  }
+});
+
+// AI: generate a portable parser from a log sample (validated + self-tested,
+// with an auto-refine loop). Returns the proposed parser + its check results.
+router.post('/ai/generate', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const { sample, hints, maxAttempts } = req.body ?? {};
+    if (!sample || typeof sample !== 'string') {
+      throw new ApiError(400, 'sample is required');
+    }
+    const result = await generateParser({ sample, hints, maxAttempts });
+    res.json(result);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, `AI generation failed: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 });
 

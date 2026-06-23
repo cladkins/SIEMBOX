@@ -47,10 +47,14 @@ recommender.
     catalog hub (`detectionCatalog.ts`, `GET /rules/catalog`,
     `POST /rules/catalog/install`) + Browse Catalog on the Detection Rules page.
     One repo holds `parsers/` + `detections/`.
-- **Phase 3 — AI parser builder.** Paste a sample → LLM proposes a declarative
-  parser → run through `testParser` against samples → refine loop → save/export.
-  Provider abstraction, bring-your-own-key (Anthropic default = latest Claude,
-  + OpenAI + Ollama).
+- **Phase 3 — AI builder (parsers AND detections).** Paste a log sample → LLM
+  proposes a declarative parser → run through the validator + self-tests → auto-
+  refine loop → save/export. Same for detections: describe the threat → LLM
+  proposes a rule → validate against the engine contract → refine. Provider
+  abstraction, bring-your-own-key (Anthropic default = latest Claude, + OpenAI +
+  Ollama; key encrypted at rest or via env). *Backend done (`services/ai/aiService.ts`,
+  `POST /parsers/ai/generate`, `POST /rules/ai/generate`, `GET/PUT /settings/ai`);
+  frontend next.*
 - **Phase 4 — recommendation engine.** Watch logs hitting the generic fallback
   (priority 1000 = unrecognized), fingerprint them, and either recommend an
   existing hub parser or kick off the AI builder from a snippet.
@@ -62,3 +66,11 @@ engine code. **Phase 2 done** — portable parsers + detections, export/import, 
 catalog browse/install for both, a standalone catalog repo, and the submission CI
 gate all landed. The whole catalog (27 parsers + 48 detections) is installable
 from a repo in-app. Next: Phase 3 (AI parser builder).
+
+## Backlog / follow-ups
+- **Catalog UX: filtering + sorting.** The in-app Browse Catalog dialogs (parsers
+  *and* detections) are plain tables — add a search box (name/tag/description),
+  tag/severity filters, and column sorting (incl. by install status) so larger
+  catalogs stay navigable.
+- **Behavioral rule fixtures (optional).** Detections have structural validation;
+  add optional fire/no-fire fixtures for non-aggregation rules.

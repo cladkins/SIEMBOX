@@ -123,10 +123,27 @@ export async function saveAiConfig(input: {
 /** A single chat completion: system + user -> text. Injectable for tests. */
 export type Completer = (cfg: AiConfig, system: string, user: string) => Promise<string>;
 
+/** fetch with a hard timeout and a clear, actionable connection error. */
+async function llmFetch(url: string, options: any): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 120_000);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } catch (e: any) {
+    if (e?.name === 'AbortError') throw new Error(`Request to ${url} timed out after 120s`);
+    throw new Error(
+      `Could not reach ${url} (${e?.message || e}). The Base URL must be reachable from the SIEMBox backend CONTAINER — ` +
+        `for a local Ollama, bind it to 0.0.0.0 (OLLAMA_HOST=0.0.0.0:11434) and use the host LAN IP or http://host.docker.internal:11434.`
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function callProvider(cfg: AiConfig, system: string, user: string): Promise<string> {
   if (cfg.provider === 'anthropic') {
     if (!cfg.apiKey) throw new Error('No Anthropic API key configured');
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await llmFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -148,7 +165,7 @@ async function callProvider(cfg: AiConfig, system: string, user: string): Promis
   if (cfg.provider === 'openai') {
     if (!cfg.apiKey) throw new Error('No OpenAI API key configured');
     const base = cfg.baseUrl || DEFAULT_BASE_URLS.openai;
-    const res = await fetch(`${base}/chat/completions`, {
+    const res = await llmFetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` },
       body: JSON.stringify({
@@ -168,7 +185,7 @@ async function callProvider(cfg: AiConfig, system: string, user: string): Promis
 
   // ollama
   const base = cfg.baseUrl || DEFAULT_BASE_URLS.ollama;
-  const res = await fetch(`${base}/api/chat`, {
+  const res = await llmFetch(`${base}/api/chat`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({

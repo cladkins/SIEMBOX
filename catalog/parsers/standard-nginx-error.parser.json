@@ -1,0 +1,40 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "standard-nginx-error",
+  "description": "Parses standard NGINX error logs",
+  "parser_type": "regex",
+  "priority": 39,
+  "pattern": "^(?<timestamp>\\d{4}/\\d{2}/\\d{2}\\s+\\d{2}:\\d{2}:\\d{2})\\s+\\[(?<log_level>\\w+)\\]\\s+(?<message>.*)$",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "log_level": "log_level",
+    "message": "message",
+    "service": "nginx"
+  },
+  "event_type": "nginx_error",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "open() failed error line: log level captured and service set",
+      "input": "2024/01/15 12:00:00 [error] 1234#0: *5 open() \"/usr/share/nginx/html/missing\" failed (2: No such file or directory), client: 203.0.113.5, server: example.com, request: \"GET /missing HTTP/1.1\"",
+      "packet_source_ip": "10.0.0.1",
+      "expect": {
+        "log_level": "error",
+        "service": "nginx",
+        "observer_ip": "10.0.0.1"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "NGINX error log",
+    "tags": [
+      "nginx",
+      "error",
+      "webserver"
+    ],
+    "references": [
+      "https://nginx.org/en/docs/ngx_core_module.html#error_log"
+    ]
+  }
+}

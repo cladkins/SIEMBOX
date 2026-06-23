@@ -82,8 +82,10 @@ export function validatePortableParser(obj: unknown, opts: { strict?: boolean } 
     errors.push('name is required (non-empty string)');
   } else {
     if (p.name.length > 100) errors.push('name must be <= 100 characters');
+    // kebab-case is recommended for new community parsers, but legacy/first-party
+    // names ("SSH Authentication") are valid and are the upsert key — never an error.
     if (!/^[a-z0-9][a-z0-9-]*$/.test(p.name)) {
-      note(`name "${p.name}" should be kebab-case ([a-z0-9-]) for the catalog`);
+      warnings.push(`name "${p.name}" is not kebab-case ([a-z0-9-]); fine, but kebab is preferred for the catalog`);
     }
   }
 

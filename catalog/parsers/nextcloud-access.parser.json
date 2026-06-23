@@ -1,0 +1,57 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "nextcloud-access",
+  "description": "Parses Nextcloud file sharing and collaboration platform logs",
+  "parser_type": "regex",
+  "priority": 35,
+  "pattern": "^\\[(?<timestamp>[^\\]]+)\\]\\s+(?<app>\\w+)\\.(?<log_level>\\w+):\\s+(?<message>.+?)\\s+\\{.*?\"user\":\"(?<user>[^\"]*)\".*?\"url\":\"(?<url>[^\"]*)\".*?\"method\":\"(?<method>[^\"]*)\".*?\"ip\":\"(?<client_ip>[^\"]*)\"",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "app": "app",
+    "log_level": "log_level",
+    "message": "message",
+    "user": "user",
+    "url": "url",
+    "method": "method",
+    "client_ip": "client_ip",
+    "service": "nextcloud"
+  },
+  "event_type": "nextcloud_access",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "failed login carries user, url, method and client IP",
+      "input": "[2024-01-15T12:00:00+00:00] core.warning: Login failed: 'alice' (Remote IP: 203.0.113.5) {\"reqId\":\"abc123\",\"level\":2,\"user\":\"alice\",\"url\":\"/index.php/login\",\"method\":\"POST\",\"ip\":\"203.0.113.5\"}",
+      "expect": {
+        "user": "alice",
+        "client_ip": "203.0.113.5",
+        "source_ip": "203.0.113.5",
+        "method": "POST",
+        "path": "/index.php/login"
+      }
+    },
+    {
+      "description": "WebDAV PROPFIND access by an authenticated admin",
+      "input": "[2024-01-15T12:05:00+00:00] core.error: Bruteforce attempt detected {\"reqId\":\"xyz789\",\"user\":\"admin\",\"url\":\"/remote.php/dav\",\"method\":\"PROPFIND\",\"ip\":\"198.51.100.9\"}",
+      "expect": {
+        "user": "admin",
+        "client_ip": "198.51.100.9",
+        "source_ip": "198.51.100.9",
+        "method": "PROPFIND",
+        "path": "/remote.php/dav"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Nextcloud server log (nextcloud.log, JSON context)",
+    "tags": [
+      "nextcloud",
+      "file-sharing",
+      "access"
+    ],
+    "references": [
+      "https://docs.nextcloud.com/server/latest/admin_manual/configuration_server/logging_configuration.html"
+    ]
+  }
+}

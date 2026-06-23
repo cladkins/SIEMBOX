@@ -1,0 +1,58 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "traefik-access",
+  "description": "Parses Traefik reverse proxy access logs in JSON format",
+  "parser_type": "json",
+  "priority": 48,
+  "pattern": "",
+  "field_mappings": {
+    "ClientAddr": "client_ip",
+    "RequestMethod": "method",
+    "RequestPath": "request_uri",
+    "RequestProtocol": "http_version",
+    "DownstreamStatus": "status_code",
+    "DownstreamContentSize": "body_bytes_sent",
+    "RequestRefererHeader": "http_referer",
+    "RequestUserAgentHeader": "user_agent",
+    "Duration": "duration",
+    "service": "traefik"
+  },
+  "event_type": "http_request",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "Traefik JSON access log, 200 to /api/whoami",
+      "input": "{\"ClientAddr\":\"203.0.113.5:51234\",\"RequestMethod\":\"GET\",\"RequestPath\":\"/api/whoami\",\"RequestProtocol\":\"HTTP/2.0\",\"DownstreamStatus\":200,\"DownstreamContentSize\":42,\"RequestRefererHeader\":\"https://example.com/\",\"RequestUserAgentHeader\":\"Mozilla/5.0\",\"Duration\":1530000}",
+      "expect": {
+        "method": "GET",
+        "path": "/api/whoami",
+        "status_code": "200",
+        "user_agent": "Mozilla/5.0",
+        "service": "traefik"
+      }
+    },
+    {
+      "description": "404 scan for /.env captured as method+path+status",
+      "input": "{\"ClientAddr\":\"198.51.100.9:40000\",\"RequestMethod\":\"GET\",\"RequestPath\":\"/.env\",\"RequestProtocol\":\"HTTP/1.1\",\"DownstreamStatus\":404,\"DownstreamContentSize\":19,\"RequestUserAgentHeader\":\"python-requests/2.31.0\"}",
+      "expect": {
+        "method": "GET",
+        "path": "/.env",
+        "status_code": "404",
+        "user_agent": "python-requests/2.31.0",
+        "service": "traefik"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Traefik access log (JSON format)",
+    "tags": [
+      "http",
+      "reverse-proxy",
+      "traefik"
+    ],
+    "references": [
+      "https://doc.traefik.io/traefik/observability/access-logs/"
+    ]
+  }
+}

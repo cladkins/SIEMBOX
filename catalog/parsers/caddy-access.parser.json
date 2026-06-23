@@ -1,0 +1,64 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "caddy-access",
+  "description": "Parses Caddy web server access logs with JSON format",
+  "parser_type": "json",
+  "priority": 42,
+  "pattern": "",
+  "field_mappings": {
+    "ts": "timestamp",
+    "request.client_ip": "client_ip",
+    "request.method": "method",
+    "request.uri": "request_uri",
+    "request.proto": "http_version",
+    "status": "status_code",
+    "size": "body_bytes_sent",
+    "request.headers.Referer[0]": "http_referer",
+    "request.headers.User-Agent[0]": "user_agent",
+    "duration": "duration",
+    "service": "caddy"
+  },
+  "event_type": "http_request",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "Caddy JSON access log, 200 (nested request.* fields resolve via dotted paths)",
+      "input": "{\"level\":\"info\",\"ts\":1705320000.123,\"logger\":\"http.log.access\",\"msg\":\"handled request\",\"request\":{\"client_ip\":\"203.0.113.5\",\"method\":\"GET\",\"uri\":\"/api/health\",\"proto\":\"HTTP/2.0\",\"headers\":{\"User-Agent\":[\"Mozilla/5.0\"]}},\"status\":200,\"size\":18,\"duration\":0.0012}",
+      "expect": {
+        "client_ip": "203.0.113.5",
+        "source_ip": "203.0.113.5",
+        "method": "GET",
+        "path": "/api/health",
+        "status_code": "200",
+        "response_size": "18",
+        "user_agent": "Mozilla/5.0",
+        "service": "caddy"
+      }
+    },
+    {
+      "description": "Caddy JSON access log, 403 denied (client_ip + user_agent from nested paths)",
+      "input": "{\"level\":\"info\",\"ts\":1705320060.5,\"logger\":\"http.log.access\",\"msg\":\"handled request\",\"request\":{\"client_ip\":\"198.51.100.9\",\"method\":\"POST\",\"uri\":\"/admin\",\"proto\":\"HTTP/1.1\",\"headers\":{\"User-Agent\":[\"curl/8.0\"]}},\"status\":403,\"size\":0,\"duration\":0.0003}",
+      "expect": {
+        "client_ip": "198.51.100.9",
+        "source_ip": "198.51.100.9",
+        "method": "POST",
+        "path": "/admin",
+        "status_code": "403",
+        "user_agent": "curl/8.0",
+        "service": "caddy"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Caddy access log (structured JSON, http.log.access)",
+    "tags": [
+      "http",
+      "webserver",
+      "caddy"
+    ],
+    "references": [
+      "https://caddyserver.com/docs/caddyfile/directives/log"
+    ]
+  }
+}

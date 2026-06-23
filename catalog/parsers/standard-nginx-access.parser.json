@@ -1,0 +1,62 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "standard-nginx-access",
+  "description": "Parses standard NGINX access logs (combined format)",
+  "parser_type": "regex",
+  "priority": 40,
+  "pattern": "^(?<client_ip>[\\d.]+)\\s+-\\s+(?<remote_user>\\S+)\\s+\\[(?<timestamp>[^\\]]+)\\]\\s+\"(?<method>\\w+)\\s+(?<request_uri>\\S+)\\s+HTTP/(?<http_version>[\\d.]+)\"\\s+(?<status_code>\\d{3})\\s+(?<body_bytes_sent>\\d+)\\s+\"(?<http_referer>[^\"]*)\"\\s+\"(?<user_agent>[^\"]*)\"",
+  "field_mappings": {
+    "client_ip": "client_ip",
+    "remote_user": "remote_user",
+    "timestamp": "timestamp",
+    "method": "method",
+    "request_uri": "request_uri",
+    "http_version": "http_version",
+    "status_code": "status_code",
+    "body_bytes_sent": "body_bytes_sent",
+    "http_referer": "http_referer",
+    "user_agent": "user_agent",
+    "service": "nginx"
+  },
+  "event_type": "http_request",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "combined-format GET returning 200",
+      "input": "203.0.113.5 - - [15/Jan/2024:12:00:00 +0000] \"GET /index.html HTTP/1.1\" 200 1024 \"https://example.com/\" \"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36\"",
+      "expect": {
+        "client_ip": "203.0.113.5",
+        "source_ip": "203.0.113.5",
+        "method": "GET",
+        "path": "/index.html",
+        "status_code": "200",
+        "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        "service": "nginx"
+      }
+    },
+    {
+      "description": "401 brute-force attempt against wp-login",
+      "input": "198.51.100.9 - - [15/Jan/2024:12:01:00 +0000] \"POST /wp-login.php HTTP/1.1\" 401 0 \"-\" \"curl/7.81.0\"",
+      "expect": {
+        "client_ip": "198.51.100.9",
+        "source_ip": "198.51.100.9",
+        "method": "POST",
+        "path": "/wp-login.php",
+        "status_code": "401",
+        "service": "nginx"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "NGINX access log (combined format)",
+    "tags": [
+      "http",
+      "webserver",
+      "nginx"
+    ],
+    "references": [
+      "https://nginx.org/en/docs/http/ngx_http_log_module.html#log_format"
+    ]
+  }
+}

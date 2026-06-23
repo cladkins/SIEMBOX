@@ -1,0 +1,44 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "Linux Sudo",
+  "description": "Parses sudo command execution logs",
+  "parser_type": "regex",
+  "priority": 15,
+  "pattern": "^(?<timestamp>\\w+\\s+\\d+\\s+\\d+:\\d+:\\d+)\\s+(?<hostname>\\S+)\\s+sudo:\\s+(?<user>\\S+)\\s+:\\s+TTY=(?<tty>\\S+)\\s+;\\s+PWD=(?<pwd>\\S+)\\s+;\\s+USER=(?<target_user>\\S+)\\s+;\\s+COMMAND=(?<command>.+)$",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "hostname": "hostname",
+    "user": "user",
+    "tty": "tty",
+    "working_dir": "pwd",
+    "target_user": "target_user",
+    "command": "command"
+  },
+  "event_type": "sudo_command",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "sudo invocation captures the invoking user, target user, and command",
+      "input": "Jan 15 12:00:00 webserver sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/apt update",
+      "expect": {
+        "user": "alice",
+        "target_user": "root",
+        "command": "/usr/bin/apt update",
+        "host": "webserver",
+        "service": "sudo"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Linux sudo (syslog auth.log / journald)",
+    "tags": [
+      "sudo",
+      "privilege-escalation",
+      "linux"
+    ],
+    "references": [
+      "https://www.sudo.ws/docs/man/sudo.man/#LOG_FORMAT"
+    ]
+  }
+}

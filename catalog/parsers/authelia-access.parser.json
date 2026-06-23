@@ -1,0 +1,131 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "authelia-access",
+  "description": "Parses Authelia authentication gateway access logs",
+  "parser_type": "regex",
+  "priority": 25,
+  "pattern": "^time=\"(?<timestamp>[^\"]+)\"\\s+level=(?<log_level>\\w+)\\s+msg=\"(?<message>[^\"]*)\"(?:\\s+method=(?<method>\\w+))?(?:\\s+path=(?<path>[^\\s]+))?(?:\\s+remote_ip=(?<client_ip>[\\d.]+))?(?:\\s+status_code=(?<status_code>\\d+))?",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "log_level": "log_level",
+    "message": "message",
+    "method": "method",
+    "path": "path",
+    "client_ip": "client_ip",
+    "status_code": "status_code",
+    "service": "authelia"
+  },
+  "event_type": "authelia_auth",
+  "derivations": [
+    {
+      "when": {
+        "message": {
+          "contains": "unsuccessful"
+        }
+      },
+      "set": {
+        "event": "authentication failed"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "authentication failed"
+        }
+      },
+      "set": {
+        "event": "authentication failed"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "invalid"
+        }
+      },
+      "set": {
+        "event": "authentication failed"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "denied"
+        }
+      },
+      "set": {
+        "event": "authentication failed"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "failed"
+        }
+      },
+      "set": {
+        "event": "authentication failed"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "successful"
+        }
+      },
+      "set": {
+        "event": "authentication success"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "authenticated"
+        }
+      },
+      "set": {
+        "event": "authentication success"
+      }
+    }
+  ],
+  "test_samples": [
+    {
+      "description": "unsuccessful 1FA attempt -> authentication failed (failure)",
+      "input": "time=\"2024-01-15T12:00:00Z\" level=error msg=\"Unsuccessful 1FA authentication attempt by user 'alice'\" method=POST path=/api/firstfactor remote_ip=203.0.113.5 status_code=401",
+      "expect": {
+        "client_ip": "203.0.113.5",
+        "source_ip": "203.0.113.5",
+        "method": "POST",
+        "path": "/api/firstfactor",
+        "status_code": "401",
+        "event": "authentication failed",
+        "auth_outcome": "failure",
+        "service": "authelia"
+      }
+    },
+    {
+      "description": "successful 1FA attempt -> authentication success",
+      "input": "time=\"2024-01-15T12:01:00Z\" level=info msg=\"Successful 1FA authentication attempt by user 'bob'\" method=POST path=/api/firstfactor remote_ip=198.51.100.9 status_code=200",
+      "expect": {
+        "client_ip": "198.51.100.9",
+        "source_ip": "198.51.100.9",
+        "status_code": "200",
+        "event": "authentication success",
+        "auth_outcome": "success",
+        "service": "authelia"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Authelia authentication portal log (logfmt text format)",
+    "tags": [
+      "authentication",
+      "sso",
+      "authelia"
+    ],
+    "references": [
+      "https://www.authelia.com/configuration/miscellaneous/logging/"
+    ]
+  }
+}

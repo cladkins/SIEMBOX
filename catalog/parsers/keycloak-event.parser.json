@@ -1,0 +1,64 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "keycloak-event",
+  "description": "Parses Keycloak identity provider event logs",
+  "parser_type": "regex",
+  "priority": 23,
+  "pattern": "^(?<timestamp>\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2},\\d+)\\s+\\w+\\s+\\[(?<logger>[^\\]]+)\\].*?type=(?<event>\\w+).*?(?:realmId=(?<realm>\\w+))?.*?(?:userId=(?<user_id>[^,\\s]+))?.*?(?:ipAddress=(?<client_ip>[\\d.]+))?",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "logger": "logger",
+    "event": "event",
+    "realm": "realm",
+    "user_id": "user_id",
+    "client_ip": "client_ip",
+    "service": "keycloak"
+  },
+  "event_type": "keycloak_event",
+  "derivations": [
+    {
+      "when": {
+        "event": {
+          "contains": "error"
+        }
+      },
+      "set": {
+        "event": "authentication failed"
+      },
+      "overwrite": true
+    }
+  ],
+  "test_samples": [
+    {
+      "description": "LOGIN_ERROR event is normalized to a failure marker",
+      "input": "2024-01-15 12:00:00,123 WARN  [org.keycloak.events] (default task-1) type=LOGIN_ERROR, realmId=master, clientId=account, userId=abc-123, ipAddress=203.0.113.5, error=invalid_user_credentials",
+      "expect": {
+        "event": "authentication failed",
+        "auth_outcome": "failure",
+        "logger": "org.keycloak.events"
+      }
+    },
+    {
+      "description": "successful LOGIN event is left intact (no failure marker)",
+      "input": "2024-01-15 12:01:00,456 INFO  [org.keycloak.events] (default task-2) type=LOGIN, realmId=master, clientId=account, userId=def-456, ipAddress=198.51.100.9",
+      "expect": {
+        "event": "LOGIN",
+        "auth_outcome": null,
+        "logger": "org.keycloak.events"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Keycloak server log (org.keycloak.events logger)",
+    "tags": [
+      "authentication",
+      "sso",
+      "identity",
+      "keycloak"
+    ],
+    "references": [
+      "https://www.keycloak.org/docs/latest/server_admin/#configuring-auditing-to-track-events"
+    ]
+  }
+}

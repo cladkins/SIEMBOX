@@ -1,0 +1,43 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "Generic Syslog",
+  "description": "Fallback parser for standard syslog format",
+  "parser_type": "regex",
+  "priority": 1000,
+  "pattern": "^(?<timestamp>\\w+\\s+\\d+\\s+\\d+:\\d+:\\d+)\\s+(?<hostname>\\S+)\\s+(?<process>\\S+?)(?:\\[(?<pid>\\d+)\\])?:\\s+(?<message>.+)$",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "hostname": "hostname",
+    "process": "process",
+    "pid": "pid",
+    "message": "message"
+  },
+  "event_type": "generic",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "standard RFC3164 syslog line: host, program[pid], message",
+      "input": "Jan 15 12:00:00 webserver CRON[2222]: (root) CMD (/usr/bin/backup.sh)",
+      "packet_source_ip": "10.0.0.1",
+      "expect": {
+        "host": "webserver",
+        "process": "CRON",
+        "pid": "2222",
+        "service": "CRON",
+        "observer_ip": "10.0.0.1"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Generic syslog (RFC 3164)",
+    "tags": [
+      "syslog",
+      "fallback",
+      "generic"
+    ],
+    "references": [
+      "https://datatracker.ietf.org/doc/html/rfc3164"
+    ]
+  }
+}

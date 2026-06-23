@@ -1,0 +1,232 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "vaultwarden-access",
+  "description": "Parses Vaultwarden authentication and vault access logs for critical security monitoring",
+  "parser_type": "regex",
+  "priority": 55,
+  "pattern": "^\\[(?<timestamp>\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?)\\]\\[(?<module>[^\\]]+)\\]\\[(?<log_level>\\w+)\\]\\s+(?<message>.*?)(?:\\s+for\\s+(?<user_email>[^\\s,.]+))?(?:\\s+by\\s+(?<admin_email>\\S+)\\s+from\\s+(?<admin_ip>\\d{1,3}(?:\\.\\d{1,3}){3})|(?:[.,]?\\s+(?:from\\s+)?(?:IP:\\s*)?(?<client_ip>\\d{1,3}(?:\\.\\d{1,3}){3})))?(?:[.,]?\\s+(?:Email|Username):\\s*(?<login_email>[^\\s,]+?)\\.?)?(?:,\\s+Device:\\s+(?<device>[^,]+))?\\.?\\s*$",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "module": "module",
+    "log_level": "log_level",
+    "message": "message",
+    "client_ip": "client_ip",
+    "source_ip": "client_ip",
+    "user_email": "email",
+    "login_email": "email",
+    "admin_email": "admin_email",
+    "admin_ip": "admin_ip",
+    "device": "device",
+    "service": "vaultwarden"
+  },
+  "event_type": "vaultwarden_event",
+  "derivations": [
+    {
+      "when": {
+        "message": {
+          "contains": "vault export"
+        }
+      },
+      "set": {
+        "action": "vault_export"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "vault import"
+        }
+      },
+      "set": {
+        "action": "vault_import"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "vault sync"
+        }
+      },
+      "set": {
+        "action": "vault_sync"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "vault accessed"
+        }
+      },
+      "set": {
+        "action": "vault_access"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "username or password is incorrect"
+        }
+      },
+      "set": {
+        "event": "login_failure"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "invalid totp code"
+        }
+      },
+      "set": {
+        "event": "login_failure"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "invalid admin token"
+        }
+      },
+      "set": {
+        "event": "login_failure"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "this user has been disabled"
+        }
+      },
+      "set": {
+        "event": "login_failure"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "failed login"
+        }
+      },
+      "set": {
+        "event": "login_failure"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "invalid password"
+        }
+      },
+      "set": {
+        "event": "login_failure"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "logged in successfully"
+        }
+      },
+      "set": {
+        "event": "login_success"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "successful login"
+        }
+      },
+      "set": {
+        "event": "login_success"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "did not complete a 2fa login"
+        }
+      },
+      "set": {
+        "event": "login_2fa_incomplete"
+      }
+    },
+    {
+      "when": {
+        "module": {
+          "contains": "::api::core"
+        }
+      },
+      "set": {
+        "path": "/api/core"
+      }
+    },
+    {
+      "when": {
+        "module": {
+          "contains": "::api::identity"
+        }
+      },
+      "set": {
+        "path": "/api/identity"
+      }
+    },
+    {
+      "when": {
+        "module": {
+          "contains": "::api::admin"
+        }
+      },
+      "set": {
+        "path": "/admin"
+      }
+    },
+    {
+      "when": {
+        "module": {
+          "contains": "::api::"
+        }
+      },
+      "set": {
+        "path": "/api"
+      }
+    }
+  ],
+  "test_samples": [
+    {
+      "description": "incorrect password (Vaultwarden 1.30+ IP/Username format) -> login_failure",
+      "input": "[2024-01-15 12:00:00.123][vaultwarden::api::identity][ERROR] Username or password is incorrect. Try again. IP: 203.0.113.5. Username: alice@example.com.",
+      "expect": {
+        "client_ip": "203.0.113.5",
+        "source_ip": "203.0.113.5",
+        "email": "alice@example.com",
+        "event": "login_failure",
+        "auth_outcome": "failure",
+        "service": "vaultwarden"
+      }
+    },
+    {
+      "description": "successful login -> login_success",
+      "input": "[2024-01-15 12:01:00.456][vaultwarden::api::identity][INFO] User alice@example.com logged in successfully. IP: 198.51.100.9.",
+      "expect": {
+        "client_ip": "198.51.100.9",
+        "source_ip": "198.51.100.9",
+        "event": "login_success",
+        "auth_outcome": "success",
+        "service": "vaultwarden"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Vaultwarden server log (extended logging, 1.30+)",
+    "tags": [
+      "authentication",
+      "password-manager",
+      "vaultwarden"
+    ],
+    "references": [
+      "https://github.com/dani-garcia/vaultwarden/wiki/Logging"
+    ]
+  }
+}

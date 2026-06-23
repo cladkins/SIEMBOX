@@ -1,0 +1,54 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "nginx-komodo-timestamp-first",
+  "description": "Parses custom NGINX access logs from komodo that start with timestamp",
+  "parser_type": "regex",
+  "priority": 45,
+  "pattern": "^\\[(?<timestamp>[^\\]]+)\\]\\s+(?:-\\s+)?(?<status_code1>\\d{3})?\\s*(?<status_code2>\\d{3})?\\s*-?\\s*(?<method>GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|CONNECT|TRACE)?\\s*(?<protocol>https?|wss?)?\\s*(?<request_uri>\\S+)?",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "status_code": "status_code1",
+    "upstream_status": "status_code2",
+    "method": "method",
+    "protocol": "protocol",
+    "request_uri": "request_uri",
+    "service": "nginx-komodo"
+  },
+  "event_type": "http_request",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "timestamp-first access line with response and upstream status",
+      "input": "[15/Jan/2024:12:00:00 +0000] - 200 200 - GET https /api/health",
+      "expect": {
+        "status_code": "200",
+        "upstream_status": "200",
+        "method": "GET",
+        "path": "/api/health",
+        "service": "nginx"
+      }
+    },
+    {
+      "description": "404 line, single status code",
+      "input": "[15/Jan/2024:12:01:00 +0000] 404 - GET https /missing",
+      "expect": {
+        "status_code": "404",
+        "method": "GET",
+        "path": "/missing",
+        "service": "nginx"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Komodo-managed NGINX container access log (timestamp-first custom format)",
+    "tags": [
+      "http",
+      "nginx",
+      "komodo"
+    ],
+    "references": [
+      "https://komo.do/"
+    ]
+  }
+}

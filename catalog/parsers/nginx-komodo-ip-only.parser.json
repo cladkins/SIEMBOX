@@ -1,0 +1,38 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "nginx-komodo-ip-only",
+  "description": "Parses minimal NGINX access logs from komodo with only IP address",
+  "parser_type": "regex",
+  "priority": 43,
+  "pattern": "^(?<client_ip>[\\d.]+)\\s+-\\s*(?<message>.*)?",
+  "field_mappings": {
+    "client_ip": "client_ip",
+    "message": "message",
+    "service": "nginx-komodo"
+  },
+  "event_type": "http_request",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "minimal access line carrying only the client IP",
+      "input": "203.0.113.5 - some trailing access info",
+      "expect": {
+        "client_ip": "203.0.113.5",
+        "source_ip": "203.0.113.5",
+        "service": "nginx"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Komodo-managed NGINX container access log (IP-only minimal format)",
+    "tags": [
+      "http",
+      "nginx",
+      "komodo"
+    ],
+    "references": [
+      "https://komo.do/"
+    ]
+  }
+}

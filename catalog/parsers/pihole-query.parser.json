@@ -1,0 +1,52 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "pihole-query",
+  "description": "Parses Pi-hole DNS query logs for network monitoring and ad blocking",
+  "parser_type": "regex",
+  "priority": 30,
+  "pattern": "dnsmasq\\[\\d+\\]:\\s+query\\[(?<query_type>[^\\]]+)\\]\\s+(?<domain>\\S+)\\s+from\\s+(?<client_ip>[\\d.]+)",
+  "field_mappings": {
+    "query_type": "query_type",
+    "domain": "domain",
+    "client_ip": "client_ip",
+    "service": "pihole"
+  },
+  "event_type": "dns_query",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "A-record query from a LAN client",
+      "input": "Jan 15 12:00:00 dnsmasq[1234]: query[A] tracker.example.com from 203.0.113.5",
+      "expect": {
+        "query_type": "A",
+        "domain": "tracker.example.com",
+        "client_ip": "203.0.113.5",
+        "source_ip": "203.0.113.5",
+        "service": "pihole"
+      }
+    },
+    {
+      "description": "AAAA-record query from a different client",
+      "input": "Jan 15 12:00:01 dnsmasq[1234]: query[AAAA] cdn.example.net from 198.51.100.9",
+      "expect": {
+        "query_type": "AAAA",
+        "domain": "cdn.example.net",
+        "client_ip": "198.51.100.9",
+        "source_ip": "198.51.100.9",
+        "service": "pihole"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Pi-hole DNS query log (dnsmasq / pihole.log)",
+    "tags": [
+      "dns",
+      "pihole",
+      "network"
+    ],
+    "references": [
+      "https://docs.pi-hole.net/"
+    ]
+  }
+}

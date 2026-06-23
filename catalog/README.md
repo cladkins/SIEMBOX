@@ -9,10 +9,13 @@ The promise: **a parser that passes CI here imports into SIEMBox and behaves
 identically**, because the catalog's CI runs the exact same
 parse → derive → normalize pipeline the app uses (`backend/src/services/parser/runParser.ts`).
 
-> This directory is the staging home for the catalog while the platform is built.
-> It is intended to graduate into a standalone `siembox-parsers` repository that
-> SIEMBox fetches in-app (mirroring the Nuclei templates flow). The file format,
-> validator, and CI here move over unchanged.
+> The canonical community catalog now lives in the standalone repo
+> **[cladkins/siembox-parsers](https://github.com/cladkins/siembox-parsers)** —
+> that's what SIEMBox installs from in-app (the default
+> `PARSER_CATALOG_REPO=cladkins/siembox-parsers`). This `catalog/` directory is the
+> **seed + engine test fixtures**: the main repo's CI validates these parsers on
+> every engine change (regression guard), and `scripts/bootstrap-siembox-parsers.sh`
+> seeds/refreshes the standalone repo from here.
 
 ## Layout
 
@@ -34,9 +37,9 @@ source is configurable:
 
 | env var | default | meaning |
 |---------|---------|---------|
-| `PARSER_CATALOG_REPO` | `cladkins/SIEMBOX` | `owner/repo` to fetch from |
+| `PARSER_CATALOG_REPO` | `cladkins/siembox-parsers` | `owner/repo` to fetch from |
 | `PARSER_CATALOG_REF`  | `main` | branch/tag/sha |
-| `PARSER_CATALOG_PATH` | `catalog/parsers` | directory within the repo |
+| `PARSER_CATALOG_PATH` | `parsers` | directory within the repo |
 | `PARSER_CATALOG_TOKEN` / `GITHUB_TOKEN` | — | optional; raises GitHub API rate limit / private repos |
 
 ## Validate locally

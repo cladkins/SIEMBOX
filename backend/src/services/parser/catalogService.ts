@@ -5,11 +5,10 @@
  * each *.parser.json from raw.githubusercontent (not API-rate-limited), and reuse
  * the SAME validator + self-test runner the import endpoint and CI use.
  *
- * Source is configurable so the catalog can graduate to a standalone repo without
- * a code change:
- *   PARSER_CATALOG_REPO   default "cladkins/SIEMBOX"
+ * Source is configurable so the catalog can move without a code change:
+ *   PARSER_CATALOG_REPO   default "cladkins/siembox-parsers" (the standalone catalog)
  *   PARSER_CATALOG_REF    default "main"
- *   PARSER_CATALOG_PATH   default "catalog/parsers"
+ *   PARSER_CATALOG_PATH   default "parsers"
  *   PARSER_CATALOG_TOKEN / GITHUB_TOKEN  optional, raises GitHub API rate limit
  */
 import * as https from 'https';
@@ -48,9 +47,9 @@ export interface CatalogEntry {
 
 export function getCatalogSource(): CatalogSource {
   return {
-    repo: process.env.PARSER_CATALOG_REPO || 'cladkins/SIEMBOX',
+    repo: process.env.PARSER_CATALOG_REPO || 'cladkins/siembox-parsers',
     ref: process.env.PARSER_CATALOG_REF || 'main',
-    path: (process.env.PARSER_CATALOG_PATH || 'catalog/parsers').replace(/^\/+|\/+$/g, ''),
+    path: (process.env.PARSER_CATALOG_PATH || 'parsers').replace(/^\/+|\/+$/g, ''),
   };
 }
 

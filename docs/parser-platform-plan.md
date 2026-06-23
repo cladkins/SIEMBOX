@@ -20,11 +20,15 @@ recommender.
 
 ## Phases
 - **Phase 0 — canonical schema** (`docs/canonical-schema.md`). ✅
-- **Phase 1 — declarative engine (keystone).** `derive` interpreter
-  (`services/parser/derive.ts`) + a `derivations` field on parsers; the engine
-  applies them generically. Convert parsers off hardcoded `postProcessFields`
-  one at a time (Vaultwarden first, validated by `test_samples`), then delete the
-  hardcoded blocks. *(in progress)*
+- **Phase 1 — declarative engine (keystone).** ✅ `derive` interpreter
+  (`services/parser/derive.ts`: `when` matchers + `set` literals + `extract`
+  regex-capture) + a `derivations` JSONB field on parsers; the engine applies
+  them generically. ALL hardcoded `postProcessFields` per-parser logic is now data
+  (Vaultwarden → migration 010; Authelia/authentik/Keycloak/Home Assistant/
+  Jellyfin/Plex → migration 011). `parserEngine.postProcessFields` retains only
+  the generic CEF-extension split, the `applyDerivations` call, and the shared
+  `auth_outcome` marker — no per-parser branches remain. A faithfulness check
+  confirmed the data path reproduces the deleted blocks byte-for-byte.
 - **Phase 2 — in-app catalog/hub.** A `siembox-parsers` GitHub repo of
   declarative parsers + detections; fetch/browse/install/update in-app (mirror
   the Nuclei tarball pattern); parser export/import.
@@ -37,4 +41,6 @@ recommender.
   existing hub parser or kick off the AI builder from a snippet.
 
 ## Status
-Phase 0 done; Phase 1 keystone underway (Vaultwarden converted as the proof).
+Phase 0 done. **Phase 1 done** — the engine is fully data-driven; onboarding a new
+log source needs only parser data (pattern + field_mappings + derivations), no
+engine code. Next: Phase 2 (in-app catalog/hub).

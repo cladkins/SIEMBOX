@@ -17,15 +17,24 @@ export interface DeriveMatcher {
   equals?: string | number | boolean;
   contains?: string; // case-insensitive substring
   in?: Array<string | number>;
-  matches?: string; // regex (tested case-sensitively unless the pattern says otherwise)
+  matches?: string; // regex, tested case-INsensitively (the hardcoded blocks this replaces all lower-cased first)
   exists?: boolean;
+}
+
+/** Extract a value from another field via a regex capture group. */
+export interface ExtractSpec {
+  from: string; // source field to run the regex against
+  pattern: string; // regex with at least one capture group
+  group?: number; // capture group to use (default 1)
 }
 
 export interface DeriveRule {
   /** field -> matcher; all must match. Omit to always apply. */
   when?: Record<string, DeriveMatcher>;
-  /** fields to set when matched. */
-  set: Record<string, string | number | boolean>;
+  /** fields to set to a literal value when matched. */
+  set?: Record<string, string | number | boolean>;
+  /** fields to set from a regex capture of another field. */
+  extract?: Record<string, ExtractSpec>;
   /** overwrite existing values (default false = only fill empty fields). */
   overwrite?: boolean;
 }
@@ -48,7 +57,7 @@ function matchOne(value: any, m: DeriveMatcher): boolean {
   if (m.in !== undefined && !m.in.map(String).includes(s)) return false;
   if (m.matches !== undefined) {
     try {
-      if (!new RegExp(m.matches).test(s)) return false;
+      if (!new RegExp(m.matches, 'i').test(s)) return false;
     } catch {
       return false;
     }
@@ -71,13 +80,23 @@ function whenMatches(fields: Record<string, any>, when?: Record<string, DeriveMa
 export function applyDerivations(fields: Record<string, any>, rules: unknown): void {
   if (!Array.isArray(rules)) return;
   for (const rule of rules as DeriveRule[]) {
-    if (!rule || typeof rule !== 'object' || typeof rule.set !== 'object') continue;
+    if (!rule || typeof rule !== 'object' || (typeof rule.set !== 'object' && typeof rule.extract !== 'object')) {
+      continue;
+    }
     try {
       if (!whenMatches(fields, rule.when)) continue;
-      for (const [key, value] of Object.entries(rule.set)) {
+      for (const [key, value] of Object.entries(rule.set || {})) {
         if (rule.overwrite || isEmpty(fields[key])) {
           fields[key] = value;
         }
+      }
+      for (const [key, spec] of Object.entries(rule.extract || {})) {
+        if (!rule.overwrite && !isEmpty(fields[key])) continue;
+        const source = fields[spec?.from as string];
+        if (isEmpty(source) || !spec?.pattern) continue;
+        const match = String(source).match(new RegExp(spec.pattern));
+        const captured = match ? match[spec.group ?? 1] : undefined;
+        if (!isEmpty(captured)) fields[key] = captured;
       }
     } catch (error) {
       logger.warn('Derivation rule failed; skipping', { error: error instanceof Error ? error.message : String(error) });

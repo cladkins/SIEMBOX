@@ -270,7 +270,6 @@ export class ParserEngine {
   }
 
   private postProcessFields(parser: Parser, fields: Record<string, any>): Record<string, any> {
-    const parserName = parser.name;
     // CEF extension parsing: break the raw "key=value key=value ..." extension
     // into individual fields so src/dst/act/UNIFIipsSignature/etc. become
     // queryable by rules instead of being trapped in one string. Applies to any
@@ -282,117 +281,17 @@ export class ParserEngine {
     }
 
     // Declarative, data-driven derivations carried by the parser — the portable
-    // replacement for the hardcoded per-parser blocks. Vaultwarden has been
-    // migrated to data (migration 010); the remaining hardcoded blocks below are
-    // migrated incrementally. (vaultwarden's service comes from deriveService.)
+    // replacement for what used to be hardcoded per-parser blocks here. ALL
+    // parser-specific field logic now lives as data on the parser and is applied
+    // generically (see services/parser/derive.ts + migrations 010/011):
+    //   - Vaultwarden actions / login outcomes / API path (migration 010);
+    //   - SSO failure/success markers for Authelia / authentik / Keycloak;
+    //   - Home Assistant http.ban client IP + ip_banned/login_failure event;
+    //   - Jellyfin auth-denied + playback-start (user/IP/app/title);
+    //   - Plex "Completed:" line IP/status/method/uri + playback/auth event and
+    //     the "[Now] User is" username (all migration 011).
+    // New log sources therefore need no engine changes — only parser data.
     applyDerivations(fields, parser.derivations);
-
-    // SSO / auth portals (Authelia, authentik, Keycloak): derive a uniform
-    // `event` failure/success marker so one cross-IdP rule (AUTH-007) matches
-    // regardless of each vendor's wording. Authelia emits no event at all;
-    // Keycloak's is a type like LOGIN_ERROR; authentik's is an action plus a
-    // success flag.
-    if (parserName === 'authelia-access' && fields.message) {
-      const m = String(fields.message).toLowerCase();
-      if (/unsuccessful|authentication failed|invalid|denied|\bfailed\b/.test(m)) {
-        fields.event = 'authentication failed';
-      } else if (/successful|authenticated/.test(m)) {
-        fields.event = 'authentication success';
-      }
-    } else if (parserName === 'authentik-audit') {
-      const evt = String(fields.event ?? '').toLowerCase();
-      const success = String(fields.success ?? '').toLowerCase();
-      if (success === 'false' || /fail|denied|invalid/.test(evt)) {
-        fields.event = 'authentication failed';
-      }
-    } else if (parserName === 'keycloak-event') {
-      if (/error/i.test(String(fields.event ?? ''))) {
-        fields.event = 'authentication failed';
-      }
-    }
-
-    // Home Assistant core log (home-assistant.log). The actionable lines come
-    // from logger homeassistant.components.http.ban. Pull the client IP out of
-    // the message (three shapes) and derive a uniform `event` marker. service
-    // must be set explicitly because the normalizer otherwise treats `logger`
-    // as the service.
-    if (parserName === 'home-assistant' && fields.message) {
-      const msg = String(fields.message);
-      const ipMatch =
-        msg.match(/Banned IP\s+(\d{1,3}(?:\.\d{1,3}){3})/) ||
-        msg.match(/\bfrom\s+\S+\s+\((\d{1,3}(?:\.\d{1,3}){3})\)/) ||
-        msg.match(/\bfrom\s+(\d{1,3}(?:\.\d{1,3}){3})\b/);
-      if (ipMatch) {
-        fields.client_ip = ipMatch[1];
-        fields.source_ip = ipMatch[1];
-      }
-      const m = msg.toLowerCase();
-      if (m.includes('banned ip') && m.includes('too many login attempts')) {
-        fields.event = 'ip_banned';
-      } else if (m.includes('invalid authentication')) {
-        fields.event = 'login_failure';
-      }
-      fields.service = 'home-assistant';
-    }
-
-    // Jellyfin server log. Two actionable message shapes on the generic line:
-    //   auth fail: Authentication request for "<user>" has been denied (IP: "<ip>")
-    //   playback:  ...SessionManager: Playback start reported by app "<app>" "<ver>" playing "<title>"
-    // The auth line carries user+IP; the playback line carries neither (IP comes
-    // from the packet sender via the normalizer). service is set explicitly
-    // because the normalizer treats the captured `category` as a service synonym.
-    if (parserName === 'jellyfin' && fields.message) {
-      const msg = String(fields.message);
-      const denied = msg.match(
-        /Authentication request for\s+"?(?<user>[^"]+?)"?\s+has been denied\s+\(IP:\s*"?(?<ip>\d{1,3}(?:\.\d{1,3}){3})"?\)/
-      );
-      if (denied && denied.groups) {
-        fields.user = denied.groups.user;
-        fields.client_ip = denied.groups.ip;
-        fields.source_ip = denied.groups.ip;
-        fields.event = 'login_failure';
-      }
-      const play = msg.match(
-        /Playback start reported by app\s+"(?<app>[^"]*)"\s+"(?<appver>[^"]*)"\s+playing\s+"(?<item>[^"]*)"/
-      );
-      if (play && play.groups) {
-        fields.event = 'playback_start';
-        fields.client_app = play.groups.app;
-        fields.media_item = play.groups.item;
-      }
-      fields.service = 'jellyfin';
-    }
-
-    // Plex Media Server log. The reliable per-event line is:
-    //   Completed: [<ip:port>] <status> GET <uri> ...   -> client_ip + status_code
-    // Playback start is a 200 on /:/timeline with state=playing; an auth failure
-    // is a 401/403 (Plex delegates real auth to MyPlex). The username is on a
-    // separate "[Now] User is <name>" line.
-    if (parserName === 'plex' && fields.message) {
-      const msg = String(fields.message);
-      const completed = msg.match(
-        /Completed:\s*\[(?<ip>[0-9a-fA-F:.]+?):\d+\]\s+(?<status>\d{3})\s+(?<method>GET|POST|PUT|DELETE|HEAD)\s+(?<uri>\S+)/
-      );
-      if (completed && completed.groups) {
-        fields.client_ip = completed.groups.ip;
-        fields.source_ip = completed.groups.ip;
-        fields.status_code = completed.groups.status;
-        fields.method = completed.groups.method;
-        fields.request_uri = completed.groups.uri;
-        if (/\/:\/timeline\b/.test(completed.groups.uri) && /[?&]state=playing\b/.test(completed.groups.uri)) {
-          fields.event = 'playback_start';
-        }
-        if (completed.groups.status === '401' || completed.groups.status === '403') {
-          fields.event = 'login_failure';
-        }
-      }
-      const now = msg.match(/\[Now\]\s+User is\s+(?<user>.+?)\s+\(ID:\s*(?<uid>\d+)\)/);
-      if (now && now.groups) {
-        fields.user = now.groups.user;
-        fields.user_id = now.groups.uid;
-      }
-      fields.service = 'plex';
-    }
 
     // Canonical authentication outcome shared across all auth parsers, so
     // cross-service rules (e.g. GEO-001) can key on one field regardless of each

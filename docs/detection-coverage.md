@@ -19,6 +19,8 @@ Also: normalizer now aliases `response_size ← body_bytes_sent` (combined-forma
 
 **Rule delivery (important):** `rules/` is a read-only **volume mount** (`./rules:/app/rules` in `compose.prod.yaml`), *not* baked into the image, and `importRules` used to **skip any rule whose name already existed** — so edits to existing rules never reached a running install. `importRules` now **upserts** a rule when its YAML changed (preserving the operator's enabled/disabled toggle). Applying rule changes therefore needs a host `git pull` (to refresh `./rules`) **plus** a backend restart; parser/engine fixes and `migrations/` ship in the image via `docker pull`.
 
+**Parser logic is now data, not engine code.** The per-parser field derivations that used to live in `parserEngine.postProcessFields` (SSO failure/success markers; Home Assistant `http.ban` IP+event; Jellyfin/Plex auth+playback; Vaultwarden actions/outcomes/path) are now declarative `derivations` carried by each parser (`derivations` JSONB column, migrations 010/011), applied generically by `services/parser/derive.ts` (`when`/`set`/`extract`). The "derived in postProcessFields" notes below therefore mean "derived via the parser's `derivations`" — the *emitted fields and rule coverage are unchanged* (a faithfulness test confirms the data path reproduces the old blocks exactly). This is the keystone of the parser platform: a new log source is onboarded with parser data only, no engine changes.
+
 | # | Parser | Verified | Notes / fixes |
 |---|--------|----------|---------------|
 | 1–2 | cef-syslog / cef-standard | ✅ | CEF extension extraction + UNIFI-* rules (earlier PRs) |

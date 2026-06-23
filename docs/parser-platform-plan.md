@@ -39,9 +39,14 @@ recommender.
     before upsert, and flags installed / update-available via a content signature.
     Source is configurable (`PARSER_CATALOG_REPO/REF/PATH`), defaulting to this
     repo's `catalog/`.
-  - ✅ CI gate for submissions (`validate-parsers` CLI + `.github/workflows/validate-catalog.yml`).
-  - ⏳ Graduate `catalog/` into a standalone `siembox-parsers` repo (outward-facing;
-    one env-var change once created). Add detections to the catalog alongside parsers.
+  - ✅ CI gate for submissions (`validate-parsers` + `validate-detections` CLIs +
+    `.github/workflows/validate-catalog.yml`).
+  - ✅ Standalone catalog repo (`cladkins/siembox-parsers`, → rename to
+    `siembox-catalog`) seeded by `scripts/bootstrap-siembox-parsers.sh`.
+  - ✅ **Detections in the catalog**: rule validator (`rulePortable.ts`) + detection
+    catalog hub (`detectionCatalog.ts`, `GET /rules/catalog`,
+    `POST /rules/catalog/install`) + Browse Catalog on the Detection Rules page.
+    One repo holds `parsers/` + `detections/`.
 - **Phase 3 — AI parser builder.** Paste a sample → LLM proposes a declarative
   parser → run through `testParser` against samples → refine loop → save/export.
   Provider abstraction, bring-your-own-key (Anthropic default = latest Claude,
@@ -53,7 +58,7 @@ recommender.
 ## Status
 Phase 0 done. **Phase 1 done** — the engine is fully data-driven; onboarding a new
 log source needs only parser data (pattern + field_mappings + derivations), no
-engine code. **Phase 2 mostly done** — portable format, export/import, in-app
-catalog browse/install, and the submission CI gate all landed; remaining is
-splitting `catalog/` into a standalone repo and adding detections to it. Next:
-Phase 3 (AI parser builder).
+engine code. **Phase 2 done** — portable parsers + detections, export/import, in-app
+catalog browse/install for both, a standalone catalog repo, and the submission CI
+gate all landed. The whole catalog (27 parsers + 48 detections) is installable
+from a repo in-app. Next: Phase 3 (AI parser builder).

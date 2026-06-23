@@ -3,6 +3,14 @@ import { DetectionRuleModel } from '../models/DetectionRule';
 import yaml from 'js-yaml';
 import { ApiError } from '../middleware/errorHandler';
 import { RulesEngine } from '../services/rules/rulesEngine';
+import { validateRule } from '../services/rules/rulePortable';
+import {
+  fetchDetectionCatalog,
+  getCatalogDetection,
+  getDetectionSource,
+  clearDetectionCache,
+  ruleSignature,
+} from '../services/rules/detectionCatalog';
 
 const router = Router();
 
@@ -13,6 +21,95 @@ router.get('/', async (_req: Request, res: Response) => {
     res.json(rules);
   } catch (error) {
     throw new ApiError(500, 'Failed to fetch rules');
+  }
+});
+
+// Browse the detection catalog (remote GitHub repo), annotated with install status.
+router.get('/catalog', async (req: Request, res: Response) => {
+  try {
+    const { source, entries } = await fetchDetectionCatalog(req.query.refresh === 'true');
+    const installed = await DetectionRuleModel.findAll();
+    const bySig = new Map(installed.map((r) => [r.name, ruleSignature(r)]));
+    const rules = entries.map((e) => {
+      const isInstalled = bySig.has(e.name);
+      return {
+        ...e,
+        installed: isInstalled,
+        update_available: isInstalled && e.signature !== '' && bySig.get(e.name) !== e.signature,
+      };
+    });
+    res.json({ source, rules });
+  } catch (error) {
+    throw new ApiError(502, `Failed to load detection catalog: ${error instanceof Error ? error.message : 'unknown error'}`);
+  }
+});
+
+// Current detection catalog source (for display/config hints).
+router.get('/catalog/source', (_req: Request, res: Response) => {
+  res.json(getDetectionSource());
+});
+
+// Install (or update) a detection rule from the catalog by name: fetch -> validate
+// -> upsert. Preserves the operator's enabled toggle on update (like the importer).
+router.post('/catalog/install', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.body ?? {};
+    if (!name || typeof name !== 'string') {
+      throw new ApiError(400, 'name is required');
+    }
+
+    const found = await getCatalogDetection(name);
+    if (!found) {
+      throw new ApiError(404, `Rule "${name}" not found in catalog`);
+    }
+
+    const { rule_yaml, parsed } = found;
+    const validation = validateRule(parsed, { strict: false });
+    if (!validation.ok) {
+      res.status(422).json({ message: 'Catalog rule failed validation', validation });
+      return;
+    }
+
+    const rule_logic = {
+      conditions: parsed.conditions,
+      aggregation: parsed.aggregation,
+      alert: parsed.alert,
+    };
+    const existing = await DetectionRuleModel.findByName(parsed.name);
+    const saved = existing
+      ? await DetectionRuleModel.update(existing.id, {
+          description: parsed.description,
+          severity: parsed.severity,
+          rule_yaml,
+          rule_logic,
+          tags: parsed.tags || [],
+        })
+      : await DetectionRuleModel.create({
+          name: parsed.name,
+          description: parsed.description,
+          enabled: parsed.enabled !== false,
+          severity: parsed.severity,
+          rule_yaml,
+          rule_logic,
+          tags: parsed.tags || [],
+        });
+
+    await RulesEngine.getInstance().reload();
+    res.status(existing ? 200 : 201).json({ action: existing ? 'updated' : 'created', rule: saved });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to install rule from catalog');
+  }
+});
+
+// Force a detection catalog cache refresh.
+router.post('/catalog/refresh', async (_req: Request, res: Response) => {
+  try {
+    clearDetectionCache();
+    const { entries } = await fetchDetectionCatalog(true);
+    res.json({ refreshed: true, count: entries.length });
+  } catch (error) {
+    throw new ApiError(502, `Failed to refresh detection catalog: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 });
 

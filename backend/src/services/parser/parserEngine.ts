@@ -7,6 +7,7 @@ import { ErrorLogService } from '../errors/errorLogService';
 import { normalizeParsedData } from '../normalize/fieldNormalizer';
 import { geoipService } from '../geoip/geoipService';
 import { parseCefExtension } from './cef';
+import { applyDerivations } from './derive';
 
 export class ParserEngine {
   private parsers: Parser[] = [];
@@ -190,7 +191,7 @@ export class ParserEngine {
       fields.message = message;
 
       // Post-process fields for specific parsers
-      const processedFields = this.postProcessFields(parser.name, fields);
+      const processedFields = this.postProcessFields(parser, fields);
 
       // Determine event type from parser name or extracted fields
       const event_type = this.determineEventType(parser.name, processedFields);
@@ -257,7 +258,7 @@ export class ParserEngine {
 
       // Run the same post-processing as the regex path so JSON parsers (e.g.
       // authentik) get their derivations and the shared auth_outcome marker.
-      const processedFields = this.postProcessFields(parser.name, fields);
+      const processedFields = this.postProcessFields(parser, fields);
 
       const event_type = this.determineEventType(parser.name, processedFields);
 
@@ -268,7 +269,8 @@ export class ParserEngine {
     }
   }
 
-  private postProcessFields(parserName: string, fields: Record<string, any>): Record<string, any> {
+  private postProcessFields(parser: Parser, fields: Record<string, any>): Record<string, any> {
+    const parserName = parser.name;
     // CEF extension parsing: break the raw "key=value key=value ..." extension
     // into individual fields so src/dst/act/UNIFIipsSignature/etc. become
     // queryable by rules instead of being trapped in one string. Applies to any
@@ -279,59 +281,11 @@ export class ParserEngine {
       }
     }
 
-    // Post-processing for Vaultwarden parser to derive action, event, and path fields
-    if (parserName === 'vaultwarden-access' && fields.message) {
-      const message = fields.message.toLowerCase();
-
-      // Derive action field for vault operations
-      if (message.includes('vault export')) {
-        fields.action = 'vault_export';
-      } else if (message.includes('vault import')) {
-        fields.action = 'vault_import';
-      } else if (message.includes('vault sync')) {
-        fields.action = 'vault_sync';
-      } else if (message.includes('vault accessed')) {
-        fields.action = 'vault_access';
-      }
-
-      // Derive event field for authentication and device events
-      // Real Vaultwarden wording (1.30+): "Username or password is incorrect",
-      // "Invalid TOTP code!", "Invalid admin token", "logged in successfully".
-      if (
-        message.includes('username or password is incorrect') ||
-        message.includes('invalid totp code') ||
-        message.includes('invalid admin token') ||
-        message.includes('this user has been disabled') ||
-        message.includes('failed login') ||
-        message.includes('invalid password')
-      ) {
-        fields.event = 'login_failure';
-      } else if (
-        message.includes('logged in successfully') ||
-        message.includes('successful login')
-      ) {
-        fields.event = 'login_success';
-      } else if (message.includes('did not complete a 2fa login')) {
-        fields.event = 'login_2fa_incomplete';
-      }
-
-      // Derive path from module (approximation for API monitoring)
-      if (fields.module) {
-        const module = fields.module.toLowerCase();
-        if (module.includes('::api::core')) {
-          fields.path = '/api/core';
-        } else if (module.includes('::api::identity')) {
-          fields.path = '/api/identity';
-        } else if (module.includes('::api::admin')) {
-          fields.path = '/admin';
-        } else if (module.includes('::api::')) {
-          fields.path = '/api';
-        }
-      }
-
-      // Ensure service field is always set
-      fields.service = 'vaultwarden';
-    }
+    // Declarative, data-driven derivations carried by the parser — the portable
+    // replacement for the hardcoded per-parser blocks. Vaultwarden has been
+    // migrated to data (migration 010); the remaining hardcoded blocks below are
+    // migrated incrementally. (vaultwarden's service comes from deriveService.)
+    applyDerivations(fields, parser.derivations);
 
     // SSO / auth portals (Authelia, authentik, Keycloak): derive a uniform
     // `event` failure/success marker so one cross-IdP rule (AUTH-007) matches

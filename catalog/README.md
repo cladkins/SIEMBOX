@@ -24,6 +24,21 @@ catalog/
   CONTRIBUTING.md  — how to add a parser (read this before submitting)
 ```
 
+## Install in-app
+
+SIEMBox can browse and install these parsers directly (Parsers → **Browse Catalog**).
+The backend lists the source repo's tree, pulls each `*.parser.json` from
+`raw.githubusercontent`, **validates + runs its self-tests**, and only then upserts
+it — flagging each as installed / update-available via a content signature. The
+source is configurable:
+
+| env var | default | meaning |
+|---------|---------|---------|
+| `PARSER_CATALOG_REPO` | `cladkins/SIEMBOX` | `owner/repo` to fetch from |
+| `PARSER_CATALOG_REF`  | `main` | branch/tag/sha |
+| `PARSER_CATALOG_PATH` | `catalog/parsers` | directory within the repo |
+| `PARSER_CATALOG_TOKEN` / `GITHUB_TOKEN` | — | optional; raises GitHub API rate limit / private repos |
+
 ## Validate locally
 
 The validator is shipped with the backend and needs no database:

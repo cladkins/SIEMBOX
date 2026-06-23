@@ -5,6 +5,9 @@
         <div class="card-header">
           <span>Log Parsers</span>
           <div class="header-actions">
+            <el-button size="small" @click="openCatalog">
+              <el-icon><Shop /></el-icon> Browse Catalog
+            </el-button>
             <el-button size="small" @click="triggerImport">
               <el-icon><Upload /></el-icon> Import
             </el-button>
@@ -233,6 +236,80 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- Parser Catalog Dialog -->
+    <el-dialog v-model="catalogDialogVisible" title="Parser Catalog" width="900px">
+      <div class="catalog-toolbar">
+        <span v-if="catalogSource" class="catalog-source">
+          Source: <code>{{ catalogSource.repo }}@{{ catalogSource.ref }}/{{ catalogSource.path }}</code>
+        </span>
+        <el-button size="small" :loading="catalogLoading" @click="loadCatalog(true)">
+          <el-icon><Refresh /></el-icon> Refresh
+        </el-button>
+      </div>
+
+      <el-alert
+        v-if="catalogError"
+        type="error"
+        :closable="false"
+        :title="catalogError"
+        style="margin-bottom: 12px"
+      />
+
+      <el-table :data="catalog" v-loading="catalogLoading" stripe max-height="460">
+        <el-table-column prop="name" label="Name" min-width="150">
+          <template #default="{ row }">
+            <strong>{{ row.name }}</strong>
+            <div v-if="row.log_source" class="catalog-sub">{{ row.log_source }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="description" label="Description" min-width="240" show-overflow-tooltip />
+        <el-table-column label="Tags" width="160">
+          <template #default="{ row }">
+            <el-tag v-for="t in row.tags" :key="t" size="small" class="catalog-tag">{{ t }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Status" width="130">
+          <template #default="{ row }">
+            <el-tag v-if="!row.valid" type="danger" size="small">Invalid</el-tag>
+            <el-tag v-else-if="row.update_available" type="warning" size="small">Update</el-tag>
+            <el-tag v-else-if="row.installed" type="success" size="small">Installed</el-tag>
+            <el-tag v-else type="info" size="small" effect="plain">Available</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Action" width="140" fixed="right">
+          <template #default="{ row }">
+            <el-tooltip
+              v-if="!row.valid"
+              :content="(row.errors && row.errors[0]) || 'Failed self-tests'"
+              placement="top"
+            >
+              <el-button size="small" disabled>Invalid</el-button>
+            </el-tooltip>
+            <el-button
+              v-else-if="row.update_available"
+              size="small"
+              type="warning"
+              :loading="installing === row.name"
+              @click="install(row)"
+            >Update</el-button>
+            <el-button
+              v-else-if="row.installed"
+              size="small"
+              :loading="installing === row.name"
+              @click="install(row)"
+            >Reinstall</el-button>
+            <el-button
+              v-else
+              size="small"
+              type="primary"
+              :loading="installing === row.name"
+              @click="install(row)"
+            >Install</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
@@ -240,7 +317,7 @@
 import { ref, onMounted, reactive } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
-import { Plus, Delete, Right, CircleCheck, Upload } from '@element-plus/icons-vue';
+import { Plus, Delete, Right, CircleCheck, Upload, Shop, Refresh } from '@element-plus/icons-vue';
 
 const parsers = ref<any[]>([]);
 const loading = ref(false);
@@ -277,6 +354,14 @@ const importParserData = ref<any>(null);
 const importValidation = ref<any>(null);
 const importSelfTest = ref<any>(null);
 const importing = ref(false);
+
+// Parser catalog (browse/install from GitHub)
+const catalogDialogVisible = ref(false);
+const catalogLoading = ref(false);
+const catalog = ref<any[]>([]);
+const catalogSource = ref<any>(null);
+const catalogError = ref('');
+const installing = ref('');
 
 const rules: FormRules = {
   name: [{ required: true, message: 'Name is required', trigger: 'blur' }],
@@ -549,6 +634,38 @@ async function doImport() {
   }
 }
 
+function openCatalog() {
+  catalogDialogVisible.value = true;
+  if (catalog.value.length === 0) loadCatalog(false);
+}
+
+async function loadCatalog(refresh: boolean) {
+  catalogLoading.value = true;
+  catalogError.value = '';
+  try {
+    const res = await api.getCatalog(refresh);
+    catalog.value = res.data.parsers || [];
+    catalogSource.value = res.data.source || null;
+  } catch (error: any) {
+    catalogError.value = error.response?.data?.message || 'Failed to load catalog';
+  } finally {
+    catalogLoading.value = false;
+  }
+}
+
+async function install(row: any) {
+  installing.value = row.name;
+  try {
+    const res = await api.installCatalogParser(row.name);
+    ElMessage.success(`Parser "${row.name}" ${res.data.action}`);
+    await Promise.all([fetchParsers(), loadCatalog(false)]);
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || `Failed to install "${row.name}"`);
+  } finally {
+    installing.value = '';
+  }
+}
+
 async function deleteParser(parser: any) {
   try {
     await ElMessageBox.confirm(
@@ -604,6 +721,27 @@ async function deleteParser(parser: any) {
 .selftest-failure {
   margin-top: 6px;
   font-size: 13px;
+}
+
+.catalog-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.catalog-source {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.catalog-sub {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.catalog-tag {
+  margin: 0 4px 4px 0;
 }
 
 .field-mappings {

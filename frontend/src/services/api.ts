@@ -102,6 +102,11 @@ export const api = {
   validatePortableParser: (parser: any, strict = false) =>
     apiClient.post('/parsers/validate', { parser, strict }),
   importParser: (parser: any, force = false) => apiClient.post('/parsers/import', { parser, force }),
+  // Parser catalog (browse/install from a GitHub repo, in-app)
+  getCatalog: (refresh = false) => apiClient.get('/parsers/catalog', { params: refresh ? { refresh: true } : {} }),
+  getCatalogSource: () => apiClient.get('/parsers/catalog/source'),
+  installCatalogParser: (name: string, force = false) =>
+    apiClient.post('/parsers/catalog/install', { name, force }),
 
   // Detection Rules
   getRules: () => apiClient.get('/rules'),

@@ -121,10 +121,11 @@ export const api = {
   // AI builder
   getAiSettings: () => apiClient.get('/settings/ai'),
   updateAiSettings: (data: any) => apiClient.put('/settings/ai', data),
+  // Long timeout: generation runs an auto-refine loop of up to 3 model calls.
   generateParserAI: (sample: string, hints?: string) =>
-    apiClient.post('/parsers/ai/generate', { sample, hints }),
+    apiClient.post('/parsers/ai/generate', { sample, hints }, { timeout: 240000 }),
   generateDetectionAI: (description: string, context?: string) =>
-    apiClient.post('/rules/ai/generate', { description, context }),
+    apiClient.post('/rules/ai/generate', { description, context }, { timeout: 240000 }),
 
   // Alerts
   getAlerts: (params?: any) => apiClient.get('/alerts', { params }),

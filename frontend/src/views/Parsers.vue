@@ -451,7 +451,10 @@ async function runAiGenerate() {
     aiResult.value = res.data;
     if (res.data.error) aiError.value = res.data.error;
   } catch (error: any) {
-    aiError.value = error.response?.data?.message || 'Generation failed';
+    aiError.value =
+      error.response?.data?.message ||
+      (error.code === 'ECONNABORTED' ? 'Timed out waiting for the model — try again or simplify the sample' : error.message) ||
+      'Generation failed';
   } finally {
     aiGenerating.value = false;
   }

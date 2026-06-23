@@ -12,9 +12,9 @@ conditions:
   - field: geo_foreign
     operator: equals
     value: true
-  - field: event
+  - field: auth_outcome
     operator: in
-    value: "login_success,login_failure"
+    value: "success,failure"
 
 aggregation:
   field: source_ip

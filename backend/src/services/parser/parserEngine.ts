@@ -255,9 +255,13 @@ export class ParserEngine {
         Object.assign(fields, parsed);
       }
 
-      const event_type = this.determineEventType(parser.name, fields);
+      // Run the same post-processing as the regex path so JSON parsers (e.g.
+      // authentik) get their derivations and the shared auth_outcome marker.
+      const processedFields = this.postProcessFields(parser.name, fields);
 
-      return { fields, event_type };
+      const event_type = this.determineEventType(parser.name, processedFields);
+
+      return { fields: processedFields, event_type };
     } catch (error) {
       // Not valid JSON
       return null;
@@ -434,6 +438,24 @@ export class ParserEngine {
         fields.user_id = now.groups.uid;
       }
       fields.service = 'plex';
+    }
+
+    // Canonical authentication outcome shared across all auth parsers, so
+    // cross-service rules (e.g. GEO-001) can key on one field regardless of each
+    // parser's wording: SSH "Failed password", SSO "authentication failed",
+    // vaultwarden/HA/media "login_failure", etc.
+    if (fields.auth_outcome === undefined && fields.event !== undefined) {
+      const e = String(fields.event).toLowerCase();
+      if (e === 'failed password' || e === 'authentication failed' || e === 'login_failure') {
+        fields.auth_outcome = 'failure';
+      } else if (
+        e === 'accepted password' ||
+        e === 'accepted publickey' ||
+        e === 'authentication success' ||
+        e === 'login_success'
+      ) {
+        fields.auth_outcome = 'success';
+      }
     }
 
     return fields;

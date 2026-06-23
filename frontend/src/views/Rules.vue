@@ -5,6 +5,9 @@
         <div class="card-header">
           <span>Detection Rules</span>
           <div class="header-actions">
+            <el-button size="small" @click="openAiBuilder">
+              <el-icon><MagicStick /></el-icon> Generate with AI
+            </el-button>
             <el-button size="small" @click="openCatalog">
               <el-icon><Shop /></el-icon> Browse Catalog
             </el-button>
@@ -211,14 +214,72 @@
         </el-table-column>
       </el-table>
     </el-dialog>
+
+    <!-- AI Detection Builder Dialog -->
+    <el-dialog v-model="aiDialogVisible" title="Generate Detection with AI" width="760px">
+      <el-form label-position="top">
+        <el-form-item label="Describe the detection">
+          <el-input
+            v-model="aiDescription"
+            type="textarea"
+            :rows="3"
+            placeholder="e.g. 5 failed SSH logins from the same IP within 5 minutes"
+          />
+        </el-form-item>
+        <el-form-item label="Context (optional)">
+          <el-input
+            v-model="aiContext"
+            type="textarea"
+            :rows="2"
+            placeholder="e.g. service=sshd; fields: source_ip, user, event (login_failure / login_success)"
+          />
+        </el-form-item>
+        <el-button type="primary" :loading="aiGenerating" @click="runAiGenerate">
+          <el-icon><MagicStick /></el-icon> {{ aiResult ? 'Regenerate' : 'Generate' }}
+        </el-button>
+      </el-form>
+
+      <template v-if="aiError">
+        <el-divider />
+        <el-alert type="error" :closable="false" :title="aiError" />
+      </template>
+
+      <template v-if="aiResult">
+        <el-divider />
+        <el-alert
+          :type="aiResult.ok ? 'success' : 'warning'"
+          :closable="false"
+          style="margin-bottom: 10px"
+          :title="aiResult.ok
+            ? `Valid rule (${aiResult.attempts} attempt(s))`
+            : `Not fully valid after ${aiResult.attempts} attempt(s) — review or regenerate`"
+        >
+          <div v-if="aiResult.rule">
+            <strong>{{ aiResult.rule.name }}</strong>
+            <el-tag v-if="aiResult.rule.severity" size="small" :type="severityType(aiResult.rule.severity)">{{ aiResult.rule.severity }}</el-tag>
+          </div>
+          <ul v-if="aiResult.validation && aiResult.validation.errors.length">
+            <li v-for="(e, i) in aiResult.validation.errors" :key="i">{{ e }}</li>
+          </ul>
+        </el-alert>
+        <pre v-if="aiResult.rule" class="ai-preview">{{ aiRuleYaml }}</pre>
+      </template>
+
+      <template #footer>
+        <el-button @click="aiDialogVisible = false">Close</el-button>
+        <el-button type="primary" :disabled="!aiResult || !aiResult.ok" :loading="aiSaving" @click="saveAiRule">
+          Save Rule
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive } from 'vue';
+import { ref, onMounted, reactive, computed } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
-import { Plus, CircleCheck, Shop, Refresh } from '@element-plus/icons-vue';
+import { Plus, CircleCheck, Shop, Refresh, MagicStick } from '@element-plus/icons-vue';
 import yaml from 'js-yaml';
 
 const rules = ref<any[]>([]);
@@ -267,6 +328,70 @@ async function installRule(row: any) {
     ElMessage.error(error.response?.data?.message || `Failed to install "${row.name}"`);
   } finally {
     installing.value = '';
+  }
+}
+
+// AI detection builder
+const aiDialogVisible = ref(false);
+const aiDescription = ref('');
+const aiContext = ref('');
+const aiGenerating = ref(false);
+const aiResult = ref<any>(null);
+const aiError = ref('');
+const aiSaving = ref(false);
+const aiRuleYaml = computed(() => {
+  try {
+    return aiResult.value?.rule ? yaml.dump(aiResult.value.rule) : '';
+  } catch {
+    return '';
+  }
+});
+
+function openAiBuilder() {
+  aiResult.value = null;
+  aiError.value = '';
+  aiDialogVisible.value = true;
+}
+
+async function runAiGenerate() {
+  if (!aiDescription.value.trim()) {
+    ElMessage.warning('Describe the detection first');
+    return;
+  }
+  aiGenerating.value = true;
+  aiError.value = '';
+  aiResult.value = null;
+  try {
+    const res = await api.generateDetectionAI(aiDescription.value, aiContext.value || undefined);
+    aiResult.value = res.data;
+    if (res.data.error) aiError.value = res.data.error;
+  } catch (error: any) {
+    aiError.value = error.response?.data?.message || 'Generation failed';
+  } finally {
+    aiGenerating.value = false;
+  }
+}
+
+async function saveAiRule() {
+  const rule = aiResult.value?.rule;
+  if (!rule) return;
+  aiSaving.value = true;
+  try {
+    await api.createRule({
+      name: rule.name,
+      description: rule.description,
+      enabled: rule.enabled !== false,
+      severity: rule.severity,
+      rule_yaml: yaml.dump(rule),
+      tags: rule.tags || [],
+    });
+    ElMessage.success(`Rule "${rule.name}" created`);
+    aiDialogVisible.value = false;
+    fetchRules();
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Failed to save rule');
+  } finally {
+    aiSaving.value = false;
   }
 }
 
@@ -654,6 +779,16 @@ const getSeverityType = (severity: string) => {
 
 .catalog-tag {
   margin: 0 4px 4px 0;
+}
+
+.ai-preview {
+  background: var(--siembox-bg-color);
+  padding: 12px;
+  border-radius: 4px;
+  max-height: 280px;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 
 .yaml-editor-container {

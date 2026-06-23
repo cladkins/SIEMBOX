@@ -70,6 +70,58 @@
 
         <el-card style="margin-top: 20px">
           <template #header>
+            <span>AI Builder</span>
+          </template>
+
+          <el-form :model="aiForm" label-width="200px" v-loading="aiLoading">
+            <el-form-item label="Provider">
+              <el-select v-model="aiForm.provider" style="width: 220px">
+                <el-option label="Anthropic (Claude)" value="anthropic" />
+                <el-option label="OpenAI" value="openai" />
+                <el-option label="Ollama (local)" value="ollama" />
+              </el-select>
+            </el-form-item>
+
+            <el-form-item label="Model">
+              <el-input v-model="aiForm.model" style="width: 320px" :placeholder="aiModelPlaceholder" />
+            </el-form-item>
+
+            <el-form-item v-if="aiForm.provider !== 'anthropic'" label="Base URL">
+              <el-input
+                v-model="aiForm.baseUrl"
+                style="width: 320px"
+                :placeholder="aiForm.provider === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com/v1'"
+              />
+            </el-form-item>
+
+            <el-form-item v-if="aiForm.provider !== 'ollama'" label="API Key">
+              <el-input
+                v-model="aiForm.apiKey"
+                type="password"
+                show-password
+                style="width: 320px"
+                :placeholder="aiKeyPlaceholder"
+              />
+              <el-text size="small" :type="aiConfigured ? 'success' : 'warning'" style="margin-left: 10px">
+                {{ aiKeyStatus }}
+              </el-text>
+            </el-form-item>
+
+            <el-form-item>
+              <el-button type="primary" @click="saveAiSettings" :loading="aiSaving">
+                <el-icon><Check /></el-icon> Save AI Settings
+              </el-button>
+            </el-form-item>
+            <el-text size="small" type="info">
+              Powers "Generate with AI" on the Parsers and Detection Rules pages. The API key is stored
+              encrypted at rest; you can instead set ANTHROPIC_API_KEY / OPENAI_API_KEY as environment variables.
+              Leave the key blank to keep the existing one.
+            </el-text>
+          </el-form>
+        </el-card>
+
+        <el-card style="margin-top: 20px">
+          <template #header>
             <span>Syslog Server Configuration</span>
           </template>
 
@@ -827,7 +879,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive } from 'vue';
+import { ref, onMounted, reactive, computed } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Check, Delete, Refresh, Plus, Edit, VideoPlay } from '@element-plus/icons-vue';
@@ -853,6 +905,59 @@ const retentionForm = reactive({
   alerts_days: 365,
   auto_cleanup_enabled: true,
 });
+
+// AI builder settings
+const aiLoading = ref(false);
+const aiSaving = ref(false);
+const aiConfigured = ref(false);
+const aiKeySource = ref<'stored' | 'env' | 'none'>('none');
+const aiForm = reactive({ provider: 'anthropic', model: '', baseUrl: '', apiKey: '' });
+
+const aiModelPlaceholder = computed(() =>
+  ({ anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', ollama: 'llama3.1' } as Record<string, string>)[aiForm.provider] || ''
+);
+const aiKeyPlaceholder = computed(() =>
+  aiKeySource.value === 'stored' ? '•••••••• (saved — leave blank to keep)'
+  : aiKeySource.value === 'env' ? 'set via environment variable'
+  : 'paste your API key'
+);
+const aiKeyStatus = computed(() =>
+  aiConfigured.value
+    ? aiKeySource.value === 'env' ? 'Configured via environment variable' : 'Key configured'
+    : 'No API key configured'
+);
+
+async function fetchAiSettings() {
+  aiLoading.value = true;
+  try {
+    const { data } = await api.getAiSettings();
+    aiForm.provider = data.provider || 'anthropic';
+    aiForm.model = data.model || '';
+    aiForm.baseUrl = data.baseUrl || '';
+    aiForm.apiKey = '';
+    aiConfigured.value = !!data.configured;
+    aiKeySource.value = data.keySource || 'none';
+  } catch (error) {
+    // non-admins / not configured — leave defaults
+  } finally {
+    aiLoading.value = false;
+  }
+}
+
+async function saveAiSettings() {
+  aiSaving.value = true;
+  try {
+    const payload: any = { provider: aiForm.provider, model: aiForm.model, baseUrl: aiForm.baseUrl };
+    if (aiForm.apiKey) payload.apiKey = aiForm.apiKey; // only send when changing
+    await api.updateAiSettings(payload);
+    ElMessage.success('AI settings saved');
+    await fetchAiSettings();
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Failed to save AI settings');
+  } finally {
+    aiSaving.value = false;
+  }
+}
 
 const syslogForm = reactive({
   syslog_host: '',
@@ -936,6 +1041,7 @@ const notificationSettingsForm = reactive({
 
 onMounted(() => {
   fetchRetentionSettings();
+  fetchAiSettings();
   fetchSyslogSettings();
   fetchAutoDiscoverySettings();
   fetchStatistics();

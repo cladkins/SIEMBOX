@@ -5,6 +5,9 @@
         <div class="card-header">
           <span>Log Parsers</span>
           <div class="header-actions">
+            <el-button size="small" @click="openAiBuilder">
+              <el-icon><MagicStick /></el-icon> Generate with AI
+            </el-button>
             <el-button size="small" @click="openCatalog">
               <el-icon><Shop /></el-icon> Browse Catalog
             </el-button>
@@ -310,6 +313,63 @@
         </el-table-column>
       </el-table>
     </el-dialog>
+
+    <!-- AI Parser Builder Dialog -->
+    <el-dialog v-model="aiDialogVisible" title="Generate Parser with AI" width="760px">
+      <el-form label-position="top">
+        <el-form-item label="Paste a log line (or a few)">
+          <el-input
+            v-model="aiSample"
+            type="textarea"
+            :rows="4"
+            placeholder="e.g. Jan 1 12:00:00 host myapp: login failed from 203.0.113.5"
+          />
+        </el-form-item>
+        <el-form-item label="Hints (optional)">
+          <el-input v-model="aiHints" placeholder="e.g. this is MyApp's auth log; the IP is the attacker" />
+        </el-form-item>
+        <el-button type="primary" :loading="aiGenerating" @click="runAiGenerate">
+          <el-icon><MagicStick /></el-icon> {{ aiResult ? 'Regenerate' : 'Generate' }}
+        </el-button>
+      </el-form>
+
+      <template v-if="aiError">
+        <el-divider />
+        <el-alert type="error" :closable="false" :title="aiError" />
+      </template>
+
+      <template v-if="aiResult">
+        <el-divider />
+        <el-alert
+          :type="aiResult.ok ? 'success' : 'warning'"
+          :closable="false"
+          style="margin-bottom: 10px"
+          :title="aiResult.ok
+            ? `Valid parser (${aiResult.self_test ? aiResult.self_test.passed + '/' + aiResult.self_test.total + ' self-tests' : 'no self-tests'}, ${aiResult.attempts} attempt(s))`
+            : `Not fully valid after ${aiResult.attempts} attempt(s) — review or regenerate with a hint`"
+        >
+          <div v-if="aiResult.parser">
+            <strong>{{ aiResult.parser.name }}</strong>
+            <el-tag size="small">{{ aiResult.parser.parser_type }}</el-tag>
+          </div>
+          <ul v-if="aiResult.validation && aiResult.validation.errors.length">
+            <li v-for="(e, i) in aiResult.validation.errors" :key="i">{{ e }}</li>
+          </ul>
+          <div v-for="(f, i) in (aiResult.self_test && aiResult.self_test.failures) || []" :key="'f' + i" class="selftest-failure">
+            sample[{{ f.index }}]<span v-if="!f.matched"> — did not match</span>
+            <ul><li v-for="(m, j) in f.mismatches" :key="j">{{ m.field }}: expected {{ JSON.stringify(m.expected) }}, got {{ JSON.stringify(m.actual) }}</li></ul>
+          </div>
+        </el-alert>
+        <pre v-if="aiResult.parser" class="ai-preview">{{ JSON.stringify(aiResult.parser, null, 2) }}</pre>
+      </template>
+
+      <template #footer>
+        <el-button @click="aiDialogVisible = false">Close</el-button>
+        <el-button type="primary" :disabled="!aiResult || !aiResult.ok" :loading="aiSaving" @click="saveAiParser">
+          Save Parser
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -317,7 +377,7 @@
 import { ref, onMounted, reactive } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
-import { Plus, Delete, Right, CircleCheck, Upload, Shop, Refresh } from '@element-plus/icons-vue';
+import { Plus, Delete, Right, CircleCheck, Upload, Shop, Refresh, MagicStick } from '@element-plus/icons-vue';
 
 const parsers = ref<any[]>([]);
 const loading = ref(false);
@@ -362,6 +422,55 @@ const catalog = ref<any[]>([]);
 const catalogSource = ref<any>(null);
 const catalogError = ref('');
 const installing = ref('');
+
+// AI parser builder
+const aiDialogVisible = ref(false);
+const aiSample = ref('');
+const aiHints = ref('');
+const aiGenerating = ref(false);
+const aiResult = ref<any>(null);
+const aiError = ref('');
+const aiSaving = ref(false);
+
+function openAiBuilder() {
+  aiResult.value = null;
+  aiError.value = '';
+  aiDialogVisible.value = true;
+}
+
+async function runAiGenerate() {
+  if (!aiSample.value.trim()) {
+    ElMessage.warning('Paste a log sample first');
+    return;
+  }
+  aiGenerating.value = true;
+  aiError.value = '';
+  aiResult.value = null;
+  try {
+    const res = await api.generateParserAI(aiSample.value, aiHints.value || undefined);
+    aiResult.value = res.data;
+    if (res.data.error) aiError.value = res.data.error;
+  } catch (error: any) {
+    aiError.value = error.response?.data?.message || 'Generation failed';
+  } finally {
+    aiGenerating.value = false;
+  }
+}
+
+async function saveAiParser() {
+  if (!aiResult.value?.parser) return;
+  aiSaving.value = true;
+  try {
+    const res = await api.importParser(aiResult.value.parser);
+    ElMessage.success(`Parser "${res.data.parser?.name}" ${res.data.action}`);
+    aiDialogVisible.value = false;
+    fetchParsers();
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Failed to save parser');
+  } finally {
+    aiSaving.value = false;
+  }
+}
 
 const rules: FormRules = {
   name: [{ required: true, message: 'Name is required', trigger: 'blur' }],
@@ -742,6 +851,15 @@ async function deleteParser(parser: any) {
 
 .catalog-tag {
   margin: 0 4px 4px 0;
+}
+
+.ai-preview {
+  background: var(--siembox-bg-color);
+  padding: 12px;
+  border-radius: 4px;
+  max-height: 280px;
+  overflow: auto;
+  font-size: 12px;
 }
 
 .field-mappings {

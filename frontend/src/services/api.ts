@@ -118,6 +118,14 @@ export const api = {
   getRuleCatalog: (refresh = false) => apiClient.get('/rules/catalog', { params: refresh ? { refresh: true } : {} }),
   installCatalogRule: (name: string) => apiClient.post('/rules/catalog/install', { name }),
 
+  // AI builder
+  getAiSettings: () => apiClient.get('/settings/ai'),
+  updateAiSettings: (data: any) => apiClient.put('/settings/ai', data),
+  generateParserAI: (sample: string, hints?: string) =>
+    apiClient.post('/parsers/ai/generate', { sample, hints }),
+  generateDetectionAI: (description: string, context?: string) =>
+    apiClient.post('/rules/ai/generate', { description, context }),
+
   // Alerts
   getAlerts: (params?: any) => apiClient.get('/alerts', { params }),
   getAlertStatistics: () => apiClient.get('/alerts/statistics'),

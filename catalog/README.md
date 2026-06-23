@@ -35,12 +35,17 @@ The backend lists the source repo's tree, pulls each `*.parser.json` from
 it — flagging each as installed / update-available via a content signature. The
 source is configurable:
 
+Parsers install from **Parsers → Browse Catalog**; detection rules from
+**Detection Rules → Browse Catalog**. Both read the same repo (`parsers/` and
+`detections/`), validate + (for parsers) self-test each file, and upsert.
+
 | env var | default | meaning |
 |---------|---------|---------|
-| `PARSER_CATALOG_REPO` | `cladkins/siembox-parsers` | `owner/repo` to fetch from |
-| `PARSER_CATALOG_REF`  | `main` | branch/tag/sha |
-| `PARSER_CATALOG_PATH` | `parsers` | directory within the repo |
-| `PARSER_CATALOG_TOKEN` / `GITHUB_TOKEN` | — | optional; raises GitHub API rate limit / private repos |
+| `SIEMBOX_CATALOG_REPO` (or legacy `PARSER_CATALOG_REPO`) | `cladkins/siembox-parsers` | `owner/repo` to fetch from (GitHub redirects this to `siembox-catalog` after a rename, so it keeps working) |
+| `SIEMBOX_CATALOG_REF` (or `PARSER_CATALOG_REF`) | `main` | branch/tag/sha |
+| `SIEMBOX_CATALOG_PARSERS_PATH` (or `PARSER_CATALOG_PATH`) | `parsers` | parser directory within the repo |
+| `SIEMBOX_CATALOG_DETECTIONS_PATH` | `detections` | detection-rule directory within the repo |
+| `SIEMBOX_CATALOG_TOKEN` / `GITHUB_TOKEN` | — | optional; raises GitHub API rate limit / private repos |
 
 ## Validate locally
 

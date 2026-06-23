@@ -114,6 +114,9 @@ export const api = {
   createRule: (data: any) => apiClient.post('/rules', data),
   updateRule: (id: number, data: any) => apiClient.put(`/rules/${id}`, data),
   deleteRule: (id: number) => apiClient.delete(`/rules/${id}`),
+  // Detection catalog (browse/install rules from the GitHub repo, in-app)
+  getRuleCatalog: (refresh = false) => apiClient.get('/rules/catalog', { params: refresh ? { refresh: true } : {} }),
+  installCatalogRule: (name: string) => apiClient.post('/rules/catalog/install', { name }),
 
   // Alerts
   getAlerts: (params?: any) => apiClient.get('/alerts', { params }),

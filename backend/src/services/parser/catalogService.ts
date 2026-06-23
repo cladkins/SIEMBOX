@@ -5,11 +5,12 @@
  * each *.parser.json from raw.githubusercontent (not API-rate-limited), and reuse
  * the SAME validator + self-test runner the import endpoint and CI use.
  *
- * Source is configurable so the catalog can move without a code change:
- *   PARSER_CATALOG_REPO   default "cladkins/siembox-parsers" (the standalone catalog)
- *   PARSER_CATALOG_REF    default "main"
- *   PARSER_CATALOG_PATH   default "parsers"
- *   PARSER_CATALOG_TOKEN / GITHUB_TOKEN  optional, raises GitHub API rate limit
+ * Source is configurable so the catalog can move without a code change. The repo
+ * and ref are shared with the detection catalog (services/rules/detectionCatalog):
+ *   SIEMBOX_CATALOG_REPO  (or legacy PARSER_CATALOG_REPO)  default "cladkins/siembox-parsers"
+ *   SIEMBOX_CATALOG_REF   (or legacy PARSER_CATALOG_REF)   default "main"
+ *   SIEMBOX_CATALOG_PARSERS_PATH (or legacy PARSER_CATALOG_PATH)  default "parsers"
+ *   SIEMBOX_CATALOG_TOKEN / GITHUB_TOKEN  optional, raises GitHub API rate limit
  */
 import * as https from 'https';
 import { logger } from '../../utils/logger';
@@ -45,16 +46,32 @@ export interface CatalogEntry {
   signature: string;
 }
 
-export function getCatalogSource(): CatalogSource {
+const trimSlashes = (s: string) => s.replace(/^\/+|\/+$/g, '');
+
+/**
+ * Repo + ref shared by the parser and detection catalogs (new + legacy env names).
+ * Defaults to siembox-parsers: GitHub redirects it to siembox-catalog after a
+ * rename, so this works whether or not the repo has been renamed. Set
+ * SIEMBOX_CATALOG_REPO=cladkins/siembox-catalog to point at the new name directly.
+ */
+export function catalogRepoRef(): { repo: string; ref: string } {
   return {
-    repo: process.env.PARSER_CATALOG_REPO || 'cladkins/siembox-parsers',
-    ref: process.env.PARSER_CATALOG_REF || 'main',
-    path: (process.env.PARSER_CATALOG_PATH || 'parsers').replace(/^\/+|\/+$/g, ''),
+    repo: process.env.SIEMBOX_CATALOG_REPO || process.env.PARSER_CATALOG_REPO || 'cladkins/siembox-parsers',
+    ref: process.env.SIEMBOX_CATALOG_REF || process.env.PARSER_CATALOG_REF || 'main',
+  };
+}
+
+export function getCatalogSource(): CatalogSource {
+  const { repo, ref } = catalogRepoRef();
+  return {
+    repo,
+    ref,
+    path: trimSlashes(process.env.SIEMBOX_CATALOG_PARSERS_PATH || process.env.PARSER_CATALOG_PATH || 'parsers'),
   };
 }
 
 /** Deterministic JSON: object keys sorted recursively, array order preserved. */
-function stableStringify(v: any): string {
+export function stableStringify(v: any): string {
   if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
   if (v && typeof v === 'object') {
     return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stableStringify(v[k])).join(',') + '}';
@@ -88,7 +105,7 @@ export function parserSignature(p: {
 /** HTTP getter seam — defaults to real https, overridable in tests. */
 export type HttpGetter = (url: string, headers?: Record<string, string>) => Promise<{ status: number; body: string }>;
 
-function httpsGet(url: string, headers: Record<string, string> = {}): Promise<{ status: number; body: string }> {
+export function httpsGet(url: string, headers: Record<string, string> = {}): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const make = (target: string, redirects = 0) => {
       if (redirects > 5) return reject(new Error('Too many redirects'));
@@ -110,15 +127,15 @@ function httpsGet(url: string, headers: Record<string, string> = {}): Promise<{ 
   });
 }
 
-function apiHeaders(): Record<string, string> {
-  const token = process.env.PARSER_CATALOG_TOKEN || process.env.GITHUB_TOKEN;
+export function apiHeaders(): Record<string, string> {
+  const token = process.env.SIEMBOX_CATALOG_TOKEN || process.env.PARSER_CATALOG_TOKEN || process.env.GITHUB_TOKEN;
   const h: Record<string, string> = { Accept: 'application/vnd.github+json' };
   if (token) h.Authorization = `Bearer ${token}`;
   return h;
 }
 
-/** List catalog file paths in the source repo via the git-trees API (one request). */
-async function listParserPaths(src: CatalogSource, get: HttpGetter): Promise<string[]> {
+/** List blob paths under src.path ending in `suffix`, via the git-trees API (one request). */
+export async function listTreeFiles(src: CatalogSource, get: HttpGetter, suffix: string): Promise<string[]> {
   const url = `https://api.github.com/repos/${src.repo}/git/trees/${encodeURIComponent(src.ref)}?recursive=1`;
   const { status, body } = await get(url, apiHeaders());
   if (status !== 200) {
@@ -128,18 +145,27 @@ async function listParserPaths(src: CatalogSource, get: HttpGetter): Promise<str
   const tree: Array<{ path: string; type: string }> = Array.isArray(json.tree) ? json.tree : [];
   const prefix = src.path + '/';
   return tree
-    .filter((e) => e.type === 'blob' && e.path.startsWith(prefix) && e.path.endsWith('.parser.json'))
+    .filter((e) => e.type === 'blob' && e.path.startsWith(prefix) && e.path.endsWith(suffix))
     .map((e) => e.path);
 }
 
-async function fetchRawParser(src: CatalogSource, filePath: string, get: HttpGetter): Promise<PortableParser> {
+/** Fetch a file's raw text from raw.githubusercontent (not API-rate-limited). */
+export async function fetchRawText(src: CatalogSource, filePath: string, get: HttpGetter): Promise<string> {
   const url = `https://raw.githubusercontent.com/${src.repo}/${encodeURIComponent(src.ref)}/${filePath
     .split('/')
     .map(encodeURIComponent)
     .join('/')}`;
   const { status, body } = await get(url);
   if (status !== 200) throw new Error(`Failed to fetch ${filePath} (${status})`);
-  return JSON.parse(body) as PortableParser;
+  return body;
+}
+
+async function listParserPaths(src: CatalogSource, get: HttpGetter): Promise<string[]> {
+  return listTreeFiles(src, get, '.parser.json');
+}
+
+async function fetchRawParser(src: CatalogSource, filePath: string, get: HttpGetter): Promise<PortableParser> {
+  return JSON.parse(await fetchRawText(src, filePath, get)) as PortableParser;
 }
 
 interface CacheShape {

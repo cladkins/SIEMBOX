@@ -4,9 +4,14 @@
       <template #header>
         <div class="card-header">
           <span>Detection Rules</span>
-          <el-button type="primary" size="small" @click="showCreateDialog">
-            <el-icon><Plus /></el-icon> Add Rule
-          </el-button>
+          <div class="header-actions">
+            <el-button size="small" @click="openCatalog">
+              <el-icon><Shop /></el-icon> Browse Catalog
+            </el-button>
+            <el-button type="primary" size="small" @click="showCreateDialog">
+              <el-icon><Plus /></el-icon> Add Rule
+            </el-button>
+          </div>
         </div>
       </template>
 
@@ -144,6 +149,68 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- Detection Catalog Dialog -->
+    <el-dialog v-model="catalogDialogVisible" title="Detection Catalog" width="900px">
+      <div class="catalog-toolbar">
+        <span v-if="catalogSource" class="catalog-source">
+          Source: <code>{{ catalogSource.repo }}@{{ catalogSource.ref }}/{{ catalogSource.path }}</code>
+        </span>
+        <el-button size="small" :loading="catalogLoading" @click="loadCatalog(true)">
+          <el-icon><Refresh /></el-icon> Refresh
+        </el-button>
+      </div>
+
+      <el-alert v-if="catalogError" type="error" :closable="false" :title="catalogError" style="margin-bottom: 12px" />
+
+      <el-table :data="catalog" v-loading="catalogLoading" stripe max-height="460">
+        <el-table-column prop="name" label="Name" min-width="220">
+          <template #default="{ row }">
+            <strong>{{ row.name }}</strong>
+            <div v-if="row.description" class="catalog-sub">{{ row.description }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="Severity" width="110">
+          <template #default="{ row }">
+            <el-tag v-if="row.severity" :type="severityType(row.severity)" size="small">{{ row.severity }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Tags" width="170">
+          <template #default="{ row }">
+            <el-tag v-for="t in row.tags" :key="t" size="small" class="catalog-tag">{{ t }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Status" width="120">
+          <template #default="{ row }">
+            <el-tag v-if="!row.valid" type="danger" size="small">Invalid</el-tag>
+            <el-tag v-else-if="row.update_available" type="warning" size="small">Update</el-tag>
+            <el-tag v-else-if="row.installed" type="success" size="small">Installed</el-tag>
+            <el-tag v-else type="info" size="small" effect="plain">Available</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Action" width="130" fixed="right">
+          <template #default="{ row }">
+            <el-tooltip v-if="!row.valid" :content="(row.errors && row.errors[0]) || 'Invalid rule'" placement="top">
+              <el-button size="small" disabled>Invalid</el-button>
+            </el-tooltip>
+            <el-button
+              v-else-if="row.update_available"
+              size="small"
+              type="warning"
+              :loading="installing === row.name"
+              @click="installRule(row)"
+            >Update</el-button>
+            <el-button
+              v-else-if="row.installed"
+              size="small"
+              :loading="installing === row.name"
+              @click="installRule(row)"
+            >Reinstall</el-button>
+            <el-button v-else size="small" type="primary" :loading="installing === row.name" @click="installRule(row)">Install</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
@@ -151,13 +218,57 @@
 import { ref, onMounted, reactive } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
-import { Plus, CircleCheck } from '@element-plus/icons-vue';
+import { Plus, CircleCheck, Shop, Refresh } from '@element-plus/icons-vue';
 import yaml from 'js-yaml';
 
 const rules = ref<any[]>([]);
 const loading = ref(false);
 const updating = ref(false);
 const saving = ref(false);
+
+// Detection catalog (browse/install from GitHub)
+const catalogDialogVisible = ref(false);
+const catalogLoading = ref(false);
+const catalog = ref<any[]>([]);
+const catalogSource = ref<any>(null);
+const catalogError = ref('');
+const installing = ref('');
+
+function severityType(sev: string) {
+  return { critical: 'danger', high: 'danger', medium: 'warning', low: 'info' }[sev] || 'info';
+}
+
+function openCatalog() {
+  catalogDialogVisible.value = true;
+  if (catalog.value.length === 0) loadCatalog(false);
+}
+
+async function loadCatalog(refresh: boolean) {
+  catalogLoading.value = true;
+  catalogError.value = '';
+  try {
+    const res = await api.getRuleCatalog(refresh);
+    catalog.value = res.data.rules || [];
+    catalogSource.value = res.data.source || null;
+  } catch (error: any) {
+    catalogError.value = error.response?.data?.message || 'Failed to load detection catalog';
+  } finally {
+    catalogLoading.value = false;
+  }
+}
+
+async function installRule(row: any) {
+  installing.value = row.name;
+  try {
+    const res = await api.installCatalogRule(row.name);
+    ElMessage.success(`Rule "${row.name}" ${res.data.action}`);
+    await Promise.all([fetchRules(), loadCatalog(false)]);
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || `Failed to install "${row.name}"`);
+  } finally {
+    installing.value = '';
+  }
+}
 
 const dialogVisible = ref(false);
 const editMode = ref(false);
@@ -516,6 +627,33 @@ const getSeverityType = (severity: string) => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.catalog-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.catalog-source {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.catalog-sub {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.catalog-tag {
+  margin: 0 4px 4px 0;
 }
 
 .yaml-editor-container {

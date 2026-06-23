@@ -14,6 +14,9 @@ Any UI page that displays or uses GeoIP results **must** show:
 
 > IP Geolocation by DB-IP — `<a href="https://db-ip.com">IP Geolocation by DB-IP</a>`
 
+SIEMBox satisfies this with a persistent link in the global app footer
+(`frontend/src/views/Layout.vue`), shown on every page.
+
 ## Configuration
 
 | Env var | Default | Meaning |

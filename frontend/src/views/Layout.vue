@@ -127,6 +127,10 @@
       <el-main>
         <router-view />
       </el-main>
+
+      <el-footer height="28px" class="app-footer">
+        <a href="https://db-ip.com" target="_blank" rel="noopener">IP Geolocation by DB-IP</a>
+      </el-footer>
     </el-container>
   </el-container>
 </template>
@@ -301,6 +305,28 @@ const handleLogout = () => {
   background-color: var(--siembox-bg-color);
   padding: 20px;
   transition: background-color 0.3s;
+}
+
+/* DB-IP GeoIP attribution (CC BY 4.0 requires a link on pages using the data). */
+.app-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--siembox-bg-color);
+  padding: 0 20px;
+  font-size: 11px;
+  color: var(--siembox-text-secondary);
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.app-footer a {
+  color: var(--siembox-text-secondary);
+  text-decoration: none;
+}
+
+.app-footer a:hover {
+  color: #409eff;
+  text-decoration: underline;
 }
 
 .header-left {

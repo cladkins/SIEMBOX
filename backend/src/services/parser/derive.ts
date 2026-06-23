@@ -39,6 +39,79 @@ export interface DeriveRule {
   overwrite?: boolean;
 }
 
+/**
+ * Structurally validate a parser's `derivations` (used by import + CI). Returns a
+ * list of human-readable errors; empty array means valid. Verifies rule shape,
+ * matcher keys, and that every regex (`matches` / `extract.pattern`) compiles.
+ */
+export function validateDerivations(rules: unknown): string[] {
+  const errors: string[] = [];
+  if (rules === undefined || rules === null) return errors; // optional
+  if (!Array.isArray(rules)) return ['derivations must be an array'];
+
+  const matcherKeys = new Set(['equals', 'contains', 'in', 'matches', 'exists']);
+  rules.forEach((rule: any, i) => {
+    const at = `derivations[${i}]`;
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
+      errors.push(`${at} must be an object`);
+      return;
+    }
+    if (rule.set === undefined && rule.extract === undefined) {
+      errors.push(`${at} must have a "set" or "extract"`);
+    }
+    if (rule.when !== undefined) {
+      if (typeof rule.when !== 'object' || Array.isArray(rule.when)) {
+        errors.push(`${at}.when must be an object`);
+      } else {
+        for (const [field, matcher] of Object.entries(rule.when as Record<string, any>)) {
+          if (!matcher || typeof matcher !== 'object') {
+            errors.push(`${at}.when.${field} must be a matcher object`);
+            continue;
+          }
+          for (const k of Object.keys(matcher)) {
+            if (!matcherKeys.has(k)) errors.push(`${at}.when.${field} has unknown matcher "${k}"`);
+          }
+          if (matcher.matches !== undefined) {
+            try { new RegExp(String(matcher.matches)); } catch (e) {
+              errors.push(`${at}.when.${field}.matches is not a valid regex: ${(e as Error).message}`);
+            }
+          }
+          if (matcher.in !== undefined && !Array.isArray(matcher.in)) {
+            errors.push(`${at}.when.${field}.in must be an array`);
+          }
+        }
+      }
+    }
+    if (rule.set !== undefined && (typeof rule.set !== 'object' || Array.isArray(rule.set))) {
+      errors.push(`${at}.set must be an object`);
+    }
+    if (rule.extract !== undefined) {
+      if (typeof rule.extract !== 'object' || Array.isArray(rule.extract)) {
+        errors.push(`${at}.extract must be an object`);
+      } else {
+        for (const [field, spec] of Object.entries(rule.extract as Record<string, any>)) {
+          if (!spec || typeof spec !== 'object') {
+            errors.push(`${at}.extract.${field} must be a {from, pattern} object`);
+            continue;
+          }
+          if (typeof spec.from !== 'string' || !spec.from) errors.push(`${at}.extract.${field}.from must be a non-empty string`);
+          if (typeof spec.pattern !== 'string' || !spec.pattern) {
+            errors.push(`${at}.extract.${field}.pattern must be a non-empty string`);
+          } else {
+            try { new RegExp(spec.pattern); } catch (e) {
+              errors.push(`${at}.extract.${field}.pattern is not a valid regex: ${(e as Error).message}`);
+            }
+          }
+          if (spec.group !== undefined && (typeof spec.group !== 'number' || spec.group < 0)) {
+            errors.push(`${at}.extract.${field}.group must be a non-negative number`);
+          }
+        }
+      }
+    }
+  });
+  return errors;
+}
+
 function isEmpty(v: any): boolean {
   return v === undefined || v === null || v === '';
 }

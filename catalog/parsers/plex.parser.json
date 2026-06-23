@@ -1,0 +1,136 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "plex",
+  "description": "Plex Media Server log: 401/403 auth failures and playback-start (timeline state=playing) events.",
+  "parser_type": "regex",
+  "priority": 19,
+  "pattern": "^(?<timestamp>[A-Z][a-z]{2}\\s+\\d{1,2},\\s+\\d{4}\\s+\\d{2}:\\d{2}:\\d{2}\\.\\d{3})\\s+\\[(?<thread>0x[0-9a-fA-F]+)\\]\\s+(?<log_level>[A-Z]+)\\s+-\\s+(?<msg>.*)$",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "thread": "thread",
+    "log_level": "log_level",
+    "msg": "message",
+    "service": "plex"
+  },
+  "derivations": [
+    {
+      "extract": {
+        "client_ip": {
+          "from": "message",
+          "pattern": "Completed:\\s*\\[([0-9a-fA-F:.]+?):\\d+\\]\\s+(\\d{3})\\s+(GET|POST|PUT|DELETE|HEAD)\\s+(\\S+)",
+          "group": 1
+        },
+        "source_ip": {
+          "from": "message",
+          "pattern": "Completed:\\s*\\[([0-9a-fA-F:.]+?):\\d+\\]\\s+(\\d{3})\\s+(GET|POST|PUT|DELETE|HEAD)\\s+(\\S+)",
+          "group": 1
+        },
+        "status_code": {
+          "from": "message",
+          "pattern": "Completed:\\s*\\[([0-9a-fA-F:.]+?):\\d+\\]\\s+(\\d{3})\\s+(GET|POST|PUT|DELETE|HEAD)\\s+(\\S+)",
+          "group": 2
+        },
+        "method": {
+          "from": "message",
+          "pattern": "Completed:\\s*\\[([0-9a-fA-F:.]+?):\\d+\\]\\s+(\\d{3})\\s+(GET|POST|PUT|DELETE|HEAD)\\s+(\\S+)",
+          "group": 3
+        },
+        "request_uri": {
+          "from": "message",
+          "pattern": "Completed:\\s*\\[([0-9a-fA-F:.]+?):\\d+\\]\\s+(\\d{3})\\s+(GET|POST|PUT|DELETE|HEAD)\\s+(\\S+)",
+          "group": 4
+        }
+      }
+    },
+    {
+      "when": {
+        "request_uri": {
+          "matches": "/:/timeline\\b.*[?&]state=playing\\b"
+        }
+      },
+      "set": {
+        "event": "playback_start"
+      }
+    },
+    {
+      "when": {
+        "status_code": {
+          "in": [
+            "401",
+            "403"
+          ]
+        }
+      },
+      "set": {
+        "event": "login_failure"
+      },
+      "overwrite": true
+    },
+    {
+      "extract": {
+        "user": {
+          "from": "message",
+          "pattern": "\\[Now\\]\\s+User is\\s+(.+?)\\s+\\(ID:\\s*(\\d+)\\)",
+          "group": 1
+        },
+        "user_id": {
+          "from": "message",
+          "pattern": "\\[Now\\]\\s+User is\\s+(.+?)\\s+\\(ID:\\s*(\\d+)\\)",
+          "group": 2
+        }
+      }
+    },
+    {
+      "set": {
+        "service": "plex"
+      }
+    }
+  ],
+  "event_type": "plex_event",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "timeline GET with state=playing is a playback start",
+      "input": "Jan 15, 2024 12:00:00.123 [0x7f1a] INFO - Completed: [203.0.113.5:53122] 200 GET /:/timeline?ratingKey=1&state=playing&time=10 (glyph)",
+      "expect": {
+        "source_ip": "203.0.113.5",
+        "client_ip": "203.0.113.5",
+        "status_code": "200",
+        "method": "GET",
+        "event": "playback_start",
+        "service": "plex"
+      }
+    },
+    {
+      "description": "401 on the API is an auth failure (Plex delegates to MyPlex)",
+      "input": "Jan 15, 2024 12:01:00.000 [0x7f1a] INFO - Completed: [198.51.100.9:443] 401 GET /library/sections",
+      "expect": {
+        "source_ip": "198.51.100.9",
+        "status_code": "401",
+        "event": "login_failure",
+        "auth_outcome": "failure",
+        "service": "plex"
+      }
+    },
+    {
+      "description": "the [Now] line carries the username",
+      "input": "Jan 15, 2024 12:02:00.000 [0x7f1a] DEBUG - [Now] User is John Doe (ID: 42)",
+      "expect": {
+        "user": "John Doe",
+        "user_id": "42",
+        "service": "plex"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Plex Media Server.log",
+    "tags": [
+      "media",
+      "plex"
+    ],
+    "references": [
+      "https://support.plex.tv/articles/200250417-plex-media-server-log-files/"
+    ]
+  }
+}

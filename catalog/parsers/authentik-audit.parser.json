@@ -1,0 +1,101 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "authentik-audit",
+  "description": "Authentik SSO audit events (JSON): normalizes failed logins to a uniform marker.",
+  "parser_type": "json",
+  "priority": 24,
+  "pattern": "",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "event": "event",
+    "user": "user",
+    "ip": "client_ip",
+    "success": "success",
+    "app": "app",
+    "service": "authentik"
+  },
+  "derivations": [
+    {
+      "when": {
+        "success": {
+          "equals": "false"
+        }
+      },
+      "set": {
+        "event": "authentication failed"
+      },
+      "overwrite": true
+    },
+    {
+      "when": {
+        "event": {
+          "contains": "fail"
+        }
+      },
+      "set": {
+        "event": "authentication failed"
+      },
+      "overwrite": true
+    },
+    {
+      "when": {
+        "event": {
+          "contains": "denied"
+        }
+      },
+      "set": {
+        "event": "authentication failed"
+      },
+      "overwrite": true
+    },
+    {
+      "when": {
+        "event": {
+          "contains": "invalid"
+        }
+      },
+      "set": {
+        "event": "authentication failed"
+      },
+      "overwrite": true
+    }
+  ],
+  "event_type": "authentik_audit",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "failed login (success=false) -> uniform failure marker",
+      "input": "{\"timestamp\":\"2024-01-15T12:00:00Z\",\"event\":\"login\",\"user\":\"alice\",\"ip\":\"203.0.113.5\",\"success\":false}",
+      "expect": {
+        "event": "authentication failed",
+        "user": "alice",
+        "source_ip": "203.0.113.5",
+        "client_ip": "203.0.113.5",
+        "auth_outcome": "failure",
+        "service": "authentik"
+      }
+    },
+    {
+      "description": "successful login is left intact",
+      "input": "{\"timestamp\":\"2024-01-15T12:01:00Z\",\"event\":\"login\",\"user\":\"bob\",\"ip\":\"203.0.113.6\",\"success\":true}",
+      "expect": {
+        "event": "login",
+        "user": "bob",
+        "service": "authentik",
+        "auth_outcome": null
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Authentik audit log (JSON)",
+    "tags": [
+      "sso",
+      "authentik",
+      "identity"
+    ],
+    "references": [
+      "https://docs.goauthentik.io/docs/events/"
+    ]
+  }
+}

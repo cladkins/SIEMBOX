@@ -97,6 +97,11 @@ export const api = {
   testParser: (id: number, sample: string) => apiClient.post(`/parsers/${id}/test`, { sample }),
   testParserConfig: (parser_type: string, pattern: string, field_mappings: any, sample: string) =>
     apiClient.post('/parsers/test', { parser_type, pattern, field_mappings, sample }),
+  // Portable parser export/import (shareable .parser.json; same format the catalog uses)
+  exportParser: (id: number) => apiClient.get(`/parsers/${id}/export`, { responseType: 'blob' }),
+  validatePortableParser: (parser: any, strict = false) =>
+    apiClient.post('/parsers/validate', { parser, strict }),
+  importParser: (parser: any, force = false) => apiClient.post('/parsers/import', { parser, force }),
 
   // Detection Rules
   getRules: () => apiClient.get('/rules'),

@@ -4,9 +4,21 @@
       <template #header>
         <div class="card-header">
           <span>Log Parsers</span>
-          <el-button type="primary" size="small" @click="showCreateDialog">
-            <el-icon><Plus /></el-icon> Add Parser
-          </el-button>
+          <div class="header-actions">
+            <el-button size="small" @click="triggerImport">
+              <el-icon><Upload /></el-icon> Import
+            </el-button>
+            <el-button type="primary" size="small" @click="showCreateDialog">
+              <el-icon><Plus /></el-icon> Add Parser
+            </el-button>
+            <input
+              ref="importFileInput"
+              type="file"
+              accept=".json"
+              style="display: none"
+              @change="onImportFileChange"
+            />
+          </div>
         </div>
       </template>
 
@@ -28,10 +40,11 @@
           </template>
         </el-table-column>
         <el-table-column prop="description" label="Description" min-width="300" show-overflow-tooltip />
-        <el-table-column label="Actions" width="250" fixed="right">
+        <el-table-column label="Actions" width="330" fixed="right">
           <template #default="{ row }">
             <el-button size="small" @click="testParser(row)">Test</el-button>
             <el-button size="small" @click="editParser(row)">Edit</el-button>
+            <el-button size="small" @click="exportParser(row)">Export</el-button>
             <el-button type="danger" size="small" @click="deleteParser(row)">Delete</el-button>
           </template>
         </el-table-column>
@@ -165,6 +178,61 @@
         </el-form-item>
       </el-form>
     </el-dialog>
+
+    <!-- Import Parser Dialog -->
+    <el-dialog v-model="importDialogVisible" title="Import Parser" width="700px">
+      <template v-if="importParserData">
+        <p class="import-name">
+          <strong>{{ importParserData.name || '(unnamed)' }}</strong>
+          <el-tag v-if="importParserData.parser_type" size="small">{{ importParserData.parser_type.toUpperCase() }}</el-tag>
+        </p>
+        <p v-if="importParserData.description" class="import-desc">{{ importParserData.description }}</p>
+
+        <el-alert
+          v-if="importValidation && !importValidation.ok"
+          type="error"
+          :closable="false"
+          title="Validation errors — fix these before importing"
+          style="margin-bottom: 10px"
+        >
+          <ul><li v-for="(e, i) in importValidation.errors" :key="i">{{ e }}</li></ul>
+        </el-alert>
+
+        <el-alert
+          v-if="importValidation && importValidation.warnings && importValidation.warnings.length"
+          type="warning"
+          :closable="false"
+          title="Warnings"
+          style="margin-bottom: 10px"
+        >
+          <ul><li v-for="(w, i) in importValidation.warnings" :key="i">{{ w }}</li></ul>
+        </el-alert>
+
+        <el-alert
+          v-if="importSelfTest"
+          :type="importSelfTest.ok ? 'success' : 'warning'"
+          :closable="false"
+          :title="`Self-tests: ${importSelfTest.passed}/${importSelfTest.total} passed`"
+        >
+          <div v-for="(f, i) in importSelfTest.failures" :key="i" class="selftest-failure">
+            sample[{{ f.index }}]<span v-if="f.description"> "{{ f.description }}"</span><span v-if="!f.matched"> — parser did not match</span>
+            <ul><li v-for="(m, j) in f.mismatches" :key="j">{{ m.field }}: expected {{ JSON.stringify(m.expected) }}, got {{ JSON.stringify(m.actual) }}</li></ul>
+          </div>
+        </el-alert>
+      </template>
+
+      <template #footer>
+        <el-button @click="importDialogVisible = false">Cancel</el-button>
+        <el-button
+          type="primary"
+          :disabled="!importValidation || !importValidation.ok"
+          :loading="importing"
+          @click="doImport"
+        >
+          Import{{ importSelfTest && !importSelfTest.ok ? ' anyway' : '' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -172,7 +240,7 @@
 import { ref, onMounted, reactive } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
-import { Plus, Delete, Right, CircleCheck } from '@element-plus/icons-vue';
+import { Plus, Delete, Right, CircleCheck, Upload } from '@element-plus/icons-vue';
 
 const parsers = ref<any[]>([]);
 const loading = ref(false);
@@ -201,6 +269,14 @@ const mappingKeys = ref<string[]>([]);
 const testSample = ref('');
 const testInput = ref('');
 const testResult = ref<any>(null);
+
+// Portable parser import/export
+const importFileInput = ref<HTMLInputElement>();
+const importDialogVisible = ref(false);
+const importParserData = ref<any>(null);
+const importValidation = ref<any>(null);
+const importSelfTest = ref<any>(null);
+const importing = ref(false);
 
 const rules: FormRules = {
   name: [{ required: true, message: 'Name is required', trigger: 'blur' }],
@@ -410,6 +486,69 @@ async function runTest() {
   }
 }
 
+async function exportParser(parser: any) {
+  try {
+    const res = await api.exportParser(parser.id);
+    const url = URL.createObjectURL(new Blob([res.data], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${parser.name}.parser.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    ElMessage.error('Failed to export parser');
+  }
+}
+
+function triggerImport() {
+  importFileInput.value?.click();
+}
+
+async function onImportFileChange(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    ElMessage.error('Selected file is not valid JSON');
+    input.value = '';
+    return;
+  }
+  input.value = ''; // allow re-selecting the same file later
+
+  importParserData.value = parsed;
+  importValidation.value = null;
+  importSelfTest.value = null;
+  try {
+    const res = await api.validatePortableParser(parsed);
+    importValidation.value = res.data.validation;
+    importSelfTest.value = res.data.self_test;
+  } catch {
+    ElMessage.error('Failed to validate parser');
+  }
+  importDialogVisible.value = true;
+}
+
+async function doImport() {
+  if (!importParserData.value) return;
+  const force = !!(importSelfTest.value && !importSelfTest.value.ok);
+  importing.value = true;
+  try {
+    const res = await api.importParser(importParserData.value, force);
+    ElMessage.success(`Parser ${res.data.action} successfully`);
+    importDialogVisible.value = false;
+    importParserData.value = null;
+    fetchParsers();
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Failed to import parser');
+  } finally {
+    importing.value = false;
+  }
+}
+
 async function deleteParser(parser: any) {
   try {
     await ElMessageBox.confirm(
@@ -442,6 +581,29 @@ async function deleteParser(parser: any) {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.import-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+}
+
+.import-desc {
+  color: var(--el-text-color-secondary);
+  margin: 0 0 12px;
+}
+
+.selftest-failure {
+  margin-top: 6px;
+  font-size: 13px;
 }
 
 .field-mappings {

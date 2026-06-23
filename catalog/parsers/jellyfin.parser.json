@@ -1,0 +1,109 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "jellyfin",
+  "description": "Jellyfin media server log (log_*.log): surfaces denied-authentication and playback-start events.",
+  "parser_type": "regex",
+  "priority": 21,
+  "pattern": "^\\[(?<timestamp>\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?(?:\\s*[+-]\\d{2}:\\d{2})?)\\]\\s+\\[(?<log_level>[A-Z]{3})\\]\\s+(?:\\[(?<thread>[^\\]]*)\\]\\s+)?(?<category>[^:]+):\\s+(?<msg>.*)$",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "log_level": "log_level",
+    "thread": "thread",
+    "category": "category",
+    "msg": "message",
+    "service": "jellyfin"
+  },
+  "derivations": [
+    {
+      "when": {
+        "message": {
+          "matches": "Authentication request for\\s+\"?([^\"]+?)\"?\\s+has been denied\\s+\\(IP:\\s*\"?(\\d{1,3}(?:\\.\\d{1,3}){3})\"?\\)"
+        }
+      },
+      "set": {
+        "event": "login_failure"
+      },
+      "extract": {
+        "user": {
+          "from": "message",
+          "pattern": "Authentication request for\\s+\"?([^\"]+?)\"?\\s+has been denied\\s+\\(IP:\\s*\"?(\\d{1,3}(?:\\.\\d{1,3}){3})\"?\\)",
+          "group": 1
+        },
+        "client_ip": {
+          "from": "message",
+          "pattern": "Authentication request for\\s+\"?([^\"]+?)\"?\\s+has been denied\\s+\\(IP:\\s*\"?(\\d{1,3}(?:\\.\\d{1,3}){3})\"?\\)",
+          "group": 2
+        },
+        "source_ip": {
+          "from": "message",
+          "pattern": "Authentication request for\\s+\"?([^\"]+?)\"?\\s+has been denied\\s+\\(IP:\\s*\"?(\\d{1,3}(?:\\.\\d{1,3}){3})\"?\\)",
+          "group": 2
+        }
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "matches": "Playback start reported by app\\s+\"([^\"]*)\"\\s+\"([^\"]*)\"\\s+playing\\s+\"([^\"]*)\""
+        }
+      },
+      "set": {
+        "event": "playback_start"
+      },
+      "extract": {
+        "client_app": {
+          "from": "message",
+          "pattern": "Playback start reported by app\\s+\"([^\"]*)\"\\s+\"([^\"]*)\"\\s+playing\\s+\"([^\"]*)\"",
+          "group": 1
+        },
+        "media_item": {
+          "from": "message",
+          "pattern": "Playback start reported by app\\s+\"([^\"]*)\"\\s+\"([^\"]*)\"\\s+playing\\s+\"([^\"]*)\"",
+          "group": 3
+        }
+      }
+    },
+    {
+      "set": {
+        "service": "jellyfin"
+      }
+    }
+  ],
+  "event_type": "jellyfin_event",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "denied authentication carries user + IP",
+      "input": "[2024-01-15 12:00:00.1234567 +00:00] [INF] [27] Emby.Server.Implementations.Session.SessionManager: Authentication request for \"jdoe\" has been denied (IP: \"203.0.113.5\").",
+      "expect": {
+        "user": "jdoe",
+        "source_ip": "203.0.113.5",
+        "client_ip": "203.0.113.5",
+        "event": "login_failure",
+        "auth_outcome": "failure",
+        "service": "jellyfin"
+      }
+    },
+    {
+      "description": "playback start carries app + media title",
+      "input": "[2024-01-15 12:05:00.0000000 +00:00] [INF] Emby.Server.Implementations.Session.SessionManager: Playback start reported by app \"Jellyfin Web\" \"10.8.0\" playing \"Some Movie (2021)\"",
+      "expect": {
+        "event": "playback_start",
+        "client_app": "Jellyfin Web",
+        "media_item": "Some Movie (2021)",
+        "service": "jellyfin"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Jellyfin server log (log_*.log)",
+    "tags": [
+      "media",
+      "jellyfin"
+    ],
+    "references": [
+      "https://jellyfin.org/docs/general/administration/configuration/#logging"
+    ]
+  }
+}

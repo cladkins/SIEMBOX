@@ -150,6 +150,17 @@ function applyRegexParser(parser: ParserDef, message: string): { fields: Record<
   return { fields: processedFields, event_type: determineEventType(parser.name, processedFields) };
 }
 
+/**
+ * Resolve a dotted/indexed path within a parsed JSON object, e.g.
+ * "request.client_ip" or "request.headers.User-Agent[0]". Returns undefined for
+ * flat keys (the caller already tried those as a top-level lookup).
+ */
+function getJsonPath(obj: any, path: string): any {
+  const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.');
+  if (parts.length < 2) return undefined;
+  return parts.reduce((o, k) => (o == null ? undefined : o[k]), obj);
+}
+
 function applyJsonParser(parser: ParserDef, message: string): { fields: Record<string, any>; event_type: string } | null {
   try {
     let jsonString = message.trim();
@@ -163,7 +174,12 @@ function applyJsonParser(parser: ParserDef, message: string): { fields: Record<s
     const fields: Record<string, any> = {};
     if (Object.keys(parser.field_mappings).length > 0) {
       for (const [sourceField, targetField] of Object.entries(parser.field_mappings)) {
-        if (parsed[sourceField] !== undefined) fields[targetField] = parsed[sourceField];
+        // Prefer an exact top-level key; fall back to a dotted path (e.g. Caddy's
+        // "request.client_ip") so nested JSON logs can map nested values. Flat keys
+        // always win, so existing flat-mapped parsers are unaffected.
+        const value =
+          parsed[sourceField] !== undefined ? parsed[sourceField] : getJsonPath(parsed, sourceField);
+        if (value !== undefined) fields[targetField] = value;
       }
     } else {
       Object.assign(fields, parsed);

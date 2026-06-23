@@ -22,19 +22,29 @@
   "enabled": true,
   "test_samples": [
     {
-      "description": "Caddy JSON access log, 200 (top-level status/size are mapped)",
+      "description": "Caddy JSON access log, 200 (nested request.* fields resolve via dotted paths)",
       "input": "{\"level\":\"info\",\"ts\":1705320000.123,\"logger\":\"http.log.access\",\"msg\":\"handled request\",\"request\":{\"client_ip\":\"203.0.113.5\",\"method\":\"GET\",\"uri\":\"/api/health\",\"proto\":\"HTTP/2.0\",\"headers\":{\"User-Agent\":[\"Mozilla/5.0\"]}},\"status\":200,\"size\":18,\"duration\":0.0012}",
       "expect": {
+        "client_ip": "203.0.113.5",
+        "source_ip": "203.0.113.5",
+        "method": "GET",
+        "path": "/api/health",
         "status_code": "200",
         "response_size": "18",
+        "user_agent": "Mozilla/5.0",
         "service": "caddy"
       }
     },
     {
-      "description": "Caddy JSON access log, 403 denied",
+      "description": "Caddy JSON access log, 403 denied (client_ip + user_agent from nested paths)",
       "input": "{\"level\":\"info\",\"ts\":1705320060.5,\"logger\":\"http.log.access\",\"msg\":\"handled request\",\"request\":{\"client_ip\":\"198.51.100.9\",\"method\":\"POST\",\"uri\":\"/admin\",\"proto\":\"HTTP/1.1\",\"headers\":{\"User-Agent\":[\"curl/8.0\"]}},\"status\":403,\"size\":0,\"duration\":0.0003}",
       "expect": {
+        "client_ip": "198.51.100.9",
+        "source_ip": "198.51.100.9",
+        "method": "POST",
+        "path": "/admin",
         "status_code": "403",
+        "user_agent": "curl/8.0",
         "service": "caddy"
       }
     }

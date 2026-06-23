@@ -243,12 +243,28 @@
     <!-- Parser Catalog Dialog -->
     <el-dialog v-model="catalogDialogVisible" title="Parser Catalog" width="900px">
       <div class="catalog-toolbar">
-        <span v-if="catalogSource" class="catalog-source">
-          Source: <code>{{ catalogSource.repo }}@{{ catalogSource.ref }}/{{ catalogSource.path }}</code>
-        </span>
+        <el-input
+          v-model="catalogSearch"
+          placeholder="Search name, tag, description…"
+          clearable
+          size="small"
+          style="width: 240px"
+        />
+        <el-select v-model="catalogStatusFilter" size="small" style="width: 160px">
+          <el-option label="All statuses" value="all" />
+          <el-option label="Available" value="available" />
+          <el-option label="Installed" value="installed" />
+          <el-option label="Update available" value="update" />
+          <el-option label="Invalid" value="invalid" />
+        </el-select>
+        <div style="flex: 1" />
+        <span class="catalog-count">{{ filteredParserCatalog.length }} / {{ catalog.length }}</span>
         <el-button size="small" :loading="catalogLoading" @click="loadCatalog(true)">
           <el-icon><Refresh /></el-icon> Refresh
         </el-button>
+      </div>
+      <div v-if="catalogSource" class="catalog-source catalog-source-line">
+        Source: <code>{{ catalogSource.repo }}@{{ catalogSource.ref }}/{{ catalogSource.path }}</code>
       </div>
 
       <el-alert
@@ -259,8 +275,8 @@
         style="margin-bottom: 12px"
       />
 
-      <el-table :data="catalog" v-loading="catalogLoading" stripe max-height="460">
-        <el-table-column prop="name" label="Name" min-width="150">
+      <el-table :data="filteredParserCatalog" v-loading="catalogLoading" stripe max-height="460" :default-sort="{ prop: 'name', order: 'ascending' }">
+        <el-table-column prop="name" label="Name" min-width="150" sortable>
           <template #default="{ row }">
             <strong>{{ row.name }}</strong>
             <div v-if="row.log_source" class="catalog-sub">{{ row.log_source }}</div>
@@ -374,7 +390,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive } from 'vue';
+import { ref, onMounted, reactive, computed } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
 import { Plus, Delete, Right, CircleCheck, Upload, Shop, Refresh, MagicStick } from '@element-plus/icons-vue';
@@ -422,6 +438,25 @@ const catalog = ref<any[]>([]);
 const catalogSource = ref<any>(null);
 const catalogError = ref('');
 const installing = ref('');
+const catalogSearch = ref('');
+const catalogStatusFilter = ref('all');
+
+function entryStatus(r: any) {
+  return !r.valid ? 'invalid' : r.update_available ? 'update' : r.installed ? 'installed' : 'available';
+}
+
+const filteredParserCatalog = computed(() => {
+  const q = catalogSearch.value.trim().toLowerCase();
+  const sf = catalogStatusFilter.value;
+  return catalog.value.filter((r) => {
+    if (sf !== 'all' && entryStatus(r) !== sf) return false;
+    if (q) {
+      const hay = [r.name, r.description, r.log_source, ...(r.tags || [])].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+});
 
 // AI parser builder
 const aiDialogVisible = ref(false);
@@ -837,8 +872,17 @@ async function deleteParser(parser: any) {
 
 .catalog-toolbar {
   display: flex;
-  justify-content: space-between;
+  gap: 10px;
   align-items: center;
+  margin-bottom: 8px;
+}
+
+.catalog-count {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.catalog-source-line {
   margin-bottom: 12px;
 }
 

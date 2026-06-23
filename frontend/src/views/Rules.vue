@@ -156,24 +156,47 @@
     <!-- Detection Catalog Dialog -->
     <el-dialog v-model="catalogDialogVisible" title="Detection Catalog" width="900px">
       <div class="catalog-toolbar">
-        <span v-if="catalogSource" class="catalog-source">
-          Source: <code>{{ catalogSource.repo }}@{{ catalogSource.ref }}/{{ catalogSource.path }}</code>
-        </span>
+        <el-input
+          v-model="catalogSearch"
+          placeholder="Search name, tag, description…"
+          clearable
+          size="small"
+          style="width: 220px"
+        />
+        <el-select v-model="catalogSeverityFilter" size="small" style="width: 130px">
+          <el-option label="All severities" value="all" />
+          <el-option label="Critical" value="critical" />
+          <el-option label="High" value="high" />
+          <el-option label="Medium" value="medium" />
+          <el-option label="Low" value="low" />
+        </el-select>
+        <el-select v-model="catalogStatusFilter" size="small" style="width: 150px">
+          <el-option label="All statuses" value="all" />
+          <el-option label="Available" value="available" />
+          <el-option label="Installed" value="installed" />
+          <el-option label="Update available" value="update" />
+          <el-option label="Invalid" value="invalid" />
+        </el-select>
+        <div style="flex: 1" />
+        <span class="catalog-count">{{ filteredRuleCatalog.length }} / {{ catalog.length }}</span>
         <el-button size="small" :loading="catalogLoading" @click="loadCatalog(true)">
           <el-icon><Refresh /></el-icon> Refresh
         </el-button>
       </div>
+      <div v-if="catalogSource" class="catalog-source catalog-source-line">
+        Source: <code>{{ catalogSource.repo }}@{{ catalogSource.ref }}/{{ catalogSource.path }}</code>
+      </div>
 
       <el-alert v-if="catalogError" type="error" :closable="false" :title="catalogError" style="margin-bottom: 12px" />
 
-      <el-table :data="catalog" v-loading="catalogLoading" stripe max-height="460">
-        <el-table-column prop="name" label="Name" min-width="220">
+      <el-table :data="filteredRuleCatalog" v-loading="catalogLoading" stripe max-height="460" :default-sort="{ prop: 'name', order: 'ascending' }">
+        <el-table-column prop="name" label="Name" min-width="220" sortable>
           <template #default="{ row }">
             <strong>{{ row.name }}</strong>
             <div v-if="row.description" class="catalog-sub">{{ row.description }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="Severity" width="110">
+        <el-table-column label="Severity" width="110" sortable :sort-method="sortBySeverity">
           <template #default="{ row }">
             <el-tag v-if="row.severity" :type="severityType(row.severity)" size="small">{{ row.severity }}</el-tag>
           </template>
@@ -294,6 +317,30 @@ const catalog = ref<any[]>([]);
 const catalogSource = ref<any>(null);
 const catalogError = ref('');
 const installing = ref('');
+const catalogSearch = ref('');
+const catalogStatusFilter = ref('all');
+const catalogSeverityFilter = ref('all');
+
+const SEV_RANK: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+function sortBySeverity(a: any, b: any) {
+  return (SEV_RANK[a.severity] || 0) - (SEV_RANK[b.severity] || 0);
+}
+function ruleStatus(r: any) {
+  return !r.valid ? 'invalid' : r.update_available ? 'update' : r.installed ? 'installed' : 'available';
+}
+
+const filteredRuleCatalog = computed(() => {
+  const q = catalogSearch.value.trim().toLowerCase();
+  return catalog.value.filter((r) => {
+    if (catalogStatusFilter.value !== 'all' && ruleStatus(r) !== catalogStatusFilter.value) return false;
+    if (catalogSeverityFilter.value !== 'all' && r.severity !== catalogSeverityFilter.value) return false;
+    if (q) {
+      const hay = [r.name, r.description, ...(r.tags || [])].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+});
 
 function severityType(sev: string) {
   return { critical: 'danger', high: 'danger', medium: 'warning', low: 'info' }[sev] || 'info';
@@ -765,8 +812,17 @@ const getSeverityType = (severity: string) => {
 
 .catalog-toolbar {
   display: flex;
-  justify-content: space-between;
+  gap: 10px;
   align-items: center;
+  margin-bottom: 8px;
+}
+
+.catalog-count {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.catalog-source-line {
   margin-bottom: 12px;
 }
 

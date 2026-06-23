@@ -30,6 +30,9 @@
 3. **Dead/malformed links in vuln detail** — 3a fixed (commit `1db04e5`), 3b/3d remain.
 4. **Security sweep** — Dependabot: backend **22** (15 high, 7 moderate), frontend **29** (2 critical, 18 high, 9 moderate). Knock down at least critical+high.
 5. (Decision) Keep bundled parsers/detections for V2 — do NOT do the "remove bundled" work in V2.
+6. **Update the README + docs.** The repo README/`DEPLOYMENT.md`/`API.md`/`SECURITY.md` still describe **v1** ("19 parsers", "40+ rules", "seeds parsers and rules on first startup", Vue/Node stack). Refresh for v2: **27 parsers + 48 detections**, the in-app **catalog** (Browse/Install, export/import), the **AI builder** (parsers + detections, BYO key), canonical normalization, GeoIP enrichment, and the new env vars in `.env.example`. The `v1.0.0` GitHub release description is also stale (superseded by v2 notes).
+7. **Publish the v2.0.0 GitHub Release (manual — agent can't).** Notes are drafted in **`docs/releases/v2.0.0.md`**. Tag/release pushes are **blocked by the harness (403)**, same as direct `main` pushes, and the GitHub MCP has no create-release tool — so a human must publish it: GitHub → Releases → *Draft a new release* → create tag **`v2.0.0`** targeting `main` → title "SIEMBox v2.0.0 — The Parser Platform" → paste `docs/releases/v2.0.0.md` → Publish. Publishing triggers `build-containers` to push **semver-tagged** images (`v2.0.0`, `2.0`, `2`). (Or run `gh release create v2.0.0 --notes-file docs/releases/v2.0.0.md` from a machine with `gh`.)
+
 
 ### V3 backlog (net-new, deferred)
 - **Remove bundled parsers/detections** + an "Install all" action in Browse Catalog (catalog-only first run). *User asked for this; deferring because it makes a fresh install empty without an install-all flow.*

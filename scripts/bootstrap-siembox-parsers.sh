@@ -19,9 +19,11 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="${1:?usage: scripts/bootstrap-siembox-parsers.sh <target-dir>}"
 
-mkdir -p "$TARGET/parsers" "$TARGET/schema" "$TARGET/.github/workflows"
+mkdir -p "$TARGET/parsers" "$TARGET/schema" "$TARGET/detections" "$TARGET/.github/workflows"
 cp "$HERE"/catalog/parsers/*.parser.json "$TARGET/parsers/"
 cp "$HERE"/catalog/schema/parser.schema.json "$TARGET/schema/"
+# Detection rules: the YAML under rules/ IS the portable form (preserve subdirs).
+cp -r "$HERE"/rules/. "$TARGET/detections/"
 cp "$HERE"/LICENSE "$TARGET/LICENSE"
 
 cat > "$TARGET/.github/workflows/validate.yml" <<'YML'
@@ -69,6 +71,9 @@ jobs:
 
       - name: Validate parsers (strict + self-tests)
         run: node .siembox/backend/dist/scripts/validate-parsers.js "$GITHUB_WORKSPACE/parsers"
+
+      - name: Validate detections (strict)
+        run: node .siembox/backend/dist/scripts/validate-detections.js "$GITHUB_WORKSPACE/detections"
 YML
 
 cat > "$TARGET/README.md" <<'MD'
@@ -102,8 +107,9 @@ PARSER_CATALOG_PATH=parsers
 ## Layout
 
 ```
-parsers/   *.parser.json   — one portable parser per file
-schema/    parser.schema.json — JSON Schema (editor autocomplete + docs)
+parsers/     *.parser.json   — one portable parser per file
+detections/  *.yaml          — detection rules (by category), the SIEMBox rule format
+schema/      parser.schema.json — JSON Schema (editor autocomplete + docs)
 ```
 
 ## Contributing

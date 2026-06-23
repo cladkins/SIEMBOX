@@ -11,7 +11,8 @@
     "import-rules": "node dist/scripts/import-rules.js",
     "validate-parsers": "node dist/scripts/validate-parsers.js",
     "lint": "eslint src --ext .ts",
-    "format": "prettier --write \"src/**/*.ts\""
+    "format": "prettier --write \"src/**/*.ts\"",
+    "validate-detections": "node dist/scripts/validate-detections.js"
   },
   "keywords": [
     "siem",

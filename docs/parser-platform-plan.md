@@ -68,9 +68,8 @@ gate all landed. The whole catalog (27 parsers + 48 detections) is installable
 from a repo in-app. Next: Phase 3 (AI parser builder).
 
 ## Backlog / follow-ups
-- **Catalog UX: filtering + sorting.** The in-app Browse Catalog dialogs (parsers
-  *and* detections) are plain tables — add a search box (name/tag/description),
-  tag/severity filters, and column sorting (incl. by install status) so larger
-  catalogs stay navigable.
+- ✅ **Catalog UX: filtering + sorting.** Both Browse Catalog dialogs now have a
+  search box (name/tag/description), status (+ severity for detections) filters, a
+  result count, and sortable Name/Severity columns.
 - **Behavioral rule fixtures (optional).** Detections have structural validation;
   add optional fire/no-fire fixtures for non-aggregation rules.

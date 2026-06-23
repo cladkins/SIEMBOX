@@ -60,6 +60,10 @@ services:
       - ./rules:/app/rules:ro
       - ./data/geoip:/app/data
       - nuclei-templates:/root/nuclei-templates
+    # Lets the backend reach services on the Docker host (e.g. a local Ollama at
+    # http://host.docker.internal:11434). Ollama must also bind 0.0.0.0.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8421:8421"
       - "514:514/udp"

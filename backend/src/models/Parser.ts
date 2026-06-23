@@ -10,6 +10,7 @@ export interface Parser {
   pattern: string;
   field_mappings: Record<string, string>;
   test_samples: any[] | null;
+  derivations?: any[] | null;
   event_type: string | null;
   created_at: Date;
   updated_at: Date;

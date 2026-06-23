@@ -20,14 +20,28 @@ recommender.
 
 ## Phases
 - **Phase 0 — canonical schema** (`docs/canonical-schema.md`). ✅
-- **Phase 1 — declarative engine (keystone).** `derive` interpreter
-  (`services/parser/derive.ts`) + a `derivations` field on parsers; the engine
-  applies them generically. Convert parsers off hardcoded `postProcessFields`
-  one at a time (Vaultwarden first, validated by `test_samples`), then delete the
-  hardcoded blocks. *(in progress)*
-- **Phase 2 — in-app catalog/hub.** A `siembox-parsers` GitHub repo of
-  declarative parsers + detections; fetch/browse/install/update in-app (mirror
-  the Nuclei tarball pattern); parser export/import.
+- **Phase 1 — declarative engine (keystone).** ✅ `derive` interpreter
+  (`services/parser/derive.ts`: `when` matchers + `set` literals + `extract`
+  regex-capture) + a `derivations` JSONB field on parsers; the engine applies
+  them generically. ALL hardcoded `postProcessFields` per-parser logic is now data
+  (Vaultwarden → migration 010; Authelia/authentik/Keycloak/Home Assistant/
+  Jellyfin/Plex → migration 011). `parserEngine.postProcessFields` retains only
+  the generic CEF-extension split, the `applyDerivations` call, and the shared
+  `auth_outcome` marker — no per-parser branches remain. A faithfulness check
+  confirmed the data path reproduces the deleted blocks byte-for-byte.
+- **Phase 2 — in-app catalog/hub.** *(mostly done)*
+  - ✅ Portable parser format (`siembox.parser/v1`) + shared validator + self-test
+    runner (`parserPortable.ts`), reused by import AND the catalog CI.
+  - ✅ Export/import endpoints + UI (`GET /parsers/:id/export`, `POST /parsers/{validate,import}`).
+  - ✅ In-app **browse/install** from a GitHub repo (`catalogService.ts`,
+    `GET /parsers/catalog`, `POST /parsers/catalog/install`) — lists the repo tree,
+    pulls each `*.parser.json` from raw.githubusercontent, validates + self-tests
+    before upsert, and flags installed / update-available via a content signature.
+    Source is configurable (`PARSER_CATALOG_REPO/REF/PATH`), defaulting to this
+    repo's `catalog/`.
+  - ✅ CI gate for submissions (`validate-parsers` CLI + `.github/workflows/validate-catalog.yml`).
+  - ⏳ Graduate `catalog/` into a standalone `siembox-parsers` repo (outward-facing;
+    one env-var change once created). Add detections to the catalog alongside parsers.
 - **Phase 3 — AI parser builder.** Paste a sample → LLM proposes a declarative
   parser → run through `testParser` against samples → refine loop → save/export.
   Provider abstraction, bring-your-own-key (Anthropic default = latest Claude,
@@ -37,4 +51,9 @@ recommender.
   existing hub parser or kick off the AI builder from a snippet.
 
 ## Status
-Phase 0 done; Phase 1 keystone underway (Vaultwarden converted as the proof).
+Phase 0 done. **Phase 1 done** — the engine is fully data-driven; onboarding a new
+log source needs only parser data (pattern + field_mappings + derivations), no
+engine code. **Phase 2 mostly done** — portable format, export/import, in-app
+catalog browse/install, and the submission CI gate all landed; remaining is
+splitting `catalog/` into a standalone repo and adding detections to it. Next:
+Phase 3 (AI parser builder).

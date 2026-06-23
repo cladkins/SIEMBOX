@@ -1,0 +1,114 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "home-assistant",
+  "description": "Home Assistant core log (home-assistant.log): surfaces http.ban failed-login and IP-ban events.",
+  "parser_type": "regex",
+  "priority": 22,
+  "pattern": "^(?<timestamp>\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?)\\s+(?<log_level>[A-Z]+)\\s+\\((?<thread>[^)]+)\\)\\s+\\[(?<logger>[^\\]]+)\\]\\s+(?<message>.*)$",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "log_level": "log_level",
+    "thread": "thread",
+    "logger": "logger",
+    "message": "message",
+    "service": "home-assistant"
+  },
+  "derivations": [
+    {
+      "extract": {
+        "client_ip": {
+          "from": "message",
+          "pattern": "Banned IP\\s+(\\d{1,3}(?:\\.\\d{1,3}){3})"
+        },
+        "source_ip": {
+          "from": "message",
+          "pattern": "Banned IP\\s+(\\d{1,3}(?:\\.\\d{1,3}){3})"
+        }
+      }
+    },
+    {
+      "extract": {
+        "client_ip": {
+          "from": "message",
+          "pattern": "\\bfrom\\s+\\S+\\s+\\((\\d{1,3}(?:\\.\\d{1,3}){3})\\)"
+        },
+        "source_ip": {
+          "from": "message",
+          "pattern": "\\bfrom\\s+\\S+\\s+\\((\\d{1,3}(?:\\.\\d{1,3}){3})\\)"
+        }
+      }
+    },
+    {
+      "extract": {
+        "client_ip": {
+          "from": "message",
+          "pattern": "\\bfrom\\s+(\\d{1,3}(?:\\.\\d{1,3}){3})\\b"
+        },
+        "source_ip": {
+          "from": "message",
+          "pattern": "\\bfrom\\s+(\\d{1,3}(?:\\.\\d{1,3}){3})\\b"
+        }
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "matches": "banned ip.*too many login attempts"
+        }
+      },
+      "set": {
+        "event": "ip_banned"
+      }
+    },
+    {
+      "when": {
+        "message": {
+          "contains": "invalid authentication"
+        }
+      },
+      "set": {
+        "event": "login_failure"
+      }
+    },
+    {
+      "set": {
+        "service": "home-assistant"
+      }
+    }
+  ],
+  "event_type": "homeassistant_event",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "IP ban after too many attempts",
+      "input": "2024-01-15 12:00:00.123 WARNING (MainThread) [homeassistant.components.http.ban] Banned IP 203.0.113.5 for too many login attempts",
+      "expect": {
+        "source_ip": "203.0.113.5",
+        "client_ip": "203.0.113.5",
+        "event": "ip_banned",
+        "service": "home-assistant"
+      }
+    },
+    {
+      "description": "invalid authentication carries client IP",
+      "input": "2024-01-15 12:01:00.000 WARNING (MainThread) [homeassistant.components.http.ban] Login attempt or request with invalid authentication from 203.0.113.9 (203.0.113.9). Requested URL: '/auth/login_flow'.",
+      "expect": {
+        "source_ip": "203.0.113.9",
+        "event": "login_failure",
+        "auth_outcome": "failure",
+        "service": "home-assistant"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Home Assistant core log (home-assistant.log)",
+    "tags": [
+      "iot",
+      "home-assistant"
+    ],
+    "references": [
+      "https://www.home-assistant.io/integrations/http/#ip-ban"
+    ]
+  }
+}

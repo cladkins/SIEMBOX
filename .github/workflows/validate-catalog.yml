@@ -1,0 +1,47 @@
+name: Validate Parser Catalog
+
+# Gate for community parser submissions: every portable parser under catalog/
+# must pass strict schema validation AND its own self-tests (test_samples), run
+# through the exact same parse->derive->normalize pipeline the app uses. A parser
+# that passes here imports into SIEMBox and behaves identically.
+on:
+  pull_request:
+    paths:
+      - 'catalog/**'
+      - 'backend/src/services/parser/**'
+      - 'backend/src/scripts/validate-parsers.ts'
+      - '.github/workflows/validate-catalog.yml'
+  push:
+    branches: [main, develop]
+    paths:
+      - 'catalog/**'
+      - 'backend/src/services/parser/**'
+      - '.github/workflows/validate-catalog.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate portable parsers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
+
+      - name: Build validator
+        working-directory: backend
+        run: npm run build
+
+      - name: Validate catalog parsers (strict + self-tests)
+        working-directory: backend
+        run: npm run validate-parsers -- ../catalog/parsers

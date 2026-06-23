@@ -11,6 +11,8 @@ import {
   clearDetectionCache,
   ruleSignature,
 } from '../services/rules/detectionCatalog';
+import { generateDetection } from '../services/ai/aiService';
+import { authorize } from '../middleware/auth';
 
 const router = Router();
 
@@ -21,6 +23,23 @@ router.get('/', async (_req: Request, res: Response) => {
     res.json(rules);
   } catch (error) {
     throw new ApiError(500, 'Failed to fetch rules');
+  }
+});
+
+// AI: generate a detection rule from a natural-language description (+ optional
+// context about available fields), validated against the engine contract with an
+// auto-refine loop. Returns the proposed rule + validation.
+router.post('/ai/generate', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const { description, context, maxAttempts } = req.body ?? {};
+    if (!description || typeof description !== 'string') {
+      throw new ApiError(400, 'description is required');
+    }
+    const result = await generateDetection({ description, context, maxAttempts });
+    res.json(result);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, `AI generation failed: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 });
 

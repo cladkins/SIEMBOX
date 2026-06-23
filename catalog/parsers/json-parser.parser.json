@@ -1,0 +1,45 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "JSON Parser",
+  "description": "Parses logs already in JSON format",
+  "parser_type": "json",
+  "priority": 50,
+  "pattern": ".*",
+  "field_mappings": {},
+  "event_type": "json_log",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "passthrough of a canonical-named JSON log; client_ip is mirrored from source_ip",
+      "input": "{\"timestamp\":\"2024-01-15T12:00:00Z\",\"level\":\"warning\",\"message\":\"failed login\",\"user\":\"alice\",\"source_ip\":\"203.0.113.5\",\"status_code\":401,\"service\":\"myapp\"}",
+      "expect": {
+        "user": "alice",
+        "source_ip": "203.0.113.5",
+        "client_ip": "203.0.113.5",
+        "status_code": "401",
+        "service": "myapp"
+      }
+    },
+    {
+      "description": "alias-named keys (src_ip, dst_port) are filled into canonical fields",
+      "input": "{\"event\":\"connection_blocked\",\"src_ip\":\"198.51.100.9\",\"dst_port\":22,\"action\":\"deny\"}",
+      "expect": {
+        "event": "connection_blocked",
+        "source_ip": "198.51.100.9",
+        "dest_port": "22"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Any application emitting one JSON object per line",
+    "tags": [
+      "json",
+      "passthrough",
+      "generic"
+    ],
+    "references": [
+      "https://www.json.org/"
+    ]
+  }
+}

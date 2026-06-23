@@ -1,0 +1,46 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "nginx-komodo-error",
+  "description": "Parses NGINX error logs from komodo system",
+  "parser_type": "regex",
+  "priority": 44,
+  "pattern": "^(?<timestamp>\\d{4}/\\d{2}/\\d{2}\\s+\\d{2}:\\d{2}:\\d{2})\\s+\\[(?<log_level>\\w+)\\]\\s+(?<pid>\\d+)#(?<worker_id>\\d+):\\s+\\*(?<connection_id>\\d+)\\s*(?<message>.*)?",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "log_level": "log_level",
+    "pid": "pid",
+    "worker_id": "worker_id",
+    "connection_id": "connection_id",
+    "message": "error_message",
+    "service": "nginx-komodo"
+  },
+  "event_type": "nginx_error",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "upstream connect failure: worker/connection ids and log level captured",
+      "input": "2024/01/15 12:00:00 [error] 1234#5: *6789 connect() failed (111: Connection refused) while connecting to upstream",
+      "packet_source_ip": "10.0.0.1",
+      "expect": {
+        "log_level": "error",
+        "pid": "1234",
+        "worker_id": "5",
+        "connection_id": "6789",
+        "service": "nginx",
+        "observer_ip": "10.0.0.1"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Komodo-managed NGINX container error log",
+    "tags": [
+      "nginx",
+      "error",
+      "komodo"
+    ],
+    "references": [
+      "https://nginx.org/en/docs/ngx_core_module.html#error_log"
+    ]
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "cef-standard",
+  "description": "Parses Common Event Format (CEF) logs used by security products like ArcSight, Trend Micro, and many SIEM integrations",
+  "parser_type": "regex",
+  "priority": 5,
+  "pattern": "^CEF:(?<cef_version>\\d+)\\|(?<device_vendor>[^|]*)\\|(?<device_product>[^|]*)\\|(?<device_version>[^|]*)\\|(?<signature_id>[^|]*)\\|(?<event_name>[^|]*)\\|(?<severity>[^|]*)\\|(?<extension>.*)$",
+  "field_mappings": {
+    "cef_version": "cef_version",
+    "device_vendor": "device_vendor",
+    "device_product": "device_product",
+    "device_version": "device_version",
+    "signature_id": "signature_id",
+    "event_name": "event_name",
+    "severity": "severity",
+    "extension": "extension",
+    "format": "cef"
+  },
+  "event_type": "cef_event",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "UniFi intrusion CEF: src/dst/spt/dpt/act extension fields are split out",
+      "input": "CEF:0|Ubiquiti|UniFi Network|9.0.108|1|Intrusion Detected|7|src=203.0.113.5 dst=198.51.100.10 spt=55000 dpt=443 proto=TCP act=blocked msg=ET SCAN Potential SSH Scan",
+      "expect": {
+        "device_vendor": "Ubiquiti",
+        "source_ip": "203.0.113.5",
+        "dest_ip": "198.51.100.10",
+        "source_port": "55000",
+        "dest_port": "443",
+        "act": "blocked"
+      }
+    },
+    {
+      "description": "Trend Micro Deep Security CEF: suser maps to user",
+      "input": "CEF:0|Trend Micro|Deep Security Agent|10.0|100|Eicar_test_file|6|src=198.51.100.9 dst=203.0.113.7 suser=jdoe act=Quarantine",
+      "expect": {
+        "device_vendor": "Trend Micro",
+        "source_ip": "198.51.100.9",
+        "dest_ip": "203.0.113.7",
+        "user": "jdoe",
+        "act": "Quarantine"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Common Event Format (CEF) security events (ArcSight, Trend Micro, etc.)",
+    "tags": [
+      "cef",
+      "siem",
+      "security"
+    ],
+    "references": [
+      "https://www.microfocus.com/documentation/arcsight/arcsight-smartconnectors-8.4/cef-implementation-standard/"
+    ]
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "SSH Authentication",
+  "description": "Parses SSH authentication logs (success and failure)",
+  "parser_type": "regex",
+  "priority": 10,
+  "pattern": "^(?<timestamp>\\w+\\s+\\d+\\s+\\d+:\\d+:\\d+)\\s+(?<hostname>\\S+)\\s+sshd\\[(?<pid>\\d+)\\]:\\s+(?<event>Failed password|Accepted password|Accepted publickey)\\s+for\\s+(?<user>\\S+)\\s+from\\s+(?<src_ip>[\\d.]+)\\s+port\\s+(?<src_port>\\d+)",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "hostname": "hostname",
+    "pid": "pid",
+    "event": "event",
+    "user": "user",
+    "source_ip": "src_ip",
+    "source_port": "src_port"
+  },
+  "event_type": "ssh_auth",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "Failed password is a login failure with source IP and user",
+      "input": "Jan 15 12:00:00 webserver sshd[12345]: Failed password for root from 203.0.113.5 port 54321 ssh2",
+      "expect": {
+        "event": "Failed password",
+        "user": "root",
+        "source_ip": "203.0.113.5",
+        "source_port": "54321",
+        "auth_outcome": "failure",
+        "service": "sshd"
+      }
+    },
+    {
+      "description": "Accepted password is a successful login",
+      "input": "Jan 15 12:01:00 webserver sshd[12346]: Accepted password for alice from 198.51.100.9 port 51000 ssh2",
+      "expect": {
+        "event": "Accepted password",
+        "user": "alice",
+        "source_ip": "198.51.100.9",
+        "auth_outcome": "success",
+        "service": "sshd"
+      }
+    },
+    {
+      "description": "Accepted publickey is also a successful login",
+      "input": "Jan 15 12:02:00 webserver sshd[12347]: Accepted publickey for deploy from 198.51.100.10 port 51002 ssh2: RSA SHA256:n0tar3alkeyhash",
+      "expect": {
+        "event": "Accepted publickey",
+        "user": "deploy",
+        "source_ip": "198.51.100.10",
+        "auth_outcome": "success",
+        "service": "sshd"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "OpenSSH sshd (syslog auth.log / journald)",
+    "tags": [
+      "ssh",
+      "authentication",
+      "linux"
+    ],
+    "references": [
+      "https://man.openbsd.org/sshd"
+    ]
+  }
+}

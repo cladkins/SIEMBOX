@@ -1,0 +1,41 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "nginx-proxy-manager-error",
+  "description": "Parses NGINX Proxy Manager error logs for troubleshooting and security monitoring",
+  "parser_type": "regex",
+  "priority": 49,
+  "pattern": "^(?<timestamp>\\d{4}/\\d{2}/\\d{2}\\s+\\d{2}:\\d{2}:\\d{2})\\s+\\[(?<log_level>\\w+)\\]\\s+(?<message>.*)$",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "log_level": "log_level",
+    "message": "message",
+    "service": "nginx-proxy-manager"
+  },
+  "event_type": "nginx_error",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "NGINX error line: log level captured, message retained, service set",
+      "input": "2024/01/15 12:00:00 [warn] 99#99: *123 a client request body is buffered to a temporary file /var/lib/nginx/body/0000000001",
+      "packet_source_ip": "10.0.0.1",
+      "expect": {
+        "log_level": "warn",
+        "service": "nginx",
+        "observer_ip": "10.0.0.1"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "NGINX Proxy Manager error log",
+    "tags": [
+      "nginx",
+      "error",
+      "reverse-proxy",
+      "nginx-proxy-manager"
+    ],
+    "references": [
+      "https://nginx.org/en/docs/ngx_core_module.html#error_log"
+    ]
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "cef-syslog",
+  "description": "Parses CEF logs that include a syslog header prefix (common when CEF is transported via syslog)",
+  "parser_type": "regex",
+  "priority": 4,
+  "pattern": "^(?:(?<syslog_timestamp>\\w+\\s+\\d+\\s+[\\d:]+)\\s+(?<syslog_host>\\S+)\\s+)?CEF:(?<cef_version>\\d+)\\|(?<device_vendor>[^|]*)\\|(?<device_product>[^|]*)\\|(?<device_version>[^|]*)\\|(?<signature_id>[^|]*)\\|(?<event_name>[^|]*)\\|(?<severity>[^|]*)\\|(?<extension>.*)$",
+  "field_mappings": {
+    "syslog_timestamp": "syslog_timestamp",
+    "syslog_host": "syslog_host",
+    "cef_version": "cef_version",
+    "device_vendor": "device_vendor",
+    "device_product": "device_product",
+    "device_version": "device_version",
+    "signature_id": "signature_id",
+    "event_name": "event_name",
+    "severity": "severity",
+    "extension": "extension",
+    "format": "cef"
+  },
+  "event_type": "cef_event",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "CEF with a syslog header: host parsed and src/dst extension split out",
+      "input": "Jan 15 12:00:00 gateway CEF:0|Ubiquiti|UniFi Network|9.0.108|1|Intrusion Detected|7|src=203.0.113.5 dst=198.51.100.10 spt=55000 dpt=443 proto=TCP act=blocked",
+      "expect": {
+        "syslog_host": "gateway",
+        "host": "gateway",
+        "device_vendor": "Ubiquiti",
+        "source_ip": "203.0.113.5",
+        "dest_ip": "198.51.100.10",
+        "source_port": "55000",
+        "dest_port": "443",
+        "act": "blocked"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "CEF over syslog (RFC 3164 header + CEF payload)",
+    "tags": [
+      "cef",
+      "syslog",
+      "siem",
+      "security"
+    ],
+    "references": [
+      "https://www.microfocus.com/documentation/arcsight/arcsight-smartconnectors-8.4/cef-implementation-standard/"
+    ]
+  }
+}

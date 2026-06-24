@@ -717,11 +717,80 @@
             />
           </el-form-item>
 
-          <el-form-item label="Template Profile" required>
-            <el-select v-model="scheduledScanForm.vulnProfile" style="width: 100%">
-              <el-option label="All templates" value="all" />
-              <el-option label="CVEs" value="cves" />
-              <el-option label="Common (cve, rce, sqli, xss, lfi)" value="common" />
+          <el-form-item label="Template Selection" required>
+            <el-radio-group v-model="scheduledScanForm.vulnTemplateMode">
+              <el-radio-button value="all">All</el-radio-button>
+              <el-radio-button value="cves">CVEs</el-radio-button>
+              <el-radio-button value="category">By Category</el-radio-button>
+              <el-radio-button value="tags">By Tags</el-radio-button>
+              <el-radio-button value="custom">Custom</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+
+          <el-form-item
+            v-if="scheduledScanForm.vulnTemplateMode === 'category'"
+            label="Categories"
+          >
+            <el-checkbox-group
+              v-model="scheduledScanForm.vulnCategories"
+              v-loading="schedLoadingTemplates"
+            >
+              <el-checkbox
+                v-for="c in schedTemplateCategories"
+                :key="c.id"
+                :value="c.id"
+              >
+                {{ c.name }}
+                <el-tag size="small" type="info">{{ c.count.toLocaleString() }}</el-tag>
+              </el-checkbox>
+            </el-checkbox-group>
+            <el-text v-if="schedTemplateCategories.length === 0" type="info" size="small">
+              No templates available yet — download them on the Vulnerability Scanning page.
+            </el-text>
+          </el-form-item>
+
+          <el-form-item
+            v-if="scheduledScanForm.vulnTemplateMode === 'tags'"
+            label="Tags"
+          >
+            <el-select
+              v-model="scheduledScanForm.vulnTags"
+              multiple
+              filterable
+              placeholder="Select vulnerability tags (e.g. cve, rce, sqli)"
+              style="width: 100%"
+              :loading="schedLoadingTemplates"
+            >
+              <el-option
+                v-for="t in schedTemplateTags"
+                :key="t.name"
+                :label="`${t.name} (${t.count})`"
+                :value="t.name"
+              />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item
+            v-if="scheduledScanForm.vulnTemplateMode === 'custom'"
+            label="Templates"
+          >
+            <el-select
+              v-model="scheduledScanForm.vulnTemplates"
+              multiple
+              filterable
+              remote
+              reserve-keyword
+              placeholder="Search templates by name, CVE, or description..."
+              style="width: 100%"
+              :loading="schedLoadingTemplates"
+              :remote-method="searchScheduledTemplates"
+            >
+              <el-option
+                v-for="tmpl in schedTemplateOptions"
+                :key="tmpl.id"
+                :label="`${tmpl.name} (${tmpl.severity})`"
+                :value="tmpl.id"
+              />
             </el-select>
           </el-form-item>
 
@@ -885,6 +954,49 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Check, Delete, Refresh, Plus, Edit, VideoPlay } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
 import { useAuthStore } from '@/stores/auth';
+import vulnerabilityService, {
+  type Template,
+  type TemplateCategory,
+  type TemplateTag,
+} from '@/services/vulnerabilityService';
+
+// Template data for the scheduled vuln-scan template selector (same source as
+// the one-off scan form). Loaded lazily when the scheduled-scan dialog opens.
+const schedTemplateCategories = ref<TemplateCategory[]>([]);
+const schedTemplateTags = ref<TemplateTag[]>([]);
+const schedTemplateOptions = ref<Template[]>([]);
+const schedLoadingTemplates = ref(false);
+
+async function loadScanTemplateData() {
+  if (schedTemplateCategories.value.length > 0 || schedLoadingTemplates.value) return;
+  schedLoadingTemplates.value = true;
+  try {
+    const overview = await vulnerabilityService.getTemplatesOverview();
+    schedTemplateCategories.value = overview.categories || [];
+    schedTemplateTags.value = await vulnerabilityService.getTemplateTags();
+  } catch (error: any) {
+    if (error?.response?.status !== 404) {
+      console.error('Failed to load scan templates:', error);
+    }
+  } finally {
+    schedLoadingTemplates.value = false;
+  }
+}
+
+async function searchScheduledTemplates(query: string) {
+  if (!query || query.length < 2) {
+    schedTemplateOptions.value = [];
+    return;
+  }
+  schedLoadingTemplates.value = true;
+  try {
+    schedTemplateOptions.value = await vulnerabilityService.searchTemplates(query, 50);
+  } catch (error) {
+    console.error('Failed to search templates:', error);
+  } finally {
+    schedLoadingTemplates.value = false;
+  }
+}
 
 const authStore = useAuthStore();
 
@@ -992,7 +1104,10 @@ const scheduledScanForm = reactive({
   assetScanType: 'ping' as 'ping' | 'port' | 'service' | 'os',
   // vulnerability fields
   vulnTarget: '',
-  vulnProfile: 'all' as 'all' | 'cves' | 'common',
+  vulnTemplateMode: 'all' as 'all' | 'cves' | 'category' | 'tags' | 'custom',
+  vulnCategories: ['http', 'network'] as string[],
+  vulnTags: [] as string[],
+  vulnTemplates: [] as string[],
   vulnSeverities: [] as string[],
 });
 
@@ -1339,12 +1454,16 @@ function resetScheduledScanForm() {
   scheduledScanForm.assetTargets = '';
   scheduledScanForm.assetScanType = 'ping';
   scheduledScanForm.vulnTarget = '';
-  scheduledScanForm.vulnProfile = 'all';
+  scheduledScanForm.vulnTemplateMode = 'all';
+  scheduledScanForm.vulnCategories = ['http', 'network'];
+  scheduledScanForm.vulnTags = [];
+  scheduledScanForm.vulnTemplates = [];
   scheduledScanForm.vulnSeverities = [];
 }
 
 function showCreateSchedule() {
   resetScheduledScanForm();
+  loadScanTemplateData();
   scheduledScanDialogVisible.value = true;
 }
 
@@ -1364,15 +1483,26 @@ function editSchedule(scan: any) {
     scheduledScanForm.vulnTarget = options.target || '';
     const sel = options.templateSelection || {};
     if (sel.all) {
-      scheduledScanForm.vulnProfile = 'all';
+      scheduledScanForm.vulnTemplateMode = 'all';
     } else if (sel.cves) {
-      scheduledScanForm.vulnProfile = 'cves';
-    } else if (Array.isArray(sel.tags)) {
-      scheduledScanForm.vulnProfile = 'common';
+      scheduledScanForm.vulnTemplateMode = 'cves';
+    } else if (Array.isArray(sel.tags) && sel.tags.length > 0) {
+      scheduledScanForm.vulnTemplateMode = 'tags';
+      scheduledScanForm.vulnTags = [...sel.tags];
+    } else if (Array.isArray(sel.templates) && sel.templates.length > 0) {
+      // Trailing-slash entries are category directories; bare ids are custom.
+      if (sel.templates.every((t: string) => t.endsWith('/'))) {
+        scheduledScanForm.vulnTemplateMode = 'category';
+        scheduledScanForm.vulnCategories = sel.templates.map((t: string) => t.replace(/\/$/, ''));
+      } else {
+        scheduledScanForm.vulnTemplateMode = 'custom';
+        scheduledScanForm.vulnTemplates = [...sel.templates];
+      }
     }
     scheduledScanForm.vulnSeverities = Array.isArray(sel.severities) ? [...sel.severities] : [];
   }
 
+  loadScanTemplateData();
   scheduledScanDialogVisible.value = true;
 }
 
@@ -1385,12 +1515,26 @@ function parseTargets(raw: string): string[] {
 
 function buildTemplateSelection(): any {
   let selection: any;
-  if (scheduledScanForm.vulnProfile === 'all') {
-    selection = { all: true };
-  } else if (scheduledScanForm.vulnProfile === 'cves') {
-    selection = { cves: true };
-  } else {
-    selection = { tags: ['cve', 'rce', 'sqli', 'xss', 'lfi'] };
+  switch (scheduledScanForm.vulnTemplateMode) {
+    case 'all':
+      selection = { all: true };
+      break;
+    case 'cves':
+      selection = { cves: true };
+      break;
+    case 'category':
+      // Categories map to template directories (e.g. 'http/'), matching the
+      // one-off scan form.
+      selection = { templates: scheduledScanForm.vulnCategories.map((c) => `${c}/`) };
+      break;
+    case 'tags':
+      selection = { tags: [...scheduledScanForm.vulnTags] };
+      break;
+    case 'custom':
+      selection = { templates: [...scheduledScanForm.vulnTemplates] };
+      break;
+    default:
+      selection = { all: true };
   }
   if (scheduledScanForm.vulnSeverities.length > 0) {
     selection.severities = [...scheduledScanForm.vulnSeverities];

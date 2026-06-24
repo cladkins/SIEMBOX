@@ -210,6 +210,12 @@ export const api = {
   getVulnerabilities: (params?: any) => apiClient.get('/vulnerabilities', { params }),
   getVulnerabilitySummary: () => apiClient.get('/vulnerabilities/summary'),
 
+  // Container image scanning (Trivy)
+  scanContainer: (image_ref: string) =>
+    apiClient.post('/containers/scan', { image_ref }, { timeout: 30000 }),
+  getContainerScans: (limit = 20) => apiClient.get('/containers/scans', { params: { limit } }),
+  getContainerScan: (id: number) => apiClient.get(`/containers/scans/${id}`),
+
   // Scheduled Scans
   getScheduledScans: () => apiClient.get('/scheduled-scans'),
   createScheduledScan: (data: any) => apiClient.post('/scheduled-scans', data),

@@ -10,6 +10,7 @@ export interface ParsedLog {
   event_type: string | null;
   created_at: Date;
   app_name?: string | null; // From joined raw_logs table
+  parser_name?: string | null; // From joined parsers table (which parser matched)
 }
 
 export interface CreateParsedLogParams {
@@ -51,6 +52,7 @@ export class ParsedLogModel {
     sourceIp?: string;
     eventType?: string;
     appName?: string;
+    parserId?: number;
     search?: string;
     startTime?: Date;
     endTime?: Date;
@@ -72,6 +74,11 @@ export class ParsedLogModel {
     if (options?.appName) {
       conditions.push(`rl.app_name = $${paramIndex++}`);
       params.push(options.appName);
+    }
+
+    if (options?.parserId !== undefined && !Number.isNaN(options.parserId)) {
+      conditions.push(`pl.parser_id = $${paramIndex++}`);
+      params.push(options.parserId);
     }
 
     if (options?.search) {
@@ -107,9 +114,10 @@ export class ParsedLogModel {
 
     params.push(limit, offset);
     const logsResult = await query(
-      `SELECT pl.*, rl.app_name
+      `SELECT pl.*, rl.app_name, p.name AS parser_name
        FROM parsed_logs pl
        LEFT JOIN raw_logs rl ON pl.raw_log_id = rl.id
+       LEFT JOIN parsers p ON pl.parser_id = p.id
        ${whereClause}
        ORDER BY pl.created_at DESC
        LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,

@@ -45,6 +45,10 @@ router.get('/parsed', async (req: Request, res: Response) => {
     const sourceIp = req.query.source_ip as string;
     const eventType = req.query.event_type as string;
     const appName = req.query.app_name as string;
+    const parserId =
+      req.query.parser_id !== undefined && req.query.parser_id !== ''
+        ? parseInt(req.query.parser_id as string, 10)
+        : undefined;
     const search = req.query.search as string;
     const startTime = req.query.start_date ? new Date(req.query.start_date as string) : undefined;
     const endTime = req.query.end_date ? new Date(req.query.end_date as string) : undefined;
@@ -55,6 +59,7 @@ router.get('/parsed', async (req: Request, res: Response) => {
       sourceIp,
       eventType,
       appName,
+      parserId,
       search,
       startTime,
       endTime,

@@ -1,6 +1,6 @@
 # SIEMBox — Session Handoff
 
-> Working branch: **`claude/exciting-mccarthy-qrzfog`**. All finished work is merged to `main` via PRs (#55–#65). This file is the bridge to a fresh context.
+> Working branch: **`claude/exciting-mccarthy-qrzfog`**. The parser platform + AI builder are merged to `main` via PRs (#55–#67). The **V2 stabilization punch list** (Issues 2/4/3 + security sweep + docs, commits `abacebf`..`5fb5be0`) is **pushed to the branch but not yet merged to `main`** — open a PR to land it. This file is the bridge to a fresh context.
 
 ## How to operate (important mechanics)
 - **Direct `git push` to `main` is blocked** by the harness (HTTP 403). To land on main: commit+push to the branch, then **open a PR and merge it via the GitHub MCP tools** (`mcp__github__create_pull_request` + `mcp__github__merge_pull_request`, owner `cladkins`, repo `siembox`). That path works; direct push does not.
@@ -15,23 +15,24 @@
 - **Phase 3 — AI builder (parsers AND detections).** `services/ai/aiService.ts`: provider abstraction (Anthropic/OpenAI/Ollama, BYO key, key encrypted at rest via `CredentialEncryption` or env `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). `generateParser`/`generateDetection` run a **generate→validate→auto-refine loop (≤3 attempts)** — never trusts the LLM blind. Endpoints `POST /parsers/ai/generate`, `POST /rules/ai/generate`, `GET/PUT /settings/ai`. UI: "Generate with AI" on Parsers + Detection Rules pages, "AI Builder" card in Settings. **Verified working by the user.**
 - **Deploy plumbing:** `compose.prod.yaml` now passes `CREDENTIAL_ENCRYPTION_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `SIEMBOX_CATALOG_*`, `GITHUB_TOKEN`, and `extra_hosts: host.docker.internal:host-gateway` (for local Ollama). AI request timeouts: axios 240s (#62), nginx `/api` `proxy_read_timeout 300s` (#64), backend per-call 120s (#61).
 
-## Uncommitted / unpushed RIGHT NOW
-- Commit **`1db04e5`** ("vuln UI: don't render non-http matched-at as a broken relative link") is on the branch **but not yet pushed/merged**. It fixes Issue 3a below. **Push it + merge it** first thing.
-- Nothing else uncommitted.
+## Status RIGHT NOW
+- `1db04e5` (link fix 3a) is pushed and merged — handled in an earlier pass.
+- **The entire V2 punch list below (Issues 2/4/3 + the security sweep + the docs refresh) is DONE and pushed** to `claude/exciting-mccarthy-qrzfog` (commits `abacebf`, `4477ad5`, `286c974`, `c1b553b`, `4b501be`, `5fb5be0`), **but not yet merged to `main`** — open a PR + merge via the GitHub MCP when ready. Working tree is clean.
+- **Only remaining V2 action: publish the v2.0.0 GitHub Release (manual — item 7).**
 
 ---
 
 ## V2 SHIP CUT (recommended)
 **V2 = stabilize + secure what's built.** The parser platform + AI builder are done; ship them with the vuln-UI/dashboard bugs fixed and the dependency vulns knocked down. Keep the bundled parsers/detections (good out-of-box). Net-new features → V3.
 
-### V2 punch list (all have exact fixes below)
-1. **Vuln "results combining" — REAL data bug (highest priority).**
-2. **Dashboard permanently shows zeros — REAL bug.**
-3. **Dead/malformed links in vuln detail** — 3a fixed (commit `1db04e5`), 3b/3d remain.
-4. **Security sweep** — Dependabot: backend **22** (15 high, 7 moderate), frontend **29** (2 critical, 18 high, 9 moderate). Knock down at least critical+high.
-5. (Decision) Keep bundled parsers/detections for V2 — do NOT do the "remove bundled" work in V2.
-6. **Update the README + docs.** The repo README/`DEPLOYMENT.md`/`API.md`/`SECURITY.md` still describe **v1** ("19 parsers", "40+ rules", "seeds parsers and rules on first startup", Vue/Node stack). Refresh for v2: **27 parsers + 48 detections**, the in-app **catalog** (Browse/Install, export/import), the **AI builder** (parsers + detections, BYO key), canonical normalization, GeoIP enrichment, and the new env vars in `.env.example`. The `v1.0.0` GitHub release description is also stale (superseded by v2 notes).
-7. **Publish the v2.0.0 GitHub Release (manual — agent can't).** Notes are drafted in **`docs/releases/v2.0.0.md`**. Tag/release pushes are **blocked by the harness (403)**, same as direct `main` pushes, and the GitHub MCP has no create-release tool — so a human must publish it: GitHub → Releases → *Draft a new release* → create tag **`v2.0.0`** targeting `main` → title "SIEMBox v2.0.0 — The Parser Platform" → paste `docs/releases/v2.0.0.md` → Publish. Publishing triggers `build-containers` to push **semver-tagged** images (`v2.0.0`, `2.0`, `2`). (Or run `gh release create v2.0.0 --notes-file docs/releases/v2.0.0.md` from a machine with `gh`.)
+### V2 punch list — ✅ DONE (commits on the branch, awaiting merge to `main`)
+1. ✅ **Vuln "results combining"** — `abacebf`. Assets keyed on each finding's `matched-at` host (not the scan target); migration `012` widens `cve_id` to VARCHAR(255) so `NUCLEI-*` findings persist; dropped findings surfaced via `ErrorLogService`; scan headline count reconciled to the persisted count.
+2. ✅ **Dashboard zeros** — `4477ad5`. Cards read the real API fields (`active_assets`/`offline_assets`, `critical_count`/`total_vulnerabilities`); charts rebuild in a `watch(alertStats)` with destroy-before-recreate. 4e was a no-op in element-plus 2.x (`primary` is valid) — intentionally left.
+3. ✅ **Dead/malformed links** — `286c974`. 3b/3d: references + CVE link only linkify real http(s) URLs / real `CVE-` ids via shared `safeHttpUrl`/`isCveId`; 3c: `Assets.vue` now consumes `?id=` and deep-links to the asset (resolves correctly given the Issue-2 per-host assets).
+4. ✅ **Security sweep** — backend `c1b553b` (22 → **1 in the production image**; the rest are dev-only; key win was bcrypt 5→6 dropping node-pre-gyp/tar, musl+glibc prebuilts verified for alpine), frontend `4b501be` (29 → 11; **both criticals + all bundled-runtime highs cleared**; residual 11 are dev/build tooling needing vite@8/vue-tsc@3 majors — deferred, not forced blind).
+5. ✅ (Decision) Kept bundled parsers/detections for V2.
+6. ✅ **README + docs refresh** — `5fb5be0`. README/DEPLOYMENT/docs-README/API/SECURITY/.env.example + v2.0.0 notes brought to v2 (27 parsers + 48 detections, catalog, AI builder, normalization, GeoIP, new env vars; API.md gained a Catalog & AI Builder section; SECURITY.md gained credential-encryption/AI-data-flow/catalog-trust sections). Archived docs under `docs/archive/` left as historical snapshots.
+7. ⏳ **Publish the v2.0.0 GitHub Release (manual — agent can't).** Notes drafted in **`docs/releases/v2.0.0.md`** (its "known issues" are now marked fixed). Tag/release pushes are **blocked by the harness (403)**, and the GitHub MCP has no create-release tool — so a human must publish it: GitHub → Releases → *Draft a new release* → create tag **`v2.0.0`** targeting `main` (after this branch merges) → title "SIEMBox v2.0.0 — The Parser Platform" → paste `docs/releases/v2.0.0.md` → Publish. Publishing triggers `build-containers` to push **semver-tagged** images (`v2.0.0`, `2.0`, `2`). (Or run `gh release create v2.0.0 --notes-file docs/releases/v2.0.0.md` from a machine with `gh`.)
 
 
 ### V3 backlog (net-new, deferred)
@@ -80,8 +81,7 @@ Root causes:
 3. **Re-seed `siembox-parsers`** after any catalog change: rerun `scripts/bootstrap-siembox-parsers.sh ../siembox-parsers` (now seeds 27 parsers + 48 detections) and push.
 
 ## Suggested first moves for the fresh context
-1. Push + PR-merge commit `1db04e5` (link fix 3a).
-2. Issue 2 (asset key + `cve_id` width) — the load-bearing data bug; needs a migration. Verify with a re-scan that distinct hosts get distinct assets and stored count matches.
-3. Dashboard 4a/4b (one-line field renames) + 4c chart watcher.
-4. Links 3b/3d.
-5. Security sweep (`npm audit fix` + rebuild + verify).
+1. **Open a PR for `claude/exciting-mccarthy-qrzfog` and merge it to `main`** (GitHub MCP). It carries the whole V2 punch list (6 commits, `abacebf`..`5fb5be0`).
+2. **Verify on a host** (these were verified by build/typecheck/smoke-test, not a live re-scan): re-scan a CIDR and confirm distinct hosts get distinct assets, non-CVE (`NUCLEI-*`) findings now persist, the scan "Vulns Found" matches the Management count, and the dashboard cards/charts populate. (Update path: `git pull && docker compose -f compose.prod.yaml pull && up -d`, then hard-refresh.)
+3. **Publish the v2.0.0 GitHub Release** (item 7 above) once merged.
+4. (Optional) V3 backlog below — none started.

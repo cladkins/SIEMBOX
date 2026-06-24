@@ -6,6 +6,7 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
+import { isIP } from 'net';
 import { AuditService } from '../audit/auditService';
 import pool from '../../config/database';
 import { ErrorLogService } from '../errors/errorLogService';
@@ -354,7 +355,13 @@ export class NucleiScanner {
   ): Promise<void> {
     console.log(`[Nuclei] Processing ${results.length} results for scan ${scanId}`);
 
-    const vulnerabilitiesFound = results.length;
+    // Raw count = lines Nuclei emitted; stored count = findings actually
+    // persisted. They can diverge (e.g. a finding we can't map to an asset), so
+    // we track both and report the persisted count as the scan's headline
+    // figure to match the Vulnerability Management view (COUNT(DISTINCT av.id)).
+    const rawCount = results.length;
+    let storedCount = 0;
+    let droppedCount = 0;
     const severityCounts = {
       critical: 0,
       high: 0,
@@ -369,23 +376,38 @@ export class NucleiScanner {
         // Convert to processed vulnerability
         const processedVuln = this.processNucleiResult(result, target);
 
-        // Count by severity
-        severityCounts[processedVuln.severity]++;
-
         // Store in database via vulnerability processor
         await this.storeVulnerability(scanId, processedVuln);
 
+        // Only count toward the persisted totals once the store succeeds
+        storedCount++;
+        severityCounts[processedVuln.severity]++;
+
       } catch (error) {
+        droppedCount++;
         console.error(`[Nuclei] Failed to process result:`, error);
+        // Surface the dropped finding instead of swallowing it in the logs.
+        ErrorLogService.logBackgroundError(
+          'vuln-scan',
+          error instanceof Error ? error : new Error(String(error)),
+          { dedupeKey: `${scanId}:store-failure`, scanId }
+        );
       }
     }
 
-    console.log(`[Nuclei] Scan ${scanId} processed ${vulnerabilitiesFound} vulnerabilities`);
+    if (droppedCount > 0) {
+      console.warn(
+        `[Nuclei] Scan ${scanId}: ${droppedCount}/${rawCount} findings could not be stored`
+      );
+    }
+    console.log(
+      `[Nuclei] Scan ${scanId} stored ${storedCount}/${rawCount} vulnerabilities`
+    );
     console.log(`[Nuclei] Severity breakdown:`, severityCounts);
 
-    // Update scan summary
+    // Update scan summary (headline count = persisted findings)
     console.log(`[Nuclei] Updating scan summary for scan ${scanId}...`);
-    await this.updateScanSummary(scanId, vulnerabilitiesFound, severityCounts);
+    await this.updateScanSummary(scanId, storedCount, severityCounts, rawCount, droppedCount);
     console.log(`[Nuclei] Scan summary updated for scan ${scanId}`);
 
     // Notify on findings (respects notification preferences / severity threshold).
@@ -402,7 +424,9 @@ export class NucleiScanner {
       userAgent: 'nuclei-scanner',
       responseStatus: 200,
       details: {
-        vulnerabilitiesFound,
+        vulnerabilitiesFound: storedCount,
+        vulnerabilitiesScanned: rawCount,
+        vulnerabilitiesDropped: droppedCount,
         severityCounts,
       },
     });
@@ -478,12 +502,70 @@ export class NucleiScanner {
   }
 
   /**
+   * Extract the bare host from a Nuclei value such as a `matched-at`
+   * (`https://192.168.1.5:443/path`, `192.168.1.5:80`, `[::1]:8443`) or a scan
+   * target (`192.168.1.0/24`, `https://example.com`). Strips any scheme, port,
+   * path, query and IPv6 brackets. Returns null for empty input.
+   */
+  private static extractHost(value?: string): string | null {
+    if (!value) return null;
+    let s = value.trim();
+    if (!s) return null;
+
+    // Strip URL scheme (http://, https://, ftp://, ...)
+    s = s.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '');
+    // Drop any path / query / fragment (also strips a CIDR suffix like /24)
+    s = s.split('/')[0].split('?')[0].split('#')[0];
+
+    // IPv6 in brackets, optionally with a port: [::1]:443 -> ::1
+    const bracketed = s.match(/^\[([^\]]+)\]/);
+    if (bracketed) return bracketed[1];
+
+    // Strip a :port suffix only when there is a single colon (IPv4 / hostname).
+    // A bare IPv6 address has multiple colons and must be left intact.
+    if ((s.match(/:/g) || []).length === 1) {
+      s = s.split(':')[0];
+    }
+
+    return s || null;
+  }
+
+  /**
+   * Derive the asset IP for a finding. Prefer the per-host `matched-at` value so
+   * that each host in a CIDR/range scan becomes its own asset; fall back to the
+   * scan target only when `matched-at` carries no usable IP. Returns null when
+   * neither yields a valid IP address (e.g. a hostname-only target), since the
+   * assets.ip_address column is INET and cannot store a hostname.
+   */
+  private static deriveAssetIp(matchedAt?: string, target?: string): string | null {
+    const fromMatched = this.extractHost(matchedAt);
+    if (fromMatched && isIP(fromMatched)) return fromMatched;
+
+    const fromTarget = this.extractHost(target);
+    if (fromTarget && isIP(fromTarget)) return fromTarget;
+
+    return null;
+  }
+
+  /**
    * Store vulnerability in database
    */
   private static async storeVulnerability(
     _scanId: number,
     vuln: ProcessedNucleiVulnerability
   ): Promise<void> {
+    // Key the asset on the actual host this finding matched, not the scan
+    // target — otherwise every host in a CIDR/range scan collapses onto one
+    // synthetic asset. Fail fast (before opening a transaction) when no IP can
+    // be derived; the caller surfaces the dropped finding.
+    const assetIp = this.deriveAssetIp(vuln.matchedAt, vuln.target);
+    if (!assetIp) {
+      throw new Error(
+        `Could not derive an asset IP for finding "${vuln.templateId}" ` +
+          `(matched-at="${vuln.matchedAt}", target="${vuln.target}")`
+      );
+    }
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -530,7 +612,7 @@ export class NucleiScanner {
 
       const vulnerabilityId = vulnResult.rows[0].id;
 
-      // Find or create asset for this target
+      // Find or create the asset for the matched host (see deriveAssetIp above)
       const assetQuery = `
         INSERT INTO assets (ip_address, last_seen, updated_at)
         VALUES ($1, NOW(), NOW())
@@ -540,7 +622,7 @@ export class NucleiScanner {
         RETURNING id
       `;
 
-      const assetResult = await client.query(assetQuery, [vuln.target]);
+      const assetResult = await client.query(assetQuery, [assetIp]);
       const assetId = assetResult.rows[0].id;
 
       // Link asset to vulnerability
@@ -720,7 +802,9 @@ export class NucleiScanner {
   private static async updateScanSummary(
     scanId: number,
     vulnerabilitiesFound: number,
-    severityCounts: Record<string, number>
+    severityCounts: Record<string, number>,
+    rawCount?: number,
+    droppedCount?: number
   ): Promise<void> {
     console.log(`[Nuclei] updateScanSummary called: scanId=${scanId}, vulnsFound=${vulnerabilitiesFound}`);
     try {
@@ -734,7 +818,11 @@ export class NucleiScanner {
       `;
 
       const summary = {
+        // Headline = persisted findings (matches the Management view count)
         vulnerabilitiesFound,
+        // Raw Nuclei output vs what actually persisted, for transparency
+        vulnerabilitiesScanned: rawCount ?? vulnerabilitiesFound,
+        vulnerabilitiesDropped: droppedCount ?? 0,
         severityCounts,
         completedAt: new Date().toISOString(),
       };

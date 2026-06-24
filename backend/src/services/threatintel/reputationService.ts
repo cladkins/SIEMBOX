@@ -37,10 +37,11 @@ export interface ReputationResult {
   error?: string;
 }
 
-// Strict IP allowlist applied INLINE (see each provider's lookup) right before
-// an address is placed into an outbound request URL. Beyond the isIP() check at
-// the entry point, this regexp-test guard is a defence-in-depth barrier that
-// closes the SSRF path so a malformed value can never reach a provider URL.
+// Defence-in-depth IP hygiene, applied INLINE in each provider's lookup. The
+// primary SSRF barrier is structural: the request host is a constant baked into
+// the URL object (see fetchJson), so the IP only ever lands in the path/query and
+// cannot redirect the request. On top of that, isIP() at the entry point and this
+// regexp guard reject any malformed value before it reaches a provider URL.
 const SAFE_IP_RE = /^[0-9A-Fa-f:.]{2,45}$/;
 
 // Takes a URL object (never a string) so the request destination is the constant

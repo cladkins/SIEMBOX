@@ -147,6 +147,16 @@ export const api = {
   getThreatIntelIp: (ip: string) => apiClient.get(`/threat-intel/ip/${encodeURIComponent(ip)}`),
   getThreatIntelCountry: (code: string, days = 30) =>
     apiClient.get(`/threat-intel/country/${encodeURIComponent(code)}`, { params: { days } }),
+
+  // External threat feeds + IP reputation (Phase 4)
+  getThreatFeeds: () => apiClient.get('/threat-feeds'),
+  updateThreatFeed: (id: number, data: { enabled?: boolean; refresh_interval_minutes?: number }) =>
+    apiClient.put(`/threat-feeds/feeds/${id}`, data),
+  refreshThreatFeed: (id: number) => apiClient.post(`/threat-feeds/feeds/${id}/refresh`, {}, { timeout: 60000 }),
+  refreshAllThreatFeeds: () => apiClient.post('/threat-feeds/refresh', {}, { timeout: 120000 }),
+  saveThreatProvider: (name: string, data: { apiKey?: string | null; enabled?: boolean }) =>
+    apiClient.put(`/threat-feeds/providers/${name}`, data),
+  lookupThreatIp: (ip: string) => apiClient.get(`/threat-feeds/lookup/${encodeURIComponent(ip)}`),
   getAlert: (id: number) => apiClient.get(`/alerts/${id}`),
   updateAlert: (id: number, data: any) => apiClient.put(`/alerts/${id}`, data),
   deleteAlert: (id: number) => apiClient.delete(`/alerts/${id}`),

@@ -8,6 +8,7 @@ import { importRules } from './scripts/import-rules';
 import { startAutoDiscoveryJob, stopAutoDiscoveryJob } from './jobs/autoDiscovery';
 import { startScheduledScansJob, stopScheduledScansJob } from './jobs/scheduledScans';
 import { startIngestionHealthJob, stopIngestionHealthJob } from './jobs/ingestionHealth';
+import { startThreatFeedsJob, stopThreatFeedsJob } from './jobs/threatFeeds';
 import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
 import { TemplateService } from './services/scanner/templateService';
 
@@ -70,6 +71,9 @@ const startServer = async () => {
     // Start ingestion-health monitor (drives ingestion notifications)
     startIngestionHealthJob();
 
+    // Start the external threat-feed refresher (populates blocklist indicators).
+    startThreatFeedsJob();
+
     // Warm the Nuclei template cache in the background so the first request to
     // the (heavy) template endpoints hits a populated cache instead of parsing
     // ~10k files inline and tripping the client timeout. Fire-and-forget.
@@ -102,6 +106,7 @@ process.on('SIGTERM', async () => {
   stopAutoDiscoveryJob();
   stopScheduledScansJob();
   stopIngestionHealthJob();
+  stopThreatFeedsJob();
   pool.end(() => {
     logger.info('Database pool closed');
     process.exit(0);
@@ -119,6 +124,7 @@ process.on('SIGINT', async () => {
   stopAutoDiscoveryJob();
   stopScheduledScansJob();
   stopIngestionHealthJob();
+  stopThreatFeedsJob();
   pool.end(() => {
     logger.info('Database pool closed');
     process.exit(0);

@@ -334,6 +334,34 @@ Uncomment this volume in `compose.prod.yaml` under the `backend` service:
 If your Docker socket lives somewhere non-standard, set `DOCKER_SOCKET_PATH` on
 the backend to point at it (defaults to `/var/run/docker.sock`).
 
+## Threat Intelligence Feeds
+
+The **Threat Intel** page enriches an IP lookup with external intelligence: which
+blocklists flag it, plus on-demand reputation from keyed providers.
+
+### Free blocklists (automatic)
+
+A few well-known, no-auth IP blocklists are seeded and refreshed on a schedule
+(every few hours):
+
+- **Feodo Tracker** & **SSLBL** (abuse.ch) — active botnet C2 IPs
+- **Tor exit nodes** — current Tor exit list
+- **blocklist.de** — IPs reported for attacks on fail2ban-protected services
+
+These only require the backend to have **outbound HTTPS egress**. If egress is
+blocked, each feed simply records `last_status = error` and the rest of the app
+is unaffected. Enable/disable feeds or trigger a manual refresh from the *Threat
+Feeds & Reputation Providers* panel on the Threat Intel page.
+
+### Reputation providers (bring your own key)
+
+For richer per-IP reputation you can plug in keyed providers — **AbuseIPDB** and
+**GreyNoise** (both have free tiers). Paste an API key into the same panel
+(admin only). Keys are encrypted at rest using `CREDENTIAL_ENCRYPTION_KEY`
+(set it, or key storage is refused), and are queried **only on demand** when you
+look up an IP — results are cached briefly to respect rate limits. Nothing is
+stored from these providers.
+
 ## Backup and Restore
 
 ### Backup Your Database

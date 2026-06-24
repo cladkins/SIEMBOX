@@ -43,7 +43,10 @@ export interface ReputationResult {
 // closes the SSRF path so a malformed value can never reach a provider URL.
 const SAFE_IP_RE = /^[0-9A-Fa-f:.]{2,45}$/;
 
-async function fetchJson(url: string, headers: Record<string, string>): Promise<{ status: number; body: any }> {
+// Takes a URL object (never a string) so the request destination is the constant
+// host baked into the URL at construction; only path/query carry the IP. Passing
+// the structured URL keeps the host provably non-user-controlled at the fetch sink.
+async function fetchJson(url: URL, headers: Record<string, string>): Promise<{ status: number; body: any }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), LOOKUP_TIMEOUT_MS);
   try {
@@ -73,7 +76,7 @@ const PROVIDERS: Record<ProviderName, ProviderDef> = {
       const u = new URL('https://api.abuseipdb.com/api/v2/check');
       u.searchParams.set('ipAddress', ip);
       u.searchParams.set('maxAgeInDays', '90');
-      const { status, body } = await fetchJson(u.toString(), { Key: key });
+      const { status, body } = await fetchJson(u, { Key: key });
       if (status === 401 || status === 403) {
         return { provider: 'abuseipdb', label: 'AbuseIPDB', ok: false, error: 'Invalid API key' };
       }
@@ -109,10 +112,11 @@ const PROVIDERS: Record<ProviderName, ProviderDef> = {
     signupUrl: 'https://www.greynoise.io/viz/signup',
     async lookup(ip, key) {
       if (!SAFE_IP_RE.test(ip)) throw new Error('Invalid IP for reputation lookup');
-      // Constant host via the URL API base; a relative path can't change the host,
-      // so the IP path segment cannot redirect the request (closes the SSRF path).
-      const u = new URL(`v3/community/${encodeURIComponent(ip)}`, 'https://api.greynoise.io/');
-      const { status, body } = await fetchJson(u.toString(), { key });
+      // Fully-constant base URL (host + path prefix); the encoded IP is appended to
+      // the path only, so the request host stays provably constant at the sink.
+      const u = new URL('https://api.greynoise.io/v3/community/');
+      u.pathname += encodeURIComponent(ip);
+      const { status, body } = await fetchJson(u, { key });
       if (status === 401 || status === 403) {
         return { provider: 'greynoise', label: 'GreyNoise', ok: false, error: 'Invalid API key' };
       }

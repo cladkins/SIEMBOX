@@ -79,6 +79,12 @@ const routes: RouteRecordRaw[] = [
         meta: { allowedRoles: ['admin', 'operator'] },
       },
       {
+        path: 'scheduled-scans',
+        name: 'ScheduledScans',
+        component: () => import('@/views/ScheduledScans.vue'),
+        meta: { allowedRoles: ['admin', 'operator'] },
+      },
+      {
         path: 'templates',
         name: 'Templates',
         component: () => import('@/views/Templates.vue'),

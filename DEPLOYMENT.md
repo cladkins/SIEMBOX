@@ -44,8 +44,16 @@ NODE_ENV=production
 LOG_LEVEL=info
 
 # Optional: Specify version (default: latest)
-# SIEMBOX_VERSION=1.0.0
+# SIEMBOX_VERSION=2.0.0
 ```
+
+> **Optional v2 features.** The AI builder, parser/detection catalog, and GeoIP
+> enrichment are all configured with additional (optional) environment variables —
+> `CREDENTIAL_ENCRYPTION_KEY`, `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`,
+> `SIEMBOX_CATALOG_REPO` / `SIEMBOX_CATALOG_REF` / `GITHUB_TOKEN`, and
+> `GEOIP_HOME_COUNTRIES`. All have safe defaults; see
+> [`.env.example`](./.env.example) for the full annotated list. You can also set the
+> AI key from the UI (*Settings → AI Builder*), stored encrypted at rest.
 
 ### 3. Start SIEMBox
 
@@ -132,18 +140,20 @@ The compose file defines these services:
 
 The database migrations and seed data import run automatically when the backend container starts. This includes:
 - Running all database migrations
-- Importing 19 pre-built parsers
-- Seeding 40+ detection rules
+- Importing the 27 bundled parsers
+- Seeding the 48 bundled detection rules
 - Creating default admin user
 
 The process is fully automated and requires no manual intervention. Monitor your deployment logs to verify completion.
 
 On first startup, SIEMBox automatically:
-- Runs all database migrations (including 18+ parsers)
-- Seeds 40+ detection rules from YAML files
+- Runs all database migrations
+- Seeds the 27 bundled parsers and 48 detection rules
 - Creates default admin user
 
-**No manual steps required!**
+**No manual steps required!** After first start you can browse and install more
+parsers and detections, or pull updates, from the in-app catalog
+(*Parsers → Browse Catalog* and *Detection Rules → Browse Catalog*).
 
 ### 5. Access the Application
 
@@ -250,13 +260,13 @@ When the backend container starts for the first time, it automatically:
 
 1. **Runs all database migrations** from `/backend/migrations/`:
    - Creates database schema (tables, indexes, constraints)
-   - Imports 19 built-in parsers
+   - Imports the 27 bundled parsers
    - Configures retention policies
    - Sets up system tables
 
 2. **Seeds detection rules** (on first run only):
    - Checks if rules table is empty
-   - If empty, imports 40+ detection rules from `/rules/` directory
+   - If empty, imports the 48 bundled detection rules from `/rules/` directory
    - If rules already exist, skips import (prevents duplication)
 
 3. **Creates default admin user** with credentials from environment variables

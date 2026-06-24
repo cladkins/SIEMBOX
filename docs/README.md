@@ -73,16 +73,20 @@ System architecture, design decisions, and implementation specifications.
 
 **Current State:** Production Ready
 
-**Recent Milestones:**
-- ✅ 19 production-ready parsers (reverse proxy, auth, applications)
-- ✅ 40+ detection rules implemented and tested
+**Recent Milestones (v2 — the Parser Platform):**
+- ✅ 27 production-ready parsers (reverse proxy, auth, applications, media)
+- ✅ 48 detection rules implemented and tested
+- ✅ Declarative parser engine + portable, in-app community catalog
+- ✅ AI builder for parsers and detections (Anthropic / OpenAI / Ollama, BYO key)
+- ✅ Canonical normalization + offline GeoIP enrichment
 - ✅ Zero-configuration deployment with automatic seeding
-- ✅ Comprehensive documentation reorganization
 
 **Features:**
-- Automatic parser and rule seeding on first startup
-- Built-in parsers for common homelab applications
-- Detection rules for authentication, proxy security, data exfiltration, and more
+- Declarative, data-driven parsers — onboard a log source without engine code
+- In-app catalog to browse, install, update, export, and import parsers/detections
+- AI-assisted authoring with a generate → validate → auto-refine loop
+- Automatic seeding of the bundled 27 parsers and 48 rules on first startup
+- Detection rules for authentication, proxy security, data exfiltration, geo, and more
 - Role-based access control and alert management
 
 See [../DEPLOYMENT.md](../DEPLOYMENT.md) for quick start and [operations/TROUBLESHOOTING.md](operations/TROUBLESHOOTING.md) for support.

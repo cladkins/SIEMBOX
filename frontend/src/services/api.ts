@@ -107,6 +107,8 @@ export const api = {
   getCatalogSource: () => apiClient.get('/parsers/catalog/source'),
   installCatalogParser: (name: string, force = false) =>
     apiClient.post('/parsers/catalog/install', { name, force }),
+  installAllCatalogParsers: (force = false) =>
+    apiClient.post('/parsers/catalog/install-all', { force }, { timeout: 120000 }),
 
   // Detection Rules
   getRules: () => apiClient.get('/rules'),
@@ -117,6 +119,7 @@ export const api = {
   // Detection catalog (browse/install rules from the GitHub repo, in-app)
   getRuleCatalog: (refresh = false) => apiClient.get('/rules/catalog', { params: refresh ? { refresh: true } : {} }),
   installCatalogRule: (name: string) => apiClient.post('/rules/catalog/install', { name }),
+  installAllCatalogRules: () => apiClient.post('/rules/catalog/install-all', {}, { timeout: 120000 }),
 
   // AI builder
   getAiSettings: () => apiClient.get('/settings/ai'),

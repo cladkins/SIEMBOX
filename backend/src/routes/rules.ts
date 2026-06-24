@@ -121,6 +121,76 @@ router.post('/catalog/install', async (req: Request, res: Response) => {
   }
 });
 
+// Install (or update) EVERY detection in the catalog — the "Install all" action,
+// the populate path for a catalog-only (unseeded) install. Bad items are
+// recorded in `failed` and skipped rather than aborting the batch; the engine is
+// reloaded once at the end.
+router.post('/catalog/install-all', async (req: Request, res: Response) => {
+  try {
+    const { entries } = await fetchDetectionCatalog(req.query.refresh === 'true');
+    const results = {
+      total: entries.length,
+      installed: 0,
+      updated: 0,
+      failed: [] as Array<{ name: string; reason: string }>,
+    };
+    for (const entry of entries) {
+      try {
+        const found = await getCatalogDetection(entry.name);
+        if (!found) {
+          results.failed.push({ name: entry.name, reason: 'not found in catalog' });
+          continue;
+        }
+        const { rule_yaml, parsed } = found;
+        const validation = validateRule(parsed, { strict: false });
+        if (!validation.ok) {
+          results.failed.push({ name: entry.name, reason: 'failed validation' });
+          continue;
+        }
+        const rule_logic = {
+          conditions: parsed.conditions,
+          aggregation: parsed.aggregation,
+          alert: parsed.alert,
+        };
+        const existing = await DetectionRuleModel.findByName(parsed.name);
+        if (existing) {
+          await DetectionRuleModel.update(existing.id, {
+            description: parsed.description,
+            severity: parsed.severity,
+            rule_yaml,
+            rule_logic,
+            tags: parsed.tags || [],
+          });
+          results.updated++;
+        } else {
+          await DetectionRuleModel.create({
+            name: parsed.name,
+            description: parsed.description,
+            enabled: parsed.enabled !== false,
+            severity: parsed.severity,
+            rule_yaml,
+            rule_logic,
+            tags: parsed.tags || [],
+          });
+          results.installed++;
+        }
+      } catch (e) {
+        results.failed.push({
+          name: entry.name,
+          reason: e instanceof Error ? e.message : 'install error',
+        });
+      }
+    }
+    await RulesEngine.getInstance().reload();
+    res.json(results);
+  } catch (error) {
+    throw new ApiError(
+      502,
+      `Failed to install detection catalog: ${error instanceof Error ? error.message : 'unknown error'}`
+    );
+  }
+});
+
 // Force a detection catalog cache refresh.
 router.post('/catalog/refresh', async (_req: Request, res: Response) => {
   try {

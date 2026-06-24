@@ -138,22 +138,23 @@ The compose file defines these services:
 
 ### 4. Verify Database Initialization
 
-The database migrations and seed data import run automatically when the backend container starts. This includes:
+The database migrations run automatically when the backend container starts. This includes:
 - Running all database migrations
-- Importing the 27 bundled parsers
-- Seeding the 48 bundled detection rules
-- Creating default admin user
+- Creating the default admin user
 
-The process is fully automated and requires no manual intervention. Monitor your deployment logs to verify completion.
+A fresh install is **catalog-only**: no parsers or detection rules are seeded, so
+the deployment starts empty and you install exactly what you want. The process is
+fully automated and requires no manual intervention. Monitor your deployment logs
+to verify completion.
 
 On first startup, SIEMBox automatically:
 - Runs all database migrations
-- Seeds the 27 bundled parsers and 48 detection rules
-- Creates default admin user
+- Creates the default admin user
 
-**No manual steps required!** After first start you can browse and install more
-parsers and detections, or pull updates, from the in-app catalog
-(*Parsers → Browse Catalog* and *Detection Rules → Browse Catalog*).
+**No manual steps required to boot.** Once you log in, populate parsers and
+detections from the in-app catalog — open *Parsers → Browse Catalog* and
+*Detection Rules → Browse Catalog* and click **Install all** (or pick individual
+items). The same catalog is the update path later.
 
 ### 5. Access the Application
 
@@ -256,22 +257,26 @@ Note: Do not run docker-compose commands directly. Your deployment environment w
 
 ### Automatic Initialization
 
-When the backend container starts for the first time, it automatically:
+When the backend container starts, it automatically:
 
 1. **Runs all database migrations** from `/backend/migrations/`:
    - Creates database schema (tables, indexes, constraints)
-   - Imports the 27 bundled parsers
    - Configures retention policies
    - Sets up system tables
 
-2. **Seeds detection rules** (on first run only):
-   - Checks if rules table is empty
-   - If empty, imports the 48 bundled detection rules from `/rules/` directory
-   - If rules already exist, skips import (prevents duplication)
+2. **Creates the default admin user** with credentials from environment variables
 
-3. **Creates default admin user** with credentials from environment variables
+Migrations are idempotent and run on every startup. A fresh install is
+**catalog-only**: no parsers or detection rules are seeded — you install exactly
+what you want from the in-app catalog after first login (*Parsers / Detection
+Rules → Browse Catalog → Install all*).
 
-**This entire process is automatic and requires no manual intervention.**
+**This entire process is automatic and requires no manual intervention to boot.**
+
+> **Opting back into legacy seeding.** Set `SEED_BUNDLED_CONTENT=true` to have the
+> backend auto-import the bundled detection rules on startup (the old behaviour).
+> Left unset, the install stays catalog-only. This affects detections only;
+> parsers always come from the catalog.
 
 ### Verify Initialization Completed
 
@@ -281,11 +286,12 @@ You can verify that initialization was successful by checking the health endpoin
 curl http://your-server-ip:8421/health/seed-status
 ```
 
-Expected response:
+On a fresh catalog-only install the counts start at zero and climb as you install
+from the catalog:
 ```json
 {
-  "parsers": 19,
-  "rules": 40,
+  "parsers": 0,
+  "rules": 0,
   "seeded": true
 }
 ```

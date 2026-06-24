@@ -56,8 +56,9 @@ services:
       SIEMBOX_CATALOG_REPO: ${SIEMBOX_CATALOG_REPO:-}
       SIEMBOX_CATALOG_REF: ${SIEMBOX_CATALOG_REF:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      # Set to false for a catalog-only install (skips bundled detection seeding).
-      SEED_BUNDLED_CONTENT: ${SEED_BUNDLED_CONTENT:-true}
+      # Catalog-only by default (no bundled parsers/detections seeded). Set to
+      # true to opt back into auto-importing the bundled detection rules (legacy).
+      SEED_BUNDLED_CONTENT: ${SEED_BUNDLED_CONTENT:-}
     volumes:
       - ./rules:/app/rules:ro
       - ./data/geoip:/app/data

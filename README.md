@@ -9,11 +9,11 @@ A lightweight, self-hosted Security Information and Event Management (SIEM) syst
 - **AI builder (bring your own key)**: Paste a log line to generate a parser, or describe a threat to generate a detection rule. A *generate → validate → auto-refine* loop runs against the real engine (≤3 attempts), so you never get an invalid artifact. Works with **Anthropic, OpenAI, or local Ollama**; your key is encrypted at rest.
 - **Canonical normalization**: Every parser normalizes to one canonical schema, so a detection rule written once fires against logs from any source.
 - **GeoIP enrichment**: Offline country / foreign-geo enrichment (no external calls), powering geo-aware detections such as foreign-login alerts.
-- **Zero-configuration setup**: The bundled 27 parsers and 48 detection rules seed automatically on first startup; the catalog is the additive update path.
+- **Catalog-only by default**: A fresh install starts empty — no hardcoded parsers or detections. You install exactly what you want from the in-app catalog (*Browse Catalog → Install all*), so the deployment carries only the content you chose.
 - **Syslog ingestion**: Receive logs via UDP/TCP on port 514.
 - **Log shipper**: Universal log forwarder for collecting logs (files, Docker containers, systemd journals) from any host.
 - **Vulnerability scanning**: Built-in Nuclei scanning with per-host asset tracking and a vulnerability management view.
-- **Pre-built parsers**: Nginx, Traefik, Caddy, Authelia, Keycloak, Nextcloud, Pi-hole, Vaultwarden, UniFi, Home Assistant, Plex, Jellyfin, and more.
+- **Ready-made parsers in the catalog**: Nginx, Traefik, Caddy, Authelia, Keycloak, Nextcloud, Pi-hole, Vaultwarden, UniFi, Home Assistant, Plex, Jellyfin, and more — one click to install from *Parsers → Browse Catalog*.
 - **Alert management**: View, acknowledge, and manage security alerts.
 - **Log retention**: Configurable retention policies with automated cleanup.
 - **User management**: Role-based access control (Admin, Analyst, Viewer).

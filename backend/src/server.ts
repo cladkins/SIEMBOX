@@ -9,6 +9,7 @@ import { startAutoDiscoveryJob, stopAutoDiscoveryJob } from './jobs/autoDiscover
 import { startScheduledScansJob, stopScheduledScansJob } from './jobs/scheduledScans';
 import { startIngestionHealthJob, stopIngestionHealthJob } from './jobs/ingestionHealth';
 import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
+import { TemplateService } from './services/scanner/templateService';
 
 dotenv.config();
 
@@ -66,6 +67,11 @@ const startServer = async () => {
 
     // Start ingestion-health monitor (drives ingestion notifications)
     startIngestionHealthJob();
+
+    // Warm the Nuclei template cache in the background so the first request to
+    // the (heavy) template endpoints hits a populated cache instead of parsing
+    // ~10k files inline and tripping the client timeout. Fire-and-forget.
+    void TemplateService.warmCache();
 
     // Start Express API server
     app.listen(PORT, () => {

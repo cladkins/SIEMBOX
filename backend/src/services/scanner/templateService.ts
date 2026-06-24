@@ -59,6 +59,9 @@ export class TemplateService {
   private static tagsCache: TagInfo[] | null = null;
   private static lastCacheTime: number = 0;
   private static CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  // De-dupes concurrent cold loads: a page that fires overview + tags + search
+  // at once would otherwise kick off three full ~10k-file parses in parallel.
+  private static loadingPromise: Promise<TemplateInfo[]> | null = null;
 
   /**
    * Check if templates directory exists and is accessible
@@ -272,20 +275,53 @@ export class TemplateService {
     if (this.templatesCache && Date.now() - this.lastCacheTime < this.CACHE_TTL) {
       return this.templatesCache;
     }
+    // Share a single in-flight load between concurrent callers (see loadingPromise).
+    if (this.loadingPromise) {
+      return this.loadingPromise;
+    }
+    this.loadingPromise = this.loadAllTemplates().finally(() => {
+      this.loadingPromise = null;
+    });
+    return this.loadingPromise;
+  }
 
-    const templates: TemplateInfo[] = [];
+  /** Warm the template cache (used at startup so the first user hits a warm cache). */
+  static async warmCache(): Promise<void> {
+    try {
+      await this.getAllTemplates();
+    } catch {
+      // best-effort; the endpoints fall back to defaults if this fails
+    }
+  }
 
+  private static async loadAllTemplates(): Promise<TemplateInfo[]> {
     try {
       const dirCheck = await this.checkTemplatesDirectory();
       if (!dirCheck.exists) {
         return [];
       }
 
-      await this.scanDirectory(TEMPLATES_DIR, '', templates);
+      // 1. Walk the tree to collect file paths (cheap — no parsing).
+      const files: Array<{ path: string; category: string }> = [];
+      await this.collectTemplateFiles(TEMPLATES_DIR, '', files);
+
+      // 2. Parse with bounded concurrency. Nuclei ships ~10k templates; parsing
+      //    them one-at-a-time blocked the request long enough to trip the client
+      //    timeout. Batching overlaps the file reads and finishes far faster.
+      const templates: TemplateInfo[] = [];
+      const CONCURRENCY = 32;
+      for (let i = 0; i < files.length; i += CONCURRENCY) {
+        const batch = files.slice(i, i + CONCURRENCY);
+        const parsed = await Promise.all(
+          batch.map((f) => this.parseTemplate(f.path, f.category))
+        );
+        for (const t of parsed) {
+          if (t) templates.push(t);
+        }
+      }
 
       this.templatesCache = templates;
       this.lastCacheTime = Date.now();
-
       console.log(`[TemplateService] Loaded ${templates.length} templates`);
       return templates;
     } catch (error) {
@@ -295,12 +331,13 @@ export class TemplateService {
   }
 
   /**
-   * Recursively scan directory for templates
+   * Recursively collect template file paths (with their top-level category),
+   * without reading/parsing them — the parse happens with concurrency above.
    */
-  private static async scanDirectory(
+  private static async collectTemplateFiles(
     dirPath: string,
     category: string,
-    templates: TemplateInfo[]
+    files: Array<{ path: string; category: string }>
   ): Promise<void> {
     try {
       const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
@@ -313,12 +350,9 @@ export class TemplateService {
         if (entry.isDirectory()) {
           // Use first-level directory as category
           const newCategory = category || entry.name;
-          await this.scanDirectory(fullPath, newCategory, templates);
+          await this.collectTemplateFiles(fullPath, newCategory, files);
         } else if (entry.isFile() && (entry.name.endsWith('.yaml') || entry.name.endsWith('.yml'))) {
-          const template = await this.parseTemplate(fullPath, category);
-          if (template) {
-            templates.push(template);
-          }
+          files.push({ path: fullPath, category });
         }
       }
     } catch (error) {

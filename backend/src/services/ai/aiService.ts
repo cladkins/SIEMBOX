@@ -231,7 +231,7 @@ A parser:
   "metadata": { "author": "ai", "log_source": "<source>", "tags": ["..."] }
 }
 
-Map to CANONICAL fields wherever possible: source_ip, dest_ip, source_port, dest_port, user, target_user, host, service, method, path, status_code, message, event. The engine fills aliases (client_ip/src_ip -> source_ip) and mirrors source_ip<->client_ip, so usually set one. For regex parsers ALWAYS capture the actor IP into a group mapped to source_ip when present.
+Map to CANONICAL fields wherever possible: source_ip, dest_ip, source_port, dest_port, user, target_user, host, service, method, path, status_code, message, event. The engine fills aliases (client_ip/src_ip -> source_ip) and mirrors source_ip<->client_ip, so usually set one. For regex parsers ALWAYS capture the actor IP into a group mapped to source_ip when present. If you do NOT map "message", the engine sets it to the full raw log line; map a group to "message" only to surface a cleaner human-readable message, and make its test_samples "expect" that exact captured text.
 
 derivations (optional, applied after mapping; fill EMPTY fields unless "overwrite": true; first match wins):
 - { "when": { "<field>": { "contains"|"equals"|"in"|"matches"|"exists": ... } }, "set": { "<field>": "<value>" } }   (contains/matches are case-insensitive)

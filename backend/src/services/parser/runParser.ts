@@ -145,7 +145,12 @@ function applyRegexParser(parser: ParserDef, message: string): { fields: Record<
     }
   }
 
-  fields.message = message;
+  // DEFAULT `message` to the raw line, but let an explicit field_mappings -> message
+  // win so a parser can surface a cleaned-up message instead of the whole line.
+  // (The JSON path already lets mappings own `message`; this keeps the two parser
+  // types consistent. The full original line is always retained on the raw_logs
+  // row, so there's no need to duplicate it into every parsed record here.)
+  if (fields.message === undefined) fields.message = message;
   const processedFields = postProcessFields(parser, fields);
   return { fields: processedFields, event_type: determineEventType(parser.name, processedFields) };
 }

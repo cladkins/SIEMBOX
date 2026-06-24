@@ -130,6 +130,8 @@ export const api = {
   // Alerts
   getAlerts: (params?: any) => apiClient.get('/alerts', { params }),
   getAlertStatistics: () => apiClient.get('/alerts/statistics'),
+  getAlertsByCountry: (params?: { days?: number; limit?: number }) =>
+    apiClient.get('/alerts/by-country', { params }),
   getAlert: (id: number) => apiClient.get(`/alerts/${id}`),
   updateAlert: (id: number, data: any) => apiClient.put(`/alerts/${id}`, data),
   deleteAlert: (id: number) => apiClient.delete(`/alerts/${id}`),

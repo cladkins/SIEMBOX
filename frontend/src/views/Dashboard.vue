@@ -153,6 +153,26 @@
       </el-col>
     </el-row>
 
+    <!-- Geo Row: alerts by country -->
+    <el-row :gutter="20" class="charts-row">
+      <el-col :xs="24">
+        <el-card>
+          <template #header>
+            <div class="card-header">
+              <span>Alerts by Country (last 30 days)</span>
+            </div>
+          </template>
+          <div v-if="alertsByCountry.length === 0" class="empty-geo">
+            No geo-located alerts yet. Alerts are placed on the map once a public
+            source IP resolves to a country (GeoIP enrichment).
+          </div>
+          <div v-else class="chart-container chart-container--wide">
+            <canvas ref="countryChart"></canvas>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <!-- Recent Alerts Table -->
     <el-card class="recent-alerts">
       <template #header>
@@ -220,12 +240,17 @@ const vulnStats = ref<any>(null);
 
 const severityChart = ref<HTMLCanvasElement>();
 const statusChart = ref<HTMLCanvasElement>();
+const countryChart = ref<HTMLCanvasElement>();
 let severityChartInstance: Chart | null = null;
 let statusChartInstance: Chart | null = null;
+let countryChartInstance: Chart | null = null;
+
+const alertsByCountry = ref<Array<{ country_code: string; country_name: string; count: number; foreign_count: number }>>([]);
 
 onMounted(async () => {
   await loadData();
   createCharts();
+  renderCountryChart();
 });
 
 // alertStats arrives asynchronously (and can refresh). The original code built
@@ -236,6 +261,12 @@ watch(alertStats, () => {
   createCharts();
 });
 
+// The country breakdown loads independently of alertStats, so rebuild its chart
+// when it changes (its canvas only exists when there's data — see the template).
+watch(alertsByCountry, () => {
+  renderCountryChart();
+});
+
 const loadData = async () => {
   loading.value = true;
   try {
@@ -244,11 +275,22 @@ const loadData = async () => {
       alertsStore.fetchAlerts({ limit: 10 }),
       loadAssetStats(),
       loadVulnStats(),
+      loadAlertsByCountry(),
     ]);
   } catch (error) {
     console.error('Failed to load dashboard data:', error);
   } finally {
     loading.value = false;
+  }
+};
+
+const loadAlertsByCountry = async () => {
+  try {
+    const response = await api.getAlertsByCountry({ days: 30, limit: 12 });
+    alertsByCountry.value = Array.isArray(response.data) ? response.data : [];
+  } catch (error) {
+    console.error('Failed to load alerts by country:', error);
+    alertsByCountry.value = [];
   }
 };
 
@@ -341,6 +383,55 @@ const createCharts = () => {
       },
     });
   }
+};
+
+// Horizontal bar of alert counts per country. Bars for countries that triggered
+// any foreign-geo alert are coloured red (vs blue for domestic-only), so an
+// operator can spot unexpected origins at a glance. Rebuilt on data change with
+// the same destroy-before-recreate guard as the other charts.
+const renderCountryChart = () => {
+  countryChartInstance?.destroy();
+  countryChartInstance = null;
+
+  const rows = alertsByCountry.value;
+  if (!countryChart.value || rows.length === 0) return;
+
+  countryChartInstance = new Chart(countryChart.value, {
+    type: 'bar',
+    data: {
+      labels: rows.map((r) => r.country_name || r.country_code),
+      datasets: [
+        {
+          label: 'Alerts',
+          data: rows.map((r) => r.count),
+          backgroundColor: rows.map((r) =>
+            r.foreign_count > 0 ? '#f56c6c' : '#409eff'
+          ),
+        },
+      ],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            afterLabel: (ctx) => {
+              const row = rows[ctx.dataIndex];
+              return row && row.foreign_count > 0
+                ? `${row.foreign_count} flagged foreign`
+                : '';
+            },
+          },
+        },
+      },
+      scales: {
+        x: { beginAtZero: true, ticks: { precision: 0 } },
+      },
+    },
+  });
 };
 
 const getSeverityType = (severity: string) => {
@@ -482,6 +573,20 @@ const viewAlert = (alert: any) => {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* The country bar chart grows with the number of countries; give it room and
+   let it fill the width (maintainAspectRatio is off for the horizontal bar). */
+.chart-container--wide {
+  height: 360px;
+  width: 100%;
+}
+
+.empty-geo {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--siembox-text-secondary, #909399);
+  font-size: 14px;
 }
 
 .card-header {

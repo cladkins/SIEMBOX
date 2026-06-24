@@ -173,4 +173,34 @@ export class AlertModel {
 
     return result.rows[0];
   }
+
+  /**
+   * Aggregate alerts by the GeoIP country of the IP that triggered them.
+   * country_code / country_name / geo_foreign are enriched onto the parsed log
+   * before rule matching and copied into alerts.matched_data, so no join or
+   * extra lookup is needed. Alerts whose IP was private/unresolved (no
+   * country_code) are excluded. `days` bounds the window; `limit` caps rows.
+   */
+  static async getCountByCountry(days = 30, limit = 50): Promise<any[]> {
+    const result = await query(
+      `
+      SELECT
+        matched_data->>'country_code' AS country_code,
+        MAX(matched_data->>'country_name') AS country_name,
+        COUNT(*)::int AS count,
+        COUNT(*) FILTER (
+          WHERE (matched_data->>'geo_foreign')::boolean IS TRUE
+        )::int AS foreign_count
+      FROM alerts
+      WHERE created_at >= NOW() - ($1 || ' days')::interval
+        AND matched_data->>'country_code' IS NOT NULL
+        AND matched_data->>'country_code' <> ''
+      GROUP BY matched_data->>'country_code'
+      ORDER BY count DESC
+      LIMIT $2
+      `,
+      [days, limit]
+    );
+    return result.rows;
+  }
 }

@@ -43,6 +43,19 @@
           />
         </el-form-item>
 
+        <el-form-item label="Parser">
+          <el-select
+            v-model="filters.parser_id"
+            placeholder="All Parsers"
+            clearable
+            filterable
+            style="width: 200px"
+            @change="applyFilters"
+          >
+            <el-option v-for="p in parsers" :key="p.id" :label="p.name" :value="p.id" />
+          </el-select>
+        </el-form-item>
+
         <el-form-item label="Severity">
           <el-select
             v-model="filters.severity"
@@ -105,6 +118,12 @@
               <template #default="{ row }">
                 <el-tag v-if="row.event_type" size="small">{{ row.event_type }}</el-tag>
                 <el-text v-else type="info" size="small">N/A</el-text>
+              </template>
+            </el-table-column>
+            <el-table-column prop="parser_name" label="Parser" width="180">
+              <template #default="{ row }">
+                <el-tag v-if="row.parser_name" type="warning" size="small" effect="plain">{{ row.parser_name }}</el-tag>
+                <el-text v-else type="info" size="small">Unknown</el-text>
               </template>
             </el-table-column>
             <el-table-column label="Parsed Data">
@@ -201,13 +220,27 @@ const filters = reactive({
   source_ip: '',
   event_type: '',
   app_name: '',
+  parser_id: null as number | null,
   severity: null as number | null,
 });
 
 const dateRange = ref<[Date, Date] | null>(null);
 
+// Parser list powers the "Parser" filter dropdown.
+const parsers = ref<{ id: number; name: string }[]>([]);
+
+const loadParsers = async () => {
+  try {
+    const res = await api.getParsers();
+    parsers.value = (res.data || []).map((p: any) => ({ id: p.id, name: p.name }));
+  } catch {
+    // Non-fatal: the filter just stays empty if parsers can't be loaded.
+  }
+};
+
 onMounted(() => {
   fetchParsedLogs();
+  loadParsers();
 });
 
 const buildQueryParams = () => {
@@ -235,6 +268,10 @@ const buildQueryParams = () => {
 
   if (filters.app_name) {
     params.app_name = filters.app_name;
+  }
+
+  if (filters.parser_id !== null && filters.parser_id !== undefined) {
+    params.parser_id = filters.parser_id;
   }
 
   if (filters.severity !== null && filters.severity !== undefined) {
@@ -293,6 +330,8 @@ const resetFilters = () => {
   filters.search = '';
   filters.source_ip = '';
   filters.event_type = '';
+  filters.app_name = '';
+  filters.parser_id = null;
   filters.severity = null;
   dateRange.value = null;
   applyFilters();
@@ -363,10 +402,12 @@ const convertToCSV = (logs: any[], type: string): string => {
 
     return [headers.join(','), ...rows.map((row) => row.join(','))].join('\n');
   } else {
-    const headers = ['Timestamp', 'Source IP', 'Event Type', 'Parsed Data'];
+    const headers = ['Timestamp', 'Source IP', 'Source', 'Parser', 'Event Type', 'Parsed Data'];
     const rows = logs.map((log) => [
       log.timestamp,
       log.source_ip || '',
+      log.app_name || '',
+      log.parser_name || '',
       log.event_type || '',
       `"${JSON.stringify(log.parsed_data || {}).replace(/"/g, '""')}"`,
     ]);

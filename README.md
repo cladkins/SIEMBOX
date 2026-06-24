@@ -1,18 +1,23 @@
 # SIEMBox
 
-A lightweight, self-hosted Security Information and Event Management (SIEM) system built with Node.js, TypeScript, and Vue.js.
+A lightweight, self-hosted Security Information and Event Management (SIEM) system built with Node.js, TypeScript, and Vue.js. As of **v2 — the Parser Platform**, parsers and detections are portable data: shareable, installable from a community catalog, and generatable by AI.
 
 ## Features
 
-- **Zero-Configuration Setup**: Automatically seeds 19 parsers and 40+ detection rules on first startup
-- **Syslog Ingestion**: Receive logs via UDP/TCP on port 514
-- **Log Shipper**: Universal log forwarder for collecting logs from any source
-- **Pre-Built Parsers**: Nginx, Traefik, Caddy, Authelia, Keycloak, Nextcloud, Pi-hole, Vaultwarden, UniFi, and more
-- **Detection Rules**: Built-in rules for authentication failures, web attacks, DNS anomalies, and system events
-- **Alert Management**: View, acknowledge, and manage security alerts
-- **Log Retention**: Configurable retention policies with automated cleanup
-- **User Management**: Role-based access control (Admin, Analyst, Viewer)
-- **Dashboard**: Real-time visualization of logs and alerts
+- **Declarative parser platform**: Parsers are pure data — a match pattern, canonical field mappings, and declarative `derivations` — so you can onboard a new log source without touching engine code.
+- **In-app community catalog**: Browse and install **27 parsers** and **48 detection rules** from a GitHub catalog directly in the UI (*Parsers → Browse Catalog*, *Detection Rules → Browse Catalog*) — every item validated and self-tested before install, with search, filters, and install/update status. Export or import any item as portable JSON.
+- **AI builder (bring your own key)**: Paste a log line to generate a parser, or describe a threat to generate a detection rule. A *generate → validate → auto-refine* loop runs against the real engine (≤3 attempts), so you never get an invalid artifact. Works with **Anthropic, OpenAI, or local Ollama**; your key is encrypted at rest.
+- **Canonical normalization**: Every parser normalizes to one canonical schema, so a detection rule written once fires against logs from any source.
+- **GeoIP enrichment**: Offline country / foreign-geo enrichment (no external calls), powering geo-aware detections such as foreign-login alerts.
+- **Zero-configuration setup**: The bundled 27 parsers and 48 detection rules seed automatically on first startup; the catalog is the additive update path.
+- **Syslog ingestion**: Receive logs via UDP/TCP on port 514.
+- **Log shipper**: Universal log forwarder for collecting logs (files, Docker containers, systemd journals) from any host.
+- **Vulnerability scanning**: Built-in Nuclei scanning with per-host asset tracking and a vulnerability management view.
+- **Pre-built parsers**: Nginx, Traefik, Caddy, Authelia, Keycloak, Nextcloud, Pi-hole, Vaultwarden, UniFi, Home Assistant, Plex, Jellyfin, and more.
+- **Alert management**: View, acknowledge, and manage security alerts.
+- **Log retention**: Configurable retention policies with automated cleanup.
+- **User management**: Role-based access control (Admin, Analyst, Viewer).
+- **Dashboard**: Real-time visualization of logs, alerts, assets, and vulnerabilities.
 
 ## Quick Start
 
@@ -136,6 +141,10 @@ The shipper should show as **online** in the UI within ~30 seconds. Full setup, 
 - **[API Reference](./API.md)** - Complete REST API documentation
 - **[Community Parsers](./PARSERS.md)** - Pre-built parsers for common log sources
 - **[Detection Rules](./RULES.md)** - Built-in and community detection rules
+- **[Parser Platform Plan](./docs/parser-platform-plan.md)** - The v2 declarative engine + catalog design
+- **[Canonical Schema](./docs/canonical-schema.md)** - The normalized field schema parsers map to
+- **[Detection Normalization](./docs/detection-normalization.md)** - How rules match across log sources
+- **[GeoIP Enrichment](./docs/geoip.md)** - Offline country / foreign-geo enrichment
 - **[Parser Documentation](./docs/parsers/)** - Application-specific parser guides
 - **[Architecture Documentation](./docs/architecture/)** - System design and specifications
 
@@ -168,9 +177,13 @@ MIT License - See LICENSE file for details
 ## Roadmap
 
 - [x] CEF (Common Event Format) parser
+- [x] Declarative parser platform + portable parser/detection catalog (v2)
+- [x] AI-assisted parser & detection authoring (v2)
+- [x] Canonical normalization + GeoIP enrichment (v2)
+- [x] Email / Slack / NTFY alert notifications
 - [ ] Additional parser types (LEEF)
 - [ ] Threat intelligence integration
 - [ ] Advanced correlation rules
-- [ ] Email/webhook alert notifications
-- [ ] Data export capabilities
+- [ ] GeoIP dashboard map (alerts by country)
+- [ ] Container vulnerability scanning (Trivy / Grype)
 - [ ] Multi-tenancy support

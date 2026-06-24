@@ -74,7 +74,7 @@
               <el-icon :size="40"><Monitor /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ assetStats?.total || 0 }}</div>
+              <div class="stat-value">{{ Number(assetStats?.active_assets || 0) + Number(assetStats?.offline_assets || 0) }}</div>
               <div class="stat-label">Total Assets</div>
             </div>
           </div>
@@ -88,7 +88,7 @@
               <el-icon :size="40"><CircleCheck /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ assetStats?.online || 0 }}</div>
+              <div class="stat-value">{{ Number(assetStats?.active_assets || 0) }}</div>
               <div class="stat-label">Online Assets</div>
             </div>
           </div>
@@ -102,7 +102,7 @@
               <el-icon :size="40"><WarnTriangleFilled /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ vulnStats?.critical || 0 }}</div>
+              <div class="stat-value">{{ vulnStats?.critical_count || 0 }}</div>
               <div class="stat-label">Critical Vulns</div>
             </div>
           </div>
@@ -116,7 +116,7 @@
               <el-icon :size="40"><DataBoard /></el-icon>
             </div>
             <div class="stat-info">
-              <div class="stat-value">{{ vulnStats?.total || 0 }}</div>
+              <div class="stat-value">{{ vulnStats?.total_vulnerabilities || 0 }}</div>
               <div class="stat-label">Total Vulnerabilities</div>
             </div>
           </div>
@@ -198,7 +198,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAlertsStore } from '@/stores/alerts';
 import { api } from '@/services/api';
@@ -228,6 +228,14 @@ onMounted(async () => {
   createCharts();
 });
 
+// alertStats arrives asynchronously (and can refresh). The original code built
+// the charts once in onMounted and bailed out (early return) whenever the stats
+// weren't loaded yet, leaving the canvases permanently blank. Rebuild whenever
+// the stats change; createCharts() destroys the prior instances first.
+watch(alertStats, () => {
+  createCharts();
+});
+
 const loadData = async () => {
   loading.value = true;
   try {
@@ -250,7 +258,7 @@ const loadAssetStats = async () => {
     assetStats.value = response.data;
   } catch (error) {
     console.error('Failed to load asset statistics:', error);
-    assetStats.value = { total: 0, online: 0, offline: 0 };
+    assetStats.value = { active_assets: 0, offline_assets: 0 };
   }
 };
 
@@ -260,12 +268,20 @@ const loadVulnStats = async () => {
     vulnStats.value = response.data;
   } catch (error) {
     console.error('Failed to load vulnerability statistics:', error);
-    vulnStats.value = { total: 0, critical: 0, high: 0, medium: 0, low: 0 };
+    vulnStats.value = { total_vulnerabilities: 0, critical_count: 0, high_count: 0, medium_count: 0, low_count: 0 };
   }
 };
 
 const createCharts = () => {
   if (!alertStats.value) return;
+
+  // Destroy any prior instances before recreating — Chart.js throws "Canvas is
+  // already in use" if a new chart is attached to a canvas that still owns one,
+  // and leaving them around leaks on every refresh.
+  severityChartInstance?.destroy();
+  severityChartInstance = null;
+  statusChartInstance?.destroy();
+  statusChartInstance = null;
 
   // Severity Chart
   if (severityChart.value) {

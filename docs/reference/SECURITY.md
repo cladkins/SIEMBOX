@@ -92,6 +92,46 @@ git check-ignore .env  # Should return .env
 grep -r "DB_PASSWORD\|JWT_SECRET" .git/  # Should return nothing
 ```
 
+### Secrets & Credential Encryption (v2)
+
+SIEMBox encrypts sensitive secrets at rest (scanner credentials and the AI
+builder's provider API key) using `CREDENTIAL_ENCRYPTION_KEY`.
+
+```bash
+# Generate a 64-char hex key (32 bytes)
+CREDENTIAL_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+```
+
+- Set this **before** storing any credential or AI key from the UI. Without it,
+  the backend cannot persist a UI-entered key (it will tell you to set the key or
+  use an env var instead).
+- Treat it like `JWT_SECRET`: unique per installation, `chmod 600` in `.env`,
+  never committed. **Rotating it invalidates previously stored secrets**, which
+  must be re-entered.
+- As an alternative to storing the AI key encrypted, you can inject it at runtime
+  via `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` and never persist it.
+
+### AI Builder & Catalog Trust (v2)
+
+- **AI builder data flow.** When you generate a parser or detection, the log
+  sample or threat description you submit is sent to the configured provider.
+  With **Anthropic** or **OpenAI** this leaves your network; with **Ollama** it
+  stays on a host you control. Choose the provider per your data-sensitivity
+  policy, and avoid pasting sensitive log content to a third-party provider —
+  use a local Ollama endpoint for fully on-prem operation. The AI endpoints are
+  admin-only.
+- **Catalog source.** Catalog installs come from a GitHub repository (default
+  `cladkins/siembox-parsers`). Pin `SIEMBOX_CATALOG_REPO` / `SIEMBOX_CATALOG_REF`
+  to a source you trust. Every parser/detection is schema-validated and
+  self-tested before it is stored, but a parser is still code-adjacent data — only
+  install from sources you trust.
+
+### Dependency Updates
+
+Keep the container images current — `git pull && docker compose -f
+compose.prod.yaml pull && up -d` ships the latest dependency fixes. Dependabot is
+enabled on the repository; review and merge its security PRs promptly.
+
 ### Host System Hardening
 
 **Update System:**

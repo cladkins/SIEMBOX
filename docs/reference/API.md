@@ -13,6 +13,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Logs](#logs-endpoints)
   - [Parsers](#parsers-endpoints)
   - [Detection Rules](#detection-rules-endpoints)
+  - [Catalog & AI Builder (v2)](#catalog--ai-builder-endpoints-v2)
   - [Alerts](#alerts-endpoints)
   - [Users](#users-endpoints)
   - [Settings](#settings-endpoints)
@@ -746,6 +747,91 @@ Delete detection rule.
 
 **Errors:**
 - `404` - Rule not found
+
+---
+
+## Catalog & AI Builder Endpoints (v2)
+
+SIEMBox v2 treats parsers and detections as portable data. These endpoints back
+the in-app catalog (browse / install / refresh), portable export & import, and
+the AI builder. Parsers and detections expose parallel routes.
+
+Install/import is never blind: every item is run through the validator and its
+self-tests before it is stored. A failing item returns `422` (with the
+validation / self-test details) unless you pass `force: true`.
+
+### Catalog
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /api/parsers/catalog` | Browse the parser catalog, each entry annotated with `installed` and `update_available`. `?refresh=true` bypasses the ~5-minute cache. Returns `{ source, parsers }`. |
+| `GET /api/parsers/catalog/source` | The configured catalog source (repo / ref) for display. |
+| `POST /api/parsers/catalog/install` | Install or update a catalog parser by `name` (validate → self-test → upsert). Body: `{ "name": "nginx", "force": false }`. `201` created / `200` updated. |
+| `POST /api/parsers/catalog/refresh` | Force a catalog cache refresh. Returns `{ refreshed, count }`. |
+| `GET /api/rules/catalog` | Browse the detection catalog (same annotations). Returns `{ source, rules }`. |
+| `GET /api/rules/catalog/source` | The configured catalog source. |
+| `POST /api/rules/catalog/install` | Install or update a catalog detection by `name`. |
+| `POST /api/rules/catalog/refresh` | Force a catalog cache refresh. |
+
+Catalog source defaults to `cladkins/siembox-parsers` and is overridable via the
+`SIEMBOX_CATALOG_REPO` / `SIEMBOX_CATALOG_REF` env vars (`GITHUB_TOKEN` raises the
+GitHub API rate limit).
+
+### Export / Import (portable parsers)
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /api/parsers/:id/export` | Export an installed parser as a portable `siembox.parser/v1` JSON document. |
+| `POST /api/parsers/import` | Import a portable parser. Body: `{ "parser": { … }, "force": false }`. Validated + self-tested before upsert; `422` on failure unless `force`. |
+
+### AI Builder
+
+**Authentication:** Admin. Requires an AI provider to be configured (see
+`PUT /api/settings/ai`). Each call runs a **generate → validate → auto-refine**
+loop against the real engine (default ≤3 attempts) and returns the proposed
+artifact together with its validation and self-test results — it never returns an
+invalid parser/detection.
+
+#### POST /api/parsers/ai/generate
+
+Generate a parser from a sample log line.
+
+**Request Body:**
+```json
+{
+  "sample": "192.168.1.10 - - [10/Oct/2024:13:55:36 +0000] \"GET / HTTP/1.1\" 200 1234",
+  "hints": "nginx access log",
+  "maxAttempts": 3
+}
+```
+`sample` is required; `hints` and `maxAttempts` are optional.
+
+#### POST /api/rules/ai/generate
+
+Generate a detection rule from a natural-language description.
+
+**Request Body:**
+```json
+{
+  "description": "Alert on 5 or more failed SSH logins from one IP in 5 minutes",
+  "context": "fields available: source_ip, event_action, app",
+  "maxAttempts": 3
+}
+```
+`description` is required; `context` and `maxAttempts` are optional.
+
+### AI Settings
+
+**Authentication:** Admin.
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /api/settings/ai` | Current AI config (provider, model, base URL, and whether a key is set — the key itself is never returned). |
+| `PUT /api/settings/ai` | Update AI config. Body: `{ "provider": "anthropic" \| "openai" \| "ollama", "model": "…", "baseUrl": "…", "apiKey": "…" }`. Pass `apiKey` to set it (encrypted at rest via `CREDENTIAL_ENCRYPTION_KEY`), or `""` to clear it. |
+
+> Storing a key from the UI requires `CREDENTIAL_ENCRYPTION_KEY` to be set;
+> alternatively provide the key via the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`
+> environment variable.
 
 ---
 

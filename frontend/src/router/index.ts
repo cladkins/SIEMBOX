@@ -24,6 +24,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/Alerts.vue'),
       },
       {
+        path: 'threat-intel',
+        name: 'ThreatIntel',
+        component: () => import('@/views/ThreatIntel.vue'),
+      },
+      {
         path: 'logs',
         name: 'Logs',
         component: () => import('@/views/Logs.vue'),

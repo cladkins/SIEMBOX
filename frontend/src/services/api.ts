@@ -142,6 +142,11 @@ export const api = {
   getAlertStatistics: () => apiClient.get('/alerts/statistics'),
   getAlertsByCountry: (params?: { days?: number; limit?: number }) =>
     apiClient.get('/alerts/by-country', { params }),
+
+  // Threat Intel (IP-centric geo / events / alerts)
+  getThreatIntelIp: (ip: string) => apiClient.get(`/threat-intel/ip/${encodeURIComponent(ip)}`),
+  getThreatIntelCountry: (code: string, days = 30) =>
+    apiClient.get(`/threat-intel/country/${encodeURIComponent(code)}`, { params: { days } }),
   getAlert: (id: number) => apiClient.get(`/alerts/${id}`),
   updateAlert: (id: number, data: any) => apiClient.put(`/alerts/${id}`, data),
   deleteAlert: (id: number) => apiClient.delete(`/alerts/${id}`),

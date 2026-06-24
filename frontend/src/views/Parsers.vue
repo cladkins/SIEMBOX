@@ -385,12 +385,25 @@
             <ul><li v-for="(m, j) in f.mismatches" :key="j">{{ m.field }}: expected {{ JSON.stringify(m.expected) }}, got {{ JSON.stringify(m.actual) }}</li></ul>
           </div>
         </el-alert>
+        <p v-if="!aiResult.ok && aiResult.parser" class="ai-hint">
+          Close, but not fully verified. You can tweak the <strong>Hints</strong> above and Regenerate, edit
+          the JSON below, or <strong>Save anyway</strong> and refine it with the Test/Edit tools.
+        </p>
         <pre v-if="aiResult.parser" class="ai-preview">{{ JSON.stringify(aiResult.parser, null, 2) }}</pre>
       </template>
 
       <template #footer>
         <el-button @click="aiDialogVisible = false">Close</el-button>
-        <el-button type="primary" :disabled="!aiResult || !aiResult.ok" :loading="aiSaving" @click="saveAiParser">
+        <el-button
+          v-if="aiResult && aiResult.parser && !aiResult.ok"
+          type="warning"
+          plain
+          :loading="aiSaving"
+          @click="saveAiParser(true)"
+        >
+          Save anyway
+        </el-button>
+        <el-button type="primary" :disabled="!aiResult || !aiResult.ok" :loading="aiSaving" @click="saveAiParser(false)">
           Save Parser
         </el-button>
       </template>
@@ -505,11 +518,24 @@ async function runAiGenerate() {
   }
 }
 
-async function saveAiParser() {
+async function saveAiParser(force = false) {
   if (!aiResult.value?.parser) return;
+  // A not-fully-valid parser can still be a useful starting point — let the user
+  // save it (force) and refine it with the Test/Edit tools, rather than dead-ending.
+  if (force) {
+    try {
+      await ElMessageBox.confirm(
+        "This parser didn't pass all of its self-tests, so it may not extract every field correctly yet. You can save it now and refine it with the Test and Edit tools. Save anyway?",
+        'Save unverified parser?',
+        { confirmButtonText: 'Save anyway', cancelButtonText: 'Cancel', type: 'warning' }
+      );
+    } catch {
+      return; // user cancelled
+    }
+  }
   aiSaving.value = true;
   try {
-    const res = await api.importParser(aiResult.value.parser);
+    const res = await api.importParser(aiResult.value.parser, force);
     ElMessage.success(`Parser "${res.data.parser?.name}" ${res.data.action}`);
     aiDialogVisible.value = false;
     fetchParsers();
@@ -894,6 +920,14 @@ async function deleteParser(parser: any) {
 .selftest-failure {
   margin-top: 6px;
   font-size: 13px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.ai-hint {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
 }
 
 .catalog-toolbar {

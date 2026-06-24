@@ -277,6 +277,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import assetService, { type Asset, type AssetWithServices } from '@/services/assetService';
@@ -286,6 +287,7 @@ import { api } from '@/services/api';
 const authStore = useAuthStore();
 const canTriggerScans = computed(() => ['admin', 'analyst', 'operator'].includes(authStore.user?.role || ''));
 
+const route = useRoute();
 const assets = ref<Asset[]>([]);
 const loading = ref(false);
 const total = ref(0);
@@ -405,17 +407,21 @@ async function loadAssets() {
   }
 }
 
-async function showAssetDetails(asset: Asset) {
+async function openAssetById(id: number) {
   showDetailsDialog.value = true;
   loadingDetails.value = true;
   try {
-    selectedAsset.value = await assetService.getAsset(asset.id);
+    selectedAsset.value = await assetService.getAsset(id);
   } catch (error) {
     ElMessage.error('Failed to load asset details');
     console.error(error);
   } finally {
     loadingDetails.value = false;
   }
+}
+
+function showAssetDetails(asset: Asset) {
+  openAssetById(asset.id);
 }
 
 async function confirmDelete(asset: Asset) {
@@ -500,6 +506,14 @@ onMounted(() => {
   loadAssets();
   loadScans(); // Load scans once on mount
   // Polling disabled - use manual refresh button instead
+
+  // Deep link: /assets?id=N opens that asset's details directly. Used by the
+  // asset link on the Vulnerability Management page (now that findings map to
+  // real per-host assets — see Issue 2 — this lands on the right asset).
+  const id = Number(route.query.id);
+  if (Number.isInteger(id) && id > 0) {
+    openAssetById(id);
+  }
 });
 
 onUnmounted(() => {

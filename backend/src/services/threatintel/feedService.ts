@@ -15,6 +15,16 @@ import { ErrorLogService } from '../errors/errorLogService';
 const FETCH_TIMEOUT_MS = 30_000;
 const INSERT_BATCH = 1000;
 
+// Feeds are a fixed, seeded set (there is no user-supplied-feed-URL path), so the
+// fetcher is restricted to their known hosts. This enforces the "no SSRF surface"
+// property and acts as a constant-host allowlist barrier around the fetch below.
+const ALLOWED_FEED_HOSTS = new Set([
+  'feodotracker.abuse.ch',
+  'sslbl.abuse.ch',
+  'check.torproject.org',
+  'lists.blocklist.de',
+]);
+
 export interface ThreatFeed {
   id: number;
   slug: string;
@@ -38,10 +48,16 @@ export interface FeedMatch {
 }
 
 async function fetchText(url: string): Promise<string> {
+  // Only fetch from the allowlisted feed hosts over HTTPS — defence in depth and
+  // an explicit SSRF barrier even though feed URLs are seeded, not user-supplied.
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'https:' || !ALLOWED_FEED_HOSTS.has(parsed.hostname)) {
+    throw new Error(`Refusing to fetch disallowed feed host: ${parsed.hostname}`);
+  }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url, {
+    const res = await fetch(parsed, {
       signal: ctrl.signal,
       headers: { 'User-Agent': 'SIEMBox-ThreatFeeds/1.0' },
       redirect: 'follow',

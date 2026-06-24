@@ -37,6 +37,12 @@ export interface ReputationResult {
   error?: string;
 }
 
+// Strict IP allowlist applied INLINE (see each provider's lookup) right before
+// an address is placed into an outbound request URL. Beyond the isIP() check at
+// the entry point, this regexp-test guard is a defence-in-depth barrier that
+// closes the SSRF path so a malformed value can never reach a provider URL.
+const SAFE_IP_RE = /^[0-9A-Fa-f:.]{2,45}$/;
+
 async function fetchJson(url: string, headers: Record<string, string>): Promise<{ status: number; body: any }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), LOOKUP_TIMEOUT_MS);
@@ -61,7 +67,9 @@ const PROVIDERS: Record<ProviderName, ProviderDef> = {
     docsUrl: 'https://docs.abuseipdb.com/',
     signupUrl: 'https://www.abuseipdb.com/register',
     async lookup(ip, key) {
-      const url = `https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90`;
+      if (!SAFE_IP_RE.test(ip)) throw new Error('Invalid IP for reputation lookup');
+      const v = ip; // guarded above; only an allowlisted IP reaches the URL
+      const url = `https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(v)}&maxAgeInDays=90`;
       const { status, body } = await fetchJson(url, { Key: key });
       if (status === 401 || status === 403) {
         return { provider: 'abuseipdb', label: 'AbuseIPDB', ok: false, error: 'Invalid API key' };
@@ -78,7 +86,7 @@ const PROVIDERS: Record<ProviderName, ProviderDef> = {
         score,
         classification: score == null ? 'unknown' : score >= 75 ? 'malicious' : score >= 25 ? 'suspicious' : 'benign',
         summary: `Abuse confidence ${score ?? '?'}% · ${d.totalReports ?? 0} reports`,
-        link: `https://www.abuseipdb.com/check/${encodeURIComponent(ip)}`,
+        link: `https://www.abuseipdb.com/check/${encodeURIComponent(v)}`,
         details: {
           totalReports: d.totalReports,
           countryCode: d.countryCode,
@@ -97,7 +105,9 @@ const PROVIDERS: Record<ProviderName, ProviderDef> = {
     docsUrl: 'https://docs.greynoise.io/',
     signupUrl: 'https://www.greynoise.io/viz/signup',
     async lookup(ip, key) {
-      const url = `https://api.greynoise.io/v3/community/${encodeURIComponent(ip)}`;
+      if (!SAFE_IP_RE.test(ip)) throw new Error('Invalid IP for reputation lookup');
+      const v = ip; // guarded above; only an allowlisted IP reaches the URL
+      const url = `https://api.greynoise.io/v3/community/${encodeURIComponent(v)}`;
       const { status, body } = await fetchJson(url, { key });
       if (status === 401 || status === 403) {
         return { provider: 'greynoise', label: 'GreyNoise', ok: false, error: 'Invalid API key' };
@@ -110,7 +120,7 @@ const PROVIDERS: Record<ProviderName, ProviderDef> = {
           ok: true,
           classification: 'unknown',
           summary: body?.message || 'Not observed by GreyNoise',
-          link: `https://viz.greynoise.io/ip/${encodeURIComponent(ip)}`,
+          link: `https://viz.greynoise.io/ip/${encodeURIComponent(v)}`,
           details: { noise: false, riot: false },
         };
       }

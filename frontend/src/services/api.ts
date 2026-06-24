@@ -225,6 +225,8 @@ export const api = {
     apiClient.post('/containers/scan', { image_ref }, { timeout: 30000 }),
   getContainerScans: (limit = 20) => apiClient.get('/containers/scans', { params: { limit } }),
   getContainerScan: (id: number) => apiClient.get(`/containers/scans/${id}`),
+  // Images already present on the Docker host (requires the socket to be mounted).
+  getDiscoveredImages: () => apiClient.get('/containers/discovered'),
 
   // Scheduled Scans
   getScheduledScans: () => apiClient.get('/scheduled-scans'),

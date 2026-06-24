@@ -300,6 +300,40 @@ from the catalog:
 
 For advanced users, if you need to manually run migrations or reimport rules, refer to the backend container documentation. These operations should rarely be needed in normal operation.
 
+## Container Scanning and Docker Image Discovery
+
+**Container Scanning** (under *Assets & Vulnerabilities*) scans a container image
+for known OS and library vulnerabilities with Trivy. Type any image reference
+(for example `nginx:latest` or `ghcr.io/cladkins/siembox-backend:latest`) and
+Trivy pulls the image itself — **no Docker socket required** for manual scans.
+
+### Optional: discover images from the Docker host
+
+To skip typing references, you can let SIEMBox list the images already running on
+the host and scan them in one click ("Images on this Docker host" on the Container
+Scanning page). This requires mounting the Docker socket into the backend
+container. It is **opt-in** and **off by default**.
+
+Uncomment this volume in `compose.prod.yaml` under the `backend` service:
+
+```yaml
+    volumes:
+      # ...
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+```
+
+> ⚠️ **Security tradeoff.** Mounting the Docker socket grants the backend
+> container control of the Docker daemon, which is effectively **root on the
+> host**. The `:ro` flag only marks the socket *file* read-only — it does **not**
+> make the Docker API read-only. SIEMBox itself only issues read-only `GET`
+> requests (`/containers/json`, `/images/json`) for discovery, but you are still
+> widening the trust boundary. Enable this only if you accept that risk; leave it
+> commented out otherwise. The feature degrades gracefully — when the socket is
+> absent, the UI shows a short explanation instead of an error.
+
+If your Docker socket lives somewhere non-standard, set `DOCKER_SOCKET_PATH` on
+the backend to point at it (defaults to `/var/run/docker.sock`).
+
 ## Backup and Restore
 
 ### Backup Your Database

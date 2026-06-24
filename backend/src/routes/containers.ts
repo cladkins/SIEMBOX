@@ -1,8 +1,21 @@
 import { Router, Request, Response } from 'express';
 import { ApiError } from '../middleware/errorHandler';
 import { TrivyScanner } from '../services/scanner/trivyScanner';
+import { DockerDiscovery } from '../services/scanner/dockerDiscovery';
 
 const router = Router();
+
+// Enumerate images already present on the Docker host (if the socket is mounted)
+// so the operator can scan one without typing the reference. Always 200: when the
+// socket isn't available the body carries { available: false, reason } so the UI
+// can show guidance rather than treating it as an error.
+router.get('/discovered', async (_req: Request, res: Response) => {
+  try {
+    res.json(await DockerDiscovery.discoverImages());
+  } catch (error) {
+    throw new ApiError(500, 'Failed to enumerate Docker images');
+  }
+});
 
 // Start a container image scan (Trivy). Body: { image_ref: "nginx:latest" }.
 router.post('/scan', async (req: Request, res: Response) => {

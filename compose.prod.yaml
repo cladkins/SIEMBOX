@@ -65,6 +65,13 @@ services:
       - nuclei-templates:/root/nuclei-templates
       # Persist Trivy's vulnerability DB so container scans don't re-download it.
       - trivy-cache:/root/.cache/trivy
+      # OPTIONAL — Docker host image discovery (Container Scanning → "Images on
+      # this Docker host"). Uncomment to let the backend enumerate the images you
+      # already run and scan them in one click. SIEMBox only issues read-only GETs,
+      # but be aware: granting a container the Docker socket is effectively root on
+      # the host (`:ro` does NOT make the Docker API read-only). Leave commented
+      # out unless you accept that tradeoff; discovery degrades gracefully when absent.
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
     # Lets the backend reach services on the Docker host (e.g. a local Ollama at
     # http://host.docker.internal:11434). Ollama must also bind 0.0.0.0.
     extra_hosts:

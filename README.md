@@ -13,6 +13,8 @@ A lightweight, self-hosted Security Information and Event Management (SIEM) syst
 - **Syslog ingestion**: Receive logs via UDP/TCP on port 514.
 - **Log shipper**: Universal log forwarder for collecting logs (files, Docker containers, systemd journals) from any host.
 - **Vulnerability scanning**: Built-in Nuclei scanning with per-host asset tracking and a vulnerability management view.
+- **Container scanning**: Scan any image for OS/library CVEs with Trivy. Optionally enumerate the images already running on your Docker host and scan them in one click.
+- **Threat Intel**: Investigate any IP — its GeoIP country, the log events it produced, and the alerts it triggered — with a country choropleth on the dashboard that drills into source IPs.
 - **Ready-made parsers in the catalog**: Nginx, Traefik, Caddy, Authelia, Keycloak, Nextcloud, Pi-hole, Vaultwarden, UniFi, Home Assistant, Plex, Jellyfin, and more — one click to install from *Parsers → Browse Catalog*.
 - **Alert management**: View, acknowledge, and manage security alerts.
 - **Log retention**: Configurable retention policies with automated cleanup.
@@ -184,6 +186,7 @@ MIT License - See LICENSE file for details
 - [ ] Additional parser types (LEEF)
 - [ ] Threat intelligence integration
 - [ ] Advanced correlation rules
-- [ ] GeoIP dashboard map (alerts by country)
-- [ ] Container vulnerability scanning (Trivy / Grype)
+- [x] GeoIP dashboard map (alerts by country)
+- [x] Container vulnerability scanning (Trivy)
+- [ ] External threat-intelligence feeds
 - [ ] Multi-tenancy support

@@ -142,6 +142,21 @@ export const api = {
   getAlertStatistics: () => apiClient.get('/alerts/statistics'),
   getAlertsByCountry: (params?: { days?: number; limit?: number }) =>
     apiClient.get('/alerts/by-country', { params }),
+
+  // Threat Intel (IP-centric geo / events / alerts)
+  getThreatIntelIp: (ip: string) => apiClient.get(`/threat-intel/ip/${encodeURIComponent(ip)}`),
+  getThreatIntelCountry: (code: string, days = 30) =>
+    apiClient.get(`/threat-intel/country/${encodeURIComponent(code)}`, { params: { days } }),
+
+  // External threat feeds + IP reputation (Phase 4)
+  getThreatFeeds: () => apiClient.get('/threat-feeds'),
+  updateThreatFeed: (id: number, data: { enabled?: boolean; refresh_interval_minutes?: number }) =>
+    apiClient.put(`/threat-feeds/feeds/${id}`, data),
+  refreshThreatFeed: (id: number) => apiClient.post(`/threat-feeds/feeds/${id}/refresh`, {}, { timeout: 60000 }),
+  refreshAllThreatFeeds: () => apiClient.post('/threat-feeds/refresh', {}, { timeout: 120000 }),
+  saveThreatProvider: (name: string, data: { apiKey?: string | null; enabled?: boolean }) =>
+    apiClient.put(`/threat-feeds/providers/${name}`, data),
+  lookupThreatIp: (ip: string) => apiClient.get(`/threat-feeds/lookup/${encodeURIComponent(ip)}`),
   getAlert: (id: number) => apiClient.get(`/alerts/${id}`),
   updateAlert: (id: number, data: any) => apiClient.put(`/alerts/${id}`, data),
   deleteAlert: (id: number) => apiClient.delete(`/alerts/${id}`),
@@ -220,6 +235,8 @@ export const api = {
     apiClient.post('/containers/scan', { image_ref }, { timeout: 30000 }),
   getContainerScans: (limit = 20) => apiClient.get('/containers/scans', { params: { limit } }),
   getContainerScan: (id: number) => apiClient.get(`/containers/scans/${id}`),
+  // Images already present on the Docker host (requires the socket to be mounted).
+  getDiscoveredImages: () => apiClient.get('/containers/discovered'),
 
   // Scheduled Scans
   getScheduledScans: () => apiClient.get('/scheduled-scans'),

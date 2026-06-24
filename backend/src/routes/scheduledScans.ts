@@ -13,6 +13,10 @@ function validateScanOptions(scanType: ScheduledScanType, opts: any): void {
     if (!Array.isArray(opts.targets) || opts.targets.length === 0) {
       throw new ApiError(400, 'Asset scans require scan_options.targets (a non-empty array of IPs/CIDRs)');
     }
+  } else if (scanType === 'container') {
+    if (!opts.image_ref || typeof opts.image_ref !== 'string') {
+      throw new ApiError(400, 'Container scans require scan_options.image_ref (an image reference)');
+    }
   } else {
     if (!opts.target || typeof opts.target !== 'string') {
       throw new ApiError(400, 'Vulnerability scans require scan_options.target (a host/IP string)');
@@ -39,8 +43,8 @@ router.post('/', async (req: Request, res: Response) => {
   if (!name || typeof name !== 'string') {
     throw new ApiError(400, 'name is required');
   }
-  if (scan_type !== 'asset' && scan_type !== 'vulnerability') {
-    throw new ApiError(400, "scan_type must be 'asset' or 'vulnerability'");
+  if (scan_type !== 'asset' && scan_type !== 'vulnerability' && scan_type !== 'container') {
+    throw new ApiError(400, "scan_type must be 'asset', 'vulnerability', or 'container'");
   }
   validateInterval(interval_minutes);
   validateScanOptions(scan_type, scan_options);
@@ -70,8 +74,8 @@ router.put('/:id', async (req: Request, res: Response) => {
 
   const { name, scan_type, scan_options, interval_minutes, enabled } = req.body;
 
-  if (scan_type !== undefined && scan_type !== 'asset' && scan_type !== 'vulnerability') {
-    throw new ApiError(400, "scan_type must be 'asset' or 'vulnerability'");
+  if (scan_type !== undefined && scan_type !== 'asset' && scan_type !== 'vulnerability' && scan_type !== 'container') {
+    throw new ApiError(400, "scan_type must be 'asset', 'vulnerability', or 'container'");
   }
   if (interval_minutes !== undefined) {
     validateInterval(interval_minutes);

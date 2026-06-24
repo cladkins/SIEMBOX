@@ -24,6 +24,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/Alerts.vue'),
       },
       {
+        path: 'threat-intel',
+        name: 'ThreatIntel',
+        component: () => import('@/views/ThreatIntel.vue'),
+      },
+      {
         path: 'logs',
         name: 'Logs',
         component: () => import('@/views/Logs.vue'),
@@ -76,6 +81,12 @@ const routes: RouteRecordRaw[] = [
         path: 'container-scanning',
         name: 'ContainerScanning',
         component: () => import('@/views/ContainerScanning.vue'),
+        meta: { allowedRoles: ['admin', 'operator'] },
+      },
+      {
+        path: 'scheduled-scans',
+        name: 'ScheduledScans',
+        component: () => import('@/views/ScheduledScans.vue'),
         meta: { allowedRoles: ['admin', 'operator'] },
       },
       {

@@ -1,6 +1,6 @@
 import { query } from '../config/database';
 
-export type ScheduledScanType = 'asset' | 'vulnerability';
+export type ScheduledScanType = 'asset' | 'vulnerability' | 'container';
 
 export interface ScheduledScan {
   id: number;

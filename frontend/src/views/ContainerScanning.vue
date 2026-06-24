@@ -27,6 +27,82 @@
       </el-form>
     </el-card>
 
+    <el-card class="discovered-card">
+      <template #header>
+        <div class="card-header">
+          <span>Images on this Docker host</span>
+          <el-button size="small" :loading="discoveryLoading" @click="loadDiscovered">
+            <el-icon><Refresh /></el-icon> Refresh
+          </el-button>
+        </div>
+      </template>
+
+      <el-alert
+        v-if="!discoveryLoading && !discoveryAvailable"
+        type="info"
+        :closable="false"
+        show-icon
+        title="Docker image discovery is off"
+      >
+        <p class="discovery-reason">{{ discoveryReason || 'The Docker socket is not available.' }}</p>
+        <p class="discovery-reason">
+          Mount <code>/var/run/docker.sock</code> into the backend container to list the images
+          you're already running and scan them in one click. This is opt-in — see the deployment
+          docs for the security tradeoff.
+        </p>
+      </el-alert>
+
+      <template v-else>
+        <div class="discovered-toolbar" v-if="discovered.length">
+          <el-text size="small" type="info">
+            {{ scannableCount }} scannable image{{ scannableCount === 1 ? '' : 's' }} found
+          </el-text>
+          <el-button
+            type="primary"
+            size="small"
+            :disabled="scannableCount === 0 || starting"
+            @click="scanAllDiscovered"
+          >
+            Scan all ({{ scannableCount }})
+          </el-button>
+        </div>
+
+        <el-table :data="discovered" v-loading="discoveryLoading" stripe>
+          <el-table-column prop="image" label="Image" min-width="260" show-overflow-tooltip />
+          <el-table-column label="Used by" min-width="200" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span>{{ (row.containers || []).join(', ') || '—' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="Running" width="100" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.running > 0 ? 'success' : 'info'" size="small">
+                {{ row.running }}/{{ (row.containers || []).length }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="Actions" width="110">
+            <template #default="{ row }">
+              <el-button
+                v-if="row.scannable"
+                link
+                type="primary"
+                size="small"
+                :loading="scanningImage === row.image"
+                @click="scanImage(row.image)"
+              >
+                Scan
+              </el-button>
+              <el-tooltip v-else content="Image has no scannable registry reference (built locally or referenced by digest)" placement="top">
+                <span class="muted">—</span>
+              </el-tooltip>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-if="!discoveryLoading && discovered.length === 0" description="No containers found on the Docker host." />
+      </template>
+    </el-card>
+
     <el-card class="scans-card">
       <template #header>
         <div class="card-header">
@@ -142,7 +218,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
@@ -152,6 +228,14 @@ const imageRef = ref('');
 const starting = ref(false);
 const loading = ref(false);
 const scans = ref<any[]>([]);
+
+// Docker host image discovery (requires the socket mounted into the backend).
+const discovered = ref<any[]>([]);
+const discoveryAvailable = ref(true);
+const discoveryReason = ref('');
+const discoveryLoading = ref(false);
+const scanningImage = ref('');
+const scannableCount = computed(() => discovered.value.filter((i) => i.scannable).length);
 
 const detailVisible = ref(false);
 const loadingDetail = ref(false);
@@ -198,6 +282,54 @@ async function loadScans() {
   }
 }
 
+async function loadDiscovered() {
+  discoveryLoading.value = true;
+  try {
+    const { data } = await api.getDiscoveredImages();
+    discoveryAvailable.value = !!data?.available;
+    discoveryReason.value = data?.reason || '';
+    discovered.value = Array.isArray(data?.images) ? data.images : [];
+  } catch (error) {
+    discoveryAvailable.value = false;
+    discoveryReason.value = 'Failed to query the Docker host.';
+    discovered.value = [];
+  } finally {
+    discoveryLoading.value = false;
+  }
+}
+
+async function scanImage(image: string) {
+  scanningImage.value = image;
+  try {
+    await api.scanContainer(image);
+    ElMessage.success(`Scan started for ${image}`);
+    await loadScans();
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.error || error?.response?.data?.message || 'Failed to start scan');
+  } finally {
+    scanningImage.value = '';
+  }
+}
+
+async function scanAllDiscovered() {
+  const targets = discovered.value.filter((i) => i.scannable).map((i) => i.image);
+  if (targets.length === 0) return;
+  starting.value = true;
+  let ok = 0;
+  for (const image of targets) {
+    try {
+      await api.scanContainer(image);
+      ok++;
+    } catch {
+      // keep going; surface the aggregate result below
+    }
+  }
+  starting.value = false;
+  if (ok > 0) ElMessage.success(`Started ${ok} of ${targets.length} scans`);
+  if (ok < targets.length) ElMessage.warning(`${targets.length - ok} scan(s) failed to start`);
+  await loadScans();
+}
+
 async function viewScan(row: any) {
   detailVisible.value = true;
   loadingDetail.value = true;
@@ -223,6 +355,7 @@ function startPolling() {
 
 onMounted(() => {
   loadScans();
+  loadDiscovered();
   startPolling();
 });
 onUnmounted(() => {
@@ -247,6 +380,21 @@ onUnmounted(() => {
 }
 .scan-card {
   margin-bottom: 16px;
+}
+.discovered-card {
+  margin-bottom: 16px;
+}
+.discovered-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.discovery-reason {
+  margin: 4px 0;
+}
+.muted {
+  color: var(--siembox-text-secondary, #909399);
 }
 .card-header {
   display: flex;

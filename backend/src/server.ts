@@ -8,7 +8,9 @@ import { importRules } from './scripts/import-rules';
 import { startAutoDiscoveryJob, stopAutoDiscoveryJob } from './jobs/autoDiscovery';
 import { startScheduledScansJob, stopScheduledScansJob } from './jobs/scheduledScans';
 import { startIngestionHealthJob, stopIngestionHealthJob } from './jobs/ingestionHealth';
+import { startThreatFeedsJob, stopThreatFeedsJob } from './jobs/threatFeeds';
 import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
+import { TemplateService } from './services/scanner/templateService';
 
 dotenv.config();
 
@@ -33,21 +35,23 @@ const startServer = async () => {
     // without this they stay stuck forever and can't be cancelled normally.
     await reconcileInterruptedScans();
 
-    // Auto-import the bundled detection rules on startup, unless the operator
-    // opted into a catalog-only install (SEED_BUNDLED_CONTENT=false) — then
-    // detections are populated from the catalog via Browse Catalog → Install all.
-    if (process.env.SEED_BUNDLED_CONTENT === 'false') {
-      logger.info(
-        'SEED_BUNDLED_CONTENT=false — skipping bundled detection import (use Browse Catalog → Install all).'
-      );
-    } else {
-      logger.info('Checking for detection rules to import...');
+    // Catalog-only by default: a fresh install starts with no bundled
+    // parsers/detections, and the operator installs exactly what they want from
+    // the in-app catalog (Parsers / Detection Rules → Browse Catalog → Install
+    // all). Set SEED_BUNDLED_CONTENT=true to opt back into auto-importing the
+    // bundled detection rules on startup (legacy behaviour).
+    if (process.env.SEED_BUNDLED_CONTENT === 'true') {
+      logger.info('SEED_BUNDLED_CONTENT=true — checking for bundled detection rules to import...');
       try {
         await importRules();
       } catch (error) {
         logger.error('Failed to import rules, but continuing startup:', error);
         logger.warn('Detection rules may need to be created manually');
       }
+    } else {
+      logger.info(
+        'Catalog-only install (SEED_BUNDLED_CONTENT not set to true) — skipping bundled detection import. Use Browse Catalog → Install all.'
+      );
     }
 
     // Start syslog server
@@ -66,6 +70,14 @@ const startServer = async () => {
 
     // Start ingestion-health monitor (drives ingestion notifications)
     startIngestionHealthJob();
+
+    // Start the external threat-feed refresher (populates blocklist indicators).
+    startThreatFeedsJob();
+
+    // Warm the Nuclei template cache in the background so the first request to
+    // the (heavy) template endpoints hits a populated cache instead of parsing
+    // ~10k files inline and tripping the client timeout. Fire-and-forget.
+    void TemplateService.warmCache();
 
     // Start Express API server
     app.listen(PORT, () => {
@@ -94,6 +106,7 @@ process.on('SIGTERM', async () => {
   stopAutoDiscoveryJob();
   stopScheduledScansJob();
   stopIngestionHealthJob();
+  stopThreatFeedsJob();
   pool.end(() => {
     logger.info('Database pool closed');
     process.exit(0);
@@ -111,6 +124,7 @@ process.on('SIGINT', async () => {
   stopAutoDiscoveryJob();
   stopScheduledScansJob();
   stopIngestionHealthJob();
+  stopThreatFeedsJob();
   pool.end(() => {
     logger.info('Database pool closed');
     process.exit(0);

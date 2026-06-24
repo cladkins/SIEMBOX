@@ -9,11 +9,13 @@ A lightweight, self-hosted Security Information and Event Management (SIEM) syst
 - **AI builder (bring your own key)**: Paste a log line to generate a parser, or describe a threat to generate a detection rule. A *generate → validate → auto-refine* loop runs against the real engine (≤3 attempts), so you never get an invalid artifact. Works with **Anthropic, OpenAI, or local Ollama**; your key is encrypted at rest.
 - **Canonical normalization**: Every parser normalizes to one canonical schema, so a detection rule written once fires against logs from any source.
 - **GeoIP enrichment**: Offline country / foreign-geo enrichment (no external calls), powering geo-aware detections such as foreign-login alerts.
-- **Zero-configuration setup**: The bundled 27 parsers and 48 detection rules seed automatically on first startup; the catalog is the additive update path.
+- **Catalog-only by default**: A fresh install starts empty — no hardcoded parsers or detections. You install exactly what you want from the in-app catalog (*Browse Catalog → Install all*), so the deployment carries only the content you chose.
 - **Syslog ingestion**: Receive logs via UDP/TCP on port 514.
 - **Log shipper**: Universal log forwarder for collecting logs (files, Docker containers, systemd journals) from any host.
 - **Vulnerability scanning**: Built-in Nuclei scanning with per-host asset tracking and a vulnerability management view.
-- **Pre-built parsers**: Nginx, Traefik, Caddy, Authelia, Keycloak, Nextcloud, Pi-hole, Vaultwarden, UniFi, Home Assistant, Plex, Jellyfin, and more.
+- **Container scanning**: Scan any image for OS/library CVEs with Trivy. Optionally enumerate the images already running on your Docker host and scan them in one click.
+- **Threat Intel**: Investigate any IP — its GeoIP country, the log events it produced, and the alerts it triggered — with a country choropleth on the dashboard that drills into source IPs. Enriched with **external threat feeds** (free abuse.ch / Tor / blocklist.de blocklists) and optional **bring-your-own-key reputation** (AbuseIPDB, GreyNoise).
+- **Ready-made parsers in the catalog**: Nginx, Traefik, Caddy, Authelia, Keycloak, Nextcloud, Pi-hole, Vaultwarden, UniFi, Home Assistant, Plex, Jellyfin, and more — one click to install from *Parsers → Browse Catalog*.
 - **Alert management**: View, acknowledge, and manage security alerts.
 - **Log retention**: Configurable retention policies with automated cleanup.
 - **User management**: Role-based access control (Admin, Analyst, Viewer).
@@ -184,6 +186,7 @@ MIT License - See LICENSE file for details
 - [ ] Additional parser types (LEEF)
 - [ ] Threat intelligence integration
 - [ ] Advanced correlation rules
-- [ ] GeoIP dashboard map (alerts by country)
-- [ ] Container vulnerability scanning (Trivy / Grype)
+- [x] GeoIP dashboard map (alerts by country)
+- [x] Container vulnerability scanning (Trivy)
+- [x] External threat-intelligence feeds (blocklists + BYO-key reputation)
 - [ ] Multi-tenancy support

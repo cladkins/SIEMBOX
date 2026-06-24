@@ -153,22 +153,17 @@
       </el-col>
     </el-row>
 
-    <!-- Geo Row: alerts by country -->
+    <!-- Geo Row: alerts by country (world map) -->
     <el-row :gutter="20" class="charts-row">
       <el-col :xs="24">
         <el-card>
           <template #header>
             <div class="card-header">
               <span>Alerts by Country (last 30 days)</span>
+              <el-text size="small" type="info">Click a country to investigate it</el-text>
             </div>
           </template>
-          <div v-if="alertsByCountry.length === 0" class="empty-geo">
-            No geo-located alerts yet. Alerts are placed on the map once a public
-            source IP resolves to a country (GeoIP enrichment).
-          </div>
-          <div v-else class="chart-container chart-container--wide">
-            <canvas ref="countryChart"></canvas>
-          </div>
+          <AlertsCountryMap :data="alertsByCountry" @country-click="goToCountry" />
         </el-card>
       </el-col>
     </el-row>
@@ -225,6 +220,7 @@ import { api } from '@/services/api';
 import { Chart, registerables } from 'chart.js';
 import { format } from 'date-fns';
 import { Bell, WarningFilled, Warning, Document, Monitor, CircleCheck, WarnTriangleFilled, DataBoard } from '@element-plus/icons-vue';
+import AlertsCountryMap from '@/components/AlertsCountryMap.vue';
 
 Chart.register(...registerables);
 
@@ -240,18 +236,20 @@ const vulnStats = ref<any>(null);
 
 const severityChart = ref<HTMLCanvasElement>();
 const statusChart = ref<HTMLCanvasElement>();
-const countryChart = ref<HTMLCanvasElement>();
 let severityChartInstance: Chart | null = null;
 let statusChartInstance: Chart | null = null;
-let countryChartInstance: Chart | null = null;
 
 const alertsByCountry = ref<Array<{ country_code: string; country_name: string; count: number; foreign_count: number }>>([]);
 
 onMounted(async () => {
   await loadData();
   createCharts();
-  renderCountryChart();
 });
+
+// Click a country on the map -> investigate it on the Threat Intel tab.
+function goToCountry(code: string) {
+  router.push({ path: '/threat-intel', query: { country: code } });
+}
 
 // alertStats arrives asynchronously (and can refresh). The original code built
 // the charts once in onMounted and bailed out (early return) whenever the stats
@@ -259,12 +257,6 @@ onMounted(async () => {
 // the stats change; createCharts() destroys the prior instances first.
 watch(alertStats, () => {
   createCharts();
-});
-
-// The country breakdown loads independently of alertStats, so rebuild its chart
-// when it changes (its canvas only exists when there's data — see the template).
-watch(alertsByCountry, () => {
-  renderCountryChart();
 });
 
 const loadData = async () => {
@@ -383,55 +375,6 @@ const createCharts = () => {
       },
     });
   }
-};
-
-// Horizontal bar of alert counts per country. Bars for countries that triggered
-// any foreign-geo alert are coloured red (vs blue for domestic-only), so an
-// operator can spot unexpected origins at a glance. Rebuilt on data change with
-// the same destroy-before-recreate guard as the other charts.
-const renderCountryChart = () => {
-  countryChartInstance?.destroy();
-  countryChartInstance = null;
-
-  const rows = alertsByCountry.value;
-  if (!countryChart.value || rows.length === 0) return;
-
-  countryChartInstance = new Chart(countryChart.value, {
-    type: 'bar',
-    data: {
-      labels: rows.map((r) => r.country_name || r.country_code),
-      datasets: [
-        {
-          label: 'Alerts',
-          data: rows.map((r) => r.count),
-          backgroundColor: rows.map((r) =>
-            r.foreign_count > 0 ? '#f56c6c' : '#409eff'
-          ),
-        },
-      ],
-    },
-    options: {
-      indexAxis: 'y',
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            afterLabel: (ctx) => {
-              const row = rows[ctx.dataIndex];
-              return row && row.foreign_count > 0
-                ? `${row.foreign_count} flagged foreign`
-                : '';
-            },
-          },
-        },
-      },
-      scales: {
-        x: { beginAtZero: true, ticks: { precision: 0 } },
-      },
-    },
-  });
 };
 
 const getSeverityType = (severity: string) => {

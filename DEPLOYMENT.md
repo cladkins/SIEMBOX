@@ -138,22 +138,23 @@ The compose file defines these services:
 
 ### 4. Verify Database Initialization
 
-The database migrations and seed data import run automatically when the backend container starts. This includes:
+The database migrations run automatically when the backend container starts. This includes:
 - Running all database migrations
-- Importing the 27 bundled parsers
-- Seeding the 48 bundled detection rules
-- Creating default admin user
+- Creating the default admin user
 
-The process is fully automated and requires no manual intervention. Monitor your deployment logs to verify completion.
+A fresh install is **catalog-only**: no parsers or detection rules are seeded, so
+the deployment starts empty and you install exactly what you want. The process is
+fully automated and requires no manual intervention. Monitor your deployment logs
+to verify completion.
 
 On first startup, SIEMBox automatically:
 - Runs all database migrations
-- Seeds the 27 bundled parsers and 48 detection rules
-- Creates default admin user
+- Creates the default admin user
 
-**No manual steps required!** After first start you can browse and install more
-parsers and detections, or pull updates, from the in-app catalog
-(*Parsers → Browse Catalog* and *Detection Rules → Browse Catalog*).
+**No manual steps required to boot.** Once you log in, populate parsers and
+detections from the in-app catalog — open *Parsers → Browse Catalog* and
+*Detection Rules → Browse Catalog* and click **Install all** (or pick individual
+items). The same catalog is the update path later.
 
 ### 5. Access the Application
 
@@ -256,22 +257,26 @@ Note: Do not run docker-compose commands directly. Your deployment environment w
 
 ### Automatic Initialization
 
-When the backend container starts for the first time, it automatically:
+When the backend container starts, it automatically:
 
 1. **Runs all database migrations** from `/backend/migrations/`:
    - Creates database schema (tables, indexes, constraints)
-   - Imports the 27 bundled parsers
    - Configures retention policies
    - Sets up system tables
 
-2. **Seeds detection rules** (on first run only):
-   - Checks if rules table is empty
-   - If empty, imports the 48 bundled detection rules from `/rules/` directory
-   - If rules already exist, skips import (prevents duplication)
+2. **Creates the default admin user** with credentials from environment variables
 
-3. **Creates default admin user** with credentials from environment variables
+Migrations are idempotent and run on every startup. A fresh install is
+**catalog-only**: no parsers or detection rules are seeded — you install exactly
+what you want from the in-app catalog after first login (*Parsers / Detection
+Rules → Browse Catalog → Install all*).
 
-**This entire process is automatic and requires no manual intervention.**
+**This entire process is automatic and requires no manual intervention to boot.**
+
+> **Opting back into legacy seeding.** Set `SEED_BUNDLED_CONTENT=true` to have the
+> backend auto-import the bundled detection rules on startup (the old behaviour).
+> Left unset, the install stays catalog-only. This affects detections only;
+> parsers always come from the catalog.
 
 ### Verify Initialization Completed
 
@@ -281,11 +286,12 @@ You can verify that initialization was successful by checking the health endpoin
 curl http://your-server-ip:8421/health/seed-status
 ```
 
-Expected response:
+On a fresh catalog-only install the counts start at zero and climb as you install
+from the catalog:
 ```json
 {
-  "parsers": 19,
-  "rules": 40,
+  "parsers": 0,
+  "rules": 0,
   "seeded": true
 }
 ```
@@ -293,6 +299,68 @@ Expected response:
 ### Advanced: Manual Operations
 
 For advanced users, if you need to manually run migrations or reimport rules, refer to the backend container documentation. These operations should rarely be needed in normal operation.
+
+## Container Scanning and Docker Image Discovery
+
+**Container Scanning** (under *Assets & Vulnerabilities*) scans a container image
+for known OS and library vulnerabilities with Trivy. Type any image reference
+(for example `nginx:latest` or `ghcr.io/cladkins/siembox-backend:latest`) and
+Trivy pulls the image itself — **no Docker socket required** for manual scans.
+
+### Optional: discover images from the Docker host
+
+To skip typing references, you can let SIEMBox list the images already running on
+the host and scan them in one click ("Images on this Docker host" on the Container
+Scanning page). This requires mounting the Docker socket into the backend
+container. It is **opt-in** and **off by default**.
+
+Uncomment this volume in `compose.prod.yaml` under the `backend` service:
+
+```yaml
+    volumes:
+      # ...
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+```
+
+> ⚠️ **Security tradeoff.** Mounting the Docker socket grants the backend
+> container control of the Docker daemon, which is effectively **root on the
+> host**. The `:ro` flag only marks the socket *file* read-only — it does **not**
+> make the Docker API read-only. SIEMBox itself only issues read-only `GET`
+> requests (`/containers/json`, `/images/json`) for discovery, but you are still
+> widening the trust boundary. Enable this only if you accept that risk; leave it
+> commented out otherwise. The feature degrades gracefully — when the socket is
+> absent, the UI shows a short explanation instead of an error.
+
+If your Docker socket lives somewhere non-standard, set `DOCKER_SOCKET_PATH` on
+the backend to point at it (defaults to `/var/run/docker.sock`).
+
+## Threat Intelligence Feeds
+
+The **Threat Intel** page enriches an IP lookup with external intelligence: which
+blocklists flag it, plus on-demand reputation from keyed providers.
+
+### Free blocklists (automatic)
+
+A few well-known, no-auth IP blocklists are seeded and refreshed on a schedule
+(every few hours):
+
+- **Feodo Tracker** & **SSLBL** (abuse.ch) — active botnet C2 IPs
+- **Tor exit nodes** — current Tor exit list
+- **blocklist.de** — IPs reported for attacks on fail2ban-protected services
+
+These only require the backend to have **outbound HTTPS egress**. If egress is
+blocked, each feed simply records `last_status = error` and the rest of the app
+is unaffected. Enable/disable feeds or trigger a manual refresh from the *Threat
+Feeds & Reputation Providers* panel on the Threat Intel page.
+
+### Reputation providers (bring your own key)
+
+For richer per-IP reputation you can plug in keyed providers — **AbuseIPDB** and
+**GreyNoise** (both have free tiers). Paste an API key into the same panel
+(admin only). Keys are encrypted at rest using `CREDENTIAL_ENCRYPTION_KEY`
+(set it, or key storage is refused), and are queried **only on demand** when you
+look up an IP — results are cached briefly to respect rate limits. Nothing is
+stored from these providers.
 
 ## Backup and Restore
 

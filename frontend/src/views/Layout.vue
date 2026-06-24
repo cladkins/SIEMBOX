@@ -20,6 +20,11 @@
           <span>Dashboard</span>
         </el-menu-item>
 
+        <el-menu-item index="/threat-intel">
+          <el-icon><Aim /></el-icon>
+          <span>Threat Intel</span>
+        </el-menu-item>
+
         <el-sub-menu index="siem">
           <template #title>
             <el-icon><Grid /></el-icon>
@@ -67,6 +72,10 @@
           <el-menu-item index="/container-scanning" v-if="authStore.user?.role === 'admin' || authStore.user?.role === 'operator'">
             <el-icon><Ship /></el-icon>
             <span>Container Scanning</span>
+          </el-menu-item>
+          <el-menu-item index="/scheduled-scans" v-if="authStore.user?.role === 'admin' || authStore.user?.role === 'operator'">
+            <el-icon><Timer /></el-icon>
+            <span>Scheduled Scans</span>
           </el-menu-item>
           <el-menu-item index="/templates">
             <el-icon><Collection /></el-icon>
@@ -144,7 +153,7 @@ import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship } from '@element-plus/icons-vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();

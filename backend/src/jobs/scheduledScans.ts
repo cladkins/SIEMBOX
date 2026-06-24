@@ -9,6 +9,7 @@
 import { ScheduledScanModel, ScheduledScan } from '../models/ScheduledScan';
 import { NucleiScanner } from '../services/scanner/nucleiScanner';
 import { NmapScanner } from '../services/scanner/nmapScanner';
+import { TrivyScanner } from '../services/scanner/trivyScanner';
 import { logger } from '../utils/logger';
 import { ErrorLogService } from '../services/errors/errorLogService';
 
@@ -33,6 +34,10 @@ export async function triggerScheduledScan(schedule: ScheduledScan): Promise<num
       timeout: opts.timeout,
       rateLimit: opts.rateLimit,
     });
+  }
+
+  if (schedule.scan_type === 'container') {
+    return TrivyScanner.scan(opts.image_ref, userId);
   }
 
   return NmapScanner.scan({

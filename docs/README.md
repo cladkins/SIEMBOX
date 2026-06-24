@@ -79,13 +79,13 @@ System architecture, design decisions, and implementation specifications.
 - ✅ Declarative parser engine + portable, in-app community catalog
 - ✅ AI builder for parsers and detections (Anthropic / OpenAI / Ollama, BYO key)
 - ✅ Canonical normalization + offline GeoIP enrichment
-- ✅ Zero-configuration deployment with automatic seeding
+- ✅ Catalog-only install — a fresh deployment starts empty, you install what you want
 
 **Features:**
 - Declarative, data-driven parsers — onboard a log source without engine code
 - In-app catalog to browse, install, update, export, and import parsers/detections
 - AI-assisted authoring with a generate → validate → auto-refine loop
-- Automatic seeding of the bundled 27 parsers and 48 rules on first startup
+- Catalog-only by default — a fresh install ships with no parsers/detections; install them from Browse Catalog
 - Detection rules for authentication, proxy security, data exfiltration, geo, and more
 - Role-based access control and alert management
 

@@ -66,6 +66,11 @@ apiClient.interceptors.response.use(
         default:
           ElMessage.error('An error occurred. Please try again.');
       }
+    } else if (error.code === 'ECONNABORTED' || /timeout/i.test(error.message || '')) {
+      // Axios aborts on the client when a request exceeds its timeout; there is
+      // no response, so this is distinct from a real connectivity failure. Say so
+      // — otherwise a slow endpoint reads as "check your connection".
+      ElMessage.error('Request timed out — the server took too long to respond.');
     } else if (error.request) {
       ElMessage.error('Network error. Please check your connection.');
     }

@@ -126,6 +126,8 @@ export const api = {
     apiClient.post('/parsers/ai/generate', { sample, hints }, { timeout: 240000 }),
   generateDetectionAI: (description: string, context?: string) =>
     apiClient.post('/rules/ai/generate', { description, context }, { timeout: 240000 }),
+  explainWithAI: (kind: string, data: any, question?: string) =>
+    apiClient.post('/ai/explain', { kind, data, question }, { timeout: 240000 }),
 
   // Alerts
   getAlerts: (params?: any) => apiClient.get('/alerts', { params }),

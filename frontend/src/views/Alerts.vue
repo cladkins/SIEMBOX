@@ -107,6 +107,14 @@
           <h4>Matched Data</h4>
           <pre>{{ JSON.stringify(selectedAlert.matched_data, null, 2) }}</pre>
         </div>
+
+        <div class="alert-explain">
+          <ExplainWithAI
+            kind="alert"
+            :data="explainPayload(selectedAlert)"
+            label="Explain this alert"
+          />
+        </div>
       </div>
     </el-dialog>
 
@@ -141,8 +149,20 @@ import { useAlertsStore, type Alert } from '@/stores/alerts';
 import { ElMessage } from 'element-plus';
 import { format } from 'date-fns';
 import { Search } from '@element-plus/icons-vue';
+import ExplainWithAI from '@/components/ExplainWithAI.vue';
 
 const alertsStore = useAlertsStore();
+
+// Trim an alert to the fields worth sending to the AI assistant (skip noisy
+// internal ids / the full raw_result blob inside matched_data).
+const explainPayload = (alert: Alert) => ({
+  severity: alert.severity,
+  status: alert.status,
+  title: alert.title,
+  description: alert.description,
+  created_at: alert.created_at,
+  matched_data: alert.matched_data,
+});
 
 const filters = ref({
   severity: '',

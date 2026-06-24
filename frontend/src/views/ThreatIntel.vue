@@ -27,6 +27,16 @@
       </el-form>
     </el-card>
 
+    <el-card class="map-card">
+      <template #header>
+        <div class="card-header">
+          <span>Alert Origins (last 30 days)</span>
+          <el-text size="small" type="info">Click a country to list its IPs</el-text>
+        </div>
+      </template>
+      <AlertsCountryMap :data="countries" @country-click="selectCountryByCode" />
+    </el-card>
+
     <el-row :gutter="20">
       <el-col :xs="24" :md="10">
         <el-card>
@@ -151,6 +161,7 @@ import { Search } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
 import { api } from '@/services/api';
 import ExplainWithAI from '@/components/ExplainWithAI.vue';
+import AlertsCountryMap from '@/components/AlertsCountryMap.vue';
 
 const route = useRoute();
 
@@ -188,6 +199,11 @@ async function loadCountries() {
   }
 }
 
+function selectCountryByCode(code: string) {
+  const existing = countries.value.find((c) => c.country_code === code);
+  selectCountry(existing || { country_code: code, country_name: code });
+}
+
 async function selectCountry(row: any) {
   selectedCountry.value = row;
   countryIps.value = [];
@@ -223,11 +239,14 @@ function lookup() {
   if (ipQuery.value.trim()) loadIp(ipQuery.value.trim());
 }
 
-onMounted(() => {
-  loadCountries();
-  // Deep link: /threat-intel?ip=... (used by clickthrough from other pages).
+onMounted(async () => {
+  await loadCountries();
+  // Deep links: ?ip= (clickthrough from other pages) and ?country= (from the
+  // dashboard map).
   const ip = route.query.ip;
   if (typeof ip === 'string' && ip.trim()) loadIp(ip.trim());
+  const country = route.query.country;
+  if (typeof country === 'string' && country.trim()) selectCountryByCode(country.trim().toUpperCase());
 });
 </script>
 
@@ -237,6 +256,7 @@ onMounted(() => {
 .page-header h2 { margin: 0 0 4px; }
 .subtitle { margin: 0; color: var(--siembox-text-secondary, #909399); font-size: 14px; }
 .lookup-card { margin-bottom: 16px; }
+.map-card { margin-bottom: 20px; }
 .detail-card { margin-top: 20px; }
 .detail-desc { margin-bottom: 8px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; }

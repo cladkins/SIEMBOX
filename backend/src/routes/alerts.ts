@@ -46,6 +46,18 @@ router.get('/statistics', async (_req: Request, res: Response) => {
   }
 });
 
+// Alerts grouped by GeoIP country (for the dashboard "Alerts by Country" widget)
+router.get('/by-country', async (req: Request, res: Response) => {
+  try {
+    const days = Math.min(Math.max(parseInt(String(req.query.days)) || 30, 1), 365);
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit)) || 50, 1), 250);
+    const rows = await AlertModel.getCountByCountry(days, limit);
+    res.json(rows);
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch alerts by country');
+  }
+});
+
 // Get single alert
 router.get('/:id', async (req: Request, res: Response) => {
   try {

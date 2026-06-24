@@ -140,7 +140,15 @@ async function llmFetch(url: string, options: any): Promise<Response> {
   }
 }
 
-async function callProvider(cfg: AiConfig, system: string, user: string): Promise<string> {
+async function callProvider(
+  cfg: AiConfig,
+  system: string,
+  user: string,
+  opts: { json?: boolean } = {}
+): Promise<string> {
+  // The parser/detection generators need strict JSON; the "explain" assistant
+  // wants free-text markdown. JSON mode defaults on to preserve generator behaviour.
+  const jsonMode = opts.json !== false;
   if (cfg.provider === 'anthropic') {
     if (!cfg.apiKey) throw new Error('No Anthropic API key configured');
     const res = await llmFetch('https://api.anthropic.com/v1/messages', {
@@ -175,7 +183,7 @@ async function callProvider(cfg: AiConfig, system: string, user: string): Promis
           { role: 'user', content: user },
         ],
         max_tokens: 2000,
-        response_format: { type: 'json_object' },
+        ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
       }),
     });
     if (!res.ok) throw new Error(`OpenAI API ${res.status}: ${(await res.text()).slice(0, 300)}`);
@@ -191,7 +199,7 @@ async function callProvider(cfg: AiConfig, system: string, user: string): Promis
     body: JSON.stringify({
       model: cfg.model,
       stream: false,
-      format: 'json',
+      ...(jsonMode ? { format: 'json' } : {}),
       messages: [
         { role: 'system', content: system },
         { role: 'user', content: user },
@@ -395,4 +403,51 @@ export async function generateDetection(
     prev = { rule, errors: validation.errors };
   }
   return last;
+}
+
+// ---- "Explain this" assistant ------------------------------------------------
+
+const EXPLAIN_SYSTEM_PROMPT = `You are a senior SOC analyst helping a SIEMBox operator understand a security artifact (an alert, vulnerability, incident, or log). Given the artifact — and an optional question — explain it clearly and concisely in GitHub-flavored Markdown for a technically literate but possibly junior analyst.
+
+Cover, briefly:
+- What it is / what happened, in plain language.
+- Why it matters — severity, the likely cause, and whether it reads as malicious, benign, or needs more context.
+- Concrete next steps to investigate or remediate.
+
+Be specific to the data provided; do NOT invent fields, IPs, CVEs, or values that aren't present. If the data is insufficient to be sure, say so. Keep it tight — a few short sections or bullet lists. Output Markdown only, with no preamble like "Sure" or "Here is".`;
+
+export interface ExplainInput {
+  /** What the artifact is: 'alert' | 'vulnerability' | 'incident' | 'log' | ... */
+  kind: string;
+  /** The artifact itself — an object (stringified) or raw text. */
+  data: unknown;
+  /** Optional operator question to focus the explanation. */
+  question?: string;
+}
+
+/**
+ * Free-text "explain this" over any security artifact, reusing the configured
+ * provider/key. Unlike the generators this asks for prose (json:false), runs a
+ * single call (no validate/refine loop), and clips oversized artifacts so a huge
+ * raw log can't blow the context window.
+ */
+export async function explain(
+  input: ExplainInput,
+  cfgOverride?: AiConfig
+): Promise<{ explanation: string }> {
+  const cfg = cfgOverride ?? (await getAiConfig());
+
+  const dataStr =
+    typeof input.data === 'string' ? input.data : JSON.stringify(input.data, null, 2);
+  const clipped =
+    dataStr.length > 8000 ? `${dataStr.slice(0, 8000)}\n…(truncated)` : dataStr;
+
+  let user = `Artifact type: ${input.kind || 'unknown'}\n\nArtifact:\n${clipped}\n`;
+  if (input.question && input.question.trim()) {
+    user += `\nThe operator asks: ${input.question.trim()}\n`;
+  }
+  user += `\nExplain it.`;
+
+  const explanation = await callProvider(cfg, EXPLAIN_SYSTEM_PROMPT, user, { json: false });
+  return { explanation: (explanation || '').trim() };
 }

@@ -259,6 +259,15 @@
         </el-select>
         <div style="flex: 1" />
         <span class="catalog-count">{{ filteredParserCatalog.length }} / {{ catalog.length }}</span>
+        <el-button
+          size="small"
+          type="primary"
+          :loading="installingAll"
+          :disabled="catalogLoading || catalog.length === 0"
+          @click="installAll"
+        >
+          <el-icon><Download /></el-icon> Install all
+        </el-button>
         <el-button size="small" :loading="catalogLoading" @click="loadCatalog(true)">
           <el-icon><Refresh /></el-icon> Refresh
         </el-button>
@@ -393,7 +402,7 @@
 import { ref, onMounted, reactive, computed } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
-import { Plus, Delete, Right, CircleCheck, Upload, Shop, Refresh, MagicStick } from '@element-plus/icons-vue';
+import { Plus, Delete, Right, CircleCheck, Upload, Shop, Refresh, MagicStick, Download } from '@element-plus/icons-vue';
 
 const parsers = ref<any[]>([]);
 const loading = ref(false);
@@ -438,6 +447,7 @@ const catalog = ref<any[]>([]);
 const catalogSource = ref<any>(null);
 const catalogError = ref('');
 const installing = ref('');
+const installingAll = ref(false);
 const catalogSearch = ref('');
 const catalogStatusFilter = ref('all');
 
@@ -810,6 +820,22 @@ async function install(row: any) {
     ElMessage.error(error.response?.data?.message || `Failed to install "${row.name}"`);
   } finally {
     installing.value = '';
+  }
+}
+
+async function installAll() {
+  installingAll.value = true;
+  try {
+    const { data } = await api.installAllCatalogParsers();
+    const msg = `Parsers: ${data.installed} installed, ${data.updated} updated` +
+      (data.failed?.length ? `, ${data.failed.length} failed` : '');
+    if (data.failed?.length) ElMessage.warning(msg);
+    else ElMessage.success(msg);
+    await Promise.all([fetchParsers(), loadCatalog(false)]);
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Failed to install catalog');
+  } finally {
+    installingAll.value = false;
   }
 }
 

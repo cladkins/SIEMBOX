@@ -43,6 +43,20 @@ RUN apk add --no-cache wget unzip && \
 # Download Nuclei templates (CVE, default, etc.)
 RUN nuclei -update-templates -silent
 
+# Install Trivy for container image vulnerability scanning. Trivy pulls image
+# layers itself, so no Docker daemon is needed at runtime.
+ARG TRIVY_VERSION=0.58.1
+RUN apk add --no-cache wget && \
+    case "${TARGETARCH}" in \
+      arm64) TRIVY_ARCH=Linux-ARM64 ;; \
+      *) TRIVY_ARCH=Linux-64bit ;; \
+    esac && \
+    wget -q "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_${TRIVY_ARCH}.tar.gz" -O /tmp/trivy.tar.gz && \
+    tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy && \
+    rm /tmp/trivy.tar.gz && \
+    chmod +x /usr/local/bin/trivy && \
+    apk del wget
+
 # Install production dependencies only
 COPY package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --only=production

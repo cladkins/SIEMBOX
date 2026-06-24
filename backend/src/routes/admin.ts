@@ -40,18 +40,23 @@ router.get('/overview', async (_req: Request, res: Response) => {
       dbHealth = 'unhealthy';
     }
 
-    // Syslog receiver health (check if logs received recently)
+    // Syslog receiver health (did we ingest a log recently?)
     let syslogHealth = 'unknown';
     try {
+      // Index-backed (idx_raw_logs_created_at): read only the newest row instead
+      // of COUNT(*) FILTER over all of raw_logs. The old query was a full table
+      // scan that grows unbounded as logs ingest — on a busy SIEM it eventually
+      // exceeded the client's request timeout, so the polled /overview surfaced a
+      // "Network error" toast every 30s while the query still returned 200
+      // server-side (nothing logged).
       const syslogResult = await query(
-        `SELECT
-           COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '5 minutes') as recent_count,
-           MAX(created_at) as last_log
-         FROM raw_logs`
+        `SELECT created_at AS last_log FROM raw_logs ORDER BY created_at DESC LIMIT 1`
       );
-      syslogHealth = parseInt(syslogResult.rows[0]?.recent_count || '0', 10) > 0
-        ? 'healthy'
-        : 'warning';
+      const lastLog = syslogResult.rows[0]?.last_log;
+      syslogHealth =
+        lastLog && new Date(lastLog).getTime() > Date.now() - 5 * 60 * 1000
+          ? 'healthy'
+          : 'warning';
     } catch (err) {
       logger.warn('Failed to check syslog health:', err);
     }

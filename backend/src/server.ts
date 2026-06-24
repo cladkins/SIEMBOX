@@ -33,13 +33,21 @@ const startServer = async () => {
     // without this they stay stuck forever and can't be cancelled normally.
     await reconcileInterruptedScans();
 
-    // Auto-import detection rules on first startup
-    logger.info('Checking for detection rules to import...');
-    try {
-      await importRules();
-    } catch (error) {
-      logger.error('Failed to import rules, but continuing startup:', error);
-      logger.warn('Detection rules may need to be created manually');
+    // Auto-import the bundled detection rules on startup, unless the operator
+    // opted into a catalog-only install (SEED_BUNDLED_CONTENT=false) — then
+    // detections are populated from the catalog via Browse Catalog → Install all.
+    if (process.env.SEED_BUNDLED_CONTENT === 'false') {
+      logger.info(
+        'SEED_BUNDLED_CONTENT=false — skipping bundled detection import (use Browse Catalog → Install all).'
+      );
+    } else {
+      logger.info('Checking for detection rules to import...');
+      try {
+        await importRules();
+      } catch (error) {
+        logger.error('Failed to import rules, but continuing startup:', error);
+        logger.warn('Detection rules may need to be created manually');
+      }
     }
 
     // Start syslog server

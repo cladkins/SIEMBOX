@@ -21,6 +21,8 @@ import vulnerabilitiesRoutes from './routes/vulnerabilities';
 import adminRoutes from './routes/admin';
 import scheduledScansRoutes from './routes/scheduledScans';
 import notificationsRoutes from './routes/notifications';
+import aiRoutes from './routes/ai';
+import containersRoutes from './routes/containers';
 
 const app: Application = express();
 
@@ -98,7 +100,9 @@ app.use('/api/assets', assetsRoutes); // Asset discovery and management
 app.use('/api/vulnerabilities', vulnerabilitiesRoutes); // Vulnerability scanning and management
 app.use('/api/admin', adminRoutes); // Admin dashboard (requires admin role)
 app.use('/api/scheduled-scans', authenticate, scheduledScansRoutes); // Recurring scheduled scans
-app.use('/api/notifications', authenticate, notificationsRoutes); // Notification channels & preferences
+app.use('/api/notifications', authenticate, notificationsRoutes);
+app.use('/api/ai', authenticate, aiRoutes); // "Explain this" assistant (any authed user)
+app.use('/api/containers', authenticate, containersRoutes); // Trivy container image scanning // Notification channels & preferences
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

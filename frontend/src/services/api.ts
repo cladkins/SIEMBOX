@@ -66,6 +66,11 @@ apiClient.interceptors.response.use(
         default:
           ElMessage.error('An error occurred. Please try again.');
       }
+    } else if (error.code === 'ECONNABORTED' || /timeout/i.test(error.message || '')) {
+      // Axios aborts on the client when a request exceeds its timeout; there is
+      // no response, so this is distinct from a real connectivity failure. Say so
+      // — otherwise a slow endpoint reads as "check your connection".
+      ElMessage.error('Request timed out — the server took too long to respond.');
     } else if (error.request) {
       ElMessage.error('Network error. Please check your connection.');
     }
@@ -107,6 +112,8 @@ export const api = {
   getCatalogSource: () => apiClient.get('/parsers/catalog/source'),
   installCatalogParser: (name: string, force = false) =>
     apiClient.post('/parsers/catalog/install', { name, force }),
+  installAllCatalogParsers: (force = false) =>
+    apiClient.post('/parsers/catalog/install-all', { force }, { timeout: 120000 }),
 
   // Detection Rules
   getRules: () => apiClient.get('/rules'),
@@ -117,6 +124,7 @@ export const api = {
   // Detection catalog (browse/install rules from the GitHub repo, in-app)
   getRuleCatalog: (refresh = false) => apiClient.get('/rules/catalog', { params: refresh ? { refresh: true } : {} }),
   installCatalogRule: (name: string) => apiClient.post('/rules/catalog/install', { name }),
+  installAllCatalogRules: () => apiClient.post('/rules/catalog/install-all', {}, { timeout: 120000 }),
 
   // AI builder
   getAiSettings: () => apiClient.get('/settings/ai'),
@@ -126,10 +134,14 @@ export const api = {
     apiClient.post('/parsers/ai/generate', { sample, hints }, { timeout: 240000 }),
   generateDetectionAI: (description: string, context?: string) =>
     apiClient.post('/rules/ai/generate', { description, context }, { timeout: 240000 }),
+  explainWithAI: (kind: string, data: any, question?: string) =>
+    apiClient.post('/ai/explain', { kind, data, question }, { timeout: 240000 }),
 
   // Alerts
   getAlerts: (params?: any) => apiClient.get('/alerts', { params }),
   getAlertStatistics: () => apiClient.get('/alerts/statistics'),
+  getAlertsByCountry: (params?: { days?: number; limit?: number }) =>
+    apiClient.get('/alerts/by-country', { params }),
   getAlert: (id: number) => apiClient.get(`/alerts/${id}`),
   updateAlert: (id: number, data: any) => apiClient.put(`/alerts/${id}`, data),
   deleteAlert: (id: number) => apiClient.delete(`/alerts/${id}`),
@@ -202,6 +214,12 @@ export const api = {
   // Vulnerabilities
   getVulnerabilities: (params?: any) => apiClient.get('/vulnerabilities', { params }),
   getVulnerabilitySummary: () => apiClient.get('/vulnerabilities/summary'),
+
+  // Container image scanning (Trivy)
+  scanContainer: (image_ref: string) =>
+    apiClient.post('/containers/scan', { image_ref }, { timeout: 30000 }),
+  getContainerScans: (limit = 20) => apiClient.get('/containers/scans', { params: { limit } }),
+  getContainerScan: (id: number) => apiClient.get(`/containers/scans/${id}`),
 
   // Scheduled Scans
   getScheduledScans: () => apiClient.get('/scheduled-scans'),

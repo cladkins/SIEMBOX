@@ -181,6 +181,55 @@ router.post('/catalog/install', async (req: Request, res: Response) => {
   }
 });
 
+// Install (or update) EVERY parser in the catalog — the "Install all" action,
+// the populate path for a catalog-only (unseeded) install. Each item is
+// validated + self-tested; a bad item is recorded in `failed` and skipped
+// rather than aborting the batch. `force` installs items whose self-tests fail.
+router.post('/catalog/install-all', async (req: Request, res: Response) => {
+  try {
+    const force = !!(req.body && req.body.force);
+    const { entries } = await fetchCatalog(req.query.refresh === 'true');
+    const results = {
+      total: entries.length,
+      installed: 0,
+      updated: 0,
+      failed: [] as Array<{ name: string; reason: string }>,
+    };
+    for (const entry of entries) {
+      try {
+        const portable = await getCatalogParser(entry.name);
+        if (!portable) {
+          results.failed.push({ name: entry.name, reason: 'not found in catalog' });
+          continue;
+        }
+        const validation = validatePortableParser(portable, { strict: false });
+        if (!validation.ok) {
+          results.failed.push({ name: entry.name, reason: 'failed validation' });
+          continue;
+        }
+        if (!runSelfTests(portable).ok && !force) {
+          results.failed.push({ name: entry.name, reason: 'self-tests failed' });
+          continue;
+        }
+        const r = await upsertPortableParser(portable);
+        if (r.action === 'created') results.installed++;
+        else results.updated++;
+      } catch (e) {
+        results.failed.push({
+          name: entry.name,
+          reason: e instanceof Error ? e.message : 'install error',
+        });
+      }
+    }
+    res.json(results);
+  } catch (error) {
+    throw new ApiError(
+      502,
+      `Failed to install catalog: ${error instanceof Error ? error.message : 'unknown error'}`
+    );
+  }
+});
+
 // Force a catalog cache refresh.
 router.post('/catalog/refresh', async (_req: Request, res: Response) => {
   try {

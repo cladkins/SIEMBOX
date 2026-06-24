@@ -73,6 +73,12 @@ const routes: RouteRecordRaw[] = [
         meta: { allowedRoles: ['admin', 'operator'] },
       },
       {
+        path: 'container-scanning',
+        name: 'ContainerScanning',
+        component: () => import('@/views/ContainerScanning.vue'),
+        meta: { allowedRoles: ['admin', 'operator'] },
+      },
+      {
         path: 'templates',
         name: 'Templates',
         component: () => import('@/views/Templates.vue'),

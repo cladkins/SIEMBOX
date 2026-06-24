@@ -45,7 +45,7 @@ RUN nuclei -update-templates -silent
 
 # Install Trivy for container image vulnerability scanning. Trivy pulls image
 # layers itself, so no Docker daemon is needed at runtime.
-ARG TRIVY_VERSION=0.58.1
+ARG TRIVY_VERSION=0.71.2
 RUN apk add --no-cache wget && \
     case "${TARGETARCH}" in \
       arm64) TRIVY_ARCH=Linux-ARM64 ;; \

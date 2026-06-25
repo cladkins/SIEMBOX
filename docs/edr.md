@@ -31,7 +31,7 @@ unique index on `event_id` for replay dedup).
 
 **Admin-facing** (JWT + admin role):
 - `GET /agents`, `GET /agents/:id`, `GET /agents/:id/vulnerabilities`, `GET /agents/:id/detections`, `DELETE /agents/:id`
-- `POST /tokens` (generate, plaintext shown once), `GET /tokens`
+- `POST /tokens` (generate, plaintext shown once), `GET /tokens`, `DELETE /tokens/:hash` (revoke)
 
 The **Endpoints** UI (admin) lives under *Assets & Vulnerabilities → Endpoints (EDR)*:
 agent list with live status + open-vuln / recent-detection counts, a per-endpoint

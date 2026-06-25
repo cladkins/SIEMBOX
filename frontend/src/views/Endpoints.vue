@@ -84,6 +84,13 @@
             <el-tag v-else type="success" size="small">active</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="" width="120" align="right">
+          <template #default="{ row }">
+            <el-button size="small" type="danger" plain @click="revokeToken(row)">
+              {{ row.used || row.expired ? 'Remove' : 'Revoke' }}
+            </el-button>
+          </template>
+        </el-table-column>
         <template #empty>No tokens issued.</template>
       </el-table>
     </el-card>
@@ -229,6 +236,24 @@ async function generateToken() {
   finally { generating.value = false; }
 }
 function resetToken() { generated.value = ''; }
+
+async function revokeToken(row: any) {
+  const active = !row.used && !row.expired;
+  try {
+    await ElMessageBox.confirm(
+      active
+        ? 'Revoke this enrollment token? It can no longer be used to enroll an endpoint.'
+        : 'Remove this token from the list?',
+      active ? 'Revoke token' : 'Remove token',
+      { type: 'warning', confirmButtonText: active ? 'Revoke' : 'Remove', cancelButtonText: 'Cancel' }
+    );
+  } catch { return; }
+  try {
+    await api.revokeEnrollmentToken(row.token_hash);
+    ElMessage.success(active ? 'Token revoked' : 'Token removed');
+    fetchTokens();
+  } catch { ElMessage.error('Failed to revoke token'); }
+}
 
 async function copy(text: string) {
   try { await navigator.clipboard.writeText(text); ElMessage.success('Copied'); }

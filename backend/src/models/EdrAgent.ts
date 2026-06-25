@@ -152,10 +152,13 @@ export class EdrEnrollmentTokenModel {
     return result.rows[0] || null;
   }
 
-  /** List tokens (without the hash secret) for the admin UI. */
+  /**
+   * List tokens for the admin UI. `token_hash` is a sha256 (NOT the secret) and
+   * is safe to show an admin — it's the stable key used to revoke a token.
+   */
   static async listAll(): Promise<any[]> {
     const result = await query(
-      `SELECT label, created_by, expires_at, used_at, created_at,
+      `SELECT token_hash, label, created_by, expires_at, used_at, created_at,
               (used_at IS NOT NULL) AS used,
               (expires_at IS NOT NULL AND expires_at <= NOW()) AS expired
        FROM edr_enrollment_tokens
@@ -164,9 +167,11 @@ export class EdrEnrollmentTokenModel {
     return result.rows;
   }
 
-  static async revokeUnused(tokenHash: string): Promise<boolean> {
+  /** Revoke/remove a token by its hash. Revoking an active (unused) token means
+   *  it can no longer be used to enroll. */
+  static async delete(tokenHash: string): Promise<boolean> {
     const result = await query(
-      `DELETE FROM edr_enrollment_tokens WHERE token_hash = $1 AND used_at IS NULL`,
+      `DELETE FROM edr_enrollment_tokens WHERE token_hash = $1`,
       [tokenHash]
     );
     return (result.rowCount ?? 0) > 0;

@@ -90,10 +90,18 @@ router.post('/tokens', authenticate, authorize('admin'), async (req: Request, re
   res.status(201).json(result);
 });
 
-// List issued tokens (status only — never the secret).
+// List issued tokens (hash + status — never the plaintext secret).
 router.get('/tokens', authenticate, authorize('admin'), async (_req: Request, res: Response) => {
   const tokens = await EdrEnrollmentTokenModel.listAll();
   res.json({ tokens });
+});
+
+// Revoke (delete) an enrollment token by its hash. Revoking an active token
+// stops it being used to enroll; on a used/expired token it just clears the row.
+router.delete('/tokens/:hash', authenticate, authorize('admin'), async (req: Request, res: Response) => {
+  const ok = await EdrEnrollmentTokenModel.delete(req.params.hash);
+  if (!ok) throw new ApiError(404, 'Token not found');
+  res.json({ deleted: true });
 });
 
 // Endpoint detail.

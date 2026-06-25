@@ -277,6 +277,7 @@ export const api = {
   getEnrollmentTokens: () => apiClient.get('/edr/tokens'),
   createEnrollmentToken: (data: { label?: string; expires_in_hours?: number }) =>
     apiClient.post('/edr/tokens', data),
+  revokeEnrollmentToken: (tokenHash: string) => apiClient.delete(`/edr/tokens/${tokenHash}`),
 
   // Generic methods
   get: (url: string, config?: any) => apiClient.get(url, config),

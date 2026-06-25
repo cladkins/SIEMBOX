@@ -23,6 +23,28 @@ export interface YaraBundle {
   created_at: Date;
 }
 
+/**
+ * How many bundle versions to retain. Server-side only — the agent always pulls
+ * the highest version, so older rows exist purely for rollback/audit. Each row is
+ * a full copy (~16.6MB on YARA-Forge Extended), so we cap the table. Always keep
+ * at least 1 (the current bundle).
+ */
+const KEEP_VERSIONS = Math.max(1, parseInt(process.env.EDR_YARA_KEEP_VERSIONS || '10', 10) || 10);
+
+/** Delete all but the newest KEEP_VERSIONS bundles (by version, gap-safe). */
+async function pruneOldBundles(): Promise<void> {
+  const result = await query(
+    `DELETE FROM edr_yara_bundle
+      WHERE version NOT IN (
+        SELECT version FROM edr_yara_bundle ORDER BY version DESC LIMIT $1
+      )`,
+    [KEEP_VERSIONS]
+  );
+  if ((result.rowCount ?? 0) > 0) {
+    logger.info(`[YARA] pruned ${result.rowCount} old bundle version(s), keeping latest ${KEEP_VERSIONS}`);
+  }
+}
+
 /** Highest published bundle version, or 0 if none (agent then uses baseline only). */
 export async function getCurrentYaraVersion(): Promise<number> {
   const result = await query('SELECT COALESCE(MAX(version), 0) AS v FROM edr_yara_bundle');
@@ -80,5 +102,6 @@ export async function publishYaraBundle(rules: string, source: string): Promise<
     `[YARA] published bundle v${nextVersion} (${Buffer.byteLength(rules, 'utf8')} bytes, ` +
       `sha256=${sha256.slice(0, 12)}…, source=${source})`
   );
+  await pruneOldBundles();
   return nextVersion;
 }

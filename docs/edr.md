@@ -75,6 +75,10 @@ contract: `docs/SERVER_YARA_ADDON.md` in the agent repo.
   compile), extracts the `.yar` (dependency-free zip reader), and publishes a new
   bundle only when the content changed. Off by default since it pushes a large pack
   to every endpoint. `POST /yara/refresh` triggers it on demand regardless.
+- **Retention:** each version is a full copy, so after every publish we keep only
+  the newest `EDR_YARA_KEEP_VERSIONS` rows (default 10) — server-side only, since
+  the agent always pulls the highest version. Pruning never reuses version numbers,
+  so the agent's version comparison is unaffected.
 
 ## Known follow-ups
 

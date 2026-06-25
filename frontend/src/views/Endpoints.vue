@@ -160,11 +160,20 @@
           <el-tab-pane :label="`Vulnerabilities (${detail.vulns.length})`" name="vulns">
             <el-table :data="detail.vulns" v-loading="detail.loading" size="small" stripe max-height="420">
               <el-table-column label="Severity" width="110">
-                <template #default="{ row }"><el-tag :type="severityType(row.severity)" size="small">{{ row.severity }}</el-tag></template>
+                <template #default="{ row }">
+                  <el-tag :type="severityType(row.vulnerability?.severity)" size="small">{{ row.vulnerability?.severity || '—' }}</el-tag>
+                </template>
               </el-table-column>
-              <el-table-column prop="cve_id" label="CVE" width="160" />
-              <el-table-column prop="title" label="Title" min-width="240" show-overflow-tooltip />
-              <el-table-column prop="status" label="Status" width="120" />
+              <el-table-column label="CVE" width="180">
+                <template #default="{ row }">{{ row.vulnerability?.cve_id || '—' }}</template>
+              </el-table-column>
+              <el-table-column label="Title" min-width="240" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.vulnerability?.title || '—' }}</template>
+              </el-table-column>
+              <el-table-column label="CVSS" width="90" align="center">
+                <template #default="{ row }">{{ row.vulnerability?.cvss_score ?? '—' }}</template>
+              </el-table-column>
+              <el-table-column prop="status" label="Status" width="100" />
               <template #empty>No vulnerabilities reported for this endpoint.</template>
             </el-table>
           </el-tab-pane>

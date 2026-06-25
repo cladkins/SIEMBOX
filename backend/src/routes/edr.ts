@@ -19,6 +19,12 @@ import {
   buildAgentConfig,
   createEnrollmentToken,
 } from '../services/edr/edrService';
+import {
+  getCurrentYaraVersion,
+  getCurrentYaraBundle,
+  getYaraStatus,
+} from '../services/edr/yaraService';
+import { refreshYaraForge } from '../services/edr/yaraForgeService';
 
 const router = Router();
 
@@ -30,16 +36,28 @@ router.post('/agents/enroll', async (req: Request, res: Response) => {
   res.status(200).json(result);
 });
 
-// Heartbeat — agent auth; :id must match the authenticated agent.
+// Heartbeat — agent auth; :id must match the authenticated agent. The returned
+// config_version is composite (agent row + current YARA version) so a new YARA
+// bundle makes it rise and the agent re-pulls config. See buildAgentConfig.
 router.post('/agents/:id/heartbeat', authenticateAgent, requireAgentMatchesParam, async (req: Request, res: Response) => {
   const { status, agent_version } = req.body ?? {};
-  const configVersion = await EdrAgentModel.heartbeat(req.params.id, status, agent_version);
-  res.status(200).json({ config_version: configVersion ?? req.edrAgent!.config_version });
+  const base = await EdrAgentModel.heartbeat(req.params.id, status, agent_version);
+  const yaraVersion = await getCurrentYaraVersion();
+  res.status(200).json({ config_version: (base ?? req.edrAgent!.config_version) + yaraVersion });
 });
 
 // Config pull — agent auth.
 router.get('/agents/:id/config', authenticateAgent, requireAgentMatchesParam, async (req: Request, res: Response) => {
-  res.status(200).json(buildAgentConfig(req.edrAgent!.config_version));
+  const yaraVersion = await getCurrentYaraVersion();
+  res.status(200).json(buildAgentConfig(req.edrAgent!.config_version, yaraVersion));
+});
+
+// YARA rule pull — agent auth. Returns the curated bundle (highest version) as
+// raw text/plain. Empty body is valid; the agent appends its embedded baseline.
+// The agent only calls this when yara_rules_version increased, so it's low-traffic.
+router.get('/agents/:id/yara', authenticateAgent, requireAgentMatchesParam, async (_req: Request, res: Response) => {
+  const bundle = await getCurrentYaraBundle();
+  res.status(200).type('text/plain').send(bundle?.rules ?? '');
 });
 
 /** Body `agent_id` must match the authenticated agent (defense in depth). */
@@ -102,6 +120,19 @@ router.delete('/tokens/:hash', authenticate, authorize('admin'), async (req: Req
   const ok = await EdrEnrollmentTokenModel.delete(req.params.hash);
   if (!ok) throw new ApiError(404, 'Token not found');
   res.json({ deleted: true });
+});
+
+// Current served YARA bundle metadata (version/sha/source/size) — never the rules
+// body. Useful for the UI and for verifying a publish landed.
+router.get('/yara', authenticate, authorize('admin'), async (_req: Request, res: Response) => {
+  res.json(await getYaraStatus());
+});
+
+// Pull the latest YARA-Forge bundle on demand (works regardless of the daily-job
+// toggle). Returns the new version, or 200 with updated=false if it was unchanged.
+router.post('/yara/refresh', authenticate, authorize('admin'), async (_req: Request, res: Response) => {
+  const version = await refreshYaraForge();
+  res.json({ updated: version !== null, version: version ?? (await getCurrentYaraVersion()) });
 });
 
 // Endpoint detail.

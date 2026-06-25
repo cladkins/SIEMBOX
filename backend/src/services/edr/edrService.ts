@@ -28,11 +28,24 @@ import {
   sha256hex,
   generateSecret,
 } from '../../models/EdrAgent';
+import { getCurrentYaraVersion } from './yaraService';
 
-/** Desired agent behaviour. Bump config_version (on the agent row) when changed. */
-export function buildAgentConfig(configVersion: number) {
+/**
+ * Desired agent behaviour.
+ *
+ * `config_version` is COMPOSITE: the agent's own row version plus the current
+ * server-wide YARA bundle version. Publishing a new YARA bundle (a higher yara
+ * version) therefore raises config_version for every agent, so the agent re-pulls
+ * its config and then downloads the new rules — no agent rows need touching. The
+ * agent treats config_version as an opaque monotonic counter, so this is safe.
+ *
+ * `yara_rules_version` is the version the agent compares against; 0 means "use the
+ * embedded baseline only" (no server bundle published yet).
+ */
+export function buildAgentConfig(baseConfigVersion: number, yaraRulesVersion = 0) {
   return {
-    config_version: configVersion,
+    config_version: baseConfigVersion + yaraRulesVersion,
+    yara_rules_version: yaraRulesVersion,
     heartbeat_interval_seconds: 60,
     config_poll_interval_seconds: 300,
     inventory_interval_seconds: 3600,
@@ -131,7 +144,10 @@ export async function enrollAgent(input: EnrollInput, connIp?: string) {
   });
 
   logger.info('EDR agent enrolled', { agentId, assetId, hostname: input.hostname });
-  return { agent_id: agentId, agent_api_key: apiKey, config: buildAgentConfig(1) };
+  // New agents default to config_version 1; include the current YARA version so a
+  // freshly-enrolled agent downloads the current bundle on its first config poll.
+  const yaraVersion = await getCurrentYaraVersion();
+  return { agent_id: agentId, agent_api_key: apiKey, config: buildAgentConfig(1, yaraVersion) };
 }
 
 // ---- Inventory --------------------------------------------------------------

@@ -9,6 +9,7 @@ import { startAutoDiscoveryJob, stopAutoDiscoveryJob } from './jobs/autoDiscover
 import { startScheduledScansJob, stopScheduledScansJob } from './jobs/scheduledScans';
 import { startIngestionHealthJob, stopIngestionHealthJob } from './jobs/ingestionHealth';
 import { startThreatFeedsJob, stopThreatFeedsJob } from './jobs/threatFeeds';
+import { startYaraRulesJob, stopYaraRulesJob } from './jobs/yaraRules';
 import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
 import { TemplateService } from './services/scanner/templateService';
 
@@ -74,6 +75,9 @@ const startServer = async () => {
     // Start the external threat-feed refresher (populates blocklist indicators).
     startThreatFeedsJob();
 
+    // Start the EDR YARA-Forge refresher (opt-in via EDR_YARA_FORGE_ENABLED).
+    startYaraRulesJob();
+
     // Warm the Nuclei template cache in the background so the first request to
     // the (heavy) template endpoints hits a populated cache instead of parsing
     // ~10k files inline and tripping the client timeout. Fire-and-forget.
@@ -107,6 +111,7 @@ process.on('SIGTERM', async () => {
   stopScheduledScansJob();
   stopIngestionHealthJob();
   stopThreatFeedsJob();
+  stopYaraRulesJob();
   pool.end(() => {
     logger.info('Database pool closed');
     process.exit(0);
@@ -125,6 +130,7 @@ process.on('SIGINT', async () => {
   stopScheduledScansJob();
   stopIngestionHealthJob();
   stopThreatFeedsJob();
+  stopYaraRulesJob();
   pool.end(() => {
     logger.info('Database pool closed');
     process.exit(0);

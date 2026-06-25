@@ -26,12 +26,14 @@ unique index on `event_id` for replay dedup).
 **Agent-facing** (per-agent key: `Authorization: Bearer <key>` + `X-Agent-ID`):
 - `POST /agents/enroll` — exchange a one-time enrollment token for `{agent_id, agent_api_key, config}` (key returned once; only its sha256 is stored).
 - `POST /agents/:id/heartbeat` → `{config_version}`
-- `GET  /agents/:id/config` → `AgentConfig`
+- `GET  /agents/:id/config` → `AgentConfig` (includes `yara_rules_version`)
+- `GET  /agents/:id/yara` → curated YARA bundle as raw `text/plain` (empty body valid)
 - `POST /inventory` · `POST /events` · `POST /vulnerabilities` → `202 Accepted`
 
 **Admin-facing** (JWT + admin role):
 - `GET /agents`, `GET /agents/:id`, `GET /agents/:id/vulnerabilities`, `GET /agents/:id/detections`, `DELETE /agents/:id`
 - `POST /tokens` (generate, plaintext shown once), `GET /tokens`, `DELETE /tokens/:hash` (revoke)
+- `GET /yara` (current bundle version/sha/size), `POST /yara/refresh` (pull YARA-Forge now)
 
 The **Endpoints** UI (admin) lives under *Assets & Vulnerabilities → Endpoints (EDR)*:
 agent list with live status + open-vuln / recent-detection counts, a per-endpoint
@@ -47,10 +49,38 @@ install instructions.
 - **Offline:** an agent reads as offline when `last_seen` is older than 5 minutes.
 - **Rate limiting:** authenticated agent traffic (`X-Agent-ID` present) is exempt from the global IP limiter so a fleet behind one NAT IP isn't throttled.
 
+## YARA rule packs (server-delivered)
+
+The agent does on-disk YARA file detection. It ships an embedded baseline and pulls
+a curated server bundle when the config's `yara_rules_version` increases. Wire
+contract: `docs/SERVER_YARA_ADDON.md` in the agent repo.
+
+- **Storage:** `edr_yara_bundle (version PK, rules, sha256, source, created_at)`
+  — one row per version; the server always serves the **highest** version. Migration
+  `017` seeds a small, valid, permissively-licensed starter bundle as version 1
+  (EICAR + a couple of generic rules, `SIEMBox_`-prefixed so they can't collide with
+  the agent's baseline identifiers).
+- **Re-pull trigger (composite `config_version`):** the served `config_version` is
+  `edr_agents.config_version + current yara version`. Publishing a higher bundle
+  version therefore raises every agent's `config_version`, so the agent re-pulls
+  config, sees the new `yara_rules_version`, and downloads `GET /agents/:id/yara`.
+  No agent rows are mutated on publish — which keeps migration `017` idempotent
+  (it re-runs every startup) and makes already-enrolled agents pick up v1 on their
+  next heartbeat automatically.
+- **Serving:** `GET /agents/:id/yara` returns only our rules as `text/plain`; the
+  agent appends its baseline. Empty body is valid (no bundle published).
+- **YARA-Forge refresh (opt-in):** `EDR_YARA_FORGE_ENABLED=true` runs a daily job
+  that downloads the latest YARA-Forge **Extended** pack (a permissive superset of
+  Core — using both would duplicate identifiers and break the agent's combined
+  compile), extracts the `.yar` (dependency-free zip reader), and publishes a new
+  bundle only when the content changed. Off by default since it pushes a large pack
+  to every endpoint. `POST /yara/refresh` triggers it on demand regardless.
+
 ## Known follow-ups
 
 - EDR alerts are inserted directly, so they don't yet fire Email/Slack/NTFY notifications (rule-based alerts still do).
 - Server-pushed Sigma `rules` in `AgentConfig` are empty; wire to `/api/rules` (endpoint/Sigma) later.
+- No admin UI for YARA yet (version/refresh are API-only: `GET`/`POST /api/edr/yara`).
 
 ## Verify with the real agent
 
@@ -66,3 +96,11 @@ EOF
 Generate a token under **Endpoints (EDR)**, run the agent, and it should appear in
 the list; inventory fills the endpoint asset, scans surface vulns on it, and
 detections show in the **Alerts** UI and the endpoint drill-down.
+
+**YARA self-test** (needs no server rules — the agent's baseline matches it):
+drop a file containing `SIEMBOX_YARA_SELFTEST` into a watched dir (`~/Downloads`
+on macOS, `/tmp` on Linux). A `siembox-yara-file-match` detection should land at
+`POST /api/edr/events` and show as an alert. To confirm the *server* bundle is
+flowing, the seeded v1 also matches the EICAR test string, and
+`curl -s http://localhost:8421/api/edr/yara -H "Authorization: Bearer <jwt>"`
+shows the current `version`/`sha256`/`bytes`.

@@ -64,6 +64,30 @@
       </el-table>
     </el-card>
 
+    <!-- YARA rules status -->
+    <el-card style="margin-top: 16px">
+      <template #header>
+        <div class="card-header-row">
+          <span>YARA rules</span>
+          <el-button size="small" :loading="yara.refreshing" @click="pullYaraForge">Pull YARA-Forge now</el-button>
+        </div>
+      </template>
+      <el-descriptions :column="4" size="small" border>
+        <el-descriptions-item label="Version">
+          <el-tag v-if="yara.status && yara.status.version > 0" type="success" size="small">v{{ yara.status.version }}</el-tag>
+          <span v-else class="muted">none — agents use baseline only</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="Source">{{ yara.status?.source || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="Size">{{ yara.status ? humanBytes(yara.status.bytes) : '—' }}</el-descriptions-item>
+        <el-descriptions-item label="Updated">{{ yara.status?.created_at ? formatDate(yara.status.created_at) : '—' }}</el-descriptions-item>
+      </el-descriptions>
+      <p class="muted" style="margin: 8px 0 0">
+        Served to agents at <code>GET /api/edr/agents/:id/yara</code>; each appends its built-in baseline.
+        The starter bundle ships by default — enable the daily YARA-Forge import with
+        <code>EDR_YARA_FORGE_ENABLED=true</code>.
+      </p>
+    </el-card>
+
     <!-- Enrollment tokens -->
     <el-card style="margin-top: 16px">
       <template #header><span>Enrollment tokens</span></template>
@@ -193,6 +217,7 @@ import { format } from 'date-fns';
 const loading = ref(false);
 const endpoints = ref<any[]>([]);
 const tokens = ref<any[]>([]);
+const yara = reactive<{ status: any | null; refreshing: boolean }>({ status: null, refreshing: false });
 
 const tokenDialog = ref(false);
 const generating = ref(false);
@@ -218,13 +243,34 @@ async function fetchTokens() {
   const res = await api.getEnrollmentTokens();
   tokens.value = res.data.tokens || [];
 }
+async function fetchYaraStatus() {
+  const res = await api.getYaraStatus();
+  yara.status = res.data;
+}
 async function refresh() {
   loading.value = true;
-  try { await Promise.all([fetchEndpoints(), fetchTokens()]); }
+  try { await Promise.all([fetchEndpoints(), fetchTokens(), fetchYaraStatus()]); }
   catch { ElMessage.error('Failed to load endpoints'); }
   finally { loading.value = false; }
 }
 onMounted(refresh);
+
+async function pullYaraForge() {
+  try {
+    await ElMessageBox.confirm(
+      'Download the latest YARA-Forge Extended pack (~3.4 MB) and publish it as a new bundle? ' +
+        'Each enrolled endpoint then pulls the full rule set (~16.6 MB) on its next config poll.',
+      'Pull YARA-Forge', { type: 'warning', confirmButtonText: 'Pull now', cancelButtonText: 'Cancel' }
+    );
+  } catch { return; }
+  yara.refreshing = true;
+  try {
+    const res = await api.refreshYaraForge();
+    ElMessage.success(res.data.updated ? `Published YARA bundle v${res.data.version}` : 'Already up to date');
+    await fetchYaraStatus();
+  } catch { ElMessage.error('YARA-Forge refresh failed (check server egress and logs)'); }
+  finally { yara.refreshing = false; }
+}
 
 function openTokenDialog() {
   generated.value = '';
@@ -299,6 +345,12 @@ async function removeEndpoint(agent: any) {
 }
 
 function formatDate(d: string) { return format(new Date(d), 'MMM dd, yyyy HH:mm'); }
+function humanBytes(n: number): string {
+  if (!n) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  return `${(n / Math.pow(1024, i)).toFixed(i ? 1 : 0)} ${u[i]}`;
+}
 function severityType(sev: string): string {
   const m: Record<string, string> = { critical: 'danger', high: 'danger', medium: 'warning', low: 'info', info: 'info' };
   return m[sev] || 'info';
@@ -307,6 +359,7 @@ function severityType(sev: string): string {
 
 <style scoped>
 .page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+.card-header-row { display: flex; justify-content: space-between; align-items: center; }
 .page-header h2 { margin: 0; }
 .subtitle { margin: 4px 0 0; color: var(--el-text-color-secondary); font-size: 13px; }
 .muted { color: var(--el-text-color-secondary); font-size: 12px; }

@@ -59,6 +59,12 @@ services:
       # Catalog-only by default (no bundled parsers/detections seeded). Set to
       # true to opt back into auto-importing the bundled detection rules (legacy).
       SEED_BUNDLED_CONTENT: ${SEED_BUNDLED_CONTENT:-}
+      # EDR YARA rule packs (optional). A small built-in starter bundle ships by
+      # default and needs no config. Set EDR_YARA_FORGE_ENABLED=true to auto-import
+      # the large YARA-Forge Extended pack daily (~16.6MB pulled per endpoint on
+      # change). EDR_YARA_KEEP_VERSIONS caps stored bundle history (default 10).
+      EDR_YARA_FORGE_ENABLED: ${EDR_YARA_FORGE_ENABLED:-}
+      EDR_YARA_KEEP_VERSIONS: ${EDR_YARA_KEEP_VERSIONS:-}
     volumes:
       - ./rules:/app/rules:ro
       - ./data/geoip:/app/data

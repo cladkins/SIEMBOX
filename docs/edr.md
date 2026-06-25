@@ -84,7 +84,9 @@ contract: `docs/SERVER_YARA_ADDON.md` in the agent repo.
 
 - EDR alerts are inserted directly, so they don't yet fire Email/Slack/NTFY notifications (rule-based alerts still do).
 - Server-pushed Sigma `rules` in `AgentConfig` are empty; wire to `/api/rules` (endpoint/Sigma) later.
-- No admin UI for YARA yet (version/refresh are API-only: `GET`/`POST /api/edr/yara`).
+- YARA bundle status (version/source/size) + a "Pull YARA-Forge now" button live on
+  the **Endpoints (EDR)** page; per-agent "which version does this agent have"
+  isn't tracked yet (the agent stores it locally; the server only knows the served version).
 
 ## Verify with the real agent
 

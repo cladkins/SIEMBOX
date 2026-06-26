@@ -16,7 +16,7 @@ SIEMBox ingests logs from your hosts and services, **parses** them into a single
 | **Parsers** | Declarative, portable parsers (pattern + field mappings + derivations + self-tests); install from an in-app **catalog** or generate with **AI** | [Parsers](Parsers) |
 | **Detections** | Portable detection rules with conditions, aggregation/threshold logic, and alert templating; catalog + AI builder | [Detection Rules](Detection-Rules) |
 | **Normalization** | One **canonical schema** so a rule written once fires across every log source | [Parsers](Parsers) |
-| **Threat Intel** | IP drill-down (country, events, alerts), a dashboard **country choropleth**, free **blocklist feeds**, and BYO-key **reputation** (AbuseIPDB / GreyNoise) | [Threat Intel](Threat-Intel) |
+| **Threat Intel** | IP drill-down (country, events, alerts), a dashboard **country choropleth**, free **blocklist feeds**, and BYO-key **reputation** (AbuseIPDB / AlienVault OTX) | [Threat Intel](Threat-Intel) |
 | **Scanning** | Host vulnerability scanning (**Nuclei**) and container-image scanning (**Trivy**), with optional Docker-host image discovery and scheduled scans | [Vulnerability & Container Scanning](Vulnerability-and-Container-Scanning) |
 | **Alerts & access** | Alert management, configurable retention, and role-based access (Admin / Analyst / Viewer) | [Configuration](Configuration) |
 

@@ -60,7 +60,7 @@ router.post('/refresh', authorize('admin', 'operator'), async (_req: Request, re
 // Configure a reputation provider's key/enabled flag (admin only).
 router.put('/providers/:name', authorize('admin'), async (req: Request, res: Response) => {
   const name = req.params.name as ProviderName;
-  if (!['abuseipdb', 'greynoise'].includes(name)) throw new ApiError(400, 'Unknown provider');
+  if (!['abuseipdb', 'otx'].includes(name)) throw new ApiError(400, 'Unknown provider');
   try {
     await ReputationService.saveProvider(name, {
       apiKey: req.body?.apiKey,

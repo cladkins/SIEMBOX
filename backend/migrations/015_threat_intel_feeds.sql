@@ -6,7 +6,7 @@
 --
 -- A background job refreshes enabled feeds on an interval; lookups join an IP
 -- against threat_indicators to see which feeds flag it. Keyed reputation
--- providers (AbuseIPDB / GreyNoise) are NOT stored here — their on-demand results
+-- providers (AbuseIPDB / AlienVault OTX) are NOT stored here — their on-demand results
 -- aren't persisted and their API keys live (encrypted) in system_settings.
 --
 -- Idempotent / re-runnable: CREATE ... IF NOT EXISTS, and the seed feeds use

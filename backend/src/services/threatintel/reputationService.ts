@@ -15,7 +15,7 @@ import { CredentialEncryption } from '../credentials/credentialEncryption';
 const LOOKUP_TIMEOUT_MS = 12_000;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 
-export type ProviderName = 'abuseipdb' | 'greynoise';
+export type ProviderName = 'abuseipdb' | 'otx';
 
 interface ProviderDef {
   name: ProviderName;
@@ -106,44 +106,53 @@ const PROVIDERS: Record<ProviderName, ProviderDef> = {
       };
     },
   },
-  greynoise: {
-    name: 'greynoise',
-    label: 'GreyNoise',
-    docsUrl: 'https://docs.greynoise.io/',
-    signupUrl: 'https://www.greynoise.io/viz/signup',
+  otx: {
+    name: 'otx',
+    label: 'AlienVault OTX',
+    docsUrl: 'https://otx.alienvault.com/api',
+    signupUrl: 'https://otx.alienvault.com/',
     async lookup(ip, key) {
       if (!SAFE_IP_RE.test(ip)) throw new Error('Invalid IP for reputation lookup');
-      // Fully-constant base URL (host + path prefix); the encoded IP is appended to
-      // the path only, so the request host stays provably constant at the sink.
-      const u = new URL('https://api.greynoise.io/v3/community/');
-      u.pathname += encodeURIComponent(ip);
-      const { status, body } = await fetchJson(u, { key });
+      // Constant host + path prefix; the IP-type segment is derived from isIP() (not
+      // user input) and the encoded IP is appended to the path only, so the request
+      // host stays provably constant at the sink (closes the SSRF path).
+      const section = isIP(ip) === 6 ? 'IPv6' : 'IPv4';
+      const u = new URL('https://otx.alienvault.com/api/v1/indicators/');
+      u.pathname += `${section}/${encodeURIComponent(ip)}/general`;
+      const { status, body } = await fetchJson(u, { 'X-OTX-API-KEY': key });
       if (status === 401 || status === 403) {
-        return { provider: 'greynoise', label: 'GreyNoise', ok: false, error: 'Invalid API key' };
-      }
-      // 404 from the community endpoint = "IP not observed", a valid benign answer.
-      if (status === 404) {
-        return {
-          provider: 'greynoise',
-          label: 'GreyNoise',
-          ok: true,
-          classification: 'unknown',
-          summary: body?.message || 'Not observed by GreyNoise',
-          link: `https://viz.greynoise.io/ip/${encodeURIComponent(ip)}`,
-          details: { noise: false, riot: false },
-        };
+        return { provider: 'otx', label: 'AlienVault OTX', ok: false, error: 'Invalid API key' };
       }
       if (status < 200 || status >= 300 || !body) {
-        return { provider: 'greynoise', label: 'GreyNoise', ok: false, error: body?.message || `HTTP ${status}` };
+        return { provider: 'otx', label: 'AlienVault OTX', ok: false, error: body?.error || body?.detail || `HTTP ${status}` };
       }
+      // OTX's free "general" endpoint has no 0-100 score; the actionable signal is
+      // how many community "pulses" (threat reports) reference the IP. A non-empty
+      // `validation` marks known-good infrastructure (whitelisted).
+      const pulseCount = Number(body?.pulse_info?.count) || 0;
+      const whitelisted = Array.isArray(body?.validation) && body.validation.length > 0;
+      const latestPulse = body?.pulse_info?.pulses?.[0]?.name;
+      const classification = whitelisted
+        ? 'benign'
+        : pulseCount >= 5 ? 'malicious' : pulseCount >= 1 ? 'suspicious' : 'benign';
       return {
-        provider: 'greynoise',
-        label: 'GreyNoise',
+        provider: 'otx',
+        label: 'AlienVault OTX',
         ok: true,
-        classification: body.classification || 'unknown',
-        summary: `${body.classification || 'unknown'}${body.name && body.name !== 'unknown' ? ` · ${body.name}` : ''}${body.noise ? ' · internet noise' : ''}`,
-        link: body.link || `https://viz.greynoise.io/ip/${encodeURIComponent(ip)}`,
-        details: { noise: body.noise, riot: body.riot, name: body.name, lastSeen: body.last_seen },
+        score: whitelisted ? 0 : Math.min(100, pulseCount * 20),
+        classification,
+        summary: pulseCount > 0
+          ? `In ${pulseCount} OTX pulse${pulseCount === 1 ? '' : 's'}${latestPulse ? ` · ${latestPulse}` : ''}`
+          : whitelisted ? 'Whitelisted in OTX' : 'Not referenced in OTX pulses',
+        link: `https://otx.alienvault.com/indicator/ip/${encodeURIComponent(ip)}`,
+        details: {
+          pulseCount,
+          country: body?.country_name,
+          asn: body?.asn,
+          city: body?.city,
+          validation: body?.validation,
+          latestPulse,
+        },
       };
     },
   },

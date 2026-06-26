@@ -46,11 +46,12 @@
           </template>
         </el-table-column>
         <el-table-column prop="description" label="Description" min-width="300" show-overflow-tooltip />
-        <el-table-column label="Actions" width="330" fixed="right">
+        <el-table-column label="Actions" width="420" fixed="right">
           <template #default="{ row }">
             <el-button size="small" @click="testParser(row)">Test</el-button>
             <el-button size="small" @click="editParser(row)">Edit</el-button>
             <el-button size="small" @click="exportParser(row)">Export</el-button>
+            <el-button size="small" @click="contributeParser(row)">Contribute</el-button>
             <el-button type="danger" size="small" @click="deleteParser(row)">Delete</el-button>
           </template>
         </el-table-column>
@@ -405,6 +406,54 @@
         </el-button>
         <el-button type="primary" :disabled="!aiResult || !aiResult.ok" :loading="aiSaving" @click="saveAiParser(false)">
           Save Parser
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Contribute to the community catalog (browser hand-off — no token needed) -->
+    <el-dialog v-model="contributeDialogVisible" title="Contribute to the community catalog" width="640px">
+      <div v-loading="contributeLoading" style="min-height: 60px">
+        <template v-if="contributeData">
+          <el-alert
+            v-if="contributeData.ready"
+            type="success" :closable="false" show-icon
+            title="Validated + self-tests passed — ready to propose."
+            style="margin-bottom: 12px"
+          />
+          <el-alert
+            v-else
+            type="error" :closable="false" show-icon
+            title="Not ready — fix the issues below, then try again."
+            style="margin-bottom: 12px"
+          />
+
+          <p style="margin: 0 0 10px; color: var(--el-text-color-secondary); font-size: 13px">
+            This opens GitHub's pre-filled <strong>“propose new file”</strong> page for
+            <code>{{ contributeData.path }}</code>. You finish the fork + pull request in your browser,
+            signed in as you — SIEMBox never touches your GitHub credentials. A maintainer reviews it and
+            the catalog's CI re-runs these same checks before it can merge.
+          </p>
+
+          <div v-if="contributeData.self_test" style="margin: 6px 0">
+            Self-tests:
+            <el-tag :type="contributeData.self_test.ok ? 'success' : 'danger'" size="small">
+              {{ contributeData.self_test.passed }}/{{ contributeData.self_test.total }} passed
+            </el-tag>
+          </div>
+
+          <ul v-if="contributeData.errors && contributeData.errors.length" class="contrib-issues error">
+            <li v-for="(e, i) in contributeData.errors" :key="'e' + i">{{ e }}</li>
+          </ul>
+          <ul v-if="contributeData.warnings && contributeData.warnings.length" class="contrib-issues warn">
+            <li v-for="(w, i) in contributeData.warnings" :key="'w' + i">{{ w }}</li>
+          </ul>
+        </template>
+      </div>
+      <template #footer>
+        <el-button @click="contributeDialogVisible = false">Close</el-button>
+        <el-button v-if="contributeData" @click="copyContributeContent">Copy JSON</el-button>
+        <el-button type="primary" :disabled="!contributeData || !contributeData.ready" @click="openContributeUrl">
+          Open GitHub PR
         </el-button>
       </template>
     </el-dialog>
@@ -768,6 +817,42 @@ async function exportParser(parser: any) {
   }
 }
 
+// --- Contribute to the community catalog (browser hand-off; no token needed) ---
+const contributeDialogVisible = ref(false);
+const contributeLoading = ref(false);
+const contributeData = ref<any>(null);
+
+async function contributeParser(parser: any) {
+  contributeData.value = null;
+  contributeLoading.value = true;
+  contributeDialogVisible.value = true;
+  try {
+    const { data } = await api.getParserContribution(parser.id);
+    contributeData.value = data;
+  } catch (error) {
+    ElMessage.error('Failed to prepare contribution');
+    contributeDialogVisible.value = false;
+  } finally {
+    contributeLoading.value = false;
+  }
+}
+
+function openContributeUrl() {
+  if (contributeData.value?.contribute_url) {
+    window.open(contributeData.value.contribute_url, '_blank', 'noopener');
+  }
+}
+
+async function copyContributeContent() {
+  if (!contributeData.value?.content) return;
+  try {
+    await navigator.clipboard.writeText(contributeData.value.content);
+    ElMessage.success('Copied parser JSON — you can paste it into GitHub manually');
+  } catch {
+    ElMessage.warning('Copy failed');
+  }
+}
+
 function triggerImport() {
   importFileInput.value?.click();
 }
@@ -987,4 +1072,11 @@ pre {
   overflow-x: auto;
   font-size: 12px;
 }
+.contrib-issues {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+.contrib-issues.error { color: var(--el-color-danger); }
+.contrib-issues.warn { color: var(--el-color-warning); }
 </style>

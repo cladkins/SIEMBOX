@@ -70,6 +70,19 @@ export function getCatalogSource(): CatalogSource {
   };
 }
 
+/**
+ * Build a GitHub "create new file" URL that opens the pre-filled propose-a-file
+ * flow for a catalog contribution. No token/App needed: the user finishes the
+ * fork + commit + PR in their own browser session, so the PR is attributed to
+ * them and SIEMBox never handles a credential. `filePath` is relative to the repo
+ * root (e.g. `parsers/foo.parser.json`).
+ */
+export function catalogNewFileUrl(filePath: string, content: string): string {
+  const { repo, ref } = catalogRepoRef();
+  const params = new URLSearchParams({ filename: filePath, value: content });
+  return `https://github.com/${repo}/new/${encodeURIComponent(ref)}?${params.toString()}`;
+}
+
 /** Deterministic JSON: object keys sorted recursively, array order preserved. */
 export function stableStringify(v: any): string {
   if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';

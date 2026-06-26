@@ -445,9 +445,10 @@ export class TemplateService {
    */
   static async getTemplatesBySeverity(severity: string, limit: number = 100): Promise<TemplateInfo[]> {
     const templates = await this.getAllTemplates();
+    const target = severity.toLowerCase();
 
     return templates
-      .filter(t => t.severity === severity)
+      .filter(t => t.severity.toLowerCase() === target)
       .slice(0, limit);
   }
 

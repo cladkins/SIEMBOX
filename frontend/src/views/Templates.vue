@@ -439,14 +439,10 @@ async function handleSeverityChange() {
 
   loading.value = true;
   try {
-    // Use search with severity filter
-    const response = await api.get('/vulnerabilities/templates/search', {
-      params: { q: selectedSeverity.value, limit: 500 }
+    const response = await api.get(`/vulnerabilities/templates/severity/${selectedSeverity.value}`, {
+      params: { limit: 500 }
     });
-    // Filter by severity since API search is text-based
-    templates.value = (response.data.templates || []).filter(
-      (t: TemplateInfo) => t.severity.toLowerCase() === selectedSeverity.value.toLowerCase()
-    );
+    templates.value = response.data.templates || [];
     currentPage.value = 1;
   } catch (error: any) {
     ElMessage.error('Failed to load templates by severity');

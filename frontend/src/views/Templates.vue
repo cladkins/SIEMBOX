@@ -85,7 +85,7 @@
           <el-card
             shadow="hover"
             class="category-card"
-            @click="selectedCategory = cat.id"
+            @click="selectCategory(cat.id)"
           >
             <div class="category-icon">
               <el-icon :size="32"><Folder /></el-icon>
@@ -125,7 +125,10 @@
             <span v-if="selectedSeverity"> with {{ selectedSeverity }} severity</span>
             <span v-if="searchQuery"> matching "{{ searchQuery }}"</span>
           </span>
-          <el-button text @click="clearFilters">Clear Filters</el-button>
+          <el-button @click="clearFilters">
+            <el-icon><ArrowLeft /></el-icon>
+            Back to categories
+          </el-button>
         </div>
       </template>
 
@@ -278,7 +281,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Search, Refresh, Folder, Document } from '@element-plus/icons-vue';
+import { Search, Refresh, Folder, Document, ArrowLeft } from '@element-plus/icons-vue';
 import api from '@/services/api';
 
 interface TemplateInfo {
@@ -396,6 +399,16 @@ async function searchTemplates() {
   } finally {
     loading.value = false;
   }
+}
+
+// Clicking a category card sets the ref directly, which does NOT fire the
+// el-select @change — so trigger the fetch explicitly (otherwise the table opens
+// empty). Clearing the other filters keeps it a single, clean category view.
+function selectCategory(id: string) {
+  searchQuery.value = '';
+  selectedSeverity.value = '';
+  selectedCategory.value = id;
+  handleCategoryChange();
 }
 
 async function handleCategoryChange() {

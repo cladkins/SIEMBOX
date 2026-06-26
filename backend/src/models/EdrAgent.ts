@@ -13,6 +13,15 @@ import { query } from '../config/database';
 /** An agent is considered offline if it hasn't been seen within this window. */
 export const OFFLINE_THRESHOLD_MINUTES = 5;
 
+/**
+ * Agent cadence (seconds) — server-pushed in AgentConfig and the single source of
+ * truth for the schedule. Used both to build the config and to derive "next scan".
+ */
+export const HEARTBEAT_INTERVAL_SECONDS = 60;
+export const CONFIG_POLL_INTERVAL_SECONDS = 300;
+export const INVENTORY_INTERVAL_SECONDS = 3600;
+export const VULN_SCAN_INTERVAL_SECONDS = 86400;
+
 /** sha256 hex of a secret — used for both api keys and enrollment tokens. */
 export function sha256hex(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -36,6 +45,8 @@ export interface EdrAgent {
   status: string;
   config_version: number;
   last_seen: Date | null;
+  last_scan_started_at: Date | null;
+  last_scan_completed_at: Date | null;
   created_at: Date;
 }
 
@@ -89,6 +100,17 @@ export class EdrAgentModel {
       [agentId, 'online']);
   }
 
+  /** Record the agent-reported vuln scan window (either bound may be null). */
+  static async recordScan(agentId: string, startedAt: Date | null, completedAt: Date | null): Promise<void> {
+    await query(
+      `UPDATE edr_agents
+          SET last_scan_started_at   = COALESCE($2, last_scan_started_at),
+              last_scan_completed_at = COALESCE($3, last_scan_completed_at)
+        WHERE agent_id = $1`,
+      [agentId, startedAt, completedAt]
+    );
+  }
+
   /** List agents with live status + open-vuln / recent-detection counts for the UI. */
   static async listWithStats(): Promise<any[]> {
     const result = await query(
@@ -103,7 +125,9 @@ export class EdrAgentModel {
                     WHERE al.asset_id = a.asset_id AND al.source = 'edr'
                       AND al.created_at > NOW() - INTERVAL '7 days'), 0) AS recent_detections,
          (SELECT MAX(av.last_detected) FROM asset_vulnerabilities av
-            WHERE av.asset_id = a.asset_id) AS last_scan_at
+            WHERE av.asset_id = a.asset_id) AS last_scan_at,
+         a.last_scan_completed_at + INTERVAL '${VULN_SCAN_INTERVAL_SECONDS} seconds' AS next_scan_at,
+         ${VULN_SCAN_INTERVAL_SECONDS} AS vuln_scan_interval_seconds
        FROM edr_agents a
        ORDER BY a.last_seen DESC NULLS LAST, a.created_at DESC`
     );

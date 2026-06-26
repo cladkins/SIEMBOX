@@ -44,7 +44,8 @@ install instructions.
 
 - **Enrollment tokens:** single-use (`used_at` stamped atomically on enroll) with optional `expires_at`.
 - **Auth:** sha256 hash of the agent key, constant-time compared; the `:id` path param must match the authenticated agent.
-- **Vuln reconciliation:** idempotent upsert keyed by `(asset, CVE)`; `last_detected` refreshed each scan (no destructive replace).
+- **Vuln reconciliation:** idempotent upsert keyed by `(asset, CVE)`; `last_detected` refreshed each scan (no destructive replace). Ingest logs `received/unique/duplicate_id/skipped_no_id` so grype's per-package count reconciles with the host's unique-CVE count.
+- **Scan timing:** the agent reports no forward schedule — it runs on the server-set cadence in `AgentConfig` (heartbeat 60s, config 5m, inventory 1h, **vuln scan daily**) and only reports `scan_started_at`/`scan_completed_at` after a scan. Those are stored on the agent row; the Endpoints UI shows the real last scan + duration and derives **next scan ≈ last completed + `vuln_scan_interval_seconds`**.
 - **Detections:** `type='detection'` → alerts; `telemetry` events are ignored for now.
 - **Offline:** an agent reads as offline when `last_seen` is older than 5 minutes.
 - **Rate limiting:** authenticated agent traffic (`X-Agent-ID` present) is exempt from the global IP limiter so a fleet behind one NAT IP isn't throttled.

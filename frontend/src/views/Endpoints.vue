@@ -51,8 +51,14 @@
         <el-table-column label="Last seen" width="170">
           <template #default="{ row }">{{ row.last_seen ? formatDate(row.last_seen) : 'never' }}</template>
         </el-table-column>
-        <el-table-column label="Last scan" width="170">
-          <template #default="{ row }">{{ row.last_scan_at ? formatDate(row.last_scan_at) : '—' }}</template>
+        <el-table-column label="Last scan" width="190">
+          <template #default="{ row }">
+            <template v-if="row.last_scan_completed_at || row.last_scan_at">
+              {{ formatDate(row.last_scan_completed_at || row.last_scan_at) }}
+              <div class="muted" v-if="row.next_scan_at">next ≈ {{ formatDate(row.next_scan_at) }}</div>
+            </template>
+            <span v-else>—</span>
+          </template>
         </el-table-column>
         <el-table-column label="" width="150" align="right">
           <template #default="{ row }">
@@ -165,6 +171,15 @@
           <el-descriptions-item label="Arch">{{ detail.agent.arch || '—' }}</el-descriptions-item>
           <el-descriptions-item label="Agent version">{{ detail.agent.agent_version || '—' }}</el-descriptions-item>
           <el-descriptions-item label="Last seen">{{ detail.agent.last_seen ? formatDate(detail.agent.last_seen) : 'never' }}</el-descriptions-item>
+          <el-descriptions-item label="Last scan">
+            <template v-if="detail.agent.last_scan_completed_at || detail.agent.last_scan_at">
+              {{ formatDate(detail.agent.last_scan_completed_at || detail.agent.last_scan_at) }}
+              <span class="muted" v-if="scanDuration(detail.agent)"> ({{ scanDuration(detail.agent) }})</span>
+            </template>
+            <template v-else>never</template>
+          </el-descriptions-item>
+          <el-descriptions-item label="Next scan ≈">{{ detail.agent.next_scan_at ? formatDate(detail.agent.next_scan_at) : '—' }}</el-descriptions-item>
+          <el-descriptions-item label="Scan interval">{{ humanInterval(detail.agent.vuln_scan_interval_seconds) }}</el-descriptions-item>
         </el-descriptions>
 
         <el-tabs v-model="detailTab">
@@ -345,6 +360,21 @@ async function removeEndpoint(agent: any) {
 }
 
 function formatDate(d: string) { return format(new Date(d), 'MMM dd, yyyy HH:mm'); }
+function scanDuration(a: any): string {
+  if (!a?.last_scan_started_at || !a?.last_scan_completed_at) return '';
+  const ms = new Date(a.last_scan_completed_at).getTime() - new Date(a.last_scan_started_at).getTime();
+  if (!(ms > 0)) return '';
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `took ${s}s` : `took ${Math.floor(s / 60)}m ${s % 60}s`;
+}
+function humanInterval(sec?: number): string {
+  if (!sec) return '—';
+  if (sec === 86400) return 'daily';
+  if (sec === 3600) return 'hourly';
+  if (sec % 86400 === 0) return `every ${sec / 86400}d`;
+  if (sec % 3600 === 0) return `every ${sec / 3600}h`;
+  return `every ${Math.round(sec / 60)}m`;
+}
 function humanBytes(n: number): string {
   if (!n) return '0 B';
   const u = ['B', 'KB', 'MB', 'GB'];

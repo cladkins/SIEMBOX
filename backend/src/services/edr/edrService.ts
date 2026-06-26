@@ -27,8 +27,19 @@ import {
   EdrEnrollmentTokenModel,
   sha256hex,
   generateSecret,
+  HEARTBEAT_INTERVAL_SECONDS,
+  CONFIG_POLL_INTERVAL_SECONDS,
+  INVENTORY_INTERVAL_SECONDS,
+  VULN_SCAN_INTERVAL_SECONDS,
 } from '../../models/EdrAgent';
 import { getCurrentYaraVersion } from './yaraService';
+
+/** Parse an RFC3339/ISO timestamp, or null if missing/invalid. */
+function parseTimestamp(value: unknown): Date | null {
+  if (!value) return null;
+  const d = new Date(String(value));
+  return isNaN(d.getTime()) ? null : d;
+}
 
 /**
  * Desired agent behaviour.
@@ -46,10 +57,10 @@ export function buildAgentConfig(baseConfigVersion: number, yaraRulesVersion = 0
   return {
     config_version: baseConfigVersion + yaraRulesVersion,
     yara_rules_version: yaraRulesVersion,
-    heartbeat_interval_seconds: 60,
-    config_poll_interval_seconds: 300,
-    inventory_interval_seconds: 3600,
-    vuln_scan_interval_seconds: 86400,
+    heartbeat_interval_seconds: HEARTBEAT_INTERVAL_SECONDS,
+    config_poll_interval_seconds: CONFIG_POLL_INTERVAL_SECONDS,
+    inventory_interval_seconds: INVENTORY_INTERVAL_SECONDS,
+    vuln_scan_interval_seconds: VULN_SCAN_INTERVAL_SECONDS,
     enabled_modules: ['inventory', 'vuln', 'detect'],
     rule_set_version: 1,
     // Server-pushed Sigma rules. Empty for now; wire to /api/rules (endpoint/Sigma) later.
@@ -186,6 +197,13 @@ export async function ingestInventory(agentId: string, inventory: any): Promise<
 export async function ingestVulnerabilities(agentId: string, payload: any): Promise<number> {
   const agent = await EdrAgentModel.findById(agentId);
   await EdrAgentModel.touch(agentId);
+
+  // Record the agent-reported scan window (independent of whether findings attach
+  // to an asset) so the UI can show the real last scan + derive the next one.
+  const startedAt = parseTimestamp(payload?.scan_started_at);
+  const completedAt = parseTimestamp(payload?.scan_completed_at);
+  if (startedAt || completedAt) await EdrAgentModel.recordScan(agentId, startedAt, completedAt);
+
   if (!agent?.asset_id) return 0; // no asset to attach findings to yet
 
   const items = Array.isArray(payload?.vulnerabilities) ? payload.vulnerabilities : [];

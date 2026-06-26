@@ -3,7 +3,8 @@ import { DetectionRuleModel } from '../models/DetectionRule';
 import yaml from 'js-yaml';
 import { ApiError } from '../middleware/errorHandler';
 import { RulesEngine } from '../services/rules/rulesEngine';
-import { validateRule } from '../services/rules/rulePortable';
+import { validateRule, toPortableRule, portableRuleToYaml } from '../services/rules/rulePortable';
+import { catalogNewFileUrl } from '../services/parser/catalogService';
 import {
   fetchDetectionCatalog,
   getCatalogDetection,
@@ -216,6 +217,42 @@ router.get('/:id', async (req: Request, res: Response) => {
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch rule');
+  }
+});
+
+// Prepare a community-catalog contribution for a saved detection: rebuild its
+// portable YAML -> validate, and (only if clean) build a no-auth GitHub "propose
+// new file" URL the user finishes in their own browser. SIEMBox never opens the
+// PR or holds a credential; the catalog's CI + maintainer review are the gate.
+router.get('/:id/contribute', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const rule = await DetectionRuleModel.findById(id);
+    if (!rule) throw new ApiError(404, 'Rule not found');
+
+    const portable = toPortableRule(rule);
+    const validation = validateRule(portable, { strict: true });
+    const ready = validation.ok;
+
+    const slug = String(rule.name || `rule-${id}`).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || `rule-${id}`;
+    const filePath = `${getDetectionSource().path}/${slug}.yaml`;
+    const content = portableRuleToYaml(rule);
+
+    res.json({
+      kind: 'detection',
+      name: rule.name,
+      path: filePath,
+      content,
+      valid: validation.ok,
+      errors: validation.errors,
+      warnings: validation.warnings,
+      self_test: null, // detections have no self-tests (parsers do)
+      ready,
+      contribute_url: ready ? catalogNewFileUrl(filePath, content) : null,
+    });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to prepare contribution');
   }
 });
 

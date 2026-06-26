@@ -120,6 +120,7 @@ export const api = {
   // Detection Rules
   getRules: () => apiClient.get('/rules'),
   getRule: (id: number) => apiClient.get(`/rules/${id}`),
+  getRuleContribution: (id: number) => apiClient.get(`/rules/${id}/contribute`),
   createRule: (data: any) => apiClient.post('/rules', data),
   updateRule: (id: number, data: any) => apiClient.put(`/rules/${id}`, data),
   deleteRule: (id: number) => apiClient.delete(`/rules/${id}`),

@@ -4,6 +4,7 @@
  * under rules/); this validates its structure against what the rules engine
  * actually supports, so a rule that passes CI imports and evaluates cleanly.
  */
+import yaml from 'js-yaml';
 
 /** Condition operators the rules engine implements (see rulesEngine.ts). */
 export const RULE_OPERATORS = [
@@ -132,4 +133,30 @@ export function validateRule(obj: unknown, opts: { strict?: boolean } = {}): Rul
   }
 
   return { ok: errors.length === 0, errors, warnings };
+}
+
+/**
+ * Build a portable rule from a stored detection rule (DB row). Pulls the
+ * engine-canonical fields out of `rule_logic` so the result round-trips through
+ * the validator and the rules engine identically (and drops operator-tunable
+ * `enabled`, which isn't part of a shareable rule).
+ */
+export function toPortableRule(rule: any): PortableRule {
+  const rl = (rule && rule.rule_logic) || {};
+  const portable: PortableRule = {
+    name: rule?.name,
+    severity: rule?.severity,
+    conditions: rl.conditions ?? rule?.conditions ?? [],
+    alert: rl.alert ?? rule?.alert ?? { title: '', description: '' },
+  };
+  if (rule?.description) portable.description = rule.description;
+  if (Array.isArray(rule?.tags) && rule.tags.length) portable.tags = rule.tags;
+  const agg = rl.aggregation ?? rule?.aggregation;
+  if (agg) portable.aggregation = agg;
+  return portable;
+}
+
+/** Serialize a stored rule to the catalog's portable YAML. */
+export function portableRuleToYaml(rule: any): string {
+  return yaml.dump(toPortableRule(rule), { lineWidth: 100, noRefs: true, sortKeys: false });
 }

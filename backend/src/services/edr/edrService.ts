@@ -189,16 +189,24 @@ export async function ingestVulnerabilities(agentId: string, payload: any): Prom
   if (!agent?.asset_id) return 0; // no asset to attach findings to yet
 
   const items = Array.isArray(payload?.vulnerabilities) ? payload.vulnerabilities : [];
+  // Track the breakdown so the agent's grype count (one row per package×match)
+  // can be reconciled with what we store (unique vuln-id per host). Logged below.
+  const seen = new Set<string>();
   let stored = 0;
+  let duplicate = 0;
+  let skippedNoId = 0;
   for (const v of items) {
-    const cve = (v?.cve ?? '').toString().trim();
-    if (!cve) continue;
+    // Primary field is `cve`; fall back to a generic advisory id (GHSA/ELSA/…)
+    // if the agent sends one, so non-CVE findings aren't silently dropped.
+    const ident = (v?.cve ?? v?.id ?? v?.vulnerability_id ?? '').toString().trim();
+    if (!ident) { skippedNoId++; continue; }
+    if (seen.has(ident)) duplicate++; else seen.add(ident);
     const severity = SEVERITY[(v?.severity ?? '').toString().toLowerCase()] ?? VulnerabilitySeverity.MEDIUM;
     try {
       const vuln = await VulnerabilityRepository.upsertVulnerability({
-        cve_id: cve.slice(0, 64),
+        cve_id: ident.slice(0, 64),
         severity,
-        title: v?.package ? `${cve} — ${v.package}` : cve,
+        title: v?.package ? `${ident} — ${v.package}` : ident,
         description: v?.description ?? null,
         cvss_score: typeof v?.cvss === 'number' ? v.cvss : null,
         metadata: {
@@ -221,9 +229,15 @@ export async function ingestVulnerabilities(agentId: string, payload: any): Prom
       });
       stored++;
     } catch (e) {
-      logger.warn('EDR vuln upsert failed', { agentId, cve, error: e instanceof Error ? e.message : String(e) });
+      logger.warn('EDR vuln upsert failed', { agentId, ident, error: e instanceof Error ? e.message : String(e) });
     }
   }
+  // received = grype's count; unique = what the host shows as "Open vulns".
+  // received - unique = duplicate_id (same id, multiple packages) + skipped_no_id.
+  logger.info(
+    `[EDR] vuln ingest agent=${agentId} received=${items.length} unique=${seen.size} ` +
+    `duplicate_id=${duplicate} skipped_no_id=${skippedNoId}`
+  );
   return stored;
 }
 

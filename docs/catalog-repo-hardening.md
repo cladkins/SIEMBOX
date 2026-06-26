@@ -157,22 +157,24 @@ gh api repos/cladkins/siembox-catalog/branches/main/protection \
 - **Explicit `permissions: contents: read`**: Even if the organization default is `write`, this job only needs to clone the repo. Declared read-only at the workflow level so every job inherits it.
 - **SHA-pinned actions**: Tags can be moved (the March 2025 tj-actions incident exfiltrated secrets this way). SHAs are immutable. Never change to a floating tag without Dependabot managing the update.
 - **`ACTIONS_STEP_DEBUG` / `ACTIONS_RUNNER_DEBUG` are never set**: Avoids leaking structured output.
-- **ReDoS note**: The validator runs community-submitted regex patterns (the `pattern` field in `*.parser.json`) through Node.js's V8 engine. Node has no built-in regex timeout. If a catastrophically backtracking pattern is submitted, the CI job will time out at the workflow level (`timeout-minutes: 15`). This is the current guard. A stronger guard is to add a ReDoS linter (e.g., `safe-regex` npm package or `vuln-regex-detector`) as a pre-check step — see the commented-out placeholder in the workflow below.
+- **Validator from the trusted repo, not the fork**: the code that judges a submission is checked out from `cladkins/siembox` (Section 3b); the fork supplies only the data files. A malicious PR cannot alter its own validation.
+- **ReDoS guard (active)**: community-submitted `pattern` regexes run through Node/V8, which has no per-regex timeout. The workflow runs an **active `safe-regex` pre-scan** that fails the PR on a catastrophically-backtracking pattern, with the 15-minute job timeout (`timeout-minutes: 15`) as a backstop.
 
-### 3b. Confirm the exact validator commands from the backend
+### 3b. How the validator is obtained (the catalog repo does NOT contain it)
 
-Before committing the workflow, confirm these two npm scripts exist in `backend/package.json` of the `cladkins/siembox-catalog` repo (or of the `cladkins/siembox` backend that is checked out). As of authoring they are:
+The validator — `backend/src/scripts/validate-parsers.ts` / `validate-detections.ts` plus the `services/parser` + `services/rules` engines — lives in the **main app repo `cladkins/siembox`**, not in the catalog repo. So the workflow below checks out **two** repositories:
+
+1. **`cladkins/siembox-catalog`** (the PR head) → supplies the submitted `parsers/` and `detections/` files. Fork-safe, read-only. Lands at `workspace/catalog`.
+2. **`cladkins/siembox`** (pinned to `main`; public, so no token needed) → supplies the validator. It comes from the **trusted** app repo, never the fork, so a malicious PR cannot tamper with the code that judges it. Lands at `workspace/siembox`.
+
+The validator builds once under `siembox/backend` and runs against `../../catalog/{parsers,detections}`. The npm scripts (in `cladkins/siembox`'s `backend/package.json`) are:
 
 ```
 "validate-parsers":   "node dist/scripts/validate-parsers.js"
 "validate-detections": "node dist/scripts/validate-detections.js"
 ```
 
-The validator accepts a directory argument:
-- `npm run validate-parsers -- ../catalog/parsers` — validates all `*.parser.json` files in that directory
-- `npm run validate-detections -- ../catalog/detections` — validates all `*.yaml` / `*.yml` files in that directory
-
-If `cladkins/siembox-catalog` is a standalone repo (separate from the main SIEMBox backend), the executing agent must confirm how the backend is brought in. The workflow below assumes the catalog repo contains a `backend/` directory (or a git submodule). **If the backend lives in a separate repository**, replace the `Checkout backend` step with a separate `actions/checkout` of the backend repo into a `./backend` path, or use a pre-built Docker image that ships the validator. Adjust the step marked `# --- ADJUST IF NEEDED` accordingly.
+Both take a directory argument and exit non-zero on any schema or self-test failure.
 
 ### 3c. Workflow file to create
 
@@ -205,13 +207,6 @@ on:
       - "parsers/**"
       - "detections/**"
       - "schema/**"
-      # Also re-validate if the validator script itself changes
-      - "backend/src/scripts/validate-parsers.ts"
-      - "backend/src/scripts/validate-detections.ts"
-      - "backend/src/services/parser/**"
-      - "backend/src/services/rules/**"
-      - "backend/package.json"
-      - "backend/package-lock.json"
 
 # Declare the minimum required permissions for this workflow.
 # Fork PRs receive a read-only token by default; this declaration makes the
@@ -226,89 +221,73 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      # -----------------------------------------------------------------------
-      # 1. Checkout the catalog repo (PR head, read-only — fork-safe)
-      # -----------------------------------------------------------------------
-      - name: Checkout catalog
-        # actions/checkout v4.2.2  SHA: 11bd71901bbe5b1630ceea73d27597364c9af683
+      # 1. The submitted files (PR head — fork-safe, read-only).
+      - name: Checkout catalog (PR)
+        # actions/checkout v4.2.2
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: catalog
 
-      # -----------------------------------------------------------------------
-      # 2. Set up Node.js
-      #    Pin to an LTS version matching the backend's target runtime.
-      # -----------------------------------------------------------------------
+      # 2. The validator, from the TRUSTED app repo — NOT the fork. The fork only
+      #    supplies data files; the code that judges them comes from cladkins/siembox,
+      #    so a malicious PR can't tamper with its own validation.
+      - name: Checkout SIEMBox validator
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: cladkins/siembox
+          ref: main
+          path: siembox
+
       - name: Set up Node.js
-        # actions/setup-node v4.1.0  SHA: 39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        # actions/setup-node v4.1.0
         uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: backend/package-lock.json
+          cache-dependency-path: siembox/backend/package-lock.json
 
-      # -----------------------------------------------------------------------
-      # 3. Install backend dependencies
-      #    `npm ci` is deterministic (uses package-lock.json exactly).
-      # -----------------------------------------------------------------------
-      - name: Install backend dependencies
-        working-directory: backend
+      - name: Install validator dependencies
+        working-directory: siembox/backend
         run: npm ci
 
-      # -----------------------------------------------------------------------
-      # 4. Build the TypeScript validator
-      #    The compiled scripts live at dist/scripts/validate-parsers.js and
-      #    dist/scripts/validate-detections.js — these are what npm run
-      #    validate-parsers / validate-detections invoke.
-      # -----------------------------------------------------------------------
       - name: Build validator
-        working-directory: backend
+        working-directory: siembox/backend
         run: npm run build
 
-      # -----------------------------------------------------------------------
-      # [OPTIONAL - future improvement] ReDoS pre-scan
-      # Uncomment to add a lightweight regex safety check before running
-      # community-submitted patterns through the full validator. This catches
-      # catastrophically backtracking patterns before they time out the runner.
-      #
-      # - name: Install safe-regex scanner
-      #   run: npm install -g safe-regex@1.1.0
-      #
-      # - name: ReDoS pre-scan (parsers)
-      #   run: |
-      #     grep -rh '"pattern"' parsers/ \
-      #       | grep -oP '(?<="pattern":\s*")[^"]+' \
-      #       | while read -r pat; do
-      #           safe-regex "$pat" || { echo "UNSAFE REGEX: $pat"; exit 1; }
-      #         done
-      # -----------------------------------------------------------------------
+      # ReDoS pre-scan: reject catastrophically-backtracking parser regexes BEFORE
+      # the validator runs them through V8 (which has no per-regex timeout).
+      - name: ReDoS pre-scan (parser regexes)
+        working-directory: catalog
+        run: |
+          npm install safe-regex@1.1.0 --no-save
+          node -e '
+            const fs = require("fs"), path = require("path"), safe = require("safe-regex");
+            const dir = "parsers";
+            if (!fs.existsSync(dir)) { console.log("no parsers/ dir; skipping"); process.exit(0); }
+            let bad = 0;
+            for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".parser.json"))) {
+              let p; try { p = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")); } catch { continue; }
+              if (typeof p.pattern === "string" && p.pattern && !safe(p.pattern)) {
+                console.error("UNSAFE regex (possible ReDoS) in " + f + ": " + p.pattern);
+                bad++;
+              }
+            }
+            if (bad) { console.error(bad + " potentially-catastrophic regex(es) — fix before merge."); process.exit(1); }
+            console.log("ReDoS pre-scan passed.");
+          '
 
-      # -----------------------------------------------------------------------
-      # 5. Validate parsers
-      #    Strict mode: schema validation + all self-tests must pass.
-      #    Exits non-zero on any failure; the workflow fails and the PR is blocked.
-      # -----------------------------------------------------------------------
+      # Validate parsers — strict: schema + every self-test must pass. The catalog
+      # dirs sit one level up from siembox/ (workspace/catalog, workspace/siembox).
       - name: Validate parsers
-        working-directory: backend
-        run: npm run validate-parsers -- ../parsers
-        # --- ADJUST IF NEEDED ------------------------------------------------
-        # If parsers/ is at a different relative path from backend/, change the
-        # argument above. E.g. if the repo layout is:
-        #   catalog/parsers/   and backend/ is at the repo root → ../catalog/parsers
-        # ---------------------------------------------------------------------
+        working-directory: siembox/backend
+        run: npm run validate-parsers -- ../../catalog/parsers
 
-      # -----------------------------------------------------------------------
-      # 6. Validate detections
-      #    Same validator pattern; exits non-zero on schema or content errors.
-      # -----------------------------------------------------------------------
+      # Validate detections — skips cleanly until the first detection is submitted.
       - name: Validate detections
-        working-directory: backend
-        run: npm run validate-detections -- ../detections
-        # --- ADJUST IF NEEDED ------------------------------------------------
-        # Change the path argument to match the actual detections/ directory
-        # relative to backend/ in cladkins/siembox-catalog.
-        # If the detections/ directory does not exist yet, add:
-        #   if: ${{ hashFiles('detections/**') != '' }}
-        # to skip the step until the first detection is submitted.
-        # ---------------------------------------------------------------------
+        if: ${{ hashFiles('catalog/detections/**') != '' }}
+        working-directory: siembox/backend
+        run: npm run validate-detections -- ../../catalog/detections
 ```
 
 ### 3d. Commit the workflow
@@ -916,20 +895,24 @@ All boolean values should be `true` (or `false` for the blocked ones — note th
 
 ---
 
-## 10. Decisions requiring human confirmation
+## 10. Decisions — confirmed by the owner
 
-The following items have tradeoffs that the human owner of `cladkins/siembox-catalog` must decide before the executing agent applies them.
+These were confirmed by the repo owner; the rest of this document already reflects them, so the executing agent needs no further input.
 
-| # | Decision | Default in this doc | Tradeoff |
-|---|----------|---------------------|----------|
-| 1 | **Squash-only merge** | Enabled | Simplifies history. Contributors lose their individual commit messages. Rebase merge is disabled. If you want to preserve contributor history, re-enable rebase merge (`--enable-rebase-merge=true`) and leave squash as the default. |
-| 2 | **Signed commits requirement** | Disabled (Section 7d) | Raises the contribution barrier significantly. Most community users do not have GPG/SSH commit signing configured. Recommended: defer until the contributor base is established. |
-| 3 | **`restrictions` (who can push)** | Empty arrays | The current config blocks ALL direct pushes, including org members. If you want a team to have direct-push access for emergency fixes, add their GitHub username or team slug to `restrictions.users` / `restrictions.teams` in the Section 2b JSON. |
-| 4 | **`enforce_admins: true`** | Enabled | Admins cannot bypass branch protection. This is the correct posture for a community-facing repo. If you need an emergency escape hatch, temporarily disable enforcement via `gh api --method DELETE /repos/cladkins/siembox-catalog/branches/main/protection/enforce_admins` (re-enable immediately after). |
-| 5 | **ReDoS linting in CI** | Commented-out placeholder | The 15-minute job timeout is the current guard. Adding `safe-regex` or `vuln-regex-detector` as a pre-check step provides a faster, more informative failure. Requires a decision on which scanner to use and whether to block or warn. |
-| 6 | **`detections/` directory** | Assumed to exist | If `detections/` does not yet exist in `cladkins/siembox-catalog`, add `if: ${{ hashFiles('detections/**') != '' }}` to the "Validate detections" step in the workflow, or remove the step and add it when the first detection is submitted. |
-| 7 | **Backend location** | Assumed `backend/` in same repo | If the validator (TypeScript scripts in `backend/src/scripts/`) lives in a separate repository, the workflow must check out that repo too. The executing agent must verify the exact repo layout of `cladkins/siembox-catalog` before committing the workflow. |
-| 8 | **Additional maintainers in CODEOWNERS** | Only `@cladkins` | Single-maintainer CODEOWNERS creates a bottleneck. Consider adding one or two trusted contributors so PRs are not stalled if the primary maintainer is unavailable. |
+| # | Decision | Confirmed setting |
+|---|----------|-------------------|
+| 1 | Merge method | **Squash-only** (merge + rebase disabled) — Section 7a |
+| 2 | Signed commits | **Disabled** — Section 7d (defer; high contributor friction) |
+| 3 | Direct-push allowlist | **Empty** — nobody pushes `main` directly; everything via PR |
+| 4 | `enforce_admins` | **Enabled** — protection applies to the owner too (no admin bypass) |
+| 5 | ReDoS check | **Active `safe-regex` pre-scan** in CI (Section 3c), backed by the 15-min timeout |
+| 6 | `detections/` directory | Handled by the `if: hashFiles(...)` guard — the step skips until the first detection exists |
+| 7 | Validator location | **Resolved** — CI checks out `cladkins/siembox` for the validator (Sections 3b/3c); `backend/` is NOT in the catalog repo |
+| 8 | Additional CODEOWNERS maintainers | **`@cladkins` only** for now — add a backup reviewer later if PRs stall |
+
+> **Emergency escape hatch** (since `enforce_admins` is on): to land a hotfix, temporarily lift enforcement with
+> `gh api --method DELETE /repos/cladkins/siembox-catalog/branches/main/protection/enforce_admins`, push, then immediately
+> re-enable by re-running the Section 2b PUT.
 
 ---
 

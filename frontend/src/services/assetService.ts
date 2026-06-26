@@ -37,6 +37,77 @@ export interface AssetWithServices extends Asset {
   services: AssetService[];
 }
 
+// --- Asset-360: everything correlated to an asset --------------------------
+
+export interface RelatedAgent {
+  agent_id: string;
+  asset_id: number | null;
+  hostname: string | null;
+  os: string | null;
+  os_version: string | null;
+  arch: string | null;
+  agent_version: string | null;
+  ip: string | null;
+  status: string;
+  config_version: number;
+  last_seen: string | null;
+  created_at: string;
+  online: boolean;
+}
+
+export interface RelatedShipper {
+  id: number;
+  name: string;
+  status: string;
+  version: string | null;
+  last_seen: string | null;
+  ip_address: string | null;
+  hostname: string | null;
+}
+
+export interface GeoInfo {
+  country_code: string;
+  country_name: string;
+}
+
+export interface RelatedVulnerability {
+  id: number;
+  asset_id: number;
+  status: string;
+  risk_score: number | null;
+  first_detected: string;
+  last_detected: string;
+  vulnerability: {
+    id: number;
+    cve_id: string;
+    cvss_score: number | null;
+    severity: string;
+    title: string;
+    description?: string;
+  };
+}
+
+export interface RelatedAlert {
+  id: number;
+  rule_id: number | null;
+  severity: string;
+  title: string;
+  description: string | null;
+  status: string;
+  source: string | null;
+  event_id: string | null;
+  matched_data: any;
+  created_at: string;
+}
+
+export interface AssetRelated {
+  agent: RelatedAgent | null;
+  shipper: RelatedShipper | null;
+  geo: GeoInfo | null;
+  vulnerabilities: RelatedVulnerability[];
+  alerts: RelatedAlert[];
+}
+
 export interface AssetFilters {
   status?: string;
   criticality?: string;
@@ -73,6 +144,11 @@ class AssetServiceClient {
 
   async getAsset(id: number): Promise<AssetWithServices> {
     const response = await apiClient.get(`/assets/${id}`);
+    return response.data;
+  }
+
+  async getAssetRelated(id: number): Promise<AssetRelated> {
+    const response = await apiClient.get(`/assets/${id}/related`);
     return response.data;
   }
 

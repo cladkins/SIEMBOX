@@ -17,6 +17,7 @@ export enum AssetType {
   NETWORK = 'network',
   IOT = 'iot',
   MOBILE = 'mobile',
+  ENDPOINT = 'endpoint',
   UNKNOWN = 'unknown'
 }
 
@@ -47,6 +48,7 @@ export enum AssetStatus {
 export enum DiscoveryMethod {
   NMAP = 'nmap',
   LOG_CORRELATION = 'log_correlation',
+  EDR_AGENT = 'edr_agent',
   MANUAL = 'manual'
 }
 

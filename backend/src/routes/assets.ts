@@ -12,6 +12,10 @@ import { NmapScanner } from '../services/scanner/nmapScanner';
 import { AutoDiscoveryService } from '../services/assets/autoDiscoveryService';
 import { ScanRepository } from '../services/assets/scanRepository';
 import { AssetStatus, AssetCriticality, AssetType } from '../models/Asset';
+import { query } from '../config/database';
+import { VulnerabilityRepository } from '../services/vulnerabilities/vulnerabilityRepository';
+import { geoipService } from '../services/geoip/geoipService';
+import { OFFLINE_THRESHOLD_MINUTES } from '../models/EdrAgent';
 
 const router = express.Router();
 
@@ -205,6 +209,90 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
     console.error('Get asset error:', error);
     res.status(500).json({
       error: 'Failed to retrieve asset',
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/assets/:id/related
+ * Asset-360: everything correlated to this asset in one call —
+ *   - agent          the EDR endpoint agent reporting on this asset (if any)
+ *   - shipper        the log shipper matched by hostname/IP (if any)
+ *   - geo            GeoIP country for the asset's IP (null for private IPs)
+ *   - vulnerabilities the asset's open/closed findings (nested vuln shape)
+ *   - alerts         alerts linked by asset_id OR whose source_ip matches the IP
+ * No authentication required - read-only, consistent with the sibling GET /:id.
+ */
+router.get('/:id/related', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const assetId = parseInt(req.params.id);
+
+    if (isNaN(assetId)) {
+      res.status(400).json({ error: 'Invalid asset ID' });
+      return;
+    }
+
+    const asset = await AssetRepository.getById(assetId);
+    if (!asset) {
+      res.status(404).json({ error: 'Asset not found' });
+      return;
+    }
+
+    const ip = asset.ip_address ? String(asset.ip_address) : null;
+    const hostname = asset.hostname || null;
+
+    // Run the independent lookups concurrently.
+    const [agentResult, shipperResult, alertsResult, vulnerabilities] = await Promise.all([
+      // EDR agent reporting on this asset (never expose the api key hash).
+      query(
+        `SELECT agent_id, asset_id, hostname, os, os_version, arch, agent_version, ip,
+                status, config_version, last_seen, created_at,
+                (last_seen IS NOT NULL
+                   AND last_seen > NOW() - ($2::int * INTERVAL '1 minute'))
+                  AS online
+           FROM edr_agents
+          WHERE asset_id = $1
+          ORDER BY last_seen DESC NULLS LAST
+          LIMIT 1`,
+        [assetId, OFFLINE_THRESHOLD_MINUTES]
+      ),
+      // Log shipper matched by hostname or IP.
+      query(
+        `SELECT id, name, status, version, last_seen, ip_address, hostname
+           FROM log_shippers
+          WHERE ($1::text IS NOT NULL AND hostname = $1)
+             OR ($2::text IS NOT NULL AND ip_address = $2)
+          ORDER BY last_seen DESC NULLS LAST
+          LIMIT 1`,
+        [hostname, ip]
+      ),
+      // Alerts linked to the asset, or whose extracted source_ip matches the IP.
+      query(
+        `SELECT id, rule_id, severity, title, description, status, source, event_id,
+                matched_data, created_at
+           FROM alerts
+          WHERE asset_id = $1
+             OR ($2::text IS NOT NULL AND matched_data->>'source_ip' = $2)
+          ORDER BY created_at DESC
+          LIMIT 100`,
+        [assetId, ip]
+      ),
+      // Reuse the existing nested asset-vuln shape (vulnerability.* fields).
+      VulnerabilityRepository.getAssetVulnerabilities(assetId),
+    ]);
+
+    res.json({
+      agent: agentResult.rows[0] || null,
+      shipper: shipperResult.rows[0] || null,
+      geo: ip ? geoipService.lookup(ip) : null,
+      vulnerabilities,
+      alerts: alertsResult.rows,
+    });
+  } catch (error: any) {
+    console.error('Get related asset data error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve related asset data',
       message: error.message,
     });
   }

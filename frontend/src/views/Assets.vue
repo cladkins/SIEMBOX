@@ -193,12 +193,143 @@
           <el-descriptions-item label="Discovery Method">{{ selectedAsset.discovery_method }}</el-descriptions-item>
           <el-descriptions-item label="First Seen">{{ formatDate(selectedAsset.first_seen) }}</el-descriptions-item>
           <el-descriptions-item label="Last Seen">{{ formatDate(selectedAsset.last_seen) }}</el-descriptions-item>
+          <el-descriptions-item label="Location">
+            <template v-if="related?.geo">
+              {{ related.geo.country_name }} ({{ related.geo.country_code }})
+            </template>
+            <span v-else style="color: var(--el-text-color-secondary)">N/A</span>
+          </el-descriptions-item>
         </el-descriptions>
 
-        <!-- Services Tab -->
+        <!-- Linked entities: EDR agent, log shipper, exposure counts -->
+        <div class="related-summary" v-loading="loadingRelated">
+          <div class="related-card">
+            <div class="related-label">
+              <el-icon><Cpu /></el-icon> EDR Agent
+            </div>
+            <template v-if="related?.agent">
+              <el-tag :type="related.agent.online ? 'success' : 'info'" size="small">
+                {{ related.agent.online ? 'Online' : 'Offline' }}
+              </el-tag>
+              <div class="related-meta">
+                {{ related.agent.hostname || related.agent.agent_id.slice(0, 8) }}
+                <span v-if="related.agent.agent_version">· v{{ related.agent.agent_version }}</span>
+              </div>
+              <div class="related-meta" v-if="related.agent.last_seen">
+                Last seen {{ formatDate(related.agent.last_seen) }}
+              </div>
+            </template>
+            <div class="related-meta muted" v-else>No agent enrolled</div>
+          </div>
+
+          <div class="related-card">
+            <div class="related-label">
+              <el-icon><Connection /></el-icon> Log Shipper
+            </div>
+            <template v-if="related?.shipper">
+              <el-tag :type="related.shipper.status === 'online' ? 'success' : 'info'" size="small">
+                {{ related.shipper.status }}
+              </el-tag>
+              <div class="related-meta">
+                {{ related.shipper.name }}
+                <span v-if="related.shipper.version">· v{{ related.shipper.version }}</span>
+              </div>
+            </template>
+            <div class="related-meta muted" v-else>No shipper linked</div>
+          </div>
+
+          <div class="related-card">
+            <div class="related-label">
+              <el-icon><Warning /></el-icon> Exposure
+            </div>
+            <div class="related-counts">
+              <el-tag :type="openVulnCount > 0 ? 'danger' : 'success'" size="small" effect="plain">
+                {{ openVulnCount }} open vuln{{ openVulnCount === 1 ? '' : 's' }}
+              </el-tag>
+              <el-tag :type="(related?.alerts?.length || 0) > 0 ? 'warning' : 'info'" size="small" effect="plain">
+                {{ related?.alerts?.length || 0 }} alert{{ (related?.alerts?.length || 0) === 1 ? '' : 's' }}
+              </el-tag>
+            </div>
+          </div>
+        </div>
+
+        <!-- Detail tabs: vulns + alerts (correlation) then services + metadata -->
         <el-tabs v-model="activeTab" style="margin-top: 20px">
+          <el-tab-pane name="vulnerabilities">
+            <template #label>
+              Vulnerabilities
+              <el-badge
+                v-if="related && related.vulnerabilities.length"
+                :value="related.vulnerabilities.length"
+                type="danger"
+                class="tab-badge"
+              />
+            </template>
+            <el-table :data="related?.vulnerabilities || []" v-loading="loadingRelated" style="width: 100%" max-height="360">
+              <el-table-column label="Severity" width="110">
+                <template #default="{ row }">
+                  <el-tag :type="getSeverityColor(row.vulnerability?.severity)" size="small">
+                    {{ row.vulnerability?.severity || 'unknown' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="CVE" width="160">
+                <template #default="{ row }">{{ row.vulnerability?.cve_id || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="Title" min-width="220">
+                <template #default="{ row }">{{ row.vulnerability?.title || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="CVSS" width="90">
+                <template #default="{ row }">{{ row.vulnerability?.cvss_score ?? '-' }}</template>
+              </el-table-column>
+              <el-table-column label="Status" width="110">
+                <template #default="{ row }">
+                  <el-tag :type="row.status === 'open' ? 'danger' : 'success'" size="small">{{ row.status }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="Last Detected" width="180">
+                <template #default="{ row }">{{ row.last_detected ? formatDate(row.last_detected) : '-' }}</template>
+              </el-table-column>
+              <template #empty>No vulnerabilities recorded for this asset</template>
+            </el-table>
+          </el-tab-pane>
+
+          <el-tab-pane name="alerts">
+            <template #label>
+              Alerts
+              <el-badge
+                v-if="related && related.alerts.length"
+                :value="related.alerts.length"
+                type="warning"
+                class="tab-badge"
+              />
+            </template>
+            <el-table :data="related?.alerts || []" v-loading="loadingRelated" style="width: 100%" max-height="360">
+              <el-table-column label="Severity" width="110">
+                <template #default="{ row }">
+                  <el-tag :type="getSeverityColor(row.severity)" size="small">{{ row.severity }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="title" label="Title" min-width="240" show-overflow-tooltip />
+              <el-table-column label="Source" width="100">
+                <template #default="{ row }">
+                  <el-tag size="small" effect="plain">{{ row.source || 'rule' }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="Status" width="120">
+                <template #default="{ row }">
+                  <el-tag size="small" effect="plain">{{ row.status }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="Time" width="180">
+                <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
+              </el-table-column>
+              <template #empty>No alerts associated with this asset</template>
+            </el-table>
+          </el-tab-pane>
+
           <el-tab-pane label="Services" name="services">
-            <el-table :data="selectedAsset.services" style="width: 100%">
+            <el-table :data="selectedAsset.services" style="width: 100%" max-height="360">
               <el-table-column prop="port" label="Port" width="80" />
               <el-table-column prop="protocol" label="Protocol" width="100" />
               <el-table-column prop="service_name" label="Service" width="150" />
@@ -208,6 +339,7 @@
                   <el-tag :type="row.state === 'open' ? 'success' : 'info'">{{ row.state }}</el-tag>
                 </template>
               </el-table-column>
+              <template #empty>No open ports/services recorded</template>
             </el-table>
           </el-tab-pane>
           <el-tab-pane label="Metadata" name="metadata">
@@ -279,8 +411,8 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Search, Refresh } from '@element-plus/icons-vue';
-import assetService, { type Asset, type AssetWithServices } from '@/services/assetService';
+import { Search, Refresh, Cpu, Connection, Warning } from '@element-plus/icons-vue';
+import assetService, { type Asset, type AssetWithServices, type AssetRelated } from '@/services/assetService';
 import { useAuthStore } from '@/stores/auth';
 import { api } from '@/services/api';
 
@@ -303,7 +435,13 @@ const filters = ref({
 const showDetailsDialog = ref(false);
 const loadingDetails = ref(false);
 const selectedAsset = ref<AssetWithServices | null>(null);
-const activeTab = ref('services');
+const activeTab = ref('vulnerabilities');
+const related = ref<AssetRelated | null>(null);
+const loadingRelated = ref(false);
+
+const openVulnCount = computed(
+  () => related.value?.vulnerabilities.filter((v) => v.status === 'open').length || 0
+);
 
 const showScanDialog = ref(false);
 const scanLoading = ref(false);
@@ -410,14 +548,36 @@ async function loadAssets() {
 async function openAssetById(id: number) {
   showDetailsDialog.value = true;
   loadingDetails.value = true;
-  try {
-    selectedAsset.value = await assetService.getAsset(id);
-  } catch (error) {
-    ElMessage.error('Failed to load asset details');
-    console.error(error);
-  } finally {
-    loadingDetails.value = false;
-  }
+  loadingRelated.value = true;
+  activeTab.value = 'vulnerabilities';
+  related.value = null;
+
+  // Core asset + correlated entities load in parallel; a failure on one
+  // shouldn't blank the other.
+  assetService
+    .getAsset(id)
+    .then((asset) => {
+      selectedAsset.value = asset;
+    })
+    .catch((error) => {
+      ElMessage.error('Failed to load asset details');
+      console.error(error);
+    })
+    .finally(() => {
+      loadingDetails.value = false;
+    });
+
+  assetService
+    .getAssetRelated(id)
+    .then((data) => {
+      related.value = data;
+    })
+    .catch((error) => {
+      console.error('Failed to load related asset data', error);
+    })
+    .finally(() => {
+      loadingRelated.value = false;
+    });
 }
 
 function showAssetDetails(asset: Asset) {
@@ -491,6 +651,17 @@ function getStatusColor(status: string) {
     offline: 'danger'
   };
   return colors[status] || '';
+}
+
+function getSeverityColor(severity?: string) {
+  const colors: Record<string, string> = {
+    critical: 'danger',
+    high: 'warning',
+    medium: '',
+    low: 'info',
+    unknown: 'info'
+  };
+  return colors[(severity || '').toLowerCase()] || 'info';
 }
 
 function formatDate(date: string) {
@@ -581,5 +752,50 @@ onUnmounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 20px;
+}
+
+.related-summary {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.related-card {
+  flex: 1 1 180px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background-color: var(--siembox-bg-color);
+}
+
+.related-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 8px;
+  color: var(--el-text-color-primary);
+}
+
+.related-meta {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 4px;
+}
+
+.related-meta.muted {
+  font-style: italic;
+}
+
+.related-counts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tab-badge {
+  margin-left: 4px;
 }
 </style>

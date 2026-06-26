@@ -267,6 +267,20 @@ export const api = {
   getAdminJobs: (status?: string, limit?: number, offset?: number) =>
     apiClient.get('/admin/jobs', { params: { status, limit, offset } }),
 
+  // EDR Endpoints
+  getEndpoints: () => apiClient.get('/edr/agents'),
+  getEndpoint: (id: string) => apiClient.get(`/edr/agents/${id}`),
+  getEndpointVulnerabilities: (id: string) => apiClient.get(`/edr/agents/${id}/vulnerabilities`),
+  getEndpointDetections: (id: string, limit = 100) =>
+    apiClient.get(`/edr/agents/${id}/detections`, { params: { limit } }),
+  deleteEndpoint: (id: string) => apiClient.delete(`/edr/agents/${id}`),
+  getEnrollmentTokens: () => apiClient.get('/edr/tokens'),
+  createEnrollmentToken: (data: { label?: string; expires_in_hours?: number }) =>
+    apiClient.post('/edr/tokens', data),
+  revokeEnrollmentToken: (tokenHash: string) => apiClient.delete(`/edr/tokens/${tokenHash}`),
+  getYaraStatus: () => apiClient.get('/edr/yara'),
+  refreshYaraForge: () => apiClient.post('/edr/yara/refresh'),
+
   // Generic methods
   get: (url: string, config?: any) => apiClient.get(url, config),
   post: (url: string, data?: any) => apiClient.post(url, data),

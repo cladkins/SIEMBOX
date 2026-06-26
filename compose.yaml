@@ -48,6 +48,10 @@ services:
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-changeme}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      # EDR YARA rule packs (optional). Built-in starter bundle ships by default;
+      # set EDR_YARA_FORGE_ENABLED=true to auto-import YARA-Forge Extended daily.
+      EDR_YARA_FORGE_ENABLED: ${EDR_YARA_FORGE_ENABLED:-}
+      EDR_YARA_KEEP_VERSIONS: ${EDR_YARA_KEEP_VERSIONS:-}
     volumes:
       - ./rules:/app/rules:ro  # Mount rules directory as read-only
       - ./nuclei-templates:/root/nuclei-templates  # Nuclei vulnerability templates (bind mount for easy customization)

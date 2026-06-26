@@ -25,6 +25,7 @@ import aiRoutes from './routes/ai';
 import containersRoutes from './routes/containers';
 import threatIntelRoutes from './routes/threatIntel';
 import threatFeedsRoutes from './routes/threatFeeds';
+import edrRoutes from './routes/edr';
 
 const app: Application = express();
 
@@ -48,8 +49,13 @@ const limiter = rateLimit({
   max: 1000, // Limit each IP to 1000 requests per windowMs (generous for UI polling)
   message: 'Too many requests from this IP, please try again later.',
   skip: (req: Request) => {
-    // Skip rate limiting for authenticated admin users
-    return (req as any).user?.role === 'admin';
+    // Skip rate limiting for authenticated admin users.
+    if ((req as any).user?.role === 'admin') return true;
+    // EDR agents authenticate per-request and may be numerous behind one NAT IP;
+    // exempt authenticated agent traffic (enroll, which has no X-Agent-ID, stays limited).
+    const url = req.originalUrl || req.url || '';
+    if (url.startsWith('/api/edr/') && req.headers['x-agent-id']) return true;
+    return false;
   },
 });
 
@@ -107,6 +113,7 @@ app.use('/api/ai', authenticate, aiRoutes); // "Explain this" assistant (any aut
 app.use('/api/containers', authenticate, containersRoutes); // Trivy container image scanning
 app.use('/api/threat-intel', authenticate, threatIntelRoutes); // IP-centric geo/event/alert lookup
 app.use('/api/threat-feeds', authenticate, threatFeedsRoutes); // External threat feeds + IP reputation
+app.use('/api/edr', edrRoutes); // EDR endpoint agents (enroll + agent-auth ingest + admin UI)
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

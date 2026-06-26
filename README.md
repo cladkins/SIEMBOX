@@ -108,7 +108,9 @@ The shipper should show as **online** in the UI within ~30 seconds. Full setup, 
 
 ## Documentation
 
-📖 **[Complete Documentation Index](./docs/README.md)** - Full documentation navigation
+📚 **[GitHub Wiki](https://github.com/cladkins/SIEMBOX/wiki)** — friendly, navigable guides (Installation, Configuration, Parsers, Detections, Threat Intel, Scanning, API, FAQ). Pages are staged in [`wiki/`](./wiki); see [publishing](./docs/wiki-publishing.md).
+
+📖 **[Complete Documentation Index](./docs/README.md)** — full in-repo reference documentation
 
 ### Quick Links
 
@@ -183,10 +185,10 @@ MIT License - See LICENSE file for details
 - [x] AI-assisted parser & detection authoring (v2)
 - [x] Canonical normalization + GeoIP enrichment (v2)
 - [x] Email / Slack / NTFY alert notifications
-- [ ] Additional parser types (LEEF)
-- [ ] Threat intelligence integration
-- [ ] Advanced correlation rules
+- [x] Threat intelligence (IP drill-down, country map, blocklist feeds, BYO-key reputation)
 - [x] GeoIP dashboard map (alerts by country)
-- [x] Container vulnerability scanning (Trivy)
+- [x] Container vulnerability scanning (Trivy) + scheduled scans
 - [x] External threat-intelligence feeds (blocklists + BYO-key reputation)
+- [ ] Additional parser types (LEEF)
+- [ ] Advanced correlation rules
 - [ ] Multi-tenancy support

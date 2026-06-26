@@ -77,6 +77,10 @@
             <el-icon><Timer /></el-icon>
             <span>Scheduled Scans</span>
           </el-menu-item>
+          <el-menu-item index="/endpoints" v-if="authStore.user?.role === 'admin'">
+            <el-icon><Cpu /></el-icon>
+            <span>Endpoints (EDR)</span>
+          </el-menu-item>
           <el-menu-item index="/templates">
             <el-icon><Collection /></el-icon>
             <span>Templates</span>
@@ -153,7 +157,7 @@ import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim } from '@element-plus/icons-vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim, Cpu } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();

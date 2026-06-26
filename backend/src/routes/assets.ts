@@ -249,13 +249,13 @@ router.get('/:id/related', async (req: Request, res: Response): Promise<void> =>
         `SELECT agent_id, asset_id, hostname, os, os_version, arch, agent_version, ip,
                 status, config_version, last_seen, created_at,
                 (last_seen IS NOT NULL
-                   AND last_seen > NOW() - INTERVAL '${OFFLINE_THRESHOLD_MINUTES} minutes')
+                   AND last_seen > NOW() - ($2::int * INTERVAL '1 minute'))
                   AS online
            FROM edr_agents
           WHERE asset_id = $1
           ORDER BY last_seen DESC NULLS LAST
           LIMIT 1`,
-        [assetId]
+        [assetId, OFFLINE_THRESHOLD_MINUTES]
       ),
       // Log shipper matched by hostname or IP.
       query(

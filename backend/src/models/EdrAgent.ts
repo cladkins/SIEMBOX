@@ -113,11 +113,13 @@ export class EdrAgentModel {
 
   /** List agents with live status + open-vuln / recent-detection counts for the UI. */
   static async listWithStats(): Promise<any[]> {
+    // Interval bounds are passed as bound parameters (not string-interpolated) so
+    // the query is fully parameterized — no dynamic SQL construction.
     const result = await query(
       `SELECT
          a.*,
          CASE WHEN a.last_seen IS NOT NULL
-                   AND a.last_seen > NOW() - INTERVAL '${OFFLINE_THRESHOLD_MINUTES} minutes'
+                   AND a.last_seen > NOW() - ($1::int * INTERVAL '1 minute')
               THEN 'online' ELSE 'offline' END AS live_status,
          COALESCE((SELECT COUNT(*) FROM asset_vulnerabilities av
                     WHERE av.asset_id = a.asset_id AND av.status = 'open'), 0) AS open_vulns,
@@ -126,10 +128,11 @@ export class EdrAgentModel {
                       AND al.created_at > NOW() - INTERVAL '7 days'), 0) AS recent_detections,
          (SELECT MAX(av.last_detected) FROM asset_vulnerabilities av
             WHERE av.asset_id = a.asset_id) AS last_scan_at,
-         a.last_scan_completed_at + INTERVAL '${VULN_SCAN_INTERVAL_SECONDS} seconds' AS next_scan_at,
-         ${VULN_SCAN_INTERVAL_SECONDS} AS vuln_scan_interval_seconds
+         a.last_scan_completed_at + ($2::int * INTERVAL '1 second') AS next_scan_at,
+         $2::int AS vuln_scan_interval_seconds
        FROM edr_agents a
-       ORDER BY a.last_seen DESC NULLS LAST, a.created_at DESC`
+       ORDER BY a.last_seen DESC NULLS LAST, a.created_at DESC`,
+      [OFFLINE_THRESHOLD_MINUTES, VULN_SCAN_INTERVAL_SECONDS]
     );
     return result.rows;
   }

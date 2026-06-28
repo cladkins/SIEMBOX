@@ -140,6 +140,23 @@ export const api = {
   explainWithAI: (kind: string, data: any, question?: string) =>
     apiClient.post('/ai/explain', { kind, data, question }, { timeout: 240000 }),
 
+  // AI Security Analyst (conversational, read-only tool loop)
+  analystChat: (sessionId: number | null, message: string, context?: any) =>
+    apiClient.post(
+      '/ai/chat',
+      { session_id: sessionId ?? undefined, message, context },
+      { timeout: 240000 }
+    ),
+  getAnalystHealth: () => apiClient.get('/ai/chat/health'),
+  listChatSessions: () => apiClient.get('/ai/chat/sessions'),
+  getChatSession: (id: number) => apiClient.get(`/ai/chat/sessions/${id}`),
+  renameChatSession: (id: number, title: string) =>
+    apiClient.patch(`/ai/chat/sessions/${id}`, { title }),
+  deleteChatSession: (id: number) => apiClient.delete(`/ai/chat/sessions/${id}`),
+  // Separate analyst-model config (admin)
+  getChatAiSettings: () => apiClient.get('/settings/ai-chat'),
+  updateChatAiSettings: (data: any) => apiClient.put('/settings/ai-chat', data),
+
   // Alerts
   getAlerts: (params?: any) => apiClient.get('/alerts', { params }),
   getAlertStatistics: () => apiClient.get('/alerts/statistics'),

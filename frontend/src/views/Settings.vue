@@ -122,6 +122,63 @@
 
         <el-card style="margin-top: 20px">
           <template #header>
+            <span>AI Analyst (chat)</span>
+          </template>
+
+          <el-form :model="chatForm" label-width="200px" v-loading="chatLoading">
+            <el-form-item label="Provider">
+              <el-select v-model="chatForm.provider" style="width: 260px">
+                <el-option label="Inherit main AI config" value="" />
+                <el-option label="Anthropic (Claude)" value="anthropic" />
+                <el-option label="OpenAI" value="openai" />
+                <el-option label="Ollama (local)" value="ollama" />
+              </el-select>
+            </el-form-item>
+
+            <template v-if="chatForm.provider">
+              <el-form-item label="Model">
+                <el-input v-model="chatForm.model" style="width: 320px" :placeholder="chatModelPlaceholder" />
+              </el-form-item>
+
+              <el-form-item v-if="chatForm.provider !== 'anthropic'" label="Base URL">
+                <el-input
+                  v-model="chatForm.baseUrl"
+                  style="width: 320px"
+                  :placeholder="chatForm.provider === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com/v1'"
+                />
+              </el-form-item>
+
+              <el-form-item v-if="chatForm.provider !== 'ollama'" label="API Key">
+                <el-input
+                  v-model="chatForm.apiKey"
+                  type="password"
+                  show-password
+                  style="width: 320px"
+                  :placeholder="chatKeyPlaceholder"
+                />
+                <el-text size="small" :type="chatConfigured ? 'success' : 'warning'" style="margin-left: 10px">
+                  {{ chatKeyStatus }}
+                </el-text>
+              </el-form-item>
+            </template>
+
+            <el-form-item>
+              <el-button type="primary" @click="saveChatSettings" :loading="chatSaving">
+                <el-icon><Check /></el-icon> Save Analyst Settings
+              </el-button>
+            </el-form-item>
+            <el-text size="small" type="info">
+              Powers the conversational AI Analyst. Leave the provider on "Inherit main AI config" to reuse the
+              AI Builder model above, or choose a separate model (e.g. a larger one, or a local Ollama instruct
+              model like Qwen2.5 / Llama 3.1) just for the analyst — the tool loop works best with a strong
+              instruction-following model. Key stored encrypted at rest; leave blank to keep the existing one.
+              <span v-if="chatInheritsFrom === 'main'"> Currently inheriting the main AI config.</span>
+            </el-text>
+          </el-form>
+        </el-card>
+
+        <el-card style="margin-top: 20px">
+          <template #header>
             <span>Syslog Server Configuration</span>
           </template>
 
@@ -768,6 +825,72 @@ async function saveAiSettings() {
   }
 }
 
+// AI Analyst (chat) settings — a separate model config that may inherit the main one.
+const chatLoading = ref(false);
+const chatSaving = ref(false);
+const chatConfigured = ref(false);
+const chatKeySource = ref<'stored' | 'env' | 'none'>('none');
+const chatInheritsFrom = ref<'chat' | 'main'>('main');
+const chatForm = reactive({ provider: '', model: '', baseUrl: '', apiKey: '' });
+
+const chatModelPlaceholder = computed(() =>
+  ({ anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', ollama: 'llama3.1' } as Record<string, string>)[
+    chatForm.provider
+  ] || 'inherits main config'
+);
+const chatKeyPlaceholder = computed(() =>
+  chatKeySource.value === 'stored'
+    ? '•••••••• (saved — leave blank to keep)'
+    : chatKeySource.value === 'env'
+    ? 'set via environment variable'
+    : 'paste your API key'
+);
+const chatKeyStatus = computed(() =>
+  chatConfigured.value
+    ? chatKeySource.value === 'env'
+      ? 'Configured via environment variable'
+      : 'Key configured'
+    : 'No API key configured'
+);
+
+async function fetchChatSettings() {
+  chatLoading.value = true;
+  try {
+    const { data } = await api.getChatAiSettings();
+    chatInheritsFrom.value = data.inheritsFrom || 'main';
+    const own = data.inheritsFrom === 'chat';
+    chatForm.provider = own ? data.provider || '' : '';
+    chatForm.model = own ? data.model || '' : '';
+    chatForm.baseUrl = own ? data.baseUrl || '' : '';
+    chatForm.apiKey = '';
+    chatConfigured.value = !!data.configured;
+    chatKeySource.value = data.keySource || 'none';
+  } catch (error) {
+    // non-admins / not configured — leave defaults
+  } finally {
+    chatLoading.value = false;
+  }
+}
+
+async function saveChatSettings() {
+  chatSaving.value = true;
+  try {
+    const payload: any = { provider: chatForm.provider };
+    if (chatForm.provider) {
+      payload.model = chatForm.model;
+      payload.baseUrl = chatForm.baseUrl;
+      if (chatForm.apiKey) payload.apiKey = chatForm.apiKey; // only send when changing
+    }
+    await api.updateChatAiSettings(payload);
+    ElMessage.success('AI Analyst settings saved');
+    await fetchChatSettings();
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Failed to save analyst settings');
+  } finally {
+    chatSaving.value = false;
+  }
+}
+
 const syslogForm = reactive({
   syslog_host: '',
   syslog_port: 514,
@@ -831,6 +954,7 @@ const notificationSettingsForm = reactive({
 onMounted(() => {
   fetchRetentionSettings();
   fetchAiSettings();
+  fetchChatSettings();
   fetchSyslogSettings();
   fetchAutoDiscoverySettings();
   fetchStatistics();

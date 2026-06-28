@@ -118,10 +118,96 @@ export async function saveAiConfig(input: {
   }
 }
 
+// ---- Separate "AI Analyst" (chat) model config ------------------------------
+// The conversational analyst can use its own provider/model, independent of the
+// explain/generate config above. Resolution rule: if `ai_chat_provider` is unset,
+// the chat inherits the main config and individual fields (model/base_url/key) may
+// still be overridden; if it IS set to a DIFFERENT provider, a fresh config is
+// built for that provider (main's model/key are for the wrong provider).
+
+/** Full chat config incl. resolved key — server-side use only. */
+export async function getChatAiConfig(): Promise<AiConfig> {
+  const main = await getAiConfig();
+  const chatProvider = (await getSetting('ai_chat_provider')) as AiProvider | undefined;
+  const provider = (chatProvider as AiProvider) || main.provider;
+  const sameAsMain = provider === main.provider;
+
+  const model =
+    (await getSetting('ai_chat_model')) || (sameAsMain ? main.model : DEFAULT_MODELS[provider]) || '';
+  const baseUrl =
+    (await getSetting('ai_chat_base_url')) || (sameAsMain ? main.baseUrl : DEFAULT_BASE_URLS[provider]);
+
+  let apiKey: string | undefined;
+  const stored = await getSetting('ai_chat_api_key');
+  if (stored) {
+    try {
+      const { encrypted, iv, authTag } = JSON.parse(stored);
+      apiKey = CredentialEncryption.decrypt(encrypted, iv, authTag);
+    } catch (e) {
+      logger.warn('AI: stored ai_chat api key could not be decrypted; falling back', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  if (!apiKey) apiKey = sameAsMain ? main.apiKey : envKeyFor(provider);
+  return { provider, model, baseUrl, apiKey };
+}
+
+/** Chat config safe for the UI (no key); `inheritsFrom` tells if it uses main config. */
+export async function getChatAiPublicConfig(): Promise<{
+  provider: AiProvider;
+  model: string;
+  baseUrl?: string;
+  configured: boolean;
+  keySource: 'stored' | 'env' | 'none';
+  inheritsFrom: 'chat' | 'main';
+}> {
+  const hasChatProvider = !!(await getSetting('ai_chat_provider'));
+  const inheritsFrom: 'chat' | 'main' = hasChatProvider ? 'chat' : 'main';
+  const cfg = await getChatAiConfig();
+  let keySource: 'stored' | 'env' | 'none';
+  if (inheritsFrom === 'main') {
+    keySource = (await getAiPublicConfig()).keySource;
+  } else {
+    const hasStored = !!(await getSetting('ai_chat_api_key'));
+    keySource = hasStored ? 'stored' : cfg.apiKey ? 'env' : 'none';
+  }
+  return {
+    provider: cfg.provider,
+    model: cfg.model,
+    baseUrl: cfg.baseUrl,
+    configured: cfg.provider === 'ollama' ? true : !!cfg.apiKey,
+    keySource,
+    inheritsFrom,
+  };
+}
+
+/** Persist chat provider/model/base_url; encrypt+store the key. Empty provider reverts to inheriting main. */
+export async function saveChatAiConfig(input: {
+  provider?: AiProvider | '';
+  model?: string;
+  baseUrl?: string;
+  apiKey?: string | null;
+}): Promise<void> {
+  if (input.provider !== undefined) await setSetting('ai_chat_provider', input.provider || '');
+  if (input.model !== undefined) await setSetting('ai_chat_model', input.model);
+  if (input.baseUrl !== undefined) await setSetting('ai_chat_base_url', input.baseUrl);
+
+  if (input.apiKey === null || input.apiKey === '') {
+    await setSetting('ai_chat_api_key', '');
+  } else if (typeof input.apiKey === 'string') {
+    const enc = CredentialEncryption.encrypt(input.apiKey); // throws if CREDENTIAL_ENCRYPTION_KEY unset
+    await setSetting('ai_chat_api_key', JSON.stringify(enc));
+  }
+}
+
 // ---- LLM call (provider-specific) -------------------------------------------
 
 /** A single chat completion: system + user -> text. Injectable for tests. */
 export type Completer = (cfg: AiConfig, system: string, user: string) => Promise<string>;
+
+/** A message in a multi-turn conversation. */
+export type ChatMsg = { role: 'system' | 'user' | 'assistant'; content: string };
 
 /** fetch with a hard timeout and a clear, actionable connection error. */
 async function llmFetch(url: string, options: any): Promise<Response> {
@@ -140,17 +226,35 @@ async function llmFetch(url: string, options: any): Promise<Response> {
   }
 }
 
-async function callProvider(
+/**
+ * Multi-turn completion across providers. `messages` is the full conversation
+ * (may include a leading `system` message). JSON mode defaults on. `maxTokens`
+ * bounds the response (defaults to 2000, preserving the single-turn behaviour).
+ */
+export async function callProviderChat(
   cfg: AiConfig,
-  system: string,
-  user: string,
-  opts: { json?: boolean } = {}
+  messages: ChatMsg[],
+  opts: { json?: boolean; maxTokens?: number } = {}
 ): Promise<string> {
-  // The parser/detection generators need strict JSON; the "explain" assistant
-  // wants free-text markdown. JSON mode defaults on to preserve generator behaviour.
   const jsonMode = opts.json !== false;
+  const maxTokens = opts.maxTokens ?? 2000;
+
   if (cfg.provider === 'anthropic') {
     if (!cfg.apiKey) throw new Error('No Anthropic API key configured');
+    // Anthropic requires `system` separate from messages[] — hoist all system turns.
+    const systemText = messages
+      .filter((m) => m.role === 'system')
+      .map((m) => m.content)
+      .join('\n\n');
+    // Anthropic requires messages to alternate user/assistant — merge any
+    // consecutive same-role turns (e.g. a tool-result user turn following another).
+    const convo: { role: 'user' | 'assistant'; content: string }[] = [];
+    for (const m of messages) {
+      if (m.role === 'system') continue;
+      const last = convo[convo.length - 1];
+      if (last && last.role === m.role) last.content += '\n\n' + m.content;
+      else convo.push({ role: m.role as 'user' | 'assistant', content: m.content });
+    }
     const res = await llmFetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -160,9 +264,9 @@ async function callProvider(
       },
       body: JSON.stringify({
         model: cfg.model,
-        max_tokens: 2000,
-        system,
-        messages: [{ role: 'user', content: user }],
+        max_tokens: maxTokens,
+        ...(systemText ? { system: systemText } : {}),
+        messages: convo.length ? convo : [{ role: 'user', content: '' }],
       }),
     });
     if (!res.ok) throw new Error(`Anthropic API ${res.status}: ${(await res.text()).slice(0, 300)}`);
@@ -178,11 +282,8 @@ async function callProvider(
       headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` },
       body: JSON.stringify({
         model: cfg.model,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-        max_tokens: 2000,
+        messages,
+        max_tokens: maxTokens,
         ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
       }),
     });
@@ -200,15 +301,31 @@ async function callProvider(
       model: cfg.model,
       stream: false,
       ...(jsonMode ? { format: 'json' } : {}),
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
+      // Only bound output when a caller explicitly asks (keeps existing callers' behaviour).
+      ...(opts.maxTokens ? { options: { num_predict: opts.maxTokens } } : {}),
+      messages,
     }),
   });
   if (!res.ok) throw new Error(`Ollama API ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const json: any = await res.json();
   return json.message?.content || '';
+}
+
+/** Single-turn wrapper (system + user) — preserves every existing caller. */
+async function callProvider(
+  cfg: AiConfig,
+  system: string,
+  user: string,
+  opts: { json?: boolean } = {}
+): Promise<string> {
+  return callProviderChat(
+    cfg,
+    [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    opts
+  );
 }
 
 // ---- Prompt + generation loop ------------------------------------------------
@@ -252,7 +369,7 @@ function buildUserPrompt(sample: string, hints?: string, prev?: { parser: any; e
   return u;
 }
 
-function extractJson(text: string): any {
+export function extractJson(text: string): any {
   let s = (text || '').trim();
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence) s = fence[1].trim();

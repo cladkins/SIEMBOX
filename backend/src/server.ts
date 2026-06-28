@@ -12,6 +12,7 @@ import { startThreatFeedsJob, stopThreatFeedsJob } from './jobs/threatFeeds';
 import { startYaraRulesJob, stopYaraRulesJob } from './jobs/yaraRules';
 import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
 import { TemplateService } from './services/scanner/templateService';
+import { CredentialEncryption } from './services/credentials/credentialEncryption';
 
 dotenv.config();
 
@@ -30,6 +31,27 @@ const startServer = async () => {
     // Test database connection
     await pool.query('SELECT NOW()');
     logger.info('Database connection successful');
+
+    // Credential-encryption key health. Warn loudly (do NOT crash) if it's
+    // missing or malformed: without a valid key, secrets entered in the UI
+    // (scanner credentials, AI-builder API key) cannot be stored — so it's
+    // better for operators to see this at boot than to hit a cryptic save error.
+    const keyStatus = CredentialEncryption.getKeyStatus();
+    if (!keyStatus.valid) {
+      logger.warn(
+        '============================================================\n' +
+          `⚠️  CREDENTIAL_ENCRYPTION_KEY is not usable: ${keyStatus.reason}.\n` +
+          '    Storing secrets from the UI (scanner credentials, AI-builder\n' +
+          '    API key) will FAIL until this is fixed.\n' +
+          '    Fix: generate one with `openssl rand -hex 32` and set\n' +
+          '    CREDENTIAL_ENCRYPTION_KEY in your .env, then restart.\n' +
+          '    Alternatively set ANTHROPIC_API_KEY / OPENAI_API_KEY to use the\n' +
+          '    AI builder without storing a key in the UI.\n' +
+          '============================================================'
+      );
+    } else {
+      logger.info('Credential encryption key configured.');
+    }
 
     // Mark scans left 'running'/'queued' by a previous process as failed.
     // Scan workers live in memory, so a restart orphans any in-flight scan —

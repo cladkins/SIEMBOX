@@ -20,7 +20,6 @@ const INSERT_BATCH = 1000;
 // property and acts as a constant-host allowlist barrier around the fetch below.
 const ALLOWED_FEED_HOSTS = new Set([
   'feodotracker.abuse.ch',
-  'sslbl.abuse.ch',
   'check.torproject.org',
   'lists.blocklist.de',
 ]);

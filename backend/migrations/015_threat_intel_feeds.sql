@@ -51,9 +51,9 @@ VALUES
     ('feodo-c2', 'Feodo Tracker (abuse.ch)',
      'Active botnet C2 server IPs (Dridex, Emotet, TrickBot, QakBot, BazarLoader) from abuse.ch Feodo Tracker.',
      'c2', 'https://feodotracker.abuse.ch/downloads/ipblocklist.txt', 'plain'),
-    ('sslbl-botnet', 'SSL Botnet C2 (abuse.ch SSLBL)',
-     'IPs running botnet C2 with malicious SSL certificates, from abuse.ch SSLBL.',
-     'botnet', 'https://sslbl.abuse.ch/blacklist/sslipblacklist.txt', 'plain'),
+    -- NOTE: the abuse.ch SSLBL botnet-C2 IP feed was deprecated upstream on
+    -- 2025-01-03 (URL still returns 200 but is header-only / 0 IPs), so it is no
+    -- longer seeded; migration 019 removes it from installs that already had it.
     ('tor-exit', 'Tor Exit Nodes',
      'Current Tor network exit-node IPs (from the Tor Project bulk exit list).',
      'tor', 'https://check.torproject.org/torbulkexitlist', 'plain'),

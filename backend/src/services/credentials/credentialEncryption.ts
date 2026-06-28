@@ -66,13 +66,18 @@ export class CredentialEncryption {
    * @throws Error if encryption fails
    */
   static encrypt(plaintext: string): EncryptedData {
+    if (!plaintext) {
+      throw new Error('Cannot encrypt empty plaintext');
+    }
+
+    // Resolve + validate the key OUTSIDE the try below so its actionable message
+    // ("CREDENTIAL_ENCRYPTION_KEY ... not set" / "must be 32 bytes") propagates
+    // to callers instead of being flattened into the generic "Failed to encrypt
+    // credential". The settings route keys off that text to tell the operator how
+    // to fix an unconfigured key.
+    const key = this.getEncryptionKey();
+
     try {
-      if (!plaintext) {
-        throw new Error('Cannot encrypt empty plaintext');
-      }
-
-      const key = this.getEncryptionKey();
-
       // Generate random IV for this encryption operation
       const iv = crypto.randomBytes(this.IV_LENGTH);
 
@@ -109,13 +114,15 @@ export class CredentialEncryption {
    * @throws Error if decryption or authentication fails
    */
   static decrypt(encrypted: string, iv: string, authTag: string): string {
+    if (!encrypted || !iv || !authTag) {
+      throw new Error('Missing required decryption parameters');
+    }
+
+    // Resolve + validate the key OUTSIDE the try so a key-configuration error
+    // surfaces with its actionable message rather than the generic decrypt error.
+    const key = this.getEncryptionKey();
+
     try {
-      if (!encrypted || !iv || !authTag) {
-        throw new Error('Missing required decryption parameters');
-      }
-
-      const key = this.getEncryptionKey();
-
       // Convert from base64
       const ivBuffer = Buffer.from(iv, 'base64');
       const authTagBuffer = Buffer.from(authTag, 'base64');

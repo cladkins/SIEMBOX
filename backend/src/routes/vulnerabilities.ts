@@ -195,6 +195,31 @@ router.get('/templates/tag/:tag', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/vulnerabilities/templates/severity/:severity
+ * Get templates by severity — proper server-side filter (not a text search).
+ * No authentication required - read-only operation
+ */
+router.get('/templates/severity/:severity', async (req: Request, res: Response) => {
+  try {
+    const severity = req.params.severity;
+    const limit = parseInt(req.query.limit as string) || 500;
+
+    const templates = await TemplateService.getTemplatesBySeverity(severity, limit);
+    res.json({
+      templates,
+      total: templates.length,
+      severity,
+    });
+  } catch (error: any) {
+    console.error('[VULN] Get templates by severity error:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve templates by severity',
+      message: error.message,
+    });
+  }
+});
+
+/**
  * POST /api/vulnerabilities/templates/refresh
  * Refresh template cache
  * Authentication required

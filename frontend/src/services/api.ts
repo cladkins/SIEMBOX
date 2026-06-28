@@ -104,6 +104,8 @@ export const api = {
     apiClient.post('/parsers/test', { parser_type, pattern, field_mappings, sample }),
   // Portable parser export/import (shareable .parser.json; same format the catalog uses)
   exportParser: (id: number) => apiClient.get(`/parsers/${id}/export`, { responseType: 'blob' }),
+  // Prepare a community-catalog contribution (validate + self-test + propose-file URL)
+  getParserContribution: (id: number) => apiClient.get(`/parsers/${id}/contribute`),
   validatePortableParser: (parser: any, strict = false) =>
     apiClient.post('/parsers/validate', { parser, strict }),
   importParser: (parser: any, force = false) => apiClient.post('/parsers/import', { parser, force }),
@@ -118,6 +120,7 @@ export const api = {
   // Detection Rules
   getRules: () => apiClient.get('/rules'),
   getRule: (id: number) => apiClient.get(`/rules/${id}`),
+  getRuleContribution: (id: number) => apiClient.get(`/rules/${id}/contribute`),
   createRule: (data: any) => apiClient.post('/rules', data),
   updateRule: (id: number, data: any) => apiClient.put(`/rules/${id}`, data),
   deleteRule: (id: number) => apiClient.delete(`/rules/${id}`),

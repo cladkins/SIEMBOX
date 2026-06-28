@@ -356,7 +356,7 @@ Feeds & Reputation Providers* panel on the Threat Intel page.
 ### Reputation providers (bring your own key)
 
 For richer per-IP reputation you can plug in keyed providers — **AbuseIPDB** and
-**GreyNoise** (both have free tiers). Paste an API key into the same panel
+**AlienVault OTX** (both have free API keys). Paste an API key into the same panel
 (admin only). Keys are encrypted at rest using `CREDENTIAL_ENCRYPTION_KEY`
 (set it, or key storage is refused), and are queried **only on demand** when you
 look up an IP — results are cached briefly to respect rate limits. Nothing is

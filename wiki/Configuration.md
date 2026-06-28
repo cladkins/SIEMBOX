@@ -70,6 +70,6 @@ Docker-host image discovery requires mounting the Docker socket into the backend
 Some configuration lives in **Settings** rather than env vars:
 
 - **AI Builder** — provider, model, base URL, API key.
-- **Threat Feeds & Reputation** — enable/disable feeds, add AbuseIPDB/GreyNoise keys (admin-gated). See [Threat Intel](Threat-Intel).
+- **Threat Feeds & Reputation** — enable/disable feeds, add AbuseIPDB/AlienVault OTX keys (admin-gated). See [Threat Intel](Threat-Intel).
 - **Notifications** — Email / Slack / NTFY alert delivery.
 - **Retention** — log retention window and automated cleanup.

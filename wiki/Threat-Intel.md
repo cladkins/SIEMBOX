@@ -37,7 +37,7 @@ These need only outbound HTTPS. If egress is blocked they degrade gracefully (th
 On-demand reputation lookups from:
 
 - **AbuseIPDB**
-- **GreyNoise**
+- **AlienVault OTX**
 
 These are **bring-your-own-key**: add your keys in the admin **Threat Feeds & Reputation Providers** panel. Keys are **encrypted at rest** (AES-256-GCM, via `CREDENTIAL_ENCRYPTION_KEY`) and results are cached briefly. Verdicts appear in the IP detail alongside the feed hits.
 

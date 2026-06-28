@@ -13,6 +13,7 @@ import {
   getCatalogSource,
   clearCatalogCache,
   parserSignature,
+  catalogNewFileUrl,
 } from '../services/parser/catalogService';
 import { generateParser } from '../services/ai/aiService';
 import { authorize } from '../middleware/auth';
@@ -273,6 +274,42 @@ router.get('/:id/export', async (req: Request, res: Response) => {
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to export parser');
+  }
+});
+
+// Prepare a community-catalog contribution for a saved parser: export -> validate
+// -> self-test, and (only if clean) build a no-auth GitHub "propose new file" URL
+// the user finishes in their own browser. SIEMBox never opens the PR or holds a
+// credential; the catalog's CI + maintainer review are the merge gate.
+router.get('/:id/contribute', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const parser = await ParserModel.findById(id);
+    if (!parser) throw new ApiError(404, 'Parser not found');
+
+    const portable = toPortableParser(parser);
+    const validation = validatePortableParser(portable, { strict: true });
+    const selfTest = validation.ok ? runSelfTests(portable) : null;
+    const ready = validation.ok && !!selfTest?.ok;
+
+    const filePath = `${getCatalogSource().path}/${parser.name}.parser.json`;
+    const content = JSON.stringify(portable, null, 2);
+
+    res.json({
+      kind: 'parser',
+      name: parser.name,
+      path: filePath,
+      content,
+      valid: validation.ok,
+      errors: validation.errors,
+      warnings: validation.warnings,
+      self_test: selfTest,
+      ready, // only offer the PR link when it would pass the catalog's CI
+      contribute_url: ready ? catalogNewFileUrl(filePath, content) : null,
+    });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to prepare contribution');
   }
 });
 

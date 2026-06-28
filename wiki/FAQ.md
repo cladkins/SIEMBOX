@@ -15,7 +15,7 @@ Only for collecting **files**, **Docker container logs**, or the **systemd journ
 **Does SIEMBox phone home / need internet?**
 - **GeoIP** is fully **offline** (bundled DB-IP database) — no external calls.
 - **Threat feeds** need outbound **HTTPS** to refresh the free blocklists; if egress is blocked they degrade gracefully.
-- **Reputation** (AbuseIPDB/GreyNoise) and the **AI builder** are **bring-your-own-key** and only call out when you configure and use them.
+- **Reputation** (AbuseIPDB/AlienVault OTX) and the **AI builder** are **bring-your-own-key** and only call out when you configure and use them.
 - The **catalog** browser calls the GitHub API to list community parsers/rules.
 
 **Which AI providers work with the builder?**

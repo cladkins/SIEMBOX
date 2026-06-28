@@ -59,6 +59,31 @@ export class CredentialEncryption {
   }
 
   /**
+   * Non-throwing configuration check for startup diagnostics. Reports whether
+   * CREDENTIAL_ENCRYPTION_KEY is set and valid (64 hex chars = 32 bytes) WITHOUT
+   * throwing, so the server can warn loudly at boot instead of only failing when
+   * an operator tries to store a credential.
+   *
+   * Note: Buffer.from(x, 'hex') silently truncates at the first non-hex char, so
+   * the raw string is validated as clean hex of the right length here rather than
+   * trusting the decoded byte length alone.
+   */
+  static getKeyStatus(): { configured: boolean; valid: boolean; reason?: string } {
+    const keyHex = process.env.CREDENTIAL_ENCRYPTION_KEY;
+    if (!keyHex) {
+      return { configured: false, valid: false, reason: 'CREDENTIAL_ENCRYPTION_KEY is not set' };
+    }
+    if (!/^[0-9a-fA-F]{64}$/.test(keyHex)) {
+      return {
+        configured: true,
+        valid: false,
+        reason: `CREDENTIAL_ENCRYPTION_KEY must be 64 hex characters (32 bytes); got ${keyHex.length} character(s)`,
+      };
+    }
+    return { configured: true, valid: true };
+  }
+
+  /**
    * Encrypt plaintext using AES-256-GCM
    *
    * @param plaintext - The sensitive data to encrypt
@@ -66,13 +91,18 @@ export class CredentialEncryption {
    * @throws Error if encryption fails
    */
   static encrypt(plaintext: string): EncryptedData {
+    if (!plaintext) {
+      throw new Error('Cannot encrypt empty plaintext');
+    }
+
+    // Resolve + validate the key OUTSIDE the try below so its actionable message
+    // ("CREDENTIAL_ENCRYPTION_KEY ... not set" / "must be 32 bytes") propagates
+    // to callers instead of being flattened into the generic "Failed to encrypt
+    // credential". The settings route keys off that text to tell the operator how
+    // to fix an unconfigured key.
+    const key = this.getEncryptionKey();
+
     try {
-      if (!plaintext) {
-        throw new Error('Cannot encrypt empty plaintext');
-      }
-
-      const key = this.getEncryptionKey();
-
       // Generate random IV for this encryption operation
       const iv = crypto.randomBytes(this.IV_LENGTH);
 
@@ -109,13 +139,15 @@ export class CredentialEncryption {
    * @throws Error if decryption or authentication fails
    */
   static decrypt(encrypted: string, iv: string, authTag: string): string {
+    if (!encrypted || !iv || !authTag) {
+      throw new Error('Missing required decryption parameters');
+    }
+
+    // Resolve + validate the key OUTSIDE the try so a key-configuration error
+    // surfaces with its actionable message rather than the generic decrypt error.
+    const key = this.getEncryptionKey();
+
     try {
-      if (!encrypted || !iv || !authTag) {
-        throw new Error('Missing required decryption parameters');
-      }
-
-      const key = this.getEncryptionKey();
-
       // Convert from base64
       const ivBuffer = Buffer.from(iv, 'base64');
       const authTagBuffer = Buffer.from(authTag, 'base64');

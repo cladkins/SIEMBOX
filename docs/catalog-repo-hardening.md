@@ -158,7 +158,7 @@ gh api repos/cladkins/siembox-catalog/branches/main/protection \
 - **SHA-pinned actions**: Tags can be moved (the March 2025 tj-actions incident exfiltrated secrets this way). SHAs are immutable. Never change to a floating tag without Dependabot managing the update.
 - **`ACTIONS_STEP_DEBUG` / `ACTIONS_RUNNER_DEBUG` are never set**: Avoids leaking structured output.
 - **Validator from the trusted repo, not the fork**: the code that judges a submission is checked out from `cladkins/siembox` (Section 3b); the fork supplies only the data files. A malicious PR cannot alter its own validation.
-- **ReDoS guard (active)**: community-submitted `pattern` regexes run through Node/V8, which has no per-regex timeout. The workflow runs an **active `safe-regex` pre-scan** that fails the PR on a catastrophically-backtracking pattern, with the 15-minute job timeout (`timeout-minutes: 15`) as a backstop.
+- **ReDoS guard (active, changed files only)**: community-submitted `pattern` regexes run through Node/V8, which has no per-regex timeout. The workflow runs an **active [`recheck`](https://github.com/makenowjust-labs/recheck) ReDoS pre-scan over the parser files this PR adds or modifies** — it fails the PR on a regex `recheck` proves *vulnerable* and warns (does not fail) on *unknown* (analyzer timeout/unsupported). The scope is intentionally changed-files-only: an accurate scan finds **16 of the 23 parsers already in the catalog are ReDoS-vulnerable**, so a repo-wide gate would wedge every unrelated PR on pre-existing debt. Those legacy parsers are grandfathered and tracked for a dedicated cleanup PR (Section 11); new and modified parsers must be clean. The 15-minute job timeout (`timeout-minutes: 15`) is the backstop. (The older `safe-regex` heuristic is **not** used: it is so conservative it flags all 23 parsers, safe ones included.)
 
 ### 3b. How the validator is obtained (the catalog repo does NOT contain it)
 
@@ -195,7 +195,9 @@ Both take a directory argument and exit non-zero on any schema or self-test fail
 #     Dependabot (Section 8) to keep SHAs current.
 #   - Job has a 15-minute hard timeout to bound ReDoS risk from submitted
 #     regex patterns (community `pattern` fields run through Node/V8 with no
-#     per-regex timeout). A future improvement is to add safe-regex pre-scan.
+#     per-regex timeout), PLUS an active `recheck` ReDoS pre-scan that fails
+#     the PR on any regex it proves vulnerable in the parser files this PR
+#     adds or modifies (changed-files scope; see the pre-scan step below).
 
 name: Validate Catalog
 
@@ -227,6 +229,10 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           path: catalog
+          # Full history so the ReDoS pre-scan can diff the PR head (the merge
+          # commit) against its base commit and scan only the parser files this
+          # PR adds or modifies. The default depth=1 omits the base parent.
+          fetch-depth: 0
 
       # 2. The validator, from the TRUSTED app repo — NOT the fork. The fork only
       #    supplies data files; the code that judges them comes from cladkins/siembox,
@@ -255,26 +261,61 @@ jobs:
         working-directory: siembox/backend
         run: npm run build
 
-      # ReDoS pre-scan: reject catastrophically-backtracking parser regexes BEFORE
-      # the validator runs them through V8 (which has no per-regex timeout).
-      - name: ReDoS pre-scan (parser regexes)
+      # ReDoS pre-scan: reject catastrophically-backtracking regexes in the parser
+      # files this PR ADDS or MODIFIES, before the validator runs them through V8
+      # (which has no per-regex timeout). Uses `recheck` (accurate automaton+fuzz
+      # ReDoS analysis) via its synchronous, in-process backend (`checkSync` does
+      # not spawn an external CLI). The older `safe-regex` heuristic is NOT used:
+      # it is so conservative it flags all 23 existing parsers, safe ones included.
+      #
+      # Scope is changed files ONLY, on purpose: 16 of the 23 parsers already in
+      # the catalog are ReDoS-vulnerable, so a repo-wide gate would block every
+      # unrelated PR on pre-existing debt. Those are grandfathered and fixed in a
+      # dedicated cleanup PR (Section 11). New/modified parsers must be clean:
+      # FAIL on a "vulnerable" verdict; WARN (don't fail) on "unknown" (recheck
+      # timed out / unsupported syntax). The diff uses the PR base commit, which
+      # the merge-ref parent makes reachable thanks to fetch-depth: 0 above.
+      - name: ReDoS pre-scan (changed parser regexes)
         working-directory: catalog
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          npm install safe-regex@1.1.0 --no-save
-          node -e '
-            const fs = require("fs"), path = require("path"), safe = require("safe-regex");
-            const dir = "parsers";
-            if (!fs.existsSync(dir)) { console.log("no parsers/ dir; skipping"); process.exit(0); }
+          set -euo pipefail
+          CHANGED="$(git diff --name-only --diff-filter=AM "$BASE_SHA" HEAD -- 'parsers/**.parser.json' || true)"
+          if [ -z "$CHANGED" ]; then
+            echo "No added/modified parser files in this PR; skipping ReDoS scan."
+            exit 0
+          fi
+          echo "Scanning changed parser files:"; echo "$CHANGED"
+          # recheck@4 resolves to the latest 4.x at install time. It is an
+          # ad-hoc dev install (no manifest entry), so it stays current on its
+          # own — Dependabot (Section 8) tracks the committed package files only.
+          npm install recheck@4 --no-save
+          CHANGED_FILES="$CHANGED" node -e '
+            const fs = require("fs");
+            const { checkSync } = require("recheck");
+            const files = (process.env.CHANGED_FILES || "").split("\n").map((s) => s.trim()).filter(Boolean);
             let bad = 0;
-            for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".parser.json"))) {
-              let p; try { p = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")); } catch { continue; }
-              if (typeof p.pattern === "string" && p.pattern && !safe(p.pattern)) {
-                console.error("UNSAFE regex (possible ReDoS) in " + f + ": " + p.pattern);
+            for (const f of files) {
+              let p; try { p = JSON.parse(fs.readFileSync(f, "utf8")); } catch { continue; }
+              if (typeof p.pattern !== "string" || !p.pattern) continue;
+              let r; try { r = checkSync(p.pattern, ""); } catch (e) {
+                console.error("WARN  could not analyze " + f + ": " + (e && e.message)); continue;
+              }
+              if (r.status === "vulnerable") {
+                const kind = (r.complexity && r.complexity.type) || "backtracking";
+                console.error("FAIL  ReDoS-vulnerable regex (" + kind + ") in " + f + ": " + p.pattern);
                 bad++;
+              } else if (r.status === "unknown") {
+                const why = (r.error && r.error.kind) || "unknown";
+                console.error("WARN  could not prove safe in " + f + " (" + why + "): " + p.pattern);
               }
             }
-            if (bad) { console.error(bad + " potentially-catastrophic regex(es) — fix before merge."); process.exit(1); }
-            console.log("ReDoS pre-scan passed.");
+            if (bad) {
+              console.error(bad + " ReDoS-vulnerable regex(es) in changed parsers — fix before merge.");
+              process.exit(1);
+            }
+            console.log("ReDoS pre-scan passed (changed parsers only).");
           '
 
       # Validate parsers — strict: schema + every self-test must pass. The catalog
@@ -905,7 +946,7 @@ These were confirmed by the repo owner; the rest of this document already reflec
 | 2 | Signed commits | **Disabled** — Section 7d (defer; high contributor friction) |
 | 3 | Direct-push allowlist | **Empty** — nobody pushes `main` directly; everything via PR |
 | 4 | `enforce_admins` | **Enabled** — protection applies to the owner too (no admin bypass) |
-| 5 | ReDoS check | **Active `safe-regex` pre-scan** in CI (Section 3c), backed by the 15-min timeout |
+| 5 | ReDoS check | **Active `recheck` pre-scan on changed parser files** in CI (Section 3c) — fail on *vulnerable*, warn on *unknown*; the 16 ReDoS-vulnerable legacy parsers are grandfathered + fixed in a cleanup PR (Section 11); backed by the 15-min timeout. (`safe-regex` was rejected — it flags all 23 parsers.) |
 | 6 | `detections/` directory | Handled by the `if: hashFiles(...)` guard — the step skips until the first detection exists |
 | 7 | Validator location | **Resolved** — CI checks out `cladkins/siembox` for the validator (Sections 3b/3c); `backend/` is NOT in the catalog repo |
 | 8 | Additional CODEOWNERS maintainers | **`@cladkins` only** for now — add a backup reviewer later if PRs stall |
@@ -913,6 +954,19 @@ These were confirmed by the repo owner; the rest of this document already reflec
 > **Emergency escape hatch** (since `enforce_admins` is on): to land a hotfix, temporarily lift enforcement with
 > `gh api --method DELETE /repos/cladkins/siembox-catalog/branches/main/protection/enforce_admins`, push, then immediately
 > re-enable by re-running the Section 2b PUT.
+
+---
+
+## 11. Legacy parser ReDoS cleanup (follow-up)
+
+The ReDoS pre-scan (Section 3c) deliberately scans **only the parser files a PR adds or modifies**, because an accurate `recheck` scan finds **16 of the 23 parsers already in the catalog are ReDoS-vulnerable**. Gating the whole tree would fail every unrelated PR on pre-existing debt, so those 16 are *grandfathered*: the gate ignores them until they are touched. This is a known, accepted gap — not an oversight — and it is closed by a separate work item:
+
+1. Run `recheck` over all of `parsers/*.parser.json` and capture every file whose `status` is `"vulnerable"`. That list is authoritative — do not hand-pick.
+2. For each, rewrite the `pattern` to remove the catastrophic construct (typically an unbounded quantifier over a variable-length group — e.g. `(.*)+`, `(\S+\s*)+`, or adjacent overlapping `.*`). Anchor where possible, restructure nested quantifiers, and bound character classes.
+3. Re-run the parser self-tests (`npm run validate-parsers -- ../../catalog/parsers`) so every rewrite still matches its `test_samples`.
+4. Land the fixes in one (or a few) dedicated **cleanup PR(s)** — e.g. `fix(parsers): remove ReDoS-vulnerable patterns`. Each passes the changed-files pre-scan because the rewrites are clean.
+
+Once all 16 are clean, the scan scope **can optionally be widened** to the whole `parsers/` tree (change the diff step to enumerate every `*.parser.json` instead of only changed files) to catch any regression that bypasses the diff. That is a hardening *upgrade*, not a blocker for this pass.
 
 ---
 

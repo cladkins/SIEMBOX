@@ -51,7 +51,7 @@ echo "Working repo: cladkins/siembox-catalog"
 | Dismiss stale reviews | Yes | New commit resets approval |
 | Require code-owner review | Yes | Ties to CODEOWNERS for parser/detection dirs |
 | Require last-push approval | Yes | Reviewer must see the final commit |
-| Required status check: `validate-catalog` | Yes (strict) | CI must pass AND branch must be up-to-date |
+| Required status check: `validate-catalog` | Yes (strict) | CI must pass AND branch must be up-to-date. The workflow runs on **every** PR to main (no `paths:` filter) so this required check is never skipped — see Section 3c. |
 | Enforce admins | Yes | Admins cannot bypass |
 | Required conversation resolution | Yes | All review threads must be resolved |
 | Required linear history | Yes | Forces squash or rebase; no merge commits |
@@ -62,6 +62,8 @@ echo "Working repo: cladkins/siembox-catalog"
 ### 2b. `gh api` command (execute this)
 
 > IMPORTANT: The `contexts` array in `required_status_checks` must exactly match the `name:` field of the job in the workflow (Section 3). The job is named `validate-catalog`. After the workflow has run at least once, GitHub will recognise the check by that name. If you run the API call before the first CI run, you may see a warning that the check context is unknown — this is expected; proceed anyway. The protection will activate the moment the first workflow run completes.
+>
+> Because this is a **required** check, the workflow in Section 3c deliberately has **no `paths:` filter** — it runs on every PR to main and decides relevance internally (a "Detect relevant changes" step gates the heavy work). A path-filtered required check would leave docs-only / `.github`-only PRs stuck on "Expected — waiting for status" and unable to merge.
 
 ```bash
 gh api \
@@ -198,17 +200,25 @@ Both take a directory argument and exit non-zero on any schema or self-test fail
 #     per-regex timeout), PLUS an active `recheck` ReDoS pre-scan that fails
 #     the PR on any regex it proves vulnerable in the parser files this PR
 #     adds or modifies (changed-files scope; see the pre-scan step below).
+#   - Runs on EVERY pull request to main (no `paths:` filter) on purpose: this
+#     job is a REQUIRED branch-protection check (Section 2b), and GitHub never
+#     reports a required check whose path filter excludes the PR — the merge
+#     blocks forever on "Expected — waiting for status." To stay both required
+#     AND fast, the trigger is unconditional but the heavy steps (validator
+#     checkout/build, ReDoS scan, validation) are gated on an internal "did
+#     parsers/detections/schema actually change?" diff, so a docs-only or
+#     .github-only PR no-ops to green in seconds.
 
 name: Validate Catalog
 
 on:
+  # Run on every PR to main — do NOT add a `paths:` filter here. A path-filtered
+  # workflow that is also a required status check leaves unrelated PRs stuck on
+  # "Expected — waiting for status" forever. Relevance is decided inside the job
+  # instead (see the "Detect relevant changes" step).
   pull_request:
     branches:
       - main
-    paths:
-      - "parsers/**"
-      - "detections/**"
-      - "schema/**"
 
 # Declare the minimum required permissions for this workflow.
 # Fork PRs receive a read-only token by default; this declaration makes the
@@ -234,10 +244,33 @@ jobs:
           # PR adds or modifies. The default depth=1 omits the base parent.
           fetch-depth: 0
 
+      # Decide whether this PR actually touches catalog content. Because the
+      # workflow is a REQUIRED check it runs on every PR, but a docs-only or
+      # .github-only PR has nothing to validate — gate the heavy steps below on
+      # this so the job no-ops to green in seconds instead of building the whole
+      # validator. (The git diff sits in an `if` condition, so its non-zero
+      # "differences found" exit does not trip `set -e`; any unexpected error
+      # falls through to relevant=true — fail safe by validating.)
+      - name: Detect relevant changes
+        id: changes
+        working-directory: catalog
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet "$BASE_SHA" HEAD -- parsers detections schema; then
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No parser/detection/schema changes in this PR; validation will be skipped."
+          else
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Catalog content changed; running full validation."
+          fi
+
       # 2. The validator, from the TRUSTED app repo — NOT the fork. The fork only
       #    supplies data files; the code that judges them comes from cladkins/siembox,
       #    so a malicious PR can't tamper with its own validation.
       - name: Checkout SIEMBox validator
+        if: steps.changes.outputs.relevant == 'true'
         # actions/checkout v4.2.2
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -246,6 +279,7 @@ jobs:
           path: siembox
 
       - name: Set up Node.js
+        if: steps.changes.outputs.relevant == 'true'
         # actions/setup-node v4.1.0
         uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
         with:
@@ -254,10 +288,12 @@ jobs:
           cache-dependency-path: siembox/backend/package-lock.json
 
       - name: Install validator dependencies
+        if: steps.changes.outputs.relevant == 'true'
         working-directory: siembox/backend
         run: npm ci
 
       - name: Build validator
+        if: steps.changes.outputs.relevant == 'true'
         working-directory: siembox/backend
         run: npm run build
 
@@ -276,6 +312,7 @@ jobs:
       # timed out / unsupported syntax). The diff uses the PR base commit, which
       # the merge-ref parent makes reachable thanks to fetch-depth: 0 above.
       - name: ReDoS pre-scan (changed parser regexes)
+        if: steps.changes.outputs.relevant == 'true'
         working-directory: catalog
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -321,12 +358,13 @@ jobs:
       # Validate parsers — strict: schema + every self-test must pass. The catalog
       # dirs sit one level up from siembox/ (workspace/catalog, workspace/siembox).
       - name: Validate parsers
+        if: steps.changes.outputs.relevant == 'true'
         working-directory: siembox/backend
         run: npm run validate-parsers -- ../../catalog/parsers
 
       # Validate detections — skips cleanly until the first detection is submitted.
       - name: Validate detections
-        if: ${{ hashFiles('catalog/detections/**') != '' }}
+        if: ${{ steps.changes.outputs.relevant == 'true' && hashFiles('catalog/detections/**') != '' }}
         working-directory: siembox/backend
         run: npm run validate-detections -- ../../catalog/detections
 ```

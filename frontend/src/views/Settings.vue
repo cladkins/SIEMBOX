@@ -363,15 +363,21 @@
           <template #header>
             <div class="card-header">
               <span>Notifications</span>
-              <el-button type="primary" size="small" @click="showCreateChannel" :icon="Plus">
-                New Channel
-              </el-button>
+              <div>
+                <el-button size="small" @click="sendTestAlert" :loading="testAlertSending">
+                  Send test alert
+                </el-button>
+                <el-button type="primary" size="small" @click="showCreateChannel" :icon="Plus">
+                  New Channel
+                </el-button>
+              </div>
             </div>
           </template>
 
           <el-alert type="info" :closable="false" style="margin-bottom: 15px">
             Configure notification channels (Slack, Email, NTFY) and choose which events trigger them.
-            Use "Test" to send a sample message and confirm a channel is reachable.
+            "Test" sends a generic message to one channel; <strong>Send test alert</strong> previews the
+            real new-alert email across all enabled channels (it ignores the enabled / severity preferences below).
           </el-alert>
 
           <el-table :data="notificationChannels" v-loading="notificationChannelsLoading" stripe>
@@ -1373,6 +1379,27 @@ async function testChannel(channel: any) {
     ElMessage.success(response.data?.message || 'Test message sent successfully');
   } catch (error: any) {
     ElMessage.error(error.response?.data?.error || 'Failed to send test message');
+  }
+}
+
+const testAlertSending = ref(false);
+async function sendTestAlert() {
+  testAlertSending.value = true;
+  try {
+    const response = await api.sendTestAlert();
+    const results = response.data?.results || [];
+    const msg = response.data?.message || 'Test alert sent.';
+    if (results.length === 0) {
+      ElMessage.warning(msg);
+    } else if (results.every((r: any) => r.ok)) {
+      ElMessage.success(msg);
+    } else {
+      ElMessage.warning(msg);
+    }
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || 'Failed to send test alert');
+  } finally {
+    testAlertSending.value = false;
   }
 }
 

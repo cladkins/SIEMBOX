@@ -21,6 +21,23 @@ export interface NotificationMessage {
   severity?: string;
 }
 
+export interface ChannelResult {
+  name: string;
+  type: string;
+  ok: boolean;
+  error?: string;
+}
+
+/** Build the exact message a real new-alert notification produces (shared by the
+ *  live alert path and the test-alert preview so the email is identical). */
+function buildAlertMessage(params: { severity: string; ruleName: string; title: string; description?: string }): NotificationMessage {
+  return {
+    title: `[SIEMBox] ${params.severity.toUpperCase()} alert: ${params.title}`,
+    body: `Rule: ${params.ruleName}\nSeverity: ${params.severity}\n${params.description || ''}`.trim(),
+    severity: params.severity,
+  };
+}
+
 async function getSetting(key: string, fallback: string): Promise<string> {
   try {
     const r = await query(`SELECT value FROM system_settings WHERE key = $1`, [key]);
@@ -91,18 +108,27 @@ async function sendToChannel(channel: NotificationChannel, msg: NotificationMess
   }
 }
 
-// Fan out to every enabled channel; isolate failures per channel.
-async function dispatch(msg: NotificationMessage): Promise<void> {
+// Fan out to every enabled channel; isolate failures per channel and report the
+// per-channel outcome (used by the test-alert preview so the UI can show what sent).
+async function dispatchWithResults(msg: NotificationMessage): Promise<ChannelResult[]> {
   const channels = await NotificationChannelModel.findEnabled();
-  await Promise.all(
-    channels.map(async (ch) => {
+  return Promise.all(
+    channels.map(async (ch): Promise<ChannelResult> => {
       try {
         await sendToChannel(ch, msg);
+        return { name: ch.name, type: ch.channel_type, ok: true };
       } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
         logger.error(`[Notifications] ${ch.channel_type} channel "${ch.name}" failed:`, err);
+        return { name: ch.name, type: ch.channel_type, ok: false, error };
       }
     })
   );
+}
+
+// Best-effort fan-out for real events (per-channel results ignored).
+async function dispatch(msg: NotificationMessage): Promise<void> {
+  await dispatchWithResults(msg);
 }
 
 export const NotificationService = {
@@ -119,14 +145,25 @@ export const NotificationService = {
     try {
       if ((await getSetting('notify_alerts_enabled', 'false')) !== 'true') return;
       if (!severityPasses(params.severity, await getSetting('notify_alerts_min_severity', 'high'))) return;
-      await dispatch({
-        title: `[SIEMBox] ${params.severity.toUpperCase()} alert: ${params.title}`,
-        body: `Rule: ${params.ruleName}\nSeverity: ${params.severity}\n${params.description || ''}`.trim(),
-        severity: params.severity,
-      });
+      await dispatch(buildAlertMessage(params));
     } catch (err) {
       logger.error('[Notifications] notifyAlert failed:', err);
     }
+  },
+
+  // Explicit admin preview of the new-alert email. Uses the exact alert format and
+  // the configured channels, but bypasses the enabled / min-severity gates so the
+  // email can be previewed regardless of the current notification preferences.
+  async sendTestAlert(): Promise<ChannelResult[]> {
+    return dispatchWithResults(
+      buildAlertMessage({
+        severity: 'high',
+        ruleName: 'SIEMBox Test Rule',
+        title: 'Test alert — multiple failed logins from 203.0.113.10',
+        description:
+          'This is a TEST alert sent from Settings -> Notifications to preview the new-alert email. No real detection occurred.',
+      })
+    );
   },
 
   async notifyVulnScan(params: { target: string; severityCounts: Record<string, number> }): Promise<void> {

@@ -60,7 +60,7 @@
         <el-sub-menu index="assets" v-if="authStore.user?.role === 'admin' || authStore.user?.role === 'analyst' || authStore.user?.role === 'operator'">
           <template #title>
             <el-icon><Monitor /></el-icon>
-            <span>Assets & Vulnerabilities</span>
+            <span>Assets &amp; Vulns</span>
           </template>
           <el-menu-item index="/asset-inventory">
             <el-icon><Box /></el-icon>

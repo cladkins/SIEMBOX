@@ -271,6 +271,7 @@ export const api = {
   updateNotificationChannel: (id: number, data: any) => apiClient.put(`/notifications/channels/${id}`, data),
   deleteNotificationChannel: (id: number) => apiClient.delete(`/notifications/channels/${id}`),
   testNotificationChannel: (id: number) => apiClient.post(`/notifications/channels/${id}/test`),
+  sendTestAlert: () => apiClient.post('/notifications/test-alert'),
 
   // Notifications - Settings
   getNotificationSettings: () => apiClient.get('/notifications/settings'),

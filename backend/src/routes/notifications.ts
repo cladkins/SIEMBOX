@@ -63,6 +63,24 @@ router.post('/channels/:id/test', async (req: Request, res: Response) => {
   }
 });
 
+// Preview the real new-alert email: dispatches a sample alert (in the exact
+// new-alert format) to every enabled channel and reports per-channel outcomes.
+router.post('/test-alert', async (_req: Request, res: Response) => {
+  const results = await NotificationService.sendTestAlert();
+  if (results.length === 0) {
+    res.json({ message: 'No enabled notification channels — add and enable one first.', results });
+    return;
+  }
+  const ok = results.filter((r) => r.ok).length;
+  const failed = results.filter((r) => !r.ok);
+  res.json({
+    message: failed.length
+      ? `Test alert: ${ok}/${results.length} channel(s) sent. Failed: ${failed.map((f) => `${f.name} (${f.error})`).join('; ')}`
+      : `Test alert sent to ${ok} channel(s) — check your inbox.`,
+    results,
+  });
+});
+
 // ---- Per-event preferences (stored in system_settings) ----
 
 router.get('/settings', async (_req: Request, res: Response) => {

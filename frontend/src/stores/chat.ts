@@ -161,7 +161,6 @@ export const useChatStore = defineStore('analystChat', () => {
     notConfigured,
     drawerOpen,
     drawerContext,
-    pendingSeed,
     checkHealth,
     loadSessions,
     openSession,

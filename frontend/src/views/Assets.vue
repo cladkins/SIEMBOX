@@ -201,11 +201,11 @@
           </el-descriptions-item>
         </el-descriptions>
 
-        <!-- Linked entities: EDR agent, log shipper, exposure counts -->
+        <!-- Linked entities: Endpoint agent, log shipper, exposure counts -->
         <div class="related-summary" v-loading="loadingRelated">
           <div class="related-card">
             <div class="related-label">
-              <el-icon><Cpu /></el-icon> EDR Agent
+              <el-icon><Cpu /></el-icon> Endpoint Agent
             </div>
             <template v-if="related?.agent">
               <el-tag :type="related.agent.online ? 'success' : 'info'" size="small">

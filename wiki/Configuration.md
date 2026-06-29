@@ -71,13 +71,13 @@ Offline country / foreign-geo enrichment (DB-IP IP-to-Country Lite, CC BY 4.0). 
 
 Docker-host image discovery requires mounting the Docker socket into the backend; it is **commented out by default**. See the security note in [Vulnerability & Container Scanning](Vulnerability-and-Container-Scanning#docker-host-discovery) before enabling it (`:ro` does **not** make the Docker API read-only — socket access is root-equivalent on the host).
 
-## EDR & YARA (optional)
+## Endpoints & YARA (optional)
 
-Endpoint agents (see [Endpoints & EDR](Endpoints-and-EDR)) are enrolled from the UI; the server delivers YARA rule packs to them.
+Endpoint agents (see [SIEMBOX Endpoint](SIEMBOX-Endpoint)) are enrolled from the UI; the server delivers YARA rule packs to them.
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `EDR_YARA_FORGE_ENABLED` | *(off)* | Set `true` to import the open-source **YARA-Forge** pack daily and publish a new bundle when it changes. Admins can also pull on demand from *Endpoints (EDR)*. |
+| `EDR_YARA_FORGE_ENABLED` | *(off)* | Set `true` to import the open-source **YARA-Forge** pack daily and publish a new bundle when it changes. Admins can also pull on demand from *Endpoints*. |
 | `EDR_YARA_KEEP_VERSIONS` | `10` | How many YARA bundle versions to retain server-side (older are pruned; agents always pull the newest). |
 
 ## In-UI settings
@@ -86,7 +86,7 @@ Some configuration lives in **Settings** rather than env vars:
 
 - **AI Builder** — provider, model, base URL, API key.
 - **AI Analyst** — the analyst's provider/model (inherits AI Builder if left blank). See [AI Security Analyst](AI-Security-Analyst).
-- **EDR / YARA** — endpoint enrollment tokens and the server YARA bundle (incl. *Pull YARA-Forge now*). See [Endpoints & EDR](Endpoints-and-EDR).
+- **Endpoints / YARA** — endpoint enrollment tokens and the server YARA bundle (incl. *Pull YARA-Forge now*). See [SIEMBOX Endpoint](SIEMBOX-Endpoint).
 - **Threat Feeds & Reputation** — enable/disable feeds, add AbuseIPDB/AlienVault OTX keys (admin-gated). See [Threat Intel](Threat-Intel).
 - **Notifications** — Email / Slack / NTFY alert delivery.
 - **Retention** — log retention window and automated cleanup.

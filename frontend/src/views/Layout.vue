@@ -84,7 +84,7 @@
           </el-menu-item>
           <el-menu-item index="/endpoints" v-if="authStore.user?.role === 'admin'">
             <el-icon><Cpu /></el-icon>
-            <span>Endpoints (EDR)</span>
+            <span>Endpoints</span>
           </el-menu-item>
           <el-menu-item index="/templates">
             <el-icon><Collection /></el-icon>

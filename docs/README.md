@@ -37,9 +37,9 @@ System architecture, design decisions, and implementation specifications.
 - **[VAULTWARDEN-PARSER-IMPLEMENTATION.md](architecture/VAULTWARDEN-PARSER-IMPLEMENTATION.md)** - Vaultwarden parser design decisions
 
 ### Feature guides
-Deep-dives for specific shipped features (see also the friendlier **[GitHub Wiki](https://github.com/cladkins/SIEMBOX/wiki)**, which has pages for **AI Security Analyst** and **Endpoints & EDR**).
+Deep-dives for specific shipped features (see also the friendlier **[GitHub Wiki](https://github.com/cladkins/SIEMBOX/wiki)**, which has pages for **AI Security Analyst** and **SIEMBOX Endpoint**).
 
-- **[edr.md](edr.md)** - EDR server API, agent enrollment, and YARA bundle delivery
+- **[edr.md](edr.md)** - SIEMBOX Endpoint server API, agent enrollment, and YARA bundle delivery
 - **[geoip.md](geoip.md)** - Offline GeoIP enrichment
 - **[canonical-schema.md](canonical-schema.md)** - The normalized field schema parsers map to
 - **[detection-normalization.md](detection-normalization.md)** - How detection rules match across sources
@@ -84,7 +84,7 @@ Deep-dives for specific shipped features (see also the friendlier **[GitHub Wiki
 
 **Recent Milestones (v3):**
 - ✅ **AI Security Analyst** — conversational, read-only, model-agnostic (local Ollama or cloud)
-- ✅ **EDR endpoint agents** — enrollment, inventory/detections/vulnerabilities, server-delivered YARA
+- ✅ **SIEMBOX Endpoint agents** — enrollment, inventory/detections/vulnerabilities, server-delivered YARA
 - ✅ **Asset-360** — one asset view correlating vulns, alerts, agent, shipper, geo, and ports
 - ✅ Threat Intel — blocklist feeds + BYO-key reputation (AbuseIPDB, AlienVault OTX) + dashboard country map
 
@@ -98,7 +98,7 @@ Deep-dives for specific shipped features (see also the friendlier **[GitHub Wiki
 - Declarative, data-driven parsers — onboard a log source without engine code
 - In-app catalog to browse, install, update, export, import, and **contribute** parsers/detections
 - AI-assisted authoring with a generate → validate → auto-refine loop, plus a read-only **AI Security Analyst**
-- EDR endpoints, host (**Nuclei**) + container (**Trivy**) vulnerability scanning, and threat intelligence
+- SIEMBOX Endpoint agents, host (**Nuclei**) + container (**Trivy**) vulnerability scanning, and threat intelligence
 - Role-based access control (**admin / analyst / operator / viewer**) and alert management
 
 See [../DEPLOYMENT.md](../DEPLOYMENT.md) for quick start and [operations/TROUBLESHOOTING.md](operations/TROUBLESHOOTING.md) for support.
@@ -163,4 +163,4 @@ Update this README.md when adding new documentation files. Each subdirectory has
 ---
 
 **Last Updated:** 2026-06-29
-**Documentation Version:** 4.0 (v3 — AI Security Analyst + EDR endpoints; internal planning docs kept local, out of the public repo)
+**Documentation Version:** 4.0 (v3 — AI Security Analyst + SIEMBOX Endpoint; internal planning docs kept local, out of the public repo)

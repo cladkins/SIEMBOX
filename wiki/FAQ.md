@@ -24,8 +24,8 @@ Only for collecting **files**, **Docker container logs**, or the **systemd journ
 **What's the AI Security Analyst, and how is it different from the AI builder?**
 The **[AI Security Analyst](AI-Security-Analyst)** is a conversational, **read-only** assistant that answers questions about *your* alerts, vulnerabilities, assets, and threat intel and helps you prioritize — it can only observe (via read-only tools), never change anything. The **AI builder** instead *generates* parsers and detection rules. They can use the same model or different ones (*Settings → AI Analyst* vs *Settings → AI Builder*), including a local Ollama model. Available to admin/analyst/operator.
 
-**What is EDR, and how do I add an endpoint?**
-EDR lets you enroll lightweight **endpoint agents** that report inventory, detections, and vulnerabilities and run server-delivered YARA scans. Generate a one-time enrollment token under **Endpoints (EDR)** (admin) and install the agent on the host; its findings show up in Alerts, Assets, and Vulnerability Management. See [Endpoints & EDR](Endpoints-and-EDR).
+**What is SIEMBOX Endpoint, and how do I add an endpoint?**
+**SIEMBOX Endpoint** lets you enroll lightweight **endpoint agents** that report inventory, detections, and vulnerabilities and run server-delivered YARA scans. Generate a one-time enrollment token under **Endpoints** (admin) and install the agent on the host; its findings show up in Alerts, Assets, and Vulnerability Management. See [SIEMBOX Endpoint](SIEMBOX-Endpoint).
 
 **Where are my API keys stored?**
 Encrypted at rest (AES-256-GCM) using `CREDENTIAL_ENCRYPTION_KEY`. This covers the AI builder key and scanner/reputation provider credentials.

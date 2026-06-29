@@ -35,7 +35,7 @@ Each turn, the model emits exactly one action — either a **tool call** or a **
 | `list_assets` / `get_asset` / `get_asset_stats` | Asset inventory, detail, discovery summary |
 | `lookup_ip` | Threat-feed hits + reputation for an IP |
 | `search_logs` | Search parsed logs (time-bounded) |
-| `list_edr_agents` | EDR endpoint list *(admin only)* |
+| `list_edr_agents` | Endpoint list *(admin only)* |
 
 The analyst typically gathers 2–4 results, then answers — it is tuned to stop investigating once it can respond.
 
@@ -69,4 +69,4 @@ Chats are saved as **per-user threads** (you only see your own). Rename or delet
 - **Errors mentioning the model/host** → usually the Ollama/cloud endpoint (model too large, server down). The Analyst is only as available as the model you point it at.
 - **"Ran out of analysis steps"** is avoided in v3 — the Analyst always composes a final answer from whatever it gathered.
 
-See also: [Configuration](Configuration) · [Threat Intel](Threat-Intel) · [Endpoints & EDR](Endpoints-and-EDR).
+See also: [Configuration](Configuration) · [Threat Intel](Threat-Intel) · [SIEMBOX Endpoint](SIEMBOX-Endpoint).

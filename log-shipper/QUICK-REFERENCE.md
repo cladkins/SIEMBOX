@@ -3,7 +3,7 @@
 **Navigation:** [Main README](../README.md) > [Log Shipper](./README.md) > Quick Reference
 
 **Related Documentation:**
-- [Verification Guide](./VERIFICATION-GUIDE.md) - How to verify logs are flowing
+- [Shipper Diagnostics](../docs/operations/SHIPPER-DIAGNOSTICS.md) - How to verify logs are flowing
 
 ---
 

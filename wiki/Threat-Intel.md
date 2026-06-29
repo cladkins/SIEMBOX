@@ -26,7 +26,6 @@ Country / foreign-geo enrichment is **fully offline** (DB-IP IP-to-Country Lite,
 SIEMBox seeds a set of **free, no-auth IP blocklists** and auto-refreshes them every few hours:
 
 - **abuse.ch Feodo Tracker** (botnet C2)
-- **abuse.ch SSLBL** (malicious SSL)
 - **Tor exit nodes**
 - **blocklist.de**
 

@@ -14,6 +14,8 @@
 **Security features**
 - [Threat Intel](Threat-Intel)
 - [Vulnerability & Container Scanning](Vulnerability-and-Container-Scanning)
+- [Endpoints & EDR](Endpoints-and-EDR)
+- [AI Security Analyst](AI-Security-Analyst)
 
 **Reference**
 - [API Reference](API-Reference)

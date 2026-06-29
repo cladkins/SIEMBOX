@@ -83,15 +83,21 @@ analysis/
 /VULNERABILITY_SCHEMA_VALIDATION.md
 /TESTING_GUIDE.md
 /backend/TYPE_DEFINITIONS_SUMMARY.md
+/backend/src/types/QUICK_REFERENCE.md
 /docs/guides/VITEST_VUE_TESTING_GUIDE.md
 /docs/guides/TESTING_GUIDE.md
 /docs/guides/ASSET_DISCOVERY_TESTING.md
 /docs/guides/PRE-V1-DATABASE.md
+/docs/guides/TESTING_RECOMMENDATIONS.md
 /docs/reference/JEST_TESTING_RESEARCH.md
 /docs/reference/TESTING_QUICK_START.md
 /docs/reference/TESTING_STRATEGIES.md
+/docs/parser-platform-plan.md
+/docs/catalog-repo-hardening.md
 /log-shipper/DEPLOYMENT-VERIFICATION.md
 /log-shipper/INCIDENT-REPORT-PROCESS-MANAGEMENT.md
+/log-shipper/VERIFICATION-GUIDE.md
+/handoff.md
 
 # GeoIP database (CC BY 4.0, fetched at deploy time — not committed)
 /data/geoip/

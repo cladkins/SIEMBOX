@@ -1,6 +1,6 @@
 # SIEMBox
 
-A lightweight, self-hosted **Security Information and Event Management (SIEM)** system built with Node.js/TypeScript, Vue 3, and PostgreSQL. As of **v2 — the Parser Platform**, parsers and detection rules are *portable data*: shareable, installable from a community catalog, and generatable by AI.
+A lightweight, self-hosted **Security Information and Event Management (SIEM)** system built with Node.js/TypeScript, Vue 3, and PostgreSQL. **v3** adds an **AI Security Analyst** and **EDR endpoint agents** on top of the v2 *Parser Platform*, where parsers and detection rules are *portable data*: shareable, installable from a community catalog, and generatable by AI.
 
 > New here? Go to **[Installation](Installation)**, then **[Log Shippers](Log-Shippers)** to start getting logs in.
 
@@ -18,7 +18,9 @@ SIEMBox ingests logs from your hosts and services, **parses** them into a single
 | **Normalization** | One **canonical schema** so a rule written once fires across every log source | [Parsers](Parsers) |
 | **Threat Intel** | IP drill-down (country, events, alerts), a dashboard **country choropleth**, free **blocklist feeds**, and BYO-key **reputation** (AbuseIPDB / AlienVault OTX) | [Threat Intel](Threat-Intel) |
 | **Scanning** | Host vulnerability scanning (**Nuclei**) and container-image scanning (**Trivy**), with optional Docker-host image discovery and scheduled scans | [Vulnerability & Container Scanning](Vulnerability-and-Container-Scanning) |
-| **Alerts & access** | Alert management, configurable retention, and role-based access (Admin / Analyst / Viewer) | [Configuration](Configuration) |
+| **Endpoints (EDR)** | Enroll endpoint agents for host inventory, detections, and vulnerability scans, with server-delivered **YARA** rule packs | [Endpoints & EDR](Endpoints-and-EDR) |
+| **AI Security Analyst** | A conversational, **read-only** analyst over your own data (alerts, vulns, assets, threat intel) that helps you prioritize | [AI Security Analyst](AI-Security-Analyst) |
+| **Alerts & access** | Alert management, configurable retention, and role-based access (Admin / Analyst / Operator / Viewer) | [Configuration](Configuration) |
 
 ## Highlights
 

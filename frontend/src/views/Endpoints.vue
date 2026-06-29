@@ -2,8 +2,11 @@
   <div class="endpoints">
     <div class="page-header">
       <div>
-        <h2>Endpoints (EDR)</h2>
-        <p class="subtitle">Enrolled endpoint agents — inventory, vulnerabilities, and detections.</p>
+        <h2>Endpoints</h2>
+        <p class="subtitle">Enrolled SIEMBOX Endpoint agents — inventory, vulnerabilities, and detections.</p>
+        <p class="subtitle">
+          Agent: <a href="https://github.com/cladkins/siembox-endpoint" target="_blank" rel="noopener">github.com/cladkins/siembox-endpoint</a>
+        </p>
       </div>
       <div class="actions">
         <el-button @click="refresh" :loading="loading"><el-icon><Refresh /></el-icon> Refresh</el-button>
@@ -149,7 +152,7 @@
         <p class="muted" style="margin: 0 0 8px">
           Point the agent at this server and enroll with the token above. See the agent's
           <code>scripts/install.sh</code> / release assets in the
-          <a href="https://github.com/cladkins/SIEMBOX-EDR" target="_blank">SIEMBOX-EDR</a> repo.
+          <a href="https://github.com/cladkins/siembox-endpoint" target="_blank" rel="noopener">SIEMBOX Endpoint</a> repo.
         </p>
         <pre class="install">{{ installSnippet }}</pre>
       </template>

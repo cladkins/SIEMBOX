@@ -287,7 +287,7 @@ export const api = {
   getAdminJobs: (status?: string, limit?: number, offset?: number) =>
     apiClient.get('/admin/jobs', { params: { status, limit, offset } }),
 
-  // EDR Endpoints
+  // SIEMBOX Endpoint agents
   getEndpoints: () => apiClient.get('/edr/agents'),
   getEndpoint: (id: string) => apiClient.get(`/edr/agents/${id}`),
   getEndpointVulnerabilities: (id: string) => apiClient.get(`/edr/agents/${id}/vulnerabilities`),

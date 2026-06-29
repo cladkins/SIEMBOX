@@ -11,6 +11,9 @@
             <el-button size="small" @click="openCatalog">
               <el-icon><Shop /></el-icon> Browse Catalog
             </el-button>
+            <el-button size="small" tag="a" href="https://github.com/cladkins/siembox-catalog" target="_blank" rel="noopener">
+              Catalog repo ↗
+            </el-button>
             <el-button type="primary" size="small" @click="showCreateDialog">
               <el-icon><Plus /></el-icon> Add Rule
             </el-button>
@@ -194,7 +197,7 @@
         </el-button>
       </div>
       <div v-if="catalogSource" class="catalog-source catalog-source-line">
-        Source: <code>{{ catalogSource.repo }}@{{ catalogSource.ref }}/{{ catalogSource.path }}</code>
+        Source: <a :href="`https://github.com/${catalogSource.repo}`" target="_blank" rel="noopener"><code>{{ catalogSource.repo }}@{{ catalogSource.ref }}/{{ catalogSource.path }}</code></a>
       </div>
 
       <el-alert v-if="catalogError" type="error" :closable="false" :title="catalogError" style="margin-bottom: 12px" />

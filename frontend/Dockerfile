@@ -19,8 +19,10 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 # Copy source code
 COPY . .
 
-# Build the app
-RUN npm run build
+# Type-check, then build. The type-check gates the image: a vue-tsc-catchable
+# error (undefined reference, type mismatch) fails the build instead of shipping
+# (vite build alone does NOT type-check).
+RUN npm run type-check && npm run build
 
 # Stage 2: Production with Nginx
 FROM nginx:alpine

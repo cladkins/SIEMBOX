@@ -264,7 +264,7 @@
               <el-tag
                 v-for="(count, category) in errorSummary.byCategory"
                 :key="category"
-                :type="getCategoryType(category)"
+                :type="getCategoryType(String(category))"
                 size="small"
                 style="margin-right: 5px; margin-bottom: 5px"
               >

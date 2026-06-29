@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "type-check": "vue-tsc --noEmit",
     "build:check": "vue-tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint src --ext .vue,.ts",
@@ -39,6 +40,6 @@
     "prettier": "^3.1.1",
     "typescript": "^5.3.3",
     "vite": "^5.0.11",
-    "vue-tsc": "^1.8.27"
+    "vue-tsc": "^2.2.12"
   }
 }

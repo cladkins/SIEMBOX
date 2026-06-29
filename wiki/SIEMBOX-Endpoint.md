@@ -1,16 +1,16 @@
-# Endpoints & EDR
+# SIEMBOX Endpoint
 
-SIEMBox v3 adds **endpoint detection & response (EDR)**: lightweight agents you install on your hosts that report **inventory**, **detections**, and **vulnerabilities** back to SIEMBox, and run **YARA** scans using rule packs delivered by the server.
+SIEMBox v3 adds **SIEMBOX Endpoint**: lightweight agents you install on your hosts that report **inventory**, **detections**, and **vulnerabilities** back to SIEMBox, and run **YARA** scans using rule packs delivered by the server.
 
-> **Two pieces.** This repo is the **server side** — the `/api/edr/*` API, the **Endpoints (EDR)** admin page, and YARA bundle delivery. The **agent** itself is a separate, lightweight component (a small Go binary) that you install on each endpoint and enroll from the UI.
+> **Two pieces.** This repo is the **server side** — the `/api/edr/*` API, the **Endpoints** admin page, and YARA bundle delivery. The **agent** itself is a separate, lightweight component (a small Go binary) that you install on each endpoint and enroll from the UI. It lives at **[cladkins/siembox-endpoint](https://github.com/cladkins/siembox-endpoint)**.
 
 ## Where to find it
 
-**Assets & Vulnerabilities → Endpoints (EDR)** (admin only). The page shows your endpoint fleet (hostname, OS, architecture, agent version, live status, open vulnerabilities, recent detections, last seen, last/next scan), enrollment-token management, and the current **YARA bundle** status.
+**Assets & Vulnerabilities → Endpoints** (admin only). The page shows your endpoint fleet (hostname, OS, architecture, agent version, live status, open vulnerabilities, recent detections, last seen, last/next scan), enrollment-token management, and the current **YARA bundle** status.
 
 ## Enrolling an endpoint
 
-1. **Generate a token.** On *Endpoints (EDR)*, create a one-time **enrollment token** (shown once — copy it).
+1. **Generate a token.** On *Endpoints*, create a one-time **enrollment token** (shown once — copy it).
 2. **Install + enroll the agent** on the host, pointing it at your server (`https://<siembox-host>:8421`) with that token.
 3. The agent calls `POST /api/edr/agents/enroll`; the server validates the token (single-use, optional expiry), then returns a unique **agent ID** and **API key** (the key is shown once and stored only as a hash server-side).
 4. The agent **heartbeats** (~60s) and **pulls config** (~5m). Revoke a token anytime from the same page; revoked/expired tokens can't enroll.
@@ -36,7 +36,7 @@ The server stores **versioned YARA bundles** and serves the current one to agent
 - **YARA-Forge (opt-in).** Set `EDR_YARA_FORGE_ENABLED=true` to have a daily job import the open-source **YARA-Forge** pack and publish a new bundle when it changes. Admins can also pull on demand with **"Pull YARA-Forge now"** on the Endpoints page (`POST /api/edr/yara/refresh`).
 - **Retention.** Only the newest `EDR_YARA_KEEP_VERSIONS` bundles are kept (default 10); agents always pull the highest version.
 
-See [Configuration → EDR](Configuration#edr--yara-optional) for the knobs.
+See [Configuration → Endpoints](Configuration#endpoints--yara-optional) for the knobs.
 
 ## Verifying it works
 

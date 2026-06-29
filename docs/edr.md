@@ -1,7 +1,7 @@
-# EDR — server side
+# SIEMBOX Endpoint — server side
 
-Server-side implementation of the SIEMBox EDR API that the endpoint agent
-([`cladkins/SIEMBOX-EDR`](https://github.com/cladkins/SIEMBOX-EDR)) talks to. The
+Server-side implementation of the SIEMBOX Endpoint API that the endpoint agent
+([`cladkins/siembox-endpoint`](https://github.com/cladkins/siembox-endpoint)) talks to. The
 wire contract is that repo's `docs/EDR_API.md`; this documents how it maps into
 SIEMBox.
 
@@ -35,7 +35,7 @@ unique index on `event_id` for replay dedup).
 - `POST /tokens` (generate, plaintext shown once), `GET /tokens`, `DELETE /tokens/:hash` (revoke)
 - `GET /yara` (current bundle version/sha/size), `POST /yara/refresh` (pull YARA-Forge now)
 
-The **Endpoints** UI (admin) lives under *Assets & Vulnerabilities → Endpoints (EDR)*:
+The **Endpoints** UI (admin) lives under *Assets & Vulnerabilities → Endpoints*:
 agent list with live status + open-vuln / recent-detection counts, a per-endpoint
 drill-down (reusing the alert + vuln tables), and enrollment-token generation with
 install instructions.
@@ -83,16 +83,16 @@ contract: `docs/SERVER_YARA_ADDON.md` in the agent repo.
 
 ## Known follow-ups
 
-- EDR alerts are inserted directly, so they don't yet fire Email/Slack/NTFY notifications (rule-based alerts still do).
+- Endpoint alerts are inserted directly, so they don't yet fire Email/Slack/NTFY notifications (rule-based alerts still do).
 - Server-pushed Sigma `rules` in `AgentConfig` are empty; wire to `/api/rules` (endpoint/Sigma) later.
 - YARA bundle status (version/source/size) + a "Pull YARA-Forge now" button live on
-  the **Endpoints (EDR)** page; per-agent "which version does this agent have"
+  the **Endpoints** page; per-agent "which version does this agent have"
   isn't tracked yet (the agent stores it locally; the server only knows the served version).
 
 ## Verify with the real agent
 
 ```sh
-# in the SIEMBOX-EDR repo
+# in the siembox-endpoint repo
 go build -o /tmp/siembox-agent ./cmd/siembox-agent
 mkdir -p /tmp/agentdir
 cat > /tmp/agentdir/agent.json <<EOF
@@ -100,7 +100,7 @@ cat > /tmp/agentdir/agent.json <<EOF
 EOF
 /tmp/siembox-agent -dir /tmp/agentdir -v run
 ```
-Generate a token under **Endpoints (EDR)**, run the agent, and it should appear in
+Generate a token under **Endpoints**, run the agent, and it should appear in
 the list; inventory fills the endpoint asset, scans surface vulns on it, and
 detections show in the **Alerts** UI and the endpoint drill-down.
 

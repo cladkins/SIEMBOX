@@ -12,7 +12,7 @@ Most endpoints require a **JWT**. Log in (`POST /api/auth/login`), then send the
 Authorization: Bearer <YOUR_JWT_TOKEN>
 ```
 
-Tokens are valid for **24 hours**. Role-based access applies (Admin / Analyst / Operator / Viewer) — some endpoints (user management, AI builders, threat-feed/provider config, EDR fleet) are **admin-only**. Endpoint agents authenticate separately with a per-agent API key.
+Tokens are valid for **24 hours**. Role-based access applies (Admin / Analyst / Operator / Viewer) — some endpoints (user management, AI builders, threat-feed/provider config, Endpoint fleet) are **admin-only**. Endpoint agents authenticate separately with a per-agent API key.
 
 ## Response & error format
 
@@ -53,7 +53,7 @@ Tokens are valid for **24 hours**. Role-based access applies (Admin / Analyst / 
 | Vulnerabilities | `/api/vulnerabilities` | Host scan results. |
 | Containers | `/api/containers` | Image scans + Docker-host image discovery. |
 | Scheduled Scans | `/api/scheduled-scans` | Scheduled host/container scans. |
-| EDR | `/api/edr` | Endpoint agent enroll/heartbeat/config, YARA bundle delivery, inventory/events/vulns ingest, admin fleet + tokens. |
+| Endpoints | `/api/edr` | Endpoint agent enroll/heartbeat/config, YARA bundle delivery, inventory/events/vulns ingest, admin fleet + tokens. |
 | Threat Intel | `/api/threat-intel` | IP detail (country, events, alerts), country IPs. |
 | Threat Feeds | `/api/threat-feeds` | Feed status + reputation provider config (admin). |
 | Shippers | `/api/shippers` | Log shipper registration/keys, ingest. |

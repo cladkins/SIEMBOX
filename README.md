@@ -1,6 +1,6 @@
 # SIEMBox
 
-A lightweight, self-hosted Security Information and Event Management (SIEM) system built with Node.js, TypeScript, and Vue.js. **v3** adds an **AI Security Analyst** and **EDR endpoint agents** on top of the v2 *Parser Platform* — where parsers and detections are portable data: shareable, installable from a community catalog, and generatable by AI.
+A lightweight, self-hosted Security Information and Event Management (SIEM) system built with Node.js, TypeScript, and Vue.js. **v3** adds an **AI Security Analyst** and **SIEMBOX Endpoint agents** on top of the v2 *Parser Platform* — where parsers and detections are portable data: shareable, installable from a community catalog, and generatable by AI.
 
 ## Features
 
@@ -15,8 +15,8 @@ A lightweight, self-hosted Security Information and Event Management (SIEM) syst
 - **Log shipper**: Universal log forwarder for collecting logs (files, Docker containers, systemd journals) from any host.
 - **Vulnerability scanning**: Built-in Nuclei scanning with per-host asset tracking and a vulnerability management view.
 - **Container scanning**: Scan any image for OS/library CVEs with Trivy. Optionally enumerate the images already running on your Docker host and scan them in one click.
-- **🖥️ EDR endpoint agents (new in v3)**: Enroll lightweight endpoint agents from *Endpoints (EDR)* to report host inventory, detections, and vulnerabilities, with **server-delivered YARA** rule packs (optional YARA-Forge sync). Endpoint findings flow into the same Alerts and Assets views.
-- **Asset-360**: One asset view that correlates its open vulnerabilities, the alerts it raised, its EDR agent and log shipper, GeoIP, and open ports.
+- **🖥️ SIEMBOX Endpoint agents (new in v3)**: Enroll lightweight endpoint agents from *Endpoints* to report host inventory, detections, and vulnerabilities, with **server-delivered YARA** rule packs (optional YARA-Forge sync). Endpoint findings flow into the same Alerts and Assets views.
+- **Asset-360**: One asset view that correlates its open vulnerabilities, the alerts it raised, its endpoint agent and log shipper, GeoIP, and open ports.
 - **Threat Intel**: Investigate any IP — its GeoIP country, the log events it produced, and the alerts it triggered — with a country choropleth on the dashboard that drills into source IPs. Enriched with **external threat feeds** (free abuse.ch / Tor / blocklist.de blocklists) and optional **bring-your-own-key reputation** (AbuseIPDB, AlienVault OTX).
 - **Ready-made parsers in the catalog**: Nginx, Traefik, Caddy, Authelia, Keycloak, Nextcloud, Pi-hole, Vaultwarden, UniFi, Home Assistant, Plex, Jellyfin, and more — one click to install from *Parsers → Browse Catalog*.
 - **Alert management**: View, acknowledge, and manage security alerts.
@@ -30,7 +30,7 @@ SIEMBox runs as a main stack plus two optional agents:
 
 - **The main stack** — the server: web UI, API, syslog listener, and database. Deploy this once, on your SIEMBox host.
 - **The log shipper** *(optional)* — a lightweight forwarder you install on **other** machines to push their logs (files, Docker containers, systemd journal) to the main stack.
-- **The EDR endpoint agent** *(optional)* — enroll endpoints from **Endpoints (EDR)** in the UI to collect host inventory, detections, and vulnerability scans. See the [Endpoints & EDR](https://github.com/cladkins/SIEMBOX/wiki/Endpoints-and-EDR) wiki page.
+- **The SIEMBOX Endpoint agent** *(optional)* — enroll endpoints from **Endpoints** in the UI to collect host inventory, detections, and vulnerability scans. See the [SIEMBOX Endpoint](https://github.com/cladkins/SIEMBOX/wiki/SIEMBOX-Endpoint) wiki page.
 
 ---
 
@@ -149,7 +149,7 @@ The shipper should show as **online** in the UI within ~30 seconds. Full setup, 
 - **[API Reference](./API.md)** - Complete REST API documentation
 - **[Community Parsers](./PARSERS.md)** - Pre-built parsers for common log sources
 - **[Detection Rules](./RULES.md)** - Built-in and community detection rules
-- **[EDR (server side)](./docs/edr.md)** - Endpoint agent API, enrollment, and YARA delivery
+- **[SIEMBOX Endpoint (server side)](./docs/edr.md)** - Endpoint agent API, enrollment, and YARA delivery
 - **[Canonical Schema](./docs/canonical-schema.md)** - The normalized field schema parsers map to
 - **[Detection Normalization](./docs/detection-normalization.md)** - How rules match across log sources
 - **[GeoIP Enrichment](./docs/geoip.md)** - Offline country / foreign-geo enrichment
@@ -167,7 +167,7 @@ The shipper should show as **online** in the UI within ~30 seconds. Full setup, 
 - **Backend**: Node.js + TypeScript + Express
 - **Database**: PostgreSQL with JSONB for flexible log storage
 - **Log Shipper**: Alpine-based log forwarder (optional component)
-- **EDR**: Server-side endpoint-agent API (`/api/edr/*`) with server-delivered YARA; the agent itself is a separate component you enroll from the UI
+- **SIEMBOX Endpoint**: Server-side endpoint-agent API (`/api/edr/*`) with server-delivered YARA; the agent itself is a separate component you enroll from the UI
 - **AI Security Analyst**: Model-agnostic, read-only tool loop over your own data (local Ollama or cloud)
 - **Deployment**: Docker Compose
 
@@ -195,7 +195,7 @@ MIT License - See LICENSE file for details
 - [x] GeoIP dashboard map (alerts by country)
 - [x] Container vulnerability scanning (Trivy) + scheduled scans
 - [x] External threat-intelligence feeds (blocklists + BYO-key reputation)
-- [x] EDR endpoint agents + server-delivered YARA rule packs (v3)
+- [x] SIEMBOX Endpoint agents + server-delivered YARA rule packs (v3)
 - [x] AI Security Analyst — conversational, read-only, model-agnostic (v3)
 - [x] Asset-360 correlation (vulns, alerts, agent, shipper, geo)
 - [ ] Additional parser types (LEEF)

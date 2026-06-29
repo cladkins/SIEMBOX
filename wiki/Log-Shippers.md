@@ -48,7 +48,6 @@ Two compose files are provided in [`log-shipper/`](https://github.com/cladkins/S
 - The **Log Shippers** view shows each shipper's online status and recent activity.
 - If a shipper is offline or logs aren't arriving, see [Troubleshooting](Troubleshooting) and the in-repo guides:
   [Log Shipper README](https://github.com/cladkins/SIEMBOX/blob/main/log-shipper/README.md) ·
-  [Verification Guide](https://github.com/cladkins/SIEMBOX/blob/main/log-shipper/VERIFICATION-GUIDE.md) ·
   [Shipper Diagnostics](https://github.com/cladkins/SIEMBOX/blob/main/docs/operations/SHIPPER-DIAGNOSTICS.md)
 
 ## After logs arrive

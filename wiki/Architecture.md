@@ -5,9 +5,10 @@
 | Component | Stack | Role |
 |-----------|-------|------|
 | **Frontend** | Vue 3 + Element Plus + Vite | Web UI (served on port **8420**). |
-| **Backend** | Node.js + TypeScript + Express | REST API, syslog listener, parser/rules engines, scanners, jobs (port **8421**, syslog **514**). |
-| **Database** | PostgreSQL (JSONB) | Raw + parsed logs, parsers, rules, alerts, assets, vulnerabilities, threat feeds/indicators, settings. |
+| **Backend** | Node.js + TypeScript + Express | REST API, syslog listener, parser/rules engines, scanners, the **EDR server** + YARA delivery, the **AI Security Analyst** tool loop, and jobs (port **8421**, syslog **514**). |
+| **Database** | PostgreSQL (JSONB) | Raw + parsed logs, parsers, rules, alerts, assets, vulnerabilities, threat feeds/indicators, EDR agents + YARA bundles, analyst chat threads, settings. |
 | **Log shipper** | Alpine container | *Optional* forwarder installed on other hosts (see [Log Shippers](Log-Shippers)). |
+| **EDR endpoint agent** | Separate lightweight agent | *Optional* agent enrolled from the UI; reports inventory/detections/vulns and runs server-delivered YARA (see [Endpoints & EDR](Endpoints-and-EDR)). |
 
 Everything is deployed with Docker Compose.
 
@@ -54,6 +55,8 @@ The rules engine evaluates each parsed log against enabled rules: ANDed **condit
 - **`parsed_logs`** — `parsed_data` (canonical fields, JSONB), `parser_id` (which parser matched — surfaced on the Logs view), `event_type`, `source_ip`, timestamps.
 - **`parsers` / `rules`** — installed portable parsers and detection rules.
 - **`alerts`, `assets`, `vulnerabilities`, `threat_feeds`, `threat_indicators`, `system_settings`** — feature data.
+- **`edr_agents`, `edr_enrollment_tokens`, `edr_yara_bundle`** — EDR endpoints, one-time enrollment tokens, and versioned YARA bundles.
+- **`chat_sessions`, `chat_messages`** — per-user AI Security Analyst threads.
 
 ## Ports recap
 

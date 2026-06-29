@@ -14,7 +14,7 @@ The log shipper is **managed only** - there is no standalone/unauthenticated mod
 
 ## 📚 Documentation
 
-- **[Verification Guide](./VERIFICATION-GUIDE.md)** - Step-by-step guide to verify logs are being sent and received
+- **[Shipper Diagnostics](../docs/operations/SHIPPER-DIAGNOSTICS.md)** - Verify logs are flowing and debug forwarding
 - **[Quick Reference](./QUICK-REFERENCE.md)** - Common commands and troubleshooting tips
 
 ## Features
@@ -236,7 +236,7 @@ docker inspect siembox-log-shipper | jq '.[0].State.Health'
 ## Troubleshooting
 
 For comprehensive troubleshooting, see:
-- **[Verification Guide](./VERIFICATION-GUIDE.md)** - Complete verification procedures
+- **[Shipper Diagnostics](../docs/operations/SHIPPER-DIAGNOSTICS.md)** - Verification procedures and forwarding diagnostics
 - **[Quick Reference](./QUICK-REFERENCE.md)** - Quick troubleshooting commands
 
 ### Shipper shows as "Offline"

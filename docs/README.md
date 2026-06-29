@@ -36,6 +36,15 @@ System architecture, design decisions, and implementation specifications.
 - **[PARSER-RULE-IMPLEMENTATION-SPEC.md](architecture/PARSER-RULE-IMPLEMENTATION-SPEC.md)** - Parser and rule implementation design
 - **[VAULTWARDEN-PARSER-IMPLEMENTATION.md](architecture/VAULTWARDEN-PARSER-IMPLEMENTATION.md)** - Vaultwarden parser design decisions
 
+### Feature guides
+Deep-dives for specific shipped features (see also the friendlier **[GitHub Wiki](https://github.com/cladkins/SIEMBOX/wiki)**, which has pages for **AI Security Analyst** and **Endpoints & EDR**).
+
+- **[edr.md](edr.md)** - EDR server API, agent enrollment, and YARA bundle delivery
+- **[geoip.md](geoip.md)** - Offline GeoIP enrichment
+- **[canonical-schema.md](canonical-schema.md)** - The normalized field schema parsers map to
+- **[detection-normalization.md](detection-normalization.md)** - How detection rules match across sources
+- **[detection-coverage.md](detection-coverage.md)** - Detection coverage notes
+
 ---
 
 ## 🚀 Quick Start Guides
@@ -71,23 +80,26 @@ System architecture, design decisions, and implementation specifications.
 
 ## 📊 Project Status
 
-**Current State:** Production Ready
+**Current State:** Production Ready (**v3**)
 
-**Recent Milestones (v2 — the Parser Platform):**
-- ✅ 27 production-ready parsers (reverse proxy, auth, applications, media)
-- ✅ 48 detection rules implemented and tested
-- ✅ Declarative parser engine + portable, in-app community catalog
+**Recent Milestones (v3):**
+- ✅ **AI Security Analyst** — conversational, read-only, model-agnostic (local Ollama or cloud)
+- ✅ **EDR endpoint agents** — enrollment, inventory/detections/vulnerabilities, server-delivered YARA
+- ✅ **Asset-360** — one asset view correlating vulns, alerts, agent, shipper, geo, and ports
+- ✅ Threat Intel — blocklist feeds + BYO-key reputation (AbuseIPDB, AlienVault OTX) + dashboard country map
+
+**v2 — the Parser Platform:**
+- ✅ Declarative parser engine + portable, in-app community catalog (browse / install / export / **contribute**)
 - ✅ AI builder for parsers and detections (Anthropic / OpenAI / Ollama, BYO key)
 - ✅ Canonical normalization + offline GeoIP enrichment
 - ✅ Catalog-only install — a fresh deployment starts empty, you install what you want
 
 **Features:**
 - Declarative, data-driven parsers — onboard a log source without engine code
-- In-app catalog to browse, install, update, export, and import parsers/detections
-- AI-assisted authoring with a generate → validate → auto-refine loop
-- Catalog-only by default — a fresh install ships with no parsers/detections; install them from Browse Catalog
-- Detection rules for authentication, proxy security, data exfiltration, geo, and more
-- Role-based access control and alert management
+- In-app catalog to browse, install, update, export, import, and **contribute** parsers/detections
+- AI-assisted authoring with a generate → validate → auto-refine loop, plus a read-only **AI Security Analyst**
+- EDR endpoints, host (**Nuclei**) + container (**Trivy**) vulnerability scanning, and threat intelligence
+- Role-based access control (**admin / analyst / operator / viewer**) and alert management
 
 See [../DEPLOYMENT.md](../DEPLOYMENT.md) for quick start and [operations/TROUBLESHOOTING.md](operations/TROUBLESHOOTING.md) for support.
 
@@ -150,5 +162,5 @@ Update this README.md when adding new documentation files. Each subdirectory has
 
 ---
 
-**Last Updated:** 2026-06-18
-**Documentation Version:** 3.1 (Default ports 8420/8421; internal planning docs kept local, out of the public repo)
+**Last Updated:** 2026-06-29
+**Documentation Version:** 4.0 (v3 — AI Security Analyst + EDR endpoints; internal planning docs kept local, out of the public repo)

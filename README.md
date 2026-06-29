@@ -1,12 +1,13 @@
 # SIEMBox
 
-A lightweight, self-hosted Security Information and Event Management (SIEM) system built with Node.js, TypeScript, and Vue.js. As of **v2 — the Parser Platform**, parsers and detections are portable data: shareable, installable from a community catalog, and generatable by AI.
+A lightweight, self-hosted Security Information and Event Management (SIEM) system built with Node.js, TypeScript, and Vue.js. **v3** adds an **AI Security Analyst** and **EDR endpoint agents** on top of the v2 *Parser Platform* — where parsers and detections are portable data: shareable, installable from a community catalog, and generatable by AI.
 
 ## Features
 
 - **Declarative parser platform**: Parsers are pure data — a match pattern, canonical field mappings, and declarative `derivations` — so you can onboard a new log source without touching engine code.
 - **In-app community catalog**: Browse and install **27 parsers** and **48 detection rules** from a GitHub catalog directly in the UI (*Parsers → Browse Catalog*, *Detection Rules → Browse Catalog*) — every item validated and self-tested before install, with search, filters, and install/update status. Export or import any item as portable JSON.
 - **AI builder (bring your own key)**: Paste a log line to generate a parser, or describe a threat to generate a detection rule. A *generate → validate → auto-refine* loop runs against the real engine (≤3 attempts), so you never get an invalid artifact. Works with **Anthropic, OpenAI, or local Ollama**; your key is encrypted at rest.
+- **🤖 AI Security Analyst (new in v3)**: A conversational, **read-only** SOC analyst over your own data — ask about alerts, incidents, vulnerabilities, assets, and threat intel, and get help prioritizing. Model-agnostic (local **Ollama** or cloud) with a separate analyst-model config and persisted per-user chat threads. Available as a global *Ask AI* drawer and a dedicated page; grounded in read-only tools so it can observe but never change anything.
 - **Canonical normalization**: Every parser normalizes to one canonical schema, so a detection rule written once fires against logs from any source.
 - **GeoIP enrichment**: Offline country / foreign-geo enrichment (no external calls), powering geo-aware detections such as foreign-login alerts.
 - **Catalog-only by default**: A fresh install starts empty — no hardcoded parsers or detections. You install exactly what you want from the in-app catalog (*Browse Catalog → Install all*), so the deployment carries only the content you chose.
@@ -14,6 +15,8 @@ A lightweight, self-hosted Security Information and Event Management (SIEM) syst
 - **Log shipper**: Universal log forwarder for collecting logs (files, Docker containers, systemd journals) from any host.
 - **Vulnerability scanning**: Built-in Nuclei scanning with per-host asset tracking and a vulnerability management view.
 - **Container scanning**: Scan any image for OS/library CVEs with Trivy. Optionally enumerate the images already running on your Docker host and scan them in one click.
+- **🖥️ EDR endpoint agents (new in v3)**: Enroll lightweight endpoint agents from *Endpoints (EDR)* to report host inventory, detections, and vulnerabilities, with **server-delivered YARA** rule packs (optional YARA-Forge sync). Endpoint findings flow into the same Alerts and Assets views.
+- **Asset-360**: One asset view that correlates its open vulnerabilities, the alerts it raised, its EDR agent and log shipper, GeoIP, and open ports.
 - **Threat Intel**: Investigate any IP — its GeoIP country, the log events it produced, and the alerts it triggered — with a country choropleth on the dashboard that drills into source IPs. Enriched with **external threat feeds** (free abuse.ch / Tor / blocklist.de blocklists) and optional **bring-your-own-key reputation** (AbuseIPDB, AlienVault OTX).
 - **Ready-made parsers in the catalog**: Nginx, Traefik, Caddy, Authelia, Keycloak, Nextcloud, Pi-hole, Vaultwarden, UniFi, Home Assistant, Plex, Jellyfin, and more — one click to install from *Parsers → Browse Catalog*.
 - **Alert management**: View, acknowledge, and manage security alerts.
@@ -23,10 +26,11 @@ A lightweight, self-hosted Security Information and Event Management (SIEM) syst
 
 ## Quick Start
 
-SIEMBox runs as two parts:
+SIEMBox runs as a main stack plus two optional agents:
 
 - **The main stack** — the server: web UI, API, syslog listener, and database. Deploy this once, on your SIEMBox host.
-- **The log shipper** — an *optional* lightweight forwarder you install on **other** machines to push their logs to the main stack.
+- **The log shipper** *(optional)* — a lightweight forwarder you install on **other** machines to push their logs (files, Docker containers, systemd journal) to the main stack.
+- **The EDR endpoint agent** *(optional)* — enroll endpoints from **Endpoints (EDR)** in the UI to collect host inventory, detections, and vulnerability scans. See the [Endpoints & EDR](https://github.com/cladkins/SIEMBOX/wiki/Endpoints-and-EDR) wiki page.
 
 ---
 
@@ -138,14 +142,14 @@ The shipper should show as **online** in the UI within ~30 seconds. Full setup, 
 
 ### Log Shipper Documentation
 - **[Log Shipper README](./log-shipper/README.md)** - Setup and configuration
-- **[Verification Guide](./log-shipper/VERIFICATION-GUIDE.md)** - Verify logs are flowing correctly
 - **[Quick Reference](./log-shipper/QUICK-REFERENCE.md)** - Common commands and troubleshooting
+- **[Shipper Diagnostics](./docs/operations/SHIPPER-DIAGNOSTICS.md)** - Verify logs are flowing and debug forwarding
 
 ### Reference Documentation
 - **[API Reference](./API.md)** - Complete REST API documentation
 - **[Community Parsers](./PARSERS.md)** - Pre-built parsers for common log sources
 - **[Detection Rules](./RULES.md)** - Built-in and community detection rules
-- **[Parser Platform Plan](./docs/parser-platform-plan.md)** - The v2 declarative engine + catalog design
+- **[EDR (server side)](./docs/edr.md)** - Endpoint agent API, enrollment, and YARA delivery
 - **[Canonical Schema](./docs/canonical-schema.md)** - The normalized field schema parsers map to
 - **[Detection Normalization](./docs/detection-normalization.md)** - How rules match across log sources
 - **[GeoIP Enrichment](./docs/geoip.md)** - Offline country / foreign-geo enrichment
@@ -163,6 +167,8 @@ The shipper should show as **online** in the UI within ~30 seconds. Full setup, 
 - **Backend**: Node.js + TypeScript + Express
 - **Database**: PostgreSQL with JSONB for flexible log storage
 - **Log Shipper**: Alpine-based log forwarder (optional component)
+- **EDR**: Server-side endpoint-agent API (`/api/edr/*`) with server-delivered YARA; the agent itself is a separate component you enroll from the UI
+- **AI Security Analyst**: Model-agnostic, read-only tool loop over your own data (local Ollama or cloud)
 - **Deployment**: Docker Compose
 
 ## Contributing
@@ -189,6 +195,9 @@ MIT License - See LICENSE file for details
 - [x] GeoIP dashboard map (alerts by country)
 - [x] Container vulnerability scanning (Trivy) + scheduled scans
 - [x] External threat-intelligence feeds (blocklists + BYO-key reputation)
+- [x] EDR endpoint agents + server-delivered YARA rule packs (v3)
+- [x] AI Security Analyst — conversational, read-only, model-agnostic (v3)
+- [x] Asset-360 correlation (vulns, alerts, agent, shipper, geo)
 - [ ] Additional parser types (LEEF)
 - [ ] Advanced correlation rules
 - [ ] Multi-tenancy support

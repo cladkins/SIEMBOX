@@ -43,12 +43,18 @@ The AI parser/detection builders are bring-your-own-key. Set a provider key here
 
 See [Parsers → AI builder](Parsers#ai-builder) and [Detection Rules](Detection-Rules).
 
+## AI Security Analyst (optional)
+
+The **[AI Security Analyst](AI-Security-Analyst)** has its own model configuration under **Settings → AI Analyst** — provider (`ollama` / `openai` / `anthropic`), model, base URL, and (for cloud) API key (encrypted with `CREDENTIAL_ENCRYPTION_KEY`). Leave a field blank to **inherit** the AI builder config above, so the Analyst can reuse the same provider or point at a different — e.g. a local Ollama — model. The `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` env vars apply here too.
+
 ## Parser / detection catalog
 
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `SIEMBOX_CATALOG_REPO` | `cladkins/siembox-parsers` | GitHub repo backing the in-app catalog. |
 | `SIEMBOX_CATALOG_REF` | `main` | Branch/tag/ref to read. |
+| `SIEMBOX_CATALOG_PARSERS_PATH` | `parsers` | Directory in the catalog repo for parsers. |
+| `SIEMBOX_CATALOG_DETECTIONS_PATH` | `detections` | Directory in the catalog repo for detection rules. |
 | `GITHUB_TOKEN` | — | Optional, raises GitHub API rate limits for catalog browsing. |
 | `SEED_BUNDLED_CONTENT` | *(unset = catalog-only)* | Set `true` to opt back into auto-importing bundled detection rules on startup (legacy). Defaults to catalog-only. |
 
@@ -65,11 +71,22 @@ Offline country / foreign-geo enrichment (DB-IP IP-to-Country Lite, CC BY 4.0). 
 
 Docker-host image discovery requires mounting the Docker socket into the backend; it is **commented out by default**. See the security note in [Vulnerability & Container Scanning](Vulnerability-and-Container-Scanning#docker-host-discovery) before enabling it (`:ro` does **not** make the Docker API read-only — socket access is root-equivalent on the host).
 
+## EDR & YARA (optional)
+
+Endpoint agents (see [Endpoints & EDR](Endpoints-and-EDR)) are enrolled from the UI; the server delivers YARA rule packs to them.
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `EDR_YARA_FORGE_ENABLED` | *(off)* | Set `true` to import the open-source **YARA-Forge** pack daily and publish a new bundle when it changes. Admins can also pull on demand from *Endpoints (EDR)*. |
+| `EDR_YARA_KEEP_VERSIONS` | `10` | How many YARA bundle versions to retain server-side (older are pruned; agents always pull the newest). |
+
 ## In-UI settings
 
 Some configuration lives in **Settings** rather than env vars:
 
 - **AI Builder** — provider, model, base URL, API key.
+- **AI Analyst** — the analyst's provider/model (inherits AI Builder if left blank). See [AI Security Analyst](AI-Security-Analyst).
+- **EDR / YARA** — endpoint enrollment tokens and the server YARA bundle (incl. *Pull YARA-Forge now*). See [Endpoints & EDR](Endpoints-and-EDR).
 - **Threat Feeds & Reputation** — enable/disable feeds, add AbuseIPDB/AlienVault OTX keys (admin-gated). See [Threat Intel](Threat-Intel).
 - **Notifications** — Email / Slack / NTFY alert delivery.
 - **Retention** — log retention window and automated cleanup.

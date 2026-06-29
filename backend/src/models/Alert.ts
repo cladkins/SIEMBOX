@@ -59,6 +59,7 @@ export class AlertModel {
     ruleId?: number;
     startTime?: Date;
     endTime?: Date;
+    search?: string;
   }): Promise<{ alerts: Alert[]; total: number }> {
     const conditions: string[] = [];
     const params: any[] = [];
@@ -72,6 +73,14 @@ export class AlertModel {
     if (options?.status) {
       conditions.push(`status = $${paramIndex++}`);
       params.push(options.status);
+    }
+
+    if (options?.search) {
+      // Keyword / IP search across the alert title, description, and matched_data
+      // (where the source IP and other matched fields live). ILIKE = case-insensitive.
+      const p = paramIndex++;
+      conditions.push(`(title ILIKE $${p} OR description ILIKE $${p} OR matched_data::text ILIKE $${p})`);
+      params.push(`%${options.search}%`);
     }
 
     if (options?.ruleId) {

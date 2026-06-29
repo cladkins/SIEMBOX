@@ -14,6 +14,7 @@ router.get('/', async (req: Request, res: Response) => {
     const ruleId = req.query.ruleId ? parseInt(req.query.ruleId as string) : undefined;
     const startTime = req.query.startTime ? new Date(req.query.startTime as string) : undefined;
     const endTime = req.query.endTime ? new Date(req.query.endTime as string) : undefined;
+    const search = (req.query.search as string)?.trim().slice(0, 200) || undefined;
 
     const result = await AlertModel.findAll({
       limit,
@@ -23,6 +24,7 @@ router.get('/', async (req: Request, res: Response) => {
       ruleId,
       startTime,
       endTime,
+      search,
     });
 
     res.json({

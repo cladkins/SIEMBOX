@@ -2,8 +2,21 @@
   <div class="alerts">
     <el-card class="filter-card">
       <el-form :inline="true" :model="filters" class="filter-form">
+        <el-form-item label="Search">
+          <el-input
+            v-model="filters.search"
+            clearable
+            placeholder="Keyword or IP…"
+            style="width: 240px"
+            @keyup.enter="applySearch"
+            @clear="applySearch"
+          >
+            <template #prefix><el-icon><Search /></el-icon></template>
+          </el-input>
+        </el-form-item>
+
         <el-form-item label="Severity">
-          <el-select v-model="filters.severity" clearable placeholder="All" @change="fetchAlerts">
+          <el-select v-model="filters.severity" clearable placeholder="All" style="width: 150px" @change="applySearch">
             <el-option label="Critical" value="critical" />
             <el-option label="High" value="high" />
             <el-option label="Medium" value="medium" />
@@ -12,7 +25,7 @@
         </el-form-item>
 
         <el-form-item label="Status">
-          <el-select v-model="filters.status" clearable placeholder="All" @change="fetchAlerts">
+          <el-select v-model="filters.status" clearable placeholder="All" style="width: 160px" @change="applySearch">
             <el-option label="New" value="new" />
             <el-option label="Investigating" value="investigating" />
             <el-option label="Closed" value="closed" />
@@ -21,7 +34,7 @@
         </el-form-item>
 
         <el-form-item>
-          <el-button type="primary" @click="fetchAlerts">
+          <el-button type="primary" @click="applySearch">
             <el-icon><Search /></el-icon> Search
           </el-button>
           <el-button @click="resetFilters">Reset</el-button>
@@ -167,6 +180,7 @@ const explainPayload = (alert: Alert) => ({
 const filters = ref({
   severity: '',
   status: '',
+  search: '',
 });
 
 const currentPage = ref(1);
@@ -197,6 +211,9 @@ const fetchAlerts = async () => {
   if (filters.value.status) {
     params.status = filters.value.status;
   }
+  if (filters.value.search && filters.value.search.trim()) {
+    params.search = filters.value.search.trim();
+  }
 
   try {
     await alertsStore.fetchAlerts(params);
@@ -205,8 +222,13 @@ const fetchAlerts = async () => {
   }
 };
 
+const applySearch = () => {
+  currentPage.value = 1;
+  fetchAlerts();
+};
+
 const resetFilters = () => {
-  filters.value = { severity: '', status: '' };
+  filters.value = { severity: '', status: '', search: '' };
   currentPage.value = 1;
   fetchAlerts();
 };

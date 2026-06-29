@@ -1,6 +1,6 @@
 {
   "name": "siembox-backend",
-  "version": "0.1.0",
+  "version": "3.0.0",
   "description": "SIEMBox Backend - Syslog collection, parsing, and detection engine",
   "main": "dist/server.js",
   "scripts": {

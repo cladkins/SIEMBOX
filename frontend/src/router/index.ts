@@ -29,6 +29,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/ThreatIntel.vue'),
       },
       {
+        path: 'ai-analyst',
+        name: 'AIAnalyst',
+        component: () => import('@/views/AIAnalyst.vue'),
+        meta: { allowedRoles: ['admin', 'analyst', 'operator'] },
+      },
+      {
         path: 'logs',
         name: 'Logs',
         component: () => import('@/views/Logs.vue'),

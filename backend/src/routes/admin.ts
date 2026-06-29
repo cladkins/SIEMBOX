@@ -14,6 +14,19 @@ import { logger } from '../utils/logger';
 
 const router = Router();
 
+// The container runs `node dist/server.js` directly (not `npm start`), so
+// process.env.npm_package_version is never populated and the dashboard always
+// showed 0.1.0. Read the real version from the packaged manifest instead.
+// require() resolves to /app/package.json at runtime (dist/routes/admin.js ->
+// ../../package.json) and is typed `any`, so it sidesteps tsc's rootDir check.
+const APP_VERSION: string = (() => {
+  try {
+    return require('../../package.json').version || '0.1.0';
+  } catch {
+    return process.env.npm_package_version || '0.1.0';
+  }
+})();
+
 // All admin routes require authentication and admin role
 router.use(authenticate);
 router.use(requireAdmin);
@@ -26,7 +39,7 @@ router.get('/overview', async (_req: Request, res: Response) => {
   try {
     // System information
     const system = {
-      version: process.env.npm_package_version || '0.1.0',
+      version: APP_VERSION,
       uptime: process.uptime(),
       nodeVersion: process.version,
       environment: process.env.NODE_ENV || 'development',

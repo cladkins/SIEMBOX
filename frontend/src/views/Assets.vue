@@ -510,15 +510,6 @@ function getScanStatusColor(status: string) {
   return colors[status] || '';
 }
 
-// Start polling for active scans
-function startScanPolling() {
-  console.log('[Assets] Starting scan polling...');
-  loadScans(); // Initial load
-  scanPollingInterval = window.setInterval(() => {
-    loadScans(); // Always poll to catch new scans
-  }, 5000); // Poll every 5 seconds
-}
-
 // Stop polling
 function stopScanPolling() {
   if (scanPollingInterval) {

@@ -25,6 +25,11 @@
           <span>Threat Intel</span>
         </el-menu-item>
 
+        <el-menu-item index="/ai-analyst" v-if="canAnalyst">
+          <el-icon><ChatDotRound /></el-icon>
+          <span>AI Analyst</span>
+        </el-menu-item>
+
         <el-sub-menu index="siem">
           <template #title>
             <el-icon><Grid /></el-icon>
@@ -129,6 +134,15 @@
             <span class="page-title">{{ pageTitle }}</span>
           </div>
           <div class="user-actions">
+            <el-button
+              v-if="canAnalyst"
+              class="ask-ai-btn"
+              size="small"
+              @click="openAnalyst"
+            >
+              <el-icon><ChatDotRound /></el-icon>
+              <span class="ask-ai-label">Ask AI</span>
+            </el-button>
             <el-switch
               v-model="themeStore.isDark"
               :active-action-icon="Moon"
@@ -149,6 +163,19 @@
         <a href="https://db-ip.com" target="_blank" rel="noopener">IP Geolocation by DB-IP</a>
       </el-footer>
     </el-container>
+
+    <!-- Global AI Analyst drawer — shares the conversation with the dedicated page. -->
+    <el-drawer
+      v-model="chatStore.drawerOpen"
+      class="analyst-drawer"
+      title="AI Security Analyst"
+      :size="drawerSize"
+      @closed="chatStore.clearContext()"
+    >
+      <div class="analyst-drawer-body" style="height: calc(100vh - 110px)">
+        <AnalystChat />
+      </div>
+    </el-drawer>
   </el-container>
 </template>
 
@@ -157,11 +184,14 @@ import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim, Cpu } from '@element-plus/icons-vue';
+import { useChatStore } from '@/stores/chat';
+import AnalystChat from '@/components/AnalystChat.vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim, Cpu, ChatDotRound } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();
 const themeStore = useThemeStore();
+const chatStore = useChatStore();
 
 const isCollapsed = ref(false);
 
@@ -199,6 +229,7 @@ const activeMenu = computed(() => route.path);
 const pageTitle = computed(() => {
   const titles: Record<string, string> = {
     '/': 'Dashboard',
+    '/ai-analyst': 'AI Analyst',
     '/alerts': 'Alerts',
     '/logs': 'Logs',
     '/parsers': 'Parsers',
@@ -214,6 +245,15 @@ const pageTitle = computed(() => {
   };
   return titles[route.path] || 'SIEMBox';
 });
+
+const canAnalyst = computed(() =>
+  ['admin', 'analyst', 'operator'].includes(authStore.user?.role || '')
+);
+const drawerSize = computed(() => (isMobile.value ? '100%' : '460px'));
+function openAnalyst() {
+  chatStore.clearContext();
+  chatStore.drawerOpen = true;
+}
 
 const handleLogout = () => {
   authStore.logout();

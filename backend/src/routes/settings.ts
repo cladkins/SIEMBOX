@@ -2,7 +2,13 @@ import { Router, Request, Response } from 'express';
 import { query } from '../config/database';
 import { ApiError } from '../middleware/errorHandler';
 import { authorize } from '../middleware/auth';
-import { getAiPublicConfig, saveAiConfig, AiProvider } from '../services/ai/aiService';
+import {
+  getAiPublicConfig,
+  saveAiConfig,
+  AiProvider,
+  getChatAiPublicConfig,
+  saveChatAiConfig,
+} from '../services/ai/aiService';
 
 const router = Router();
 
@@ -34,6 +40,34 @@ router.put('/ai', authorize('admin'), async (req: Request, res: Response) => {
     throw new ApiError(500, error?.message?.includes('CREDENTIAL_ENCRYPTION_KEY')
       ? 'Set CREDENTIAL_ENCRYPTION_KEY to store an API key, or use the ANTHROPIC_API_KEY/OPENAI_API_KEY env var instead.'
       : 'Failed to update AI settings');
+  }
+});
+
+// Current AI Analyst (chat) config — a separate model selection that falls back
+// to the main AI config when unset (see getChatAiConfig). Never returns the key.
+router.get('/ai-chat', authorize('admin'), async (_req: Request, res: Response) => {
+  try {
+    res.json(await getChatAiPublicConfig());
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch AI analyst settings');
+  }
+});
+
+// Update the analyst chat config. Empty provider ('') reverts to inheriting the
+// main AI config. Pass apiKey to set it (encrypted at rest), '' to clear it.
+router.put('/ai-chat', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const { provider, model, baseUrl, apiKey } = req.body ?? {};
+    if (provider && provider !== '' && !['anthropic', 'openai', 'ollama'].includes(provider)) {
+      throw new ApiError(400, "provider must be anthropic, openai, ollama, or '' to inherit");
+    }
+    await saveChatAiConfig({ provider: provider as AiProvider | '', model, baseUrl, apiKey });
+    res.json(await getChatAiPublicConfig());
+  } catch (error: any) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, error?.message?.includes('CREDENTIAL_ENCRYPTION_KEY')
+      ? 'Set CREDENTIAL_ENCRYPTION_KEY to store an API key, or use the ANTHROPIC_API_KEY/OPENAI_API_KEY env var instead.'
+      : 'Failed to update AI analyst settings');
   }
 });
 

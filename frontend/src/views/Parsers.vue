@@ -120,7 +120,7 @@
 
         <el-form-item label="Field Mappings">
           <div class="field-mappings">
-            <div v-for="(value, key, index) in parserForm.field_mappings" :key="index" class="mapping-row">
+            <div v-for="(_value, _key, index) in parserForm.field_mappings" :key="index" class="mapping-row">
               <el-input v-model="mappingKeys[index]" placeholder="Group name/number" style="width: 200px" />
               <el-icon><Right /></el-icon>
               <el-input v-model="parserForm.field_mappings[mappingKeys[index]]" placeholder="Field name" style="width: 200px" />

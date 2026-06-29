@@ -36,6 +36,7 @@
       </div>
 
       <template #footer>
+        <el-button v-if="canAnalyst" @click="askAnalyst">Ask the analyst</el-button>
         <el-button @click="visible = false">Close</el-button>
         <el-button type="primary" :loading="loading" @click="run">Regenerate</el-button>
       </template>
@@ -44,9 +45,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { MagicStick } from '@element-plus/icons-vue';
 import { api } from '@/services/api';
+import { useAuthStore } from '@/stores/auth';
+import { useChatStore } from '@/stores/chat';
 
 const props = withDefaults(
   defineProps<{
@@ -56,6 +59,8 @@ const props = withDefaults(
     data: unknown;
     /** Optional focusing question. */
     question?: string;
+    /** Optional id of the artifact so the analyst can load it via tools. */
+    contextId?: number | string;
     label?: string;
     size?: 'small' | 'default' | 'large';
     type?: 'primary' | 'success' | 'info' | 'warning' | 'danger' | 'default';
@@ -63,6 +68,24 @@ const props = withDefaults(
   }>(),
   { label: 'Explain with AI', size: 'small', type: 'primary', plain: true }
 );
+
+const authStore = useAuthStore();
+const chatStore = useChatStore();
+const canAnalyst = computed(() =>
+  ['admin', 'analyst', 'operator'].includes(authStore.user?.role || '')
+);
+
+// Hand off to the conversational analyst, seeded with this artifact as context.
+function askAnalyst() {
+  const id =
+    props.contextId ??
+    (props.data && typeof props.data === 'object' ? (props.data as any).id : undefined);
+  visible.value = false;
+  chatStore.openWithContext(
+    { kind: props.kind, id },
+    `Summarize this ${props.kind}${id != null ? ` (id ${id})` : ''} and tell me whether it needs attention and the recommended next steps.`
+  );
+}
 
 const visible = ref(false);
 const loading = ref(false);

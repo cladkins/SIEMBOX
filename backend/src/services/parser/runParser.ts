@@ -166,6 +166,27 @@ function getJsonPath(obj: any, path: string): any {
   return parts.reduce((o, k) => (o == null ? undefined : o[k]), obj);
 }
 
+/**
+ * Ubiquitous JSON envelope keys that nearly every structured log carries. A JSON
+ * parser whose ONLY present source keys are these (e.g. just `timestamp`/`level`)
+ * is really matching "any JSON", so envelope keys do NOT count toward a parser's
+ * discriminator — see applyJsonParser.
+ */
+const JSON_ENVELOPE_KEYS = new Set([
+  'timestamp',
+  'time',
+  'ts',
+  '@timestamp',
+  'date',
+  'datetime',
+  'message',
+  'msg',
+  'level',
+  'severity',
+  'log',
+  'logger',
+]);
+
 function applyJsonParser(parser: ParserDef, message: string): { fields: Record<string, any>; event_type: string } | null {
   try {
     let jsonString = message.trim();
@@ -178,14 +199,27 @@ function applyJsonParser(parser: ParserDef, message: string): { fields: Record<s
 
     const fields: Record<string, any> = {};
     if (Object.keys(parser.field_mappings).length > 0) {
+      // Discriminator: a JSON parser must actually look like its target format —
+      // at least one of its DISTINCTIVE source keys (not just an envelope key like
+      // timestamp/level/msg) must resolve in the log. Otherwise the parser is
+      // matching "any JSON" and must decline, so a more specific JSON parser (or
+      // the generic json-parser catch-all, which declares no mappings and is
+      // exempt below) handles the line instead. Without this, the
+      // lowest-priority-number JSON parser silently claims EVERY JSON log
+      // (e.g. authentik-audit shadowing all Caddy/Traefik access logs).
+      let matchedDistinctiveKey = false;
       for (const [sourceField, targetField] of Object.entries(parser.field_mappings)) {
         // Prefer an exact top-level key; fall back to a dotted path (e.g. Caddy's
         // "request.client_ip") so nested JSON logs can map nested values. Flat keys
         // always win, so existing flat-mapped parsers are unaffected.
         const value =
           parsed[sourceField] !== undefined ? parsed[sourceField] : getJsonPath(parsed, sourceField);
-        if (value !== undefined) fields[targetField] = value;
+        if (value !== undefined) {
+          fields[targetField] = value;
+          if (!JSON_ENVELOPE_KEYS.has(sourceField.toLowerCase())) matchedDistinctiveKey = true;
+        }
       }
+      if (!matchedDistinctiveKey) return null;
     } else {
       Object.assign(fields, parsed);
     }

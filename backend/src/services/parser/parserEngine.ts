@@ -6,6 +6,7 @@ import { RulesEngine } from '../rules/rulesEngine';
 import { ErrorLogService } from '../errors/errorLogService';
 import { geoipService } from '../geoip/geoipService';
 import { runParser } from './runParser';
+import { normalizeParsedData } from '../normalize/fieldNormalizer';
 
 export class ParserEngine {
   private parsers: Parser[] = [];
@@ -83,9 +84,30 @@ export class ParserEngine {
       }
 
       if (!parsed) {
-        logger.debug('No parser matched for log', {
-          rawLogId: rawLog.id,
-          message: rawLog.raw_message.substring(0, 100),
+        // Embedded generic fallback — the ONE parser SIEMBox ships itself; every
+        // specific parser lives in the catalog. Most logs reach here: catalog
+        // parsers anchored on the syslog header can't match the header-stripped
+        // message, and many apps have no parser at all. Rather than drop these to
+        // raw-only, synthesize a minimal structured record (the message plus the
+        // service from the syslog tag, host, and source) so every log stays
+        // queryable in the Parsed Logs view. Detection rules are intentionally NOT
+        // evaluated here — these carry no extracted fields and the volume is high.
+        const fallbackFields = normalizeParsedData(
+          {
+            message: rawLog.raw_message,
+            service: rawLog.app_name || undefined,
+            host: rawLog.hostname || undefined,
+          },
+          { packetSourceIp: rawLog.source_ip, eventType: 'unparsed' }
+        );
+
+        await ParsedLogModel.create({
+          raw_log_id: rawLog.id,
+          parser_id: null,
+          parsed_data: fallbackFields,
+          timestamp: rawLog.timestamp,
+          source_ip: rawLog.source_ip,
+          event_type: 'unparsed',
         });
       }
     } catch (error) {

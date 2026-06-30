@@ -4,7 +4,7 @@
   "description": "Parses custom NGINX access logs from komodo that start with timestamp",
   "parser_type": "regex",
   "priority": 45,
-  "pattern": "^\\[(?<timestamp>[^\\]]+)\\]\\s+(?:-\\s+)?(?<status_code1>\\d{3})?\\s*(?<status_code2>\\d{3})?\\s*-?\\s*(?<method>GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|CONNECT|TRACE)?\\s*(?<protocol>https?|wss?)?\\s*(?<request_uri>\\S+)?",
+  "pattern": "^\\[(?<timestamp>\\d{1,2}/[A-Za-z]{3}/\\d{4}:\\d{2}:\\d{2}:\\d{2}\\s+[+-]\\d{4})\\]\\s+(?:-\\s+)?(?<status_code1>\\d{3})?\\s*(?<status_code2>\\d{3})?\\s*-?\\s*(?<method>GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|CONNECT|TRACE)?\\s*(?<protocol>https?|wss?)?\\s*(?<request_uri>\\S+)?",
   "field_mappings": {
     "timestamp": "timestamp",
     "status_code": "status_code1",

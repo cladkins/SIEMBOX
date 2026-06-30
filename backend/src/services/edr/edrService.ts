@@ -33,6 +33,7 @@ import {
   VULN_SCAN_INTERVAL_SECONDS,
 } from '../../models/EdrAgent';
 import { getCurrentYaraVersion } from './yaraService';
+import { NotificationService } from '../notifications/notificationService';
 
 /** Parse an RFC3339/ISO timestamp, or null if missing/invalid. */
 function parseTimestamp(value: unknown): Date | null {
@@ -296,7 +297,18 @@ export async function ingestEvents(agentId: string, events: any[]): Promise<numb
          RETURNING id`,
         [severity, title, description, JSON.stringify(matched), assetId, eventId]
       );
-      if ((res.rowCount ?? 0) > 0) created++;
+      if ((res.rowCount ?? 0) > 0) {
+        created++;
+        // Notify like rule-based alerts do. notifyAlert respects the per-event
+        // enabled + min-severity preferences, so endpoint detections no longer
+        // silently skip Email/Slack/ntfy.
+        void NotificationService.notifyAlert({
+          severity,
+          ruleName: (e.rule_name || e.source || 'Endpoint').toString(),
+          title,
+          description: description || undefined,
+        });
+      }
     } catch (e2) {
       logger.warn('EDR event->alert insert failed', { agentId, eventId, error: e2 instanceof Error ? e2.message : String(e2) });
     }

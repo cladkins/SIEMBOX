@@ -6,6 +6,7 @@ import { query } from '../../config/database';
 import { ErrorLogService } from '../errors/errorLogService';
 import { NotificationService } from '../notifications/notificationService';
 import { FeedService } from '../threatintel/feedService';
+import { PURE_CONDITION_OPERATORS, evaluatePureCondition } from './conditionMatch';
 
 interface RuleCondition {
   field: string;
@@ -140,38 +141,15 @@ export class RulesEngine {
 
   private async evaluateCondition(condition: RuleCondition, fieldValue: any): Promise<boolean> {
     const { operator, value } = condition;
-    const fieldStr = String(fieldValue);
-    const valueStr = String(value);
+
+    // Pure (DB-free) operators are evaluated in conditionMatch.ts so they can be
+    // unit-tested without a database. The I/O-backed operators below need async
+    // whitelist/feed lookups and stay here.
+    if (PURE_CONDITION_OPERATORS.has(operator)) {
+      return evaluatePureCondition(operator, fieldValue, value);
+    }
 
     switch (operator) {
-      case 'equals':
-        return fieldStr === valueStr;
-
-      case 'contains':
-        return fieldStr.toLowerCase().includes(valueStr.toLowerCase());
-
-      case 'not_contains':
-        return !fieldStr.toLowerCase().includes(valueStr.toLowerCase());
-
-      case 'regex':
-        try {
-          const regex = new RegExp(valueStr);
-          return regex.test(fieldStr);
-        } catch (error) {
-          logger.error('Invalid regex pattern:', { pattern: valueStr, error });
-          return false;
-        }
-
-      case 'greater_than':
-        return Number(fieldValue) > Number(value);
-
-      case 'less_than':
-        return Number(fieldValue) < Number(value);
-
-      case 'exists':
-        // Check if field exists and is not null/undefined
-        return value === true ? fieldValue !== undefined && fieldValue !== null : fieldValue === undefined || fieldValue === null;
-
       case 'not_in_whitelist':
         // Check if IP address is NOT in whitelist
         if (value !== true) {
@@ -179,23 +157,6 @@ export class RulesEngine {
           return false;
         }
         return await this.checkIpNotInWhitelist(fieldValue);
-
-      case 'not_equals':
-        return fieldStr !== valueStr;
-
-      case 'in': {
-        const list = Array.isArray(value)
-          ? value.map((v) => String(v))
-          : valueStr.split(',').map((s) => s.trim());
-        return list.includes(fieldStr);
-      }
-
-      case 'not_in': {
-        const list = Array.isArray(value)
-          ? value.map((v) => String(v))
-          : valueStr.split(',').map((s) => s.trim());
-        return !list.includes(fieldStr);
-      }
 
       case 'on_threat_feed':
         if (value !== true && value !== 'true') {

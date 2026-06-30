@@ -30,7 +30,7 @@
     <el-card class="discovered-card">
       <template #header>
         <div class="card-header">
-          <span>Images on this Docker host</span>
+          <span>Container images across your hosts</span>
           <el-button size="small" :loading="discoveryLoading" @click="loadDiscovered">
             <el-icon><Refresh /></el-icon> Refresh
           </el-button>
@@ -42,65 +42,73 @@
         type="info"
         :closable="false"
         show-icon
-        title="Docker image discovery is off"
+        title="Docker image discovery is off on the SIEMBox host"
+        style="margin-bottom: 12px"
       >
         <p class="discovery-reason">{{ discoveryReason || 'The Docker socket is not available.' }}</p>
         <p class="discovery-reason">
-          Mount <code>/var/run/docker.sock</code> into the backend container to list the images
-          you're already running and scan them in one click. This is opt-in — see the deployment
-          docs for the security tradeoff.
+          Mount <code>/var/run/docker.sock</code> into the backend container to list the SIEMBox host's
+          own images. Log shippers that mount the socket also report their host's images here
+          (any rows below are from them).
         </p>
       </el-alert>
 
-      <template v-else>
-        <div class="discovered-toolbar" v-if="discovered.length">
-          <el-text size="small" type="info">
-            {{ scannableCount }} scannable image{{ scannableCount === 1 ? '' : 's' }} found
-          </el-text>
-          <el-button
-            type="primary"
-            size="small"
-            :disabled="scannableCount === 0 || starting"
-            @click="scanAllDiscovered"
-          >
-            Scan all ({{ scannableCount }})
-          </el-button>
-        </div>
+      <div class="discovered-toolbar" v-if="discovered.length">
+        <el-text size="small" type="info">
+          {{ scannableCount }} scannable image{{ scannableCount === 1 ? '' : 's' }} across
+          {{ hostCount }} host{{ hostCount === 1 ? '' : 's' }}
+        </el-text>
+        <el-button
+          type="primary"
+          size="small"
+          :disabled="scannableCount === 0 || starting"
+          @click="scanAllDiscovered"
+        >
+          Scan all ({{ scannableCount }})
+        </el-button>
+      </div>
 
-        <el-table :data="discovered" v-loading="discoveryLoading" stripe>
-          <el-table-column prop="image" label="Image" min-width="260" show-overflow-tooltip />
-          <el-table-column label="Used by" min-width="200" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span>{{ (row.containers || []).join(', ') || '—' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="Running" width="100" align="center">
-            <template #default="{ row }">
-              <el-tag :type="row.running > 0 ? 'success' : 'info'" size="small">
-                {{ row.running }}/{{ (row.containers || []).length }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="Actions" width="110">
-            <template #default="{ row }">
-              <el-button
-                v-if="row.scannable"
-                link
-                type="primary"
-                size="small"
-                :loading="scanningImage === row.image"
-                @click="scanImage(row.image)"
-              >
-                Scan
-              </el-button>
-              <el-tooltip v-else content="Image has no scannable registry reference (built locally or referenced by digest)" placement="top">
-                <span class="muted">—</span>
-              </el-tooltip>
-            </template>
-          </el-table-column>
-        </el-table>
-        <el-empty v-if="!discoveryLoading && discovered.length === 0" description="No containers found on the Docker host." />
-      </template>
+      <el-table v-if="discovered.length" :data="discovered" v-loading="discoveryLoading" stripe>
+        <el-table-column prop="image" label="Image" min-width="240" show-overflow-tooltip />
+        <el-table-column label="Host" width="170" show-overflow-tooltip>
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.local ? 'success' : 'info'" effect="plain">{{ row.source }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Used by" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span>{{ (row.containers || []).join(', ') || '—' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="Running" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.running > 0 ? 'success' : 'info'" size="small">
+              {{ row.running }}/{{ (row.containers || []).length }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Actions" width="110">
+          <template #default="{ row }">
+            <el-button
+              v-if="row.scannable"
+              link
+              type="primary"
+              size="small"
+              :loading="scanningImage === row.image"
+              @click="scanImage(row.image)"
+            >
+              Scan
+            </el-button>
+            <el-tooltip v-else content="Image has no scannable registry reference (built locally or referenced by digest)" placement="top">
+              <span class="muted">—</span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty
+        v-if="!discoveryLoading && discovered.length === 0 && discoveryAvailable"
+        description="No containers found."
+      />
     </el-card>
 
     <el-card class="scans-card">
@@ -235,7 +243,12 @@ const discoveryAvailable = ref(true);
 const discoveryReason = ref('');
 const discoveryLoading = ref(false);
 const scanningImage = ref('');
-const scannableCount = computed(() => discovered.value.filter((i) => i.scannable).length);
+// Scanning is by image ref (Trivy pulls from the registry, host-independent), so
+// the same image across hosts only needs one scan — count/scan unique refs.
+const scannableCount = computed(
+  () => new Set(discovered.value.filter((i) => i.scannable).map((i) => i.image)).size
+);
+const hostCount = computed(() => new Set(discovered.value.map((i) => i.source)).size);
 
 const detailVisible = ref(false);
 const loadingDetail = ref(false);
@@ -285,13 +298,27 @@ async function loadScans() {
 async function loadDiscovered() {
   discoveryLoading.value = true;
   try {
-    const { data } = await api.getDiscoveredImages();
-    discoveryAvailable.value = !!data?.available;
-    discoveryReason.value = data?.reason || '';
-    discovered.value = Array.isArray(data?.images) ? data.images : [];
+    // Combined inventory: the SIEMBox host's own images + images each log shipper
+    // reported from its host. Flatten into one list, tagging each with its host.
+    const { data } = await api.getContainerInventory();
+    const local = data?.local || {};
+    discoveryAvailable.value = !!local.available;
+    discoveryReason.value = local.reason || '';
+
+    const merged: any[] = [];
+    for (const img of Array.isArray(local.images) ? local.images : []) {
+      merged.push({ ...img, source: 'SIEMBox host', local: true });
+    }
+    for (const host of Array.isArray(data?.shippers) ? data.shippers : []) {
+      const label = host.hostname || host.name || `shipper #${host.shipper_id}`;
+      for (const img of host.images || []) {
+        merged.push({ ...img, source: label, local: false });
+      }
+    }
+    discovered.value = merged;
   } catch (error) {
     discoveryAvailable.value = false;
-    discoveryReason.value = 'Failed to query the Docker host.';
+    discoveryReason.value = 'Failed to query the container inventory.';
     discovered.value = [];
   } finally {
     discoveryLoading.value = false;
@@ -312,7 +339,7 @@ async function scanImage(image: string) {
 }
 
 async function scanAllDiscovered() {
-  const targets = discovered.value.filter((i) => i.scannable).map((i) => i.image);
+  const targets = [...new Set(discovered.value.filter((i) => i.scannable).map((i) => i.image))];
   if (targets.length === 0) return;
   starting.value = true;
   let ok = 0;

@@ -276,6 +276,8 @@ export const api = {
   getContainerScan: (id: number) => apiClient.get(`/containers/scans/${id}`),
   // Images already present on the Docker host (requires the socket to be mounted).
   getDiscoveredImages: () => apiClient.get('/containers/discovered'),
+  // Combined inventory: SIEMBox host images + images reported by each log shipper host
+  getContainerInventory: () => apiClient.get('/containers/inventory'),
 
   // Scheduled Scans
   getScheduledScans: () => apiClient.get('/scheduled-scans'),

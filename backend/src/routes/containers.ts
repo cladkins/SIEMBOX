@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { ApiError } from '../middleware/errorHandler';
 import { TrivyScanner } from '../services/scanner/trivyScanner';
 import { DockerDiscovery } from '../services/scanner/dockerDiscovery';
+import { ShipperContainerModel } from '../models/ShipperContainer';
 
 const router = Router();
 
@@ -14,6 +15,22 @@ router.get('/discovered', async (_req: Request, res: Response) => {
     res.json(await DockerDiscovery.discoverImages());
   } catch (error) {
     throw new ApiError(500, 'Failed to enumerate Docker images');
+  }
+});
+
+// Combined inventory: the SIEMBox host's own images PLUS the images each log
+// shipper reported from its host (shippers mount the Docker socket for log
+// collection). Lets the operator scan containers across every host running a
+// shipper, not just the SIEMBox host.
+router.get('/inventory', async (_req: Request, res: Response) => {
+  try {
+    const [local, shippers] = await Promise.all([
+      DockerDiscovery.discoverImages(),
+      ShipperContainerModel.findGroupedByShipper(),
+    ]);
+    res.json({ local, shippers });
+  } catch (error) {
+    throw new ApiError(500, 'Failed to load container inventory');
   }
 });
 

@@ -51,8 +51,12 @@ apiClient.interceptors.response.use(
     if (error.response) {
       switch (error.response.status) {
         case 401:
-          authStore.logout();
-          ElMessage.error('Session expired. Please login again.');
+          // The login endpoint's 401s (wrong password / MFA required) are not
+          // session expiries — let the Login view handle them inline.
+          if (!/\/auth\/login$/.test(error.config?.url || '')) {
+            authStore.logout();
+            ElMessage.error('Session expired. Please login again.');
+          }
           break;
         case 403:
           ElMessage.error('You do not have permission to perform this action.');
@@ -84,10 +88,14 @@ export default apiClient;
 // API service methods
 export const api = {
   // Auth
-  login: (username: string, password: string) =>
-    apiClient.post('/auth/login', { username, password }),
+  login: (username: string, password: string, code?: string) =>
+    apiClient.post('/auth/login', { username, password, ...(code ? { code } : {}) }),
   logout: () => apiClient.post('/auth/logout'),
   getProfile: () => apiClient.get('/auth/me'),
+  // MFA (TOTP) — the logged-in user manages their own
+  mfaSetup: () => apiClient.post('/auth/me/mfa/setup'),
+  mfaEnable: (code: string) => apiClient.post('/auth/me/mfa/enable', { code }),
+  mfaDisable: (code: string) => apiClient.post('/auth/me/mfa/disable', { code }),
 
   // Logs
   getRawLogs: (params?: any) => apiClient.get('/logs/raw', { params }),

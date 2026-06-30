@@ -4,6 +4,7 @@ import { SessionModel } from '../models/Session';
 import { ApiError } from '../middleware/errorHandler';
 import { authenticate } from '../middleware/auth';
 import { logger } from '../utils/logger';
+import * as MfaService from '../services/auth/mfaService';
 
 const router = Router();
 
@@ -31,6 +32,21 @@ router.post('/login', async (req: Request, res: Response) => {
     const isValid = await UserModel.verifyPassword(user, password);
     if (!isValid) {
       throw new ApiError(401, 'Invalid username or password');
+    }
+
+    // MFA gate — only engages for users who deliberately enrolled (mfa_enabled
+    // defaults false), so password-only accounts log in exactly as before.
+    if (user.mfa_enabled) {
+      const code = (req.body?.code ?? '').toString().trim();
+      if (!code) {
+        res.status(401).json({ message: 'MFA code required', mfaRequired: true });
+        return;
+      }
+      const mfaOk = await MfaService.verifyLogin(user, code);
+      if (!mfaOk) {
+        res.status(401).json({ message: 'Invalid MFA code', mfaRequired: true });
+        return;
+      }
     }
 
     // Create session
@@ -129,6 +145,64 @@ router.put('/me/password', authenticate, async (req: Request, res: Response) => 
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to update password');
+  }
+});
+
+// --- MFA (TOTP) — the logged-in user manages their own MFA ----------------
+
+// Begin enrollment: generate + store a pending secret, return it + the otpauth
+// URI for the authenticator app. Does NOT enable MFA yet.
+router.post('/me/mfa/setup', authenticate, async (req: Request, res: Response) => {
+  try {
+    const user = await UserModel.findById(req.user!.id);
+    if (!user) throw new ApiError(404, 'User not found');
+    if (user.mfa_enabled) throw new ApiError(409, 'MFA is already enabled; disable it first to re-enroll');
+    const { secret, otpauthUrl } = await MfaService.startEnrollment(user);
+    res.json({ secret, otpauthUrl });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    const msg = error instanceof Error ? error.message : 'MFA setup failed';
+    // Surface the encryption-key misconfiguration clearly (startEnrollment encrypts the secret).
+    throw new ApiError(/ENCRYPTION_KEY|encrypt/i.test(msg) ? 400 : 500, msg);
+  }
+});
+
+// Finish enrollment: verify a code against the pending secret, enable MFA, and
+// return one-time recovery codes (shown once — the client must save them).
+router.post('/me/mfa/enable', authenticate, async (req: Request, res: Response) => {
+  try {
+    const code = (req.body?.code ?? '').toString().trim();
+    if (!code) throw new ApiError(400, 'code is required');
+    const user = await UserModel.findById(req.user!.id);
+    if (!user) throw new ApiError(404, 'User not found');
+    const { recoveryCodes } = await MfaService.enable(user, code);
+    logger.info('User enabled MFA', { userId: user.id });
+    res.json({ enabled: true, recoveryCodes });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    const msg = error instanceof Error ? error.message : 'Failed to enable MFA';
+    throw new ApiError(/invalid code|pending/i.test(msg) ? 400 : 500, msg);
+  }
+});
+
+// Disable MFA — requires a valid current code (TOTP or recovery).
+router.post('/me/mfa/disable', authenticate, async (req: Request, res: Response) => {
+  try {
+    const code = (req.body?.code ?? '').toString().trim();
+    if (!code) throw new ApiError(400, 'code is required');
+    const user = await UserModel.findById(req.user!.id);
+    if (!user) throw new ApiError(404, 'User not found');
+    if (!user.mfa_enabled) {
+      res.json({ enabled: false });
+      return;
+    }
+    await MfaService.disable(user, code);
+    logger.info('User disabled MFA', { userId: user.id });
+    res.json({ enabled: false });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    const msg = error instanceof Error ? error.message : 'Failed to disable MFA';
+    throw new ApiError(/invalid code/i.test(msg) ? 400 : 500, msg);
   }
 });
 

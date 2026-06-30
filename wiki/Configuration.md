@@ -29,7 +29,11 @@ SIEMBox is configured with environment variables (a `.env` file next to your com
 |----------|----------|-------|
 | `JWT_SECRET` | ✅ | Signs session tokens; use a long random string (32+ chars). Tokens are valid 24h. |
 | `DEFAULT_ADMIN_PASSWORD` | ✅ | Initial password for the `admin` user. |
-| `CREDENTIAL_ENCRYPTION_KEY` | ✅ | **64-char hex** key (AES-256-GCM) used to encrypt scanner credentials *and* the AI builder API key at rest. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. **If you lose/rotate this, stored encrypted credentials can't be decrypted.** |
+| `CREDENTIAL_ENCRYPTION_KEY` | ✅ | **64-char hex** key (AES-256-GCM) used to encrypt scanner credentials, the AI builder API key, *and* per-user MFA secrets at rest. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. **If you lose/rotate this, stored encrypted credentials can't be decrypted.** |
+
+### Two-factor authentication (MFA)
+
+Per-account **TOTP** MFA for local users — **Settings → Security**. It's optional and opt-in: enabling it for one account doesn't affect anyone else's login, and accounts without it log in with just a password as before (recommended for admins). Enroll by scanning the key into an authenticator app (Google Authenticator, Authy, 1Password, …) and confirming a 6-digit code; you're then shown **one-time recovery codes** — save them. At login, MFA-enabled accounts are prompted for a code (or a recovery code). The TOTP secret is stored encrypted with `CREDENTIAL_ENCRYPTION_KEY`. To turn it off, use **Settings → Security → Disable MFA** with a current code; if you've lost both your authenticator and recovery codes, an admin can clear `mfa_enabled`/`mfa_secret` for the row in the `users` table.
 
 ## AI builder (optional)
 

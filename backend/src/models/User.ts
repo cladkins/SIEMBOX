@@ -11,6 +11,12 @@ export interface User {
   last_login: Date | null;
   created_at: Date;
   updated_at: Date;
+  // Optional per-user TOTP MFA (additive; defaults to "no MFA").
+  mfa_enabled?: boolean;
+  /** Encrypted TOTP secret: JSON {encrypted, iv, authTag} or null. */
+  mfa_secret?: string | null;
+  /** bcrypt hashes of one-time recovery codes, or null. */
+  mfa_recovery_codes?: string[] | null;
 }
 
 export interface UserSafe {
@@ -22,6 +28,7 @@ export interface UserSafe {
   last_login: Date | null;
   created_at: Date;
   updated_at: Date;
+  mfa_enabled?: boolean;
 }
 
 export interface CreateUserParams {
@@ -59,7 +66,7 @@ export class UserModel {
 
   static async findByIdSafe(id: number): Promise<UserSafe | null> {
     const result = await query(
-      `SELECT id, username, email, role, enabled, last_login, created_at, updated_at
+      `SELECT id, username, email, role, enabled, mfa_enabled, last_login, created_at, updated_at
        FROM users WHERE id = $1`,
       [id]
     );
@@ -78,7 +85,7 @@ export class UserModel {
 
   static async findAll(): Promise<UserSafe[]> {
     const result = await query(
-      `SELECT id, username, email, role, enabled, last_login, created_at, updated_at
+      `SELECT id, username, email, role, enabled, mfa_enabled, last_login, created_at, updated_at
        FROM users
        ORDER BY created_at DESC`
     );
@@ -146,7 +153,45 @@ export class UserModel {
   }
 
   static removeSensitiveData(user: User): UserSafe {
-    const { password_hash, ...safeUser } = user;
+    // Strip the password hash AND the MFA secret/recovery hashes; keep the
+    // mfa_enabled flag so the UI can show MFA state.
+    const { password_hash, mfa_secret, mfa_recovery_codes, ...safeUser } = user;
     return safeUser as UserSafe;
+  }
+
+  // --- MFA -----------------------------------------------------------------
+
+  /** Store the (encrypted) TOTP secret as a PENDING enrollment (not yet enabled). */
+  static async setMfaPending(id: number, encryptedSecret: string): Promise<void> {
+    await query(
+      `UPDATE users SET mfa_secret = $1, mfa_enabled = FALSE, mfa_recovery_codes = NULL, updated_at = NOW()
+       WHERE id = $2`,
+      [encryptedSecret, id]
+    );
+  }
+
+  /** Activate MFA and store the recovery-code hashes. */
+  static async enableMfa(id: number, recoveryHashes: string[]): Promise<void> {
+    await query(
+      `UPDATE users SET mfa_enabled = TRUE, mfa_recovery_codes = $1, updated_at = NOW() WHERE id = $2`,
+      [JSON.stringify(recoveryHashes), id]
+    );
+  }
+
+  /** Replace the stored recovery-code hashes (e.g. after consuming one). */
+  static async setRecoveryCodes(id: number, recoveryHashes: string[]): Promise<void> {
+    await query(`UPDATE users SET mfa_recovery_codes = $1, updated_at = NOW() WHERE id = $2`, [
+      JSON.stringify(recoveryHashes),
+      id,
+    ]);
+  }
+
+  /** Fully disable MFA and clear all secrets/recovery codes. */
+  static async disableMfa(id: number): Promise<void> {
+    await query(
+      `UPDATE users SET mfa_enabled = FALSE, mfa_secret = NULL, mfa_recovery_codes = NULL, updated_at = NOW()
+       WHERE id = $1`,
+      [id]
+    );
   }
 }

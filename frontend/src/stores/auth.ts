@@ -10,17 +10,13 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isAuthenticated = computed(() => !!token.value);
 
-  const login = async (username: string, password: string) => {
-    try {
-      const response = await api.login(username, password);
-      token.value = response.data.token;
-      user.value = response.data.user;
-      localStorage.setItem('token', token.value!);
-      localStorage.setItem('user', JSON.stringify(user.value));
-      router.push('/');
-    } catch (error) {
-      throw error;
-    }
+  const login = async (username: string, password: string, code?: string) => {
+    const response = await api.login(username, password, code);
+    token.value = response.data.token;
+    user.value = response.data.user;
+    localStorage.setItem('token', token.value!);
+    localStorage.setItem('user', JSON.stringify(user.value));
+    router.push('/');
   };
 
   const logout = () => {

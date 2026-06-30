@@ -128,6 +128,9 @@ export const api = {
   getRuleCatalog: (refresh = false) => apiClient.get('/rules/catalog', { params: refresh ? { refresh: true } : {} }),
   installCatalogRule: (name: string) => apiClient.post('/rules/catalog/install', { name }),
   installAllCatalogRules: () => apiClient.post('/rules/catalog/install-all', {}, { timeout: 120000 }),
+  // Sigma import: convert community Sigma YAML to portable detections (preview, then import)
+  previewSigmaImport: (sigma: string) => apiClient.post('/rules/import/sigma/preview', { sigma }),
+  importSigma: (sigma: string) => apiClient.post('/rules/import/sigma', { sigma }, { timeout: 120000 }),
 
   // AI builder
   getAiSettings: () => apiClient.get('/settings/ai'),

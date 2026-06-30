@@ -64,6 +64,12 @@ Include `aggregation` for "N events in a window" detections; omit it for single-
 
 > SIEMBox is **catalog-only by default** — a fresh install has no rules until you install them. (Set `SEED_BUNDLED_CONTENT=true` to opt into the legacy bundled rules; see [Configuration](Configuration#parser--detection-catalog).)
 
+## Importing Sigma rules
+
+**Detection Rules → Import Sigma.** Paste one or more [Sigma](https://sigmahq.io) rules (YAML, `---` separated for multiple) to convert the huge body of community Sigma content into SIEMBox detections. **Preview** first to see exactly what will be created; **Import** then upserts them. Imported rules are created **disabled** so you review them before they fire.
+
+Because the engine evaluates a flat AND-list of conditions, the converter maps everything that fits that model — single selections, `a and b`, `all of them`, the `contains`/`startswith`/`endswith`/`re`/`|all` modifiers, list values (as `in`), and `*`/`?` wildcards (as regex) — and is **honest about the rest**: rules needing `or` / `not` / `1 of` / event-count are reported and skipped, never silently mistranslated into a rule that quietly never (or always) fires. Sigma field names often differ from your parser output, so the preview lists the fields each rule keys on — verify they match your parsed logs.
+
 ## AI builder
 
 **Detection Rules → Generate with AI.** Describe the threat in plain language (plus optional context about available fields); SIEMBox runs a **generate → validate → auto-refine** loop against the engine contract (≤3 attempts), so the rule it returns uses only supported operators and a satisfiable shape. Same providers/keys as the parser builder — see [Configuration](Configuration#ai-builder-optional).

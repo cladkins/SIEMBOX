@@ -4,18 +4,50 @@
   "description": "Parses Nextcloud file sharing and collaboration platform logs",
   "parser_type": "regex",
   "priority": 35,
-  "pattern": "^\\[(?<timestamp>[^\\]]+)\\]\\s+(?<app>\\w+)\\.(?<log_level>\\w+):\\s+(?<message>.+?)\\s+\\{.*?\"user\":\"(?<user>[^\"]*)\".*?\"url\":\"(?<url>[^\"]*)\".*?\"method\":\"(?<method>[^\"]*)\".*?\"ip\":\"(?<client_ip>[^\"]*)\"",
+  "pattern": "^\\[(?<timestamp>[^\\]]+)\\] (?<app>\\w+)\\.(?<log_level>\\w+): (?<message>.*)$",
   "field_mappings": {
     "timestamp": "timestamp",
     "app": "app",
     "log_level": "log_level",
     "message": "message",
-    "user": "user",
-    "url": "url",
-    "method": "method",
-    "client_ip": "client_ip",
     "service": "nextcloud"
   },
+  "derivations": [
+    {
+      "extract": {
+        "user": {
+          "from": "message",
+          "pattern": "\"user\":\"([^\"]*)\"",
+          "group": 1
+        },
+        "url": {
+          "from": "message",
+          "pattern": "\"url\":\"([^\"]*)\"",
+          "group": 1
+        },
+        "path": {
+          "from": "message",
+          "pattern": "\"url\":\"([^\"]*)\"",
+          "group": 1
+        },
+        "method": {
+          "from": "message",
+          "pattern": "\"method\":\"([^\"]*)\"",
+          "group": 1
+        },
+        "client_ip": {
+          "from": "message",
+          "pattern": "\"ip\":\"([^\"]*)\"",
+          "group": 1
+        },
+        "source_ip": {
+          "from": "message",
+          "pattern": "\"ip\":\"([^\"]*)\"",
+          "group": 1
+        }
+      }
+    }
+  ],
   "event_type": "nextcloud_access",
   "enabled": true,
   "test_samples": [

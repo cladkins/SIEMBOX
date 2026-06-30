@@ -1,0 +1,84 @@
+name: Sync Catalog
+
+# Keep this repo's catalog source (catalog/parsers/ + rules/) mirrored to the
+# published siembox-catalog repo — the one users actually install from — so the
+# in-repo source, the validate-catalog gate, and Content Packs all agree.
+#
+# Runs weekly (and on demand). The synced content is VALIDATED before a PR is
+# opened, so a drifted-but-broken upstream never lands an unmergeable PR. A PR
+# (not a direct push) keeps a human in the loop; enable auto-merge if you want it
+# fully hands-off.
+#
+# Note: scheduled/dispatch workflows only fire from the default branch, so this
+# becomes active once it's on main.
+on:
+  schedule:
+    - cron: '17 6 * * 1' # Mondays 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Catalog repo ref to sync from'
+        default: 'main'
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    name: Mirror published catalog + open PR on drift
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Sync from published catalog
+        run: ./scripts/sync-catalog.sh
+        env:
+          CATALOG_REF: ${{ github.event.inputs.ref || 'main' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
+
+      - name: Build validators
+        working-directory: backend
+        run: npm run build
+
+      # Gate the PR on the same checks validate-catalog enforces, so we never
+      # propose content that wouldn't pass CI anyway.
+      - name: Validate synced parsers (strict + self-tests)
+        working-directory: backend
+        run: npm run validate-parsers -- ../catalog/parsers
+
+      - name: Validate synced detections (strict)
+        working-directory: backend
+        run: npm run validate-detections -- ../rules
+
+      - name: Open a PR if the catalog drifted
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/catalog-sync
+          delete-branch: true
+          commit-message: 'chore(catalog): sync parsers + detections from published catalog'
+          title: 'chore(catalog): sync from published siembox-catalog'
+          body: |
+            Automated mirror of the published **siembox-catalog** into `catalog/parsers/`
+            and `rules/` (run by `.github/workflows/sync-catalog.yml`).
+
+            The synced parsers + detections already passed strict validation +
+            self-tests in this job. Merging keeps the in-repo source, the
+            `validate-catalog` gate, and what users install from Browse Catalog /
+            Content Packs all in agreement.
+          labels: |
+            catalog
+            automated

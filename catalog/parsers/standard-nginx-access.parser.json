@@ -1,10 +1,10 @@
 {
   "schema": "siembox.parser/v1",
   "name": "standard-nginx-access",
-  "description": "Parses standard NGINX access logs (combined format)",
+  "description": "Parses standard NGINX access logs (combined format), including NGINX Proxy Manager proxy-host logs",
   "parser_type": "regex",
   "priority": 40,
-  "pattern": "^(?<client_ip>[\\d.]+)\\s+-\\s+(?<remote_user>\\S+)\\s+\\[(?<timestamp>[^\\]]+)\\]\\s+\"(?<method>\\w+)\\s+(?<request_uri>\\S+)\\s+HTTP/(?<http_version>[\\d.]+)\"\\s+(?<status_code>\\d{3})\\s+(?<body_bytes_sent>\\d+)\\s+\"(?<http_referer>[^\"]*)\"\\s+\"(?<user_agent>[^\"]*)\"",
+  "pattern": "^(?<client_ip>[\\d.]+) - (?<remote_user>\\S+) \\[(?<timestamp>[^\\]]+)\\] \"(?<method>\\w+) (?<request_uri>\\S+) HTTP/(?<http_version>[\\d.]+)\" (?<status_code>\\d{3}) (?<body_bytes_sent>\\d+) \"(?<http_referer>[^\"]*)\" \"(?<user_agent>[^\"]*)\"",
   "field_mappings": {
     "client_ip": "client_ip",
     "remote_user": "remote_user",
@@ -45,18 +45,46 @@
         "status_code": "401",
         "service": "nginx"
       }
+    },
+    {
+      "description": "authenticated proxied request returning 200",
+      "input": "203.0.113.5 - admin [15/Jan/2024:12:00:00 +0000] \"GET /api/users HTTP/2.0\" 200 532 \"https://npm.example.com/\" \"Mozilla/5.0\"",
+      "expect": {
+        "client_ip": "203.0.113.5",
+        "source_ip": "203.0.113.5",
+        "user": "admin",
+        "method": "GET",
+        "path": "/api/users",
+        "status_code": "200",
+        "user_agent": "Mozilla/5.0"
+      }
+    },
+    {
+      "description": "anonymous 403 to a sensitive path",
+      "input": "198.51.100.9 - - [15/Jan/2024:12:01:00 +0000] \"GET /.git/config HTTP/1.1\" 403 153 \"-\" \"python-requests/2.31.0\"",
+      "expect": {
+        "client_ip": "198.51.100.9",
+        "source_ip": "198.51.100.9",
+        "method": "GET",
+        "path": "/.git/config",
+        "status_code": "403",
+        "user_agent": "python-requests/2.31.0"
+      }
     }
   ],
   "metadata": {
     "author": "siembox",
-    "log_source": "NGINX access log (combined format)",
+    "log_source": "NGINX access log (combined format), incl. NGINX Proxy Manager",
     "tags": [
       "http",
       "webserver",
-      "nginx"
+      "nginx",
+      "reverse-proxy",
+      "nginx-proxy-manager"
     ],
     "references": [
-      "https://nginx.org/en/docs/http/ngx_http_log_module.html#log_format"
+      "https://nginx.org/en/docs/http/ngx_http_log_module.html#log_format",
+      "https://nginxproxymanager.com/"
     ]
   }
 }

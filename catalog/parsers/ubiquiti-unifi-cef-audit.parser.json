@@ -1,0 +1,74 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "ubiquiti-unifi-cef-audit",
+  "parser_type": "regex",
+  "pattern": "^(?<syslog_time>\\w+\\s+\\d+\\s+[\\d:]+)\\s+(?<syslog_host>\\S+)\\s+CEF:(?<cef_version>\\d+)\\|(?<vendor>[^|]+)\\|(?<product>[^|]+)\\|(?<product_version>[^|]+)\\|(?<signature_id>[^|]+)\\|(?<event_name>[^|]+)\\|(?<severity>[^|]+)\\|.*?UNIFIcategory=(?<unifi_category>\\S+)\\s+UNIFIhost=(?<unifi_host>.+?)\\s+UNIFIaccessMethod=(?<access_method>\\S+)\\s+UNIFIadmin=(?<unifi_admin>\\S+)\\s+src=(?<src_ip>\\S+)\\s+UNIFIutcTime=(?<utc_time>\\S+)\\s+msg=(?<msg>.+)$",
+  "field_mappings": {
+    "msg": "message",
+    "src_ip": "source_ip",
+    "syslog_host": "host",
+    "unifi_admin": "user",
+    "access_method": "method",
+    "unifi_category": "service"
+  },
+  "description": "Parses Ubiquiti UniFi Network CEF audit log events (admin access, network events)",
+  "priority": 200,
+  "derivations": [
+    {
+      "set": {
+        "event": "network_access"
+      },
+      "when": {
+        "message": {
+          "contains": "accessed"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "login_failure"
+      },
+      "when": {
+        "message": {
+          "contains": "login failed"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "login_success"
+      },
+      "when": {
+        "message": {
+          "contains": "logged in"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "logout"
+      },
+      "when": {
+        "message": {
+          "contains": "logged out"
+        }
+      }
+    }
+  ],
+  "event_type": "unifi_audit",
+  "enabled": true,
+  "test_samples": [
+    {
+      "input": "Jun 24 14:45:44 UCG-Max CEF:0|Ubiquiti|UniFi Network|10.4.57|544|Network Accessed|4|UNIFIcategory=Audit UNIFIhost=UCG Max UNIFIaccessMethod=web UNIFIadmin=cladkins src=192.168.1.130 UNIFIutcTime=2026-06-24T19:45:44.918Z msg=cladkins accessed UniFi Network using the web. Source IP: 192.168.1.130",
+      "expect": {
+        "host": "UCG-Max",
+        "user": "cladkins",
+        "event": "network_access",
+        "method": "web",
+        "message": "cladkins accessed UniFi Network using the web. Source IP: 192.168.1.130",
+        "service": "Audit",
+        "source_ip": "192.168.1.130"
+      }
+    }
+  ]
+}

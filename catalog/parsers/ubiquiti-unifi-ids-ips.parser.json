@@ -1,0 +1,91 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "ubiquiti-unifi-ids-ips",
+  "parser_type": "regex",
+  "pattern": "^(?<syslog_time>\\w+ +\\d+ [\\d:]+) (?<syslog_host>\\S+) CEF:\\d+\\|(?<cef_vendor>[^|]+)\\|(?<cef_product>[^|]+)\\|(?<cef_version>[^|]+)\\|(?<cef_sig_id>[^|]+)\\|(?<cef_name>[^|]+)\\|(?<cef_severity>[^|]+)\\|.*?\\bproto=(?<proto>\\S+)\\s+spt=(?<spt>\\d+)\\s+dpt=(?<dpt>\\d+)\\s+act=(?<act>\\S+)\\s+app=(?<app>\\S+)\\s+.*?\\bUNIFIpolicyName=(?<policy_name>.*?)\\s+UNIFIpolicyType=(?<policy_type>.*?)\\s+UNIFIdirection=(?<direction>\\S+)\\s+.*?\\bUNIFIdeviceIp=(?<device_ip>\\S+)\\s+.*?\\bsrc=(?<src_ip>\\S+)\\s+dst=(?<dst_ip>\\S+)\\s+.*?\\bUNIFIipsSignature=(?<ips_signature>.*?)\\s+UNIFIipsSignatureId=(?<ips_sig_id>\\d+)\\s+.*?\\bmsg=(?<msg>.+)$",
+  "field_mappings": {
+    "act": "action",
+    "app": "service",
+    "dpt": "dest_port",
+    "msg": "message",
+    "spt": "source_port",
+    "proto": "network_protocol",
+    "dst_ip": "dest_ip",
+    "src_ip": "source_ip",
+    "cef_name": "event",
+    "device_ip": "sensor_ip",
+    "direction": "network_direction",
+    "ips_sig_id": "signature_id",
+    "policy_name": "rule_name",
+    "policy_type": "rule_type",
+    "syslog_host": "host",
+    "cef_severity": "severity_label",
+    "ips_signature": "signature_name"
+  },
+  "description": "Parses Ubiquiti UniFi Network CEF-format IDS/IPS threat detection and blocking alerts",
+  "priority": 200,
+  "derivations": [
+    {
+      "set": {
+        "event_outcome": "blocked"
+      },
+      "when": {
+        "action": {
+          "equals": "blocked"
+        }
+      }
+    },
+    {
+      "set": {
+        "event_outcome": "allowed"
+      },
+      "when": {
+        "action": {
+          "equals": "allowed"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "ids_ips_block"
+      },
+      "when": {
+        "event": {
+          "contains": "Blocked"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "ids_ips_alert"
+      },
+      "when": {
+        "event": {
+          "contains": "Detected"
+        }
+      }
+    }
+  ],
+  "event_type": "ids_ips_alert",
+  "enabled": true,
+  "test_samples": [
+    {
+      "input": "Jun 24 15:22:05 UCG-Max CEF:0|Ubiquiti|UniFi Network|10.4.57|201|Threat Detected and Blocked|7|UNIFIcategory=Security UNIFIhost=UCG Max proto=TCP spt=37383 dpt=443 act=blocked app=HTTPS UNIFIrisk=medium UNIFIpolicyName=DShield Block List UNIFIpolicyType=IDS/IPS UNIFIdirection=incoming deviceOutboundInterface=Default UNIFIdeviceMac=28:70:4e:84:bc:d5 UNIFIdeviceName=UCG Max UNIFIdeviceModel=UCG-Max UNIFIdeviceIp=192.168.1.1 UNIFIdeviceVersion=5.1.19 src=45.194.67.146 dst=192.168.1.194 UNIFIsrcRegion=BR UNIFIdstZone=Internal UNIFItotalBytes=54 UNIFItotalPackets=1 UNIFIpacketsReceived=0 UNIFIpacketsSent=1 UNIFIbytesReceived=0 UNIFIbytesSent=54 UNIFIflowCount=1 UNIFIflowId=null UNIFIflowStartTime=Jun 24, 2026 at 3:22:03.532 PM UNIFIipsSessionId=1316644713078973 UNIFIipsSignature=ET DROP Dshield Block Listed Source group 1 UNIFIipsSignatureId=2402000 UNIFIutcTime=2026-06-24T20:22:05.002Z msg=A network intrusion attempt from 45.194.67.146 to 192.168.1.194 has been detected and blocked.",
+      "expect": {
+        "host": "UCG-Max",
+        "action": "blocked",
+        "dest_ip": "192.168.1.194",
+        "message": "A network intrusion attempt from 45.194.67.146 to 192.168.1.194 has been detected and blocked.",
+        "service": "HTTPS",
+        "dest_port": "443",
+        "rule_name": "DShield Block List",
+        "source_ip": "45.194.67.146",
+        "source_port": "37383",
+        "signature_id": "2402000",
+        "event_outcome": "blocked",
+        "signature_name": "ET DROP Dshield Block Listed Source group 1",
+        "network_protocol": "TCP"
+      }
+    }
+  ]
+}

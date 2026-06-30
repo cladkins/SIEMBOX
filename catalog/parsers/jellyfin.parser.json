@@ -4,7 +4,7 @@
   "description": "Jellyfin media server log (log_*.log): surfaces denied-authentication and playback-start events.",
   "parser_type": "regex",
   "priority": 21,
-  "pattern": "^\\[(?<timestamp>\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?(?:\\s*[+-]\\d{2}:\\d{2})?)\\]\\s+\\[(?<log_level>[A-Z]{3})\\]\\s+(?:\\[(?<thread>[^\\]]*)\\]\\s+)?(?<category>[^:]+):\\s+(?<msg>.*)$",
+  "pattern": "^\\[(?<timestamp>\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,7})?(?: ?[+-]\\d{2}:\\d{2})?)\\] \\[(?<log_level>[A-Z]{3})\\] (?:\\[(?<thread>[^\\]]*)\\] )?(?<category>[^:]+): (?<msg>.*)$",
   "field_mappings": {
     "timestamp": "timestamp",
     "log_level": "log_level",

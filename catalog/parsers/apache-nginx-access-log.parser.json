@@ -1,10 +1,10 @@
 {
   "schema": "siembox.parser/v1",
-  "name": "Apache/Nginx Access Log",
+  "name": "apache-nginx-access-log",
   "description": "Parses standard Apache/Nginx access logs",
   "parser_type": "regex",
   "priority": 20,
-  "pattern": "^(?<client_ip>[\\d.]+)\\s+-\\s+-\\s+\\[(?<timestamp>[^\\]]+)\\]\\s+\"(?<method>\\S+)\\s+(?<path>\\S+)\\s+(?<protocol>[^\"]+)\"\\s+(?<status>\\d+)\\s+(?<size>\\d+)",
+  "pattern": "^(?<client_ip>[\\d.]+) - - \\[(?<timestamp>[^\\]]+)\\] \"(?<method>\\S+) (?<path>\\S+) (?<protocol>[^\"]+)\" (?<status>\\d+) (?<size>\\d+)",
   "field_mappings": {
     "client_ip": "client_ip",
     "timestamp": "timestamp",

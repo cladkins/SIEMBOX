@@ -150,6 +150,20 @@ export class RulesEngine {
     }
 
     switch (operator) {
+      case 'regex': {
+        // Compiles a caller-supplied detection pattern — the one place that builds
+        // a dynamic RegExp; kept here rather than in the DB-free pure module.
+        const valueStr = String(value);
+        const fieldStr = String(fieldValue);
+        try {
+          const regex = new RegExp(valueStr);
+          return regex.test(fieldStr);
+        } catch (error) {
+          logger.error('Invalid regex pattern:', { pattern: valueStr, error });
+          return false;
+        }
+      }
+
       case 'not_in_whitelist':
         // Check if IP address is NOT in whitelist
         if (value !== true) {

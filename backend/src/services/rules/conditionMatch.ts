@@ -3,24 +3,22 @@
  *
  * This is the DB-free core of detection matching: given an operator, the value
  * pulled from a parsed log, and the rule's comparison value, decide whether the
- * condition holds. It deliberately imports nothing but the logger so it can be
- * unit-tested without a database — the same philosophy as runParser.ts on the
- * parser side.
+ * condition holds. It deliberately imports nothing so it can be unit-tested
+ * without a database — the same philosophy as runParser.ts on the parser side.
  *
  * The DB-backed operators (`not_in_whitelist`, `on_threat_feed`,
- * `not_on_threat_feed`) are NOT handled here; they need async whitelist/feed
- * lookups and stay in RulesEngine. `PURE_CONDITION_OPERATORS` is the exact set
- * this module owns, so the engine can route only those here.
+ * `not_on_threat_feed`) and the `regex` operator (which compiles a caller-
+ * supplied pattern via `new RegExp` — kept in one reviewed place in RulesEngine)
+ * are NOT handled here. `PURE_CONDITION_OPERATORS` is the exact set this module
+ * owns, so the engine routes only those here.
  */
-import { logger } from '../../utils/logger';
 
-/** Operators evaluated purely (no DB / no async). Everything else is I/O-backed. */
+/** Operators evaluated purely (no DB / no async / no dynamic RegExp). */
 export const PURE_CONDITION_OPERATORS: ReadonlySet<string> = new Set([
   'equals',
   'not_equals',
   'contains',
   'not_contains',
-  'regex',
   'greater_than',
   'less_than',
   'in',
@@ -46,15 +44,6 @@ export function evaluatePureCondition(operator: string, fieldValue: any, value: 
 
     case 'not_contains':
       return !fieldStr.toLowerCase().includes(valueStr.toLowerCase());
-
-    case 'regex':
-      try {
-        const regex = new RegExp(valueStr);
-        return regex.test(fieldStr);
-      } catch (error) {
-        logger.error('Invalid regex pattern:', { pattern: valueStr, error });
-        return false;
-      }
 
     case 'greater_than':
       return Number(fieldValue) > Number(value);

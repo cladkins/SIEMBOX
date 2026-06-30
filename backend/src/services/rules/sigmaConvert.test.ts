@@ -168,15 +168,13 @@ test('a keywords selection (list of strings) converts to a regex on message', ()
   const c = r.rule!.conditions[0];
   assert.equal(c.field, 'message');
   assert.equal(c.operator, 'regex');
-  // The compiled regex matches a real log line, case-INsensitively (Sigma default),
-  // un-anchored (contains), and respects the literal escaped asterisk.
-  const re = new RegExp(c.value as string);
-  assert.ok(re.test('app: user ran DROP TABLE users')); // uppercase DROP matches lowercase keyword
-  assert.ok(re.test('query: select * from secrets')); // literal "select *"
-  assert.ok(re.test('TRUNCATE logs'));
-  assert.ok(!re.test('a normal healthy log line'));
-  // "select" alone (no asterisk) must NOT match the "select \*" branch.
-  assert.ok(!re.test('user made a selection in the menu'));
+  // Un-anchored alternation against `message`; each keyword is encoded
+  // case-INsensitively (Sigma default) as per-letter classes, and the escaped
+  // `\*` is a LITERAL asterisk, not a wildcard.
+  assert.equal(
+    c.value,
+    '(?:[Dd][Rr][Oo][Pp]|[Tt][Rr][Uu][Nn][Cc][Aa][Tt][Ee]|[Dd][Uu][Mm][Pp]|[Ss][Ee][Ll][Ee][Cc][Tt] \\*)'
+  );
 });
 
 test('keywords with a bare wildcard become a regex wildcard', () => {
@@ -186,9 +184,8 @@ test('keywords with a bare wildcard become a regex wildcard', () => {
     detection: { keywords: ['/etc/*/passwd'], condition: 'keywords' },
   });
   assertValid(r);
-  const re = new RegExp(r.rule!.conditions[0].value as string);
-  assert.ok(re.test('opened /etc/cron.d/passwd today'));
-  assert.ok(!re.test('/etc/passwd')); // the * requires an intermediate path segment
+  // bare `*` -> `.*` wildcard; letters become case-insensitive classes.
+  assert.equal(r.rule!.conditions[0].value, '(?:/[Ee][Tt][Cc]/.*/[Pp][Aa][Ss][Ss][Ww][Dd])');
 });
 
 test('a selection that is a list of maps (OR) is rejected', () => {

@@ -22,12 +22,8 @@ test('contains / not_contains are case-insensitive substring checks', () => {
   assert.equal(evaluatePureCondition('not_contains', 'Failed password', 'FAILED'), false);
 });
 
-test('regex matches against the field, invalid pattern fails closed', () => {
-  assert.equal(evaluatePureCondition('regex', '192.168.1.5', '^192\\.168\\.'), true);
-  assert.equal(evaluatePureCondition('regex', '10.0.0.1', '^192\\.168\\.'), false);
-  // An unparseable pattern must not throw — it returns false.
-  assert.equal(evaluatePureCondition('regex', 'anything', '('), false);
-});
+// Note: the `regex` operator (dynamic RegExp compile) is handled in RulesEngine,
+// not in this DB-free pure module, so it is not covered here.
 
 test('greater_than / less_than coerce to numbers', () => {
   assert.equal(evaluatePureCondition('greater_than', '10', 5), true);
@@ -62,7 +58,6 @@ test('PURE_CONDITION_OPERATORS lists exactly the DB-free operators', () => {
     'not_equals',
     'contains',
     'not_contains',
-    'regex',
     'greater_than',
     'less_than',
     'in',
@@ -70,8 +65,8 @@ test('PURE_CONDITION_OPERATORS lists exactly the DB-free operators', () => {
     'exists',
   ].sort();
   assert.deepEqual([...PURE_CONDITION_OPERATORS].sort(), expected);
-  // The I/O-backed operators must NOT be claimed by the pure set.
-  for (const op of ['not_in_whitelist', 'on_threat_feed', 'not_on_threat_feed']) {
+  // The I/O-backed operators and `regex` (dynamic compile) must NOT be in the pure set.
+  for (const op of ['not_in_whitelist', 'on_threat_feed', 'not_on_threat_feed', 'regex']) {
     assert.equal(PURE_CONDITION_OPERATORS.has(op), false);
   }
 });

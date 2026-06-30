@@ -147,8 +147,13 @@ export function detectionMatchesPack(
   const cats = pack.detectionCategories || [];
   const tags = pack.detectionTags || [];
   if (cats.length) {
-    const path = String(entry.path || '');
-    if (cats.some((c) => new RegExp(`(^|/)${c}/`).test(path))) return true;
+    // Match the category as a directory segment of the path (e.g.
+    // detections/authentication/AUTH-001.yaml), using plain string ops rather
+    // than a built regex. The category must be a non-final segment (a directory),
+    // mirroring the old `(^|/)<cat>/` pattern.
+    const segs = String(entry.path || '').split('/');
+    const dirSegs = segs.slice(0, -1); // drop the filename
+    if (cats.some((c) => dirSegs.includes(c))) return true;
   }
   if (tags.length && Array.isArray(entry.tags)) {
     if (entry.tags.some((t) => tags.includes(t))) return true;

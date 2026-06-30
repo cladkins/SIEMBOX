@@ -38,6 +38,71 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
+// Export alerts (CSV or JSON) using the same filters as the list view. Capped so
+// a click can't try to stream the whole table; narrow the filters for more.
+const EXPORT_MAX = 10000;
+function csvCell(value: unknown): string {
+  const s = value == null ? '' : String(value);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+router.get('/export', async (req: Request, res: Response) => {
+  try {
+    const format = (req.query.format as string) === 'json' ? 'json' : 'csv';
+    const severity = req.query.severity as string;
+    const status = req.query.status as string;
+    const ruleId = req.query.ruleId ? parseInt(req.query.ruleId as string) : undefined;
+    const startTime = req.query.startTime ? new Date(req.query.startTime as string) : undefined;
+    const endTime = req.query.endTime ? new Date(req.query.endTime as string) : undefined;
+    const search = (req.query.search as string)?.trim().slice(0, 200) || undefined;
+
+    const { alerts } = await AlertModel.findAll({
+      limit: EXPORT_MAX,
+      offset: 0,
+      severity,
+      status,
+      ruleId,
+      startTime,
+      endTime,
+      search,
+    });
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+    if (format === 'json') {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="siembox-alerts-${stamp}.json"`);
+      res.send(JSON.stringify(alerts, null, 2));
+      return;
+    }
+
+    const cols = ['id', 'created_at', 'severity', 'status', 'source', 'title', 'source_ip', 'country_code', 'description'];
+    const lines = [cols.join(',')];
+    for (const a of alerts as any[]) {
+      const md = a.matched_data || {};
+      lines.push(
+        [
+          a.id,
+          a.created_at instanceof Date ? a.created_at.toISOString() : a.created_at,
+          a.severity,
+          a.status,
+          a.source || 'rule',
+          a.title,
+          md.source_ip || md.ip || md.client_ip || '',
+          md.country_code || '',
+          a.description || '',
+        ]
+          .map(csvCell)
+          .join(',')
+      );
+    }
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="siembox-alerts-${stamp}.csv"`);
+    res.send(lines.join('\r\n'));
+  } catch (error) {
+    throw new ApiError(500, 'Failed to export alerts');
+  }
+});
+
 // Get alert statistics
 router.get('/statistics', async (_req: Request, res: Response) => {
   try {

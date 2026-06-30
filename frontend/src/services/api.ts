@@ -176,6 +176,8 @@ export const api = {
 
   // Alerts
   getAlerts: (params?: any) => apiClient.get('/alerts', { params }),
+  exportAlerts: (params: any, format: 'csv' | 'json') =>
+    apiClient.get('/alerts/export', { params: { ...params, format }, responseType: 'blob' }),
   getAlertStatistics: () => apiClient.get('/alerts/statistics'),
   getAlertsByCountry: (params?: { days?: number; limit?: number }) =>
     apiClient.get('/alerts/by-country', { params }),

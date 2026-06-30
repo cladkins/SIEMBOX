@@ -76,8 +76,6 @@ router.post('/logout', authenticate, async (req: Request, res: Response) => {
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.substring(7);
-    } else if (req.cookies?.session_token) {
-      token = req.cookies.session_token;
     }
 
     if (token) {

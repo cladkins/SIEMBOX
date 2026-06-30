@@ -1,7 +1,6 @@
 import 'express-async-errors'; // Must be imported before routes
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
-import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { authenticate } from './middleware/auth';
@@ -41,7 +40,6 @@ app.use(cors({
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use(cookieParser());
 
 // Rate limiting - generous global limit for normal API usage
 // Specific rate limiters are applied to scan endpoints in their routes

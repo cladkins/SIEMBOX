@@ -26,19 +26,19 @@
   "dependencies": {
     "@types/nodemailer": "^8.0.1",
     "bcrypt": "^6.0.0",
-    "cors": "^2.8.5",
+    "cors": "^2.8.6",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "express-async-errors": "^3.1.1",
     "express-rate-limit": "^7.1.5",
-    "express-validator": "^7.3.1",
+    "express-validator": "^7.3.2",
     "js-yaml": "^4.1.0",
-    "jsonwebtoken": "^9.0.2",
+    "jsonwebtoken": "^9.0.3",
     "mmdb-lib": "^3.0.2",
     "node-nmap": "^4.0.0",
-    "nodemailer": "^9.0.1",
-    "pg": "^8.11.3",
-    "winston": "^3.11.0"
+    "nodemailer": "^9.0.3",
+    "pg": "^8.22.0",
+    "winston": "^3.19.0"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",
@@ -47,12 +47,12 @@
     "@types/js-yaml": "^4.0.9",
     "@types/jsonwebtoken": "^9.0.5",
     "@types/node": "^20.10.5",
-    "@types/pg": "^8.10.9",
+    "@types/pg": "^8.20.0",
     "@typescript-eslint/eslint-plugin": "^6.15.0",
     "@typescript-eslint/parser": "^6.15.0",
     "eslint": "^8.56.0",
-    "prettier": "^3.1.1",
-    "tsx": "^4.7.0",
+    "prettier": "^3.9.4",
+    "tsx": "^4.22.4",
     "typescript": "^5.3.3"
   }
 }

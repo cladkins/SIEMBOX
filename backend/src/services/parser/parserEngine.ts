@@ -9,6 +9,7 @@ import { runParser } from './runParser';
 import { normalizeParsedData } from '../normalize/fieldNormalizer';
 
 export class ParserEngine {
+  private static instance: ParserEngine | null = null;
   private parsers: Parser[] = [];
   private rulesEngine: RulesEngine;
 
@@ -16,11 +17,22 @@ export class ParserEngine {
     this.rulesEngine = RulesEngine.getInstance();
   }
 
+  /**
+   * Shared engine the running syslog server processes logs through. Parser CRUD /
+   * catalog / pack endpoints call getInstance().reload() so enabling or importing
+   * a parser takes effect immediately — the in-memory parser list is otherwise
+   * only loaded once at startup, so changes wouldn't apply without a restart.
+   */
+  static getInstance(): ParserEngine {
+    if (!ParserEngine.instance) {
+      ParserEngine.instance = new ParserEngine();
+    }
+    return ParserEngine.instance;
+  }
+
   async initialize(): Promise<void> {
     try {
-      // Load all enabled parsers from database, ordered by priority
-      this.parsers = await ParserModel.findEnabled();
-      logger.info(`Loaded ${this.parsers.length} parsers`);
+      await this.loadParsers();
 
       // Initialize rules engine
       await this.rulesEngine.initialize();
@@ -29,6 +41,21 @@ export class ParserEngine {
       ErrorLogService.logBackgroundError('parser-engine', error, { dedupeKey: 'initialize' });
       throw error;
     }
+  }
+
+  /**
+   * Reload the in-memory parser list from the DB after a parser change (enable,
+   * import, catalog/pack install, delete). Does NOT re-init the rules engine —
+   * detection rules reload on their own changes.
+   */
+  async reload(): Promise<void> {
+    await this.loadParsers();
+  }
+
+  private async loadParsers(): Promise<void> {
+    // Enabled parsers, ordered by priority (lower number = higher priority).
+    this.parsers = await ParserModel.findEnabled();
+    logger.info(`Loaded ${this.parsers.length} parsers`);
   }
 
   async processLog(rawLog: RawLog): Promise<void> {

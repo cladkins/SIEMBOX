@@ -8,6 +8,7 @@
 import { ParserModel } from '../../models/Parser';
 import { DetectionRuleModel } from '../../models/DetectionRule';
 import { getCatalogParser, fetchCatalog } from '../parser/catalogService';
+import { ParserEngine } from '../parser/parserEngine';
 import { validatePortableParser, runSelfTests } from '../parser/parserPortable';
 import { fetchDetectionCatalog, getCatalogDetection } from '../rules/detectionCatalog';
 import { validateRule, portableRuleToYaml } from '../rules/rulePortable';
@@ -231,6 +232,9 @@ export async function installPack(id: string): Promise<PackInstallResult> {
     }
   }
 
+  if (result.parsers.installed > 0 || result.parsers.updated > 0) {
+    await ParserEngine.getInstance().reload();
+  }
   if (result.detections.installed > 0 || result.detections.updated > 0) {
     await RulesEngine.getInstance().reload();
   }

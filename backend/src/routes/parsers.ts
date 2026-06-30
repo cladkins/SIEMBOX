@@ -39,6 +39,8 @@ async function upsertPortableParser(portable: PortableParser): Promise<{ action:
   const saved = existing
     ? await ParserModel.update(existing.id, params)
     : await ParserModel.create(params);
+  // Apply to the running syslog engine immediately — no restart needed.
+  await ParserEngine.getInstance().reload();
   return { action: existing ? 'updated' : 'created', parser: saved };
 }
 
@@ -332,6 +334,7 @@ router.post('/', async (req: Request, res: Response) => {
       field_mappings,
       test_samples,
     });
+    await ParserEngine.getInstance().reload();
 
     res.status(201).json(parser);
   } catch (error) {
@@ -350,6 +353,8 @@ router.put('/:id', async (req: Request, res: Response) => {
       throw new ApiError(404, 'Parser not found');
     }
 
+    // Enable/disable/edit takes effect on the running engine immediately.
+    await ParserEngine.getInstance().reload();
     res.json(parser);
   } catch (error) {
     if (error instanceof ApiError) throw error;
@@ -367,6 +372,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
       throw new ApiError(404, 'Parser not found');
     }
 
+    await ParserEngine.getInstance().reload();
     res.json({ message: 'Parser deleted successfully' });
   } catch (error) {
     if (error instanceof ApiError) throw error;

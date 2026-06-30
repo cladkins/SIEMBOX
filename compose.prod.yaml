@@ -77,7 +77,7 @@ services:
       # but be aware: granting a container the Docker socket is effectively root on
       # the host (`:ro` does NOT make the Docker API read-only). Leave commented
       # out unless you accept that tradeoff; discovery degrades gracefully when absent.
-       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     # Lets the backend reach services on the Docker host (e.g. a local Ollama at
     # http://host.docker.internal:11434). Ollama must also bind 0.0.0.0.
     extra_hosts:

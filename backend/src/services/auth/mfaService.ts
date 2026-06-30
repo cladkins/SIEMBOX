@@ -75,11 +75,11 @@ export async function verifyLogin(user: User, code: string): Promise<boolean> {
   try {
     const secret = decryptSecret(user.mfa_secret);
     if (verifyTotp(secret, code)) return true;
-  } catch (e) {
-    logger.error('[MFA] secret decrypt failed during login', {
-      userId: user.id,
-      error: e instanceof Error ? e.message : String(e),
-    });
+  } catch {
+    // Never log the error object here — it derives from the decrypted mfa_secret
+    // and could leak secret/plaintext material. A static message + userId is
+    // enough to know an MFA decrypt failed for this user; fail closed.
+    logger.error('[MFA] secret decrypt failed during login', { userId: user.id });
     return false;
   }
 

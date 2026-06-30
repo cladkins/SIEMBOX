@@ -34,7 +34,7 @@ export const CONTENT_PACKS: ContentPack[] = [
     description:
       'SSO / login platforms and the brute-force, impossible-travel, and account-abuse detections that watch them.',
     icon: 'Key',
-    parsers: ['authelia-access', 'authentik-audit', 'keycloak-event', 'SSH Authentication', 'vaultwarden-access'],
+    parsers: ['authelia-access', 'authentik-audit', 'keycloak-event', 'ssh-authentication', 'vaultwarden-access'],
     detectionCategories: ['authentication', 'access-control', 'password-manager'],
     setup: [
       'Forward your identity provider logs (Authelia, Authentik, Keycloak) to SIEMBox over syslog.',
@@ -46,16 +46,14 @@ export const CONTENT_PACKS: ContentPack[] = [
     id: 'reverse-proxy',
     name: 'Reverse Proxy & Web',
     description:
-      'nginx / Traefik / Caddy / NPM access + error logs with path-traversal, enumeration, bad-bot, and method-abuse rules.',
+      'nginx / Traefik / Caddy access + error logs with path-traversal, enumeration, bad-bot, and method-abuse rules.',
     icon: 'Connection',
     parsers: [
       'standard-nginx-access',
       'standard-nginx-error',
       'traefik-access',
       'caddy-access',
-      'nginx-proxy-manager-access',
-      'nginx-proxy-manager-error',
-      'Apache/Nginx Access Log',
+      'apache-nginx-access-log',
       'nginx-komodo-ip-only',
       'nginx-komodo-timestamp-first',
       'nginx-komodo-error',
@@ -93,9 +91,9 @@ export const CONTENT_PACKS: ContentPack[] = [
   {
     id: 'dns-network',
     name: 'DNS & Network',
-    description: 'Pi-hole queries and UniFi firewall / IDS-IPS logs with the network-anomaly detections.',
+    description: 'Pi-hole queries / ad-block and UniFi firewall-audit + IDS-IPS logs with the network-anomaly detections.',
     icon: 'Share',
-    parsers: ['pihole-query', 'unifi-firewall', 'unifi-idsips'],
+    parsers: ['pihole-query', 'pihole-dns-adblock', 'ubiquiti-unifi-cef-audit', 'ubiquiti-unifi-ids-ips'],
     detectionCategories: ['network'],
     setup: [
       'Pi-hole: enable remote syslog (or ship the query log) to SIEMBox.',
@@ -114,9 +112,9 @@ export const CONTENT_PACKS: ContentPack[] = [
   {
     id: 'infrastructure',
     name: 'Linux & Infrastructure',
-    description: 'Host-level coverage: sudo, SSH, and generic syslog with the infrastructure detections.',
+    description: 'Host-level coverage: sudo, SSH, fail2ban, and generic syslog with the infrastructure detections.',
     icon: 'Monitor',
-    parsers: ['Linux Sudo', 'SSH Authentication', 'Generic Syslog'],
+    parsers: ['linux-sudo', 'ssh-authentication', 'generic-syslog', 'fail2ban'],
     detectionCategories: ['infrastructure'],
     setup: [
       'Ship /var/log/auth.log and /var/log/syslog (or the journal) from each Linux host.',
@@ -128,7 +126,7 @@ export const CONTENT_PACKS: ContentPack[] = [
     name: 'CEF / Standard SIEM',
     description: 'CEF and JSON ingestion for appliances and apps that already emit structured security events.',
     icon: 'DataLine',
-    parsers: ['cef-standard', 'cef-syslog', 'JSON Parser'],
+    parsers: ['cef-standard', 'cef-syslog', 'json-parser'],
     detectionCategories: ['application'],
     setup: [
       'Point CEF-capable appliances (firewalls, WAFs, security tools) at SIEMBox over syslog.',

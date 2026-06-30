@@ -17,6 +17,18 @@ test('every pack has the required fields and at least one parser', () => {
   }
 });
 
+test('pack parser names are catalog-style slugs (not human-readable display names)', () => {
+  // The published catalog resolves parsers by a slug `name` (e.g. ssh-authentication),
+  // NOT a display name ("SSH Authentication"). Guard against referencing names that
+  // can't resolve at install time.
+  const slug = /^[a-z0-9][a-z0-9-]*$/;
+  for (const p of CONTENT_PACKS) {
+    for (const name of p.parsers) {
+      assert.ok(slug.test(name), `pack "${p.id}" references non-slug parser name "${name}"`);
+    }
+  }
+});
+
 test('getContentPack resolves by id', () => {
   assert.equal(getContentPack('auth-identity')?.name, 'Auth & Identity');
   assert.equal(getContentPack('nope'), undefined);

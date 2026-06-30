@@ -48,9 +48,12 @@ export const query = async (text: string, params?: any[]) => {
       constraint: error.constraint || null,
     };
 
+    // Never log the parameter VALUES — they routinely carry secrets (password
+    // hashes, encrypted MFA secrets, API keys). The query text + a param count is
+    // enough to debug; values stay out of the logs.
     logger.error('Database query error:', {
       query: text,
-      params: params ? JSON.stringify(params) : null,
+      paramCount: Array.isArray(params) ? params.length : 0,
       error: errorDetails,
       stack: error.stack,
     });

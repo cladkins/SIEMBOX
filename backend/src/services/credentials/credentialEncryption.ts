@@ -176,8 +176,11 @@ export class CredentialEncryption {
       decrypted += decipher.final('utf8');
 
       return decrypted;
-    } catch (error) {
-      console.error('Decryption failed:', error);
+    } catch {
+      // Don't log the error object here — this runs in the decrypt path for
+      // sensitive credentials; a static message avoids any chance of leaking
+      // plaintext/secret material into logs. Callers get a descriptive throw.
+      console.error('Decryption failed: corrupt data, wrong key, or a tampered auth tag.');
       throw new Error('Failed to decrypt credential. Data may be corrupted or tampered with.');
     }
   }

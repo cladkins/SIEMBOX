@@ -91,7 +91,8 @@ export async function verifyLogin(user: User, code: string): Promise<boolean> {
       if (await bcrypt.compare(normalized, hashes[i])) {
         const remaining = hashes.filter((_, j) => j !== i);
         await UserModel.setRecoveryCodes(user.id, remaining);
-        logger.info('[MFA] recovery code consumed', { userId: user.id, remaining: remaining.length });
+        // Log only the user id — never anything derived from the recovery-code hashes.
+        logger.info('[MFA] recovery code consumed', { userId: user.id });
         return true;
       }
     } catch {

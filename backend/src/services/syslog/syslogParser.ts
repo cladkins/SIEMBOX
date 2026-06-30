@@ -12,12 +12,31 @@ export interface ParsedSyslog {
 }
 
 /**
+ * Strip ANSI / VT100 escape sequences (color codes, cursor moves) that many apps
+ * emit on colorized stdout. They carry no analytical value and, left in, both
+ * break ^-anchored parsers (the line starts with an ESC byte) and clutter the
+ * UI/search. The two char classes in the CSI body are disjoint, so this is linear
+ * (no ReDoS).
+ */
+export function stripAnsi(input: string): string {
+  return input
+    // CSI sequences incl. SGR colors: ESC '[' params intermediates final-byte.
+    .replace(/\x1b\[[0-9;:?]*[ -/]*[@-~]/g, '')
+    // Any remaining stray ESC bytes (OSC starts, lone escapes, etc.).
+    .replace(/\x1b/g, '');
+}
+
+/**
  * Parse a syslog message following RFC 3164 or RFC 5424
  * RFC 3164: <PRI>TIMESTAMP HOSTNAME TAG: MESSAGE
  * RFC 5424: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID STRUCTURED-DATA MESSAGE
  */
 export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
   const originalMessage = rawMessage;
+  // Strip ANSI/color escapes up front so they can't break ^-anchored parsers
+  // downstream and never get stored or displayed (~1 in 6 shipped lines carries
+  // them — colorized container stdout).
+  rawMessage = stripAnsi(rawMessage);
   const result: ParsedSyslog = {
     timestamp: new Date(),
     facility: null,
@@ -42,15 +61,6 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
 
       // Strip trailing newline/carriage return characters that break regex matching
       rawMessage = rawMessage.replace(/[\r\n]+$/, '');
-
-      // Debug: Log the message after PRI removal with character codes
-      logger.info('DEBUG: After PRI removal', {
-        message: rawMessage.substring(0, 100),
-        length: rawMessage.length,
-        firstChars: Array.from(rawMessage.substring(0, 20))
-          .map(c => `${c}(${c.charCodeAt(0)})`)
-          .join(' '),
-      });
     }
 
     // Try RFC 5424 format first (has VERSION after PRI)
@@ -68,31 +78,10 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
       result.appName = appName !== '-' ? appName : null;
       result.processId = procId !== '-' ? procId : null;
       result.message = message;
-
-      logger.info('DEBUG: RFC 5424 matched successfully');
     } else {
       // Try RFC 3164 format: TIMESTAMP HOSTNAME TAG: MESSAGE
-      logger.info('DEBUG: Attempting RFC 3164 match', {
-        message: rawMessage.substring(0, 100),
-        testPattern: '/^(\\S+\\s+\\d+\\s+\\d+:\\d+:\\d+)\\s+(\\S+)\\s+(.+)$/',
-        firstChars: Array.from(rawMessage.substring(0, 30))
-          .map(c => `${c}(${c.charCodeAt(0)})`)
-          .join(' '),
-      });
-
-      // Test the regex match and log详细 details
       const rfc3164Pattern = /^(\S+\s+\d+\s+\d+:\d+:\d+)\s+(\S+)\s+(.+)$/;
       const rfc3164Match = rawMessage.match(rfc3164Pattern);
-
-      logger.info('DEBUG: Regex match result', {
-        matched: !!rfc3164Match,
-        messageType: typeof rawMessage,
-        hasNewline: rawMessage.includes('\n'),
-        hasCarriageReturn: rawMessage.includes('\r'),
-        endsWithDollar: /\$$/. test(rawMessage),
-        firstTenChars: rawMessage.substring(0, 10),
-        lastTenChars: rawMessage.substring(rawMessage.length - 10),
-      });
 
       if (rfc3164Match) {
         const [, timestamp, hostname, rest] = rfc3164Match;

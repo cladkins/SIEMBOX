@@ -153,6 +153,44 @@ test('OR / NOT / 1-of conditions are rejected, not mistranslated', () => {
   }
 });
 
+test('a keywords selection (list of strings) converts to a regex on message', () => {
+  const r = sigmaToPortable({
+    title: 'Suspicious SQL Query',
+    level: 'medium',
+    detection: {
+      keywords: ['drop', 'truncate', 'dump', 'select \\*'],
+      condition: 'keywords',
+    },
+    falsepositives: ['Inventory and monitoring activity'],
+  });
+  assertValid(r);
+  assert.equal(r.rule!.conditions.length, 1);
+  const c = r.rule!.conditions[0];
+  assert.equal(c.field, 'message');
+  assert.equal(c.operator, 'regex');
+  // The compiled regex matches a real log line, case-INsensitively (Sigma default),
+  // un-anchored (contains), and respects the literal escaped asterisk.
+  const re = new RegExp(c.value as string);
+  assert.ok(re.test('app: user ran DROP TABLE users')); // uppercase DROP matches lowercase keyword
+  assert.ok(re.test('query: select * from secrets')); // literal "select *"
+  assert.ok(re.test('TRUNCATE logs'));
+  assert.ok(!re.test('a normal healthy log line'));
+  // "select" alone (no asterisk) must NOT match the "select \*" branch.
+  assert.ok(!re.test('user made a selection in the menu'));
+});
+
+test('keywords with a bare wildcard become a regex wildcard', () => {
+  const r = sigmaToPortable({
+    title: 'Wildcard keyword',
+    level: 'low',
+    detection: { keywords: ['/etc/*/passwd'], condition: 'keywords' },
+  });
+  assertValid(r);
+  const re = new RegExp(r.rule!.conditions[0].value as string);
+  assert.ok(re.test('opened /etc/cron.d/passwd today'));
+  assert.ok(!re.test('/etc/passwd')); // the * requires an intermediate path segment
+});
+
 test('a selection that is a list of maps (OR) is rejected', () => {
   const r = sigmaToPortable({
     title: 'List selection',

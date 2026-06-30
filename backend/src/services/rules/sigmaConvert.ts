@@ -68,6 +68,51 @@ function globToRegex(s: string): string {
 }
 
 /**
+ * Convert one Sigma keyword/value to an UN-anchored regex fragment, honoring
+ * Sigma escaping: `\*` `\?` `\\` are literals; bare `*`/`?` are wildcards. Used
+ * for keyword (string-list) selections, which match anywhere in the event.
+ */
+function sigmaToRegexFragment(input: string): string {
+  // Sigma string matching is case-INSENSITIVE by default, but the engine compiles
+  // `regex` with a flagless `new RegExp` (and we must not flip the global operator
+  // to /i — that would change every existing rule). So encode case-insensitivity
+  // inline as per-letter classes ([Dd]) rather than relying on the `i` flag.
+  let out = '';
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (ch === '\\') {
+      const next = input[i + 1];
+      if (next === '*' || next === '?' || next === '\\') {
+        out += escapeRegex(next); // escaped -> literal
+        i++;
+      } else {
+        out += '\\\\'; // lone backslash -> literal backslash
+      }
+    } else if (ch === '*') {
+      out += '.*';
+    } else if (ch === '?') {
+      out += '.';
+    } else if (/[a-zA-Z]/.test(ch)) {
+      out += `[${ch.toUpperCase()}${ch.toLowerCase()}]`;
+    } else {
+      out += escapeRegex(ch);
+    }
+  }
+  return out;
+}
+
+/**
+ * A Sigma selection that is a LIST OF STRINGS is a "keywords" search: match if
+ * ANY string appears anywhere in the event. Represent it as a single regex
+ * (alternation, un-anchored = contains) against the raw `message` field, which
+ * runParser populates with the whole log line.
+ */
+function keywordsToCondition(values: any[]): RuleCondition {
+  const alt = values.map((v) => sigmaToRegexFragment(String(v))).join('|');
+  return { field: 'message', operator: 'regex', value: `(?:${alt})` };
+}
+
+/**
  * Common Sigma field names -> SIEMBox canonical fields. Best-effort: anything not
  * mapped is lowercased and kept as-is, with a warning telling the user to confirm
  * the field exists in their parser output. Sigma's huge Windows/Sysmon corpus
@@ -282,10 +327,20 @@ export function sigmaToPortable(doc: any): SigmaConvertResult {
 
   const conditions: RuleCondition[] = [];
   const fieldsUsed = new Set<string>();
+  let usedKeywords = false;
   for (const selName of resolved.selections) {
     const sel = detection[selName];
     if (Array.isArray(sel)) {
-      errors.push(`selection "${selName}" is a list (OR of maps), which a flat AND-list can't express`);
+      // A list of STRINGS is a Sigma "keywords" search (match any, anywhere) —
+      // representable as one regex alternation on `message`. A list of MAPS is a
+      // genuine OR of field-sets, which a flat AND-list can't express.
+      if (sel.length > 0 && sel.every((v) => v === null || typeof v !== 'object')) {
+        conditions.push(keywordsToCondition(sel));
+        fieldsUsed.add('message');
+        usedKeywords = true;
+        continue;
+      }
+      errors.push(`selection "${selName}" is a list of maps (OR), which a flat AND-list can't express`);
       return { rule: null, errors, warnings, title };
     }
     if (!sel || typeof sel !== 'object') {
@@ -344,6 +399,12 @@ export function sigmaToPortable(doc: any): SigmaConvertResult {
     `Verify these field names exist in your parsed logs: ${[...fieldsUsed].join(', ')}. ` +
       `Sigma field names often differ from your parser output.`
   );
+  if (usedKeywords) {
+    warnings.push(
+      `Keyword search matches against the raw "message" field (the whole log line). ` +
+        `Make sure your parser keeps the full message.`
+    );
+  }
 
   return { rule, errors, warnings, title, fieldsUsed: [...fieldsUsed] };
 }

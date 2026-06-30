@@ -1,26 +1,40 @@
-# Automated dependency-update PRs so security advisories get surfaced and fixed
-# (reviewed, not auto-merged). Grouped to keep PR noise down.
+# Automated dependency-update PRs so security advisories get surfaced and fixed.
+#
+# PRs target `develop` so updates ride the normal develop→main test/promote flow
+# instead of landing straight on production `main`. Only MINOR and PATCH updates
+# are grouped — and those are auto-merged once CI passes (see
+# .github/workflows/dependabot-auto-merge.yml). MAJOR bumps are deliberately left
+# OUT of the groups so each breaking change arrives as its own PR to be reviewed
+# and tested on its own (e.g. express 4→5, pinia 2→3, vue-router 4→5).
 version: 2
 updates:
   - package-ecosystem: npm
     directory: "/backend"
+    target-branch: develop
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
     groups:
-      backend-dependencies:
+      backend-minor-patch:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: npm
     directory: "/frontend"
+    target-branch: develop
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
     groups:
-      frontend-dependencies:
+      frontend-minor-patch:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: github-actions
     directory: "/"
+    target-branch: develop
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

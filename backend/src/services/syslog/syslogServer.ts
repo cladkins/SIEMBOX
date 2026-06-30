@@ -14,7 +14,9 @@ export class SyslogServer {
 
   constructor(port: number = 514) {
     this.port = port;
-    this.parserEngine = new ParserEngine();
+    // Use the shared singleton so parser CRUD/catalog/pack endpoints can reload
+    // the SAME engine this server processes logs through.
+    this.parserEngine = ParserEngine.getInstance();
   }
 
   async start(): Promise<void> {
@@ -153,6 +155,6 @@ export class SyslogServer {
 
   async reloadParsers(): Promise<void> {
     logger.info('Reloading parsers...');
-    await this.parserEngine.initialize();
+    await this.parserEngine.reload();
   }
 }

@@ -92,6 +92,8 @@ export const api = {
     apiClient.post('/auth/login', { username, password, ...(code ? { code } : {}) }),
   logout: () => apiClient.post('/auth/logout'),
   getProfile: () => apiClient.get('/auth/me'),
+  changeOwnPassword: (currentPassword: string, newPassword: string) =>
+    apiClient.put('/auth/me/password', { currentPassword, newPassword }),
   // MFA (TOTP) — the logged-in user manages their own
   mfaSetup: () => apiClient.post('/auth/me/mfa/setup'),
   mfaEnable: (code: string) => apiClient.post('/auth/me/mfa/enable', { code }),

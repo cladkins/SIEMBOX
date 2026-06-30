@@ -14,7 +14,8 @@ SIEMBox ingests logs from your hosts and services, **parses** them into a single
 |------|--------------|-----------|
 | **Ingestion** | Syslog over UDP/TCP (port 514) + an optional universal **log shipper** for files, Docker logs, and journald | [Log Shippers](Log-Shippers) |
 | **Parsers** | Declarative, portable parsers (pattern + field mappings + derivations + self-tests); install from an in-app **catalog** or generate with **AI** | [Parsers](Parsers) |
-| **Detections** | Portable detection rules with conditions, aggregation/threshold logic, and alert templating; catalog + AI builder | [Detection Rules](Detection-Rules) |
+| **Detections** | Portable detection rules with conditions, aggregation/threshold logic, and alert templating; catalog, **Sigma import**, + AI builder | [Detection Rules](Detection-Rules) |
+| **Content Packs** | One-click, per-technology bundles of parsers + detections (Auth, Reverse Proxy, Media, DNS/Network, Infra…) | [Detection Rules](Detection-Rules#content-packs) |
 | **Normalization** | One **canonical schema** so a rule written once fires across every log source | [Parsers](Parsers) |
 | **Threat Intel** | IP drill-down (country, events, alerts), a dashboard **country choropleth**, free **blocklist feeds**, and BYO-key **reputation** (AbuseIPDB / AlienVault OTX) | [Threat Intel](Threat-Intel) |
 | **Scanning** | Host vulnerability scanning (**Nuclei**) and container-image scanning (**Trivy**), with optional Docker-host image discovery and scheduled scans | [Vulnerability & Container Scanning](Vulnerability-and-Container-Scanning) |

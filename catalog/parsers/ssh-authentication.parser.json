@@ -1,6 +1,6 @@
 {
   "schema": "siembox.parser/v1",
-  "name": "SSH Authentication",
+  "name": "ssh-authentication",
   "description": "Parses SSH authentication logs (success and failure)",
   "parser_type": "regex",
   "priority": 10,

@@ -4,6 +4,7 @@ import yaml from 'js-yaml';
 import { ApiError } from '../middleware/errorHandler';
 import { RulesEngine } from '../services/rules/rulesEngine';
 import { validateRule, toPortableRule, portableRuleToYaml } from '../services/rules/rulePortable';
+import { convertSigmaYaml } from '../services/rules/sigmaConvert';
 import { catalogNewFileUrl } from '../services/parser/catalogService';
 import {
   fetchDetectionCatalog,
@@ -201,6 +202,97 @@ router.post('/catalog/refresh', async (_req: Request, res: Response) => {
   } catch (error) {
     throw new ApiError(502, `Failed to refresh detection catalog: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
+});
+
+// Preview a Sigma import: convert one-or-many Sigma YAML docs to portable rules
+// and return the result (rule + per-doc errors/warnings) WITHOUT saving, so the
+// UI can show exactly what will be created before the user commits.
+router.post('/import/sigma/preview', authorize('admin'), async (req: Request, res: Response) => {
+  const sigma = req.body?.sigma;
+  if (typeof sigma !== 'string' || sigma.trim() === '') {
+    throw new ApiError(400, 'sigma (YAML string) is required');
+  }
+  const results = convertSigmaYaml(sigma).map((r) => ({
+    title: r.title,
+    ok: !!r.rule,
+    rule: r.rule,
+    errors: r.errors,
+    warnings: r.warnings,
+    fieldsUsed: r.fieldsUsed,
+  }));
+  res.json({
+    total: results.length,
+    convertible: results.filter((r) => r.ok).length,
+    results,
+  });
+});
+
+// Import Sigma rules: convert -> validate -> upsert each representable rule.
+// Non-convertible docs are reported (with the reason) and skipped rather than
+// aborting the batch. Imported rules are created DISABLED so the user reviews and
+// enables them; updates preserve the existing enabled toggle (like the importer).
+router.post('/import/sigma', authorize('admin'), async (req: Request, res: Response) => {
+  const sigma = req.body?.sigma;
+  if (typeof sigma !== 'string' || sigma.trim() === '') {
+    throw new ApiError(400, 'sigma (YAML string) is required');
+  }
+
+  const converted = convertSigmaYaml(sigma);
+  const results = {
+    total: converted.length,
+    created: 0,
+    updated: 0,
+    failed: [] as Array<{ title?: string; reason: string }>,
+  };
+
+  for (const c of converted) {
+    if (!c.rule) {
+      results.failed.push({ title: c.title, reason: c.errors.join('; ') || 'not convertible' });
+      continue;
+    }
+    const validation = validateRule(c.rule, { strict: false });
+    if (!validation.ok) {
+      results.failed.push({ title: c.title, reason: `validation: ${validation.errors.join('; ')}` });
+      continue;
+    }
+    try {
+      const rule_logic = {
+        conditions: c.rule.conditions,
+        aggregation: c.rule.aggregation,
+        alert: c.rule.alert,
+      };
+      const rule_yaml = portableRuleToYaml(c.rule);
+      const existing = await DetectionRuleModel.findByName(c.rule.name);
+      if (existing) {
+        await DetectionRuleModel.update(existing.id, {
+          description: c.rule.description,
+          severity: c.rule.severity,
+          rule_yaml,
+          rule_logic,
+          tags: c.rule.tags || [],
+        });
+        results.updated++;
+      } else {
+        await DetectionRuleModel.create({
+          name: c.rule.name,
+          description: c.rule.description,
+          enabled: false, // imported disabled for review
+          severity: c.rule.severity,
+          rule_yaml,
+          rule_logic,
+          tags: c.rule.tags || [],
+        });
+        results.created++;
+      }
+    } catch (e) {
+      results.failed.push({ title: c.title, reason: e instanceof Error ? e.message : 'save error' });
+    }
+  }
+
+  if (results.created > 0 || results.updated > 0) {
+    await RulesEngine.getInstance().reload();
+  }
+  res.json(results);
 });
 
 // Get single rule

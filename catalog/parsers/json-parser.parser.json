@@ -1,6 +1,6 @@
 {
   "schema": "siembox.parser/v1",
-  "name": "JSON Parser",
+  "name": "json-parser",
   "description": "Parses logs already in JSON format",
   "parser_type": "json",
   "priority": 50,

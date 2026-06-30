@@ -14,11 +14,20 @@ export function parseCefExtension(ext: string): Record<string, string> {
   const out: Record<string, string> = {};
   if (!ext) return out;
 
-  const re = /([A-Za-z][\w.]*)=(.*?)(?=\s+[A-Za-z][\w.]*=|$)/g;
+  // Locate each "key=" token (a key at the start or after whitespace); the value
+  // for a key is the text up to the next token's key, computed by slicing. This
+  // is linear — the previous one-regex approach used a lazy quantifier with a
+  // look-ahead, which backtracks polynomially on adversarial input (ReDoS).
+  const keyRe = /(^|\s)([A-Za-z][\w.]*)=/g;
+  const tokens: Array<{ key: string; keyStart: number; valStart: number }> = [];
   let m: RegExpExecArray | null;
-  while ((m = re.exec(ext)) !== null) {
-    const value = m[2].trim();
-    if (value.length > 0) out[m[1]] = value;
+  while ((m = keyRe.exec(ext)) !== null) {
+    tokens.push({ key: m[2], keyStart: m.index + m[1].length, valStart: keyRe.lastIndex });
+  }
+  for (let i = 0; i < tokens.length; i++) {
+    const end = i + 1 < tokens.length ? tokens[i + 1].keyStart : ext.length;
+    const value = ext.slice(tokens[i].valStart, end).trim();
+    if (value.length > 0) out[tokens[i].key] = value;
   }
   return out;
 }

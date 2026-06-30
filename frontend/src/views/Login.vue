@@ -25,9 +25,22 @@
             placeholder="Password"
             size="large"
             prefix-icon="Lock"
+            :disabled="mfaRequired"
             @keyup.enter="handleLogin"
             show-password
           />
+        </el-form-item>
+
+        <el-form-item v-if="mfaRequired">
+          <el-input
+            v-model="loginForm.code"
+            placeholder="6-digit code or recovery code"
+            size="large"
+            prefix-icon="Key"
+            autofocus
+            @keyup.enter="handleLogin"
+          />
+          <div class="mfa-hint">Enter the code from your authenticator app.</div>
         </el-form-item>
 
         <el-form-item>
@@ -38,7 +51,7 @@
             @click="handleLogin"
             style="width: 100%"
           >
-            Login
+            {{ mfaRequired ? 'Verify' : 'Login' }}
           </el-button>
         </el-form-item>
       </el-form>
@@ -59,9 +72,12 @@ const authStore = useAuthStore();
 const loginFormRef = ref<FormInstance>();
 const loading = ref(false);
 
+const mfaRequired = ref(false);
+
 const loginForm = reactive({
   username: '',
   password: '',
+  code: '',
 });
 
 const rules: FormRules = {
@@ -74,13 +90,32 @@ const handleLogin = async () => {
 
   await loginFormRef.value.validate(async (valid) => {
     if (!valid) return;
+    if (mfaRequired.value && !loginForm.code.trim()) {
+      ElMessage.warning('Enter your MFA code');
+      return;
+    }
 
     loading.value = true;
     try {
-      await authStore.login(loginForm.username, loginForm.password);
+      await authStore.login(
+        loginForm.username,
+        loginForm.password,
+        mfaRequired.value ? loginForm.code.trim() : undefined
+      );
       ElMessage.success('Login successful');
     } catch (error: any) {
-      ElMessage.error(error.response?.data?.message || 'Login failed');
+      if (error.response?.data?.mfaRequired) {
+        // Password was correct; prompt for the second factor.
+        if (!mfaRequired.value) {
+          mfaRequired.value = true;
+          ElMessage.info('Enter your MFA code to continue');
+        } else {
+          ElMessage.error(error.response?.data?.message || 'Invalid MFA code');
+        }
+        loginForm.code = '';
+      } else {
+        ElMessage.error(error.response?.data?.message || 'Login failed');
+      }
     } finally {
       loading.value = false;
     }
@@ -120,6 +155,13 @@ const handleLogin = async () => {
 .login-footer {
   text-align: center;
   margin-top: 20px;
+  color: var(--siembox-text-tertiary);
+  font-size: 12px;
+}
+
+.mfa-hint {
+  width: 100%;
+  margin-top: 6px;
   color: var(--siembox-text-tertiary);
   font-size: 12px;
 }

@@ -4,6 +4,8 @@ import { ApiError } from '../middleware/errorHandler';
 import { query } from '../config/database';
 import { logger } from '../utils/logger';
 import crypto from 'crypto';
+import { groupContainers, DockerContainer } from '../services/scanner/dockerDiscovery';
+import { ShipperContainerModel } from '../models/ShipperContainer';
 
 const router = Router();
 
@@ -435,6 +437,46 @@ router.post('/register', async (req: Request, res: Response) => {
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to register shipper');
+  }
+});
+
+// Shipper reports the container images on its host (it mounts the Docker socket
+// for log collection). SIEMBox stores them so they can be scanned (Trivy) like
+// the SIEMBox host's own containers. Auth: the shipper API key (in the body).
+router.post('/containers', async (req: Request, res: Response) => {
+  try {
+    const { api_key, containers } = req.body ?? {};
+    if (!api_key) throw new ApiError(400, 'API key is required');
+    if (!Array.isArray(containers)) throw new ApiError(400, 'containers must be an array');
+
+    const shipper = await LogShipperModel.findByApiKey(api_key);
+    if (!shipper) throw new ApiError(404, 'Invalid API key');
+
+    // Map the shipper's {image,name,image_id,running} items to the Docker socket
+    // shape, then reuse the exact grouping + scannable logic the local discovery
+    // uses. Cap the count so a bad/huge report can't blow up the insert.
+    const mapped: DockerContainer[] = containers.slice(0, 2000).map((c: any) => ({
+      Image: (c?.image ?? '').toString(),
+      Names: [(c?.name ?? '').toString()],
+      ImageID: (c?.image_id ?? '').toString(),
+      State:
+        c?.running === true ||
+        c?.running === 'true' ||
+        (c?.state ?? '').toString().toLowerCase() === 'running'
+          ? 'running'
+          : 'exited',
+    }));
+    const images = groupContainers(mapped);
+    await ShipperContainerModel.replaceForShipper(shipper.id, images);
+
+    // A report is also a sign of life.
+    const ip_address = req.ip || req.socket.remoteAddress || 'unknown';
+    await LogShipperModel.updateHeartbeat(api_key, ip_address).catch(() => {});
+
+    res.json({ stored: images.length });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to store shipper containers');
   }
 });
 

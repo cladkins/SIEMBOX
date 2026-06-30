@@ -38,6 +38,17 @@
             <el-icon><Search /></el-icon> Search
           </el-button>
           <el-button @click="resetFilters">Reset</el-button>
+          <el-dropdown trigger="click" @command="exportAlerts" style="margin-left: 12px">
+            <el-button :loading="exporting">
+              <el-icon><Download /></el-icon> Export<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="csv">Export CSV</el-dropdown-item>
+                <el-dropdown-item command="json">Export JSON</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </el-form-item>
       </el-form>
     </el-card>
@@ -161,7 +172,8 @@ import { ref, onMounted } from 'vue';
 import { useAlertsStore, type Alert } from '@/stores/alerts';
 import { ElMessage } from 'element-plus';
 import { format } from 'date-fns';
-import { Search } from '@element-plus/icons-vue';
+import { Search, Download, ArrowDown } from '@element-plus/icons-vue';
+import { api } from '@/services/api';
 import ExplainWithAI from '@/components/ExplainWithAI.vue';
 
 const alertsStore = useAlertsStore();
@@ -231,6 +243,34 @@ const resetFilters = () => {
   filters.value = { severity: '', status: '', search: '' };
   currentPage.value = 1;
   fetchAlerts();
+};
+
+const exporting = ref(false);
+const exportAlerts = async (fmt: 'csv' | 'json') => {
+  exporting.value = true;
+  try {
+    // Export the current filtered view (server caps the row count).
+    const params: any = {};
+    if (filters.value.severity) params.severity = filters.value.severity;
+    if (filters.value.status) params.status = filters.value.status;
+    if (filters.value.search && filters.value.search.trim()) params.search = filters.value.search.trim();
+
+    const res = await api.exportAlerts(params, fmt);
+    const blob = new Blob([res.data], { type: fmt === 'json' ? 'application/json' : 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `siembox-alerts-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.${fmt}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+    ElMessage.success(`Exported alerts as ${fmt.toUpperCase()}`);
+  } catch (error) {
+    ElMessage.error('Export failed');
+  } finally {
+    exporting.value = false;
+  }
 };
 
 const viewAlert = (alert: Alert) => {

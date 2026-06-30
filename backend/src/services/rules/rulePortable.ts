@@ -18,6 +18,8 @@ export const RULE_OPERATORS = [
   'in',
   'not_in',
   'not_in_whitelist',
+  'on_threat_feed',
+  'not_on_threat_feed',
   'exists',
 ] as const;
 

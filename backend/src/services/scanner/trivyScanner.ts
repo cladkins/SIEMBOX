@@ -41,12 +41,20 @@ interface TrivyReport {
 export class TrivyScanner {
   private static activeScans = new Map<number, ChildProcess>();
 
+  // Serialize scans. Trivy's local fs cache (a BoltDB) is single-writer, so two
+  // concurrent `trivy image` runs contend for the cache lock and all-but-one
+  // fail with "unable to initialize fs cache: cache may be in use by another
+  // process: timeout". So instead of firing every scan at once (e.g. "Scan all"),
+  // we chain them: a scan stays 'queued' until the single worker reaches it, then
+  // runs to completion before the next starts.
+  private static queue: Promise<void> = Promise.resolve();
+
   /** Validate an image reference without starting a scan. */
   static isValidImageRef(ref: string): boolean {
     return typeof ref === 'string' && IMAGE_REF_RE.test(ref.trim());
   }
 
-  /** Start a scan; returns the scan id for tracking. */
+  /** Queue a scan; returns the scan id for tracking. Runs one-at-a-time. */
   static async scan(imageRef: string, userId: number): Promise<number> {
     const ref = imageRef.trim();
     if (!this.isValidImageRef(ref)) {
@@ -66,15 +74,24 @@ export class TrivyScanner {
       details: { image_ref: ref },
     });
 
-    // Fire and forget; failures are recorded on the scan row.
-    this.executeScan(scanId, ref).catch(async (error: any) => {
-      console.error(`[Trivy] Scan ${scanId} failed:`, error);
-      await this.updateStatus(scanId, 'failed', error?.message || 'Scan failed');
-    });
+    // Append to the serial queue. Each scan waits for the previous Trivy process
+    // to exit before starting, so the cache is never accessed concurrently.
+    // Failures are recorded on the scan row and never break the chain.
+    this.queue = this.queue.then(() =>
+      this.executeScan(scanId, ref).catch(async (error: any) => {
+        console.error(`[Trivy] Scan ${scanId} failed:`, error);
+        await this.updateStatus(scanId, 'failed', error?.message || 'Scan failed');
+      })
+    );
 
     return scanId;
   }
 
+  /**
+   * Run one Trivy scan to completion. The returned promise resolves only when the
+   * process has exited (success, failure, or timeout) — that's what lets the
+   * queue run scans strictly one at a time.
+   */
   private static async executeScan(scanId: number, ref: string): Promise<void> {
     await this.markRunning(scanId);
 
@@ -88,49 +105,55 @@ export class TrivyScanner {
     ];
     console.log(`[Trivy] Scan ${scanId}: trivy ${args.join(' ')}`);
 
-    const proc = spawn('trivy', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    this.activeScans.set(scanId, proc);
+    await new Promise<void>((resolve) => {
+      const proc = spawn('trivy', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      this.activeScans.set(scanId, proc);
 
-    let stdout = '';
-    let stderr = '';
-    proc.stdout?.on('data', (d: Buffer) => (stdout += d.toString()));
-    proc.stderr?.on('data', (d: Buffer) => (stderr += d.toString()));
+      let stdout = '';
+      let stderr = '';
+      proc.stdout?.on('data', (d: Buffer) => (stdout += d.toString()));
+      proc.stderr?.on('data', (d: Buffer) => (stderr += d.toString()));
 
-    // Hard timeout (12m) in case Trivy hangs pulling a huge image.
-    const timeout = setTimeout(() => {
-      if (this.activeScans.has(scanId)) {
-        proc.kill('SIGTERM');
+      // Hard timeout (12m) in case Trivy hangs pulling a huge image.
+      const timeout = setTimeout(() => {
+        if (this.activeScans.has(scanId)) {
+          proc.kill('SIGTERM');
+          this.activeScans.delete(scanId);
+          void this.updateStatus(scanId, 'failed', 'Scan timed out after 12 minutes');
+          resolve();
+        }
+      }, 12 * 60 * 1000);
+
+      proc.on('error', (err: Error) => {
+        clearTimeout(timeout);
         this.activeScans.delete(scanId);
-        void this.updateStatus(scanId, 'failed', 'Scan timed out after 12 minutes');
-      }
-    }, 12 * 60 * 1000);
+        const msg = /ENOENT/.test(err.message)
+          ? 'Trivy is not installed or not on PATH'
+          : err.message;
+        console.error(`[Trivy] Scan ${scanId} process error:`, err);
+        void this.updateStatus(scanId, 'failed', msg);
+        resolve();
+      });
 
-    proc.on('error', (err: Error) => {
-      clearTimeout(timeout);
-      this.activeScans.delete(scanId);
-      const msg = /ENOENT/.test(err.message)
-        ? 'Trivy is not installed or not on PATH'
-        : err.message;
-      console.error(`[Trivy] Scan ${scanId} process error:`, err);
-      void this.updateStatus(scanId, 'failed', msg);
-    });
-
-    proc.on('close', async (code: number | null) => {
-      clearTimeout(timeout);
-      this.activeScans.delete(scanId);
-      if (code !== 0) {
-        const msg = (stderr.trim() || `Trivy exited with code ${code}`).slice(0, 1000);
-        console.error(`[Trivy] Scan ${scanId} failed (code ${code}): ${msg}`);
-        ErrorLogService.logBackgroundError('container-scan', msg, { dedupeKey: String(scanId), scanId });
-        await this.updateStatus(scanId, 'failed', msg);
-        return;
-      }
-      try {
-        await this.processResults(scanId, stdout);
-      } catch (e: any) {
-        console.error(`[Trivy] Scan ${scanId} result processing failed:`, e);
-        await this.updateStatus(scanId, 'failed', e?.message || 'Result processing failed');
-      }
+      proc.on('close', async (code: number | null) => {
+        clearTimeout(timeout);
+        this.activeScans.delete(scanId);
+        try {
+          if (code !== 0) {
+            const msg = (stderr.trim() || `Trivy exited with code ${code}`).slice(0, 1000);
+            console.error(`[Trivy] Scan ${scanId} failed (code ${code}): ${msg}`);
+            ErrorLogService.logBackgroundError('container-scan', msg, { dedupeKey: String(scanId), scanId });
+            await this.updateStatus(scanId, 'failed', msg);
+          } else {
+            await this.processResults(scanId, stdout);
+          }
+        } catch (e: any) {
+          console.error(`[Trivy] Scan ${scanId} result processing failed:`, e);
+          await this.updateStatus(scanId, 'failed', e?.message || 'Result processing failed');
+        } finally {
+          resolve();
+        }
+      });
     });
   }
 

@@ -1,7 +1,6 @@
 import 'express-async-errors'; // Must be imported before routes
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
-import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { authenticate } from './middleware/auth';
@@ -26,6 +25,7 @@ import containersRoutes from './routes/containers';
 import threatIntelRoutes from './routes/threatIntel';
 import threatFeedsRoutes from './routes/threatFeeds';
 import edrRoutes from './routes/edr';
+import packsRoutes from './routes/packs';
 
 const app: Application = express();
 
@@ -40,7 +40,6 @@ app.use(cors({
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use(cookieParser());
 
 // Rate limiting - generous global limit for normal API usage
 // Specific rate limiters are applied to scan endpoints in their routes
@@ -114,6 +113,7 @@ app.use('/api/containers', authenticate, containersRoutes); // Trivy container i
 app.use('/api/threat-intel', authenticate, threatIntelRoutes); // IP-centric geo/event/alert lookup
 app.use('/api/threat-feeds', authenticate, threatFeedsRoutes); // External threat feeds + IP reputation
 app.use('/api/edr', edrRoutes); // EDR endpoint agents (enroll + agent-auth ingest + admin UI)
+app.use('/api/packs', authenticate, packsRoutes); // Content Packs (curated parser+detection bundles)
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

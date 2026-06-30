@@ -10,6 +10,9 @@ SHIPPER_API_KEY="${SHIPPER_API_KEY}"
 SHIPPER_VERSION="1.0.0"
 CONFIG_POLL_INTERVAL="${CONFIG_POLL_INTERVAL:-30}" # seconds
 HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-60}" # seconds
+# How often to report this host's container images to SIEMBox for vuln scanning.
+# Set to 0 to disable. Containers change slowly, so the default is generous.
+CONTAINER_REPORT_INTERVAL="${CONTAINER_REPORT_INTERVAL:-300}" # seconds
 
 # Color output for logs
 GREEN='\033[0;32m'
@@ -75,6 +78,7 @@ load_cached_config() {
 CURRENT_CONFIG=""
 TAILING_PIDS=()
 LAST_HEARTBEAT=0
+LAST_CONTAINER_REPORT=0
 SHIPPER_ID="" # Short identifier derived from API key for log attribution
 CACHED_CONFIG_FILE="/tmp/siembox-cached-config.json" # Fallback config cache
 
@@ -512,6 +516,38 @@ send_heartbeat() {
     fi
 }
 
+# Report this host's container images to SIEMBox so they can be vuln-scanned
+# (Trivy) alongside the SIEMBox host's own containers. Best-effort + throttled;
+# silently skips if Docker/jq aren't available or reporting is disabled.
+report_containers() {
+    [ "${CONTAINER_REPORT_INTERVAL:-0}" -gt 0 ] 2>/dev/null || return 0
+    local current_time=$(date +%s)
+    [ $((current_time - LAST_CONTAINER_REPORT)) -ge "$CONTAINER_REPORT_INTERVAL" ] || return 0
+    LAST_CONTAINER_REPORT=$current_time
+
+    command -v docker >/dev/null 2>&1 || { log_debug "docker CLI not available; skipping container report"; return 0; }
+    command -v jq >/dev/null 2>&1 || return 0
+
+    # Tab-delimited "image<TAB>name<TAB>state" per container -> JSON array.
+    local items
+    items=$(docker ps -a --format '{{.Image}}\t{{.Names}}\t{{.State}}' 2>/dev/null \
+        | jq -R -s 'split("\n") | map(select(length>0) | split("\t") | {image: .[0], name: .[1], running: (.[2] == "running")})' 2>/dev/null)
+    if [ -z "$items" ] || [ "$items" = "[]" ]; then
+        log_debug "No containers to report"
+        return 0
+    fi
+
+    local body
+    body=$(jq -n --arg key "$SHIPPER_API_KEY" --argjson containers "$items" \
+        '{api_key: $key, containers: $containers}' 2>/dev/null)
+    [ -z "$body" ] && return 0
+
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${SIEMBOX_API_URL}/shippers/containers" \
+        -H 'Content-Type: application/json' -d "$body" 2>/dev/null)
+    log_debug "Reported containers to SIEMBox (HTTP ${code:-000})"
+}
+
 # Main loop
 main() {
     log_info "========================================="
@@ -575,6 +611,9 @@ main() {
 
         # Send heartbeat
         send_heartbeat
+
+        # Report container inventory for vuln scanning (throttled inside)
+        report_containers
 
         # Fetch latest config
         if new_config=$(fetch_config "$SHIPPER_API_KEY"); then

@@ -1,0 +1,75 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "pihole-dns-adblock",
+  "parser_type": "json",
+  "pattern": "",
+  "field_mappings": {
+    "mac": "source_mac",
+    "type": "event_type_raw",
+    "domain": "host",
+    "dst_ip": "dest_ip",
+    "src_ip": "source_ip",
+    "category": "category",
+    "dst_port": "dest_port",
+    "protocol": "service",
+    "src_port": "source_port",
+    "timestamp": "timestamp",
+    "unix_milli_timestamp": "timestamp_ms"
+  },
+  "description": "Parses Pi-hole DNS ad-block JSON log events including blocked domain, client IP, category, and protocol details",
+  "priority": 200,
+  "derivations": [
+    {
+      "set": {
+        "event": "dns_blocked",
+        "message": "DNS request blocked by Pi-hole"
+      },
+      "when": {
+        "event_type_raw": {
+          "equals": "dnsAdBlock"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "dns_query",
+        "message": "DNS query"
+      },
+      "when": {
+        "event_type_raw": {
+          "equals": "dnsQuery"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "dns_allowed",
+        "message": "DNS request allowed"
+      },
+      "when": {
+        "event_type_raw": {
+          "equals": "dnsAllow"
+        }
+      }
+    }
+  ],
+  "event_type": "dns_adblock",
+  "enabled": true,
+  "test_samples": [
+    {
+      "input": "{\"timestamp\":\"2026-06-28T11:18:09-05:00\",\"unix_milli_timestamp\":1782663489643,\"type\":\"dnsAdBlock\",\"category\":\"ADVERTISEMENT\",\"domain\":\"firebaselogging-pa.googleapis.com\",\"ip\":\"192.168.1.161\",\"mac\":\"28:d5:b1:d8:a0:2b\",\"src_ip\":\"192.168.1.161\",\"src_port\":61210,\"dst_ip\":\"127.0.0.1\",\"dst_port\":1053,\"protocol\":\"udp\"}",
+      "expect": {
+        "host": "firebaselogging-pa.googleapis.com",
+        "event": "dns_blocked",
+        "dest_ip": "127.0.0.1",
+        "service": "udp",
+        "category": "ADVERTISEMENT",
+        "dest_port": "1053",
+        "source_ip": "192.168.1.161",
+        "timestamp": "2026-06-28T11:18:09-05:00",
+        "source_mac": "28:d5:b1:d8:a0:2b",
+        "source_port": "61210"
+      }
+    }
+  ]
+}

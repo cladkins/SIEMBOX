@@ -14,6 +14,9 @@
             <el-button size="small" tag="a" href="https://github.com/cladkins/siembox-catalog" target="_blank" rel="noopener">
               Catalog repo ↗
             </el-button>
+            <el-button size="small" @click="openSigmaImport">
+              <el-icon><Upload /></el-icon> Import Sigma
+            </el-button>
             <el-button type="primary" size="small" @click="showCreateDialog">
               <el-icon><Plus /></el-icon> Add Rule
             </el-button>
@@ -349,6 +352,70 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- Import Sigma rules (convert community Sigma YAML to portable detections) -->
+    <el-dialog v-model="sigmaDialogVisible" title="Import Sigma rules" width="820px">
+      <p style="margin: 0 0 10px; color: var(--el-text-color-secondary); font-size: 13px">
+        Paste one or more <a href="https://sigmahq.io" target="_blank" rel="noopener">Sigma</a> rules
+        (YAML, <code>---</code> separated for multiple). They're converted to SIEMBox detections.
+        Imported rules are created <strong>disabled</strong> so you can review them first.
+        SIEMBox evaluates a flat AND-list of conditions, so rules needing OR/NOT/"1 of"/count are
+        reported and skipped rather than mistranslated.
+      </p>
+
+      <el-input
+        v-model="sigmaText"
+        type="textarea"
+        :rows="12"
+        placeholder="title: ...&#10;logsource: ...&#10;detection:&#10;  selection:&#10;    ...&#10;  condition: selection"
+        spellcheck="false"
+        style="font-family: var(--el-font-family-mono, monospace)"
+      />
+
+      <div v-if="sigmaPreview.length" style="margin-top: 14px">
+        <el-alert
+          :type="sigmaConvertible > 0 ? 'success' : 'warning'"
+          :closable="false"
+          show-icon
+          :title="`${sigmaConvertible} of ${sigmaPreview.length} rule(s) convertible`"
+          style="margin-bottom: 10px"
+        />
+        <div v-for="(r, i) in sigmaPreview" :key="i" class="sigma-preview-item">
+          <div class="sigma-preview-head">
+            <el-icon v-if="r.ok" color="var(--el-color-success)"><CircleCheck /></el-icon>
+            <el-icon v-else color="var(--el-color-warning)"><Warning /></el-icon>
+            <strong>{{ r.title || '(untitled)' }}</strong>
+            <el-tag v-if="r.ok && r.rule" size="small" :type="getSeverityType(r.rule.severity)">
+              {{ r.rule.severity }}
+            </el-tag>
+            <span v-if="r.ok && r.rule" class="sigma-cond-count">
+              {{ r.rule.conditions.length }} condition(s)
+            </span>
+          </div>
+          <ul v-if="r.errors && r.errors.length" class="contrib-issues error">
+            <li v-for="(e, j) in r.errors" :key="'se' + j">{{ e }}</li>
+          </ul>
+          <ul v-if="r.warnings && r.warnings.length" class="contrib-issues warn">
+            <li v-for="(w, j) in r.warnings" :key="'sw' + j">{{ w }}</li>
+          </ul>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="sigmaDialogVisible = false">Close</el-button>
+        <el-button :loading="sigmaPreviewing" :disabled="!sigmaText.trim()" @click="runSigmaPreview">
+          Preview
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="sigmaImporting"
+          :disabled="!sigmaText.trim() || sigmaConvertible === 0"
+          @click="runSigmaImport"
+        >
+          Import {{ sigmaConvertible || '' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -356,7 +423,7 @@
 import { ref, onMounted, reactive, computed } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
-import { Plus, CircleCheck, Shop, Refresh, MagicStick, Download } from '@element-plus/icons-vue';
+import { Plus, CircleCheck, Shop, Refresh, MagicStick, Download, Upload, Warning } from '@element-plus/icons-vue';
 import yaml from 'js-yaml';
 
 const rules = ref<any[]>([]);
@@ -898,6 +965,58 @@ const getSeverityType = (severity: string) => {
   };
   return types[severity] || 'info';
 };
+
+// ---- Sigma import ---------------------------------------------------------
+const sigmaDialogVisible = ref(false);
+const sigmaText = ref('');
+const sigmaPreview = ref<any[]>([]);
+const sigmaPreviewing = ref(false);
+const sigmaImporting = ref(false);
+const sigmaConvertible = computed(() => sigmaPreview.value.filter((r) => r.ok).length);
+
+function openSigmaImport() {
+  sigmaText.value = '';
+  sigmaPreview.value = [];
+  sigmaDialogVisible.value = true;
+}
+
+async function runSigmaPreview() {
+  if (!sigmaText.value.trim()) return;
+  sigmaPreviewing.value = true;
+  try {
+    const { data } = await api.previewSigmaImport(sigmaText.value);
+    sigmaPreview.value = data.results || [];
+    if (sigmaConvertible.value === 0) {
+      ElMessage.warning('No rules could be converted — see the reasons below');
+    }
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Preview failed');
+  } finally {
+    sigmaPreviewing.value = false;
+  }
+}
+
+async function runSigmaImport() {
+  if (!sigmaText.value.trim()) return;
+  sigmaImporting.value = true;
+  try {
+    const { data } = await api.importSigma(sigmaText.value);
+    const parts = [`${data.created} created`, `${data.updated} updated`];
+    if (data.failed?.length) parts.push(`${data.failed.length} skipped`);
+    ElMessage.success(`Sigma import: ${parts.join(', ')}`);
+    if (data.failed?.length) {
+      // Re-run preview so the skipped reasons stay visible for the user.
+      await runSigmaPreview();
+    } else {
+      sigmaDialogVisible.value = false;
+    }
+    await fetchRules();
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Import failed');
+  } finally {
+    sigmaImporting.value = false;
+  }
+}
 </script>
 
 <style scoped>
@@ -986,4 +1105,18 @@ const getSeverityType = (severity: string) => {
 }
 .contrib-issues.error { color: var(--el-color-danger); }
 .contrib-issues.warn { color: var(--el-color-warning); }
+
+.sigma-preview-item {
+  padding: 8px 0;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+.sigma-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sigma-cond-count {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
 </style>

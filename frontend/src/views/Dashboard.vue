@@ -1,5 +1,19 @@
 <template>
   <div class="dashboard">
+    <el-alert
+      v-if="showGettingStarted"
+      type="info"
+      :closable="true"
+      show-icon
+      style="margin-bottom: 16px"
+      @close="dismissGettingStarted"
+    >
+      <template #title>
+        New here? <el-link type="primary" :underline="false" @click="$router.push('/getting-started')">Open the Getting Started checklist</el-link>
+        to secure your account, ingest logs, and install detections.
+      </template>
+    </el-alert>
+
     <!-- Section: Alerts -->
     <div class="section-header">
       <h3>Security Alerts</h3>
@@ -230,6 +244,13 @@ const alertsStore = useAlertsStore();
 const alertStats = computed(() => alertsStore.statistics);
 const recentAlerts = computed(() => alertsStore.alerts.slice(0, 10));
 const loading = ref(false);
+
+// Getting Started banner — dismissible, remembered per browser.
+const showGettingStarted = ref(localStorage.getItem('onboarding_dismissed') !== '1');
+function dismissGettingStarted() {
+  localStorage.setItem('onboarding_dismissed', '1');
+  showGettingStarted.value = false;
+}
 
 const assetStats = ref<any>(null);
 const vulnStats = ref<any>(null);

@@ -1,6 +1,6 @@
 {
   "schema": "siembox.parser/v1",
-  "name": "Linux Sudo",
+  "name": "linux-sudo",
   "description": "Parses sudo command execution logs",
   "parser_type": "regex",
   "priority": 15,

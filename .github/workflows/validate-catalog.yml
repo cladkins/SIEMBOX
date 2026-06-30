@@ -1,5 +1,9 @@
 name: Validate Catalog
 
+# Least-privilege: this workflow only checks out + validates, so read-only.
+permissions:
+  contents: read
+
 # Gate for community catalog submissions. Parsers under catalog/ must pass strict
 # schema validation AND their own self-tests (run through the same
 # parse->derive->normalize pipeline the app uses); detection rules under rules/

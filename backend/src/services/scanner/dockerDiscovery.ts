@@ -31,7 +31,7 @@ export interface DiscoveryResult {
   images: DiscoveredImage[];
 }
 
-interface DockerContainer {
+export interface DockerContainer {
   Names?: string[];
   Image?: string;
   ImageID?: string;
@@ -120,35 +120,42 @@ export class DockerDiscovery {
       return { available: false, reason, images: [] };
     }
 
-    // Group containers by the image ref they were created from.
-    const byImage = new Map<string, DiscoveredImage>();
-    for (const c of containers) {
-      const image = (c.Image || '').trim();
-      if (!image) continue;
-      const name = (c.Names?.[0] || '').replace(/^\//, '') || '(unnamed)';
-      const entry =
-        byImage.get(image) ||
-        ({
-          image,
-          image_id: c.ImageID || '',
-          containers: [],
-          running: 0,
-          scannable: isScannable(image),
-        } as DiscoveredImage);
-      if (!entry.containers.includes(name)) entry.containers.push(name);
-      if ((c.State || '').toLowerCase() === 'running') entry.running += 1;
-      if (!entry.image_id && c.ImageID) entry.image_id = c.ImageID;
-      byImage.set(image, entry);
-    }
-
-    // Running images first, then by container count, then name — most relevant on top.
-    const images = Array.from(byImage.values()).sort(
-      (a, b) =>
-        b.running - a.running ||
-        b.containers.length - a.containers.length ||
-        a.image.localeCompare(b.image)
-    );
-
-    return { available: true, images };
+    return { available: true, images: groupContainers(containers) };
   }
+}
+
+/**
+ * Deduplicate a list of Docker containers into the set of images backing them,
+ * with running counts + a scannable flag, newest-usage first. Shared by the local
+ * socket discovery and the log-shipper-reported inventory so both produce the
+ * same shape.
+ */
+export function groupContainers(containers: DockerContainer[]): DiscoveredImage[] {
+  const byImage = new Map<string, DiscoveredImage>();
+  for (const c of containers) {
+    const image = (c.Image || '').trim();
+    if (!image) continue;
+    const name = (c.Names?.[0] || '').replace(/^\//, '') || '(unnamed)';
+    const entry =
+      byImage.get(image) ||
+      ({
+        image,
+        image_id: c.ImageID || '',
+        containers: [],
+        running: 0,
+        scannable: isScannable(image),
+      } as DiscoveredImage);
+    if (!entry.containers.includes(name)) entry.containers.push(name);
+    if ((c.State || '').toLowerCase() === 'running') entry.running += 1;
+    if (!entry.image_id && c.ImageID) entry.image_id = c.ImageID;
+    byImage.set(image, entry);
+  }
+
+  // Running images first, then by container count, then name — most relevant on top.
+  return Array.from(byImage.values()).sort(
+    (a, b) =>
+      b.running - a.running ||
+      b.containers.length - a.containers.length ||
+      a.image.localeCompare(b.image)
+  );
 }

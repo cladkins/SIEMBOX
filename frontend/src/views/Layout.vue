@@ -20,6 +20,11 @@
           <span>Dashboard</span>
         </el-menu-item>
 
+        <el-menu-item index="/getting-started">
+          <el-icon><Compass /></el-icon>
+          <span>Getting Started</span>
+        </el-menu-item>
+
         <el-menu-item index="/threat-intel">
           <el-icon><Aim /></el-icon>
           <span>Threat Intel</span>
@@ -50,6 +55,10 @@
           <el-menu-item index="/rules">
             <el-icon><Files /></el-icon>
             <span>Detection Rules</span>
+          </el-menu-item>
+          <el-menu-item index="/content-packs">
+            <el-icon><Collection /></el-icon>
+            <span>Content Packs</span>
           </el-menu-item>
           <el-menu-item index="/shippers">
             <el-icon><Upload /></el-icon>
@@ -186,7 +195,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
 import { useChatStore } from '@/stores/chat';
 import AnalystChat from '@/components/AnalystChat.vue';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim, Cpu, ChatDotRound } from '@element-plus/icons-vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim, Cpu, ChatDotRound, Compass } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();
@@ -230,10 +239,12 @@ const pageTitle = computed(() => {
   const titles: Record<string, string> = {
     '/': 'Dashboard',
     '/ai-analyst': 'AI Analyst',
+    '/getting-started': 'Getting Started',
     '/alerts': 'Alerts',
     '/logs': 'Logs',
     '/parsers': 'Parsers',
     '/rules': 'Detection Rules',
+    '/content-packs': 'Content Packs',
     '/shippers': 'Log Shippers',
     '/asset-inventory': 'Asset Inventory',
     '/vulnerability-scanning': 'Vulnerability Scanning',

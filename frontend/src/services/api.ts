@@ -51,8 +51,12 @@ apiClient.interceptors.response.use(
     if (error.response) {
       switch (error.response.status) {
         case 401:
-          authStore.logout();
-          ElMessage.error('Session expired. Please login again.');
+          // The login endpoint's 401s (wrong password / MFA required) are not
+          // session expiries — let the Login view handle them inline.
+          if (!/\/auth\/login$/.test(error.config?.url || '')) {
+            authStore.logout();
+            ElMessage.error('Session expired. Please login again.');
+          }
           break;
         case 403:
           ElMessage.error('You do not have permission to perform this action.');
@@ -84,10 +88,16 @@ export default apiClient;
 // API service methods
 export const api = {
   // Auth
-  login: (username: string, password: string) =>
-    apiClient.post('/auth/login', { username, password }),
+  login: (username: string, password: string, code?: string) =>
+    apiClient.post('/auth/login', { username, password, ...(code ? { code } : {}) }),
   logout: () => apiClient.post('/auth/logout'),
   getProfile: () => apiClient.get('/auth/me'),
+  changeOwnPassword: (currentPassword: string, newPassword: string) =>
+    apiClient.put('/auth/me/password', { currentPassword, newPassword }),
+  // MFA (TOTP) — the logged-in user manages their own
+  mfaSetup: () => apiClient.post('/auth/me/mfa/setup'),
+  mfaEnable: (code: string) => apiClient.post('/auth/me/mfa/enable', { code }),
+  mfaDisable: (code: string) => apiClient.post('/auth/me/mfa/disable', { code }),
 
   // Logs
   getRawLogs: (params?: any) => apiClient.get('/logs/raw', { params }),
@@ -128,6 +138,13 @@ export const api = {
   getRuleCatalog: (refresh = false) => apiClient.get('/rules/catalog', { params: refresh ? { refresh: true } : {} }),
   installCatalogRule: (name: string) => apiClient.post('/rules/catalog/install', { name }),
   installAllCatalogRules: () => apiClient.post('/rules/catalog/install-all', {}, { timeout: 120000 }),
+  // Sigma import: convert community Sigma YAML to portable detections (preview, then import)
+  previewSigmaImport: (sigma: string) => apiClient.post('/rules/import/sigma/preview', { sigma }),
+  importSigma: (sigma: string) => apiClient.post('/rules/import/sigma', { sigma }, { timeout: 120000 }),
+
+  // Content Packs (curated per-technology parser + detection bundles)
+  getContentPacks: () => apiClient.get('/packs'),
+  installContentPack: (id: string) => apiClient.post(`/packs/${id}/install`, {}, { timeout: 120000 }),
 
   // AI builder
   getAiSettings: () => apiClient.get('/settings/ai'),
@@ -159,6 +176,8 @@ export const api = {
 
   // Alerts
   getAlerts: (params?: any) => apiClient.get('/alerts', { params }),
+  exportAlerts: (params: any, format: 'csv' | 'json') =>
+    apiClient.get('/alerts/export', { params: { ...params, format }, responseType: 'blob' }),
   getAlertStatistics: () => apiClient.get('/alerts/statistics'),
   getAlertsByCountry: (params?: { days?: number; limit?: number }) =>
     apiClient.get('/alerts/by-country', { params }),
@@ -257,6 +276,8 @@ export const api = {
   getContainerScan: (id: number) => apiClient.get(`/containers/scans/${id}`),
   // Images already present on the Docker host (requires the socket to be mounted).
   getDiscoveredImages: () => apiClient.get('/containers/discovered'),
+  // Combined inventory: SIEMBox host images + images reported by each log shipper host
+  getContainerInventory: () => apiClient.get('/containers/inventory'),
 
   // Scheduled Scans
   getScheduledScans: () => apiClient.get('/scheduled-scans'),

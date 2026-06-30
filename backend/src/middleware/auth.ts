@@ -23,14 +23,14 @@ declare global {
  */
 export const authenticate = async (req: Request, _res: Response, next: NextFunction) => {
   try {
-    // Get token from Authorization header or cookie
+    // Get token from the Authorization header (Bearer). Cookie-based auth was
+    // removed: the app never issued a session_token cookie, so the fallback was
+    // dead code and an unnecessary CSRF surface.
     const authHeader = req.headers.authorization;
     let token: string | undefined;
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.substring(7);
-    } else if (req.cookies?.session_token) {
-      token = req.cookies.session_token;
     }
 
     if (!token) {
@@ -82,8 +82,6 @@ export const optionalAuthenticate = async (
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.substring(7);
-    } else if (req.cookies?.session_token) {
-      token = req.cookies.session_token;
     }
 
     if (token) {

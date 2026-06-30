@@ -1,10 +1,10 @@
 {
   "schema": "siembox.parser/v1",
-  "name": "Generic Syslog",
+  "name": "generic-syslog",
   "description": "Fallback parser for standard syslog format",
   "parser_type": "regex",
   "priority": 1000,
-  "pattern": "^(?<timestamp>\\w+\\s+\\d+\\s+\\d+:\\d+:\\d+)\\s+(?<hostname>\\S+)\\s+(?<process>\\S+?)(?:\\[(?<pid>\\d+)\\])?:\\s+(?<message>.+)$",
+  "pattern": "^(?<timestamp>\\w+ +\\d+ +\\d+:\\d+:\\d+) (?<hostname>\\S+) (?<process>[^\\s\\[\\]:]+)(?:\\[(?<pid>\\d+)\\])?: (?<message>.+)$",
   "field_mappings": {
     "timestamp": "timestamp",
     "hostname": "hostname",

@@ -451,11 +451,13 @@ A rule:
 
 Rules evaluate against NORMALIZED parsed-log fields. Use canonical field names: source_ip, dest_ip, source_port, dest_port, user, target_user, host, service, method, path, status_code, message, event, event_type, country, auth_outcome.
 
-Supported operators ONLY: equals, not_equals, contains, not_contains, regex, greater_than, less_than, in, not_in, exists.
+Supported operators ONLY: equals, not_equals, contains, not_contains, regex, greater_than, less_than, in, not_in, exists, not_in_whitelist, on_threat_feed, not_on_threat_feed.
 - "in"/"not_in": value is a comma-separated string OR an array.
 - "greater_than"/"less_than": numeric value.
 - "regex": value is a valid regex.
 - "exists": value true/false.
+- "on_threat_feed"/"not_on_threat_feed": true when the field's IP IS / IS NOT in the enabled threat-intelligence blocklist feeds. Use on an IP field (usually source_ip) with value: true. Do NOT invent a "threat_intel_match" field — use this operator. alert.title/description may use {threat_feeds} to name the matching feed(s).
+- "not_in_whitelist": true when the field's IP is NOT in the operator's IP allow-list. Use on an IP field with value: true.
 
 "aggregation" is OPTIONAL — include it for rate/brute-force/repeat detections ("5 failures in 5m"): set field (usually source_ip), timeframe, threshold, and distinct_count when you mean "N DISTINCT values". Omit aggregation for single-event rules.
 

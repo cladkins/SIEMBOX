@@ -5,6 +5,7 @@ import { logger } from '../../utils/logger';
 import { query } from '../../config/database';
 import { ErrorLogService } from '../errors/errorLogService';
 import { NotificationService } from '../notifications/notificationService';
+import { FeedService } from '../threatintel/feedService';
 
 interface RuleCondition {
   field: string;
@@ -19,6 +20,8 @@ interface RuleCondition {
     | 'in'
     | 'not_in'
     | 'not_in_whitelist'
+    | 'on_threat_feed'
+    | 'not_on_threat_feed'
     | 'exists';
   value: string | number | boolean | Array<string | number>;
 }
@@ -194,6 +197,20 @@ export class RulesEngine {
         return !list.includes(fieldStr);
       }
 
+      case 'on_threat_feed':
+        if (value !== true && value !== 'true') {
+          logger.warn('on_threat_feed operator requires value: true');
+          return false;
+        }
+        return await this.checkIpOnThreatFeed(fieldValue);
+
+      case 'not_on_threat_feed':
+        if (value !== true && value !== 'true') {
+          logger.warn('not_on_threat_feed operator requires value: true');
+          return false;
+        }
+        return !(await this.checkIpOnThreatFeed(fieldValue));
+
       default:
         logger.warn(`Unknown operator: ${operator}`);
         return false;
@@ -218,6 +235,21 @@ export class RulesEngine {
       logger.error('Error checking IP whitelist:', { ipAddress, error });
       // On error, assume not whitelisted (fail-safe)
       return true;
+    }
+  }
+
+  /**
+   * True when the IP is present in any enabled threat-intel feed (exact-IP match
+   * against threat_indicators, reusing the lookup the Threat Intel page uses).
+   * Fail-closed: on error, returns false so we don't raise false alerts.
+   */
+  private async checkIpOnThreatFeed(ip: any): Promise<boolean> {
+    try {
+      const matches = await FeedService.lookupIp(String(ip).trim());
+      return matches.length > 0;
+    } catch (error) {
+      logger.error('Error checking IP against threat feeds:', { ip, error });
+      return false;
     }
   }
 
@@ -400,6 +432,26 @@ export class RulesEngine {
         }
       }
 
+      // The IP this alert concerns (used for the allow-list, dedup, and threat-intel context).
+      const alertIp = String(
+        parsedLog.parsed_data['client_ip'] ??
+        parsedLog.parsed_data['source_ip'] ??
+        parsedLog.source_ip ??
+        ''
+      ).trim();
+
+      // Threat-intel context: if the IP is on any enabled feed, record which feeds
+      // flagged it so the alert (via {threat_feeds}) and matched_data can name them.
+      // Best-effort — never blocks alert creation.
+      try {
+        if (alertIp) {
+          const feeds = await FeedService.lookupIp(alertIp);
+          if (feeds.length > 0) variables.threat_feeds = feeds.map((f) => f.name).join(', ');
+        }
+      } catch {
+        /* best-effort enrichment */
+      }
+
       // Parse alert template from rule_logic
       const alertTemplate = rule.rule_logic.alert || {
         title: rule.name,
@@ -408,14 +460,6 @@ export class RulesEngine {
 
       const title = this.replaceVariables(alertTemplate.title, variables);
       const description = this.replaceVariables(alertTemplate.description || '', variables);
-
-      // The IP this alert concerns (used for the allow-list and dedup).
-      const alertIp = String(
-        parsedLog.parsed_data['client_ip'] ??
-        parsedLog.parsed_data['source_ip'] ??
-        parsedLog.source_ip ??
-        ''
-      ).trim();
 
       // Global allow-list: never alert on trusted/whitelisted IPs, so an
       // operator can silence their own internal hosts with one whitelist entry

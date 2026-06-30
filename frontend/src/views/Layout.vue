@@ -51,6 +51,10 @@
             <el-icon><Files /></el-icon>
             <span>Detection Rules</span>
           </el-menu-item>
+          <el-menu-item index="/content-packs">
+            <el-icon><Collection /></el-icon>
+            <span>Content Packs</span>
+          </el-menu-item>
           <el-menu-item index="/shippers">
             <el-icon><Upload /></el-icon>
             <span>Log Shippers</span>
@@ -234,6 +238,7 @@ const pageTitle = computed(() => {
     '/logs': 'Logs',
     '/parsers': 'Parsers',
     '/rules': 'Detection Rules',
+    '/content-packs': 'Content Packs',
     '/shippers': 'Log Shippers',
     '/asset-inventory': 'Asset Inventory',
     '/vulnerability-scanning': 'Vulnerability Scanning',

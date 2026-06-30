@@ -64,6 +64,10 @@ Include `aggregation` for "N events in a window" detections; omit it for single-
 
 > SIEMBox is **catalog-only by default** — a fresh install has no rules until you install them. (Set `SEED_BUNDLED_CONTENT=true` to opt into the legacy bundled rules; see [Configuration](Configuration#parser--detection-catalog).)
 
+## Content Packs
+
+**Content Packs** (sidebar → **Content Packs**) are curated, per-technology bundles that install the right parsers **and** detections in one click — e.g. *Auth & Identity*, *Reverse Proxy & Web*, *Media Servers*, *DNS & Network*, *Linux & Infrastructure*. Each pack card shows how many of its parsers/detections are already installed, plus setup hints (which container, where the logs are). Installing pulls the referenced content from the catalog: detections apply immediately (the rules engine reloads); newly installed parsers take effect after the next backend restart, same as a normal catalog install. Packs are the fastest way to go from empty to covered for the stack you actually run.
+
 ## Importing Sigma rules
 
 **Detection Rules → Import Sigma.** Paste one or more [Sigma](https://sigmahq.io) rules (YAML, `---` separated for multiple) to convert the huge body of community Sigma content into SIEMBox detections. **Preview** first to see exactly what will be created; **Import** then upserts them. Imported rules are created **disabled** so you review them before they fire.

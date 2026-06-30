@@ -132,6 +132,10 @@ export const api = {
   previewSigmaImport: (sigma: string) => apiClient.post('/rules/import/sigma/preview', { sigma }),
   importSigma: (sigma: string) => apiClient.post('/rules/import/sigma', { sigma }, { timeout: 120000 }),
 
+  // Content Packs (curated per-technology parser + detection bundles)
+  getContentPacks: () => apiClient.get('/packs'),
+  installContentPack: (id: string) => apiClient.post(`/packs/${id}/install`, {}, { timeout: 120000 }),
+
   // AI builder
   getAiSettings: () => apiClient.get('/settings/ai'),
   updateAiSettings: (data: any) => apiClient.put('/settings/ai', data),

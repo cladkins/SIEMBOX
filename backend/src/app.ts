@@ -26,6 +26,7 @@ import containersRoutes from './routes/containers';
 import threatIntelRoutes from './routes/threatIntel';
 import threatFeedsRoutes from './routes/threatFeeds';
 import edrRoutes from './routes/edr';
+import packsRoutes from './routes/packs';
 
 const app: Application = express();
 
@@ -114,6 +115,7 @@ app.use('/api/containers', authenticate, containersRoutes); // Trivy container i
 app.use('/api/threat-intel', authenticate, threatIntelRoutes); // IP-centric geo/event/alert lookup
 app.use('/api/threat-feeds', authenticate, threatFeedsRoutes); // External threat feeds + IP reputation
 app.use('/api/edr', edrRoutes); // EDR endpoint agents (enroll + agent-auth ingest + admin UI)
+app.use('/api/packs', authenticate, packsRoutes); // Content Packs (curated parser+detection bundles)
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

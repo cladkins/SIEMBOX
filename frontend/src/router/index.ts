@@ -50,6 +50,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/Rules.vue'),
       },
       {
+        path: 'content-packs',
+        name: 'ContentPacks',
+        component: () => import('@/views/ContentPacks.vue'),
+      },
+      {
         path: 'shippers',
         name: 'Shippers',
         component: () => import('@/views/Shippers.vue'),

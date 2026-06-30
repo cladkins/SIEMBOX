@@ -14,23 +14,24 @@ Effort: **S** = days · **M** = 1–2 weeks · **L** = multi-week · **XL** = ma
 - **`on_threat_feed` detection operator** — write a rule that fires when a source IP is on an enabled feed.
 - Alerts keyword/IP search + filters; "Send test alert" email preview.
 
-## Phase 1 — Trust & Reliability
+## Phase 1 — Trust & Reliability ✅ Done (on `develop`)
 Cheap, high-leverage foundation that makes SIEMBox safe to depend on.
-- **Security hygiene** *(S)* — clear dependency alerts, `SECURITY.md` disclosure, automated dependency updates.
-- **Backup / restore + safe upgrades** *(S–M)* — scheduled `pg_dump`, documented restore, idempotent startup migrations. *(Foundation for Hot/Cold below.)*
-- **Endpoint alerts → notifications** *(S)* — endpoint-agent detections now email/Slack/ntfy like rule alerts.
-- **Search index** *(S)* — `pg_trgm` GIN indexes so keyword/IP search stays fast as data grows.
-- **Detection-engine + parser tests** *(M)* — guard against "rule silently never fires" regressions.
+- ✅ **Security hygiene** *(S)* — Dependabot weekly grouped update PRs (backend, frontend, Actions).
+- ✅ **Backup / restore + safe upgrades** *(S–M)* — `scripts/backup.sh` + `restore.sh` and a backup/restore/upgrade guide; idempotent startup migrations. *(Foundation for Hot/Cold below.)*
+- ✅ **Endpoint alerts → notifications** *(S)* — endpoint-agent detections now email/Slack/ntfy like rule alerts.
+- ✅ **Search index** *(S)* — `pg_trgm` GIN indexes so keyword/IP search stays fast as data grows.
+- ✅ **Detection-engine + parser tests** *(M)* — `npm test` covers the pure detection operators + the parse→derive→normalize pipeline; guards against "rule silently never fires" regressions.
 
-## Phase 2 — Onboarding & Content
+## Phase 2 — Onboarding & Content ✅ Done (on `develop`)
 The two biggest adoption unlocks.
-- **Content Packs** *(M)* — curated, per-technology bundles (Auth, Reverse Proxy, Media, Documents, DNS,
-  Network…) of parsers + detections, installable in one click. A pack references existing catalog content
-  plus setup hints (which container, where the logs are).
-- **Sigma import / convert** *(M–L)* — turn community Sigma rules into portable detections (huge content multiplier).
-- **MFA (TOTP)** *(M)* — for local accounts; also unblocks the onboarding wizard.
-- **Onboarding wizard** *(M)* — guided first run: secure account + MFA → log ingestion (+ shipper key) →
-  install packs → API keys → notifications + test alert. *(Depends on MFA + Packs.)*
+- ✅ **Content Packs** *(M)* — curated, per-technology bundles (Auth, Reverse Proxy, Media, Documents, DNS,
+  Network, Infra, CEF) of parsers + detections, installable in one click from the **Content Packs** page,
+  with live install status + setup hints.
+- ✅ **Sigma import / convert** *(M–L)* — **Detection Rules → Import Sigma**: convert community Sigma rules to
+  portable detections (honest about OR/NOT it can't represent).
+- ✅ **MFA (TOTP)** *(M)* — opt-in two-factor for local accounts (**Settings → Security**); also unblocked the wizard.
+- ✅ **Onboarding wizard** *(M)* — guided first run (**Getting Started**): secure account + MFA → log ingestion →
+  install packs → API keys → notifications, with live status per step.
 
 ## Phase 3 — Operate like a SIEM
 - **Reporting & exports** *(M)* — scheduled reports, CSV/PDF, prebuilt templates (alert summary, vuln posture).

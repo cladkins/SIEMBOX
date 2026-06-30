@@ -32,7 +32,7 @@
     "express-async-errors": "^3.1.1",
     "express-rate-limit": "^7.1.5",
     "express-validator": "^7.3.1",
-    "js-yaml": "^4.1.0",
+    "js-yaml": "^5.2.0",
     "jsonwebtoken": "^9.0.2",
     "mmdb-lib": "^3.0.2",
     "node-nmap": "^4.0.0",

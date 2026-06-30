@@ -48,8 +48,32 @@
             </span>
           </div>
 
-          <el-collapse v-if="pack.setup?.length" class="pack-setup">
-            <el-collapse-item title="Setup hints">
+          <el-collapse class="pack-setup">
+            <el-collapse-item :title="`What's included (${pack.parserInstalled + pack.detectionInstalled}/${pack.parserTotal + pack.detectionTotal} installed)`">
+              <div class="pack-items-group">Parsers</div>
+              <ul class="pack-items">
+                <li v-for="p in pack.parsers" :key="'p' + p.name" :class="{ missing: !p.inCatalog }">
+                  <el-icon v-if="p.installed" color="var(--el-color-success)"><CircleCheck /></el-icon>
+                  <el-icon v-else-if="!p.inCatalog" color="var(--el-color-danger)"><CircleClose /></el-icon>
+                  <el-icon v-else color="var(--el-text-color-secondary)"><Minus /></el-icon>
+                  <span>{{ p.name }}</span>
+                  <span v-if="!p.inCatalog" class="item-note">not in catalog</span>
+                  <span v-else-if="!p.installed" class="item-note">available — not installed</span>
+                </li>
+              </ul>
+              <template v-if="!pack.catalogUnavailable">
+                <div class="pack-items-group">Detections</div>
+                <ul class="pack-items" v-if="pack.detections.length">
+                  <li v-for="d in pack.detections" :key="'d' + d.name">
+                    <el-icon v-if="d.installed" color="var(--el-color-success)"><CircleCheck /></el-icon>
+                    <el-icon v-else color="var(--el-text-color-secondary)"><Minus /></el-icon>
+                    <span>{{ d.name }}</span>
+                  </li>
+                </ul>
+                <p v-else class="item-note" style="margin: 4px 0 0">No detections in this pack yet.</p>
+              </template>
+            </el-collapse-item>
+            <el-collapse-item v-if="pack.setup?.length" title="Setup hints">
               <ul>
                 <li v-for="(s, i) in pack.setup" :key="i">{{ s }}</li>
               </ul>
@@ -74,9 +98,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, h } from 'vue';
 import { api } from '@/services/api';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Refresh,
   Key,
@@ -88,6 +112,9 @@ import {
   Monitor,
   DataLine,
   Box,
+  CircleCheck,
+  CircleClose,
+  Minus,
 } from '@element-plus/icons-vue';
 
 // Map the backend icon name -> imported component (fallback to Box).
@@ -141,10 +168,28 @@ async function install(pack: any) {
       `parsers: ${p.installed} new, ${p.updated} updated`,
       `detections: ${d.installed} new, ${d.updated} updated`,
     ];
-    const failed = (p.failed?.length || 0) + (d.failed?.length || 0);
-    if (failed) parts.push(`${failed} skipped`);
+    const failures = [...(p.failed || []), ...(d.failed || [])];
+    if (failures.length) parts.push(`${failures.length} skipped`);
     ElMessage.success(`${pack.name} — ${parts.join('; ')}`);
     await load();
+
+    // Show exactly what was skipped and why, so "7/10" is never a mystery.
+    if (failures.length) {
+      await ElMessageBox({
+        title: `${pack.name}: ${failures.length} item(s) skipped`,
+        message: h(
+          'div',
+          { style: 'max-height:300px;overflow:auto' },
+          failures.map((f: any) =>
+            h('div', { style: 'margin-bottom:6px' }, [
+              h('strong', {}, f.name),
+              h('span', { style: 'color:var(--el-text-color-secondary)' }, ` — ${f.reason}`),
+            ])
+          )
+        ),
+        confirmButtonText: 'OK',
+      }).catch(() => {});
+    }
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || 'Install failed');
   } finally {
@@ -205,6 +250,32 @@ onMounted(load);
   font-size: 13px;
   color: var(--el-text-color-secondary);
   padding-bottom: 8px;
+}
+.pack-items-group {
+  font-weight: 600;
+  color: var(--el-text-color-regular);
+  margin: 4px 0;
+}
+.pack-items {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+.pack-items li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  word-break: break-word;
+}
+.pack-items li.missing span:first-of-type {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+.item-note {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-style: italic;
 }
 .pack-setup ul {
   margin: 0;

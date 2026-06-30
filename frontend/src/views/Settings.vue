@@ -105,6 +105,9 @@
           <ol class="mfa-steps">
             <li>
               Scan this in your authenticator app, or enter the key manually:
+              <div class="mfa-qr">
+                <qrcode-vue v-if="mfaOtpauthUrl" :value="mfaOtpauthUrl" :size="180" level="M" render-as="svg" />
+              </div>
               <div class="mfa-secret-box">
                 <div class="mfa-secret">{{ mfaSecret }}</div>
                 <el-button size="small" @click="copySecret">Copy key</el-button>
@@ -849,6 +852,7 @@ import { api } from '@/services/api';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Check, Delete, Refresh, Plus, Edit, VideoPlay, Key } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
+import QrcodeVue from 'qrcode.vue';
 import { useAuthStore } from '@/stores/auth';
 const authStore = useAuthStore();
 
@@ -1670,6 +1674,17 @@ async function saveNotificationSettings() {
 }
 .mfa-steps li {
   margin-bottom: 14px;
+}
+.mfa-qr {
+  display: flex;
+  justify-content: center;
+  margin: 12px 0;
+}
+/* White quiet-zone so the code scans even in dark mode. */
+.mfa-qr :deep(svg) {
+  background: #fff;
+  padding: 10px;
+  border-radius: 6px;
 }
 .mfa-secret-box {
   display: flex;

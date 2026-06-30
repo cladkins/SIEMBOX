@@ -7,13 +7,21 @@
  */
 import { ParserModel } from '../../models/Parser';
 import { DetectionRuleModel } from '../../models/DetectionRule';
-import { getCatalogParser } from '../parser/catalogService';
+import { getCatalogParser, fetchCatalog } from '../parser/catalogService';
 import { validatePortableParser, runSelfTests } from '../parser/parserPortable';
 import { fetchDetectionCatalog, getCatalogDetection } from '../rules/detectionCatalog';
 import { validateRule, portableRuleToYaml } from '../rules/rulePortable';
 import { RulesEngine } from '../rules/rulesEngine';
 import { logger } from '../../utils/logger';
 import { CONTENT_PACKS, ContentPack, getContentPack, detectionMatchesPack } from './contentPacks';
+
+/** Per-item status so the UI can show exactly what's installed vs missing, and why. */
+export interface PackItemStatus {
+  name: string;
+  installed: boolean;
+  /** False = the pack references this item but it isn't in the catalog (name gap). */
+  inCatalog: boolean;
+}
 
 export interface PackStatus {
   id: string;
@@ -29,6 +37,10 @@ export interface PackStatus {
   status: 'installed' | 'partial' | 'not_installed';
   /** True if the detection catalog couldn't be reached (detectionTotal is then unknown). */
   catalogUnavailable: boolean;
+  /** Each referenced parser + whether it's installed / present in the catalog. */
+  parsers: PackItemStatus[];
+  /** Each matched detection + whether it's installed. */
+  detections: PackItemStatus[];
 }
 
 function deriveStatus(pi: number, pt: number, di: number, dt: number): PackStatus['status'] {
@@ -39,15 +51,15 @@ function deriveStatus(pi: number, pt: number, di: number, dt: number): PackStatu
   return 'not_installed';
 }
 
-/** List every pack annotated with how many of its items are already installed. */
+/** List every pack annotated with which of its items are installed / available. */
 export async function listPacksWithStatus(): Promise<PackStatus[]> {
   const installedParsers = new Set((await ParserModel.findAll()).map((p) => p.name));
   const installedRules = new Set((await DetectionRuleModel.findAll()).map((r: any) => r.name));
 
-  let entries: Array<{ name: string; tags?: string[]; path?: string }> = [];
+  let detEntries: Array<{ name: string; tags?: string[]; path?: string }> = [];
   let catalogUnavailable = false;
   try {
-    entries = (await fetchDetectionCatalog(false)).entries as any[];
+    detEntries = (await fetchDetectionCatalog(false)).entries as any[];
   } catch (e) {
     catalogUnavailable = true;
     logger.warn('[Packs] detection catalog unavailable for status', {
@@ -55,12 +67,38 @@ export async function listPacksWithStatus(): Promise<PackStatus[]> {
     });
   }
 
+  // Parser catalog names, so we can flag a pack parser that isn't in the catalog
+  // at all (a name gap) vs one that's simply not installed yet.
+  let catalogParserNames = new Set<string>();
+  try {
+    const { entries } = await fetchCatalog(false);
+    catalogParserNames = new Set((entries as any[]).map((p) => p.name));
+  } catch (e) {
+    logger.warn('[Packs] parser catalog unavailable for status', {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+  const parserCatalogKnown = catalogParserNames.size > 0;
+
   return CONTENT_PACKS.map((pack) => {
-    const matched = entries.filter((e) => detectionMatchesPack(e, pack));
-    const parserInstalled = pack.parsers.filter((n) => installedParsers.has(n)).length;
-    const detectionInstalled = matched.filter((e) => installedRules.has(e.name)).length;
-    const parserTotal = pack.parsers.length;
-    const detectionTotal = matched.length;
+    const parsers: PackItemStatus[] = pack.parsers.map((name) => ({
+      name,
+      installed: installedParsers.has(name),
+      // If we couldn't load the parser catalog, don't claim a gap — assume present.
+      inCatalog: parserCatalogKnown ? catalogParserNames.has(name) : true,
+    }));
+    const matched = detEntries.filter((e) => detectionMatchesPack(e, pack));
+    const detections: PackItemStatus[] = matched.map((e) => ({
+      name: e.name,
+      installed: installedRules.has(e.name),
+      inCatalog: true,
+    }));
+
+    const parserInstalled = parsers.filter((p) => p.installed).length;
+    const detectionInstalled = detections.filter((d) => d.installed).length;
+    const parserTotal = parsers.length;
+    const detectionTotal = detections.length;
+
     return {
       id: pack.id,
       name: pack.name,
@@ -79,6 +117,8 @@ export async function listPacksWithStatus(): Promise<PackStatus[]> {
             : 'not_installed'
         : deriveStatus(parserInstalled, parserTotal, detectionInstalled, detectionTotal),
       catalogUnavailable,
+      parsers,
+      detections,
     };
   });
 }

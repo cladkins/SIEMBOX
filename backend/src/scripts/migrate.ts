@@ -32,11 +32,16 @@ const runMigrations = async () => {
 
     logger.info('All migrations completed successfully!');
 
-    // Display default admin credentials
+    // Point the operator at the admin login without logging the secret itself.
+    // A configured DEFAULT_ADMIN_PASSWORD is never echoed; only the well-known
+    // 'changeme' default is named, as a prod to change it.
     logger.warn('===============================================');
-    logger.warn('DEFAULT ADMIN CREDENTIALS:');
-    logger.warn('Username: admin');
-    logger.warn(`Password: ${process.env.DEFAULT_ADMIN_PASSWORD || 'changeme'}`);
+    logger.warn('ADMIN LOGIN: username "admin"');
+    if (process.env.DEFAULT_ADMIN_PASSWORD) {
+      logger.warn('Password: the DEFAULT_ADMIN_PASSWORD you configured.');
+    } else {
+      logger.warn('Password: "changeme" (DEFAULT_ADMIN_PASSWORD is unset).');
+    }
     logger.warn('PLEASE CHANGE THE PASSWORD AFTER FIRST LOGIN!');
     logger.warn('===============================================');
 

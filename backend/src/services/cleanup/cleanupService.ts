@@ -1,6 +1,7 @@
 import { query } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { ErrorLogService } from '../errors/errorLogService';
+import { batchedDelete } from '../../utils/batchDelete';
 
 export class CleanupService {
   private intervalId: NodeJS.Timeout | null = null;
@@ -65,31 +66,33 @@ export class CleanupService {
         alerts_deleted: 0,
       };
 
-      // Clean up raw logs
+      // Delete in bounded batches so a large purge never holds a long lock. A
+      // single unbounded DELETE here once ran 15h and jammed a boot-time migration.
       if (settings.raw_logs_days > 0) {
-        const rawResult = await query(
-          `DELETE FROM raw_logs WHERE timestamp < NOW() - INTERVAL '1 day' * $1`,
-          [settings.raw_logs_days]
+        results.raw_logs_deleted = await batchedDelete(
+          'raw_logs',
+          "timestamp < NOW() - INTERVAL '1 day' * $1",
+          [settings.raw_logs_days],
+          { label: 'retention' }
         );
-        results.raw_logs_deleted = rawResult.rowCount || 0;
       }
 
-      // Clean up parsed logs
       if (settings.parsed_logs_days > 0) {
-        const parsedResult = await query(
-          `DELETE FROM parsed_logs WHERE timestamp < NOW() - INTERVAL '1 day' * $1`,
-          [settings.parsed_logs_days]
+        results.parsed_logs_deleted = await batchedDelete(
+          'parsed_logs',
+          "timestamp < NOW() - INTERVAL '1 day' * $1",
+          [settings.parsed_logs_days],
+          { label: 'retention' }
         );
-        results.parsed_logs_deleted = parsedResult.rowCount || 0;
       }
 
-      // Clean up old alerts
       if (settings.alerts_days > 0) {
-        const alertsResult = await query(
-          `DELETE FROM alerts WHERE created_at < NOW() - INTERVAL '1 day' * $1 AND status = 'closed'`,
-          [settings.alerts_days]
+        results.alerts_deleted = await batchedDelete(
+          'alerts',
+          "created_at < NOW() - INTERVAL '1 day' * $1 AND status = 'closed'",
+          [settings.alerts_days],
+          { label: 'retention' }
         );
-        results.alerts_deleted = alertsResult.rowCount || 0;
       }
 
       logger.info('Automated log cleanup completed', results);

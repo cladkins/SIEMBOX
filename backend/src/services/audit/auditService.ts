@@ -1,4 +1,5 @@
 import { query } from '../../config/database';
+import { batchedDelete } from '../../utils/batchDelete';
 
 /**
  * Audit log entry interface
@@ -315,13 +316,13 @@ export class AuditService {
    */
   static async cleanupOldLogs(retentionDays: number = 365): Promise<number> {
     try {
-      const sql = `
-        DELETE FROM audit_logs
-        WHERE timestamp < NOW() - INTERVAL '${retentionDays} days'
-      `;
-
-      const result = await query(sql);
-      return result.rowCount || 0;
+      // Batched + parameterized (was one unbounded, string-interpolated DELETE).
+      return await batchedDelete(
+        'audit_logs',
+        "timestamp < NOW() - INTERVAL '1 day' * $1",
+        [retentionDays],
+        { label: 'audit retention' }
+      );
     } catch (error) {
       console.error('Failed to cleanup old audit logs:', error);
       throw error;

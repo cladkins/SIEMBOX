@@ -7,6 +7,7 @@
 
 import { query } from '../../config/database';
 import { logger } from '../../utils/logger';
+import { batchedDelete } from '../../utils/batchDelete';
 
 // Throttle for background/async errors (scans, jobs, syslog, engines) so a
 // high-frequency failure cannot flood the application_errors table.
@@ -421,13 +422,14 @@ export class ErrorLogService {
    */
   static async cleanupOldErrors(retentionDays: number = 30): Promise<number> {
     try {
-      const result = await query(
-        `DELETE FROM application_errors
-         WHERE timestamp < NOW() - INTERVAL '1 day' * $1
-         RETURNING id`,
-        [retentionDays]
+      // Batched (was one unbounded DELETE ... RETURNING id that materialized
+      // every deleted row into memory).
+      return await batchedDelete(
+        'application_errors',
+        "timestamp < NOW() - INTERVAL '1 day' * $1",
+        [retentionDays],
+        { label: 'error-log retention' }
       );
-      return result.rowCount || 0;
     } catch (error) {
       logger.error('Failed to cleanup old errors:', error);
       return 0;

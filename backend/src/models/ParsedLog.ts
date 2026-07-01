@@ -1,4 +1,5 @@
 import { query } from '../config/database';
+import { batchedDelete } from '../utils/batchDelete';
 
 export interface ParsedLog {
   id: number;
@@ -159,9 +160,9 @@ export class ParsedLogModel {
   }
 
   static async deleteOlderThan(days: number): Promise<number> {
-    const result = await query(
-      `DELETE FROM parsed_logs WHERE created_at < NOW() - INTERVAL '${days} days'`
-    );
-    return result.rowCount || 0;
+    // Batched + parameterized (was an unbounded, string-interpolated DELETE).
+    return batchedDelete('parsed_logs', "created_at < NOW() - INTERVAL '1 day' * $1", [days], {
+      label: 'parsed_logs retention',
+    });
   }
 }

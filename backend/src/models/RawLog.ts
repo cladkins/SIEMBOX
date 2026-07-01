@@ -1,4 +1,5 @@
 import { query } from '../config/database';
+import { batchedDelete } from '../utils/batchDelete';
 
 export interface RawLog {
   id: number;
@@ -113,9 +114,9 @@ export class RawLogModel {
   }
 
   static async deleteOlderThan(days: number): Promise<number> {
-    const result = await query(
-      `DELETE FROM raw_logs WHERE created_at < NOW() - INTERVAL '${days} days'`
-    );
-    return result.rowCount || 0;
+    // Batched + parameterized (was an unbounded, string-interpolated DELETE).
+    return batchedDelete('raw_logs', "created_at < NOW() - INTERVAL '1 day' * $1", [days], {
+      label: 'raw_logs retention',
+    });
   }
 }

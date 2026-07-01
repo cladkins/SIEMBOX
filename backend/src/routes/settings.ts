@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { query } from '../config/database';
+import { batchedDelete } from '../utils/batchDelete';
 import { ApiError } from '../middleware/errorHandler';
 import { authorize } from '../middleware/auth';
 import {
@@ -160,31 +161,23 @@ router.post('/retention/cleanup', authorize('admin'), async (req: Request, res: 
       alerts_deleted: 0,
     };
 
-    // Delete old raw logs
+    // Batched so a large manual purge never holds a long table lock.
     if (raw_logs_days) {
-      const rawResult = await query(
-        `DELETE FROM raw_logs WHERE timestamp < NOW() - INTERVAL '1 day' * $1`,
-        [raw_logs_days]
+      results.raw_logs_deleted = await batchedDelete(
+        'raw_logs', "timestamp < NOW() - INTERVAL '1 day' * $1", [raw_logs_days], { label: 'manual retention' }
       );
-      results.raw_logs_deleted = rawResult.rowCount || 0;
     }
 
-    // Delete old parsed logs
     if (parsed_logs_days) {
-      const parsedResult = await query(
-        `DELETE FROM parsed_logs WHERE timestamp < NOW() - INTERVAL '1 day' * $1`,
-        [parsed_logs_days]
+      results.parsed_logs_deleted = await batchedDelete(
+        'parsed_logs', "timestamp < NOW() - INTERVAL '1 day' * $1", [parsed_logs_days], { label: 'manual retention' }
       );
-      results.parsed_logs_deleted = parsedResult.rowCount || 0;
     }
 
-    // Delete old alerts
     if (alerts_days) {
-      const alertsResult = await query(
-        `DELETE FROM alerts WHERE created_at < NOW() - INTERVAL '1 day' * $1`,
-        [alerts_days]
+      results.alerts_deleted = await batchedDelete(
+        'alerts', "created_at < NOW() - INTERVAL '1 day' * $1", [alerts_days], { label: 'manual retention' }
       );
-      results.alerts_deleted = alertsResult.rowCount || 0;
     }
 
     res.json({

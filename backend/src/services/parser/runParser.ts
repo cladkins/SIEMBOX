@@ -185,6 +185,11 @@ const JSON_ENVELOPE_KEYS = new Set([
   'severity',
   'log',
   'logger',
+  // A bare "ip" appears in JSON logs from many unrelated apps (DNS blockers,
+  // agents, gateways) — it identifies no particular format, so it must not let a
+  // parser claim a log by itself (authentik-audit was claiming every JSON log
+  // that merely carried an "ip" field, including UniFi coredns dnsAdBlock).
+  'ip',
 ]);
 
 function applyJsonParser(parser: ParserDef, message: string): { fields: Record<string, any>; event_type: string } | null {

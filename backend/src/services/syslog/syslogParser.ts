@@ -27,6 +27,70 @@ export function stripAnsi(input: string): string {
 }
 
 /**
+ * UniFi devices (APs, gateways) use a device prefix — "<12-hex MAC>,<model>-<fw>" —
+ * as their syslog TAG, with the real program name following inside the message
+ * ("…18870: hostapd: wifi0ap5: STA …"). Detecting it lets us surface the actual
+ * subsystem (hostapd/kernel/stahtd/…) as app_name instead of one junk app per device.
+ */
+const UNIFI_DEVICE_TAG = /^[0-9a-f]{12},\S+$/i;
+
+/** What a re-extracted program name must look like (hostapd, kernel, ubnt-fanctrl, …). */
+const PROGRAM_LIKE = /^[A-Za-z_][\w./-]*$/;
+
+/**
+ * Sanity check a TAG candidate. RFC 3164 tags are short program identifiers; when
+ * a device logs an untagged line whose first ':' sits inside a value (UniFi
+ * gateway iptables lines split at "MAC=28:70:…"), the naive first-colon split
+ * produces "tags" full of key=value junk. Reject those and treat the line as
+ * untagged instead, so the full message reaches the parsers intact.
+ */
+function isPlausibleTag(candidate: string): boolean {
+  if (candidate.length > 64) return false;
+  if (candidate.includes('=') || candidate.includes('"')) return false;
+  return true;
+}
+
+interface TagParts {
+  appName: string;
+  processId: string | null;
+  shipperId: string | null;
+  message: string;
+}
+
+/**
+ * Extract TAG (app name and optionally process ID and/or shipper ID) from the
+ * post-hostname remainder of an RFC 3164 line. Supports single- and multi-word
+ * TAGs:
+ *   "sshd[1234]: message"
+ *   "Authentik Server: message"
+ *   "nginx[a1b2c3d4]: message"           (with shipper ID)
+ *   "sshd[1234][a1b2c3d4]: message"      (with both process ID and shipper ID)
+ */
+function extractTag(rest: string): TagParts | null {
+  const tagWithBothMatch = rest.match(/^(.+?)\[(\d+)\]\[([0-9a-f]{8})\]:\s*(.*)$/);
+  if (tagWithBothMatch) {
+    const [, appName, procId, shipperId, message] = tagWithBothMatch;
+    return { appName: appName.trim(), processId: procId, shipperId, message };
+  }
+  const tagWithShipperMatch = rest.match(/^(.+?)\[([0-9a-f]{8})\]:\s*(.*)$/);
+  if (tagWithShipperMatch) {
+    const [, appName, shipperId, message] = tagWithShipperMatch;
+    return { appName: appName.trim(), processId: null, shipperId, message };
+  }
+  const tagWithProcIdMatch = rest.match(/^(.+?)\[(\d+)\]:\s*(.*)$/);
+  if (tagWithProcIdMatch) {
+    const [, appName, procId, message] = tagWithProcIdMatch;
+    return { appName: appName.trim(), processId: procId, shipperId: null, message };
+  }
+  const tagPlainMatch = rest.match(/^(.+?):\s*(.*)$/);
+  if (tagPlainMatch) {
+    const [, appName, message] = tagPlainMatch;
+    return { appName: appName.trim(), processId: null, shipperId: null, message };
+  }
+  return null;
+}
+
+/**
  * Parse a syslog message following RFC 3164 or RFC 5424
  * RFC 3164: <PRI>TIMESTAMP HOSTNAME TAG: MESSAGE
  * RFC 5424: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID STRUCTURED-DATA MESSAGE
@@ -89,51 +153,57 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
         result.timestamp = parseTimestamp(timestamp) || new Date();
         result.hostname = hostname;
 
-        // Extract TAG (app name and optionally process ID and/or shipper ID)
-        // Support both single-word and multi-word TAGs
-        // Examples:
-        //   "sshd[1234]: message"
-        //   "Authentik Server: message"
-        //   "nginx[a1b2c3d4]: message" (with shipper ID)
-        //   "sshd[1234][a1b2c3d4]: message" (with both process ID and shipper ID)
+        // UniFi AP tags — "<mac>,<model>-<fw>" with the real program following in
+        // the message — are peeled BEFORE the generic cascade, whose pid/shipper
+        // patterns would otherwise mis-split on brackets deeper in the line
+        // ("…18870: syswrapper[16283]: …" must not become app "…18870: syswrapper").
+        let tagSource = rest;
+        let unifiDeviceTag: string | null = null;
+        const unifiMatch = rest.match(/^([0-9a-f]{12},\S+):\s*(.*)$/i);
+        if (unifiMatch && UNIFI_DEVICE_TAG.test(unifiMatch[1])) {
+          unifiDeviceTag = unifiMatch[1];
+          // Some AP daemons emit an empty middle field ("…18870: : wevent: msg").
+          tagSource = unifiMatch[2].replace(/^:\s*/, '');
+        }
 
-        // Try to match with process ID and/or shipper ID
-        // Pattern: appname[digits][8hexchars] or appname[digits] or appname[8hexchars] or appname
-        const tagWithBothMatch = rest.match(/^(.+?)\[(\d+)\]\[([0-9a-f]{8})\]:\s*(.*)$/);
-        const tagWithProcIdMatch = rest.match(/^(.+?)\[(\d+)\]:\s*(.*)$/);
-        const tagWithShipperMatch = rest.match(/^(.+?)\[([0-9a-f]{8})\]:\s*(.*)$/);
-        const tagPlainMatch = rest.match(/^(.+?):\s*(.*)$/);
-
-        if (tagWithBothMatch) {
-          const [, appName, procId, shipperId, message] = tagWithBothMatch;
-          result.appName = appName.trim();
-          result.processId = procId;
-          result.shipperId = shipperId;
-          result.message = message;
-        } else if (tagWithShipperMatch) {
-          const [, appName, shipperId, message] = tagWithShipperMatch;
-          result.appName = appName.trim();
-          result.processId = null;
-          result.shipperId = shipperId;
-          result.message = message;
-        } else if (tagWithProcIdMatch) {
-          const [, appName, procId, message] = tagWithProcIdMatch;
-          result.appName = appName.trim();
-          result.processId = procId;
-          result.shipperId = null;
-          result.message = message;
-        } else if (tagPlainMatch) {
-          const [, appName, message] = tagPlainMatch;
-          result.appName = appName.trim();
-          result.processId = null;
-          result.shipperId = null;
-          result.message = message;
+        const tag = extractTag(tagSource);
+        if (unifiDeviceTag) {
+          if (tag && isPlausibleTag(tag.appName) && PROGRAM_LIKE.test(tag.appName)) {
+            result.appName = tag.appName;
+            result.processId = tag.processId;
+            result.shipperId = tag.shipperId;
+            // Some daemons repeat their name ("stahtd: stahtd: msg") — drop the echo.
+            result.message = tag.message.startsWith(`${tag.appName}: `)
+              ? tag.message.slice(tag.appName.length + 2)
+              : tag.message;
+          } else {
+            // No program-like tag in the remainder — keep the device tag as the app.
+            result.appName = unifiDeviceTag;
+            result.message = tagSource;
+          }
+          if (!result.hostname) result.hostname = unifiDeviceTag;
+        } else if (tag && isPlausibleTag(tag.appName)) {
+          result.appName = tag.appName;
+          result.processId = tag.processId;
+          result.shipperId = tag.shipperId;
+          result.message = tag.message;
+        } else if (tag) {
+          // Tag candidate is key=value junk — an untagged line whose first ':' sits
+          // inside a value (UniFi gateway iptables: "[PREROUTING-DNAT-4] DESCR=…
+          // MAC=28:70:…"). Keep the whole line as the message so parsers see it intact.
+          result.message = rest;
         } else {
           result.message = rest;
           logger.warn('Could not extract TAG from syslog', {
             original: originalMessage.substring(0, 80),
             rest: rest.substring(0, 80)
           });
+        }
+
+        // Older UniFi AP firmware puts the device tag in the HOSTNAME slot with its
+        // trailing colon ("…18870: hostapd: msg" and no separate hostname) — clean it.
+        if (result.hostname && /^[0-9a-f]{12},\S+:$/i.test(result.hostname)) {
+          result.hostname = result.hostname.slice(0, -1);
         }
 
         // Log successful parsing

@@ -57,6 +57,16 @@ test('authentik-audit still matches a real Authentik audit log', () => {
   assert.equal(r!.fields.service, 'authentik');
 });
 
+test('authentik-audit does NOT claim a UniFi coredns dnsAdBlock JSON (bare "ip" is not distinctive)', () => {
+  const corednsAdBlock =
+    '{"timestamp":"2026-06-30T18:00:12-05:00","unix_milli_timestamp":1782860412009,"type":"dnsAdBlock","category":"ADVERTISEMENT","domain":"browser-intake-datadoghq.com","ip":"192.168.1.161"}';
+  assert.equal(runParser(authentik, corednsAdBlock), null);
+  const pihole = load('pihole-dns-adblock');
+  const r = runParser(pihole, corednsAdBlock);
+  assert.ok(r, 'expected pihole-dns-adblock to claim the dnsAdBlock event');
+  assert.equal(r!.fields.event, 'dns_blocked');
+});
+
 test('caddy-access matches its own log (no longer shadowed by authentik-audit)', () => {
   const r = runParser(caddy, caddyLog);
   assert.ok(r, 'expected caddy-access to match its own log');

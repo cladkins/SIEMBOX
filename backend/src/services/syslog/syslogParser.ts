@@ -65,29 +65,33 @@ interface TagParts {
  *   "Authentik Server: message"
  *   "nginx[a1b2c3d4]: message"           (with shipper ID)
  *   "sshd[1234][a1b2c3d4]: message"      (with both process ID and shipper ID)
+ *
+ * The TAG is everything before the FIRST colon (a tag never legitimately
+ * contains one); the pid/shipper suffixes are then parsed off it end-anchored.
+ * All patterns here are linear — this runs on every raw network packet, so
+ * lazy-scan constructs like "(.+?)\[(\d+)\]:" (quadratic on hostile input, and
+ * able to cross earlier colons and produce colon-filled junk app names) are
+ * deliberately avoided.
  */
 function extractTag(rest: string): TagParts | null {
-  const tagWithBothMatch = rest.match(/^(.+?)\[(\d+)\]\[([0-9a-f]{8})\]:\s*(.*)$/);
-  if (tagWithBothMatch) {
-    const [, appName, procId, shipperId, message] = tagWithBothMatch;
-    return { appName: appName.trim(), processId: procId, shipperId, message };
+  const firstColon = rest.match(/^([^:]+):(.*)$/);
+  if (!firstColon) return null;
+  const rawTag = firstColon[1];
+  const message = firstColon[2].replace(/^\s+/, '');
+
+  const both = rawTag.match(/^(.*)\[(\d+)\]\[([0-9a-f]{8})\]$/);
+  if (both) {
+    return { appName: both[1].trim(), processId: both[2], shipperId: both[3], message };
   }
-  const tagWithShipperMatch = rest.match(/^(.+?)\[([0-9a-f]{8})\]:\s*(.*)$/);
-  if (tagWithShipperMatch) {
-    const [, appName, shipperId, message] = tagWithShipperMatch;
-    return { appName: appName.trim(), processId: null, shipperId, message };
+  const shipper = rawTag.match(/^(.*)\[([0-9a-f]{8})\]$/);
+  if (shipper) {
+    return { appName: shipper[1].trim(), processId: null, shipperId: shipper[2], message };
   }
-  const tagWithProcIdMatch = rest.match(/^(.+?)\[(\d+)\]:\s*(.*)$/);
-  if (tagWithProcIdMatch) {
-    const [, appName, procId, message] = tagWithProcIdMatch;
-    return { appName: appName.trim(), processId: procId, shipperId: null, message };
+  const procId = rawTag.match(/^(.*)\[(\d+)\]$/);
+  if (procId) {
+    return { appName: procId[1].trim(), processId: procId[2], shipperId: null, message };
   }
-  const tagPlainMatch = rest.match(/^(.+?):\s*(.*)$/);
-  if (tagPlainMatch) {
-    const [, appName, message] = tagPlainMatch;
-    return { appName: appName.trim(), processId: null, shipperId: null, message };
-  }
-  return null;
+  return { appName: rawTag.trim(), processId: null, shipperId: null, message };
 }
 
 /**
@@ -123,13 +127,18 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
       // Remove PRI from message
       rawMessage = rawMessage.substring(priMatch[0].length);
 
-      // Strip trailing newline/carriage return characters that break regex matching
-      rawMessage = rawMessage.replace(/[\r\n]+$/, '');
+      // Strip trailing newline/carriage return characters that break regex
+      // matching. (Loop instead of /[\r\n]+$/ — quadratic on hostile input.)
+      let end = rawMessage.length;
+      while (end > 0 && (rawMessage[end - 1] === '\n' || rawMessage[end - 1] === '\r')) end--;
+      if (end < rawMessage.length) rawMessage = rawMessage.slice(0, end);
     }
 
-    // Try RFC 5424 format first (has VERSION after PRI)
+    // Try RFC 5424 format first (has VERSION after PRI). The message group
+    // starts non-space so the \s+ separator owns the run (keeps it linear —
+    // this runs on every raw network packet).
     const rfc5424Match = rawMessage.match(
-      /^(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.*)$/
+      /^(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S.*)?$/
     );
 
     if (rfc5424Match) {
@@ -141,10 +150,11 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
       result.hostname = hostname !== '-' ? hostname : null;
       result.appName = appName !== '-' ? appName : null;
       result.processId = procId !== '-' ? procId : null;
-      result.message = message;
+      result.message = message ?? '';
     } else {
-      // Try RFC 3164 format: TIMESTAMP HOSTNAME TAG: MESSAGE
-      const rfc3164Pattern = /^(\S+\s+\d+\s+\d+:\d+:\d+)\s+(\S+)\s+(.+)$/;
+      // Try RFC 3164 format: TIMESTAMP HOSTNAME TAG: MESSAGE. As above, the
+      // rest group starts non-space to keep the match linear.
+      const rfc3164Pattern = /^(\S+\s+\d+\s+\d+:\d+:\d+)\s+(\S+)\s+(\S.*)$/;
       const rfc3164Match = rawMessage.match(rfc3164Pattern);
 
       if (rfc3164Match) {
@@ -159,11 +169,13 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
         // ("…18870: syswrapper[16283]: …" must not become app "…18870: syswrapper").
         let tagSource = rest;
         let unifiDeviceTag: string | null = null;
-        const unifiMatch = rest.match(/^([0-9a-f]{12},\S+):\s*(.*)$/i);
+        // [^\s:] keeps this linear on hostile input (\S here was quadratic).
+        const unifiMatch = rest.match(/^([0-9a-f]{12},[^\s:]+):(.*)$/i);
         if (unifiMatch && UNIFI_DEVICE_TAG.test(unifiMatch[1])) {
           unifiDeviceTag = unifiMatch[1];
-          // Some AP daemons emit an empty middle field ("…18870: : wevent: msg").
-          tagSource = unifiMatch[2].replace(/^:\s*/, '');
+          // Trim the separator, then a possible empty middle field
+          // ("…18870: : wevent: msg").
+          tagSource = unifiMatch[2].replace(/^\s+/, '').replace(/^:\s*/, '');
         }
 
         const tag = extractTag(tagSource);

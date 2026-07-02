@@ -1,0 +1,75 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "ubiquiti-unifi-hostapd-sta",
+  "description": "Parses UniFi AP hostapd client (STA) events — 802.11 associate/disassociate, authentication, and WPA EAPOL key exchange — with the client MAC and VAP interface.",
+  "parser_type": "regex",
+  "priority": 150,
+  "pattern": "^(?<vap>\\w+): STA (?<sta_mac>[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}) (?<subsystem>IEEE 802\\.11|IEEE 802\\.1X|WPA|RADIUS|MLME): (?<sta_event>.+)$",
+  "field_mappings": {
+    "vap": "interface",
+    "sta_mac": "source_mac",
+    "subsystem": "subsystem",
+    "sta_event": "sta_event"
+  },
+  "derivations": [
+    {
+      "set": { "event": "wifi_disassociated", "action": "disconnect" },
+      "when": { "sta_event": { "contains": "disassociated" } }
+    },
+    {
+      "set": { "event": "wifi_deauthenticated", "action": "disconnect" },
+      "when": { "sta_event": { "contains": "deauthenticated" } }
+    },
+    {
+      "set": { "event": "wifi_associated", "action": "connect" },
+      "when": { "sta_event": { "contains": "associated" } }
+    },
+    {
+      "set": { "event": "wifi_authenticated" },
+      "when": { "sta_event": { "contains": "authenticated" } }
+    },
+    {
+      "set": { "event": "wifi_eapol_exchange" },
+      "when": { "sta_event": { "contains": "EAPOL" } }
+    },
+    { "set": { "event": "wifi_sta_event" } }
+  ],
+  "event_type": "wifi_auth",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "client disassociated",
+      "input": "wifi0ap5: STA c0:49:ef:8c:07:2c IEEE 802.11: disassociated",
+      "expect": {
+        "interface": "wifi0ap5",
+        "source_mac": "c0:49:ef:8c:07:2c",
+        "subsystem": "IEEE 802.11",
+        "event": "wifi_disassociated",
+        "action": "disconnect",
+        "event_type": "wifi_auth",
+        "service": "unifi"
+      }
+    },
+    {
+      "description": "WPA EAPOL key exchange frame",
+      "input": "wifi0ap1: STA c0:49:ef:8c:07:2c WPA: received EAPOL-Key frame (2/4 Pairwise)",
+      "expect": {
+        "interface": "wifi0ap1",
+        "source_mac": "c0:49:ef:8c:07:2c",
+        "subsystem": "WPA",
+        "event": "wifi_eapol_exchange"
+      }
+    },
+    {
+      "description": "tightness guard: wpa_supplicant scan chatter must NOT match",
+      "input": "vwiresta6: Sort bss: id 2 BSSID 26:6a:1b:60:ba:a1 SSID '' weight 148 hop 2 freq 5200 level -42",
+      "expect": { "interface": null, "event": null }
+    }
+  ],
+  "metadata": {
+    "author": "cladkins",
+    "log_source": "UniFi AP (U6/U7 series) hostapd log via remote syslog",
+    "tags": ["unifi", "ubiquiti", "wifi", "hostapd", "wireless"],
+    "references": ["https://help.ui.com/hc/en-us/articles/204959834"]
+  }
+}

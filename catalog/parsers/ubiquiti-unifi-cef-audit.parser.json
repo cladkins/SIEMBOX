@@ -2,57 +2,34 @@
   "schema": "siembox.parser/v1",
   "name": "ubiquiti-unifi-cef-audit",
   "parser_type": "regex",
-  "pattern": "^(?<syslog_time>\\w+\\s+\\d+\\s+[\\d:]+)\\s+(?<syslog_host>\\S+)\\s+CEF:(?<cef_version>\\d+)\\|(?<vendor>[^|]+)\\|(?<product>[^|]+)\\|(?<product_version>[^|]+)\\|(?<signature_id>[^|]+)\\|(?<event_name>[^|]+)\\|(?<severity>[^|]+)\\|.*?UNIFIcategory=(?<unifi_category>\\S+)\\s+UNIFIhost=(?<unifi_host>.+?)\\s+UNIFIaccessMethod=(?<access_method>\\S+)\\s+UNIFIadmin=(?<unifi_admin>\\S+)\\s+src=(?<src_ip>\\S+)\\s+UNIFIutcTime=(?<utc_time>\\S+)\\s+msg=(?<msg>.+)$",
+  "pattern": "^(?<syslog_time>\\w+\\s+\\d+\\s+[\\d:]+)\\s+(?<syslog_host>\\S+)\\s+CEF:(?<cef_version>\\d+)\\|(?<vendor>[^|]*)\\|(?<product>[^|]*)\\|(?<product_version>[^|]*)\\|(?<signature_id>[^|]*)\\|(?<event_name>[^|]*)\\|(?<severity>[^|]*)\\|(?<extension>.*)$",
   "field_mappings": {
-    "msg": "message",
-    "src_ip": "source_ip",
     "syslog_host": "host",
-    "unifi_admin": "user",
-    "access_method": "method",
-    "unifi_category": "service"
+    "extension": "extension"
   },
-  "description": "Parses Ubiquiti UniFi Network CEF audit log events (admin access, network events)",
+  "description": "Parses Ubiquiti UniFi Network CEF audit log events (admin access, network events). The CEF extension is split by the engine's linear key=value parser; canonical fields are mapped from the resulting keys.",
   "priority": 200,
   "derivations": [
+    { "overwrite": true, "extract": { "message": { "from": "msg", "pattern": "(.+)" } } },
+    { "extract": { "service": { "from": "UNIFIcategory", "pattern": "(.+)" } } },
+    { "extract": { "user": { "from": "UNIFIadmin", "pattern": "(.+)" } } },
+    { "extract": { "method": { "from": "UNIFIaccessMethod", "pattern": "(.+)" } } },
+    { "extract": { "source_ip": { "from": "src", "pattern": "(.+)" } } },
     {
-      "set": {
-        "event": "network_access"
-      },
-      "when": {
-        "message": {
-          "contains": "accessed"
-        }
-      }
+      "set": { "event": "network_access" },
+      "when": { "message": { "contains": "accessed" } }
     },
     {
-      "set": {
-        "event": "login_failure"
-      },
-      "when": {
-        "message": {
-          "contains": "login failed"
-        }
-      }
+      "set": { "event": "login_failure" },
+      "when": { "message": { "contains": "login failed" } }
     },
     {
-      "set": {
-        "event": "login_success"
-      },
-      "when": {
-        "message": {
-          "contains": "logged in"
-        }
-      }
+      "set": { "event": "login_success" },
+      "when": { "message": { "contains": "logged in" } }
     },
     {
-      "set": {
-        "event": "logout"
-      },
-      "when": {
-        "message": {
-          "contains": "logged out"
-        }
-      }
+      "set": { "event": "logout" },
+      "when": { "message": { "contains": "logged out" } }
     }
   ],
   "event_type": "unifi_audit",

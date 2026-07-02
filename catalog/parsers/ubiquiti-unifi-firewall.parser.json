@@ -1,0 +1,86 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "ubiquiti-unifi-firewall",
+  "description": "Parses UniFi gateway (UCG/UDM/USG) iptables firewall log lines: rule name, optional DESCR, interfaces, source/dest IPs and ports, protocol. Covers port-forward DNAT, WAN_LOCAL default drops, and other kernel firewall rules.",
+  "parser_type": "regex",
+  "priority": 150,
+  "pattern": "^\\[(?<fw_rule>[^\\]]{1,64})\\]\\s*(?<fw_detail>(?:DESCR=\"[^\"]*\"\\s*)?IN=.*)$",
+  "field_mappings": {
+    "fw_rule": "rule_name",
+    "fw_detail": "fw_detail"
+  },
+  "derivations": [
+    { "extract": { "description": { "from": "fw_detail", "pattern": "\\bDESCR=\"([^\"]*)\"" } } },
+    { "extract": { "in_interface": { "from": "fw_detail", "pattern": "\\bIN=(\\S+)" } } },
+    { "extract": { "out_interface": { "from": "fw_detail", "pattern": "\\bOUT=(\\S+)" } } },
+    { "extract": { "source_ip": { "from": "fw_detail", "pattern": "\\bSRC=([0-9a-fA-F.:]+)" } } },
+    { "extract": { "dest_ip": { "from": "fw_detail", "pattern": "\\bDST=([0-9a-fA-F.:]+)" } } },
+    { "extract": { "source_port": { "from": "fw_detail", "pattern": "\\bSPT=(\\d+)" } } },
+    { "extract": { "dest_port": { "from": "fw_detail", "pattern": "\\bDPT=(\\d+)" } } },
+    { "extract": { "network_protocol": { "from": "fw_detail", "pattern": "\\bPROTO=(\\S+)" } } },
+    {
+      "set": { "action": "dnat", "event_outcome": "allowed", "event": "firewall_dnat" },
+      "when": { "rule_name": { "contains": "DNAT" } }
+    },
+    {
+      "set": { "event_outcome": "blocked", "event": "firewall_block" },
+      "when": { "rule_name": { "matches": "-(D|DROP)$" } }
+    },
+    {
+      "set": { "event_outcome": "blocked", "event": "firewall_reject" },
+      "when": { "rule_name": { "matches": "-(R|REJECT)$" } }
+    },
+    {
+      "set": { "event_outcome": "allowed", "event": "firewall_allow" },
+      "when": { "rule_name": { "matches": "-(A|ACCEPT)$" } }
+    },
+    { "set": { "event": "firewall_match" } }
+  ],
+  "event_type": "firewall_event",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "port-forward DNAT with DESCR (UCG-Max)",
+      "input": "[PREROUTING-DNAT-3] DESCR=\"PortForward DNAT [NPM HTTP/HTTPS]\" IN=eth4 OUT= MAC=28:70:4e:84:bc:d9:00:01:5c:a2:7e:46:08:00 SRC=5.61.209.92 DST=73.155.250.5 LEN=60 TOS=00 PREC=0x00 TTL=50 ID=39027 DF PROTO=TCP SPT=21522 DPT=80 SEQ=1496345143 ACK=0 WINDOW=64240 SYN URGP=0",
+      "expect": {
+        "rule_name": "PREROUTING-DNAT-3",
+        "description": "PortForward DNAT [NPM HTTP/HTTPS]",
+        "in_interface": "eth4",
+        "source_ip": "5.61.209.92",
+        "dest_ip": "73.155.250.5",
+        "source_port": "21522",
+        "dest_port": "80",
+        "network_protocol": "TCP",
+        "action": "dnat",
+        "event_outcome": "allowed",
+        "event": "firewall_dnat",
+        "event_type": "firewall_event",
+        "service": "unifi"
+      }
+    },
+    {
+      "description": "default-drop rule, no DESCR, no space after the rule bracket",
+      "input": "[WAN_LOCAL-default-D]IN=eth4 OUT= MAC=28:70:4e:84:bc:d9:00:01:5c:a2:7e:46:08:00 SRC=192.0.2.10 DST=73.155.250.5 LEN=40 TOS=00 PREC=0x00 TTL=245 ID=54321 PROTO=UDP SPT=53413 DPT=500 URGP=0",
+      "expect": {
+        "rule_name": "WAN_LOCAL-default-D",
+        "source_ip": "192.0.2.10",
+        "dest_ip": "73.155.250.5",
+        "dest_port": "500",
+        "network_protocol": "UDP",
+        "event_outcome": "blocked",
+        "event": "firewall_block"
+      }
+    },
+    {
+      "description": "tightness guard: a non-firewall bracketed line must NOT match",
+      "input": "[8:03:56 AM] [SUCCESS] [🖥️] SSH connection established [op:terminal_ssh_connected,user:abc,host:2,session:xyz]",
+      "expect": { "rule_name": null, "event": null }
+    }
+  ],
+  "metadata": {
+    "author": "cladkins",
+    "log_source": "UniFi gateway (UCG-Max/UDM/USG) kernel iptables firewall logging via remote syslog",
+    "tags": ["unifi", "ubiquiti", "firewall", "iptables", "network"],
+    "references": ["https://help.ui.com/hc/en-us/articles/204959834"]
+  }
+}

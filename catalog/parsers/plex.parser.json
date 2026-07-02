@@ -45,7 +45,7 @@
     {
       "when": {
         "request_uri": {
-          "matches": "/:/timeline\\b.*[?&]state=playing\\b"
+          "matches": "[?&]state=playing\\b"
         }
       },
       "set": {
@@ -70,12 +70,12 @@
       "extract": {
         "user": {
           "from": "message",
-          "pattern": "\\[Now\\]\\s+User is\\s+(.+?)\\s+\\(ID:\\s*(\\d+)\\)",
+          "pattern": "^\\[Now\\] User is ([^()]*[^()\\s]) \\(ID: (\\d+)\\)",
           "group": 1
         },
         "user_id": {
           "from": "message",
-          "pattern": "\\[Now\\]\\s+User is\\s+(.+?)\\s+\\(ID:\\s*(\\d+)\\)",
+          "pattern": "^\\[Now\\] User is ([^()]*[^()\\s]) \\(ID: (\\d+)\\)",
           "group": 2
         }
       }

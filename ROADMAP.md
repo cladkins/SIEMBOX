@@ -52,5 +52,5 @@ The two biggest adoption unlocks.
 ## Dependencies
 - **MFA** → Onboarding wizard (step 1).
 - **Phase 1 backups** → Hot/Cold archival (Phase 4).
-- **Content Packs** rely on catalog-repo content (`cladkins/siembox-catalog`).
+- **Content Packs** rely on catalog content (in-repo under `catalog/`).
 - **Sigma import** accelerates everything content-related.

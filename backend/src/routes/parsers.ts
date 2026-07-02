@@ -16,6 +16,7 @@ import {
   catalogNewFileUrl,
 } from '../services/parser/catalogService';
 import { generateParser } from '../services/ai/aiService';
+import { scanParserRedos } from '../services/parser/redos';
 import { authorize } from '../middleware/auth';
 import { ApiError } from '../middleware/errorHandler';
 
@@ -292,7 +293,13 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
     const portable = toPortableParser(parser);
     const validation = validatePortableParser(portable, { strict: true });
     const selfTest = validation.ok ? runSelfTests(portable) : null;
-    const ready = validation.ok && !!selfTest?.ok;
+    // ReDoS gate mirrors the catalog CI, so users see (and fix) a vulnerable
+    // pattern here instead of hitting a red CI on their PR. Graceful: if the
+    // analyzer isn't installed it reports nothing rather than blocking. Only a
+    // PROVEN-vulnerable regex blocks the contribute link; 'unknown' is surfaced
+    // but not blocking (matches the CLI gate).
+    const redos = validation.ok ? scanParserRedos(portable) : [];
+    const ready = validation.ok && !!selfTest?.ok && !redos.some((f) => f.status === 'vulnerable');
 
     const filePath = `${getCatalogSource().path}/${parser.name}.parser.json`;
     const content = JSON.stringify(portable, null, 2);
@@ -306,6 +313,7 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
       errors: validation.errors,
       warnings: validation.warnings,
       self_test: selfTest,
+      redos, // vulnerable/indeterminate regexes, if any (empty = clean)
       ready, // only offer the PR link when it would pass the catalog's CI
       contribute_url: ready ? catalogNewFileUrl(filePath, content) : null,
     });

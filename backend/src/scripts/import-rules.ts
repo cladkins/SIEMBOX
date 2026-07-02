@@ -144,8 +144,11 @@ async function importRule(filePath: string): Promise<boolean> {
 async function main() {
   logger.info('Starting rule import from YAML files...');
 
-  // Find rules directory (mounted at /app/rules in Docker container)
-  const rulesDir = path.join(__dirname, '../../rules');
+  // Legacy bundled-seed path (only reached when SEED_BUNDLED_CONTENT=true): the
+  // detection YAMLs now live under catalog/detections/. Not copied into the
+  // image by default — a stock install pulls detections from the catalog at
+  // runtime — so this stays a graceful skip unless the dir is mounted.
+  const rulesDir = process.env.SEED_RULES_DIR || path.join(__dirname, '../../catalog/detections');
 
   if (!fs.existsSync(rulesDir)) {
     logger.warn('Rules directory not found - skipping rule import', { rulesDir });

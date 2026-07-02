@@ -4,16 +4,16 @@ name: Validate Catalog
 permissions:
   contents: read
 
-# Gate for community catalog submissions. Parsers under catalog/ must pass strict
-# schema validation AND their own self-tests (run through the same
-# parse->derive->normalize pipeline the app uses); detection rules under rules/
-# must pass strict structural validation against the operators/shape the rules
-# engine supports. Anything that passes here imports into SIEMBox cleanly.
+# Gate for community catalog submissions. Parsers under catalog/parsers/ must
+# pass strict schema validation, their own self-tests (run through the same
+# parse->derive->normalize pipeline the app uses), AND a ReDoS scan; detection
+# rules under catalog/detections/ must pass strict structural validation against
+# the operators/shape the rules engine supports. Anything that passes here
+# imports into SIEMBox cleanly.
 on:
   pull_request:
     paths:
       - 'catalog/**'
-      - 'rules/**'
       - 'backend/src/services/parser/**'
       - 'backend/src/services/rules/**'
       - 'backend/src/scripts/validate-parsers.ts'
@@ -23,7 +23,6 @@ on:
     branches: [main, develop]
     paths:
       - 'catalog/**'
-      - 'rules/**'
       - 'backend/src/services/parser/**'
       - 'backend/src/services/rules/**'
       - '.github/workflows/validate-catalog.yml'
@@ -52,11 +51,11 @@ jobs:
         working-directory: backend
         run: npm run build
 
-      - name: Validate catalog parsers (strict + self-tests)
+      - name: Validate catalog parsers (strict + self-tests + ReDoS)
         working-directory: backend
         run: npm run validate-parsers -- ../catalog/parsers
 
       - name: Validate detection rules (strict)
         working-directory: backend
-        run: npm run validate-detections -- ../rules
+        run: npm run validate-detections -- ../catalog/detections
 

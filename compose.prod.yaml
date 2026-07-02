@@ -52,7 +52,8 @@ services:
       # AI builder (optional) — or paste the key in Settings -> AI Builder (encrypted at rest).
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      # Parser/detection catalog source (optional overrides; defaults to cladkins/siembox-parsers).
+      # Parser/detection catalog source (optional overrides; defaults to cladkins/SIEMBOX,
+      # content under catalog/parsers + catalog/detections).
       SIEMBOX_CATALOG_REPO: ${SIEMBOX_CATALOG_REPO:-}
       SIEMBOX_CATALOG_REF: ${SIEMBOX_CATALOG_REF:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}

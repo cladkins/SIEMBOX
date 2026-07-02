@@ -7,9 +7,9 @@
  *
  * Source is configurable so the catalog can move without a code change. The repo
  * and ref are shared with the detection catalog (services/rules/detectionCatalog):
- *   SIEMBOX_CATALOG_REPO  (or legacy PARSER_CATALOG_REPO)  default "cladkins/siembox-parsers"
+ *   SIEMBOX_CATALOG_REPO  (or legacy PARSER_CATALOG_REPO)  default "cladkins/SIEMBOX"
  *   SIEMBOX_CATALOG_REF   (or legacy PARSER_CATALOG_REF)   default "main"
- *   SIEMBOX_CATALOG_PARSERS_PATH (or legacy PARSER_CATALOG_PATH)  default "parsers"
+ *   SIEMBOX_CATALOG_PARSERS_PATH (or legacy PARSER_CATALOG_PATH)  default "catalog/parsers"
  *   SIEMBOX_CATALOG_TOKEN / GITHUB_TOKEN  optional, raises GitHub API rate limit
  */
 import * as https from 'https';
@@ -50,13 +50,15 @@ const trimSlashes = (s: string) => s.replace(/^\/+|\/+$/g, '');
 
 /**
  * Repo + ref shared by the parser and detection catalogs (new + legacy env names).
- * Defaults to siembox-parsers: GitHub redirects it to siembox-catalog after a
- * rename, so this works whether or not the repo has been renamed. Set
- * SIEMBOX_CATALOG_REPO=cladkins/siembox-catalog to point at the new name directly.
+ * Defaults to the main SIEMBOX repo (catalog content lives under catalog/ there),
+ * so a stock install browses/installs the bundled community catalog with no
+ * config. Point elsewhere with SIEMBOX_CATALOG_REPO (e.g. a private fork).
+ * The legacy siembox-catalog / siembox-parsers repo is archived; installs still
+ * pinned to it keep working until they clear the env override.
  */
 export function catalogRepoRef(): { repo: string; ref: string } {
   return {
-    repo: process.env.SIEMBOX_CATALOG_REPO || process.env.PARSER_CATALOG_REPO || 'cladkins/siembox-parsers',
+    repo: process.env.SIEMBOX_CATALOG_REPO || process.env.PARSER_CATALOG_REPO || 'cladkins/SIEMBOX',
     ref: process.env.SIEMBOX_CATALOG_REF || process.env.PARSER_CATALOG_REF || 'main',
   };
 }
@@ -66,7 +68,7 @@ export function getCatalogSource(): CatalogSource {
   return {
     repo,
     ref,
-    path: trimSlashes(process.env.SIEMBOX_CATALOG_PARSERS_PATH || process.env.PARSER_CATALOG_PATH || 'parsers'),
+    path: trimSlashes(process.env.SIEMBOX_CATALOG_PARSERS_PATH || process.env.PARSER_CATALOG_PATH || 'catalog/parsers'),
   };
 }
 

@@ -4,7 +4,7 @@
  * shared GitHub fetch machinery from the parser catalogService and the strict
  * rule validator, so a rule that passes CI installs and evaluates identically.
  *
- *   SIEMBOX_CATALOG_DETECTIONS_PATH  default "detections"
+ *   SIEMBOX_CATALOG_DETECTIONS_PATH  default "catalog/detections"
  * (repo/ref/token are shared with the parser catalog — see catalogService.)
  */
 import * as yaml from 'js-yaml';
@@ -25,7 +25,7 @@ export function getDetectionSource(): CatalogSource {
   return {
     repo,
     ref,
-    path: (process.env.SIEMBOX_CATALOG_DETECTIONS_PATH || 'detections').replace(/^\/+|\/+$/g, ''),
+    path: (process.env.SIEMBOX_CATALOG_DETECTIONS_PATH || 'catalog/detections').replace(/^\/+|\/+$/g, ''),
   };
 }
 

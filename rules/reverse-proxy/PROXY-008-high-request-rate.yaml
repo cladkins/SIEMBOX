@@ -8,6 +8,13 @@ enabled: true
 tags: [web, dos, attack, reverse-proxy, availability, rate-limiting]
 
 conditions:
+  # method gates this to actual HTTP access logs. client_ip alone is NOT
+  # evidence of a web request: the normalizer mirrors source_ip into client_ip
+  # on every parsed log, so an exists-check on it matches any log from any
+  # parser and turns this rule into a generic volume alarm.
+  - field: method
+    operator: exists
+    value: true
   - field: client_ip
     operator: exists
     value: true

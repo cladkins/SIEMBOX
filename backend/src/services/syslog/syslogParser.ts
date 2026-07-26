@@ -47,6 +47,10 @@ const PROGRAM_LIKE = /^[A-Za-z_][\w./-]*$/;
 function isPlausibleTag(candidate: string): boolean {
   if (candidate.length > 64) return false;
   if (candidate.includes('=') || candidate.includes('"')) return false;
+  // "CEF" before the first colon is the ArcSight CEF envelope ("CEF:0|vendor|…"),
+  // not a syslog TAG — splitting it off would leave "0|vendor|…" in the message
+  // and no CEF parser could ever match. Keep the whole line intact instead.
+  if (/^CEF$/i.test(candidate)) return false;
   return true;
 }
 

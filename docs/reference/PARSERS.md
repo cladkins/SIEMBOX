@@ -47,6 +47,20 @@ It extracts the **message portion only** and stores it in `raw_logs.raw_message`
 
 **Critical:** Parser patterns must NOT include the syslog wrapper (`<PRI>TIMESTAMP HOSTNAME TAG:`). They match only the extracted message content.
 
+**This is enforced by the self-test runner.** If a `test_samples` input looks
+like a full syslog line, validation also runs the parser against the
+header-stripped form of that input — the message production would actually
+store — and fails with a fix hint if it only matches the full line. Two ways
+to satisfy the check:
+
+- Make the header optional in the pattern
+  (`^(?:(?<timestamp>\w+\s+\d+\s+\d+:\d+:\d+)\s+(?<hostname>\S+)\s+tag:\s+)?...`),
+  which also covers lines the log shipper embeds whole (its file transport
+  wraps the original line — header intact — inside its own syslog envelope);
+- or set `"embedded_syslog": true` on the sample when the input genuinely only
+  ever reaches the parser as a full line via the shipper's file transport
+  (e.g. the `generic-syslog` parser).
+
 ### Step-by-Step Parser Creation
 
 #### 1. Analyze Your Log Format

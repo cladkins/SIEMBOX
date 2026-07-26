@@ -354,6 +354,30 @@ GET /api/logs/parsed/search?field=user&value=root&limit=10
 
 ---
 
+### GET /api/logs/parse-coverage
+
+How much of the last 24 hours of ingested logs was matched by a parser — i.e.
+how much of the stream is visible to detection. Detection rules are only
+evaluated on parser-matched logs; the unparsed fallback is stored but never
+runs detections, so a low `parsed_pct` means rules are starved of input.
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+{
+  "window": "24h",
+  "total": 1250000,
+  "parsed": 26000,
+  "unparsed": 1224000,
+  "parsed_pct": 2.1
+}
+```
+
+`parsed_pct` is `null` when no logs were ingested in the window.
+
+---
+
 ## Parsers Endpoints
 
 ### GET /api/parsers
@@ -393,6 +417,26 @@ Get all log parsers.
 - `regex` - Regular expression with capture groups
 - `grok` - Grok patterns (similar to Logstash)
 - `json` - JSON log parsing (auto-extracts all fields)
+
+---
+
+### GET /api/parsers/match-stats
+
+Per-parser production match counts over the last 24 hours, keyed by parser id,
+plus the count of logs that fell through to the unparsed fallback. A parser
+with zero matches is either unused or silently failing against the live log
+format even though its self-tests pass.
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+{
+  "window": "24h",
+  "by_parser": { "1": 50608, "7": 12044 },
+  "unparsed": 1224000
+}
+```
 
 ---
 

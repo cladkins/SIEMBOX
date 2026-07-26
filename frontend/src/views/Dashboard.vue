@@ -14,6 +14,24 @@
       </template>
     </el-alert>
 
+    <!-- Detection blind-spot warning: rules only run on parser-matched logs, so
+         a mostly-unparsed stream means detections are silently starved. -->
+    <el-alert
+      v-if="parseCoverage && parseCoverage.total > 0 && (parseCoverage.parsed_pct ?? 100) < 50"
+      type="warning"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 16px"
+    >
+      <template #title>
+        {{ (100 - (parseCoverage.parsed_pct ?? 0)).toFixed(1) }}% of your logs are invisible to detection —
+        parsers matched only {{ parseCoverage.parsed.toLocaleString() }} of
+        {{ parseCoverage.total.toLocaleString() }} logs in the last 24h. Detection rules are not evaluated on
+        unparsed logs.
+        <el-link type="primary" :underline="false" @click="$router.push('/parsers')">Review parsers</el-link>
+      </template>
+    </el-alert>
+
     <!-- Section: Alerts -->
     <div class="section-header">
       <h3>Security Alerts</h3>
@@ -138,6 +156,38 @@
       </el-col>
     </el-row>
 
+    <!-- Section: Detection pipeline health -->
+    <el-row :gutter="20" class="stats-row">
+      <el-col :xs="24" :sm="12" :md="6">
+        <el-card class="stat-card coverage">
+          <div class="stat-content">
+            <div class="stat-icon">
+              <el-icon :size="40"><View /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">
+                {{ parseCoverage?.parsed_pct != null ? parseCoverage.parsed_pct + '%' : '—' }}
+              </div>
+              <div class="stat-label">Detection Coverage (24h)</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :sm="12" :md="6">
+        <el-card class="stat-card coverage-unparsed">
+          <div class="stat-content">
+            <div class="stat-icon">
+              <el-icon :size="40"><Hide /></el-icon>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value">{{ (parseCoverage?.unparsed ?? 0).toLocaleString() }}</div>
+              <div class="stat-label">Unparsed Logs (24h)</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <!-- Charts Row -->
     <el-row :gutter="20" class="charts-row">
       <el-col :xs="24" :md="12">
@@ -233,7 +283,7 @@ import { useAlertsStore } from '@/stores/alerts';
 import { api } from '@/services/api';
 import { Chart, registerables } from 'chart.js';
 import { format } from 'date-fns';
-import { Bell, WarningFilled, Warning, Document, Monitor, CircleCheck, WarnTriangleFilled, DataBoard } from '@element-plus/icons-vue';
+import { Bell, WarningFilled, Warning, Document, Monitor, CircleCheck, WarnTriangleFilled, DataBoard, View, Hide } from '@element-plus/icons-vue';
 import AlertsCountryMap from '@/components/AlertsCountryMap.vue';
 
 Chart.register(...registerables);
@@ -254,6 +304,7 @@ function dismissGettingStarted() {
 
 const assetStats = ref<any>(null);
 const vulnStats = ref<any>(null);
+const parseCoverage = ref<any>(null);
 
 const severityChart = ref<HTMLCanvasElement>();
 const statusChart = ref<HTMLCanvasElement>();
@@ -289,6 +340,7 @@ const loadData = async () => {
       loadAssetStats(),
       loadVulnStats(),
       loadAlertsByCountry(),
+      loadParseCoverage(),
     ]);
   } catch (error) {
     console.error('Failed to load dashboard data:', error);
@@ -314,6 +366,16 @@ const loadAssetStats = async () => {
   } catch (error) {
     console.error('Failed to load asset statistics:', error);
     assetStats.value = { active_assets: 0, offline_assets: 0 };
+  }
+};
+
+const loadParseCoverage = async () => {
+  try {
+    const response = await api.getParseCoverage();
+    parseCoverage.value = response.data;
+  } catch (error) {
+    console.error('Failed to load parse coverage:', error);
+    parseCoverage.value = null;
   }
 };
 
@@ -505,6 +567,16 @@ const viewAlert = (alert: any) => {
 .stat-card.assets-online .stat-icon {
   background: rgba(103, 194, 58, 0.1);
   color: #67c23a;
+}
+
+.stat-card.coverage .stat-icon {
+  background: rgba(103, 194, 58, 0.1);
+  color: #67c23a;
+}
+
+.stat-card.coverage-unparsed .stat-icon {
+  background: rgba(230, 162, 60, 0.1);
+  color: #e6a23c;
 }
 
 .stat-card.vulns-total .stat-icon {

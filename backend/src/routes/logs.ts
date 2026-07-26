@@ -2,8 +2,38 @@ import { Router, Request, Response } from 'express';
 import { RawLogModel } from '../models/RawLog';
 import { ParsedLogModel } from '../models/ParsedLog';
 import { ApiError } from '../middleware/errorHandler';
+import { query } from '../config/database';
 
 const router = Router();
+
+// Parse coverage over the last 24h: how much of the log stream is visible to
+// detection. Rules are only evaluated on parser-matched logs — the unparsed
+// fallback is stored but NEVER runs detections — so a low parsed share means
+// rules are silently starved regardless of how correct they are. Surfacing this
+// is what turns "detections aren't working" from a mystery into a one-glance
+// diagnosis. Uses idx_parsed_logs_timestamp.
+router.get('/parse-coverage', async (_req: Request, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT COUNT(*)::bigint AS total,
+              COUNT(*) FILTER (WHERE parser_id IS NULL)::bigint AS unparsed
+       FROM parsed_logs
+       WHERE timestamp >= NOW() - INTERVAL '24 hours'`
+    );
+    const total = Number(result.rows[0]?.total || 0);
+    const unparsed = Number(result.rows[0]?.unparsed || 0);
+    const parsed = total - unparsed;
+    res.json({
+      window: '24h',
+      total,
+      parsed,
+      unparsed,
+      parsed_pct: total > 0 ? Math.round((parsed / total) * 1000) / 10 : null,
+    });
+  } catch (error) {
+    throw new ApiError(500, 'Failed to compute parse coverage');
+  }
+});
 
 // Get raw logs
 router.get('/raw', async (req: Request, res: Response) => {

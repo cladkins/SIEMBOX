@@ -4,7 +4,13 @@
   "title": "SIEMBox portable parser",
   "description": "A self-contained, declarative parser: match (pattern) + field_mappings (-> canonical) + derivations (data-driven post-processing) + test_samples (self-tests).",
   "type": "object",
-  "required": ["schema", "name", "parser_type", "pattern", "field_mappings"],
+  "required": [
+    "schema",
+    "name",
+    "parser_type",
+    "pattern",
+    "field_mappings"
+  ],
   "additionalProperties": false,
   "properties": {
     "schema": {
@@ -18,8 +24,16 @@
       "maxLength": 100,
       "description": "Unique kebab-case parser name (also the upsert key on import)."
     },
-    "description": { "type": "string" },
-    "parser_type": { "enum": ["regex", "grok", "json"] },
+    "description": {
+      "type": "string"
+    },
+    "parser_type": {
+      "enum": [
+        "regex",
+        "grok",
+        "json"
+      ]
+    },
     "priority": {
       "type": "integer",
       "minimum": 1,
@@ -32,7 +46,9 @@
     },
     "field_mappings": {
       "type": "object",
-      "additionalProperties": { "type": "string" },
+      "additionalProperties": {
+        "type": "string"
+      },
       "description": "regex: {captureGroup: canonicalField}. json: {jsonKey: canonicalField}. Map to canonical names where possible (source_ip, user, status_code, ...)."
     },
     "derivations": {
@@ -50,57 +66,127 @@
               "additionalProperties": false,
               "properties": {
                 "equals": {},
-                "contains": { "type": "string", "description": "case-insensitive substring" },
-                "in": { "type": "array" },
-                "matches": { "type": "string", "description": "regex, case-insensitive" },
-                "exists": { "type": "boolean" }
+                "contains": {
+                  "type": "string",
+                  "description": "case-insensitive substring"
+                },
+                "in": {
+                  "type": "array"
+                },
+                "matches": {
+                  "type": "string",
+                  "description": "regex, case-insensitive"
+                },
+                "exists": {
+                  "type": "boolean"
+                }
               }
             }
           },
           "set": {
             "type": "object",
             "description": "field -> literal value to set.",
-            "additionalProperties": { "type": ["string", "number", "boolean"] }
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
           },
           "extract": {
             "type": "object",
             "description": "field -> pull a regex capture group out of another field.",
             "additionalProperties": {
               "type": "object",
-              "required": ["from", "pattern"],
+              "required": [
+                "from",
+                "pattern"
+              ],
               "additionalProperties": false,
               "properties": {
-                "from": { "type": "string" },
-                "pattern": { "type": "string" },
-                "group": { "type": "integer", "minimum": 0 }
+                "from": {
+                  "type": "string"
+                },
+                "pattern": {
+                  "type": "string"
+                },
+                "group": {
+                  "type": "integer",
+                  "minimum": 0
+                }
               }
             }
           },
-          "overwrite": { "type": "boolean", "description": "Overwrite existing values (default false = only fill empty)." }
+          "overwrite": {
+            "type": "boolean",
+            "description": "Overwrite existing values (default false = only fill empty)."
+          }
         },
-        "anyOf": [{ "required": ["set"] }, { "required": ["extract"] }]
+        "anyOf": [
+          {
+            "required": [
+              "set"
+            ]
+          },
+          {
+            "required": [
+              "extract"
+            ]
+          }
+        ]
       }
     },
-    "event_type": { "type": ["string", "null"] },
-    "enabled": { "type": "boolean" },
+    "event_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "enabled": {
+      "type": "boolean"
+    },
     "test_samples": {
       "type": "array",
       "minItems": 1,
       "description": "Self-tests: each raw input must yield the expected canonical fields. Required for catalog submissions.",
       "items": {
         "type": "object",
-        "required": ["input", "expect"],
+        "required": [
+          "input",
+          "expect"
+        ],
         "additionalProperties": false,
         "properties": {
-          "input": { "type": "string", "minLength": 1, "description": "Raw log line (or JSON for json parsers)." },
+          "input": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Raw log line (or JSON for json parsers)."
+          },
           "expect": {
             "type": "object",
             "minProperties": 1,
             "description": "Canonical field -> expected value. Use null to assert a field is ABSENT.",
-            "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
           },
-          "packet_source_ip": { "type": "string", "description": "Optional syslog sender (actor-IP fallback) for this sample." },
-          "description": { "type": "string" }
+          "packet_source_ip": {
+            "type": "string",
+            "description": "Optional syslog sender (actor-IP fallback) for this sample."
+          },
+          "description": {
+            "type": "string"
+          },
+          "embedded_syslog": {
+            "type": "boolean",
+            "description": "Opt-out of the two-stage transport self-test check. Set true ONLY when this input is intentionally a full syslog line that survives to the parser because it arrives EMBEDDED inside another syslog envelope (the log shipper's file transport). Normal samples should be the header-stripped message SIEMBox stores at ingest."
+          }
         }
       }
     },
@@ -108,10 +194,24 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "author": { "type": "string" },
-        "references": { "type": "array", "items": { "type": "string" } },
-        "tags": { "type": "array", "items": { "type": "string" } },
-        "log_source": { "type": "string" }
+        "author": {
+          "type": "string"
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "log_source": {
+          "type": "string"
+        }
       }
     }
   }

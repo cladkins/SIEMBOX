@@ -9,6 +9,7 @@
  */
 import { runParser, ParserDef } from './runParser';
 import { validateDerivations } from './derive';
+import { parseSyslogMessage } from '../syslog/syslogParser';
 
 export const PARSER_SCHEMA_VERSION = 'siembox.parser/v1';
 const PARSER_TYPES = ['regex', 'grok', 'json'] as const;
@@ -23,6 +24,13 @@ export interface ParserTestSample {
   packet_source_ip?: string;
   /** Optional human note shown in failure output. */
   description?: string;
+  /**
+   * Opt-out of the two-stage transport check for this sample. Set true ONLY when
+   * the input is intentionally a full syslog line as production stores it — i.e.
+   * the line arrives EMBEDDED inside another syslog envelope (the log shipper's
+   * file transport), so the inner header genuinely survives to the parser.
+   */
+  embedded_syslog?: boolean;
 }
 
 export interface PortableParser {
@@ -153,6 +161,8 @@ export interface SampleFailure {
   description?: string;
   matched: boolean;
   mismatches: Array<{ field: string; expected: any; actual: any }>;
+  /** Set for two-stage transport failures (sample passes raw but not header-stripped). */
+  note?: string;
 }
 export interface SelfTestResult {
   ok: boolean;
@@ -199,6 +209,33 @@ export function runSelfTests(parser: PortableParser): SelfTestResult {
     const expectsPresence = Object.values(s.expect || {}).some((v) => v !== null);
     if (mismatches.length > 0 || (!matched && expectsPresence)) {
       failures.push({ index, description: s.description, matched, mismatches });
+      return;
+    }
+
+    // Two-stage transport check. Production stores the header-STRIPPED message
+    // (syslogParser removes "<PRI>TIMESTAMP HOSTNAME TAG:"), so a sample written
+    // as a full syslog line validates an input the engine will never see. If the
+    // parser matches the raw sample but not its stripped form, it is CI-green and
+    // production-dead for direct syslog transport — fail with a fix hint. Samples
+    // that only ever arrive embedded via the shipper's file transport (the inner
+    // header genuinely survives) can opt out with `embedded_syslog: true`.
+    const looksLikeSyslogLine =
+      /^<\d+>/.test(s.input) || /^\w{3}\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\S+\s+\S/.test(s.input);
+    if (matched && !s.embedded_syslog && looksLikeSyslogLine) {
+      const stripped = parseSyslogMessage(s.input);
+      if (stripped.message !== s.input && runParser(def, stripped.message, { packetSourceIp: s.packet_source_ip }) === null) {
+        failures.push({
+          index,
+          description: s.description,
+          matched: true,
+          mismatches: [],
+          note:
+            `input is a full syslog line, but at ingest SIEMBox stores only the header-stripped message ` +
+            `(${JSON.stringify(stripped.message.slice(0, 80))}) — which this parser does NOT match. ` +
+            `Make the header optional in the pattern (or use the stripped message as the sample input; ` +
+            `or set embedded_syslog: true if this line only ever arrives embedded via the shipper's file transport).`,
+        });
+      }
     }
   });
 

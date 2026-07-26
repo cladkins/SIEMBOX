@@ -130,3 +130,15 @@ test('regression: multi-word tags and shipper/pid suffixes still work', () => {
   assert.equal(d.processId, '1234');
   assert.equal(d.shipperId, 'a1b2c3d4');
 });
+
+test('CEF envelope is never split off as a syslog TAG', () => {
+  // A UniFi gateway IDS line: "CEF:" sits where a TAG would, and the first-colon
+  // split used to produce appName "CEF" with the message starting at "0|…",
+  // which no CEF parser could match. The whole envelope must survive intact.
+  const out = parseSyslogMessage(
+    '<4>Jun 24 15:22:05 UCG-Max CEF:0|Ubiquiti|UniFi Network|10.4.57|201|Threat Detected and Blocked|7|UNIFIcategory=Security src=203.0.113.5 dst=198.51.100.10 proto=TCP spt=55000 dpt=443 act=blocked'
+  );
+  assert.equal(out.hostname, 'UCG-Max');
+  assert.notEqual(out.appName, 'CEF');
+  assert.ok(out.message.startsWith('CEF:0|Ubiquiti|'));
+});

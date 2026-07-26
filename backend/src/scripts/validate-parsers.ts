@@ -52,6 +52,7 @@ function validateFile(file: string): { ok: boolean; lines: string[] } {
       for (const m of f.mismatches) {
         fl.push(`      ${m.field}: expected ${JSON.stringify(m.expected)}, got ${JSON.stringify(m.actual)}`);
       }
+      if (f.note) fl.push(`      two-stage transport: ${f.note}`);
     }
     return { ok: false, lines: fl };
   }

@@ -628,6 +628,45 @@ docker exec siembox-postgres psql -U siembox -d siembox -c \
 
 ### Issue: Rule Not Triggering Alerts
 
+**Check parse coverage FIRST.** Detection rules are only evaluated on logs
+that a parser matched — logs that fall through to the unparsed fallback are
+stored and searchable but **never run through the rules engine**. If most of
+your stream is unparsed, no amount of rule tuning will produce alerts. The
+Dashboard shows **Detection Coverage (24h)** (and warns below 50%), and the
+Parsers page shows per-parser **Matches (24h)**; or query directly:
+
+```bash
+curl http://localhost:8421/api/logs/parse-coverage \
+  -H "Authorization: Bearer $TOKEN"
+
+# Or in the database: share of logs invisible to detection
+docker exec siembox-postgres psql -U siembox -d siembox -c \
+  "SELECT (parser_id IS NULL) AS unparsed, COUNT(*)
+   FROM parsed_logs WHERE timestamp >= NOW() - INTERVAL '24 hours' GROUP BY 1;"
+```
+
+If coverage is low, fix parsing first: install parsers for your top sources
+(*Parsers → Browse Catalog*), and see [Parser Problems](#parser-problems) for
+why a parser that passes its self-tests can still miss your live logs.
+
+**Aggregation rules and clock skew.** Threshold rules (`aggregation:`) count
+matching logs inside a time window measured against the **server's** clock,
+but `parsed_logs.timestamp` comes from the sender. A device with a wrong
+timezone or clock puts its logs outside the window, so counts never reach the
+threshold and the rule stays silent even though its conditions match. Compare
+sender vs. ingest time per source:
+
+```bash
+docker exec siembox-postgres psql -U siembox -d siembox -c \
+  "SELECT COALESCE(p.name,'(fallback)') AS parser,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY pl.created_at - pl.timestamp) AS median_skew
+   FROM parsed_logs pl LEFT JOIN parsers p ON pl.parser_id = p.id
+   WHERE pl.created_at > NOW() - INTERVAL '24 hours' GROUP BY 1;"
+```
+
+Median skew should be near zero; minutes-to-hours means a sender clock or
+timezone problem.
+
 **Diagnosis:**
 ```bash
 # Check if rule is enabled

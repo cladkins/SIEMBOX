@@ -4,7 +4,7 @@
   "description": "Parses Pi-hole DNS query logs for network monitoring and ad blocking. The dnsmasq tag prefix is optional: SIEMBox strips it into the syslog TAG at ingest, so the stored message starts at 'query['.",
   "parser_type": "regex",
   "priority": 30,
-  "pattern": "(?:dnsmasq\\[\\d+\\]:\\s+)?query\\[(?<query_type>[^\\]]+)\\]\\s+(?<domain>\\S+)\\s+from\\s+(?<client_ip>[\\d.]+)",
+  "pattern": "query\\[(?<query_type>[^\\] ]{1,16})\\] (?<domain>\\S{1,255}) from (?<client_ip>[\\d.]{7,15})",
   "field_mappings": {
     "query_type": "query_type",
     "domain": "domain",

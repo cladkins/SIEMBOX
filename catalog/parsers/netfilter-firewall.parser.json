@@ -4,7 +4,7 @@
   "description": "Parses Linux netfilter (iptables/nftables) LOG lines from kernel syslog: UFW, UniFi gateways (UDM/USG firewall rules with [RULE] DESCR=\"...\" prefixes), and plain iptables logging. Anchors on the fixed 'IN= OUT= [MAC=] SRC= DST=' token sequence; ports, protocol, and rule tag are extracted by derivations.",
   "parser_type": "regex",
   "priority": 22,
-  "pattern": "\\bIN=(?<in_if>[^ ]*) OUT=(?<out_if>[^ ]*)(?: MAC=(?<mac>[^ ]*))? SRC=(?<src_ip>[0-9a-fA-F.:]+) DST=(?<dst_ip>[0-9a-fA-F.:]+)",
+  "pattern": "IN=(?<in_if>[^ =]{0,32}) OUT=(?<out_if>[^ =]{0,32})(?: MAC=(?<mac>[0-9a-fA-F:]{2,64}))? SRC=(?<src_ip>[0-9a-fA-F.:]{3,45}) DST=(?<dst_ip>[0-9a-fA-F.:]{3,45})",
   "field_mappings": {
     "in_if": "in_interface",
     "out_if": "out_interface",
@@ -15,24 +15,57 @@
   "derivations": [
     {
       "extract": {
-        "rule_tag": { "from": "message", "pattern": "^\\[([^\\]]{1,64})\\]" },
-        "descr": { "from": "message", "pattern": "\\bDESCR=\"([^\"]{1,120})\"" },
-        "protocol": { "from": "message", "pattern": "\\bPROTO=(\\w+)" },
-        "src_port": { "from": "message", "pattern": "\\bSPT=(\\d+)" },
-        "dst_port": { "from": "message", "pattern": "\\bDPT=(\\d+)" }
+        "rule_tag": {
+          "from": "message",
+          "pattern": "^\\[([^\\]]{1,64})\\]"
+        },
+        "descr": {
+          "from": "message",
+          "pattern": "\\bDESCR=\"([^\"]{1,120})\""
+        },
+        "protocol": {
+          "from": "message",
+          "pattern": "\\bPROTO=(\\w+)"
+        },
+        "src_port": {
+          "from": "message",
+          "pattern": "\\bSPT=(\\d+)"
+        },
+        "dst_port": {
+          "from": "message",
+          "pattern": "\\bDPT=(\\d+)"
+        }
       }
     },
     {
-      "when": { "rule_tag": { "matches": "block|drop|deny|-d-" } },
-      "set": { "action": "drop" }
+      "when": {
+        "rule_tag": {
+          "matches": "block|drop|deny|-d-"
+        }
+      },
+      "set": {
+        "action": "drop"
+      }
     },
     {
-      "when": { "rule_tag": { "matches": "reject|-r-" } },
-      "set": { "action": "reject" }
+      "when": {
+        "rule_tag": {
+          "matches": "reject|-r-"
+        }
+      },
+      "set": {
+        "action": "reject"
+      }
     },
     {
-      "when": { "rule_tag": { "matches": "accept|allow|-a-" } },
-      "set": { "action": "accept" }
+      "when": {
+        "rule_tag": {
+          "matches": "accept|allow|-a-"
+        }
+      },
+      "set": {
+        "action": "accept"
+      }
     }
   ],
   "event_type": "firewall_event",
@@ -75,7 +108,16 @@
   "metadata": {
     "author": "siembox",
     "log_source": "Linux kernel netfilter LOG target (UFW, UniFi UDM/USG, iptables/nftables) via syslog",
-    "tags": ["firewall", "netfilter", "iptables", "ufw", "unifi", "network"],
-    "references": ["https://www.netfilter.org/documentation/"]
+    "tags": [
+      "firewall",
+      "netfilter",
+      "iptables",
+      "ufw",
+      "unifi",
+      "network"
+    ],
+    "references": [
+      "https://www.netfilter.org/documentation/"
+    ]
   }
 }

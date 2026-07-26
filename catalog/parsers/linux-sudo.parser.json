@@ -4,7 +4,7 @@
   "description": "Parses sudo command execution logs. The syslog header is optional so both header-stripped messages and full embedded lines match.",
   "parser_type": "regex",
   "priority": 15,
-  "pattern": "^(?:(?<timestamp>\\w+\\s+\\d+\\s+\\d+:\\d+:\\d+)\\s+(?<hostname>\\S+)\\s+sudo:\\s+)?\\s*(?<user>\\S+)\\s+:\\s+TTY=(?<tty>\\S+)\\s+;\\s+PWD=(?<pwd>\\S+)\\s+;\\s+USER=(?<target_user>\\S+)\\s+;\\s+COMMAND=(?<command>.+)$",
+  "pattern": "^(?:(?<timestamp>\\w{3} {1,2}\\d{1,2} \\d{2}:\\d{2}:\\d{2}) (?<hostname>\\S{1,255}) sudo: +)?(?<user>[^ :]{1,64}) +: +TTY=(?<tty>\\S{1,64}) +; +PWD=(?<pwd>\\S{1,255}) +; +USER=(?<target_user>\\S{1,64}) +; +COMMAND=(?<command>.+)$",
   "field_mappings": {
     "timestamp": "timestamp",
     "hostname": "hostname",

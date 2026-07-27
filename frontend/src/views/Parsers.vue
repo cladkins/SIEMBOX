@@ -73,8 +73,8 @@
                 ({{ u.unparsed_high_sev_daily.toLocaleString() }} warn+)</template>
             </span>
             <code class="uncovered-example">{{ u.example }}</code>
-            <el-button size="small" text type="primary" @click="aiFromExample(u.example)">
-              Generate with AI
+            <el-button size="small" text type="primary" @click="aiFromSource(u)">
+              Generate with AI<template v-if="u.samples?.length > 1"> ({{ u.samples.length }} samples)</template>
             </el-button>
           </div>
         </div>
@@ -468,8 +468,9 @@
           <el-input
             v-model="aiSample"
             type="textarea"
-            :rows="4"
-            placeholder="e.g. Jan 1 12:00:00 host myapp: login failed from 203.0.113.5"
+            :rows="7"
+            placeholder="Paste several distinct log lines (one per line) — more variety yields a better parser.
+e.g. Jan 1 12:00:00 host myapp: login failed from 203.0.113.5"
           />
         </el-form-item>
         <el-form-item label="Hints (optional)">
@@ -1107,10 +1108,17 @@ async function installRecommended(row: any) {
   await loadRecommendations(true);
 }
 
-/** Open the AI builder pre-filled with an uncovered source's sample line. */
-function aiFromExample(example: string) {
+/** Open the AI builder seeded with an uncovered source's distinct sample lines
+ *  (full, not the truncated inline example) — more varied lines produce a
+ *  better generalized parser. */
+function aiFromSource(u: any) {
   openAiBuilder();
-  aiSample.value = example;
+  const lines: string[] = Array.isArray(u?.samples) && u.samples.length
+    ? u.samples
+    : u?.example
+    ? [u.example]
+    : [];
+  aiSample.value = lines.join('\n');
 }
 
 async function installAll() {

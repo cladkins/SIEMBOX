@@ -129,9 +129,11 @@ router.get('/recommendations', async (req: Request, res: Response) => {
       [HIGH_SEVERITY_MAX]
     );
 
-    // Recent messages per source, stratified so warning-or-worse lines are
-    // sampled first (a source's error format is what detections care about),
-    // recency breaking ties. One pass over a 6h window.
+    // Recent messages per source (up to 20), stratified so warning-or-worse
+    // lines are sampled first (a source's error format is what detections care
+    // about), recency breaking ties. One pass over a 6h window. 20 (vs the
+    // earlier 12) tightens candidate match rates and gives the AI-builder
+    // handoff enough raw lines to derive several structurally-distinct samples.
     const sampleRows = await query(
       `SELECT app_name, raw_message FROM (
          SELECT app_name, raw_message,
@@ -141,7 +143,7 @@ router.get('/recommendations', async (req: Request, res: Response) => {
                 ) AS rn
          FROM raw_logs
          WHERE created_at >= NOW() - INTERVAL '6 hours'
-       ) t WHERE rn <= 12`,
+       ) t WHERE rn <= 20`,
       [HIGH_SEVERITY_MAX]
     );
     const messagesByApp = new Map<string | null, string[]>();

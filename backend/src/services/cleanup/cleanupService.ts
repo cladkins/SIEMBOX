@@ -3,6 +3,13 @@ import { logger } from '../../utils/logger';
 import { ErrorLogService } from '../errors/errorLogService';
 import { batchedDelete } from '../../utils/batchDelete';
 
+/**
+ * Which purge currently holds the cleanup "lock" (module-level: the automated
+ * sweep and the manual job must never overlap — concurrent deleters steal each
+ * other's batches and double the I/O for the same work).
+ */
+let cleanupBusy: 'automatic' | 'manual' | null = null;
+
 export class CleanupService {
   private intervalId: NodeJS.Timeout | null = null;
   private readonly cleanupIntervalHours: number;
@@ -44,6 +51,15 @@ export class CleanupService {
    * Run the cleanup process
    */
   async runCleanup(): Promise<void> {
+    // Never run two purges concurrently. Overlapping deleters steal each
+    // other's selected batches; even with batchedDelete's empty-batch
+    // termination, concurrent purges just waste I/O doing the same work twice.
+    // The manual job takes priority — the auto sweep will catch up next cycle.
+    if (cleanupBusy) {
+      logger.info(`Skipping automated cleanup: a ${cleanupBusy} cleanup is already running`);
+      return;
+    }
+    cleanupBusy = 'automatic';
     try {
       logger.info('Starting automated log cleanup');
 
@@ -99,6 +115,8 @@ export class CleanupService {
     } catch (error) {
       logger.error('Error during automated cleanup:', error);
       ErrorLogService.logBackgroundError('cleanup', error);
+    } finally {
+      cleanupBusy = null;
     }
   }
 
@@ -190,11 +208,17 @@ export function getManualCleanupJob(): ManualCleanupJob | null {
 
 export function startManualCleanup(params: ManualCleanupParams): {
   started: boolean;
-  job: ManualCleanupJob;
+  job: ManualCleanupJob | null;
+  /** Set when refused because the AUTOMATED sweep is mid-run. */
+  busy?: 'automatic';
 } {
   if (manualJob && manualJob.status === 'running') {
     return { started: false, job: manualJob };
   }
+  if (cleanupBusy === 'automatic') {
+    return { started: false, job: null, busy: 'automatic' };
+  }
+  cleanupBusy = 'manual';
 
   const job: ManualCleanupJob = {
     status: 'running',
@@ -230,6 +254,16 @@ export function startManualCleanup(params: ManualCleanupParams): {
           { label: 'manual retention', onProgress: (n) => (job.results.alerts_deleted = n) }
         );
       }
+      // Refresh planner statistics so the Settings page's estimated totals
+      // reflect the purge immediately instead of waiting for autovacuum.
+      // Best-effort and cheap (page sampling, seconds even on large tables).
+      try {
+        await query('ANALYZE raw_logs');
+        await query('ANALYZE parsed_logs');
+        await query('ANALYZE alerts');
+      } catch (error) {
+        logger.warn('Post-cleanup ANALYZE failed (stats may lag until autovacuum):', { error });
+      }
       job.status = 'completed';
     } catch (error) {
       job.status = 'failed';
@@ -238,6 +272,7 @@ export function startManualCleanup(params: ManualCleanupParams): {
       ErrorLogService.logBackgroundError('manual-cleanup', error, { dedupeKey: 'manual-cleanup' });
     } finally {
       job.finished_at = new Date().toISOString();
+      cleanupBusy = null;
     }
   })();
 

@@ -620,7 +620,7 @@
         <el-card>
           <template #header>
             <div class="card-header">
-              <span>System Information <HelpTip text="Version and runtime details for this SIEMBox instance — useful when reporting issues or checking that a redeploy picked up a new release." /></span>
+              <span>System Information <HelpTip text="Version and runtime details for this SIEMBox instance. Table totals are fast planner estimates, refreshed automatically after a manual cleanup. Sizes show disk allocated, which stays at its high-water mark after purges — Postgres reuses the freed space internally rather than returning it to the OS." /></span>
               <el-button size="small" @click="fetchStatistics" :icon="Refresh" circle />
             </div>
           </template>
@@ -1225,10 +1225,14 @@ async function runManualCleanup() {
     await api.runManualCleanup(retentionForm);
     await pollCleanupJob();
   } catch (error: any) {
-    if (error?.response?.status === 409) {
-      // A job is already running (e.g. an earlier click) — attach to it.
+    if (error?.response?.status === 409 && error.response.data?.job) {
+      // A manual job is already running (e.g. an earlier click) — attach to it.
       ElMessage.info('A cleanup is already running — showing its progress.');
       await pollCleanupJob();
+    } else if (error?.response?.status === 409) {
+      // The AUTOMATED sweep holds the lock — no manual job to attach to.
+      ElMessage.info(error.response.data?.message || 'A cleanup is already running — try again shortly.');
+      cleaning.value = false;
     } else if (error !== 'cancel') {
       ElMessage.error('Failed to start cleanup');
       cleaning.value = false;

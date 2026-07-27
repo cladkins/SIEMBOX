@@ -54,7 +54,14 @@ export async function batchedDelete(
     const n = res.rowCount || 0;
     total += n;
     if (n > 0) opts.onProgress?.(total);
-    if (n < batchSize) break;
+    // Terminate only on an EMPTY batch. A short-but-nonempty batch does NOT
+    // mean the work is done: with a concurrent deleter (the boot-time auto
+    // cleanup overlapping a manual purge), rows this batch selected can be
+    // deleted out from under it, shrinking rowCount below batchSize while
+    // millions of qualifying rows remain — stopping there reported
+    // "completed" purges that had barely started. An empty batch is sound:
+    // nothing qualified at that moment.
+    if (n === 0) break;
     if (pauseMs > 0) await new Promise((resolve) => setTimeout(resolve, pauseMs));
   }
 

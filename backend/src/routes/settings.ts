@@ -174,9 +174,15 @@ router.post('/retention/cleanup', authorize('admin'), async (req: Request, res: 
       throw new ApiError(400, 'Provide at least one of raw_logs_days, parsed_logs_days, alerts_days');
     }
 
-    const { started, job } = startManualCleanup(params);
+    const { started, job, busy } = startManualCleanup(params);
     if (!started) {
-      res.status(409).json({ message: 'A cleanup is already running', job });
+      res.status(409).json({
+        message:
+          busy === 'automatic'
+            ? 'The automated retention sweep is currently running — try again when it finishes'
+            : 'A cleanup is already running',
+        job,
+      });
       return;
     }
     res.status(202).json({ message: 'Cleanup started', job });

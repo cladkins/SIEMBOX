@@ -1,0 +1,75 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "nginx-proxy-manager",
+  "description": "Parses Nginx Proxy Manager proxy-host access logs: '[time] cache_status upstream_status status - METHOD scheme host \"/uri\" [Client ip] [Length n] [Gzip x] [Sent-to upstream] \"user-agent\" \"referer\"'. This is NPM's default 'proxy' log_format for every proxied request.",
+  "parser_type": "regex",
+  "priority": 35,
+  "pattern": "^\\[(?<timestamp>\\d{1,2}/[A-Za-z]{3}/\\d{4}:\\d{2}:\\d{2}:\\d{2} [+-]\\d{4})\\] (?<cache_status>\\S+) (?<upstream_status>\\S+) (?<status>\\d{3}) - (?<method>[A-Z]+) (?<scheme>\\S+) (?<host>\\S+) \"(?<request_uri>[^\"]*)\" \\[Client (?<client_ip>[^\\]]+)\\] \\[Length (?<length>[^\\]]+)\\] \\[Gzip (?<gzip>[^\\]]+)\\] \\[Sent-to (?<sent_to>[^\\]]*)\\](?: \"(?<user_agent>[^\"]*)\")?(?: \"(?<referer>[^\"]*)\")?",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "cache_status": "cache_status",
+    "upstream_status": "upstream_status",
+    "status": "status",
+    "method": "method",
+    "scheme": "scheme",
+    "host": "host",
+    "request_uri": "request_uri",
+    "client_ip": "client_ip",
+    "length": "body_bytes_sent",
+    "gzip": "gzip_ratio",
+    "sent_to": "upstream_addr",
+    "user_agent": "user_agent",
+    "referer": "referer"
+  },
+  "derivations": [
+    {
+      "when": { "status": { "matches": "^(401|403)$" } },
+      "set": { "event": "access denied" }
+    },
+    {
+      "when": { "status": { "matches": "^5\\d\\d$" } },
+      "set": { "event": "server error" }
+    }
+  ],
+  "event_type": "http_request",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "Proxied request: canonical status_code, path, and source_ip are filled",
+      "input": "[26/Jul/2026:12:00:00 +0000] - 200 200 - GET https app.example.com \"/api/health\" [Client 203.0.113.5] [Length 512] [Gzip -] [Sent-to 192.168.1.20] \"Mozilla/5.0 (X11; Linux x86_64)\" \"-\"",
+      "expect": {
+        "status_code": "200",
+        "method": "GET",
+        "host": "app.example.com",
+        "path": "/api/health",
+        "source_ip": "203.0.113.5",
+        "user_agent": "Mozilla/5.0 (X11; Linux x86_64)"
+      }
+    },
+    {
+      "description": "403 from the proxy derives an access-denied event",
+      "input": "[26/Jul/2026:12:01:30 +0000] - 403 403 - POST https admin.example.com \"/login\" [Client 203.0.113.66] [Length 154] [Gzip -] [Sent-to 192.168.1.20] \"curl/8.5.0\" \"-\"",
+      "expect": {
+        "status_code": "403",
+        "path": "/login",
+        "source_ip": "203.0.113.66",
+        "event": "access denied"
+      }
+    },
+    {
+      "description": "Upstream failure derives a server-error event",
+      "input": "[26/Jul/2026:12:02:00 +0000] - 502 502 - GET https app.example.com \"/\" [Client 198.51.100.9] [Length 0] [Gzip -] [Sent-to 192.168.1.21] \"Mozilla/5.0\" \"https://app.example.com/\"",
+      "expect": {
+        "status_code": "502",
+        "event": "server error",
+        "referer": "https://app.example.com/"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Nginx Proxy Manager proxy-host access logs (data/logs/proxy-host-*_access.log or container stdout)",
+    "tags": ["nginx", "reverse-proxy", "nginx-proxy-manager", "http", "web"],
+    "references": ["https://nginxproxymanager.com/"]
+  }
+}

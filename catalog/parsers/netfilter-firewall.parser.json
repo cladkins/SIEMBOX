@@ -1,0 +1,123 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "netfilter-firewall",
+  "description": "Parses Linux netfilter (iptables/nftables) LOG lines from kernel syslog: UFW, UniFi gateways (UDM/USG firewall rules with [RULE] DESCR=\"...\" prefixes), and plain iptables logging. Anchors on the fixed 'IN= OUT= [MAC=] SRC= DST=' token sequence; ports, protocol, and rule tag are extracted by derivations.",
+  "parser_type": "regex",
+  "priority": 22,
+  "pattern": "IN=(?<in_if>[^ =]{0,32}) OUT=(?<out_if>[^ =]{0,32})(?: MAC=(?<mac>[0-9a-fA-F:]{2,64}))? SRC=(?<src_ip>[0-9a-fA-F.:]{3,45}) DST=(?<dst_ip>[0-9a-fA-F.:]{3,45})",
+  "field_mappings": {
+    "in_if": "in_interface",
+    "out_if": "out_interface",
+    "mac": "mac",
+    "src_ip": "src_ip",
+    "dst_ip": "dst_ip"
+  },
+  "derivations": [
+    {
+      "extract": {
+        "rule_tag": {
+          "from": "message",
+          "pattern": "^\\[([^\\]]{1,64})\\]"
+        },
+        "descr": {
+          "from": "message",
+          "pattern": "\\bDESCR=\"([^\"]{1,120})\""
+        },
+        "protocol": {
+          "from": "message",
+          "pattern": "\\bPROTO=(\\w+)"
+        },
+        "src_port": {
+          "from": "message",
+          "pattern": "\\bSPT=(\\d+)"
+        },
+        "dst_port": {
+          "from": "message",
+          "pattern": "\\bDPT=(\\d+)"
+        }
+      }
+    },
+    {
+      "when": {
+        "rule_tag": {
+          "matches": "block|drop|deny|-d-"
+        }
+      },
+      "set": {
+        "action": "drop"
+      }
+    },
+    {
+      "when": {
+        "rule_tag": {
+          "matches": "reject|-r-"
+        }
+      },
+      "set": {
+        "action": "reject"
+      }
+    },
+    {
+      "when": {
+        "rule_tag": {
+          "matches": "accept|allow|-a-"
+        }
+      },
+      "set": {
+        "action": "accept"
+      }
+    }
+  ],
+  "event_type": "firewall_event",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "UFW block: drop action, ports and protocol extracted",
+      "input": "[UFW BLOCK] IN=eth0 OUT= MAC=aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:08:00 SRC=203.0.113.50 DST=198.51.100.10 LEN=40 TOS=0x00 PREC=0x00 TTL=244 ID=54321 PROTO=TCP SPT=44455 DPT=23 WINDOW=1024 RES=0x00 SYN URGP=0",
+      "expect": {
+        "source_ip": "203.0.113.50",
+        "dest_ip": "198.51.100.10",
+        "dest_port": "23",
+        "protocol": "TCP",
+        "rule_tag": "UFW BLOCK",
+        "action": "drop"
+      }
+    },
+    {
+      "description": "UniFi gateway drop rule with DESCR, -D- classified as drop",
+      "input": "[FW-D-WAN_LOCAL-2001] DESCR=\"Drop invalid state\" IN=eth8 OUT= MAC=aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:08:00 SRC=203.0.113.77 DST=198.51.100.2 LEN=44 TTL=52 PROTO=TCP SPT=51234 DPT=443",
+      "expect": {
+        "source_ip": "203.0.113.77",
+        "dest_port": "443",
+        "rule_tag": "FW-D-WAN_LOCAL-2001",
+        "descr": "Drop invalid state",
+        "action": "drop"
+      }
+    },
+    {
+      "description": "UniFi gateway accept rule on internal traffic, -A- classified as accept",
+      "input": "[FW-A-LAN_LOCAL-2011] DESCR=\"Allow established\" IN=br0 OUT= MAC=aa:bb:cc:dd:ee:ff:aa:bb:cc:dd:ee:ff:08:00 SRC=192.168.1.10 DST=192.168.1.1 LEN=60 PROTO=UDP SPT=5353 DPT=5353",
+      "expect": {
+        "source_ip": "192.168.1.10",
+        "dest_ip": "192.168.1.1",
+        "protocol": "UDP",
+        "action": "accept"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "Linux kernel netfilter LOG target (UFW, UniFi UDM/USG, iptables/nftables) via syslog",
+    "tags": [
+      "firewall",
+      "netfilter",
+      "iptables",
+      "ufw",
+      "unifi",
+      "network"
+    ],
+    "references": [
+      "https://www.netfilter.org/documentation/"
+    ]
+  }
+}

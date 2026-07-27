@@ -1,0 +1,92 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "unifi-hostapd",
+  "description": "Parses hostapd WiFi station events (association, deauthentication, WPA handshake) as emitted by UniFi access points and plain Linux hostapd. Matches the header-stripped syslog message: 'IFACE: STA MAC MODULE: event'.",
+  "parser_type": "regex",
+  "priority": 20,
+  "pattern": "^(?<interface>[\\w.-]+): STA (?<sta_mac>[0-9a-fA-F:]{17}) (?<module>WPA|IEEE 802\\.11|RADIUS|MLME): (?<event>.+)$",
+  "field_mappings": {
+    "interface": "interface",
+    "sta_mac": "sta_mac",
+    "module": "module",
+    "event": "event"
+  },
+  "derivations": [
+    {
+      "when": { "event": { "contains": "deauthenticated" } },
+      "set": { "wifi_event": "deauthenticated" }
+    },
+    {
+      "when": { "event": { "contains": "disassociated" } },
+      "set": { "wifi_event": "disassociated" }
+    },
+    {
+      "when": { "event": { "contains": "associated" } },
+      "set": { "wifi_event": "associated" }
+    },
+    {
+      "when": { "event": { "contains": "invalid MIC" } },
+      "set": { "wifi_event": "handshake_failure", "auth_outcome": "failure" }
+    },
+    {
+      "when": { "event": { "contains": "handshake completed" } },
+      "set": { "wifi_event": "handshake_completed", "auth_outcome": "success" }
+    },
+    {
+      "when": { "event": { "contains": "authenticated" } },
+      "set": { "wifi_event": "authenticated" }
+    }
+  ],
+  "event_type": "wifi_event",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "WPA EAPOL frame exchange (high-volume handshake chatter)",
+      "input": "wifi0ap1: STA aa:bb:cc:dd:ee:01 WPA: received EAPOL-Key frame (2/4 Pairwise)",
+      "expect": {
+        "interface": "wifi0ap1",
+        "sta_mac": "aa:bb:cc:dd:ee:01",
+        "module": "WPA",
+        "event": "received EAPOL-Key frame (2/4 Pairwise)"
+      }
+    },
+    {
+      "description": "Station deauthentication is classified as wifi_event deauthenticated",
+      "input": "wifi1ap2: STA aa:bb:cc:dd:ee:02 IEEE 802.11: deauthenticated due to local deauth request",
+      "expect": {
+        "interface": "wifi1ap2",
+        "sta_mac": "aa:bb:cc:dd:ee:02",
+        "wifi_event": "deauthenticated"
+      }
+    },
+    {
+      "description": "Disassociation classifies before the broader 'associated' match",
+      "input": "wifi0ap5: STA aa:bb:cc:dd:ee:03 IEEE 802.11: disassociated",
+      "expect": {
+        "wifi_event": "disassociated"
+      }
+    },
+    {
+      "description": "Invalid MIC in the 4-way handshake marks an authentication failure (possible WPA cracking)",
+      "input": "wlan0: STA aa:bb:cc:dd:ee:04 WPA: invalid MIC in msg 2/4 of 4-Way Handshake",
+      "expect": {
+        "wifi_event": "handshake_failure",
+        "auth_outcome": "failure"
+      }
+    },
+    {
+      "description": "Completed pairwise handshake marks an authentication success",
+      "input": "wifi0ap1: STA aa:bb:cc:dd:ee:05 WPA: pairwise key handshake completed (RSN)",
+      "expect": {
+        "wifi_event": "handshake_completed",
+        "auth_outcome": "success"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "hostapd (UniFi access points, Linux hostapd) via syslog",
+    "tags": ["wifi", "unifi", "hostapd", "wireless", "network"],
+    "references": ["https://w1.fi/hostapd/"]
+  }
+}

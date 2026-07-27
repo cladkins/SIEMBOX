@@ -39,6 +39,18 @@
           </template>
         </el-table-column>
         <el-table-column prop="priority" label="Priority" width="100" sortable />
+        <el-table-column label="Matches (24h)" width="130" align="right">
+          <template #default="{ row }">
+            <el-tooltip
+              v-if="matchStats && !(matchStats.by_parser[String(row.id)] > 0)"
+              content="No logs matched this parser in the last 24h — it may not fit your live log format even if its self-tests pass."
+              placement="top"
+            >
+              <el-tag type="warning" size="small">0</el-tag>
+            </el-tooltip>
+            <span v-else>{{ (matchStats?.by_parser[String(row.id)] ?? 0).toLocaleString() }}</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="enabled" label="Status" width="120">
           <template #default="{ row }">
             <el-switch
@@ -470,6 +482,7 @@ import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
 import { Plus, Delete, Right, CircleCheck, Upload, Shop, Refresh, MagicStick, Download } from '@element-plus/icons-vue';
 
 const parsers = ref<any[]>([]);
+const matchStats = ref<{ window: string; by_parser: Record<string, number>; unparsed: number } | null>(null);
 const loading = ref(false);
 const updating = ref(false);
 const saving = ref(false);
@@ -612,6 +625,13 @@ async function fetchParsers() {
   try {
     const response = await api.getParsers();
     parsers.value = response.data;
+    // Best-effort: production match counts (last 24h), so a parser that is
+    // CI-green but never fires against the live stream is visible at a glance.
+    try {
+      matchStats.value = (await api.getParserMatchStats()).data;
+    } catch {
+      matchStats.value = null;
+    }
   } catch (error) {
     ElMessage.error('Failed to fetch parsers');
   } finally {

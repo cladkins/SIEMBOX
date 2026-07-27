@@ -18,6 +18,7 @@ import {
 import { generateParser } from '../services/ai/aiService';
 import { authorize } from '../middleware/auth';
 import { ApiError } from '../middleware/errorHandler';
+import { query } from '../config/database';
 
 const router = Router();
 
@@ -51,6 +52,31 @@ router.get('/', async (_req: Request, res: Response) => {
     res.json(parsers);
   } catch (error) {
     throw new ApiError(500, 'Failed to fetch parsers');
+  }
+});
+
+// Per-parser match counts over the last 24h, so the Parsers page can show which
+// parsers actually fire in production. A parser with zero matches is either
+// unnecessary or — worse — silently failing against the real log stream while
+// its self-tests pass (the CI-green/production-dead class). Uses
+// idx_parsed_logs_timestamp; parser_id NULL rows are the unparsed fallback.
+router.get('/match-stats', async (_req: Request, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT parser_id, COUNT(*)::bigint AS matches
+       FROM parsed_logs
+       WHERE timestamp >= NOW() - INTERVAL '24 hours'
+       GROUP BY parser_id`
+    );
+    const byParser: Record<string, number> = {};
+    let unparsed = 0;
+    for (const row of result.rows) {
+      if (row.parser_id === null) unparsed = Number(row.matches);
+      else byParser[String(row.parser_id)] = Number(row.matches);
+    }
+    res.json({ window: '24h', by_parser: byParser, unparsed });
+  } catch (error) {
+    throw new ApiError(500, 'Failed to compute parser match stats');
   }
 });
 

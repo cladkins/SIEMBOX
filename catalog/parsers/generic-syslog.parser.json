@@ -1,7 +1,7 @@
 {
   "schema": "siembox.parser/v1",
   "name": "generic-syslog",
-  "description": "Fallback parser for standard syslog format",
+  "description": "Fallback parser for standard syslog format. Matches FULL syslog lines, which in production only occur embedded inside the log shipper's file transport (direct syslog is header-stripped at ingest before parsers run).",
   "parser_type": "regex",
   "priority": 1000,
   "pattern": "^(?<timestamp>\\w+ +\\d+ +\\d+:\\d+:\\d+) (?<hostname>\\S+) (?<process>[^\\s\\[\\]:]+)(?:\\[(?<pid>\\d+)\\])?: (?<message>.+)$",
@@ -25,7 +25,8 @@
         "pid": "2222",
         "service": "CRON",
         "observer_ip": "10.0.0.1"
-      }
+      },
+      "embedded_syslog": true
     }
   ],
   "metadata": {

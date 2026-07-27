@@ -2,18 +2,35 @@
   "schema": "siembox.parser/v1",
   "name": "ubiquiti-unifi-cef-audit",
   "parser_type": "regex",
-  "pattern": "^(?<syslog_time>\\w+\\s+\\d+\\s+[\\d:]+)\\s+(?<syslog_host>\\S+)\\s+CEF:(?<cef_version>\\d+)\\|(?<vendor>[^|]+)\\|(?<product>[^|]+)\\|(?<product_version>[^|]+)\\|(?<signature_id>[^|]+)\\|(?<event_name>[^|]+)\\|(?<severity>[^|]+)\\|.*?UNIFIcategory=(?<unifi_category>\\S+)\\s+UNIFIhost=(?<unifi_host>.+?)\\s+UNIFIaccessMethod=(?<access_method>\\S+)\\s+UNIFIadmin=(?<unifi_admin>\\S+)\\s+src=(?<src_ip>\\S+)\\s+UNIFIutcTime=(?<utc_time>\\S+)\\s+msg=(?<msg>.+)$",
+  "pattern": "^(?:(?<syslog_time>\\w{3} {1,2}\\d{1,2} [\\d:]{7,8}) (?<syslog_host>\\S{1,64}) )?CEF:(?<cef_version>\\d{1,3})\\|(?<vendor>[^|]{0,64})\\|(?<product>[^|]{0,64})\\|(?<product_version>[^|]{0,64})\\|(?<signature_id>[^|]{0,64})\\|(?<event_name>[^|]{0,128})\\|(?<severity>[^|]{0,16})\\|(?<extension>UNIFIcategory=Audit .*)$",
   "field_mappings": {
-    "msg": "message",
-    "src_ip": "source_ip",
     "syslog_host": "host",
-    "unifi_admin": "user",
-    "access_method": "method",
-    "unifi_category": "service"
+    "extension": "extension"
   },
-  "description": "Parses Ubiquiti UniFi Network CEF audit log events (admin access, network events)",
+  "description": "Parses UniFi Network audit events shipped as CEF over syslog. The regex captures only the CEF envelope (linear, ReDoS-safe); the engine's CEF extension parser explodes the key=value pairs (handling unquoted spaces in values), and derivations map them to canonical fields. The syslog time/host prefix is optional so the header-stripped message SIEMBox stores also matches. Requires the extension to start with UNIFIcategory=Audit (the discriminator vs. the IDS/IPS parser).",
   "priority": 200,
   "derivations": [
+    {
+      "extract": {
+        "message": {
+          "from": "msg",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "user": {
+          "from": "UNIFIadmin",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "method": {
+          "from": "UNIFIaccessMethod",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "service": {
+          "from": "UNIFIcategory",
+          "pattern": "^([\\s\\S]+)$"
+        }
+      },
+      "overwrite": true
+    },
     {
       "set": {
         "event": "network_access"
@@ -62,6 +79,18 @@
       "input": "Jun 24 14:45:44 UCG-Max CEF:0|Ubiquiti|UniFi Network|10.4.57|544|Network Accessed|4|UNIFIcategory=Audit UNIFIhost=UCG Max UNIFIaccessMethod=web UNIFIadmin=cladkins src=192.168.1.130 UNIFIutcTime=2026-06-24T19:45:44.918Z msg=cladkins accessed UniFi Network using the web. Source IP: 192.168.1.130",
       "expect": {
         "host": "UCG-Max",
+        "user": "cladkins",
+        "event": "network_access",
+        "method": "web",
+        "message": "cladkins accessed UniFi Network using the web. Source IP: 192.168.1.130",
+        "service": "Audit",
+        "source_ip": "192.168.1.130"
+      }
+    },
+    {
+      "description": "Header-stripped CEF line (after ingest tag guard) still matches",
+      "input": "CEF:0|Ubiquiti|UniFi Network|10.4.57|544|Network Accessed|4|UNIFIcategory=Audit UNIFIhost=UCG Max UNIFIaccessMethod=web UNIFIadmin=cladkins src=192.168.1.130 UNIFIutcTime=2026-06-24T19:45:44.918Z msg=cladkins accessed UniFi Network using the web. Source IP: 192.168.1.130",
+      "expect": {
         "user": "cladkins",
         "event": "network_access",
         "method": "web",

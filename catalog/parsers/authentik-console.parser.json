@@ -1,0 +1,69 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "authentik-console",
+  "description": "Parses authentik's default console (structlog ConsoleRenderer) output: 'YYYY-MM-DD HH:MM:SS [level    ] event key=value ...'. Complements authentik-audit, which requires authentik to be switched to JSON logging; this parser covers the out-of-the-box format.",
+  "parser_type": "regex",
+  "priority": 40,
+  "pattern": "^(?<timestamp>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?) \\[(?<log_level>\\w+)\\s*\\] (?<message>.+)$",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "log_level": "log_level",
+    "message": "message"
+  },
+  "derivations": [
+    {
+      "extract": {
+        "user": { "from": "message", "pattern": "\\busername=['\"]?([\\w@.+-]+)" },
+        "client_ip": { "from": "message", "pattern": "(?:^| )ip=['\"]?([0-9a-fA-F.:]+)" }
+      }
+    },
+    {
+      "when": { "message": { "contains": "login_failed" } },
+      "set": { "event": "authentication failed", "auth_outcome": "failure" }
+    },
+    {
+      "when": { "message": { "contains": "invalid_password" } },
+      "set": { "event": "authentication failed", "auth_outcome": "failure" }
+    },
+    {
+      "when": { "message": { "contains": "password_set" } },
+      "set": { "event": "password changed" }
+    }
+  ],
+  "event_type": "authentik_event",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "Plain operational line parses with level and message",
+      "input": "2026-06-25 19:08:22 [info     ] applying django migrations",
+      "expect": {
+        "log_level": "info",
+        "message": "applying django migrations",
+        "service": "authentik"
+      }
+    },
+    {
+      "description": "Failed login derives auth failure with user and source IP extracted",
+      "input": "2026-07-01 10:00:00 [warning  ] login_failed  username=admin ip=203.0.113.9 stage=identification",
+      "expect": {
+        "event": "authentication failed",
+        "auth_outcome": "failure",
+        "user": "admin",
+        "source_ip": "203.0.113.9"
+      }
+    },
+    {
+      "description": "Millisecond timestamps also parse",
+      "input": "2026-07-01 10:05:12.483 [error    ] Task failed  task_id=a1b2c3",
+      "expect": {
+        "log_level": "error"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "authentik server/worker container stdout (default console logging)",
+    "tags": ["authentik", "sso", "authentication", "identity"],
+    "references": ["https://docs.goauthentik.io/"]
+  }
+}

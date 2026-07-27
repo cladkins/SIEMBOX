@@ -102,9 +102,11 @@ export const api = {
   // Logs
   getRawLogs: (params?: any) => apiClient.get('/logs/raw', { params }),
   getParsedLogs: (params?: any) => apiClient.get('/logs/parsed', { params }),
+  getParseCoverage: () => apiClient.get('/logs/parse-coverage'),
 
   // Parsers
   getParsers: () => apiClient.get('/parsers'),
+  getParserMatchStats: () => apiClient.get('/parsers/match-stats'),
   getParser: (id: number) => apiClient.get(`/parsers/${id}`),
   createParser: (data: any) => apiClient.post('/parsers', data),
   updateParser: (id: number, data: any) => apiClient.put(`/parsers/${id}`, data),

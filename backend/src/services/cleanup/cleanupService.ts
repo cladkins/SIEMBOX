@@ -150,3 +150,96 @@ export class CleanupService {
     return result.rows[0];
   }
 }
+
+// ---------------------------------------------------------------------------
+// Manual cleanup as a tracked background job.
+//
+// A manual purge of a multi-million-row table takes minutes to hours even
+// batched, far past any sane HTTP timeout — the old synchronous handler kept
+// deleting after the client aborted at 10s while the UI reported failure, and
+// a retry click stacked a SECOND concurrent purge. The route now starts the
+// job and returns immediately; the UI polls getManualCleanupJob() for live
+// per-table progress. One job at a time.
+// ---------------------------------------------------------------------------
+
+export interface ManualCleanupParams {
+  raw_logs_days?: number;
+  parsed_logs_days?: number;
+  alerts_days?: number;
+}
+
+export interface ManualCleanupJob {
+  status: 'running' | 'completed' | 'failed';
+  started_at: string;
+  finished_at?: string;
+  params: ManualCleanupParams;
+  /** Live cumulative counts, updated after every delete batch. */
+  results: {
+    raw_logs_deleted: number;
+    parsed_logs_deleted: number;
+    alerts_deleted: number;
+  };
+  error?: string;
+}
+
+let manualJob: ManualCleanupJob | null = null;
+
+export function getManualCleanupJob(): ManualCleanupJob | null {
+  return manualJob;
+}
+
+export function startManualCleanup(params: ManualCleanupParams): {
+  started: boolean;
+  job: ManualCleanupJob;
+} {
+  if (manualJob && manualJob.status === 'running') {
+    return { started: false, job: manualJob };
+  }
+
+  const job: ManualCleanupJob = {
+    status: 'running',
+    started_at: new Date().toISOString(),
+    params,
+    results: { raw_logs_deleted: 0, parsed_logs_deleted: 0, alerts_deleted: 0 },
+  };
+  manualJob = job;
+
+  void (async () => {
+    try {
+      if (params.raw_logs_days) {
+        job.results.raw_logs_deleted = await batchedDelete(
+          'raw_logs',
+          "timestamp < NOW() - INTERVAL '1 day' * $1",
+          [params.raw_logs_days],
+          { label: 'manual retention', onProgress: (n) => (job.results.raw_logs_deleted = n) }
+        );
+      }
+      if (params.parsed_logs_days) {
+        job.results.parsed_logs_deleted = await batchedDelete(
+          'parsed_logs',
+          "timestamp < NOW() - INTERVAL '1 day' * $1",
+          [params.parsed_logs_days],
+          { label: 'manual retention', onProgress: (n) => (job.results.parsed_logs_deleted = n) }
+        );
+      }
+      if (params.alerts_days) {
+        job.results.alerts_deleted = await batchedDelete(
+          'alerts',
+          "created_at < NOW() - INTERVAL '1 day' * $1",
+          [params.alerts_days],
+          { label: 'manual retention', onProgress: (n) => (job.results.alerts_deleted = n) }
+        );
+      }
+      job.status = 'completed';
+    } catch (error) {
+      job.status = 'failed';
+      job.error = error instanceof Error ? error.message : String(error);
+      logger.error('Manual cleanup failed:', { error });
+      ErrorLogService.logBackgroundError('manual-cleanup', error, { dedupeKey: 'manual-cleanup' });
+    } finally {
+      job.finished_at = new Date().toISOString();
+    }
+  })();
+
+  return { started: true, job };
+}

@@ -14,17 +14,23 @@ const router = Router();
 // diagnosis. Uses idx_parsed_logs_timestamp.
 router.get('/parse-coverage', async (_req: Request, res: Response) => {
   try {
+    // Reads the incrementally-maintained hourly counters (see migration 024 and
+    // ParserEngine.bumpMatchCount) — O(rows-per-day), never a parsed_logs scan.
+    // After an upgrade the counters start empty and the 24h window fills over
+    // the following day; `since` marks where the data actually begins.
     const result = await query(
-      `SELECT COUNT(*)::bigint AS total,
-              COUNT(*) FILTER (WHERE parser_id IS NULL)::bigint AS unparsed
-       FROM parsed_logs
-       WHERE timestamp >= NOW() - INTERVAL '24 hours'`
+      `SELECT COALESCE(SUM(matches), 0)::bigint AS total,
+              COALESCE(SUM(matches) FILTER (WHERE parser_id = 0), 0)::bigint AS unparsed,
+              MIN(hour) AS since
+       FROM parser_match_hourly
+       WHERE hour >= NOW() - INTERVAL '24 hours'`
     );
     const total = Number(result.rows[0]?.total || 0);
     const unparsed = Number(result.rows[0]?.unparsed || 0);
     const parsed = total - unparsed;
     res.json({
       window: '24h',
+      since: result.rows[0]?.since ?? null,
       total,
       parsed,
       unparsed,

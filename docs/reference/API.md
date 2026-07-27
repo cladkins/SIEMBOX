@@ -367,6 +367,7 @@ runs detections, so a low `parsed_pct` means rules are starved of input.
 ```json
 {
   "window": "24h",
+  "since": "2026-07-27T00:00:00.000Z",
   "total": 1250000,
   "parsed": 26000,
   "unparsed": 1224000,
@@ -374,7 +375,10 @@ runs detections, so a low `parsed_pct` means rules are starved of input.
 }
 ```
 
-`parsed_pct` is `null` when no logs were ingested in the window.
+`parsed_pct` is `null` when no logs were ingested in the window. Counts come
+from incrementally-maintained hourly counters (`parser_match_hourly`), not a
+`parsed_logs` scan; after an upgrade the 24h window fills over the first day,
+and `since` marks where counter data begins.
 
 ---
 
@@ -433,10 +437,14 @@ format even though its self-tests pass.
 ```json
 {
   "window": "24h",
+  "since": "2026-07-27T00:00:00.000Z",
   "by_parser": { "1": 50608, "7": 12044 },
   "unparsed": 1224000
 }
 ```
+
+Counts come from the same hourly counters as parse-coverage (see above), so
+this endpoint is O(1)-ish regardless of log volume.
 
 ---
 

@@ -7,11 +7,22 @@ import { ErrorLogService } from '../errors/errorLogService';
 import { geoipService } from '../geoip/geoipService';
 import { runParser } from './runParser';
 import { normalizeParsedData } from '../normalize/fieldNormalizer';
+import { query } from '../../config/database';
+
+/** Flush accumulated match counts at most this often (or when the map grows). */
+const MATCH_COUNT_FLUSH_MS = 5000;
+const MATCH_COUNT_FLUSH_KEYS = 64;
+/** Prune parser_match_hourly rows older than 8 days, roughly every 6 hours. */
+const MATCH_COUNT_PRUNE_MS = 6 * 60 * 60 * 1000;
 
 export class ParserEngine {
   private static instance: ParserEngine | null = null;
   private parsers: Parser[] = [];
   private rulesEngine: RulesEngine;
+  /** "<hourISO>|<parserId>" -> count, flushed in batches to parser_match_hourly. */
+  private pendingMatchCounts = new Map<string, number>();
+  private lastMatchCountFlush = Date.now();
+  private lastMatchCountPrune = 0;
 
   constructor() {
     this.rulesEngine = RulesEngine.getInstance();
@@ -105,6 +116,7 @@ export class ParserEngine {
           // Run detection rules against parsed log
           await this.rulesEngine.evaluateLog(parsedLog);
 
+          this.bumpMatchCount(parser.id);
           parsed = true;
           break; // Stop after first successful parse
         }
@@ -136,6 +148,8 @@ export class ParserEngine {
           source_ip: rawLog.source_ip,
           event_type: 'unparsed',
         });
+
+        this.bumpMatchCount(null);
       }
     } catch (error) {
       logger.error('Error processing log:', { error, rawLogId: rawLog.id });
@@ -147,5 +161,67 @@ export class ParserEngine {
     // canonical fields a detection rule would actually see.
     const result = runParser(parser, sample);
     return result ? result.fields : null;
+  }
+
+  /**
+   * Count a match (parserId) or fallback (null) into the in-memory hourly
+   * accumulator, flushing in batches so stats reads never have to aggregate
+   * parsed_logs. Buckets use server ingest time — sender clock skew cannot
+   * distort the counters. Flushing is inline (no timers): a quiet stream just
+   * delays the last few counts until the next log arrives, which is fine for
+   * 24h-scale statistics.
+   */
+  private bumpMatchCount(parserId: number | null): void {
+    const hour = new Date();
+    hour.setMinutes(0, 0, 0);
+    const key = `${hour.toISOString()}|${parserId ?? 0}`;
+    this.pendingMatchCounts.set(key, (this.pendingMatchCounts.get(key) || 0) + 1);
+
+    if (
+      Date.now() - this.lastMatchCountFlush >= MATCH_COUNT_FLUSH_MS ||
+      this.pendingMatchCounts.size >= MATCH_COUNT_FLUSH_KEYS
+    ) {
+      void this.flushMatchCounts();
+    }
+  }
+
+  private async flushMatchCounts(): Promise<void> {
+    if (this.pendingMatchCounts.size === 0) return;
+    const batch = this.pendingMatchCounts;
+    this.pendingMatchCounts = new Map();
+    this.lastMatchCountFlush = Date.now();
+
+    const values: string[] = [];
+    const params: any[] = [];
+    let i = 1;
+    for (const [key, count] of batch) {
+      const [hourIso, parserId] = key.split('|');
+      values.push(`($${i}, $${i + 1}, $${i + 2})`);
+      params.push(new Date(hourIso), parseInt(parserId, 10), count);
+      i += 3;
+    }
+
+    try {
+      await query(
+        `INSERT INTO parser_match_hourly (hour, parser_id, matches)
+         VALUES ${values.join(', ')}
+         ON CONFLICT (hour, parser_id)
+         DO UPDATE SET matches = parser_match_hourly.matches + EXCLUDED.matches`,
+        params
+      );
+    } catch (error) {
+      // Dropped counts skew stats slightly; merging back on failure could grow
+      // unbounded during a DB outage, so log and move on.
+      logger.error('Failed to flush parser match counts:', { error });
+    }
+
+    if (Date.now() - this.lastMatchCountPrune >= MATCH_COUNT_PRUNE_MS) {
+      this.lastMatchCountPrune = Date.now();
+      try {
+        await query(`DELETE FROM parser_match_hourly WHERE hour < NOW() - INTERVAL '8 days'`);
+      } catch (error) {
+        logger.error('Failed to prune parser match counts:', { error });
+      }
+    }
   }
 }

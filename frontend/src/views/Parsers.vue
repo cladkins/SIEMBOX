@@ -701,8 +701,11 @@ const rules: FormRules = {
   priority: [{ required: true, message: 'Priority is required', trigger: 'blur' }],
 };
 
-onMounted(() => {
-  fetchParsers();
+onMounted(async () => {
+  // Sequential on purpose: the parser list + match counters are instant reads,
+  // while recommendations run sampling queries — don't make them compete for
+  // the database on page load.
+  await fetchParsers();
   loadRecommendations();
 });
 

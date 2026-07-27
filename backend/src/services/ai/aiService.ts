@@ -215,7 +215,22 @@ export async function saveChatAiConfig(input: {
 // ---- LLM call (provider-specific) -------------------------------------------
 
 /** A single chat completion: system + user -> text. Injectable for tests. */
-export type Completer = (cfg: AiConfig, system: string, user: string) => Promise<string>;
+export type Completer = (
+  cfg: AiConfig,
+  system: string,
+  user: string,
+  opts?: { json?: boolean; maxTokens?: number }
+) => Promise<string>;
+
+/**
+ * Output-token budget for parser/detection generation. The 2000 default was too
+ * low once we started seeding the builder with several sample lines: the model
+ * emits one test_sample per distinct event, and dense content (UniFi/hex logs
+ * tokenize heavily) overflowed 2000 tokens, truncating the JSON mid-array
+ * ("Expected ',' or ']' after array element"). Generation is user-initiated and
+ * infrequent, so a generous cap costs nothing until the output is actually big.
+ */
+const GENERATION_MAX_TOKENS = 8000;
 
 /** A message in a multi-turn conversation. */
 export type ChatMsg = { role: 'system' | 'user' | 'assistant'; content: string };
@@ -327,7 +342,7 @@ async function callProvider(
   cfg: AiConfig,
   system: string,
   user: string,
-  opts: { json?: boolean } = {}
+  opts: { json?: boolean; maxTokens?: number } = {}
 ): Promise<string> {
   return callProviderChat(
     cfg,
@@ -389,7 +404,23 @@ export function extractJson(text: string): any {
   // trim trailing prose after the last closing brace
   const end = s.lastIndexOf('}');
   if (end >= 0) s = s.slice(0, end + 1);
-  return JSON.parse(s);
+  try {
+    return JSON.parse(s);
+  } catch (e) {
+    // A response cut off at the token limit leaves more open braces/brackets
+    // than closes. Surface that as an actionable message instead of a cryptic
+    // "Expected ',' or ']' at position N".
+    const opens = (s.match(/[{[]/g) || []).length;
+    const closes = (s.match(/[}\]]/g) || []).length;
+    if (opens > closes) {
+      throw new Error(
+        'The AI response was cut off before it finished (the JSON is incomplete). ' +
+          'This usually means the output hit the model token limit — try fewer or shorter ' +
+          'sample lines, or a hint that narrows the parser, then regenerate.'
+      );
+    }
+    throw e;
+  }
 }
 
 export interface GenerateResult {
@@ -419,7 +450,9 @@ export async function generateParser(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let parser: PortableParser;
     try {
-      const text = await complete(cfg, SYSTEM_PROMPT, buildUserPrompt(input.sample, input.hints, prev));
+      const text = await complete(cfg, SYSTEM_PROMPT, buildUserPrompt(input.sample, input.hints, prev), {
+        maxTokens: GENERATION_MAX_TOKENS,
+      });
       parser = extractJson(text);
     } catch (e) {
       return { ...last, attempts: attempt, error: e instanceof Error ? e.message : String(e) };
@@ -520,7 +553,8 @@ export async function generateDetection(
       const text = await complete(
         cfg,
         DETECTION_SYSTEM_PROMPT,
-        buildDetectionUserPrompt(input.description, input.context, prev)
+        buildDetectionUserPrompt(input.description, input.context, prev),
+        { maxTokens: GENERATION_MAX_TOKENS }
       );
       rule = extractJson(text);
     } catch (e) {

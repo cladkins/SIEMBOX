@@ -620,7 +620,7 @@
         <el-card>
           <template #header>
             <div class="card-header">
-              <span>System Information <HelpTip text="Version and runtime details for this SIEMBox instance. Table totals are fast planner estimates, refreshed automatically after a manual cleanup. Sizes show disk allocated, which stays at its high-water mark after purges — Postgres reuses the freed space internally rather than returning it to the OS." /></span>
+              <span>System Information <HelpTip text="Version and runtime details for this SIEMBox instance. Raw/Parsed row totals are live-row estimates (marked ~) — exact counts would scan millions of rows; Alerts is exact. Sizes are actual disk usage, which stays at its high-water mark after deletions: Postgres reuses freed space for new logs but only returns it to the OS on VACUUM FULL, so a table can show large after a purge (flagged as % reclaimable)." /></span>
               <el-button size="small" @click="fetchStatistics" :icon="Refresh" circle />
             </div>
           </template>
@@ -665,15 +665,29 @@
               <!-- Database Statistics Section -->
               <template v-if="statistics">
                 <el-descriptions-item label="Raw Logs">
-                  <strong>{{ formatNumber(statistics.total_raw_logs) }}</strong>
+                  <strong>{{ statistics.counts_are_estimated ? '~' : '' }}{{ formatNumber(statistics.total_raw_logs) }}</strong>
                   <br />
                   <el-text size="small" type="info">{{ statistics.raw_logs_size }}</el-text>
+                  <el-tooltip
+                    v-if="statistics.raw_logs_bloat_pct >= 20"
+                    content="Most of this table's disk space is deleted rows not yet compacted. Postgres reuses it for new logs but won't shrink the file without VACUUM FULL."
+                    placement="top"
+                  >
+                    <el-tag type="info" size="small" style="margin-left: 6px">~{{ statistics.raw_logs_bloat_pct }}% reclaimable</el-tag>
+                  </el-tooltip>
                 </el-descriptions-item>
 
                 <el-descriptions-item label="Parsed Logs">
-                  <strong>{{ formatNumber(statistics.total_parsed_logs) }}</strong>
+                  <strong>{{ statistics.counts_are_estimated ? '~' : '' }}{{ formatNumber(statistics.total_parsed_logs) }}</strong>
                   <br />
                   <el-text size="small" type="info">{{ statistics.parsed_logs_size }}</el-text>
+                  <el-tooltip
+                    v-if="statistics.parsed_logs_bloat_pct >= 20"
+                    content="Most of this table's disk space is deleted rows not yet compacted. Postgres reuses it for new logs but won't shrink the file without VACUUM FULL."
+                    placement="top"
+                  >
+                    <el-tag type="info" size="small" style="margin-left: 6px">~{{ statistics.parsed_logs_bloat_pct }}% reclaimable</el-tag>
+                  </el-tooltip>
                 </el-descriptions-item>
 
                 <el-descriptions-item label="Alerts">

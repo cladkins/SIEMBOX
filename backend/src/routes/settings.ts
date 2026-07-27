@@ -203,15 +203,26 @@ router.get('/retention/cleanup/status', authorize('admin'), (_req: Request, res:
 // Get cleanup statistics
 router.get('/retention/stats', authorize('admin'), async (_req: Request, res: Response) => {
   try {
-    // Totals use planner estimates (pg_class.reltuples) — exact COUNT(*) seq
-    // scans two multi-million-row tables and blew the UI's request timeout.
-    // The "older than" counts keep exact semantics: they use the timestamp
-    // indexes and tell the operator what a cleanup would actually delete.
+    // Row totals are ESTIMATES from pg_stat_user_tables.n_live_tup — exact
+    // COUNT(*) seq-scans multi-million-row tables and blew the UI's timeout.
+    // n_live_tup (not pg_class.reltuples) is used deliberately: the stats
+    // collector decrements it as deletes commit, whereas reltuples stays frozen
+    // until the next ANALYZE — which is why the old code could show more parsed
+    // logs than raw logs (impossible; every parsed row FK-cascades from a raw
+    // row) right after a large purge. n_dead_tup exposes bloat so the UI can
+    // explain why on-disk size stays high after deletions (Postgres reuses that
+    // space but doesn't return it to the OS without VACUUM FULL).
+    //
+    // alerts is small, so it stays an exact count. The "older than" counts are
+    // exact (index-assisted) — they tell the operator what a cleanup deletes.
+    // Sizes are exact (pg_total_relation_size reads the actual on-disk files).
     const stats = await query(`
       SELECT
-        (SELECT GREATEST(reltuples, 0)::bigint FROM pg_class WHERE relname = 'raw_logs') as total_raw_logs,
-        (SELECT GREATEST(reltuples, 0)::bigint FROM pg_class WHERE relname = 'parsed_logs') as total_parsed_logs,
-        (SELECT GREATEST(reltuples, 0)::bigint FROM pg_class WHERE relname = 'alerts') as total_alerts,
+        (SELECT GREATEST(COALESCE(n_live_tup, 0), 0)::bigint FROM pg_stat_user_tables WHERE relname = 'raw_logs') as total_raw_logs,
+        (SELECT GREATEST(COALESCE(n_live_tup, 0), 0)::bigint FROM pg_stat_user_tables WHERE relname = 'parsed_logs') as total_parsed_logs,
+        (SELECT COUNT(*) FROM alerts) as total_alerts,
+        (SELECT GREATEST(COALESCE(n_dead_tup, 0), 0)::bigint FROM pg_stat_user_tables WHERE relname = 'raw_logs') as raw_logs_dead,
+        (SELECT GREATEST(COALESCE(n_dead_tup, 0), 0)::bigint FROM pg_stat_user_tables WHERE relname = 'parsed_logs') as parsed_logs_dead,
         (SELECT COUNT(*) FROM raw_logs WHERE timestamp < NOW() - INTERVAL '30 days') as raw_logs_older_30d,
         (SELECT COUNT(*) FROM parsed_logs WHERE timestamp < NOW() - INTERVAL '90 days') as parsed_logs_older_90d,
         (SELECT COUNT(*) FROM alerts WHERE created_at < NOW() - INTERVAL '365 days') as alerts_older_365d,
@@ -223,7 +234,20 @@ router.get('/retention/stats', authorize('admin'), async (_req: Request, res: Re
         (SELECT MIN(created_at) FROM alerts) as oldest_alert
     `);
 
-    res.json(stats.rows[0]);
+    // Bloat fraction per big table (dead / (live + dead)). A high value explains
+    // an on-disk size that dwarfs the live-row count — reclaimable space from
+    // deleted rows that autovacuum frees for reuse but doesn't shrink on disk.
+    const row = stats.rows[0];
+    const bloat = (live: any, dead: any) => {
+      const l = Number(live) || 0;
+      const d = Number(dead) || 0;
+      return l + d > 0 ? Math.round((d / (l + d)) * 100) : 0;
+    };
+    row.counts_are_estimated = true;
+    row.raw_logs_bloat_pct = bloat(row.total_raw_logs, row.raw_logs_dead);
+    row.parsed_logs_bloat_pct = bloat(row.total_parsed_logs, row.parsed_logs_dead);
+
+    res.json(row);
   } catch (error) {
     throw new ApiError(500, 'Failed to fetch statistics');
   }

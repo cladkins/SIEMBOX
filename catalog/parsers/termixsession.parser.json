@@ -1,0 +1,61 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "termix-session",
+  "description": "Termix (web SSH terminal) activity events: any [op:...] action — SSH session connect/disconnect, backend init, etc. Captures the op (action) plus user/host/session when present.",
+  "parser_type": "regex",
+  "priority": 30,
+  "pattern": "^\\[(?<timestamp>\\d{1,2}:\\d{2}:\\d{2}\\s?[AP]M)\\]\\s+\\[(?<outcome>[A-Z]+)\\]\\s+(?:\\[[^\\]]*\\]\\s+)?(?<event>[^\\[\\]\\s](?:[^\\[\\]]*[^\\[\\]\\s])?)\\s+\\[op:(?<action>[^,\\]]+)(?<details>(?:,[^\\]]*)?)\\]\\s*$",
+  "field_mappings": {
+    "timestamp": "timestamp",
+    "outcome": "outcome",
+    "event": "event",
+    "action": "action",
+    "details": "details"
+  },
+  "derivations": [
+    { "set": { "service": "termix" } },
+    { "extract": { "user": { "from": "details", "pattern": "user:([^,\\]]+)" } } },
+    { "extract": { "termix_host": { "from": "details", "pattern": "host:([^,\\]]+)" } } },
+    { "extract": { "session_id": { "from": "details", "pattern": "session:([^,\\]]+)" } } }
+  ],
+  "event_type": "termix_session",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "SSH session established (full: op + user + host + session)",
+      "input": "[8:03:56 AM] [SUCCESS] [🖥️] SSH connection established [op:terminal_ssh_connected,user:z3L6sEToDbcomvac8R72M,host:2,session:IQHj6km0y0jF1iQ5bq0Wt]",
+      "packet_source_ip": "192.168.1.76",
+      "expect": {
+        "action": "terminal_ssh_connected",
+        "user": "z3L6sEToDbcomvac8R72M",
+        "termix_host": "2",
+        "session_id": "IQHj6km0y0jF1iQ5bq0Wt",
+        "service": "termix",
+        "event": "SSH connection established",
+        "event_type": "termix_session",
+        "source_ip": "192.168.1.76"
+      }
+    },
+    {
+      "description": "op-only event (no user/host/session) still matches",
+      "input": "[8:03:55 AM] [SUCCESS] [🚀] Database initialized [op:backend_init_db]",
+      "expect": {
+        "action": "backend_init_db",
+        "event": "Database initialized",
+        "service": "termix",
+        "user": null,
+        "session_id": null
+      }
+    },
+    {
+      "description": "tightness guard: a non-Termix bracketed line must NOT match",
+      "input": "[2024-01-15 12:00:00] [INFO] some other application message entirely",
+      "expect": { "service": null, "action": null }
+    }
+  ],
+  "metadata": {
+    "author": "cladkins",
+    "log_source": "Termix (web-based SSH terminal) application activity log",
+    "tags": ["termix", "ssh", "terminal", "session"]
+  }
+}

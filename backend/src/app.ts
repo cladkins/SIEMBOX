@@ -3,6 +3,7 @@ import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
+import { requestTimeoutLogger } from './middleware/requestTimeoutLogger';
 import { authenticate } from './middleware/auth';
 import { query } from './config/database';
 
@@ -40,6 +41,12 @@ app.use(cors({
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Surface client-side request timeouts (slow endpoints the browser gave up on)
+// in the Admin dashboard's Recent Errors panel — the server doesn't throw on
+// these, so they were otherwise invisible. Registered before routes so it wraps
+// every API request's lifecycle.
+app.use(requestTimeoutLogger());
 
 // Rate limiting - generous global limit for normal API usage
 // Specific rate limiters are applied to scan endpoints in their routes

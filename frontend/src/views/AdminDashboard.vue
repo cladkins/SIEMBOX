@@ -245,7 +245,7 @@
         <el-card class="section-card errors-card">
           <template #header>
             <div class="card-header">
-              <span>Recent Errors <HelpTip text="Errors logged by background services (ingestion, parsing, scans, cleanup, notifications), de-duplicated so a repeating failure shows once with a count. A quiet panel is a healthy install; pick a wider window to look back further." /></span>
+              <span>Recent Errors <HelpTip text="Errors logged by background services (ingestion, parsing, scans, cleanup, notifications) plus client request timeouts — a slow endpoint the browser gave up on now lands here as a network warning, matching the 'Request timed out' banner you saw. De-duplicated so a repeating failure shows once with a count. A quiet panel is a healthy install; pick a wider window to look back further." /></span>
               <div>
                 <el-select v-model="errorsHours" size="small" style="width: 100px" @change="fetchErrors">
                   <el-option :value="1" label="1 hour" />

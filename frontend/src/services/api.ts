@@ -141,6 +141,8 @@ export const api = {
   // Detection catalog (browse/install rules from the GitHub repo, in-app)
   getRuleCatalog: (refresh = false) => apiClient.get('/rules/catalog', { params: refresh ? { refresh: true } : {} }),
   installCatalogRule: (name: string) => apiClient.post('/rules/catalog/install', { name }),
+  getRuleRecommendations: (refresh = false) =>
+    apiClient.get('/rules/recommendations', { params: refresh ? { refresh: 'true' } : {}, timeout: 60000 }),
   installAllCatalogRules: () => apiClient.post('/rules/catalog/install-all', {}, { timeout: 120000 }),
   // Sigma import: convert community Sigma YAML to portable detections (preview, then import)
   previewSigmaImport: (sigma: string) => apiClient.post('/rules/import/sigma/preview', { sigma }),

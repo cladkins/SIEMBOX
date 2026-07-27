@@ -1,5 +1,78 @@
 <template>
   <div class="rules">
+    <!-- Recommendations: not-installed catalog rules whose conditions are
+         satisfied by samples of the user's real parsed logs. -->
+    <el-card v-if="recsLoading || recs" class="recommendations-card">
+      <template #header>
+        <div class="card-header">
+          <span>
+            Recommended for your logs
+            <el-tooltip
+              content="Each not-installed catalog rule's conditions are test-run against samples of your recent parsed logs with the real condition evaluator. A recommendation means your live data satisfies the rule — it would actually engage, ranked by matching traffic × rule severity."
+              placement="top"
+            >
+              <el-icon style="vertical-align: middle"><InfoFilled /></el-icon>
+            </el-tooltip>
+          </span>
+          <el-button size="small" :loading="recsLoading" @click="loadRecommendations(true)">
+            Refresh
+          </el-button>
+        </div>
+      </template>
+
+      <div v-loading="recsLoading">
+        <el-table v-if="recs?.recommendations?.length" :data="recs.recommendations" size="small">
+          <el-table-column prop="name" label="Rule" min-width="220" show-overflow-tooltip />
+          <el-table-column label="Severity" width="100">
+            <template #default="{ row }">
+              <el-tag :type="severityType(row.severity)" size="small">{{ row.severity }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="Fed by your parsers" min-width="220">
+            <template #default="{ row }">
+              <el-tag
+                v-for="s in row.sources"
+                :key="s.parser_name"
+                size="small"
+                style="margin-right: 4px"
+              >
+                {{ s.parser_name }} {{ s.matched }}/{{ s.sampled }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="Matching logs/day" width="150" align="right">
+            <template #default="{ row }">
+              <el-tooltip
+                v-if="row.aggregation"
+                :content="`Fires at ≥${row.aggregation.threshold} matches in ${row.aggregation.timeframe} per ${row.aggregation.field}`"
+                placement="top"
+              >
+                <span>{{ row.est_daily_matches.toLocaleString() }} ⏱</span>
+              </el-tooltip>
+              <span v-else>{{ row.est_daily_matches.toLocaleString() }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="" width="110" align="right">
+            <template #default="{ row }">
+              <el-button
+                type="primary"
+                size="small"
+                :loading="installing === row.name"
+                @click="installRecommended(row)"
+              >
+                Install
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty
+          v-else-if="recs && !recs.recommendations.length"
+          description="No not-installed catalog rule matches your parsed data — your relevant rules may already be installed."
+          :image-size="60"
+        />
+      </div>
+    </el-card>
+
     <el-card>
       <template #header>
         <div class="card-header">
@@ -423,10 +496,12 @@
 import { ref, onMounted, reactive, computed } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
-import { Plus, CircleCheck, Shop, Refresh, MagicStick, Download, Upload, Warning } from '@element-plus/icons-vue';
+import { Plus, CircleCheck, Shop, Refresh, MagicStick, Download, Upload, Warning, InfoFilled } from '@element-plus/icons-vue';
 import yaml from 'js-yaml';
 
 const rules = ref<any[]>([]);
+const recs = ref<any>(null);
+const recsLoading = ref(false);
 const loading = ref(false);
 const updating = ref(false);
 const saving = ref(false);
@@ -498,6 +573,23 @@ async function installRule(row: any) {
   } finally {
     installing.value = '';
   }
+}
+
+async function loadRecommendations(refresh = false) {
+  recsLoading.value = true;
+  try {
+    recs.value = (await api.getRuleRecommendations(refresh)).data;
+  } catch {
+    // Best-effort panel: a catalog/network hiccup shouldn't block the page.
+    recs.value = null;
+  } finally {
+    recsLoading.value = false;
+  }
+}
+
+async function installRecommended(row: any) {
+  await installRule(row);
+  await loadRecommendations(true);
 }
 
 async function installAll() {
@@ -728,7 +820,10 @@ actions:
   },
 };
 
-onMounted(fetchRules);
+onMounted(async () => {
+  await fetchRules();
+  loadRecommendations();
+});
 
 async function fetchRules() {
   loading.value = true;
@@ -1020,6 +1115,10 @@ async function runSigmaImport() {
 </script>
 
 <style scoped>
+.recommendations-card {
+  margin-bottom: 20px;
+}
+
 .rules {
   padding: 0;
 }

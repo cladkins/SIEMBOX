@@ -132,6 +132,31 @@
             <span v-else>{{ (matchStats?.by_parser[String(row.id)] ?? 0).toLocaleString() }}</span>
           </template>
         </el-table-column>
+        <el-table-column v-if="catalog.length" label="Catalog" width="110">
+          <template #default="{ row }">
+            <el-tooltip
+              v-if="catalogStatus(row.name) === 'match'"
+              content="Accepted into the community catalog — your installed copy matches the published version."
+              placement="top"
+            >
+              <el-tag type="success" size="small">In catalog</el-tag>
+            </el-tooltip>
+            <el-tooltip
+              v-else-if="catalogStatus(row.name) === 'differs'"
+              content="Exists in the community catalog with different content: either the catalog version moved ahead (install the update from Browse Catalog), or your local edits haven't been contributed yet."
+              placement="top"
+            >
+              <el-tag type="warning" size="small">Differs</el-tag>
+            </el-tooltip>
+            <el-tooltip
+              v-else
+              content="Not in the community catalog. Use Contribute to validate it and open a submission."
+              placement="top"
+            >
+              <el-tag type="info" size="small">Local only</el-tag>
+            </el-tooltip>
+          </template>
+        </el-table-column>
         <el-table-column prop="enabled" label="Status" width="120">
           <template #default="{ row }">
             <el-switch
@@ -606,6 +631,22 @@ const catalogDialogVisible = ref(false);
 const catalogLoading = ref(false);
 const catalog = ref<any[]>([]);
 const catalogSource = ref<any>(null);
+
+// Community-catalog presence for the table badge. The catalog listing already
+// carries installed/update_available per entry (content-signature comparison
+// against the local copy), so this is a pure inversion: is THIS local parser
+// published, and does the published content match?
+const catalogEntryByName = computed(() => {
+  const m = new Map<string, any>();
+  for (const e of catalog.value) m.set(e.name, e);
+  return m;
+});
+
+function catalogStatus(name: string): 'match' | 'differs' | 'local' {
+  const entry = catalogEntryByName.value.get(name);
+  if (!entry) return 'local';
+  return entry.update_available ? 'differs' : 'match';
+}
 const catalogError = ref('');
 const installing = ref('');
 const installingAll = ref(false);
@@ -706,6 +747,9 @@ onMounted(async () => {
   // while recommendations run sampling queries — don't make them compete for
   // the database on page load.
   await fetchParsers();
+  // Catalog listing feeds the per-parser "In catalog / Differs / Local only"
+  // badge (server-cached 5 min). Best-effort: on failure the column hides.
+  loadCatalog(false);
   loadRecommendations();
 });
 

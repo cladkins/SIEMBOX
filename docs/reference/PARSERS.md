@@ -959,6 +959,15 @@ ubnt-idsips-daemon\[\d+\]:\s+[\d-]+T[\d:.-]+\s+(\w+):\s+(.+?):\s+ipset\[(\w+)\]\
 
 We welcome community parser contributions! If you've created a parser for a log source not yet supported by SIEMBox, share it with the community.
 
+**Tracking your contribution:** the submission itself is a browser hand-off
+(SIEMBox pre-validates and gives you a prefilled GitHub pull-request link, but
+never holds a GitHub token), so a *pending* PR is only visible on GitHub. Once
+it's merged, the **Catalog** column on the Parsers page shows the outcome for
+each of your parsers: **In catalog** (accepted, your copy matches the published
+version), **Differs** (published with different content — update from Browse
+Catalog to sync, or your local edits haven't been contributed), or **Local
+only** (not in the catalog yet).
+
 ### How to Contribute a Parser
 
 1. **Develop and test your parser** using the guide in this document

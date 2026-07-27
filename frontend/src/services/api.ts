@@ -215,7 +215,8 @@ export const api = {
   getRetentionSettings: () => apiClient.get('/settings/retention'),
   updateRetentionSettings: (data: any) => apiClient.put('/settings/retention', data),
   runManualCleanup: (data: any) => apiClient.post('/settings/retention/cleanup', data),
-  getRetentionStatistics: () => apiClient.get('/settings/retention/stats'),
+  getCleanupStatus: () => apiClient.get('/settings/retention/cleanup/status'),
+  getRetentionStatistics: () => apiClient.get('/settings/retention/stats', { timeout: 30000 }),
 
   // Settings - Syslog
   getSyslogSettings: () => apiClient.get('/settings/syslog'),

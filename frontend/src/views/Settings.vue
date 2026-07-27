@@ -400,6 +400,9 @@
           <el-button type="danger" @click="runManualCleanup" :loading="cleaning">
             <el-icon><Delete /></el-icon> Run Cleanup Now
           </el-button>
+          <el-text v-if="cleanupProgress" size="small" type="info" style="margin-left: 12px">
+            {{ cleanupProgress }}
+          </el-text>
         </el-card>
 
         <el-card style="margin-top: 20px">
@@ -956,6 +959,7 @@ async function copyRecovery() {
 const loading = ref(false);
 const saving = ref(false);
 const cleaning = ref(false);
+const cleanupProgress = ref('');
 const statsLoading = ref(false);
 const syslogLoading = ref(false);
 const syslogSaving = ref(false);
@@ -1150,7 +1154,14 @@ const notificationSettingsForm = reactive({
   ingestionStallMinutes: 15,
 });
 
-onMounted(() => {
+onMounted(async () => {
+  // Re-attach to a cleanup job still running from an earlier visit/click.
+  try {
+    const { data } = await api.getCleanupStatus();
+    if (data.job?.status === 'running') pollCleanupJob();
+  } catch {
+    /* status is best-effort */
+  }
   fetchRetentionSettings();
   fetchAiSettings();
   fetchChatSettings();
@@ -1200,22 +1211,55 @@ async function runManualCleanup() {
     );
 
     cleaning.value = true;
-    const response = await api.runManualCleanup(retentionForm);
-    const results = response.data.results;
-
-    ElMessage.success({
-      message: `Cleanup completed: ${results.raw_logs_deleted} raw logs, ${results.parsed_logs_deleted} parsed logs, ${results.alerts_deleted} alerts deleted`,
-      duration: 5000,
-    });
-
-    // Refresh statistics after cleanup
-    fetchStatistics();
+    // The purge runs as a background job on the server (it can take minutes to
+    // hours on large tables) — start it, then poll for live progress.
+    await api.runManualCleanup(retentionForm);
+    await pollCleanupJob();
   } catch (error: any) {
-    if (error !== 'cancel') {
-      ElMessage.error('Failed to run cleanup');
+    if (error?.response?.status === 409) {
+      // A job is already running (e.g. an earlier click) — attach to it.
+      ElMessage.info('A cleanup is already running — showing its progress.');
+      await pollCleanupJob();
+    } else if (error !== 'cancel') {
+      ElMessage.error('Failed to start cleanup');
+      cleaning.value = false;
+    } else {
+      cleaning.value = false;
     }
+  }
+}
+
+async function pollCleanupJob() {
+  cleaning.value = true;
+  try {
+    for (;;) {
+      const { data } = await api.getCleanupStatus();
+      const job = data.job;
+      if (!job) break;
+      const r = job.results;
+      cleanupProgress.value =
+        `Deleted so far — raw logs: ${r.raw_logs_deleted.toLocaleString()}, ` +
+        `parsed logs: ${r.parsed_logs_deleted.toLocaleString()}, ` +
+        `alerts: ${r.alerts_deleted.toLocaleString()}`;
+      if (job.status === 'completed') {
+        ElMessage.success({
+          message: `Cleanup completed: ${r.raw_logs_deleted.toLocaleString()} raw logs, ${r.parsed_logs_deleted.toLocaleString()} parsed logs, ${r.alerts_deleted.toLocaleString()} alerts deleted`,
+          duration: 8000,
+        });
+        break;
+      }
+      if (job.status === 'failed') {
+        ElMessage.error(`Cleanup failed: ${job.error || 'unknown error'}`);
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    fetchStatistics();
+  } catch {
+    ElMessage.warning('Lost track of the cleanup job — it continues on the server. Reload to re-check.');
   } finally {
     cleaning.value = false;
+    cleanupProgress.value = '';
   }
 }
 

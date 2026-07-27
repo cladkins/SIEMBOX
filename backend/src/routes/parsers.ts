@@ -69,19 +69,26 @@ router.get('/', async (_req: Request, res: Response) => {
 // idx_parsed_logs_timestamp; parser_id NULL rows are the unparsed fallback.
 router.get('/match-stats', async (_req: Request, res: Response) => {
   try {
+    // Reads the incrementally-maintained hourly counters (see migration 024 and
+    // ParserEngine.bumpMatchCount) — the previous parsed_logs GROUP BY scanned
+    // millions of rows on busy installs and timed out the UI. parser_id 0 is
+    // the unparsed fallback; `since` marks where counter data begins (the
+    // window fills over the first day after an upgrade).
     const result = await query(
-      `SELECT parser_id, COUNT(*)::bigint AS matches
-       FROM parsed_logs
-       WHERE timestamp >= NOW() - INTERVAL '24 hours'
+      `SELECT parser_id, SUM(matches)::bigint AS matches, MIN(hour) AS since
+       FROM parser_match_hourly
+       WHERE hour >= NOW() - INTERVAL '24 hours'
        GROUP BY parser_id`
     );
     const byParser: Record<string, number> = {};
     let unparsed = 0;
+    let since: string | null = null;
     for (const row of result.rows) {
-      if (row.parser_id === null) unparsed = Number(row.matches);
+      if (Number(row.parser_id) === 0) unparsed = Number(row.matches);
       else byParser[String(row.parser_id)] = Number(row.matches);
+      if (since === null || row.since < since) since = row.since;
     }
-    res.json({ window: '24h', by_parser: byParser, unparsed });
+    res.json({ window: '24h', since, by_parser: byParser, unparsed });
   } catch (error) {
     throw new ApiError(500, 'Failed to compute parser match stats');
   }

@@ -10,6 +10,8 @@ export interface BatchDeleteOpts {
   pauseMs?: number;
   /** Injectable executor (defaults to the pooled `query`) — used by tests. */
   exec?: (sql: string, params: any[]) => Promise<{ rowCount: number | null }>;
+  /** Called after each batch with the cumulative deleted count (live progress). */
+  onProgress?: (deleted: number) => void;
 }
 
 /**
@@ -51,6 +53,7 @@ export async function batchedDelete(
     const res = await exec(sql, [...params, batchSize]);
     const n = res.rowCount || 0;
     total += n;
+    if (n > 0) opts.onProgress?.(total);
     if (n < batchSize) break;
     if (pauseMs > 0) await new Promise((resolve) => setTimeout(resolve, pauseMs));
   }

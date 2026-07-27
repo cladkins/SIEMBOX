@@ -367,6 +367,7 @@ runs detections, so a low `parsed_pct` means rules are starved of input.
 ```json
 {
   "window": "24h",
+  "since": "2026-07-27T00:00:00.000Z",
   "total": 1250000,
   "parsed": 26000,
   "unparsed": 1224000,
@@ -374,7 +375,10 @@ runs detections, so a low `parsed_pct` means rules are starved of input.
 }
 ```
 
-`parsed_pct` is `null` when no logs were ingested in the window.
+`parsed_pct` is `null` when no logs were ingested in the window. Counts come
+from incrementally-maintained hourly counters (`parser_match_hourly`), not a
+`parsed_logs` scan; after an upgrade the 24h window fills over the first day,
+and `since` marks where counter data begins.
 
 ---
 
@@ -433,10 +437,14 @@ format even though its self-tests pass.
 ```json
 {
   "window": "24h",
+  "since": "2026-07-27T00:00:00.000Z",
   "by_parser": { "1": 50608, "7": 12044 },
   "unparsed": 1224000
 }
 ```
+
+Counts come from the same hourly counters as parse-coverage (see above), so
+this endpoint is O(1)-ish regardless of log volume.
 
 ---
 
@@ -1319,25 +1327,53 @@ Manually trigger log cleanup (admin only).
 }
 ```
 
-**Response (200):**
+**Response (202):** the purge runs as a **background job** (deleting millions
+of rows takes minutes to hours, far past any HTTP timeout). Poll the status
+endpoint below for live progress. Returns `409` if a job is already running.
+
 ```json
 {
-  "message": "Cleanup completed successfully",
-  "results": {
-    "raw_logs_deleted": 15234,
-    "parsed_logs_deleted": 8765,
-    "alerts_deleted": 234
+  "message": "Cleanup started",
+  "job": {
+    "status": "running",
+    "started_at": "2026-07-27T01:00:00.000Z",
+    "params": { "raw_logs_days": 30, "parsed_logs_days": 90, "alerts_days": 365 },
+    "results": { "raw_logs_deleted": 0, "parsed_logs_deleted": 0, "alerts_deleted": 0 }
   }
 }
 ```
 
-**Note:** This performs immediate cleanup based on provided retention days.
+---
+
+### GET /api/settings/retention/cleanup/status
+
+Live status of the current (or most recent) manual cleanup job (admin only).
+`results` counts update after every delete batch; `status` becomes
+`completed` or `failed` (with `error`) when the job ends. `job` is `null` if
+no manual cleanup has run since the backend started.
+
+**Authentication:** Required (Admin)
+
+**Response (200):**
+```json
+{
+  "job": {
+    "status": "running",
+    "started_at": "2026-07-27T01:00:00.000Z",
+    "params": { "raw_logs_days": 30 },
+    "results": { "raw_logs_deleted": 1250000, "parsed_logs_deleted": 0, "alerts_deleted": 0 }
+  }
+}
+```
 
 ---
 
 ### GET /api/settings/retention/stats
 
-Get cleanup statistics and database sizes (admin only).
+Get cleanup statistics and database sizes (admin only). Table totals are
+planner estimates (`pg_class.reltuples`) — exact counts required scanning
+multi-million-row tables on every Settings view; the "older than" counts
+remain exact (index-assisted).
 
 **Authentication:** Required (Admin)
 

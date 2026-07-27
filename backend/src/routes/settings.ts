@@ -1,6 +1,10 @@
 import { Router, Request, Response } from 'express';
 import { query } from '../config/database';
-import { batchedDelete } from '../utils/batchDelete';
+import {
+  startManualCleanup,
+  getManualCleanupJob,
+  ManualCleanupParams,
+} from '../services/cleanup/cleanupService';
 import { ApiError } from '../middleware/errorHandler';
 import { authorize } from '../middleware/auth';
 import {
@@ -151,52 +155,54 @@ router.put('/retention', authorize('admin'), async (req: Request, res: Response)
 });
 
 // Manual cleanup trigger
+// Start a manual cleanup as a background job (a large purge runs for minutes
+// to hours — far past any HTTP timeout). Poll GET /retention/cleanup/status
+// for live progress. 409 when a job is already running.
 router.post('/retention/cleanup', authorize('admin'), async (req: Request, res: Response) => {
   try {
-    const { raw_logs_days, parsed_logs_days, alerts_days } = req.body;
-
-    const results = {
-      raw_logs_deleted: 0,
-      parsed_logs_deleted: 0,
-      alerts_deleted: 0,
-    };
-
-    // Batched so a large manual purge never holds a long table lock.
-    if (raw_logs_days) {
-      results.raw_logs_deleted = await batchedDelete(
-        'raw_logs', "timestamp < NOW() - INTERVAL '1 day' * $1", [raw_logs_days], { label: 'manual retention' }
-      );
+    const { raw_logs_days, parsed_logs_days, alerts_days } = req.body ?? {};
+    const params: ManualCleanupParams = {};
+    for (const [key, value] of Object.entries({ raw_logs_days, parsed_logs_days, alerts_days })) {
+      if (value === undefined || value === null) continue;
+      const days = Number(value);
+      if (!Number.isFinite(days) || days < 1) {
+        throw new ApiError(400, `${key} must be a positive number of days`);
+      }
+      (params as any)[key] = days;
+    }
+    if (Object.keys(params).length === 0) {
+      throw new ApiError(400, 'Provide at least one of raw_logs_days, parsed_logs_days, alerts_days');
     }
 
-    if (parsed_logs_days) {
-      results.parsed_logs_deleted = await batchedDelete(
-        'parsed_logs', "timestamp < NOW() - INTERVAL '1 day' * $1", [parsed_logs_days], { label: 'manual retention' }
-      );
+    const { started, job } = startManualCleanup(params);
+    if (!started) {
+      res.status(409).json({ message: 'A cleanup is already running', job });
+      return;
     }
-
-    if (alerts_days) {
-      results.alerts_deleted = await batchedDelete(
-        'alerts', "created_at < NOW() - INTERVAL '1 day' * $1", [alerts_days], { label: 'manual retention' }
-      );
-    }
-
-    res.json({
-      message: 'Cleanup completed successfully',
-      results,
-    });
+    res.status(202).json({ message: 'Cleanup started', job });
   } catch (error) {
-    throw new ApiError(500, 'Failed to run cleanup');
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to start cleanup');
   }
+});
+
+// Live status of the current/last manual cleanup job.
+router.get('/retention/cleanup/status', authorize('admin'), (_req: Request, res: Response) => {
+  res.json({ job: getManualCleanupJob() });
 });
 
 // Get cleanup statistics
 router.get('/retention/stats', authorize('admin'), async (_req: Request, res: Response) => {
   try {
+    // Totals use planner estimates (pg_class.reltuples) — exact COUNT(*) seq
+    // scans two multi-million-row tables and blew the UI's request timeout.
+    // The "older than" counts keep exact semantics: they use the timestamp
+    // indexes and tell the operator what a cleanup would actually delete.
     const stats = await query(`
       SELECT
-        (SELECT COUNT(*) FROM raw_logs) as total_raw_logs,
-        (SELECT COUNT(*) FROM parsed_logs) as total_parsed_logs,
-        (SELECT COUNT(*) FROM alerts) as total_alerts,
+        (SELECT GREATEST(reltuples, 0)::bigint FROM pg_class WHERE relname = 'raw_logs') as total_raw_logs,
+        (SELECT GREATEST(reltuples, 0)::bigint FROM pg_class WHERE relname = 'parsed_logs') as total_parsed_logs,
+        (SELECT GREATEST(reltuples, 0)::bigint FROM pg_class WHERE relname = 'alerts') as total_alerts,
         (SELECT COUNT(*) FROM raw_logs WHERE timestamp < NOW() - INTERVAL '30 days') as raw_logs_older_30d,
         (SELECT COUNT(*) FROM parsed_logs WHERE timestamp < NOW() - INTERVAL '90 days') as parsed_logs_older_90d,
         (SELECT COUNT(*) FROM alerts WHERE created_at < NOW() - INTERVAL '365 days') as alerts_older_365d,

@@ -2,8 +2,8 @@ import { Router, Request, Response } from 'express';
 import { query } from '../config/database';
 import {
   startManualCleanup,
-  getManualCleanupJob,
-  ManualCleanupParams,
+  getCleanupJob,
+  CleanupParams,
 } from '../services/cleanup/cleanupService';
 import { ApiError } from '../middleware/errorHandler';
 import { authorize } from '../middleware/auth';
@@ -161,7 +161,7 @@ router.put('/retention', authorize('admin'), async (req: Request, res: Response)
 router.post('/retention/cleanup', authorize('admin'), async (req: Request, res: Response) => {
   try {
     const { raw_logs_days, parsed_logs_days, alerts_days } = req.body ?? {};
-    const params: ManualCleanupParams = {};
+    const params: CleanupParams = {};
     for (const [key, value] of Object.entries({ raw_logs_days, parsed_logs_days, alerts_days })) {
       if (value === undefined || value === null) continue;
       const days = Number(value);
@@ -174,12 +174,14 @@ router.post('/retention/cleanup', authorize('admin'), async (req: Request, res: 
       throw new ApiError(400, 'Provide at least one of raw_logs_days, parsed_logs_days, alerts_days');
     }
 
-    const { started, job, busy } = startManualCleanup(params);
+    const { started, job } = startManualCleanup(params);
     if (!started) {
+      // Whichever purge is running (an earlier manual click or the automated
+      // sweep), the job is returned so the UI can attach to its progress.
       res.status(409).json({
         message:
-          busy === 'automatic'
-            ? 'The automated retention sweep is currently running — try again when it finishes'
+          job?.trigger === 'automatic'
+            ? 'The automated retention sweep is currently running'
             : 'A cleanup is already running',
         job,
       });
@@ -192,9 +194,10 @@ router.post('/retention/cleanup', authorize('admin'), async (req: Request, res: 
   }
 });
 
-// Live status of the current/last manual cleanup job.
+// Live status of the current/last cleanup job — manual purge OR the automated
+// sweep (they share one tracked slot; `trigger` says which).
 router.get('/retention/cleanup/status', authorize('admin'), (_req: Request, res: Response) => {
-  res.json({ job: getManualCleanupJob() });
+  res.json({ job: getCleanupJob() });
 });
 
 // Get cleanup statistics

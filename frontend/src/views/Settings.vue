@@ -1226,13 +1226,14 @@ async function runManualCleanup() {
     await pollCleanupJob();
   } catch (error: any) {
     if (error?.response?.status === 409 && error.response.data?.job) {
-      // A manual job is already running (e.g. an earlier click) — attach to it.
-      ElMessage.info('A cleanup is already running — showing its progress.');
+      // A purge is already running (an earlier click, or the automated sweep
+      // that fires on backend startup) — attach and show its progress.
+      ElMessage.info(
+        error.response.data.job.trigger === 'automatic'
+          ? 'The automated retention sweep is running — showing its progress.'
+          : 'A cleanup is already running — showing its progress.'
+      );
       await pollCleanupJob();
-    } else if (error?.response?.status === 409) {
-      // The AUTOMATED sweep holds the lock — no manual job to attach to.
-      ElMessage.info(error.response.data?.message || 'A cleanup is already running — try again shortly.');
-      cleaning.value = false;
     } else if (error !== 'cancel') {
       ElMessage.error('Failed to start cleanup');
       cleaning.value = false;
@@ -1263,13 +1264,15 @@ async function pollCleanupJob() {
       }
       sawJob = true;
       const r = job.results;
+      const label = job.trigger === 'automatic' ? 'Automated sweep — deleted so far' : 'Deleted so far';
       cleanupProgress.value =
-        `Deleted so far — raw logs: ${r.raw_logs_deleted.toLocaleString()}, ` +
+        `${label} — raw logs: ${r.raw_logs_deleted.toLocaleString()}, ` +
         `parsed logs: ${r.parsed_logs_deleted.toLocaleString()}, ` +
         `alerts: ${r.alerts_deleted.toLocaleString()}`;
       if (job.status === 'completed') {
+        const what = job.trigger === 'automatic' ? 'Automated cleanup' : 'Cleanup';
         ElMessage.success({
-          message: `Cleanup completed: ${r.raw_logs_deleted.toLocaleString()} raw logs, ${r.parsed_logs_deleted.toLocaleString()} parsed logs, ${r.alerts_deleted.toLocaleString()} alerts deleted`,
+          message: `${what} completed: ${r.raw_logs_deleted.toLocaleString()} raw logs, ${r.parsed_logs_deleted.toLocaleString()} parsed logs, ${r.alerts_deleted.toLocaleString()} alerts deleted`,
           duration: 8000,
         });
         break;

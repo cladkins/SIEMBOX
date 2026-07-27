@@ -4,11 +4,54 @@ import { ErrorLogService } from '../errors/errorLogService';
 import { batchedDelete } from '../../utils/batchDelete';
 
 /**
- * Which purge currently holds the cleanup "lock" (module-level: the automated
- * sweep and the manual job must never overlap — concurrent deleters steal each
- * other's batches and double the I/O for the same work).
+ * The current (or most recent) cleanup job — automated sweep or manual purge.
+ * ONE shared slot: the two paths must never overlap (concurrent deleters steal
+ * each other's batches and double the I/O for the same work), and sharing the
+ * tracker means the Settings page can attach to and display EITHER kind of
+ * running purge — the startup auto sweep used to be an invisible
+ * multi-million-row delete that looked like a hung system.
  */
-let cleanupBusy: 'automatic' | 'manual' | null = null;
+export interface CleanupParams {
+  raw_logs_days?: number;
+  parsed_logs_days?: number;
+  alerts_days?: number;
+}
+
+export interface CleanupJob {
+  trigger: 'automatic' | 'manual';
+  status: 'running' | 'completed' | 'failed';
+  started_at: string;
+  finished_at?: string;
+  params: CleanupParams;
+  /** Live cumulative counts, updated after every delete batch. */
+  results: {
+    raw_logs_deleted: number;
+    parsed_logs_deleted: number;
+    alerts_deleted: number;
+  };
+  error?: string;
+}
+
+let currentJob: CleanupJob | null = null;
+
+export function getCleanupJob(): CleanupJob | null {
+  return currentJob;
+}
+
+/**
+ * Refresh planner statistics so the Settings page's estimated totals reflect a
+ * purge immediately instead of waiting for autovacuum. Best-effort and cheap
+ * (page sampling — seconds even on large tables).
+ */
+async function refreshPlannerStats(): Promise<void> {
+  try {
+    await query('ANALYZE raw_logs');
+    await query('ANALYZE parsed_logs');
+    await query('ANALYZE alerts');
+  } catch (error) {
+    logger.warn('Post-cleanup ANALYZE failed (stats may lag until autovacuum):', { error });
+  }
+}
 
 export class CleanupService {
   private intervalId: NodeJS.Timeout | null = null;
@@ -54,69 +97,83 @@ export class CleanupService {
     // Never run two purges concurrently. Overlapping deleters steal each
     // other's selected batches; even with batchedDelete's empty-batch
     // termination, concurrent purges just waste I/O doing the same work twice.
-    // The manual job takes priority — the auto sweep will catch up next cycle.
-    if (cleanupBusy) {
-      logger.info(`Skipping automated cleanup: a ${cleanupBusy} cleanup is already running`);
+    // A running manual job takes priority — the auto sweep catches up next cycle.
+    if (currentJob?.status === 'running') {
+      logger.info(`Skipping automated cleanup: a ${currentJob.trigger} cleanup is already running`);
       return;
     }
-    cleanupBusy = 'automatic';
-    try {
-      logger.info('Starting automated log cleanup');
 
-      // Check if auto cleanup is enabled
+    // Check if auto cleanup is enabled
+    let settings: { raw_logs_days: number; parsed_logs_days: number; alerts_days: number };
+    try {
       const enabledResult = await query(
         `SELECT value FROM system_settings WHERE key = 'retention_auto_cleanup_enabled'`
       );
-
       if (enabledResult.rows.length === 0 || enabledResult.rows[0].value !== 'true') {
         logger.info('Auto cleanup is disabled, skipping');
         return;
       }
+      settings = await this.getRetentionSettings();
+    } catch (error) {
+      logger.error('Error reading cleanup settings:', error);
+      ErrorLogService.logBackgroundError('cleanup', error);
+      return;
+    }
 
-      // Get retention settings
-      const settings = await this.getRetentionSettings();
+    // Runs through the SAME tracked-job path as a manual cleanup, so the
+    // Settings page can attach to and display an automated sweep's live
+    // progress too (the sweep fires on every backend startup — an invisible
+    // multi-million-row purge looked like a hung system).
+    const job: CleanupJob = {
+      trigger: 'automatic',
+      status: 'running',
+      started_at: new Date().toISOString(),
+      params: settings,
+      results: { raw_logs_deleted: 0, parsed_logs_deleted: 0, alerts_deleted: 0 },
+    };
+    currentJob = job;
+    logger.info('Starting automated log cleanup');
 
-      const results = {
-        raw_logs_deleted: 0,
-        parsed_logs_deleted: 0,
-        alerts_deleted: 0,
-      };
-
+    try {
       // Delete in bounded batches so a large purge never holds a long lock. A
       // single unbounded DELETE here once ran 15h and jammed a boot-time migration.
       if (settings.raw_logs_days > 0) {
-        results.raw_logs_deleted = await batchedDelete(
+        job.results.raw_logs_deleted = await batchedDelete(
           'raw_logs',
           "timestamp < NOW() - INTERVAL '1 day' * $1",
           [settings.raw_logs_days],
-          { label: 'retention' }
+          { label: 'retention', onProgress: (n) => (job.results.raw_logs_deleted = n) }
         );
       }
 
       if (settings.parsed_logs_days > 0) {
-        results.parsed_logs_deleted = await batchedDelete(
+        job.results.parsed_logs_deleted = await batchedDelete(
           'parsed_logs',
           "timestamp < NOW() - INTERVAL '1 day' * $1",
           [settings.parsed_logs_days],
-          { label: 'retention' }
+          { label: 'retention', onProgress: (n) => (job.results.parsed_logs_deleted = n) }
         );
       }
 
       if (settings.alerts_days > 0) {
-        results.alerts_deleted = await batchedDelete(
+        job.results.alerts_deleted = await batchedDelete(
           'alerts',
           "created_at < NOW() - INTERVAL '1 day' * $1 AND status = 'closed'",
           [settings.alerts_days],
-          { label: 'retention' }
+          { label: 'retention', onProgress: (n) => (job.results.alerts_deleted = n) }
         );
       }
 
-      logger.info('Automated log cleanup completed', results);
+      await refreshPlannerStats();
+      job.status = 'completed';
+      logger.info('Automated log cleanup completed', job.results);
     } catch (error) {
+      job.status = 'failed';
+      job.error = error instanceof Error ? error.message : String(error);
       logger.error('Error during automated cleanup:', error);
       ErrorLogService.logBackgroundError('cleanup', error);
     } finally {
-      cleanupBusy = null;
+      job.finished_at = new Date().toISOString();
     }
   }
 
@@ -175,58 +232,29 @@ export class CleanupService {
 // A manual purge of a multi-million-row table takes minutes to hours even
 // batched, far past any sane HTTP timeout — the old synchronous handler kept
 // deleting after the client aborted at 10s while the UI reported failure, and
-// a retry click stacked a SECOND concurrent purge. The route now starts the
-// job and returns immediately; the UI polls getManualCleanupJob() for live
-// per-table progress. One job at a time.
+// a retry click stacked a SECOND concurrent purge. The route starts the job
+// and returns immediately; the UI polls getCleanupJob() for live per-table
+// progress. One job at a time, shared with the automated sweep above.
 // ---------------------------------------------------------------------------
 
-export interface ManualCleanupParams {
-  raw_logs_days?: number;
-  parsed_logs_days?: number;
-  alerts_days?: number;
-}
-
-export interface ManualCleanupJob {
-  status: 'running' | 'completed' | 'failed';
-  started_at: string;
-  finished_at?: string;
-  params: ManualCleanupParams;
-  /** Live cumulative counts, updated after every delete batch. */
-  results: {
-    raw_logs_deleted: number;
-    parsed_logs_deleted: number;
-    alerts_deleted: number;
-  };
-  error?: string;
-}
-
-let manualJob: ManualCleanupJob | null = null;
-
-export function getManualCleanupJob(): ManualCleanupJob | null {
-  return manualJob;
-}
-
-export function startManualCleanup(params: ManualCleanupParams): {
+export function startManualCleanup(params: CleanupParams): {
   started: boolean;
-  job: ManualCleanupJob | null;
-  /** Set when refused because the AUTOMATED sweep is mid-run. */
-  busy?: 'automatic';
+  job: CleanupJob | null;
 } {
-  if (manualJob && manualJob.status === 'running') {
-    return { started: false, job: manualJob };
+  if (currentJob?.status === 'running') {
+    // Whichever purge is running (manual or the automated sweep), hand it back
+    // so the caller can attach to its progress instead of racing it.
+    return { started: false, job: currentJob };
   }
-  if (cleanupBusy === 'automatic') {
-    return { started: false, job: null, busy: 'automatic' };
-  }
-  cleanupBusy = 'manual';
 
-  const job: ManualCleanupJob = {
+  const job: CleanupJob = {
+    trigger: 'manual',
     status: 'running',
     started_at: new Date().toISOString(),
     params,
     results: { raw_logs_deleted: 0, parsed_logs_deleted: 0, alerts_deleted: 0 },
   };
-  manualJob = job;
+  currentJob = job;
 
   void (async () => {
     try {
@@ -254,16 +282,7 @@ export function startManualCleanup(params: ManualCleanupParams): {
           { label: 'manual retention', onProgress: (n) => (job.results.alerts_deleted = n) }
         );
       }
-      // Refresh planner statistics so the Settings page's estimated totals
-      // reflect the purge immediately instead of waiting for autovacuum.
-      // Best-effort and cheap (page sampling, seconds even on large tables).
-      try {
-        await query('ANALYZE raw_logs');
-        await query('ANALYZE parsed_logs');
-        await query('ANALYZE alerts');
-      } catch (error) {
-        logger.warn('Post-cleanup ANALYZE failed (stats may lag until autovacuum):', { error });
-      }
+      await refreshPlannerStats();
       job.status = 'completed';
     } catch (error) {
       job.status = 'failed';
@@ -272,7 +291,6 @@ export function startManualCleanup(params: ManualCleanupParams): {
       ErrorLogService.logBackgroundError('manual-cleanup', error, { dedupeKey: 'manual-cleanup' });
     } finally {
       job.finished_at = new Date().toISOString();
-      cleanupBusy = null;
     }
   })();
 

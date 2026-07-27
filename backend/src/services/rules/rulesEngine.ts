@@ -77,16 +77,19 @@ export class RulesEngine {
   async evaluateLog(parsedLog: ParsedLog): Promise<void> {
     for (const rule of this.rules) {
       try {
-        const matched = await this.evaluateRule(rule, parsedLog);
-        if (matched) {
-          logger.info(`Rule matched: ${rule.name}`, { parsedLogId: parsedLog.id });
-        }
+        // A match that the cooldown or whitelist then suppresses is routine —
+        // a sustained condition matches on EVERY log in the window, so logging
+        // matches at info level spammed one line per ingested log. Only actual
+        // alert creation is operator-noteworthy; createAlert logs it (and logs
+        // suppressions at debug).
+        await this.evaluateRule(rule, parsedLog);
       } catch (error) {
         logger.error(`Error evaluating rule ${rule.name}:`, error);
       }
     }
   }
 
+  /** Returns true when an alert was actually created (not merely matched). */
   private async evaluateRule(rule: DetectionRule, parsedLog: ParsedLog): Promise<boolean> {
     const ruleLogic: RuleLogic = rule.rule_logic;
 
@@ -106,15 +109,13 @@ export class RulesEngine {
       );
 
       if (thresholdMet) {
-        await this.createAlert(rule, parsedLog, ruleLogic.aggregation);
-        return true;
+        return this.createAlert(rule, parsedLog, ruleLogic.aggregation);
       }
 
       return false;
     } else {
       // No aggregation, create alert immediately
-      await this.createAlert(rule, parsedLog);
-      return true;
+      return this.createAlert(rule, parsedLog);
     }
   }
 
@@ -377,11 +378,12 @@ export class RulesEngine {
     }
   }
 
+  /** Returns true when the alert was created, false when suppressed or failed. */
   private async createAlert(
     rule: DetectionRule,
     parsedLog: ParsedLog,
     aggregation?: RuleAggregation
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       // Extract variables for alert title/description
       const variables: Record<string, any> = {
@@ -442,7 +444,7 @@ export class RulesEngine {
       // the IP is NOT whitelisted.)
       if (alertIp && !(await this.checkIpNotInWhitelist(alertIp))) {
         logger.debug('Alert suppressed: whitelisted IP', { rule: rule.name, ip: alertIp });
-        return;
+        return false;
       }
 
       // Cooldown: collapse alert storms to a single alert per (rule, title)
@@ -455,7 +457,7 @@ export class RulesEngine {
       );
       if ((recent.rowCount || 0) > 0) {
         logger.debug('Alert suppressed: duplicate within cooldown', { rule: rule.name, title });
-        return;
+        return false;
       }
 
       await AlertModel.create({
@@ -475,8 +477,10 @@ export class RulesEngine {
       });
 
       logger.info('Alert created', { rule: rule.name, title });
+      return true;
     } catch (error) {
       logger.error('Failed to create alert:', { error, rule: rule.name });
+      return false;
     }
   }
 

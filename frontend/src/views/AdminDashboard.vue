@@ -7,7 +7,7 @@
         <el-card class="section-card">
           <template #header>
             <div class="card-header">
-              <span>System Overview</span>
+              <span>System Overview <HelpTip text="Live health of this instance. Database and Syslog show whether each subsystem is reachable and receiving; Shippers counts forwarders that have checked in recently. Active Users are accounts with activity in the last 24h; Errors (1h) counts background service errors — details in the Recent Errors panel." /></span>
               <el-button size="small" @click="fetchOverview" :icon="Refresh" circle :loading="overviewLoading" />
             </div>
           </template>
@@ -105,7 +105,7 @@
         <el-card class="section-card" style="margin-top: 20px">
           <template #header>
             <div class="card-header">
-              <span>User Lookup</span>
+              <span>User Lookup <HelpTip text="Search accounts and inspect their status, last login, and activity. Activity is the number of audit-logged actions in the last 24 hours — a quick anomaly check for unexpected account use." /></span>
             </div>
           </template>
 
@@ -168,7 +168,7 @@
         <el-card class="section-card" style="margin-top: 20px">
           <template #header>
             <div class="card-header">
-              <span>Background Jobs</span>
+              <span>Background Jobs <HelpTip text="Vulnerability and discovery scan jobs with live progress. Filter by status; Results shows what each run produced (vulnerabilities found or assets discovered) and User shows who started it." /></span>
               <div>
                 <el-radio-group v-model="jobsFilter" size="small" @change="fetchJobs">
                   <el-radio-button value="">All</el-radio-button>
@@ -245,7 +245,7 @@
         <el-card class="section-card errors-card">
           <template #header>
             <div class="card-header">
-              <span>Recent Errors</span>
+              <span>Recent Errors <HelpTip text="Errors logged by background services (ingestion, parsing, scans, cleanup, notifications), de-duplicated so a repeating failure shows once with a count. A quiet panel is a healthy install; pick a wider window to look back further." /></span>
               <div>
                 <el-select v-model="errorsHours" size="small" style="width: 100px" @change="fetchErrors">
                   <el-option :value="1" label="1 hour" />
@@ -344,6 +344,7 @@ import { api } from '@/services/api';
 import { ElMessage } from 'element-plus';
 import { Refresh, Search, InfoFilled } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
+import HelpTip from '@/components/HelpTip.vue';
 
 // Data
 const overview = ref<any>(null);

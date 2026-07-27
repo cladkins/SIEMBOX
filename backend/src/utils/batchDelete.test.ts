@@ -26,7 +26,7 @@ test('loops until a short batch and sums the rows deleted', async () => {
   );
 
   assert.equal(total, 25000);
-  assert.equal(calls.length, 3); // 10000 + 10000 + 5000, then stop
+  assert.equal(calls.length, 4); // 10000 + 10000 + 5000 + 0 (empty batch terminates)
   assert.equal(
     calls[0].sql,
     "DELETE FROM raw_logs WHERE ctid IN (SELECT ctid FROM raw_logs WHERE timestamp < NOW() - INTERVAL '1 day' * $1 LIMIT $2)"
@@ -35,19 +35,20 @@ test('loops until a short batch and sums the rows deleted', async () => {
   assert.deepEqual(calls[0].params, [30, 10000]);
 });
 
-test('stops after a single statement when the first batch is short', async () => {
-  let n = 0;
-  const exec = async () => {
-    n++;
-    return { rowCount: 5 };
-  };
+test('a short batch does not terminate; only an empty batch does', async () => {
+  // Regression: with a concurrent deleter (auto cleanup overlapping a manual
+  // purge), batches come up short while qualifying rows remain — terminating
+  // on short batches reported "completed" purges that had barely started.
+  let call = 0;
+  const returns = [5, 7, 0]; // short, short, empty
+  const exec = async () => ({ rowCount: returns[call++] });
   const total = await batchedDelete('alerts', 'created_at < NOW()', [], {
     exec,
     batchSize: 10000,
     pauseMs: 0,
   });
-  assert.equal(total, 5);
-  assert.equal(n, 1);
+  assert.equal(total, 12);
+  assert.equal(call, 3);
 });
 
 test('appends the LIMIT bind after multi-param where clauses', async () => {

@@ -87,11 +87,19 @@ export async function tcpConnectScan(ip: string, ports: number[], opts: ActivePr
   return results.filter((p): p is number => p !== null).sort((a, b) => a - b);
 }
 
+/**
+ * Cert validation is deliberately off here, and ONLY here (this literal, not a
+ * shared agent/global) -- homelab admin UIs (pfSense, OPNsense, UniFi, Proxmox,
+ * ...) almost universally serve self-signed certs, so requiring a valid chain
+ * would break fingerprinting against the exact devices this targets. Scoped to
+ * read-only GETs against hosts already inside the user-approved scan scope
+ * (scope.ts); no credentials cross this connection.
+ */
 function requestOnce(ip: string, port: number, path: string, useTls: boolean, timeoutMs: number): Promise<HttpProbeResult | null> {
   return new Promise((resolve) => {
     const mod = useTls ? https : http;
     const req = mod.request(
-      { host: ip, port, path, method: 'GET', timeout: timeoutMs, rejectUnauthorized: false },
+      { host: ip, port, path, method: 'GET', timeout: timeoutMs, rejectUnauthorized: false }, // codeql[js/disabling-certificate-validation] intentional: see function doc comment above
       (res) => {
         let body = '';
         res.on('data', (chunk) => {
@@ -121,7 +129,15 @@ export async function httpProbe(
   return (await requestOnce(ip, port, path, false, timeoutMs)) ?? (await requestOnce(ip, port, path, true, timeoutMs));
 }
 
-/** Grab the TLS cert's subject CN + SAN. Self-signed homelab certs are expected, so verification is not enforced. */
+/**
+ * Grab the TLS cert's subject CN + SAN. Verification is deliberately off here,
+ * and ONLY here (this literal, not a shared agent/global) -- we need the raw
+ * cert to fingerprint the device even when it's self-signed (the norm for
+ * homelab admin UIs); `rejectUnauthorized: true` would abort the handshake
+ * before a cert is ever available to read. Scoped to hosts already inside the
+ * user-approved scan scope (scope.ts); the socket is only ever read, never
+ * written to.
+ */
 export function tlsProbe(ip: string, port: number, opts: ActiveProbeOptions = {}): Promise<TlsProbeResult | null> {
   const timeoutMs = opts.tlsTimeoutMs ?? 1500;
   return new Promise((resolve) => {
@@ -131,13 +147,16 @@ export function tlsProbe(ip: string, port: number, opts: ActiveProbeOptions = {}
       done = true;
       resolve(result);
     };
-    const socket = tls.connect({ host: ip, port, rejectUnauthorized: false, timeout: timeoutMs }, () => {
-      const cert = socket.getPeerCertificate();
-      socket.destroy();
-      if (!cert || !cert.subject) return finish(null);
-      const san = cert.subjectaltname ? cert.subjectaltname.split(',').map((s) => s.trim()) : undefined;
-      finish({ port, subject_cn: cert.subject.CN, san });
-    });
+    const socket = tls.connect(
+      { host: ip, port, rejectUnauthorized: false, timeout: timeoutMs }, // codeql[js/disabling-certificate-validation] intentional: see function doc comment above
+      () => {
+        const cert = socket.getPeerCertificate();
+        socket.destroy();
+        if (!cert || !cert.subject) return finish(null);
+        const san = cert.subjectaltname ? cert.subjectaltname.split(',').map((s) => s.trim()) : undefined;
+        finish({ port, subject_cn: cert.subject.CN, san });
+      }
+    );
     socket.once('timeout', () => {
       socket.destroy();
       finish(null);

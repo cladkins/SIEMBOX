@@ -1,0 +1,24 @@
+id: traefik
+name: Traefik
+category: reverse-proxy
+security_value: 8
+signals:
+  ports:
+    - {port: 8080, weight: 30}
+  http:
+    - {path: /api/rawdata, expect: "routers", weight: 50}
+    - {path: /dashboard/, expect: "Traefik", weight: 40}
+  mdns: []
+  ssdp: []
+  tls: []
+  mac_oui: []
+confidence_floor: 50
+attack_data_sources:
+  - web logs
+  - network traffic content
+log_access:
+  - {method: file, path: /var/log/traefik/access.log, format: json}
+onboard_template: templates/file_tail.j2
+credentials:
+  required: false
+  optional: []

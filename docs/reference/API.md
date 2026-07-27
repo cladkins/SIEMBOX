@@ -19,6 +19,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Settings](#settings-endpoints)
   - [Log Shippers](#log-shippers-endpoints)
   - [Assets](#assets-endpoints)
+  - [Log Discovery](#log-discovery-endpoints)
   - [Vulnerabilities](#vulnerabilities-endpoints)
   - [Admin Dashboard](#admin-dashboard-endpoints)
 
@@ -2345,6 +2346,199 @@ Get auto-discovery statistics.
   "assets_seen_24h": "298",
   "assets_seen_7d": "320",
   "new_assets_30d": "45"
+}
+```
+
+---
+
+## Log Discovery Endpoints
+
+Find -> identify -> recommend -> onboard: scans the local network for
+security-relevant log sources (firewalls, DNS filters, reverse proxies, etc.),
+fingerprint-matches them against a community-extensible YAML library, ranks
+them by security value, and hands back copy-paste onboarding instructions.
+Discovery is read-only; only the `onboard/confirm` endpoint records a user
+decision, and it never writes device or collector config itself (manual mode
+only -- see `backend/src/services/logDiscovery/`).
+
+### GET /api/log-discovery/scope
+
+Preview the scan scope: auto-detected local CIDRs, the single-VLAN warning
+(SIEMBOX only sees its own subnet by default), and any manually-supplied CIDRs.
+
+**Authentication:** Required
+
+**Query Parameters:**
+- `manual_cidrs` (optional) - Comma-separated CIDR list to merge into the preview, e.g. `192.168.20.0/24,10.10.0.0/16`
+
+**Response (200):**
+```json
+{
+  "cidrs": ["192.168.1.0/24", "192.168.20.0/24"],
+  "vlan_warning": null,
+  "rejected_cidrs": []
+}
+```
+
+---
+
+### GET /api/log-discovery/fingerprints
+
+The loaded fingerprint library (read-only), so the UI can explain what each match means.
+
+**Authentication:** Required
+
+**Response (200):** Array of fingerprint entries (`id`, `name`, `category`, `security_value`, `confidence_floor`, `attack_data_sources`, `log_access`, `credentials`, ...).
+
+---
+
+### POST /api/log-discovery/scans
+
+Trigger a scan. Runs asynchronously; returns immediately with the job id.
+
+**Authentication:** Required
+
+**Request Body:**
+```json
+{
+  "mode": "full",
+  "manual_cidrs": ["192.168.20.0/24"]
+}
+```
+- `mode` - `passive` (ARP/mDNS/SSDP/DHCP-lease only), `active` (scoped port/HTTP/TLS probing of passive candidates only, no fresh sweep), or `full` (both)
+- `manual_cidrs` (optional) - additional CIDRs beyond what's auto-detected
+
+**Response (202):**
+```json
+{
+  "scan_id": 7,
+  "cidrs": ["192.168.1.0/24", "192.168.20.0/24"],
+  "vlan_warning": null,
+  "rejected_cidrs": []
+}
+```
+
+---
+
+### GET /api/log-discovery/scans
+
+Recent scan jobs, most recent first.
+
+**Authentication:** Required
+
+---
+
+### GET /api/log-discovery/scans/:id
+
+A single scan job's status.
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+{
+  "id": 7,
+  "mode": "full",
+  "cidrs": ["192.168.1.0/24"],
+  "status": "completed",
+  "started_at": "2025-12-17T10:00:00Z",
+  "completed_at": "2025-12-17T10:00:42Z",
+  "error_message": null,
+  "results_summary": { "hosts_seen": 24, "hosts_matched": 9 }
+}
+```
+
+---
+
+### GET /api/log-discovery/sources
+
+Ranked discovery results: sorted by `security_value`, deduped by host, grouped
+into `top` and `advanced` (the long tail), each with a plain-language `reason`.
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+{
+  "top": [
+    {
+      "id": 3,
+      "ip": "192.168.1.1",
+      "mac": "aa:bb:cc:dd:ee:ff",
+      "hostname": "opnsense.lan",
+      "open_ports": [443, 22],
+      "matched_fingerprint_id": "opnsense",
+      "confidence": 80,
+      "is_guess": false,
+      "security_value": 10,
+      "status": "candidate",
+      "selected_log_access": null,
+      "reason": "OPNsense can provide firewall logs, network traffic flow, dns queries."
+    }
+  ],
+  "advanced": []
+}
+```
+
+---
+
+### POST /api/log-discovery/sources/:id/confirm
+
+Confirm a candidate is what the matcher thinks it is.
+
+**Authentication:** Required
+
+---
+
+### POST /api/log-discovery/sources/:id/ignore
+
+Dismiss a source; it will not resurface in the ranked list.
+
+**Authentication:** Required
+
+---
+
+### POST /api/log-discovery/sources/:id/onboard/preview
+
+Render the copy-paste onboarding block for a confirmed source's matched
+fingerprint. Read-only -- does not change the source's status.
+
+**Authentication:** Required
+
+**Request Body:**
+```json
+{ "method_index": 0 }
+```
+- `method_index` (optional, default `0`) - index into the fingerprint's `log_access` array (easiest-first order)
+
+**Response (200):**
+```json
+{
+  "instructions": "OPNsense at 192.168.1.1 — point it at SIEMBOX's syslog listener\n...",
+  "log_access": { "method": "syslog_push", "target_port": 514, "format": "rfc5424", "auth": "none" }
+}
+```
+
+---
+
+### POST /api/log-discovery/sources/:id/onboard/confirm
+
+Manual-mode onboarding, finalized: records the chosen `log_access` method and
+marks the source `onboarded`. Requires an explicit `confirm: true` -- discovery
+never onboards without user confirmation.
+
+**Authentication:** Required
+
+**Request Body:**
+```json
+{ "method_index": 0, "confirm": true }
+```
+
+**Response (200):**
+```json
+{
+  "source": { "id": 3, "status": "onboarded", "selected_log_access": { "method": "syslog_push" } },
+  "instructions": "OPNsense at 192.168.1.1 — point it at SIEMBOX's syslog listener\n..."
 }
 ```
 

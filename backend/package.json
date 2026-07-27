@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-discovery-assets.js",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "start": "node dist/server.js",
     "migrate": "node dist/scripts/migrate.js",

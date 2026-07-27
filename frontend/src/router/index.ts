@@ -88,6 +88,12 @@ const routes: RouteRecordRaw[] = [
         meta: { allowedRoles: ['admin', 'analyst', 'operator'] },
       },
       {
+        path: 'log-discovery',
+        name: 'LogDiscovery',
+        component: () => import('@/views/LogDiscovery.vue'),
+        meta: { allowedRoles: ['admin', 'operator'] },
+      },
+      {
         path: 'vulnerability-scanning',
         name: 'VulnerabilityScanning',
         component: () => import('@/views/VulnerabilityScanning.vue'),

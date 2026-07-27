@@ -1,0 +1,27 @@
+id: authentik
+name: Authentik
+category: identity
+security_value: 9
+signals:
+  ports:
+    - {port: 9443, weight: 30}
+    - {port: 9000, weight: 20}
+  http:
+    - {path: /-/health/live/, expect: "", weight: 30}
+    - {path: /if/flow/, expect: "authentik", weight: 50}
+  mdns: []
+  ssdp: []
+  tls: []
+  mac_oui: []
+confidence_floor: 50
+attack_data_sources:
+  - authentication logs
+  - user account authentication
+  - logon session
+log_access:
+  - {method: api_pull, endpoint: /api/v3/events/events/, auth: bearer_token}
+onboard_template: templates/api_poller.j2
+credentials:
+  required: false
+  optional:
+    - {type: api_token, unlocks: [api_pull]}

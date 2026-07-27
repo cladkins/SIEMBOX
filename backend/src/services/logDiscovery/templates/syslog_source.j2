@@ -1,0 +1,13 @@
+{{ name }} at {{ ip }} — point it at SIEMBOX's syslog listener
+
+SIEMBOX already listens for syslog on {{ siembox_port }}/udp and /tcp -- no
+SIEMBOX-side configuration is needed. On {{ name }} itself, set the remote
+syslog target to:
+
+  Host:     {{ siembox_host }}
+  Port:     {{ siembox_port }}
+  Protocol: UDP (TCP also accepted)
+
+Once configured, check the Logs view for entries from {{ ip }} within a few
+minutes. If nothing arrives, confirm {{ ip }} can reach {{ siembox_host }} on
+{{ siembox_port }} and that {{ name }}'s syslog client is actually enabled.

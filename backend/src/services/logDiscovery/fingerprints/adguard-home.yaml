@@ -1,0 +1,26 @@
+id: adguard-home
+name: AdGuard Home
+category: dns
+security_value: 8
+signals:
+  ports:
+    - {port: 3000, weight: 20}
+    - {port: 53, weight: 20}
+  http:
+    - {path: /control/status, expect: "dns_addresses", weight: 60}
+  mdns: []
+  ssdp: []
+  tls: []
+  mac_oui: []
+confidence_floor: 50
+attack_data_sources:
+  - dns queries
+  - network traffic flow
+log_access:
+  - {method: file, path: /opt/adguardhome/work/data/querylog.json, format: json}
+  - {method: api_pull, endpoint: /control/querylog, auth: basic}
+onboard_template: templates/file_tail.j2
+credentials:
+  required: false
+  optional:
+    - {type: basic_auth, unlocks: [api_pull]}

@@ -1,0 +1,26 @@
+id: home-assistant
+name: Home Assistant
+category: home-automation
+security_value: 6
+signals:
+  ports:
+    - {port: 8123, weight: 40}
+  http:
+    - {path: /manifest.json, expect: "Home Assistant", weight: 50}
+  mdns:
+    - {service: _home-assistant._tcp, weight: 60}
+  ssdp: []
+  tls: []
+  mac_oui: []
+confidence_floor: 50
+attack_data_sources:
+  - authentication logs
+  - application logs
+log_access:
+  - {method: api_pull, endpoint: /api/error_log, auth: bearer_token}
+  - {method: file, path: /config/home-assistant.log}
+onboard_template: templates/api_poller.j2
+credentials:
+  required: false
+  optional:
+    - {type: long_lived_token, unlocks: [api_pull]}

@@ -75,6 +75,10 @@
             <el-icon><Box /></el-icon>
             <span>Assets</span>
           </el-menu-item>
+          <el-menu-item index="/log-discovery" v-if="authStore.user?.role === 'admin' || authStore.user?.role === 'operator'">
+            <el-icon><Connection /></el-icon>
+            <span>Log Discovery</span>
+          </el-menu-item>
           <el-menu-item index="/vulnerability-scanning" v-if="authStore.user?.role === 'admin' || authStore.user?.role === 'operator'">
             <el-icon><Search /></el-icon>
             <span>Vulnerability Scanning</span>
@@ -195,7 +199,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
 import { useChatStore } from '@/stores/chat';
 import AnalystChat from '@/components/AnalystChat.vue';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim, Cpu, ChatDotRound, Compass } from '@element-plus/icons-vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim, Cpu, ChatDotRound, Compass, Connection } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();

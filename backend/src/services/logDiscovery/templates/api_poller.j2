@@ -1,0 +1,14 @@
+{{ name }} at {{ ip }} — poll its API on an interval
+
+SIEMBOX doesn't ship a generic API poller yet, so wire this up with cron on any
+host that can reach {{ ip }} (the SIEMBOX host itself works) and forward each
+response as syslog with `logger`:
+
+*/5 * * * * curl -s -k -H "Authorization: Bearer $YOUR_TOKEN" \
+  "https://{{ ip }}:{{ port }}{{ api_endpoint }}" \
+  | logger -n {{ siembox_host }} -P {{ siembox_port }} -d -t {{ id }}
+
+Replace $YOUR_TOKEN with the credential from the optional credential step
+(see this source's fingerprint for what it unlocks). Adjust the */5 interval
+to match how often {{ name }} rotates through new events, and swap https for
+http if {{ name }} doesn't serve TLS on {{ port }}.

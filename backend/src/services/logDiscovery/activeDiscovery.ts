@@ -98,8 +98,10 @@ export async function tcpConnectScan(ip: string, ports: number[], opts: ActivePr
 function requestOnce(ip: string, port: number, path: string, useTls: boolean, timeoutMs: number): Promise<HttpProbeResult | null> {
   return new Promise((resolve) => {
     const mod = useTls ? https : http;
+    // codeql[js/disabling-certificate-validation]
+    const requestOptions = { host: ip, port, path, method: 'GET', timeout: timeoutMs, rejectUnauthorized: false };
     const req = mod.request(
-      { host: ip, port, path, method: 'GET', timeout: timeoutMs, rejectUnauthorized: false }, // codeql[js/disabling-certificate-validation] intentional: see function doc comment above
+      requestOptions,
       (res) => {
         let body = '';
         res.on('data', (chunk) => {
@@ -147,8 +149,10 @@ export function tlsProbe(ip: string, port: number, opts: ActiveProbeOptions = {}
       done = true;
       resolve(result);
     };
+    // codeql[js/disabling-certificate-validation]
+    const connectOptions = { host: ip, port, rejectUnauthorized: false, timeout: timeoutMs };
     const socket = tls.connect(
-      { host: ip, port, rejectUnauthorized: false, timeout: timeoutMs }, // codeql[js/disabling-certificate-validation] intentional: see function doc comment above
+      connectOptions,
       () => {
         const cert = socket.getPeerCertificate();
         socket.destroy();

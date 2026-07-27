@@ -107,6 +107,8 @@ export const api = {
   // Parsers
   getParsers: () => apiClient.get('/parsers'),
   getParserMatchStats: () => apiClient.get('/parsers/match-stats'),
+  getParserRecommendations: (refresh = false) =>
+    apiClient.get('/parsers/recommendations', { params: refresh ? { refresh: 'true' } : {}, timeout: 60000 }),
   getParser: (id: number) => apiClient.get(`/parsers/${id}`),
   createParser: (data: any) => apiClient.post('/parsers', data),
   updateParser: (id: number, data: any) => apiClient.put(`/parsers/${id}`, data),

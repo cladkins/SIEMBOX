@@ -645,9 +645,13 @@ docker exec siembox-postgres psql -U siembox -d siembox -c \
    FROM parsed_logs WHERE timestamp >= NOW() - INTERVAL '24 hours' GROUP BY 1;"
 ```
 
-If coverage is low, fix parsing first: install parsers for your top sources
-(*Parsers → Browse Catalog*), and see [Parser Problems](#parser-problems) for
-why a parser that passes its self-tests can still miss your live logs.
+If coverage is low, fix parsing first. The **Recommended for your logs** panel
+at the top of the Parsers page dry-runs every not-installed catalog parser
+against a sample of your recent unparsed logs and ranks them by coverage
+gained (weighting warning-or-worse traffic higher) — install from there, and
+use its "no catalog match" list to seed the AI builder for sources the catalog
+doesn't cover. See [Parser Problems](#parser-problems) for why a parser that
+passes its self-tests can still miss your live logs.
 
 **Aggregation rules and clock skew.** Threshold rules (`aggregation:`) count
 matching logs inside a time window measured against the **server's** clock,

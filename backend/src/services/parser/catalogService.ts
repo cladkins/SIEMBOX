@@ -263,6 +263,12 @@ export async function getCatalogParser(name: string): Promise<PortableParser | n
   return cache?.parsers.get(name) || null;
 }
 
+/** All catalog parsers by name (fills/refreshes the cache via fetchCatalog). */
+export async function getCatalogParsers(): Promise<Map<string, PortableParser>> {
+  await fetchCatalog(false);
+  return cache ? new Map(cache.parsers) : new Map();
+}
+
 export function clearCatalogCache(): void {
   cache = null;
 }

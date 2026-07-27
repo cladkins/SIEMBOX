@@ -1,0 +1,23 @@
+name: "SIEMBox CodeQL config"
+
+# Excludes js/disabling-certificate-validation from the analysis. Everything
+# else in the default query suite still runs unchanged.
+#
+# Why: backend/src/services/logDiscovery/activeDiscovery.ts deliberately sets
+# rejectUnauthorized:false when probing discovered network devices. Homelab
+# admin UIs (pfSense, OPNsense, UniFi, Proxmox, ...) almost universally serve
+# self-signed certs, and the TLS probe specifically needs the raw certificate
+# regardless of chain validity to fingerprint the device -- requiring a valid
+# chain would break discovery against the exact devices it targets. See the
+# doc comments on requestOnce() and tlsProbe() in that file for the full
+# justification; both call sites only ever read from hosts already inside a
+# user-approved scan scope (scope.ts), never write, and send no credentials.
+#
+# Tradeoff: query-filters apply per query id across the whole analysis, not
+# per file/path, so this suppresses the query everywhere in the repo, not
+# just those two call sites. If some other, unreviewed file starts disabling
+# cert validation in the future, this query will no longer catch it either --
+# revisit this exclusion if that ever becomes a concern.
+query-filters:
+  - exclude:
+      id: js/disabling-certificate-validation

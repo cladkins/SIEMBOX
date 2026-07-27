@@ -1,0 +1,50 @@
+name: "CodeQL"
+
+# Advanced setup, replacing GitHub's Default Setup for this repo. Default Setup
+# can't be customized, so it has no way to scope out the one deliberate
+# rejectUnauthorized:false pattern in
+# backend/src/services/logDiscovery/activeDiscovery.ts (see that file's doc
+# comments, and .github/codeql/codeql-config.yml for why) without either
+# accepting perpetual false-positive alerts or disabling certificate-validation
+# checking repo-wide by hand. This workflow + config-file scopes the exclusion
+# to just that one query.
+#
+# IMPORTANT: for GitHub to accept this workflow's SARIF uploads instead of
+# erroring on a setup conflict, Default Setup must be turned off first --
+# Settings > Code security > Code scanning > Analysis tools > CodeQL > Set up
+# in Advanced mode (or remove Default Setup).
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '30 6 * * 1' # Mondays 06:30 UTC
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['javascript-typescript', 'actions']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

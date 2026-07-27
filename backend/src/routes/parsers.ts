@@ -158,12 +158,21 @@ router.get('/recommendations', async (req: Request, res: Response) => {
       unparsed_high_sev_daily: Number(v.unparsed_high_sev_daily),
     }));
 
-    // Candidates: valid catalog parsers not already installed.
+    // Candidates: valid catalog parsers the user doesn't effectively already
+    // have. Dedup by BOTH name and content signature: name alone missed a
+    // catalog parser installed under a renamed local copy (same content, no
+    // name match) — it would be recommended back to the user. Signature is the
+    // parser_type+pattern+field_mappings+derivations+event_type fingerprint the
+    // catalog browser uses, so a byte-identical parser is excluded whatever it
+    // is named locally. Name dedup is kept too, so a locally-edited install
+    // (same name, drifted content) still isn't re-suggested.
+    const localParsers = await ParserModel.findAll();
+    const installedNames = new Set(localParsers.map((p) => p.name));
+    const installedSigs = new Set(localParsers.map((p) => parserSignature(p)).filter(Boolean));
     const { entries } = await fetchCatalog(false);
-    const installed = new Set((await ParserModel.findAll()).map((p) => p.name));
     const portable = await getCatalogParsers();
     const candidates = entries
-      .filter((e) => e.valid && !installed.has(e.name))
+      .filter((e) => e.valid && !installedNames.has(e.name) && !(e.signature && installedSigs.has(e.signature)))
       .map((e) => portable.get(e.name))
       .filter((p): p is PortableParser => !!p);
 

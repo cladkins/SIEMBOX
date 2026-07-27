@@ -99,12 +99,18 @@ router.get('/recommendations', async (req: Request, res: Response) => {
       daily_volume: Number(v.daily_volume),
     }));
 
-    // Candidates: valid catalog rules not already installed.
+    // Candidates: valid catalog rules the user doesn't effectively already
+    // have. Dedup by BOTH name and content signature so a catalog rule
+    // installed under a renamed local copy (same conditions/aggregation/alert,
+    // different name) isn't recommended back. Name dedup is kept so a
+    // locally-edited install (same name, drifted content) also isn't re-suggested.
     const { entries } = await fetchDetectionCatalog(false);
-    const installed = new Set((await DetectionRuleModel.findAll()).map((r) => r.name));
+    const localRules = await DetectionRuleModel.findAll();
+    const installedNames = new Set(localRules.map((r) => r.name));
+    const installedSigs = new Set(localRules.map((r) => ruleSignature(r)).filter(Boolean));
     const parsedByName = await getCatalogDetections();
     const candidates: CandidateRule[] = entries
-      .filter((e) => e.valid && !installed.has(e.name))
+      .filter((e) => e.valid && !installedNames.has(e.name) && !(e.signature && installedSigs.has(e.signature)))
       .map((e) => parsedByName.get(e.name))
       .filter((r): r is CandidateRule => !!r);
 

@@ -170,7 +170,18 @@ export async function getChatAiPublicConfig(): Promise<{
     keySource = (await getAiPublicConfig()).keySource;
   } else {
     const hasStored = !!(await getSetting('ai_chat_api_key'));
-    keySource = hasStored ? 'stored' : cfg.apiKey ? 'env' : 'none';
+    if (hasStored) {
+      keySource = 'stored';
+    } else {
+      // No analyst-specific key. When the analyst uses the SAME provider as the
+      // main config, getChatAiConfig resolves the key from main — so its true
+      // source is main's (typically the UI-stored key), NOT an env var.
+      // Reporting 'env' here was the bug: it claimed a key came from an
+      // environment variable that isn't set. Only a different-provider fallback
+      // can legitimately originate from env.
+      const main = await getAiPublicConfig();
+      keySource = cfg.provider === main.provider ? main.keySource : cfg.apiKey ? 'env' : 'none';
+    }
   }
   return {
     provider: cfg.provider,

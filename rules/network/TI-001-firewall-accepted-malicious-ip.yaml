@@ -1,0 +1,31 @@
+name: Accepted Traffic from Known-Malicious IP
+description: >
+  A firewall log shows traffic that was ACCEPTED (not dropped/rejected) from an
+  IP currently on an enabled threat-intel feed (abuse.ch C2, Tor exit,
+  blocklist.de, etc.). Dropped/blocked traffic from bad IPs is routine noise on
+  an internet-facing gateway and is intentionally NOT alerted here — what
+  matters is a known-malicious source whose traffic got THROUGH. The event_type
+  gate keeps the feed lookup off the hot path for non-firewall logs.
+severity: high
+enabled: true
+tags: [network, threat-intel, firewall, blocklist, ioc]
+
+conditions:
+  - field: event_type
+    operator: equals
+    value: "firewall_event"
+  - field: action
+    operator: equals
+    value: "accept"
+  - field: source_ip
+    operator: on_threat_feed
+    value: true
+
+alert:
+  title: "Accepted traffic from known-malicious IP {source_ip}"
+  description: >
+    Firewall ACCEPTED traffic from {source_ip}, which is listed on threat feeds:
+    {threat_feeds}. Destination {dest_ip}:{dest_port} ({protocol}).
+    A blocklisted source reaching an internal host is high-signal — verify the
+    destination service is meant to be exposed, check what the host did next,
+    and consider blocking the source at the gateway.

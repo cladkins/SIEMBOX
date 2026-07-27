@@ -1240,11 +1240,24 @@ async function runManualCleanup() {
 
 async function pollCleanupJob() {
   cleaning.value = true;
+  let sawJob = false;
   try {
     for (;;) {
       const { data } = await api.getCleanupStatus();
       const job = data.job;
-      if (!job) break;
+      if (!job) {
+        // Job state is in backend memory; it disappearing mid-poll means the
+        // backend restarted — which also stops the purge itself. Batches
+        // already deleted stay deleted; re-running continues where it left off.
+        if (sawJob) {
+          ElMessage.warning(
+            'The cleanup job is gone — the backend likely restarted, which stops the purge. ' +
+            'Already-deleted batches are kept; run cleanup again to continue.'
+          );
+        }
+        break;
+      }
+      sawJob = true;
       const r = job.results;
       cleanupProgress.value =
         `Deleted so far — raw logs: ${r.raw_logs_deleted.toLocaleString()}, ` +

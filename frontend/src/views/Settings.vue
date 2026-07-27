@@ -4,11 +4,12 @@
       <el-col :span="16">
         <el-card>
           <template #header>
-            <span>Log Retention Settings</span>
+            <span>Log Retention Settings <HelpTip text="How long SIEMBox keeps data before the daily background cleanup removes it. Larger windows mean more searchable history but a bigger database — the totals below show current table sizes." /></span>
           </template>
 
           <el-form :model="retentionForm" label-width="200px" v-loading="loading">
-            <el-form-item label="Auto Cleanup">
+            <el-form-item>
+              <template #label>Auto Cleanup <HelpTip text="Runs the retention purge automatically once a day in the background. For alerts it only removes CLOSED ones — open alerts are kept regardless of age." /></template>
               <el-switch v-model="retentionForm.auto_cleanup_enabled" />
               <el-text size="small" type="info" style="margin-left: 10px">
                 Automatically clean up old logs based on retention periods
@@ -17,7 +18,8 @@
 
             <el-divider />
 
-            <el-form-item label="Raw Logs Retention">
+            <el-form-item>
+              <template #label>Raw Logs Retention <HelpTip text="Original syslog message bodies. Deleting a raw log also deletes its parsed record (they are linked), so your effective searchable history is the SMALLER of this and the parsed-logs setting." /></template>
               <el-input-number
                 v-model="retentionForm.raw_logs_days"
                 :min="1"
@@ -31,7 +33,8 @@
               </el-text>
             </el-form-item>
 
-            <el-form-item label="Parsed Logs Retention">
+            <el-form-item>
+              <template #label>Parsed Logs Retention <HelpTip text="The structured, normalized copy that detection rules evaluate and the log views search. Keeping these longer than raw logs preserves searchable fields after the raw text is gone." /></template>
               <el-input-number
                 v-model="retentionForm.parsed_logs_days"
                 :min="1"
@@ -45,7 +48,8 @@
               </el-text>
             </el-form-item>
 
-            <el-form-item label="Alerts Retention">
+            <el-form-item>
+              <template #label>Alerts Retention <HelpTip text="Auto cleanup deletes only CLOSED alerts older than this. The Manual Cleanup below deletes any alert older than this, open or closed." /></template>
               <el-input-number
                 v-model="retentionForm.alerts_days"
                 :min="1"
@@ -70,7 +74,7 @@
 
         <el-card style="margin-top: 20px">
           <template #header>
-            <span>Security — Two-Factor Authentication (MFA)</span>
+            <span>Security — Two-Factor Authentication (MFA) <HelpTip text="Adds a time-based one-time code (TOTP) from an authenticator app to your login. Applies to your own account; each user enables MFA for themselves." /></span>
           </template>
 
           <div v-loading="mfaLoading">
@@ -165,7 +169,7 @@
 
         <el-card style="margin-top: 20px">
           <template #header>
-            <span>AI Builder</span>
+            <span>AI Builder <HelpTip text="Powers parser and detection generation from a sample log line. Bring your own API key (stored encrypted at rest); generated artifacts run a generate → validate → auto-refine loop against the real engine before you can save them." /></span>
           </template>
 
           <el-form :model="aiForm" label-width="200px" v-loading="aiLoading">
@@ -217,7 +221,7 @@
 
         <el-card style="margin-top: 20px">
           <template #header>
-            <span>AI Analyst (chat)</span>
+            <span>AI Analyst (chat) <HelpTip text="The conversational SOC analyst (Ask AI). Read-only by design — it can query alerts, assets, and vulnerabilities but can never change anything. Configured separately from the AI Builder so you can use a cheaper or local model here." /></span>
           </template>
 
           <el-form :model="chatForm" label-width="200px" v-loading="chatLoading">
@@ -326,7 +330,8 @@
           </el-alert>
 
           <el-form :model="autoDiscoveryForm" label-width="250px" v-loading="autoDiscoveryLoading">
-            <el-form-item label="Enable Auto-Discovery">
+            <el-form-item>
+              <template #label>Enable Auto-Discovery <HelpTip text="Periodically scans incoming logs and creates or updates Assets from the source IPs and hostnames it sees — so your inventory builds itself from real traffic." /></template>
               <el-switch
                 v-model="autoDiscoveryForm.auto_discovery_enabled"
                 :disabled="authStore.user?.role !== 'admin' || autoDiscoverySaving"
@@ -389,7 +394,7 @@
 
         <el-card style="margin-top: 20px">
           <template #header>
-            <span>Manual Cleanup</span>
+            <span>Manual Cleanup <HelpTip text="Starts a background purge using the retention values above. Runs in safe 10k-row batches so ingestion keeps flowing; progress appears next to the button and you can leave this page while it runs. Unlike auto cleanup, this also deletes alerts that are still open." /></span>
           </template>
 
           <el-alert type="warning" :closable="false" style="margin-bottom: 20px">
@@ -408,7 +413,7 @@
         <el-card style="margin-top: 20px">
           <template #header>
             <div class="card-header">
-              <span>IP Whitelist Management</span>
+              <span>IP Whitelist Management <HelpTip text="Whitelisted IPs and CIDR ranges never generate alerts — the rules engine suppresses every alert whose source IP matches, so add your own trusted hosts here instead of editing individual rules. Rules can also target non-whitelisted traffic via the not_in_whitelist condition." /></span>
               <el-button type="primary" size="small" @click="showAddIpDialog" :icon="Plus">
                 Add IP
               </el-button>
@@ -460,7 +465,7 @@
         <el-card style="margin-top: 20px">
           <template #header>
             <div class="card-header">
-              <span>Notifications</span>
+              <span>Notifications <HelpTip text="Where and when SIEMBox pushes events out: channels define destinations (Slack, Email, NTFY), preferences below choose which events fire and at what minimum severity." /></span>
               <div>
                 <el-button size="small" @click="sendTestAlert" :loading="testAlertSending">
                   Send test alert
@@ -540,7 +545,8 @@
               </el-text>
             </el-form-item>
 
-            <el-form-item label="Alerts Min Severity">
+            <el-form-item>
+              <template #label>Alerts Min Severity <HelpTip text="Only alerts at or above this severity are pushed to your channels. Lower-severity alerts still appear in the Alerts view — this filters notifications, not detection." /></template>
               <el-select
                 v-model="notificationSettingsForm.alertsMinSeverity"
                 :disabled="!notificationSettingsForm.alertsEnabled"
@@ -562,7 +568,8 @@
               </el-text>
             </el-form-item>
 
-            <el-form-item label="Vulnerabilities Min Severity">
+            <el-form-item>
+              <template #label>Vulnerabilities Min Severity <HelpTip text="Only newly found vulnerabilities at or above this severity trigger a notification. Everything found still lands in the Vulnerabilities view." /></template>
               <el-select
                 v-model="notificationSettingsForm.vulnMinSeverity"
                 :disabled="!notificationSettingsForm.vulnEnabled"
@@ -577,7 +584,8 @@
 
             <el-divider />
 
-            <el-form-item label="Ingestion Health">
+            <el-form-item>
+              <template #label>Ingestion Health <HelpTip text="A watchdog for the pipeline itself: notifies when NO logs have arrived for the stall threshold below — usually a dead shipper, a network problem, or a device that stopped forwarding." /></template>
               <el-switch v-model="notificationSettingsForm.ingestionEnabled" />
               <el-text size="small" type="info" style="margin-left: 10px">
                 Notify when log ingestion stalls
@@ -612,7 +620,7 @@
         <el-card>
           <template #header>
             <div class="card-header">
-              <span>System Information</span>
+              <span>System Information <HelpTip text="Version and runtime details for this SIEMBox instance — useful when reporting issues or checking that a redeploy picked up a new release." /></span>
               <el-button size="small" @click="fetchStatistics" :icon="Refresh" circle />
             </div>
           </template>
@@ -854,6 +862,7 @@ import { ref, onMounted, reactive, computed } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Check, Delete, Refresh, Plus, Edit, VideoPlay, Key } from '@element-plus/icons-vue';
+import HelpTip from '@/components/HelpTip.vue';
 import { format } from 'date-fns';
 import QrcodeVue from 'qrcode.vue';
 import { useAuthStore } from '@/stores/auth';

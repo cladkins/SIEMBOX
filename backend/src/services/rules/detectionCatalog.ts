@@ -134,6 +134,14 @@ export async function getCatalogDetection(
   return cache?.rules.get(name) || null;
 }
 
+/** All parsed catalog rules by name (fills/refreshes the cache). */
+export async function getCatalogDetections(): Promise<Map<string, any>> {
+  await fetchDetectionCatalog(false);
+  const out = new Map<string, any>();
+  if (cache) for (const [name, r] of cache.rules) out.set(name, r.parsed);
+  return out;
+}
+
 export function clearDetectionCache(): void {
   cache = null;
 }

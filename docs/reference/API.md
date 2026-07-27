@@ -723,6 +723,52 @@ Get all detection rules.
 
 ---
 
+### GET /api/rules/recommendations
+
+Recommends catalog detection rules to install by dry-running every valid,
+not-yet-installed catalog rule's **conditions** against samples of recent
+**parsed** logs using the real condition evaluator. A recommendation means
+your live data actually satisfies the rule's conditions, so it would engage
+rather than sit inert. Ranked by matching logs/day × rule-severity weight
+(critical 10, high 5, medium 2, low 1). DB-backed operators
+(`not_in_whitelist`, `on_threat_feed`, ...) count as satisfied when the field
+is present, since their outcome is runtime context, not data shape.
+
+Cached 10 minutes; `?refresh=true` recomputes.
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+{
+  "window": "24h",
+  "sampled_parsers": 5,
+  "candidates_considered": 40,
+  "computed_at": "2026-07-27T00:00:00.000Z",
+  "recommendations": [
+    {
+      "name": "SSH Brute Force Detection",
+      "severity": "high",
+      "tags": ["ssh", "brute-force"],
+      "sources": [
+        { "parser_name": "ssh-authentication", "matched": 8, "sampled": 12, "daily_volume": 3000 }
+      ],
+      "matched": 8,
+      "sampled": 12,
+      "est_daily_matches": 2000,
+      "score": 10000,
+      "aggregation": { "field": "source_ip", "timeframe": "5m", "threshold": 5 }
+    }
+  ]
+}
+```
+
+`aggregation`, when present, tells the UI the rule only fires once its
+threshold is met over the timeframe (the `est_daily_matches` is condition-
+matching logs, not alerts).
+
+---
+
 ### GET /api/rules/:id
 
 Get single detection rule.

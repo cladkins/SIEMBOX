@@ -9,12 +9,19 @@ import { catalogNewFileUrl } from '../services/parser/catalogService';
 import {
   fetchDetectionCatalog,
   getCatalogDetection,
+  getCatalogDetections,
   getDetectionSource,
   clearDetectionCache,
   ruleSignature,
 } from '../services/rules/detectionCatalog';
+import {
+  recommendRules,
+  RuleSourceSample,
+  CandidateRule,
+} from '../services/rules/detectionRecommendations';
 import { generateDetection } from '../services/ai/aiService';
 import { authorize } from '../middleware/auth';
+import { query } from '../config/database';
 
 const router = Router();
 
@@ -42,6 +49,79 @@ router.post('/ai/generate', authorize('admin'), async (req: Request, res: Respon
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, `AI generation failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+  }
+});
+
+// Detection-rule recommendations: dry-run every not-installed catalog rule's
+// conditions against samples of recent PARSED logs using the real condition
+// evaluator, ranked by matching traffic per day × rule severity. Empirical —
+// a recommended rule is one your live data actually satisfies. Cached 10 min;
+// `?refresh=true` bypasses.
+let ruleRecsCache: { at: number; body: any } | null = null;
+const RULE_RECS_TTL = 10 * 60 * 1000;
+
+router.get('/recommendations', async (req: Request, res: Response) => {
+  try {
+    if (req.query.refresh !== 'true' && ruleRecsCache && Date.now() - ruleRecsCache.at < RULE_RECS_TTL) {
+      res.json(ruleRecsCache.body);
+      return;
+    }
+
+    // Per-parser daily volumes from the incrementally-maintained counters
+    // (parser_id 0 is the unparsed fallback — rules never see those logs).
+    const volumes = await query(
+      `SELECT h.parser_id, p.name, SUM(h.matches)::bigint AS daily_volume
+       FROM parser_match_hourly h
+       JOIN parsers p ON p.id = h.parser_id
+       WHERE h.parser_id <> 0 AND h.hour >= NOW() - INTERVAL '24 hours'
+       GROUP BY h.parser_id, p.name`
+    );
+
+    // Recent parsed_data samples per parser — one pass over a 6h window.
+    const sampleRows = await query(
+      `SELECT parser_id, parsed_data FROM (
+         SELECT parser_id, parsed_data,
+                ROW_NUMBER() OVER (PARTITION BY parser_id ORDER BY id DESC) AS rn
+         FROM parsed_logs
+         WHERE created_at >= NOW() - INTERVAL '6 hours' AND parser_id IS NOT NULL
+       ) t WHERE rn <= 12`
+    );
+    const samplesByParser = new Map<number, Array<Record<string, any>>>();
+    for (const row of sampleRows.rows) {
+      const id = Number(row.parser_id);
+      if (!samplesByParser.has(id)) samplesByParser.set(id, []);
+      samplesByParser.get(id)!.push(row.parsed_data || {});
+    }
+
+    const sources: RuleSourceSample[] = volumes.rows.map((v: any) => ({
+      parser_name: v.name,
+      samples: samplesByParser.get(Number(v.parser_id)) || [],
+      daily_volume: Number(v.daily_volume),
+    }));
+
+    // Candidates: valid catalog rules not already installed.
+    const { entries } = await fetchDetectionCatalog(false);
+    const installed = new Set((await DetectionRuleModel.findAll()).map((r) => r.name));
+    const parsedByName = await getCatalogDetections();
+    const candidates: CandidateRule[] = entries
+      .filter((e) => e.valid && !installed.has(e.name))
+      .map((e) => parsedByName.get(e.name))
+      .filter((r): r is CandidateRule => !!r);
+
+    const body = {
+      window: '24h',
+      sampled_parsers: sources.length,
+      candidates_considered: candidates.length,
+      computed_at: new Date().toISOString(),
+      ...recommendRules(sources, candidates),
+    };
+    ruleRecsCache = { at: Date.now(), body };
+    res.json(body);
+  } catch (error) {
+    throw new ApiError(
+      502,
+      `Failed to compute rule recommendations: ${error instanceof Error ? error.message : 'unknown error'}`
+    );
   }
 });
 

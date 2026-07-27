@@ -195,6 +195,7 @@ export const api = {
 
   // External threat feeds + IP reputation (Phase 4)
   getThreatFeeds: () => apiClient.get('/threat-feeds'),
+  getThreatFeedSummary: () => apiClient.get('/threat-feeds/summary'),
   updateThreatFeed: (id: number, data: { enabled?: boolean; refresh_interval_minutes?: number }) =>
     apiClient.put(`/threat-feeds/feeds/${id}`, data),
   refreshThreatFeed: (id: number) => apiClient.post(`/threat-feeds/feeds/${id}/refresh`, {}, { timeout: 60000 }),

@@ -8,6 +8,37 @@
       </p>
     </div>
 
+    <!-- Pipeline health: is intel being fetched, and is anything acting on it? -->
+    <el-alert
+      v-if="summary"
+      :type="summaryType"
+      :closable="false"
+      show-icon
+      class="summary-alert"
+    >
+      <template #title>
+        <span v-if="summary.feeds_enabled === 0">
+          No threat feeds are enabled — nothing is being fetched. Enable feeds below to start.
+        </span>
+        <span v-else-if="summary.feeds_errored > 0">
+          {{ summary.feeds_errored }} of {{ summary.feeds_enabled }} enabled feeds are failing to
+          fetch (likely blocked outbound egress — see the feeds table). {{ summary.total_indicators.toLocaleString() }}
+          indicators loaded from the rest.
+        </span>
+        <span v-else>
+          {{ summary.feeds_enabled }} feeds active · {{ summary.total_indicators.toLocaleString() }}
+          indicators loaded · last refreshed {{ summary.last_fetched_at ? formatDate(summary.last_fetched_at) : 'never' }}.
+          <template v-if="summary.threat_feed_alerts_30d > 0">
+            {{ summary.threat_feed_alerts_30d }} threat-feed alert(s) in the last 30 days.
+          </template>
+          <template v-else>
+            <strong>No alerts have used this intel in 30 days</strong> — install a threat-feed detection rule
+            (Detection Rules → Browse Catalog) so a blocklisted IP actually raises an alert.
+          </template>
+        </span>
+      </template>
+    </el-alert>
+
     <el-card class="lookup-card">
       <el-form :inline="true" @submit.prevent="lookup">
         <el-form-item label="IP address">
@@ -30,11 +61,24 @@
     <el-card class="map-card">
       <template #header>
         <div class="card-header">
-          <span>Alert Origins (last 30 days)</span>
+          <span>
+            Alert Origins (last 30 days)
+            <el-tooltip
+              content="Countries where alerts originated, by GeoIP of each alert's source IP. This maps ALERTS, not threat-feed data — it stays blank until rules fire on public (non-LAN) IPs. Internal-only traffic and unconfigured detections both leave it empty."
+              placement="top"
+            >
+              <el-icon style="vertical-align: middle"><InfoFilled /></el-icon>
+            </el-tooltip>
+          </span>
           <el-text size="small" type="info">Click a country to list its IPs</el-text>
         </div>
       </template>
-      <AlertsCountryMap :data="countries" @country-click="selectCountryByCode" />
+      <AlertsCountryMap v-if="countries.length" :data="countries" @country-click="selectCountryByCode" />
+      <el-empty
+        v-else
+        :image-size="70"
+        description="No alerts with a geolocated source IP yet. This map plots alert origins — it fills in once detection rules fire on public IPs (LAN traffic has no country)."
+      />
     </el-card>
 
     <el-row :gutter="20">
@@ -283,7 +327,7 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { Search, Refresh, Warning } from '@element-plus/icons-vue';
+import { Search, Refresh, Warning, InfoFilled } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
 import { api } from '@/services/api';
 import { useAuthStore } from '@/stores/auth';
@@ -314,6 +358,13 @@ const savingProvider = ref<string | null>(null);
 const providerKeys = reactive<Record<string, string>>({});
 const providerEnabled = reactive<Record<string, boolean>>({});
 
+const summary = ref<any>(null);
+const summaryType = computed(() => {
+  if (!summary.value) return 'info';
+  if (summary.value.feeds_enabled === 0 || summary.value.feeds_errored > 0) return 'warning';
+  if (summary.value.threat_feed_alerts_30d === 0) return 'warning';
+  return 'success';
+});
 const countries = ref<any[]>([]);
 const countriesLoading = ref(false);
 const selectedCountry = ref<any>(null);
@@ -473,8 +524,17 @@ async function saveProvider(p: any) {
   }
 }
 
+async function loadSummary() {
+  try {
+    summary.value = (await api.getThreatFeedSummary()).data;
+  } catch {
+    summary.value = null; // best-effort banner
+  }
+}
+
 onMounted(async () => {
   loadFeeds();
+  loadSummary();
   await loadCountries();
   // Deep links: ?ip= (clickthrough from other pages) and ?country= (from the
   // dashboard map).

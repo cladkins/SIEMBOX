@@ -4,8 +4,47 @@ import { ApiError } from '../middleware/errorHandler';
 import { authorize } from '../middleware/auth';
 import { FeedService } from '../services/threatintel/feedService';
 import { ReputationService, ProviderName } from '../services/threatintel/reputationService';
+import { query } from '../config/database';
 
 const router = Router();
+
+// At-a-glance health of the threat-intel pipeline: is it fetching, and is
+// anything acting on it? Answers "is threat intel actually working?" without
+// scrolling the feeds table or querying the DB. Any authenticated user.
+router.get('/summary', async (_req: Request, res: Response) => {
+  try {
+    const feeds = await FeedService.getFeeds();
+    const enabled = feeds.filter((f) => f.enabled);
+    const errored = enabled.filter((f) => f.last_status === 'error');
+    const totalIndicators = enabled.reduce((n, f) => n + (f.indicator_count || 0), 0);
+    const lastFetched = enabled
+      .map((f) => f.last_fetched_at)
+      .filter((t): t is string => !!t)
+      .sort()
+      .pop() || null;
+
+    // How many alerts in the last 30 days were actually raised by a threat-feed
+    // rule — i.e. is the intel being consumed, not just downloaded? Detected by
+    // the {threat_feeds} enrichment the engine writes onto such alerts.
+    const consumed = await query(
+      `SELECT COUNT(*)::int AS alerts_30d
+         FROM alerts
+        WHERE created_at >= NOW() - INTERVAL '30 days'
+          AND matched_data ? 'threat_feeds'`
+    );
+
+    res.json({
+      feeds_enabled: enabled.length,
+      feeds_total: feeds.length,
+      feeds_errored: errored.length,
+      total_indicators: totalIndicators,
+      last_fetched_at: lastFetched,
+      threat_feed_alerts_30d: consumed.rows[0]?.alerts_30d ?? 0,
+    });
+  } catch (error) {
+    throw new ApiError(500, 'Failed to load threat-intel summary');
+  }
+});
 
 // Overview: configured blocklist feeds (with status) + reputation providers
 // (configured/enabled flags, never the keys). Any authenticated user may read.

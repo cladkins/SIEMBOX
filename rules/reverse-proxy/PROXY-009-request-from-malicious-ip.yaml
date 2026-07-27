@@ -1,0 +1,27 @@
+name: Web Request from Known-Malicious IP
+description: >
+  A reverse-proxy / web access log shows an HTTP request whose client IP is on
+  an enabled threat-intel feed (abuse.ch, Tor exit list, blocklist.de, etc.).
+  Unlike a firewall drop, this means the request actually reached your proxy and
+  an application — worth reviewing what was requested and whether it succeeded.
+  The event_type gate keeps the feed lookup off the hot path for non-HTTP logs.
+severity: high
+enabled: true
+tags: [reverse-proxy, threat-intel, web, blocklist, ioc]
+
+conditions:
+  - field: event_type
+    operator: equals
+    value: "http_request"
+  - field: source_ip
+    operator: on_threat_feed
+    value: true
+
+alert:
+  title: "Web request from known-malicious IP {source_ip}"
+  description: >
+    {source_ip} — listed on threat feeds: {threat_feeds} — made a request to
+    {host}{path} (status {status_code}, method {method}).
+    Review whether the request succeeded, what endpoint it targeted, and whether
+    the same IP appears in other alerts. Consider blocking it at the proxy or
+    gateway if the traffic is unwanted.

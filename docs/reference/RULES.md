@@ -94,7 +94,17 @@ Each detection rule contains:
 - `equals` - Exact value match
 - `contains` - Substring match
 - `regex` - Regular expression pattern
-- `greater_than` - Numeric comparison
+- `greater_than` / `less_than` - Numeric comparison
+- `in` / `not_in` - Membership in a list
+- `exists` - Field is present (`value: true`) or absent (`value: false`)
+- `not_in_whitelist` - The field's IP is not in the operator's IP allow-list
+- `on_threat_feed` / `not_on_threat_feed` - The field's IP is (or isn't)
+  currently listed on an enabled threat-intel feed. This is what makes the
+  downloaded feeds actionable: pair it with a cheap first condition (e.g.
+  `event_type equals firewall_event`) so the per-log feed lookup only runs for
+  relevant traffic. Alerts raised this way carry a `{threat_feeds}` variable
+  naming the feeds that flagged the IP. See the `TI-*` (network) and
+  `PROXY-009` (reverse-proxy) rules.
 
 **Aggregation** - Groups events before alerting:
 - Counts occurrences of matching events

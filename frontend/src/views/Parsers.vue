@@ -1,5 +1,86 @@
 <template>
   <div class="parsers">
+    <!-- Recommendations: not-installed catalog parsers dry-run against a
+         severity-stratified sample of recent unparsed logs. -->
+    <el-card v-if="recsLoading || recs" class="recommendations-card">
+      <template #header>
+        <div class="card-header">
+          <span>
+            Recommended for your logs
+            <el-tooltip
+              content="Each not-installed catalog parser is test-run against a sample of your recent unparsed logs (warning-or-worse severity sampled first). Estimates are logs/day the parser would make visible to detection rules."
+              placement="top"
+            >
+              <el-icon style="vertical-align: middle"><InfoFilled /></el-icon>
+            </el-tooltip>
+          </span>
+          <el-button size="small" :loading="recsLoading" @click="loadRecommendations(true)">
+            Refresh
+          </el-button>
+        </div>
+      </template>
+
+      <div v-loading="recsLoading">
+        <el-table v-if="recs?.recommendations?.length" :data="recs.recommendations" size="small">
+          <el-table-column prop="name" label="Parser" min-width="180" />
+          <el-table-column label="Matches your sources" min-width="220">
+            <template #default="{ row }">
+              <el-tag
+                v-for="s in row.sources"
+                :key="s.app_name ?? '(untagged)'"
+                size="small"
+                style="margin-right: 4px"
+              >
+                {{ s.app_name ?? '(untagged)' }} {{ s.matched }}/{{ s.sampled }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="Est. logs/day gained" width="170" align="right">
+            <template #default="{ row }">
+              {{ row.est_daily_matches.toLocaleString() }}
+              <el-tag v-if="row.est_daily_high_severity > 0" type="warning" size="small">
+                {{ row.est_daily_high_severity.toLocaleString() }} warn+
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="" width="110" align="right">
+            <template #default="{ row }">
+              <el-button
+                type="primary"
+                size="small"
+                :loading="installing === row.name"
+                @click="installRecommended(row)"
+              >
+                Install
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty
+          v-else-if="recs && !recs.recommendations.length"
+          description="No catalog parser matches your unparsed logs — see the sources below for AI-builder candidates."
+          :image-size="60"
+        />
+
+        <div v-if="recs?.uncovered?.length" class="uncovered-block">
+          <div class="uncovered-title">
+            Unparsed sources with no catalog match — top parser-authoring targets:
+          </div>
+          <div v-for="u in recs.uncovered.slice(0, 8)" :key="u.app_name ?? '(untagged)'" class="uncovered-row">
+            <el-tag size="small" type="info">{{ u.app_name ?? '(untagged)' }}</el-tag>
+            <span class="uncovered-volume">
+              {{ u.unparsed_daily.toLocaleString() }}/day<template v-if="u.unparsed_high_sev_daily > 0">
+                ({{ u.unparsed_high_sev_daily.toLocaleString() }} warn+)</template>
+            </span>
+            <code class="uncovered-example">{{ u.example }}</code>
+            <el-button size="small" text type="primary" @click="aiFromExample(u.example)">
+              Generate with AI
+            </el-button>
+          </div>
+        </div>
+      </div>
+    </el-card>
+
     <el-card>
       <template #header>
         <div class="card-header">
@@ -479,10 +560,12 @@
 import { ref, onMounted, reactive, computed } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
-import { Plus, Delete, Right, CircleCheck, Upload, Shop, Refresh, MagicStick, Download } from '@element-plus/icons-vue';
+import { Plus, Delete, Right, CircleCheck, Upload, Shop, Refresh, MagicStick, Download, InfoFilled } from '@element-plus/icons-vue';
 
 const parsers = ref<any[]>([]);
 const matchStats = ref<{ window: string; by_parser: Record<string, number>; unparsed: number } | null>(null);
+const recs = ref<any>(null);
+const recsLoading = ref(false);
 const loading = ref(false);
 const updating = ref(false);
 const saving = ref(false);
@@ -618,7 +701,10 @@ const rules: FormRules = {
   priority: [{ required: true, message: 'Priority is required', trigger: 'blur' }],
 };
 
-onMounted(fetchParsers);
+onMounted(() => {
+  fetchParsers();
+  loadRecommendations();
+});
 
 async function fetchParsers() {
   loading.value = true;
@@ -957,6 +1043,29 @@ async function install(row: any) {
   }
 }
 
+async function loadRecommendations(refresh = false) {
+  recsLoading.value = true;
+  try {
+    recs.value = (await api.getParserRecommendations(refresh)).data;
+  } catch {
+    // Best-effort panel: a catalog/network hiccup shouldn't block the page.
+    recs.value = null;
+  } finally {
+    recsLoading.value = false;
+  }
+}
+
+async function installRecommended(row: any) {
+  await install(row);
+  await loadRecommendations(true);
+}
+
+/** Open the AI builder pre-filled with an uncovered source's sample line. */
+function aiFromExample(example: string) {
+  openAiBuilder();
+  aiSample.value = example;
+}
+
 async function installAll() {
   installingAll.value = true;
   try {
@@ -999,6 +1108,45 @@ async function deleteParser(parser: any) {
 <style scoped>
 .parsers {
   padding: 0;
+}
+
+.recommendations-card {
+  margin-bottom: 20px;
+}
+
+.uncovered-block {
+  margin-top: 16px;
+  border-top: 1px solid var(--el-border-color-lighter);
+  padding-top: 12px;
+}
+
+.uncovered-title {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 8px;
+}
+
+.uncovered-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  min-width: 0;
+}
+
+.uncovered-volume {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+
+.uncovered-example {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
 }
 
 .card-header {

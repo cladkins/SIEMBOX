@@ -10,11 +10,18 @@ import {
 import {
   fetchCatalog,
   getCatalogParser,
+  getCatalogParsers,
   getCatalogSource,
   clearCatalogCache,
   parserSignature,
   catalogNewFileUrl,
 } from '../services/parser/catalogService';
+import {
+  recommendParsers,
+  RecommendationResult,
+  SourceSample,
+  HIGH_SEVERITY_MAX,
+} from '../services/parser/parserRecommendations';
 import { generateParser } from '../services/ai/aiService';
 import { authorize } from '../middleware/auth';
 import { ApiError } from '../middleware/errorHandler';
@@ -77,6 +84,97 @@ router.get('/match-stats', async (_req: Request, res: Response) => {
     res.json({ window: '24h', by_parser: byParser, unparsed });
   } catch (error) {
     throw new ApiError(500, 'Failed to compute parser match stats');
+  }
+});
+
+// Parser recommendations: dry-run every not-installed catalog parser against a
+// severity-stratified sample of recent UNPARSED logs (the real runParser
+// pipeline — no heuristics), and rank by how much detection-visible coverage
+// each would add, weighting warning-or-worse traffic 10×. Expensive-ish (one
+// 24h aggregate + a windowed sample + regex dry-runs), so the result is cached
+// for 10 minutes; `?refresh=true` bypasses.
+let recommendationsCache: { at: number; body: any } | null = null;
+const RECOMMENDATIONS_TTL = 10 * 60 * 1000;
+
+router.get('/recommendations', async (req: Request, res: Response) => {
+  try {
+    if (
+      req.query.refresh !== 'true' &&
+      recommendationsCache &&
+      Date.now() - recommendationsCache.at < RECOMMENDATIONS_TTL
+    ) {
+      res.json(recommendationsCache.body);
+      return;
+    }
+
+    // Per-source unparsed volume over 24h, with the warning-or-worse share.
+    const volumes = await query(
+      `SELECT r.app_name,
+              COUNT(*)::bigint AS unparsed_daily,
+              COUNT(*) FILTER (WHERE r.severity IS NOT NULL AND r.severity <= $1)::bigint AS unparsed_high_sev_daily
+       FROM parsed_logs pl
+       JOIN raw_logs r ON r.id = pl.raw_log_id
+       WHERE pl.parser_id IS NULL
+         AND pl.created_at >= NOW() - INTERVAL '24 hours'
+       GROUP BY r.app_name
+       ORDER BY 3 DESC, 2 DESC
+       LIMIT 40`,
+      [HIGH_SEVERITY_MAX]
+    );
+
+    // Recent messages per source, stratified so warning-or-worse lines are
+    // sampled first (a source's error format is what detections care about),
+    // recency breaking ties. One pass over a 6h window.
+    const sampleRows = await query(
+      `SELECT app_name, raw_message FROM (
+         SELECT app_name, raw_message,
+                ROW_NUMBER() OVER (
+                  PARTITION BY app_name
+                  ORDER BY (CASE WHEN severity IS NOT NULL AND severity <= $1 THEN 0 ELSE 1 END), id DESC
+                ) AS rn
+         FROM raw_logs
+         WHERE created_at >= NOW() - INTERVAL '6 hours'
+       ) t WHERE rn <= 12`,
+      [HIGH_SEVERITY_MAX]
+    );
+    const messagesByApp = new Map<string | null, string[]>();
+    for (const row of sampleRows.rows) {
+      const key = row.app_name ?? null;
+      if (!messagesByApp.has(key)) messagesByApp.set(key, []);
+      messagesByApp.get(key)!.push(row.raw_message);
+    }
+
+    const samples: SourceSample[] = volumes.rows.map((v: any) => ({
+      app_name: v.app_name ?? null,
+      messages: messagesByApp.get(v.app_name ?? null) || [],
+      unparsed_daily: Number(v.unparsed_daily),
+      unparsed_high_sev_daily: Number(v.unparsed_high_sev_daily),
+    }));
+
+    // Candidates: valid catalog parsers not already installed.
+    const { entries } = await fetchCatalog(false);
+    const installed = new Set((await ParserModel.findAll()).map((p) => p.name));
+    const portable = await getCatalogParsers();
+    const candidates = entries
+      .filter((e) => e.valid && !installed.has(e.name))
+      .map((e) => portable.get(e.name))
+      .filter((p): p is PortableParser => !!p);
+
+    const result: RecommendationResult = recommendParsers(samples, candidates);
+    const body = {
+      window: '24h',
+      sampled_sources: samples.length,
+      candidates_considered: candidates.length,
+      computed_at: new Date().toISOString(),
+      ...result,
+    };
+    recommendationsCache = { at: Date.now(), body };
+    res.json(body);
+  } catch (error) {
+    throw new ApiError(
+      502,
+      `Failed to compute parser recommendations: ${error instanceof Error ? error.message : 'unknown error'}`
+    );
   }
 });
 

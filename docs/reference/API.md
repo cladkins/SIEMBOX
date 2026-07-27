@@ -440,6 +440,56 @@ format even though its self-tests pass.
 
 ---
 
+### GET /api/parsers/recommendations
+
+Recommends catalog parsers to install by dry-running every valid,
+not-yet-installed catalog parser against a sample of recent **unparsed** logs
+using the real parse pipeline. Sampling and ranking are severity-aware: lines
+with syslog severity ≤ 4 (warning or worse) are sampled first, and the ranking
+`score` counts a warning+ log 10× a routine one. Sources no candidate matches
+are returned as `uncovered` — the top targets for authoring a parser (e.g. via
+the AI builder).
+
+Results are cached for 10 minutes; pass `?refresh=true` to recompute.
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+{
+  "window": "24h",
+  "sampled_sources": 25,
+  "candidates_considered": 27,
+  "computed_at": "2026-07-27T00:00:00.000Z",
+  "recommendations": [
+    {
+      "name": "unifi-hostapd",
+      "description": "Parses hostapd WiFi station events...",
+      "tags": ["wifi", "unifi"],
+      "sources": [
+        { "app_name": "hostapd", "matched": 11, "sampled": 12,
+          "unparsed_daily": 168271, "unparsed_high_sev_daily": 3200 }
+      ],
+      "matched": 11,
+      "sampled": 12,
+      "est_daily_matches": 154248,
+      "est_daily_high_severity": 2933,
+      "score": 180645
+    }
+  ],
+  "uncovered": [
+    {
+      "app_name": "homebox",
+      "unparsed_daily": 80866,
+      "unparsed_high_sev_daily": 120,
+      "example": "level=INFO msg=\"request completed\" status=200"
+    }
+  ]
+}
+```
+
+---
+
 ### GET /api/parsers/:id
 
 Get single parser by ID.

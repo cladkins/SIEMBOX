@@ -14,6 +14,35 @@ export interface Alert {
   updated_at: Date;
 }
 
+export interface AlertFilterOptions {
+  severity?: string;
+  status?: string;
+  ruleId?: number;
+  startTime?: Date;
+  endTime?: Date;
+  search?: string;
+}
+
+/** One alert's summary as it appears inside a correlated group. */
+export interface CorrelatedAlert {
+  id: number;
+  rule_id: number;
+  severity: Alert['severity'];
+  title: string;
+  status: Alert['status'];
+  created_at: Date;
+}
+
+/**
+ * The representative alert for one triggering event, plus everything else that
+ * fired on it. `correlated` always includes the representative itself, so
+ * `correlated_count` is the true size of the group.
+ */
+export interface AlertGroup extends Alert {
+  correlated_count: number;
+  correlated: CorrelatedAlert[];
+}
+
 export interface CreateAlertParams {
   rule_id: number;
   parsed_log_id?: number | null;
@@ -51,16 +80,11 @@ export class AlertModel {
     return result.rows[0] || null;
   }
 
-  static async findAll(options?: {
-    limit?: number;
-    offset?: number;
-    severity?: string;
-    status?: string;
-    ruleId?: number;
-    startTime?: Date;
-    endTime?: Date;
-    search?: string;
-  }): Promise<{ alerts: Alert[]; total: number }> {
+  /**
+   * Shared WHERE clause for the flat and grouped list views, so a filter added
+   * to one cannot silently go missing from the other.
+   */
+  private static buildFilters(options?: AlertFilterOptions): { whereClause: string; params: any[]; nextIndex: number } {
     const conditions: string[] = [];
     const params: any[] = [];
     let paramIndex = 1;
@@ -98,7 +122,21 @@ export class AlertModel {
       params.push(options.endTime);
     }
 
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    return {
+      whereClause: conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '',
+      params,
+      nextIndex: paramIndex,
+    };
+  }
+
+  static async findAll(options?: AlertFilterOptions & { limit?: number; offset?: number }): Promise<{
+    alerts: Alert[];
+    total: number;
+  }> {
+    const built = this.buildFilters(options);
+    const whereClause = built.whereClause;
+    const params = built.params;
+    let paramIndex = built.nextIndex;
 
     // Get total count
     const countResult = await query(`SELECT COUNT(*) FROM alerts ${whereClause}`, params);
@@ -120,6 +158,81 @@ export class AlertModel {
       alerts: alertsResult.rows,
       total,
     };
+  }
+
+  /**
+   * The same list, collapsed to one row per TRIGGERING EVENT.
+   *
+   * The rules engine evaluates every rule against every log with no early exit,
+   * so one request routinely raises several alerts — `;cat /etc/passwd` trips
+   * both the SQL-injection and command-injection rules. Flat, that reads as
+   * three problems; grouped, it reads as one event three rules agree on.
+   *
+   * Grouping is by `parsed_log_id` (indexed as idx_alerts_parsed_log_id).
+   * Alerts with no parsed log — EDR findings, and anything whose source log was
+   * pruned, since the FK is ON DELETE SET NULL — must each stand alone rather
+   * than collapsing into one giant NULL bucket, so those key off the alert id.
+   *
+   * The representative is the most severe member, newest first to break ties,
+   * because that is what decides how urgently the event needs attention.
+   */
+  static async findAllGrouped(
+    options?: AlertFilterOptions & { limit?: number; offset?: number }
+  ): Promise<{ alerts: AlertGroup[]; total: number }> {
+    const { whereClause, params, nextIndex } = this.buildFilters(options);
+    let paramIndex = nextIndex;
+
+    // 'p'/'a' prefixes keep a parsed_log_id and an alert id from ever colliding.
+    const GROUP_KEY = `COALESCE('p' || parsed_log_id::text, 'a' || id::text)`;
+    const SEV_RANK = `CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END`;
+
+    const countResult = await query(
+      `SELECT COUNT(*) FROM (SELECT DISTINCT ${GROUP_KEY} AS group_key FROM alerts ${whereClause}) g`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].count, 10);
+
+    const limit = options?.limit ?? 100;
+    const offset = options?.offset ?? 0;
+    const listParams = [...params, limit, offset];
+
+    const result = await query(
+      `WITH filtered AS (
+         SELECT *, ${GROUP_KEY} AS group_key, ${SEV_RANK} AS sev_rank
+         FROM alerts ${whereClause}
+       ),
+       grouped AS (
+         SELECT
+           group_key,
+           COUNT(*)::int AS correlated_count,
+           MAX(created_at) AS group_created_at,
+           jsonb_agg(
+             jsonb_build_object(
+               'id', id, 'rule_id', rule_id, 'severity', severity,
+               'title', title, 'status', status, 'created_at', created_at
+             ) ORDER BY sev_rank DESC, created_at DESC, id DESC
+           ) AS correlated
+         FROM filtered
+         GROUP BY group_key
+       ),
+       representative AS (
+         SELECT DISTINCT ON (group_key)
+           id, rule_id, parsed_log_id, severity, title, description,
+           matched_data, status, assigned_to, created_at, updated_at, group_key
+         FROM filtered
+         ORDER BY group_key, sev_rank DESC, created_at DESC, id DESC
+       )
+       SELECT r.id, r.rule_id, r.parsed_log_id, r.severity, r.title, r.description,
+              r.matched_data, r.status, r.assigned_to, r.created_at, r.updated_at,
+              g.correlated_count, g.correlated
+       FROM representative r
+       JOIN grouped g ON g.group_key = r.group_key
+       ORDER BY g.group_created_at DESC, r.id DESC
+       LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
+      listParams
+    );
+
+    return { alerts: result.rows, total };
   }
 
   static async update(

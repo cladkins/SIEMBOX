@@ -1,6 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toCidr, detectLocalInterfaces, vlanWarning, isValidCidr, resolveScope, LocalInterface } from './scope';
+import {
+  toCidr,
+  detectLocalInterfaces,
+  vlanWarning,
+  isValidCidr,
+  isSweepableCidr,
+  cidrHosts,
+  resolveScope,
+  LocalInterface,
+} from './scope';
 
 test('toCidr computes the network address and prefix length from a netmask', () => {
   assert.equal(toCidr('192.168.1.42', '255.255.255.0'), '192.168.1.0/24');
@@ -68,4 +77,48 @@ test('resolveScope excludes the auto-detected interface CIDR from the returned s
 test('resolveScope dedupes repeated manual CIDR entries', () => {
   const result = resolveScope(['192.168.1.0/24', '192.168.1.0/24'], []);
   assert.deepEqual(result.cidrs, ['192.168.1.0/24']);
+});
+
+test('isSweepableCidr accepts a /24 and rejects a /8 as too large to sweep', () => {
+  assert.equal(isSweepableCidr('192.168.1.0/24'), true);
+  assert.equal(isSweepableCidr('10.0.0.0/8'), false);
+});
+
+test('isSweepableCidr rejects malformed CIDRs the same as isValidCidr', () => {
+  assert.equal(isSweepableCidr('not-a-cidr'), false);
+});
+
+test('resolveScope rejects a syntactically valid but too-large CIDR', () => {
+  const result = resolveScope(['10.0.0.0/8'], []);
+  assert.deepEqual(result.cidrs, []);
+  assert.deepEqual(result.rejected, ['10.0.0.0/8']);
+});
+
+test('cidrHosts excludes network + broadcast for a /24', () => {
+  const hosts = cidrHosts('192.168.1.0/24');
+  assert.equal(hosts.length, 254);
+  assert.equal(hosts[0], '192.168.1.1');
+  assert.equal(hosts[hosts.length - 1], '192.168.1.254');
+  assert.ok(!hosts.includes('192.168.1.0'));
+  assert.ok(!hosts.includes('192.168.1.255'));
+});
+
+test('cidrHosts returns both addresses for a /31 (RFC 3021, no network/broadcast)', () => {
+  assert.deepEqual(cidrHosts('10.0.0.0/31'), ['10.0.0.0', '10.0.0.1']);
+});
+
+test('cidrHosts returns just the one address for a /32', () => {
+  assert.deepEqual(cidrHosts('10.0.0.5/32'), ['10.0.0.5']);
+});
+
+test('cidrHosts handles a non-zero-aligned base address by normalizing to the network', () => {
+  // 192.168.1.42/24 should behave identically to 192.168.1.0/24
+  assert.deepEqual(cidrHosts('192.168.1.42/24'), cidrHosts('192.168.1.0/24'));
+});
+
+test('cidrHosts on a /22 stays within the MAX_SWEEP_HOSTS bound and covers all four /24s', () => {
+  const hosts = cidrHosts('10.1.0.0/22');
+  assert.equal(hosts.length, 1022); // 1024 - network - broadcast
+  assert.equal(hosts[0], '10.1.0.1');
+  assert.equal(hosts[hosts.length - 1], '10.1.3.254');
 });

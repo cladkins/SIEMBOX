@@ -8,9 +8,13 @@ import * as http from 'http';
 import * as https from 'https';
 import * as tls from 'tls';
 import { DiscoveredSignals, BannerResult, FingerprintEntry, HttpProbeResult, TlsProbeResult } from './types';
+import { cidrHosts } from './scope';
 
 const MAX_BODY_BYTES = 8192;
 const MAX_BANNER_BYTES = 512;
+
+/** A handful of near-universally-listened-on ports, used only to test whether a host is alive at all (not what's declared by any fingerprint). */
+const LIVENESS_PROBE_PORTS = [80, 443, 22, 8080, 8443, 53, 3389, 9000, 8006, 445];
 
 export interface ActiveProbeOptions {
   portTimeoutMs?: number;
@@ -59,6 +63,68 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, fn: (it
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
   return results;
+}
+
+/**
+ * Is anything home at this IP? Tries several common ports in parallel and
+ * counts either a successful connect OR an ECONNREFUSED as "yes" -- a refused
+ * connection still means a live host answered with a TCP RST, which is just
+ * as much proof of life as an open port. Only silence (timeout) on every
+ * attempt counts as down.
+ */
+export function probeLiveness(ip: string, ports: number[], timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (ports.length === 0) return resolve(false);
+    let remaining = ports.length;
+    let resolved = false;
+
+    const succeed = () => {
+      if (resolved) return;
+      resolved = true;
+      resolve(true);
+    };
+    const fail = () => {
+      if (resolved) return;
+      if (--remaining === 0) {
+        resolved = true;
+        resolve(false);
+      }
+    };
+
+    for (const port of ports) {
+      const socket = new net.Socket();
+      socket.setTimeout(timeoutMs);
+      socket.once('connect', () => {
+        socket.destroy();
+        succeed();
+      });
+      socket.once('error', (err: NodeJS.ErrnoException) => {
+        socket.destroy();
+        if (err.code === 'ECONNREFUSED') succeed();
+        else fail();
+      });
+      socket.once('timeout', () => {
+        socket.destroy();
+        fail();
+      });
+      socket.connect(port, ip);
+    }
+  });
+}
+
+/**
+ * Module 2 active phase, CIDR variant: sweep every host address in a
+ * manually-approved subnet (scope.ts's isSweepableCidr already bounds this to
+ * MAX_SWEEP_HOSTS) and return the ones that respond. This is what actually
+ * lets a manually-entered CIDR find real hosts -- passive discovery's
+ * ARP/mDNS/SSDP techniques only ever see the container's own bridge network.
+ */
+export async function sweepCidr(cidr: string, opts: ActiveProbeOptions = {}): Promise<string[]> {
+  const timeoutMs = opts.portTimeoutMs ?? 800;
+  const concurrency = opts.concurrency ?? 32; // liveness checks are cheap; sweep a subnet's worth of hosts briskly
+  const hosts = cidrHosts(cidr);
+  const results = await mapWithConcurrency(hosts, concurrency, async (ip) => ((await probeLiveness(ip, LIVENESS_PROBE_PORTS, timeoutMs)) ? ip : null));
+  return results.filter((ip): ip is string => ip !== null);
 }
 
 function connectPort(ip: string, port: number, timeoutMs: number): Promise<boolean> {

@@ -10,7 +10,7 @@ import { DiscoverySourceModel, DiscoverySource } from '../../models/DiscoverySou
 import { loadFingerprintLibrary, getFingerprintById } from './fingerprintLoader';
 import { resolveScope } from './scope';
 import { readArpTable, readDhcpLeases, queryMdnsServices, discoverSsdp, captureLldp } from './passiveDiscovery';
-import { probeHost } from './activeDiscovery';
+import { probeHost, sweepCidr } from './activeDiscovery';
 import { matchHost } from './matcher';
 import { rankSources, RankableItem } from './ranker';
 import { renderOnboardInstructions, SiemboxSyslogSettings } from './onboarder';
@@ -25,16 +25,18 @@ interface Candidate {
   discovery_methods: Set<string>;
 }
 
+function ensureCandidate(candidates: Map<string, Candidate>, ip: string): Candidate {
+  let c = candidates.get(ip);
+  if (!c) {
+    c = { ip, mdns_services: [], ssdp_services: [], discovery_methods: new Set() };
+    candidates.set(ip, c);
+  }
+  return c;
+}
+
 async function runPassivePhase(): Promise<Map<string, Candidate>> {
   const candidates = new Map<string, Candidate>();
-  const ensure = (ip: string): Candidate => {
-    let c = candidates.get(ip);
-    if (!c) {
-      c = { ip, mdns_services: [], ssdp_services: [], discovery_methods: new Set() };
-      candidates.set(ip, c);
-    }
-    return c;
-  };
+  const ensure = (ip: string): Candidate => ensureCandidate(candidates, ip);
 
   const [arp, leases] = await Promise.all([readArpTable(), readDhcpLeases()]);
   for (const entry of arp) {
@@ -78,6 +80,33 @@ async function runPassivePhase(): Promise<Map<string, Candidate>> {
   return candidates;
 }
 
+/**
+ * Sweeps every manually-approved CIDR (scope.ts already bounds each to
+ * MAX_SWEEP_HOSTS) for live hosts and folds them into `candidates` as new
+ * entries, so runActivePhase probes them the same as passively-discovered
+ * ones. This is what actually makes a manually-entered subnet find real LAN
+ * hosts -- passive discovery's ARP/mDNS/SSDP only ever see the container's
+ * own bridge network.
+ */
+async function runCidrSweep(cidrs: string[], candidates: Map<string, Candidate>): Promise<void> {
+  if (cidrs.length === 0) return;
+
+  const results = await Promise.all(
+    cidrs.map((cidr) =>
+      sweepCidr(cidr).catch((err: any) => {
+        logger.warn(`[logDiscovery] CIDR sweep of ${cidr} failed: ${err?.message || err}`);
+        return [] as string[];
+      })
+    )
+  );
+
+  for (const ips of results) {
+    for (const ip of ips) {
+      ensureCandidate(candidates, ip).discovery_methods.add('active_sweep');
+    }
+  }
+}
+
 async function runActivePhase(candidates: Map<string, Candidate>, signalsByIp: Map<string, DiscoveredSignals>): Promise<void> {
   const ips = Array.from(candidates.keys());
   const concurrency = 4;
@@ -104,9 +133,13 @@ async function runActivePhase(candidates: Map<string, Candidate>, signalsByIp: M
   await Promise.all(Array.from({ length: Math.min(concurrency, ips.length) }, worker));
 }
 
-async function executeScan(scanId: number, mode: DiscoveryScanMode): Promise<void> {
+async function executeScan(scanId: number, mode: DiscoveryScanMode, cidrs: string[]): Promise<void> {
   const library = loadFingerprintLibrary();
   const candidates = await runPassivePhase();
+
+  if (mode === 'active' || mode === 'full') {
+    await runCidrSweep(cidrs, candidates);
+  }
 
   const signalsByIp = new Map<string, DiscoveredSignals>();
   for (const [ip, c] of candidates) {
@@ -174,7 +207,7 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
   const scope = resolveScope(opts.manualCidrs || []);
   const scan = await DiscoveryScanModel.create(opts.mode, scope.cidrs, opts.createdBy ?? null);
 
-  executeScan(scan.id, opts.mode).catch(async (err: any) => {
+  executeScan(scan.id, opts.mode, scope.cidrs).catch(async (err: any) => {
     logger.error(`[logDiscovery] scan ${scan.id} failed:`, err);
     await DiscoveryScanModel.fail(scan.id, err?.message || 'Scan execution failed');
   });

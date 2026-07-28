@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as net from 'net';
 import * as http from 'http';
-import { selectPortsToScan, selectHttpProbes, flattenHeaders, tcpConnectScan, httpProbe, bannerGrab } from './activeDiscovery';
+import { selectPortsToScan, selectHttpProbes, flattenHeaders, tcpConnectScan, httpProbe, bannerGrab, probeLiveness, sweepCidr } from './activeDiscovery';
 import { FingerprintEntry } from './types';
 
 function fp(overrides: Partial<FingerprintEntry> = {}): FingerprintEntry {
@@ -91,4 +91,45 @@ test('bannerGrab captures unprompted data sent right after connect', async () =>
   } finally {
     server.close();
   }
+});
+
+test('probeLiveness resolves true when a port is actually open', async () => {
+  const server = net.createServer();
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const openPort = (server.address() as net.AddressInfo).port;
+
+  try {
+    const alive = await probeLiveness('127.0.0.1', [openPort], 500);
+    assert.equal(alive, true);
+  } finally {
+    server.close();
+  }
+});
+
+test('probeLiveness resolves true on a refused connection -- a live host that just isn\'t listening there', async () => {
+  const server = net.createServer();
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const closedPort = (server.address() as net.AddressInfo).port;
+  await new Promise<void>((resolve) => server.close(() => resolve())); // now nothing is listening on this port
+
+  const alive = await probeLiveness('127.0.0.1', [closedPort], 500);
+  assert.equal(alive, true);
+});
+
+// A genuine "every port timed out with no response at all" case needs a host that silently
+// drops packets, which isn't portably reproducible without OS-level firewall rules -- not
+// something to depend on across arbitrary test/CI environments. The all-fail path (every
+// attempt hits fail(), remaining reaches 0, resolve(false)) is simple enough to trust by
+// inspection; the empty-list short-circuit below is the one false-path case worth asserting.
+test('probeLiveness resolves false immediately given an empty port list', async () => {
+  assert.equal(await probeLiveness('127.0.0.1', [], 500), false);
+});
+
+test('sweepCidr enumerates every host in the CIDR and probes each one', async () => {
+  // 127.0.0.0/30 -> usable hosts .1 and .2. Loopback addresses always answer
+  // (open or refused) even with nothing deliberately listening, so both come
+  // back alive -- this test checks the enumerate-and-probe wiring, not the
+  // alive/dead discrimination itself (covered by the probeLiveness tests above).
+  const alive = await sweepCidr('127.0.0.0/30', { portTimeoutMs: 500 });
+  assert.deepEqual(alive.sort(), ['127.0.0.1', '127.0.0.2']);
 });

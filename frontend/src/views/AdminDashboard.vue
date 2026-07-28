@@ -168,7 +168,7 @@
         <el-card class="section-card" style="margin-top: 20px">
           <template #header>
             <div class="card-header">
-              <span>Background Jobs <HelpTip text="Vulnerability and discovery scan jobs with live progress. Filter by status; Results shows what each run produced (vulnerabilities found or assets discovered) and User shows who started it." /></span>
+              <span>Background Jobs <HelpTip text="Every one-off job this instance runs: vulnerability, asset-discovery, container-image and log-discovery scans, with live progress. Filter by status; Results shows what each run produced and User shows who started it. Recurring services (retention cleanup, feed refresh, schedulers) are listed separately below." /></span>
               <div>
                 <el-radio-group v-model="jobsFilter" size="small" @change="fetchJobs">
                   <el-radio-button value="">All</el-radio-button>
@@ -185,7 +185,7 @@
           <!-- Active Jobs Progress -->
           <div v-if="activeJobs.length > 0" class="active-jobs">
             <div class="active-jobs-title">Active Scans</div>
-            <div v-for="job in activeJobs" :key="job.id" class="active-job">
+            <div v-for="job in activeJobs" :key="job.job_key || job.id" class="active-job">
               <div class="job-info">
                 <el-tag :type="job.status === 'running' ? 'primary' : 'warning'" size="small">{{ job.type }}</el-tag>
                 <span class="job-target">{{ job.target }}</span>
@@ -223,11 +223,8 @@
                 <span v-else>-</span>
               </template>
             </el-table-column>
-            <el-table-column label="Results" width="120">
-              <template #default="{ row }">
-                <span v-if="row.type === 'vulnerability'">{{ row.vulnerabilities_found || 0 }} vulns</span>
-                <span v-else>{{ row.assets_discovered || 0 }} assets</span>
-              </template>
+            <el-table-column label="Results" width="130">
+              <template #default="{ row }">{{ jobResultLabel(row) }}</template>
             </el-table-column>
             <el-table-column prop="initiated_by_username" label="User" width="100" />
           </el-table>
@@ -237,6 +234,60 @@
               {{ status }}: {{ count }}
             </el-tag>
           </div>
+        </el-card>
+
+        <!-- Recurring services: in-process timers that own no job rows, so they
+             were previously invisible here — a dead scheduler looked exactly
+             like an idle one. -->
+        <el-card class="section-card" style="margin-top: 20px">
+          <template #header>
+            <div class="card-header">
+              <span>Recurring Services <HelpTip text="Periodic in-process jobs: retention cleanup, asset auto-discovery, the scheduled-scan dispatcher, ingestion health, threat-feed refresh and YARA refresh. Last Run and Outcome are since the last backend restart, so 'Never' right after an upgrade is expected. 'Skipped' means the job ran and deliberately did nothing (switched off in settings, or nothing was due)." /></span>
+              <el-button size="small" @click="fetchJobs" :icon="Refresh" circle :loading="jobsLoading" />
+            </div>
+          </template>
+
+          <el-table :data="recurringJobs" v-loading="jobsLoading" stripe>
+            <el-table-column label="Job" min-width="200">
+              <template #default="{ row }">
+                <div class="recurring-name">{{ row.name }}</div>
+                <div class="recurring-desc">{{ row.description }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="Status" width="110">
+              <template #default="{ row }">
+                <el-tag :type="getRecurringStatusType(row.status)" size="small">{{ row.status }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="Every" width="100">
+              <template #default="{ row }">
+                <span v-if="row.intervalMs">{{ formatInterval(row.intervalMs) }}</span>
+                <el-text v-else type="info" size="small">—</el-text>
+              </template>
+            </el-table-column>
+            <el-table-column label="Last Run" width="140">
+              <template #default="{ row }">
+                <span v-if="row.lastRunAt">{{ formatDate(row.lastRunAt) }}</span>
+                <el-text v-else type="info" size="small">Never</el-text>
+              </template>
+            </el-table-column>
+            <el-table-column label="Outcome" min-width="180">
+              <template #default="{ row }">
+                <el-text v-if="row.lastError" type="danger" size="small">{{ row.lastError }}</el-text>
+                <span v-else-if="row.lastResult">{{ row.lastResult }}</span>
+                <el-text v-else type="info" size="small">—</el-text>
+              </template>
+            </el-table-column>
+            <el-table-column label="Runs" width="90" align="center">
+              <template #default="{ row }">
+                <el-tooltip :content="`${row.runs} run(s), ${row.failures} failed`">
+                  <span :class="{ 'text-danger': row.failures > 0 }">{{ row.runs }}</span>
+                </el-tooltip>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <el-empty v-if="!jobsLoading && recurringJobs.length === 0" description="No recurring services reported" />
         </el-card>
       </el-col>
 
@@ -351,6 +402,7 @@ const overview = ref<any>(null);
 const users = ref<any[]>([]);
 const jobs = ref<any[]>([]);
 const jobCounts = ref<Record<string, number>>({});
+const recurringJobs = ref<any[]>([]);
 const errors = ref<any[]>([]);
 const errorSummary = ref<any>(null);
 const userActivity = ref<any>(null);
@@ -415,6 +467,7 @@ async function fetchJobs() {
     const response = await api.getAdminJobs(jobsFilter.value);
     jobs.value = response.data.jobs;
     jobCounts.value = response.data.counts;
+    recurringJobs.value = response.data.recurring || [];
   } catch (error) {
     console.error('Failed to fetch jobs:', error);
   } finally {
@@ -467,6 +520,39 @@ function getJobProgress(job: any): number {
   }
 
   return 10;
+}
+
+// Each job type reports a different kind of result, so label it accordingly
+// rather than calling everything that isn't a vulnerability scan "assets".
+function jobResultLabel(job: any): string {
+  if (job.type === 'vulnerability' || job.type === 'container') {
+    return `${job.vulnerabilities_found || 0} vulns`;
+  }
+  if (job.type === 'log-discovery') {
+    return `${job.assets_discovered || 0} sources`;
+  }
+  return `${job.assets_discovered || 0} assets`;
+}
+
+function getRecurringStatusType(status: string): string {
+  return (
+    {
+      ok: 'success',
+      running: 'primary',
+      failed: 'danger',
+      skipped: 'warning',
+      disabled: 'info',
+      idle: 'info',
+    }[status] || 'info'
+  );
+}
+
+function formatInterval(ms: number): string {
+  const mins = Math.round(ms / 60000);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
 }
 
 // Formatting helpers
@@ -615,6 +701,17 @@ onUnmounted(() => {
 
 .text-danger {
   color: #f56c6c;
+}
+
+.recurring-name {
+  font-weight: 500;
+}
+
+.recurring-desc {
+  font-size: 12px;
+  color: var(--siembox-text-tertiary);
+  line-height: 1.4;
+  margin-top: 2px;
 }
 
 .text-warning {

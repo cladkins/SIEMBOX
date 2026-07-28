@@ -12,6 +12,10 @@
  */
 import { refreshYaraForge } from '../services/edr/yaraForgeService';
 import { logger } from '../utils/logger';
+import { ErrorLogService } from '../services/errors/errorLogService';
+import { registerRecurringJob, trackJobRun } from '../services/jobs/jobRegistry';
+
+const JOB_KEY = 'yara-forge';
 
 let intervalId: NodeJS.Timeout | null = null;
 let startupTimer: NodeJS.Timeout | null = null;
@@ -24,20 +28,40 @@ function isEnabled(): boolean {
 
 async function tick(): Promise<void> {
   try {
-    const version = await refreshYaraForge();
-    if (version) logger.info(`[YARA] YARA-Forge bundle updated to v${version}`);
+    await trackJobRun(JOB_KEY, async () => {
+      const version = await refreshYaraForge();
+      if (version) logger.info(`[YARA] YARA-Forge bundle updated to v${version}`);
+      return version ? `bundle updated to v${version}` : 'bundle already current';
+    });
   } catch (err) {
     // Keep the current bundle on any failure (network, parse, empty) — never crash.
     logger.warn('[YARA] YARA-Forge refresh failed (keeping current bundle):', err instanceof Error ? err.message : err);
+    ErrorLogService.logBackgroundError('yara-forge', err, { dedupeKey: 'refresh' });
   }
 }
 
 export function startYaraRulesJob(): void {
+  const description =
+    'Re-fetches the YARA-Forge rule pack and republishes the endpoint bundle when it changes.';
   if (!isEnabled()) {
+    // Registered even when off, so the dashboard shows "disabled" instead of
+    // omitting the row — an absent row reads as a missing feature.
+    registerRecurringJob({
+      key: JOB_KEY,
+      name: 'YARA-Forge refresh',
+      description: `${description} Disabled — set EDR_YARA_FORGE_ENABLED=true to enable.`,
+      enabled: false,
+    });
     logger.info('[YARA] YARA-Forge refresh job disabled (set EDR_YARA_FORGE_ENABLED=true to enable)');
     return;
   }
   if (intervalId) return;
+  registerRecurringJob({
+    key: JOB_KEY,
+    name: 'YARA-Forge refresh',
+    description,
+    intervalMs: CHECK_INTERVAL_MS,
+  });
   startupTimer = setTimeout(() => {
     void tick();
   }, STARTUP_DELAY_MS);

@@ -7,7 +7,13 @@ export interface ShipperHostInventory {
   shipper_id: number;
   name: string;
   hostname: string | null;
+  version: string | null;
+  last_seen: string | null;
+  /** When this shipper last reported an inventory; null = never. */
   reported_at: string | null;
+  /** Whether the shipper could reach Docker on its host; null = never reported. */
+  docker_available: boolean | null;
+  docker_reason: string | null;
   images: DiscoveredImage[];
 }
 
@@ -51,14 +57,24 @@ export class ShipperContainerModel {
     }
   }
 
-  /** All shipper-reported inventory, grouped by host (shipper). */
+  /**
+   * All shipper-reported inventory, grouped by host (shipper).
+   *
+   * Starts from log_shippers, not shipper_containers: a shipper that reported
+   * zero images still needs a row so the UI can explain WHY it contributed
+   * nothing. Joining the other way round silently dropped exactly the hosts an
+   * operator is trying to account for.
+   */
   static async findGroupedByShipper(): Promise<ShipperHostInventory[]> {
     const result = await query(
-      `SELECT sc.shipper_id, sc.image, sc.image_id, sc.container_names, sc.running,
-              sc.scannable, sc.reported_at, ls.name, ls.hostname
-         FROM shipper_containers sc
-         JOIN log_shippers ls ON ls.id = sc.shipper_id
-        ORDER BY ls.name, sc.running DESC, sc.image`
+      `SELECT ls.id AS shipper_id, ls.name, ls.hostname, ls.version, ls.last_seen,
+              ls.containers_reported_at, ls.containers_available,
+              ls.containers_unavailable_reason,
+              sc.image, sc.image_id, sc.container_names, sc.running,
+              sc.scannable, sc.reported_at
+         FROM log_shippers ls
+         LEFT JOIN shipper_containers sc ON sc.shipper_id = ls.id
+        ORDER BY ls.name, sc.running DESC NULLS LAST, sc.image`
     );
 
     const byShipper = new Map<number, ShipperHostInventory>();
@@ -69,11 +85,18 @@ export class ShipperContainerModel {
           shipper_id: r.shipper_id,
           name: r.name,
           hostname: r.hostname,
-          reported_at: r.reported_at,
+          version: r.version,
+          last_seen: r.last_seen,
+          reported_at: r.containers_reported_at,
+          docker_available: r.containers_available,
+          docker_reason: r.containers_unavailable_reason,
           images: [],
         };
         byShipper.set(r.shipper_id, host);
       }
+
+      // LEFT JOIN: no shipper_containers row means this host reported nothing.
+      if (!r.image) continue;
       // container_names is JSONB → already an array when read back.
       const names = Array.isArray(r.container_names) ? r.container_names : [];
       host.images.push({

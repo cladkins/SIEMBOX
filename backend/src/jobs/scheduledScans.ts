@@ -12,6 +12,9 @@ import { NmapScanner } from '../services/scanner/nmapScanner';
 import { TrivyScanner } from '../services/scanner/trivyScanner';
 import { logger } from '../utils/logger';
 import { ErrorLogService } from '../services/errors/errorLogService';
+import { registerRecurringJob, trackJobRun, markJobResult } from '../services/jobs/jobRegistry';
+
+const JOB_KEY = 'scheduled-scans';
 
 let intervalId: NodeJS.Timeout | null = null;
 const CHECK_INTERVAL_MS = 60 * 1000; // look for due scans once a minute
@@ -55,17 +58,19 @@ export async function triggerScheduledScan(schedule: ScheduledScan): Promise<num
 export async function runDueScheduledScans(): Promise<void> {
   let due: ScheduledScan[];
   try {
-    due = await ScheduledScanModel.findDue();
+    due = await trackJobRun(JOB_KEY, () => ScheduledScanModel.findDue());
   } catch (error) {
     logger.error('[Scheduled Scans] Failed to query due schedules:', error);
     ErrorLogService.logBackgroundError('scheduled-scan', error, { dedupeKey: 'find-due' });
     return;
   }
 
+  let triggered = 0;
   for (const schedule of due) {
     try {
       const scanId = await triggerScheduledScan(schedule);
       await ScheduledScanModel.markRun(schedule.id, scanId);
+      triggered += 1;
       logger.info(
         `[Scheduled Scans] Triggered ${schedule.scan_type} scan for "${schedule.name}" (#${schedule.id}) -> scan ${scanId}`
       );
@@ -80,12 +85,23 @@ export async function runDueScheduledScans(): Promise<void> {
       await ScheduledScanModel.markRun(schedule.id, null).catch(() => {});
     }
   }
+
+  markJobResult(
+    JOB_KEY,
+    due.length === 0 ? 'nothing due' : `triggered ${triggered} of ${due.length} due schedule(s)`
+  );
 }
 
 export function startScheduledScansJob(): void {
   if (intervalId) {
     return;
   }
+  registerRecurringJob({
+    key: JOB_KEY,
+    name: 'Scheduled scan dispatcher',
+    description: 'Triggers user-defined recurring vulnerability, asset and container scans when due.',
+    intervalMs: CHECK_INTERVAL_MS,
+  });
   logger.info('[Scheduled Scans] Scheduler started (checking every 60s)');
   intervalId = setInterval(() => {
     runDueScheduledScans().catch((err) => logger.error('[Scheduled Scans] cycle error:', err));

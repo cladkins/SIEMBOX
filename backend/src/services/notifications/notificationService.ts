@@ -12,6 +12,7 @@ import nodemailer from 'nodemailer';
 import { NotificationChannelModel, NotificationChannel } from '../../models/NotificationChannel';
 import { query } from '../../config/database';
 import { logger } from '../../utils/logger';
+import { ErrorLogService } from '../errors/errorLogService';
 
 const SEVERITY_RANK: Record<string, number> = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
 
@@ -126,9 +127,22 @@ async function dispatchWithResults(msg: NotificationMessage): Promise<ChannelRes
   );
 }
 
-// Best-effort fan-out for real events (per-channel results ignored).
+// Best-effort fan-out for real events. Per-channel failures don't stop the
+// others, but they DO get surfaced: a notification channel that silently stops
+// delivering means alerts stop reaching anyone, which is the one failure an
+// operator must not have to find by reading container logs. Deduped per
+// channel by errorLogService so a persistently broken webhook logs once a
+// minute, not once per alert. The interactive "Test" path is excluded — the
+// route already reports those failures straight back to the user.
 async function dispatch(msg: NotificationMessage): Promise<void> {
-  await dispatchWithResults(msg);
+  const results = await dispatchWithResults(msg);
+  for (const result of results.filter((r) => !r.ok)) {
+    ErrorLogService.logBackgroundError(
+      'notifications',
+      `${result.type} channel "${result.name}" failed: ${result.error}`,
+      { dedupeKey: `${result.type}:${result.name}`, channel: result.name, channelType: result.type }
+    );
+  }
 }
 
 export const NotificationService = {
@@ -148,6 +162,7 @@ export const NotificationService = {
       await dispatch(buildAlertMessage(params));
     } catch (err) {
       logger.error('[Notifications] notifyAlert failed:', err);
+      ErrorLogService.logBackgroundError('notifications', err, { dedupeKey: 'notifyAlert' });
     }
   },
 
@@ -182,6 +197,7 @@ export const NotificationService = {
       });
     } catch (err) {
       logger.error('[Notifications] notifyVulnScan failed:', err);
+      ErrorLogService.logBackgroundError('notifications', err, { dedupeKey: 'notifyVulnScan' });
     }
   },
 
@@ -199,6 +215,7 @@ export const NotificationService = {
       );
     } catch (err) {
       logger.error('[Notifications] notifyIngestion failed:', err);
+      ErrorLogService.logBackgroundError('notifications', err, { dedupeKey: 'notifyIngestion' });
     }
   },
 };

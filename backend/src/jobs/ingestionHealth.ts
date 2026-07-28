@@ -10,6 +10,10 @@
 import { query } from '../config/database';
 import { NotificationService } from '../services/notifications/notificationService';
 import { logger } from '../utils/logger';
+import { ErrorLogService } from '../services/errors/errorLogService';
+import { registerRecurringJob, trackJobRun, markJobSkipped } from '../services/jobs/jobRegistry';
+
+const JOB_KEY = 'ingestion-health';
 
 let intervalId: NodeJS.Timeout | null = null;
 let lastHealthy: boolean | null = null;
@@ -28,6 +32,7 @@ export async function checkIngestionHealth(): Promise<void> {
   try {
     if ((await getSetting('notify_ingestion_enabled', 'false')) !== 'true') {
       lastHealthy = null;
+      markJobSkipped(JOB_KEY, 'ingestion notifications disabled in settings');
       return;
     }
 
@@ -35,33 +40,44 @@ export async function checkIngestionHealth(): Promise<void> {
     const shipperCount = (await query(`SELECT COUNT(*)::int AS c FROM log_shippers`)).rows[0].c;
     if (shipperCount === 0) {
       lastHealthy = null;
+      markJobSkipped(JOB_KEY, 'no shippers registered');
       return;
     }
 
-    const stallMinutes = parseInt(await getSetting('notify_ingestion_stall_minutes', '15'), 10) || 15;
-    const last = (await query(`SELECT MAX(created_at) AS last FROM raw_logs`)).rows[0].last;
-    const healthy = last !== null && Date.now() - new Date(last).getTime() < stallMinutes * 60 * 1000;
+    await trackJobRun(JOB_KEY, async () => {
+      const stallMinutes = parseInt(await getSetting('notify_ingestion_stall_minutes', '15'), 10) || 15;
+      const last = (await query(`SELECT MAX(created_at) AS last FROM raw_logs`)).rows[0].last;
+      const healthy = last !== null && Date.now() - new Date(last).getTime() < stallMinutes * 60 * 1000;
 
-    if (lastHealthy === null) {
-      // First observation since enabling: set the baseline, and alert if already stalled.
-      lastHealthy = healthy;
-      if (!healthy) {
-        await NotificationService.notifyIngestion({ healthy: false, stallMinutes });
+      if (lastHealthy === null) {
+        // First observation since enabling: set the baseline, and alert if already stalled.
+        lastHealthy = healthy;
+        if (!healthy) {
+          await NotificationService.notifyIngestion({ healthy: false, stallMinutes });
+        }
+        return healthy ? 'ingestion healthy' : 'ingestion stalled';
       }
-      return;
-    }
 
-    if (healthy !== lastHealthy) {
-      await NotificationService.notifyIngestion({ healthy, stallMinutes });
-      lastHealthy = healthy;
-    }
+      if (healthy !== lastHealthy) {
+        await NotificationService.notifyIngestion({ healthy, stallMinutes });
+        lastHealthy = healthy;
+      }
+      return healthy ? 'ingestion healthy' : 'ingestion stalled';
+    });
   } catch (err) {
     logger.error('[Ingestion Health] check failed:', err);
+    ErrorLogService.logBackgroundError('ingestion-health', err, { dedupeKey: 'check' });
   }
 }
 
 export function startIngestionHealthJob(): void {
   if (intervalId) return;
+  registerRecurringJob({
+    key: JOB_KEY,
+    name: 'Ingestion health monitor',
+    description: 'Watches for a stalled log stream and notifies on stall/recovery transitions.',
+    intervalMs: CHECK_INTERVAL_MS,
+  });
   logger.info('[Ingestion Health] Monitor started (every 2 min)');
   intervalId = setInterval(() => {
     checkIngestionHealth().catch((err) => logger.error('[Ingestion Health] cycle error:', err));

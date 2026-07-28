@@ -53,6 +53,35 @@
         </p>
       </el-alert>
 
+      <!-- Per-host reporting state. Without this, a shipper host that reports
+           nothing is indistinguishable from one that was never asked to — the
+           inventory just silently stops at the SIEMBox host's own images. -->
+      <div v-if="!discoveryLoading && shipperHosts.length" class="hosts-panel">
+        <div class="hosts-title">Shipper hosts</div>
+        <div v-for="host in shipperHosts" :key="host.shipper_id" class="host-row">
+          <el-tag :type="hostState(host).type" size="small" effect="plain">{{ hostState(host).label }}</el-tag>
+          <span class="host-name">{{ host.hostname || host.name }}</span>
+          <span class="host-detail">{{ hostState(host).detail }}</span>
+        </div>
+      </div>
+
+      <el-alert
+        v-if="!discoveryLoading && shipperHosts.length && reportingHosts === 0"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="No log shipper has reported container images yet"
+        style="margin-bottom: 12px"
+      >
+        <p class="discovery-reason">
+          Container Scanning lists images from every host running a shipper. If a host is missing,
+          check that its shipper mounts <code>/var/run/docker.sock</code>, that
+          <code>CONTAINER_REPORT_INTERVAL</code> is not <code>0</code>, and that it is running a
+          shipper image new enough to report ({{ MIN_REPORTING_VERSION }}+ — pull the latest image
+          and recreate the container). The shipper logs the reason on startup.
+        </p>
+      </el-alert>
+
       <div class="discovered-toolbar" v-if="discovered.length">
         <el-text size="small" type="info">
           {{ scannableCount }} scannable image{{ scannableCount === 1 ? '' : 's' }} across
@@ -250,6 +279,67 @@ const scannableCount = computed(
 );
 const hostCount = computed(() => new Set(discovered.value.map((i) => i.source)).size);
 
+// Every registered shipper, whether or not it contributed images.
+const shipperHosts = ref<any[]>([]);
+const reportingHosts = computed(
+  () => shipperHosts.value.filter((h) => h.reported_at && h.docker_available !== false).length
+);
+
+// First shipper release that reports container inventory. Older shippers check
+// in normally but never POST an inventory, so they need a distinct diagnosis.
+const MIN_REPORTING_VERSION = '1.1.0';
+
+function versionAtLeast(version: string | null, min: string): boolean {
+  if (!version) return false;
+  const a = version.split('.').map((n) => parseInt(n, 10) || 0);
+  const b = min.split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const diff = (a[i] || 0) - (b[i] || 0);
+    if (diff !== 0) return diff > 0;
+  }
+  return true;
+}
+
+/**
+ * Turn a host's reporting state into a one-line diagnosis. The three "no
+ * images" cases look identical in the table but need different fixes:
+ * old shipper -> upgrade; no socket -> mount it; never reported -> check the
+ * shipper is alive / reporting isn't disabled.
+ */
+function hostState(host: any): { type: string; label: string; detail: string } {
+  if (host.docker_available === false) {
+    return {
+      type: 'warning',
+      label: 'no Docker',
+      detail: host.docker_reason || 'The shipper cannot reach a Docker daemon on this host.',
+    };
+  }
+
+  if (host.reported_at) {
+    const count = (host.images || []).length;
+    return {
+      type: 'success',
+      label: 'reporting',
+      detail: `${count} image${count === 1 ? '' : 's'}, last reported ${formatDate(host.reported_at)}`,
+    };
+  }
+
+  if (!versionAtLeast(host.version, MIN_REPORTING_VERSION)) {
+    return {
+      type: 'info',
+      label: 'shipper too old',
+      detail: `Shipper ${host.version || 'version unknown'} predates container reporting — update to ${MIN_REPORTING_VERSION}+.`,
+    };
+  }
+
+  return {
+    type: 'info',
+    label: 'never reported',
+    detail:
+      'Shipper supports reporting but has not sent an inventory — check CONTAINER_REPORT_INTERVAL and the shipper logs.',
+  };
+}
+
 const detailVisible = ref(false);
 const loadingDetail = ref(false);
 const selectedScan = ref<any>(null);
@@ -305,11 +395,14 @@ async function loadDiscovered() {
     discoveryAvailable.value = !!local.available;
     discoveryReason.value = local.reason || '';
 
+    const hosts = Array.isArray(data?.shippers) ? data.shippers : [];
+    shipperHosts.value = hosts;
+
     const merged: any[] = [];
     for (const img of Array.isArray(local.images) ? local.images : []) {
       merged.push({ ...img, source: 'SIEMBox host', local: true });
     }
-    for (const host of Array.isArray(data?.shippers) ? data.shippers : []) {
+    for (const host of hosts) {
       const label = host.hostname || host.name || `shipper #${host.shipper_id}`;
       for (const img of host.images || []) {
         merged.push({ ...img, source: label, local: false });
@@ -320,6 +413,7 @@ async function loadDiscovered() {
     discoveryAvailable.value = false;
     discoveryReason.value = 'Failed to query the container inventory.';
     discovered.value = [];
+    shipperHosts.value = [];
   } finally {
     discoveryLoading.value = false;
   }
@@ -419,6 +513,31 @@ onUnmounted(() => {
 }
 .discovery-reason {
   margin: 4px 0;
+}
+.hosts-panel {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px;
+}
+.hosts-title {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+.host-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+.host-name {
+  font-weight: 500;
+}
+.host-detail {
+  color: var(--siembox-text-secondary, #909399);
 }
 .muted {
   color: var(--siembox-text-secondary, #909399);

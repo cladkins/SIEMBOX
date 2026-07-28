@@ -7,7 +7,11 @@ set -e
 # Configuration from environment variables
 SIEMBOX_API_URL="${SIEMBOX_API_URL:-http://localhost:3001/api}"
 SHIPPER_API_KEY="${SHIPPER_API_KEY}"
-SHIPPER_VERSION="1.0.0"
+# Reported on register and shown in the UI. Bump this when the shipper gains a
+# server-visible capability: SIEMBox uses it to tell "this shipper is too old to
+# do X" apart from "this shipper is misconfigured".
+#   1.1.0 — reports container inventory (incl. explicit docker-unavailable reports)
+SHIPPER_VERSION="1.1.0"
 CONFIG_POLL_INTERVAL="${CONFIG_POLL_INTERVAL:-30}" # seconds
 HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-60}" # seconds
 # How often to report this host's container images to SIEMBox for vuln scanning.
@@ -516,36 +520,78 @@ send_heartbeat() {
     fi
 }
 
+# POST one container-inventory report. $1 = JSON array of containers,
+# $2 = "true"/"false" for whether Docker was reachable, $3 = reason when not.
+# Returns non-zero if the POST didn't get a 2xx so the caller can retry sooner.
+send_container_report() {
+    local items="$1" available="$2" reason="$3"
+
+    local body
+    body=$(jq -n --arg key "$SHIPPER_API_KEY" --argjson containers "$items" \
+        --argjson available "$available" --arg reason "$reason" \
+        '{api_key: $key, containers: $containers, docker_available: $available, docker_reason: $reason}' 2>/dev/null)
+    [ -z "$body" ] && return 1
+
+    # --max-time so an unreachable SIEMBox can't wedge the poll loop.
+    local code
+    code=$(curl -s --max-time 20 -o /dev/null -w '%{http_code}' \
+        -X POST "${SIEMBOX_API_URL}/shippers/containers" \
+        -H 'Content-Type: application/json' -d "$body" 2>/dev/null)
+
+    case "$code" in
+        2*) log_debug "Reported containers to SIEMBox (HTTP $code)"; return 0 ;;
+        *)  log_warn "Container report to SIEMBox failed (HTTP ${code:-000}) — Container Scanning will not list this host's images"
+            return 1 ;;
+    esac
+}
+
 # Report this host's container images to SIEMBox so they can be vuln-scanned
-# (Trivy) alongside the SIEMBox host's own containers. Best-effort + throttled;
-# silently skips if Docker/jq aren't available or reporting is disabled.
+# (Trivy) alongside the SIEMBox host's own containers. Best-effort + throttled.
+#
+# Always reports, even when Docker isn't reachable: an empty report with
+# docker_available=false tells the server "this host checked in and cannot see
+# Docker", which the UI can explain. Staying silent produced an unexplained gap
+# in Container Scanning that looked identical to a broken shipper.
 report_containers() {
     [ "${CONTAINER_REPORT_INTERVAL:-0}" -gt 0 ] 2>/dev/null || return 0
     local current_time=$(date +%s)
     [ $((current_time - LAST_CONTAINER_REPORT)) -ge "$CONTAINER_REPORT_INTERVAL" ] || return 0
-    LAST_CONTAINER_REPORT=$current_time
 
-    command -v docker >/dev/null 2>&1 || { log_debug "docker CLI not available; skipping container report"; return 0; }
-    command -v jq >/dev/null 2>&1 || return 0
-
-    # Tab-delimited "image<TAB>name<TAB>state" per container -> JSON array.
-    local items
-    items=$(docker ps -a --format '{{.Image}}\t{{.Names}}\t{{.State}}' 2>/dev/null \
-        | jq -R -s 'split("\n") | map(select(length>0) | split("\t") | {image: .[0], name: .[1], running: (.[2] == "running")})' 2>/dev/null)
-    if [ -z "$items" ] || [ "$items" = "[]" ]; then
-        log_debug "No containers to report"
+    # jq builds the payload — without it there's nothing to send at all.
+    if ! command -v jq >/dev/null 2>&1; then
+        log_warn "jq not available; cannot report container inventory"
+        LAST_CONTAINER_REPORT=$current_time
         return 0
     fi
 
-    local body
-    body=$(jq -n --arg key "$SHIPPER_API_KEY" --argjson containers "$items" \
-        '{api_key: $key, containers: $containers}' 2>/dev/null)
-    [ -z "$body" ] && return 0
+    if ! command -v docker >/dev/null 2>&1; then
+        send_container_report '[]' false 'docker CLI not available in the shipper container' \
+            && LAST_CONTAINER_REPORT=$current_time
+        return 0
+    fi
 
-    local code
-    code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${SIEMBOX_API_URL}/shippers/containers" \
-        -H 'Content-Type: application/json' -d "$body" 2>/dev/null)
-    log_debug "Reported containers to SIEMBox (HTTP ${code:-000})"
+    # Tab-delimited "image<TAB>name<TAB>state" per container -> JSON array.
+    local raw
+    if ! raw=$(docker ps -a --format '{{.Image}}\t{{.Names}}\t{{.State}}' 2>/dev/null); then
+        # Socket not mounted, or mounted but not readable by this user.
+        send_container_report '[]' false 'Docker socket not reachable — mount /var/run/docker.sock into the shipper container' \
+            && LAST_CONTAINER_REPORT=$current_time
+        return 0
+    fi
+
+    local items
+    items=$(printf '%s\n' "$raw" \
+        | jq -R -s 'split("\n") | map(select(length>0) | split("\t") | {image: .[0], name: .[1], running: (.[2] == "running")})' 2>/dev/null)
+    [ -z "$items" ] && items='[]'
+
+    # An empty list is still worth sending: it means "Docker is reachable and
+    # this host currently runs nothing", which is a real answer.
+    if send_container_report "$items" true ''; then
+        LAST_CONTAINER_REPORT=$current_time
+    fi
+    # On failure LAST_CONTAINER_REPORT is left alone so the next poll retries
+    # instead of waiting out a full interval.
+    return 0
 }
 
 # Main loop
@@ -600,6 +646,11 @@ main() {
             log_error "No cached configuration available, retrying in ${CONFIG_POLL_INTERVAL}s..."
         fi
     fi
+
+    # Report container inventory once at startup rather than waiting out the
+    # first poll: a restart is how an operator checks whether reporting works,
+    # so the answer should land in the logs immediately.
+    report_containers
 
     log_info ""
     log_info "Log shipper running. Polling for configuration updates..."

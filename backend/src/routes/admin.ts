@@ -10,6 +10,7 @@ import { Router, Request, Response } from 'express';
 import { authenticate, requireAdmin } from '../middleware/auth';
 import { query } from '../config/database';
 import { ErrorLogService } from '../services/errors/errorLogService';
+import { listRecurringJobs } from '../services/jobs/jobRegistry';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -302,8 +303,63 @@ router.get('/errors', async (req: Request, res: Response) => {
 });
 
 /**
+ * The one-off job tables this dashboard unifies. Each produces the same row
+ * shape so they can be merged, sorted and paged as a single list.
+ *
+ * This used to read vulnerability_scans alone, which meant container scans and
+ * log-discovery scans ran completely invisibly — "Background Jobs" showed a
+ * subset while claiming to be the unified view.
+ */
+const JOB_SOURCES: { source: string; sql: string; countSql: string }[] = [
+  {
+    source: 'vulnerability_scans',
+    sql: `SELECT 'vulnerability_scans' AS source, id, scan_type AS type, target, status,
+                 started_at, completed_at, duration_seconds,
+                 assets_discovered, vulnerabilities_found,
+                 error_message, initiated_by, created_at, results_summary
+            FROM vulnerability_scans`,
+    countSql: `SELECT status, COUNT(*) AS count FROM vulnerability_scans GROUP BY status`,
+  },
+  {
+    source: 'container_scans',
+    sql: `SELECT 'container_scans' AS source, id, 'container' AS type, image_ref AS target, status,
+                 started_at, completed_at, duration_seconds,
+                 NULL::integer AS assets_discovered, vulnerabilities_found,
+                 error_message, initiated_by, created_at,
+                 severity_counts AS results_summary
+            FROM container_scans`,
+    countSql: `SELECT status, COUNT(*) AS count FROM container_scans GROUP BY status`,
+  },
+  {
+    source: 'discovery_scans',
+    // discovery_scans stores no duration; derive it from the timestamps so the
+    // Duration column means the same thing for every job type.
+    sql: `SELECT 'discovery_scans' AS source, id, 'log-discovery' AS type,
+                 COALESCE(
+                   NULLIF(array_to_string(ARRAY(SELECT jsonb_array_elements_text(cidrs)), ', '), ''),
+                   mode
+                 ) AS target,
+                 status, started_at, completed_at,
+                 CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL
+                      THEN EXTRACT(EPOCH FROM (completed_at - started_at))::integer
+                 END AS duration_seconds,
+                 -- Guarded cast: results_summary is free-form JSONB, and a row
+                 -- whose hosts_matched isn't a plain integer would otherwise
+                 -- abort the whole query rather than just that column.
+                 CASE WHEN results_summary->>'hosts_matched' ~ '^[0-9]+$'
+                      THEN (results_summary->>'hosts_matched')::integer
+                 END AS assets_discovered,
+                 NULL::integer AS vulnerabilities_found,
+                 error_message, created_by AS initiated_by, created_at, results_summary
+            FROM discovery_scans`,
+    countSql: `SELECT status, COUNT(*) AS count FROM discovery_scans GROUP BY status`,
+  },
+];
+
+/**
  * GET /api/admin/jobs
- * Get unified view of all background jobs (scans)
+ * Unified view of background work: every one-off job table plus the recurring
+ * in-process services (see services/jobs/jobRegistry).
  */
 router.get('/jobs', async (req: Request, res: Response) => {
   try {
@@ -311,53 +367,51 @@ router.get('/jobs', async (req: Request, res: Response) => {
     const limit = parseInt(req.query.limit as string) || 50;
     const offset = parseInt(req.query.offset as string) || 0;
 
-    let whereClause = '';
-    const params: any[] = [limit, offset];
+    // Merge in JS rather than one UNION: a table missing on an older schema
+    // degrades to "that source contributed nothing" instead of failing the
+    // whole panel. Each source yields at most limit+offset of its newest rows,
+    // which is all the merged window can possibly need.
+    const window = limit + offset;
 
-    if (status) {
-      whereClause = 'WHERE status = $3';
-      params.push(status);
-    }
+    const perSource = await Promise.all(
+      JOB_SOURCES.map(async ({ source, sql, countSql }) => {
+        try {
+          const params: any[] = [window];
+          const where = status ? ' WHERE status = $2' : '';
+          if (status) params.push(status);
 
-    // Get all scans (both asset discovery and vulnerability)
-    const scansResult = await query(
-      `SELECT
-         id, scan_type as type, target, status,
-         started_at, completed_at, duration_seconds,
-         assets_discovered, vulnerabilities_found,
-         error_message, initiated_by,
-         created_at, updated_at,
-         results_summary
-       FROM vulnerability_scans
-       ${whereClause}
-       ORDER BY
-         CASE status
-           WHEN 'running' THEN 1
-           WHEN 'queued' THEN 2
-           ELSE 3
-         END,
-         created_at DESC
-       LIMIT $1 OFFSET $2`,
-      params
-    );
-
-    // Get job counts by status
-    const countsResult = await query(
-      `SELECT
-         status,
-         COUNT(*) as count
-       FROM vulnerability_scans
-       GROUP BY status`
+          const [rows, counts] = await Promise.all([
+            query(`${sql}${where} ORDER BY created_at DESC LIMIT $1`, params),
+            query(countSql),
+          ]);
+          return { rows: rows.rows, counts: counts.rows };
+        } catch (err) {
+          logger.warn(`Admin jobs: source ${source} unavailable`, err);
+          return { rows: [], counts: [] };
+        }
+      })
     );
 
     const counts: Record<string, number> = {};
-    for (const row of countsResult.rows) {
-      counts[row.status] = parseInt(row.count, 10);
+    for (const { counts: sourceCounts } of perSource) {
+      for (const row of sourceCounts) {
+        counts[row.status] = (counts[row.status] || 0) + parseInt(row.count, 10);
+      }
     }
 
+    const statusRank = (s: string) => (s === 'running' ? 1 : s === 'queued' ? 2 : 3);
+    const merged = perSource
+      .flatMap(({ rows }) => rows)
+      .sort(
+        (a: any, b: any) =>
+          statusRank(a.status) - statusRank(b.status) ||
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      )
+      .slice(offset, offset + limit);
+
     // Get user info for initiated_by
-    const userIds = [...new Set(scansResult.rows.map((r: any) => r.initiated_by).filter(Boolean))];
-    let userMap: Record<number, string> = {};
+    const userIds = [...new Set(merged.map((r: any) => r.initiated_by).filter(Boolean))];
+    const userMap: Record<number, string> = {};
 
     if (userIds.length > 0) {
       const usersResult = await query(
@@ -369,9 +423,10 @@ router.get('/jobs', async (req: Request, res: Response) => {
       }
     }
 
-    // Enhance jobs with user info
-    const jobs = scansResult.rows.map((job: any) => ({
+    // ids are only unique per source table, so give the UI a stable composite key.
+    const jobs = merged.map((job: any) => ({
       ...job,
+      job_key: `${job.source}:${job.id}`,
       initiated_by_username: job.initiated_by ? userMap[job.initiated_by] || 'Unknown' : 'System',
     }));
 
@@ -379,6 +434,9 @@ router.get('/jobs', async (req: Request, res: Response) => {
       jobs,
       counts,
       total: Object.values(counts).reduce((a, b) => a + b, 0),
+      // Recurring in-process services (retention cleanup, feeds, schedulers).
+      // They own no rows, so without this they were invisible on the dashboard.
+      recurring: listRecurringJobs(),
       pagination: { limit, offset },
     });
   } catch (error) {

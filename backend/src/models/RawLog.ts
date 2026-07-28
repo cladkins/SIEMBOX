@@ -25,6 +25,75 @@ export interface CreateRawLogParams {
   shipper_id?: string | null;
 }
 
+export interface RawLogFilters {
+  limit?: number;
+  offset?: number;
+  sourceIp?: string;
+  /** Syslog tag/program — the same value the Parsed Logs view labels "Source". */
+  appName?: string;
+  hostname?: string;
+  search?: string;
+  severity?: number;
+  startTime?: Date;
+  endTime?: Date;
+}
+
+/**
+ * Build the WHERE clause + bind params shared by the count and page queries.
+ * Extracted so the bind-index bookkeeping is testable without a database.
+ */
+export function buildRawLogFilters(options?: RawLogFilters): {
+  whereClause: string;
+  params: any[];
+} {
+  const conditions: string[] = [];
+  const params: any[] = [];
+  let paramIndex = 1;
+
+  if (options?.sourceIp) {
+    conditions.push(`source_ip = $${paramIndex++}`);
+    params.push(options.sourceIp);
+  }
+
+  // The Parsed Logs "Source" column is raw_logs.app_name joined through
+  // raw_log_id, so the same filter has to work on the raw side or the shared
+  // filter bar silently does nothing on this tab.
+  if (options?.appName) {
+    conditions.push(`app_name = $${paramIndex++}`);
+    params.push(options.appName);
+  }
+
+  if (options?.hostname) {
+    conditions.push(`hostname = $${paramIndex++}`);
+    params.push(options.hostname);
+  }
+
+  if (options?.search) {
+    conditions.push(`raw_message ILIKE $${paramIndex++}`);
+    params.push(`%${options.search}%`);
+  }
+
+  if (options?.severity !== undefined) {
+    conditions.push(`severity = $${paramIndex++}`);
+    params.push(options.severity);
+  }
+
+  if (options?.startTime) {
+    conditions.push(`timestamp >= $${paramIndex++}`);
+    params.push(options.startTime);
+  }
+
+  if (options?.endTime) {
+    conditions.push(`timestamp <= $${paramIndex++}`);
+    params.push(options.endTime);
+  }
+
+  return {
+    whereClause: conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '',
+    params,
+  };
+}
+
 export class RawLogModel {
   static async create(params: CreateRawLogParams): Promise<RawLog> {
     const result = await query(
@@ -51,45 +120,9 @@ export class RawLogModel {
     return result.rows[0] || null;
   }
 
-  static async findAll(options?: {
-    limit?: number;
-    offset?: number;
-    sourceIp?: string;
-    search?: string;
-    severity?: number;
-    startTime?: Date;
-    endTime?: Date;
-  }): Promise<{ logs: RawLog[]; total: number }> {
-    const conditions: string[] = [];
-    const params: any[] = [];
-    let paramIndex = 1;
-
-    if (options?.sourceIp) {
-      conditions.push(`source_ip = $${paramIndex++}`);
-      params.push(options.sourceIp);
-    }
-
-    if (options?.search) {
-      conditions.push(`raw_message ILIKE $${paramIndex++}`);
-      params.push(`%${options.search}%`);
-    }
-
-    if (options?.severity !== undefined) {
-      conditions.push(`severity = $${paramIndex++}`);
-      params.push(options.severity);
-    }
-
-    if (options?.startTime) {
-      conditions.push(`timestamp >= $${paramIndex++}`);
-      params.push(options.startTime);
-    }
-
-    if (options?.endTime) {
-      conditions.push(`timestamp <= $${paramIndex++}`);
-      params.push(options.endTime);
-    }
-
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  static async findAll(options?: RawLogFilters): Promise<{ logs: RawLog[]; total: number }> {
+    const { whereClause, params } = buildRawLogFilters(options);
+    let paramIndex = params.length + 1;
 
     // Get total count
     const countResult = await query(`SELECT COUNT(*) FROM raw_logs ${whereClause}`, params);

@@ -10,6 +10,14 @@
 import { AutoDiscoveryService } from '../services/assets/autoDiscoveryService';
 import pool from '../config/database';
 import { ErrorLogService } from '../services/errors/errorLogService';
+import {
+  registerRecurringJob,
+  trackJobRun,
+  markJobSkipped,
+  setRecurringJobInterval,
+} from '../services/jobs/jobRegistry';
+
+const JOB_KEY = 'auto-discovery';
 
 let intervalId: NodeJS.Timeout | null = null;
 let currentIntervalMinutes = 360; // Track current interval to detect changes
@@ -65,6 +73,7 @@ export async function runAutoDiscovery(): Promise<void> {
 
   if (!settings.enabled) {
     console.log('[Auto-Discovery Job] Auto-discovery is disabled via settings');
+    markJobSkipped(JOB_KEY, 'auto-discovery disabled in settings');
     return;
   }
 
@@ -73,15 +82,19 @@ export async function runAutoDiscovery(): Promise<void> {
   });
 
   try {
-    const result = await AutoDiscoveryService.runFullDiscovery();
+    await trackJobRun(JOB_KEY, async () => {
+      const result = await AutoDiscoveryService.runFullDiscovery();
 
-    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+      const duration = ((Date.now() - startTime) / 1000).toFixed(2);
 
-    console.log('[Auto-Discovery Job] Cycle completed successfully:', {
-      duration: `${duration}s`,
-      discovered: result.discovered,
-      staleMarked: result.staleMarked,
-      enriched: result.enriched,
+      console.log('[Auto-Discovery Job] Cycle completed successfully:', {
+        duration: `${duration}s`,
+        discovered: result.discovered,
+        staleMarked: result.staleMarked,
+        enriched: result.enriched,
+      });
+
+      return `${result.discovered} discovered, ${result.staleMarked} marked stale, ${result.enriched} enriched`;
     });
   } catch (error) {
     console.error('[Auto-Discovery Job] Cycle failed:', error);
@@ -98,6 +111,14 @@ export async function startAutoDiscoveryJob(): Promise<void> {
   currentIntervalMinutes = settings.intervalMinutes;
 
   const intervalMs = currentIntervalMinutes * 60 * 1000;
+
+  registerRecurringJob({
+    key: JOB_KEY,
+    name: 'Asset auto-discovery',
+    description: 'Derives assets from log activity, marks stale hosts offline and enriches records.',
+    intervalMs,
+  });
+  setRecurringJobInterval(JOB_KEY, intervalMs);
 
   console.log('[Auto-Discovery Job] Starting background job', {
     enabled: settings.enabled,

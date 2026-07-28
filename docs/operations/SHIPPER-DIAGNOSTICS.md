@@ -150,6 +150,41 @@ The shipper expects this exact structure:
 }
 ```
 
+### Issue 6: Host Missing from Container Scanning
+
+**Symptom**: Container Scanning lists the SIEMBox host's images but not this
+shipper host's
+
+A shipper reports its host's container images (for Trivy scanning) once at
+startup and then every `CONTAINER_REPORT_INTERVAL` seconds. The **Shipper
+hosts** panel on the Container Scanning page shows each host's last report and,
+when there isn't one, why.
+
+**Check shipper logs for**:
+- `Container report to SIEMBox failed (HTTP ...)` — the POST didn't land. `000`
+  means the shipper couldn't reach `SIEMBOX_API_URL` at all; `404` means the API
+  key is not recognised (revoked key / ghost shipper).
+- `jq not available` — the payload can't be built.
+- Nothing at all about containers — the shipper image predates the feature.
+
+**Solution**:
+1. Restart the shipper (`docker compose restart log-shipper`) — it reports
+   immediately on startup, so the answer lands in the logs within seconds.
+2. If the UI shows **no Docker** for the host, mount the socket:
+   `- /var/run/docker.sock:/var/run/docker.sock:ro`
+3. If the UI shows **shipper too old**, the running image predates container
+   reporting (needs **1.1.0**+). `restart: unless-stopped` does **not** re-pull
+   `:latest` — force it:
+   ```bash
+   docker compose -f compose.prod.yaml pull
+   docker compose -f compose.prod.yaml up -d
+   ```
+4. If the UI shows **never reported**, confirm `CONTAINER_REPORT_INTERVAL` is
+   not `0` in the shipper's `.env`.
+
+A failed report does not consume the throttle window — the shipper retries on
+the next poll rather than waiting out a full interval.
+
 ## Diagnostic Procedure
 
 Follow these steps in order:

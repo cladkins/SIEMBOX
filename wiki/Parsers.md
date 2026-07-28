@@ -74,7 +74,16 @@ Use derivations to set an `event` marker (e.g. `login_failure` / `login_success`
 
 ## Seeing which parser matched
 
-The **Logs → Parsed Logs** table shows a **Parser** column (which parser produced each event) and a **Parser** filter so you can slice the log view by parser. "Unknown" means the matching parser was since deleted.
+The **Logs → Parsed Logs** table shows a **Parser** column (which parser produced each event) and a **Parser** filter so you can slice the log view by parser.
+
+### Why unparsed events appear under "Parsed Logs"
+
+A log that no parser matched is still written to `parsed_logs` as a minimal fallback record — the message plus the syslog tag, host and source IP — tagged **Unparsed** with event type `unparsed`. This is deliberate: without it those logs would only exist as raw text and would drop out of the searchable view entirely. Two things to know about them:
+
+- **Detection rules never run on them.** They carry no extracted fields, so a low parsed share means detections are starved no matter how good the rules are — that's what **Parse Coverage** on the dashboard measures.
+- **You can filter them out.** The **Parse Status** filter on the Logs page takes *Parsed only* or *Unparsed only* (API: `parse_status=parsed|unparsed`). *Unparsed only* is the fastest way to see which sources still need parser coverage.
+
+> **Deleting a parser reclassifies its history.** `parsed_logs.parser_id` is `ON DELETE SET NULL`, so removing a parser turns every event it produced into an Unparsed row. The extracted fields in `parsed_data` are kept — only the attribution is lost.
 
 ## Deep reference
 

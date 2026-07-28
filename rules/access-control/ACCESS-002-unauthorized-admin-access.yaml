@@ -11,7 +11,12 @@ tags: [admin-access, access-control, authentication, web, privilege]
 conditions:
   - field: path
     operator: regex
-    value: "(/admin|/administration|/manage|/dashboard|/wp-admin|/phpmyadmin|/portainer|/traefik)"
+    # flags: i — applications serve /Admin, /Dashboard and /WP-Admin.
+    # \b is independent of the flag and fixes existing false positives: without
+    # it "/manage" matched /managers-report.pdf and /manageable-items, and
+    # "/admin" matched /administrators-guide.
+    flags: i
+    value: "(/admin|/administration|/manage|/dashboard|/wp-admin|/phpmyadmin|/portainer|/traefik)\\b"
 
 alert:
   title: "Admin Interface Access from {client_ip}"

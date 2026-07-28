@@ -344,3 +344,59 @@ for (const spec of CASE_AUDIT) {
     assert.deepEqual(firing, [], `false positives on: ${firing.join(', ')}`);
   });
 }
+
+
+// ---------------------------------------------------------------------------
+// ACCESS-002 shares AUTH-011's admin-path list and had the same two problems:
+// case-sensitive matching, and no word boundary — so "/manage" matched
+// /managers-report.pdf and "/admin" matched /administrators-guide. Those were
+// false positives before the boundary was added, not new ones.
+// ---------------------------------------------------------------------------
+
+const ADMIN_PATH = ruleRegex('access-control/ACCESS-002-unauthorized-admin-access.yaml', 'path');
+
+const ADMIN_HITS: Array<[string, string]> = [
+  ['lowercase admin', '/admin/index.php'],
+  ['capitalised admin', '/Admin/index.php'],
+  ['wp-admin', '/wp-admin/'],
+  ['capitalised WP-Admin', '/WP-Admin/'],
+  ['phpmyadmin', '/phpmyadmin/'],
+  ['portainer', '/portainer/#/'],
+  ['traefik dashboard', '/traefik/dashboard'],
+  ['capitalised Dashboard', '/Dashboard'],
+  ['manage', '/manage/users'],
+];
+
+const ADMIN_MISSES: Array<[string, string]> = [
+  ['managers report', '/managers-report.pdf'],
+  ['manageable items', '/manageable-items'],
+  ['administrators guide', '/administrators-guide'],
+  ['home page', '/index.html'],
+  ['api health', '/api/health'],
+  ['static asset', '/static/app.js'],
+];
+
+for (const [label, url] of ADMIN_HITS) {
+  test(`ACCESS-002 detects admin interface access: ${label}`, () => {
+    assert.ok(ADMIN_PATH.test(url), `did not match ${url}`);
+  });
+}
+
+test('ACCESS-002 does not fire on paths that merely start with an admin word', () => {
+  const firing = ADMIN_MISSES.filter(([, u]) => ADMIN_PATH.test(u)).map(([l]) => l);
+  assert.deepEqual(firing, [], `false positives on: ${firing.join(', ')}`);
+});
+
+test('ACCESS-002 and AUTH-011 stay consistent — same list, same guards', () => {
+  // They cover the same ground from different angles (unauthenticated access vs
+  // access from an unexpected IP); letting one drift would be a silent gap.
+  for (const file of [
+    'access-control/ACCESS-002-unauthorized-admin-access.yaml',
+    'authentication/AUTH-011-admin-interface-unusual-ip.yaml',
+  ]) {
+    const doc = yaml.load(fs.readFileSync(path.join(RULES, file), 'utf8')) as any;
+    const cond = doc.conditions.find((c: any) => c.field === 'path' && c.operator === 'regex');
+    assert.equal(cond.flags, 'i', `${file} lost its case-insensitivity`);
+    assert.match(String(cond.value), /\\b/, `${file} lost its word boundary`);
+  }
+});

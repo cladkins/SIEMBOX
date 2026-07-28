@@ -16,6 +16,7 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 # Copy source code
 COPY src ./src
 COPY migrations ./migrations
+COPY scripts ./scripts
 
 # Build TypeScript
 RUN npm run build

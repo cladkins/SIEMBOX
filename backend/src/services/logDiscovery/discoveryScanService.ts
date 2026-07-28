@@ -25,6 +25,44 @@ interface Candidate {
   discovery_methods: Set<string>;
 }
 
+// ---------------------------------------------------------------------------
+// Cancellation + watchdog. The worker is an in-memory promise chained off a job
+// row, so without these a scan could stay 'running' forever (cancel had no
+// path in, and nothing bounded a wedged run). Cancellation is cooperative:
+// requestCancel() flags the id and the worker checks the flag at phase
+// boundaries and during the upsert loop — every probe inside a phase is
+// individually timeout-bounded, so boundaries are reached promptly.
+// ---------------------------------------------------------------------------
+
+/** Hard cap on a single scan run. Sweeps are bounded (≤1024 hosts/CIDR, sub-second
+ * port timeouts), so a legitimate run finishes well inside this. */
+export const SCAN_WATCHDOG_MS = 30 * 60 * 1000;
+
+const cancelRequested = new Set<number>();
+const activeScanIds = new Set<number>();
+
+export class ScanCancelledError extends Error {
+  constructor(scanId: number) {
+    super(`Discovery scan ${scanId} cancelled`);
+    this.name = 'ScanCancelledError';
+  }
+}
+
+/**
+ * Flag a scan for cooperative cancellation. Returns true if this process has
+ * an in-memory worker to interrupt — false means the row is an orphan from a
+ * previous process and only the DB status needs fixing.
+ */
+export function requestCancel(scanId: number): boolean {
+  const known = activeScanIds.has(scanId);
+  cancelRequested.add(scanId);
+  return known;
+}
+
+function throwIfCancelled(scanId: number): void {
+  if (cancelRequested.has(scanId)) throw new ScanCancelledError(scanId);
+}
+
 function ensureCandidate(candidates: Map<string, Candidate>, ip: string): Candidate {
   let c = candidates.get(ip);
   if (!c) {
@@ -136,9 +174,11 @@ async function runActivePhase(candidates: Map<string, Candidate>, signalsByIp: M
 async function executeScan(scanId: number, mode: DiscoveryScanMode, cidrs: string[]): Promise<void> {
   const library = loadFingerprintLibrary();
   const candidates = await runPassivePhase();
+  throwIfCancelled(scanId);
 
   if (mode === 'active' || mode === 'full') {
     await runCidrSweep(cidrs, candidates);
+    throwIfCancelled(scanId);
   }
 
   const signalsByIp = new Map<string, DiscoveredSignals>();
@@ -159,10 +199,12 @@ async function executeScan(scanId: number, mode: DiscoveryScanMode, cidrs: strin
 
   if (mode === 'active' || mode === 'full') {
     await runActivePhase(candidates, signalsByIp);
+    throwIfCancelled(scanId);
   }
 
   let hostsMatched = 0;
   for (const [ip, signals] of signalsByIp) {
+    throwIfCancelled(scanId);
     const best = matchHost(signals, library)[0] || null;
     await DiscoverySourceModel.upsert({
       ip_address: ip,
@@ -207,10 +249,34 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
   const scope = resolveScope(opts.manualCidrs || []);
   const scan = await DiscoveryScanModel.create(opts.mode, scope.cidrs, opts.createdBy ?? null);
 
-  executeScan(scan.id, opts.mode, scope.cidrs).catch(async (err: any) => {
-    logger.error(`[logDiscovery] scan ${scan.id} failed:`, err);
-    await DiscoveryScanModel.fail(scan.id, err?.message || 'Scan execution failed');
-  });
+  activeScanIds.add(scan.id);
+  // Watchdog: if the run wedges past the hard cap, flag it cancelled (the
+  // worker bails at its next checkpoint) and fail the row. The model's
+  // only-from-'running' guard keeps a late complete() from resurrecting it.
+  const watchdog = setTimeout(() => {
+    requestCancel(scan.id);
+    DiscoveryScanModel.fail(scan.id, `Timed out after ${Math.round(SCAN_WATCHDOG_MS / 60000)} minutes (watchdog)`).catch(
+      (err) => logger.error(`[logDiscovery] watchdog failed to mark scan ${scan.id}:`, err)
+    );
+  }, SCAN_WATCHDOG_MS);
+  watchdog.unref?.();
+
+  executeScan(scan.id, opts.mode, scope.cidrs)
+    .catch(async (err: any) => {
+      if (err instanceof ScanCancelledError) {
+        // Row was already failed by the cancel endpoint / watchdog; the guarded
+        // fail() below is a no-op in that case.
+        logger.info(`[logDiscovery] scan ${scan.id} stopped: ${err.message}`);
+      } else {
+        logger.error(`[logDiscovery] scan ${scan.id} failed:`, err);
+      }
+      await DiscoveryScanModel.fail(scan.id, err?.message || 'Scan execution failed').catch(() => {});
+    })
+    .finally(() => {
+      clearTimeout(watchdog);
+      activeScanIds.delete(scan.id);
+      cancelRequested.delete(scan.id);
+    });
 
   return { scanId: scan.id, cidrs: scope.cidrs, vlanWarning: scope.warning, rejectedCidrs: scope.rejected };
 }

@@ -3,7 +3,7 @@ import { ApiError } from '../middleware/errorHandler';
 import { DiscoveryScanModel } from '../models/DiscoveryScan';
 import { DiscoverySourceModel } from '../models/DiscoverySource';
 import { resolveScope, detectLocalInterfaces } from '../services/logDiscovery/scope';
-import { runScan, getRankedSources, buildOnboardPreview } from '../services/logDiscovery/discoveryScanService';
+import { runScan, requestCancel, getRankedSources, buildOnboardPreview } from '../services/logDiscovery/discoveryScanService';
 import { loadFingerprintLibrary } from '../services/logDiscovery/fingerprintLoader';
 
 const router = Router();
@@ -64,6 +64,24 @@ router.get('/scans/:id', async (req: Request, res: Response) => {
   const scan = await DiscoveryScanModel.findById(id);
   if (!scan) throw new ApiError(404, 'Scan not found');
   res.json(scan);
+});
+
+// POST /scans/:id/cancel - stop a running scan. Also the remedy for a scan row
+// orphaned 'running' by a previous process (no in-memory worker): the status
+// still flips to failed, it just has nothing to interrupt.
+router.post('/scans/:id/cancel', async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) throw new ApiError(400, 'Invalid scan id');
+  const scan = await DiscoveryScanModel.findById(id);
+  if (!scan) throw new ApiError(404, 'Scan not found');
+  if (scan.status !== 'running') {
+    res.json({ cancelled: false, scan });
+    return;
+  }
+
+  const hadWorker = requestCancel(id);
+  await DiscoveryScanModel.fail(id, hadWorker ? 'Cancelled by user' : 'Cancelled by user (orphaned run — no active worker)');
+  res.json({ cancelled: true, scan: await DiscoveryScanModel.findById(id) });
 });
 
 // GET /sources - ranked discovery results: { top, advanced }

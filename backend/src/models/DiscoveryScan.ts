@@ -35,17 +35,26 @@ export const DiscoveryScanModel = {
     return result.rows[0];
   },
 
-  async complete(id: number, resultsSummary: Record<string, unknown>): Promise<void> {
-    await query(
-      `UPDATE discovery_scans SET status = 'completed', completed_at = NOW(), results_summary = $2 WHERE id = $1`,
+  // complete/fail only transition OUT of 'running', so a scan that was already
+  // cancelled or watchdog-timed-out can't be flipped back by its (still
+  // finishing) worker, and duplicate terminal writes are no-ops. Both return
+  // whether the transition happened.
+
+  async complete(id: number, resultsSummary: Record<string, unknown>): Promise<boolean> {
+    const result = await query(
+      `UPDATE discovery_scans SET status = 'completed', completed_at = NOW(), results_summary = $2
+       WHERE id = $1 AND status = 'running'`,
       [id, JSON.stringify(resultsSummary)]
     );
+    return (result.rowCount || 0) > 0;
   },
 
-  async fail(id: number, errorMessage: string): Promise<void> {
-    await query(
-      `UPDATE discovery_scans SET status = 'failed', completed_at = NOW(), error_message = $2 WHERE id = $1`,
+  async fail(id: number, errorMessage: string): Promise<boolean> {
+    const result = await query(
+      `UPDATE discovery_scans SET status = 'failed', completed_at = NOW(), error_message = $2
+       WHERE id = $1 AND status = 'running'`,
       [id, errorMessage]
     );
+    return (result.rowCount || 0) > 0;
   },
 };

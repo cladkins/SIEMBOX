@@ -17,6 +17,7 @@ import {
   ValidationResult,
   SelfTestResult,
 } from '../parser/parserPortable';
+import { scanParserRedos, RedosFinding } from '../parser/redos';
 import { validateRule, RuleValidationResult, PortableRule } from '../rules/rulePortable';
 
 export type AiProvider = 'anthropic' | 'openai' | 'ollama';
@@ -428,6 +429,8 @@ export interface GenerateResult {
   parser: PortableParser | null;
   validation: ValidationResult | null;
   self_test: SelfTestResult | null;
+  /** ReDoS findings for the final attempt (empty = every regex proven safe). */
+  redos?: RedosFinding[];
   attempts: number;
   error?: string;
 }
@@ -458,10 +461,16 @@ export async function generateParser(
       return { ...last, attempts: attempt, error: e instanceof Error ? e.message : String(e) };
     }
 
-    const validation = validatePortableParser(parser, { strict: false });
+    // STRICT validation + the ReDoS scan: the exact gate the catalog CI runs on
+    // a contribution, so a generated parser that passes here also passes there.
+    // (strict:false used to let AI output through with warnings-as-passes, then
+    // fail the user's catalog PR.)
+    const validation = validatePortableParser(parser, { strict: true });
     const self_test = validation.ok ? runSelfTests(parser as PortableParser) : null;
-    const ok = validation.ok && (self_test ? self_test.ok : true);
-    last = { ok, parser, validation, self_test, attempts: attempt };
+    const redos = validation.ok ? scanParserRedos(parser as PortableParser) : [];
+    const redosVulnerable = redos.filter((f) => f.status === 'vulnerable');
+    const ok = validation.ok && (self_test ? self_test.ok : true) && redosVulnerable.length === 0;
+    last = { ok, parser, validation, self_test, redos, attempts: attempt };
     if (ok) return last;
 
     const errors = [
@@ -470,6 +479,10 @@ export async function generateParser(
         f.matched
           ? f.mismatches.map((m) => `sample[${f.index}] ${m.field}: expected ${JSON.stringify(m.expected)}, got ${JSON.stringify(m.actual)}`)
           : [`sample[${f.index}] parser did not match the input`]
+      ),
+      ...redosVulnerable.map(
+        (f) =>
+          `regex at ${f.location} is ReDoS-vulnerable (${f.complexity || 'catastrophic backtracking'}): rewrite it to be linear — anchor segments, avoid adjacent \\s+/.* over the same text, give captures like (.+?) explicit non-overlapping boundaries, prefer bounded character classes`
       ),
     ];
     prev = { parser, errors };

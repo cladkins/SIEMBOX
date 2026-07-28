@@ -2363,19 +2363,28 @@ only -- see `backend/src/services/logDiscovery/`).
 
 ### GET /api/log-discovery/scope
 
-Preview the scan scope: auto-detected local CIDRs, the single-VLAN warning
-(SIEMBOX only sees its own subnet by default), and any manually-supplied CIDRs.
+Preview the scan scope: the single-VLAN warning (SIEMBOX only sees its own
+subnet by default -- computed from the host's network interfaces regardless of
+what's below), and any manually-supplied CIDRs, validated and size-checked.
+
+`cidrs` only ever reflects manually-supplied subnets -- it deliberately excludes
+the auto-detected local interface CIDR, which in a Docker Compose deployment is
+just the backend container's own bridge network, not the user's LAN. Every
+CIDR that comes back here is exactly what an `active`/`full` scan will sweep
+host-by-host (see `POST /scans` below); each must be a /22 or smaller (1024
+addresses) to keep that sweep bounded -- larger or malformed entries land in
+`rejected_cidrs` instead.
 
 **Authentication:** Required
 
 **Query Parameters:**
-- `manual_cidrs` (optional) - Comma-separated CIDR list to merge into the preview, e.g. `192.168.20.0/24,10.10.0.0/16`
+- `manual_cidrs` (optional) - Comma-separated CIDR list to preview, e.g. `192.168.20.0/24,10.10.4.0/24`
 
 **Response (200):**
 ```json
 {
-  "cidrs": ["192.168.1.0/24", "192.168.20.0/24"],
-  "vlan_warning": null,
+  "cidrs": ["192.168.20.0/24"],
+  "vlan_warning": "SIEMBOX only sees its own subnet by default. If your homelab spans more than one VLAN or subnet, add their CIDRs manually or this scan will miss them.",
   "rejected_cidrs": []
 }
 ```
@@ -2405,8 +2414,8 @@ Trigger a scan. Runs asynchronously; returns immediately with the job id.
   "manual_cidrs": ["192.168.20.0/24"]
 }
 ```
-- `mode` - `passive` (ARP/mDNS/SSDP/DHCP-lease only), `active` (scoped port/HTTP/TLS probing of passive candidates only, no fresh sweep), or `full` (both)
-- `manual_cidrs` (optional) - additional CIDRs beyond what's auto-detected
+- `mode` - `passive` (ARP/mDNS/SSDP/DHCP-lease only), `active` (sweeps every approved manual CIDR for live hosts, then scoped port/HTTP/TLS probing of those plus whatever passive discovery found), or `full` (both passive and active)
+- `manual_cidrs` (optional) - CIDRs to sweep on this scan (each /22 or smaller; see `GET /scope`)
 
 **Response (202):**
 ```json

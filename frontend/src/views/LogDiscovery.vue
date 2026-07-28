@@ -93,10 +93,12 @@
     <!-- Manual CIDR dialog -->
     <el-dialog v-model="showManualCidrDialog" title="Add a subnet to the scan scope" width="480px">
       <p class="dialog-hint">
-        SIEMBOX only sees its own subnet by default. If your homelab has more than one VLAN, list the other CIDRs here
-        (e.g. <code>192.168.20.0/24</code>).
+        SIEMBOX only sees its own subnet by default. On an active or full scan, every subnet
+        listed here gets swept host-by-host to find real devices your passive discovery can't
+        see from inside the container's own network. Subnets larger than a /22 (1024 addresses)
+        are rejected to keep the sweep bounded -- split a bigger range into smaller CIDRs instead.
       </p>
-      <el-input v-model="manualCidrInput" placeholder="192.168.20.0/24, 10.10.0.0/16" />
+      <el-input v-model="manualCidrInput" placeholder="192.168.20.0/24, 10.10.4.0/24" />
       <template #footer>
         <el-button @click="showManualCidrDialog = false">Cancel</el-button>
         <el-button type="primary" @click="previewManualCidrs">Preview</el-button>
@@ -220,7 +222,7 @@ async function previewManualCidrs() {
   const cidrs = manualCidrInput.value.split(',').map((c) => c.trim()).filter(Boolean);
   scope.value = await logDiscoveryService.getScope(cidrs);
   if (scope.value.rejected_cidrs.length > 0) {
-    ElMessage.warning(`Ignored invalid CIDR(s): ${scope.value.rejected_cidrs.join(', ')}`);
+    ElMessage.warning(`Ignored invalid or too-large CIDR(s) (max /22): ${scope.value.rejected_cidrs.join(', ')}`);
   }
   showManualCidrDialog.value = false;
 }

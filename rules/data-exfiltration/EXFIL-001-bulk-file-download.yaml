@@ -10,6 +10,11 @@ tags: [exfiltration, data-theft, nextcloud, immich, bulk-download]
 conditions:
   - field: path
     operator: regex
+    # flags: i — file extensions are routinely uppercase (Windows clients and
+    # export tooling emit Report.PDF, Q3.XLSX, archive.ZIP). Without it this
+    # rule matched only lowercase extensions, i.e. one filename shape in five.
+    # The pattern is $-anchored, so there is no substring risk from the flag.
+    flags: i
     value: '\.(pdf|doc|docx|xls|xlsx|zip|tar|gz|rar|7z|bz2)$'
   - field: status_code
     operator: equals

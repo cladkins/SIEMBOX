@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
-import { compileUserRegex } from './userRegex';
+import { compileUserRegex, validateUserRegex } from './userRegex';
 
 const RULES = path.join(__dirname, '../../../../rules');
 
@@ -327,6 +327,55 @@ const CASE_AUDIT: Array<{
       ['coal miner report', 'coal-miner-report.pdf requested'],
     ],
   },
+  {
+    // The widest gap in the audit: the extension list was lowercase-only, so a
+    // Windows client or an export tool downloading Report.PDF / Q3.XLSX walked
+    // straight past a rule whose entire job is spotting bulk document theft.
+    file: 'data-exfiltration/EXFIL-001-bulk-file-download.yaml',
+    field: 'path',
+    detects: [
+      ['lowercase pdf', '/remote.php/dav/files/alice/report.pdf'],
+      ['uppercase PDF', '/remote.php/dav/files/alice/Report.PDF'],
+      ['uppercase XLSX', '/download/finance/Q3.XLSX'],
+      ['uppercase ZIP', '/backup/archive.ZIP'],
+      ['mixed-case DocX', '/share/Contract.DocX'],
+      ['tar.gz archive', '/dumps/nightly.tar.gz'],
+      ['7z archive', '/dumps/mail.7z'],
+    ],
+    // The pattern is $-anchored, so the flag widens which extensions match and
+    // nothing else — an extension has to end the path, not merely appear in it.
+    ignores: [
+      ['home page', '/index.html'],
+      ['image', '/photos/IMG_0042.png'],
+      ['script', '/static/js/app.min.js'],
+      ['pdf in a directory name', '/pdf/viewer/index.html'],
+      ['extension not at the end', '/docs/report.pdf.html'],
+    ],
+  },
+  {
+    // Service accounts are named however the person who created them felt that
+    // day; SVC_backup and Service_Account are as common as svc_backup.
+    file: 'access-control/ACCESS-004-service-account-login.yaml',
+    field: 'user',
+    detects: [
+      ['lowercase prefix', 'svc_backup'],
+      ['uppercase prefix', 'SVC_backup'],
+      ['capitalised service_ prefix', 'Service_Account'],
+      ['lowercase service_ prefix', 'service_nginx'],
+      ['lowercase _svc suffix', 'backup_svc'],
+      ['uppercase _svc suffix', 'BACKUP_SVC'],
+      ['_service suffix', 'db_service'],
+    ],
+    // Every alternative is anchored AND requires the underscore, so the flag
+    // does not turn this into a substring match on "svc" or "service".
+    ignores: [
+      ['ordinary user', 'alice'],
+      ['root', 'root'],
+      ['word starting with service', 'serviceable'],
+      ['no underscore', 'svcbackup'],
+      ['plural, no underscore', 'services'],
+    ],
+  },
 ];
 
 for (const spec of CASE_AUDIT) {
@@ -399,4 +448,60 @@ test('ACCESS-002 and AUTH-011 stay consistent — same list, same guards', () =>
     assert.equal(cond.flags, 'i', `${file} lost its case-insensitivity`);
     assert.match(String(cond.value), /\\b/, `${file} lost its word boundary`);
   }
+});
+
+
+// ---------------------------------------------------------------------------
+// The audit result, pinned.
+//
+// Every regex condition in the rule set was measured against attack and benign
+// corpora. These are the ones that needed `flags: i`; the rest are either
+// already case-correct or deliberately case-sensitive for a reason recorded in
+// the file (INFRA-001's TCP "SYN", INFRA-004's "t-rex", ACCESS-003's Linux
+// binary names). Dropping the flag is a silent narrowing — the rule still
+// loads, still validates, and just stops seeing most of its traffic — so it
+// needs a test rather than a comment.
+// ---------------------------------------------------------------------------
+
+const CASE_INSENSITIVE_RULES: Array<[string, string]> = [
+  ['access-control/ACCESS-002-unauthorized-admin-access.yaml', 'path'],
+  ['access-control/ACCESS-004-service-account-login.yaml', 'user'],
+  ['authentication/AUTH-007-sso-authentication-failures.yaml', 'service'],
+  ['authentication/AUTH-011-admin-interface-unusual-ip.yaml', 'path'],
+  ['data-exfiltration/EXFIL-001-bulk-file-download.yaml', 'path'],
+  ['infrastructure/INFRA-003-unusual-service-restarts.yaml', 'message'],
+  ['reverse-proxy/PROXY-002-command-injection.yaml', 'path'],
+  ['reverse-proxy/PROXY-005-malicious-user-agent.yaml', 'user_agent'],
+];
+
+for (const [file, field] of CASE_INSENSITIVE_RULES) {
+  const id = path.basename(file).replace('.yaml', '');
+
+  test(`${id} keeps its case-insensitive flag`, () => {
+    const doc = yaml.load(fs.readFileSync(path.join(RULES, file), 'utf8')) as any;
+    const cond = doc.conditions.find((c: any) => c.field === field && c.operator === 'regex');
+    assert.ok(cond, `${file} no longer has a regex condition on ${field}`);
+    assert.equal(cond.flags, 'i', `${file} lost flags: i on ${field}`);
+  });
+}
+
+test('every rule that declares flags declares ones the engine accepts', () => {
+  // A typo like `flags: I` or `flags: g` compiles to a thrown UserRegexError
+  // that the engine catches and turns into "no match" — a dead rule.
+  const files = fs
+    .readdirSync(RULES, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith('.yaml'))
+    .map((e) => path.join(e.parentPath ?? (e as any).path, e.name));
+
+  const broken: string[] = [];
+  for (const file of files) {
+    const doc = yaml.load(fs.readFileSync(file, 'utf8')) as any;
+    for (const cond of doc?.conditions ?? []) {
+      if (cond.operator !== 'regex') continue;
+      const error = validateUserRegex(String(cond.value), cond.flags);
+      if (error) broken.push(`${path.basename(file)} (${cond.field}): ${error}`);
+    }
+  }
+
+  assert.deepEqual(broken, [], `unusable regex conditions:\n${broken.join('\n')}`);
 });

@@ -6,7 +6,12 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { recommendParsers, SourceSample, HIGH_SEVERITY_WEIGHT } from './parserRecommendations';
+import {
+  recommendParsers,
+  distinctSamples,
+  SourceSample,
+  HIGH_SEVERITY_WEIGHT,
+} from './parserRecommendations';
 import { PortableParser } from './parserPortable';
 
 const sshCandidate: PortableParser = {
@@ -92,6 +97,30 @@ test('sources nothing matches surface as uncovered, high-severity first', () => 
   assert.equal(uncovered.length, 1);
   assert.equal(uncovered[0].app_name, 'homebox');
   assert.match(uncovered[0].example, /request completed/);
+  // Uncovered sources carry full sample lines to seed the AI builder.
+  assert.ok(Array.isArray(uncovered[0].samples) && uncovered[0].samples.length >= 1);
+});
+
+test('distinctSamples dedupes by digit-normalized template and caps count', () => {
+  const lines = [
+    '2026-07-27 12:00:00 INFO request id=1 done',
+    '2026-07-27 12:00:01 INFO request id=2 done', // same shape as above -> collapsed
+    '2026-07-27 12:00:02 ERROR db connection refused', // distinct shape
+    '',
+  ];
+  const out = distinctSamples(lines, 8);
+  assert.equal(out.length, 2);
+  assert.match(out[0], /request id=1/); // original line kept, not the template
+  assert.match(out[1], /connection refused/);
+});
+
+test('distinctSamples respects the limit and caps line length', () => {
+  // Distinct shapes must differ by more than digits (digit-runs are normalized).
+  const words = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf'];
+  const many = words.map((w) => `${w} event message`);
+  assert.equal(distinctSamples(many, 5).length, 5);
+  const long = ['x'.repeat(5000)];
+  assert.equal(distinctSamples(long)[0].length, 2000);
 });
 
 test('a candidate with an invalid pattern is skipped, not fatal', () => {

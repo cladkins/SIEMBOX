@@ -8,11 +8,6 @@ name: "CodeQL"
 # accepting perpetual false-positive alerts or disabling certificate-validation
 # checking repo-wide by hand. This workflow + config-file scopes the exclusion
 # to just that one query.
-#
-# IMPORTANT: for GitHub to accept this workflow's SARIF uploads instead of
-# erroring on a setup conflict, Default Setup must be turned off first --
-# Settings > Code security > Code scanning > Analysis tools > CodeQL > Set up
-# in Advanced mode (or remove Default Setup).
 on:
   push:
     branches: [main, develop]
@@ -33,18 +28,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: ['javascript-typescript', 'actions']
+        include:
+          - language: actions
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
           config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"

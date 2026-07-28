@@ -63,8 +63,34 @@ export interface UncoveredSource {
   app_name: string | null;
   unparsed_daily: number;
   unparsed_high_sev_daily: number;
-  /** One example message (truncated) to seed the AI builder / a manual parser. */
+  /** One short example message for inline display. */
   example: string;
+  /**
+   * A few structurally-distinct FULL sample lines to seed the AI builder or a
+   * manual parser. Varied formats (not N copies of one line) produce a better
+   * generalized parser and more test_samples than a single truncated example.
+   */
+  samples: string[];
+}
+
+/**
+ * Pick up to `limit` structurally-distinct lines: dedup by a digit-normalized
+ * template (so lines differing only in timestamps/IPs/counts collapse to one),
+ * keeping the original full line, each length-capped. Feeds the AI builder,
+ * whose own prompt asks for "one sample per distinct event".
+ */
+export function distinctSamples(messages: string[], limit = 8): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of messages) {
+    if (!m) continue;
+    const template = m.replace(/\d+/g, '#').slice(0, 200);
+    if (seen.has(template)) continue;
+    seen.add(template);
+    out.push(m.slice(0, 2000));
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 export interface RecommendationResult {
@@ -144,6 +170,7 @@ export function recommendParsers(
       unparsed_daily: s.unparsed_daily,
       unparsed_high_sev_daily: s.unparsed_high_sev_daily,
       example: (s.messages[0] || '').slice(0, 160),
+      samples: distinctSamples(s.messages),
     }))
     .sort(
       (a, b) =>

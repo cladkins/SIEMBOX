@@ -322,32 +322,58 @@ mis-framed them. If you are on an older build, upgrade the backend image.
 Run this against the database — it classifies each unparsed log by *why* it
 looks wrong, which points at a different fix in each case:
 
-```sql
+Note `-T`: without it `docker compose exec` allocates a TTY and the heredoc is
+swallowed. Paste the whole block, including the `SQL` terminator — not the bare
+SELECT into a shell prompt.
+
+```bash
+docker compose exec -T postgres psql -U siembox -d siembox <<'SQL'
 SELECT
   CASE
-    WHEN rl.raw_message LIKE E'%\n%'          THEN 'packed datagram (multiple events in one record)'
-    WHEN rl.raw_message ~ '^\w{3} +\d{1,2} '  THEN 'syslog header not stripped'
-    WHEN rl.raw_message ~ '=[^ ]*$'
-         AND LENGTH(rl.raw_message) > 900     THEN 'likely truncated by the sender'
-    ELSE                                           'no parser matches this format'
-  END                        AS likely_cause,
-  COUNT(*)                   AS events,
-  MIN(LENGTH(rl.raw_message)) AS min_len,
-  MAX(LENGTH(rl.raw_message)) AS max_len,
-  MIN(rl.hostname)           AS example_host
+    WHEN rl.raw_message LIKE E'%\n%'         THEN 'packed datagram (several events in one record)'
+    WHEN rl.raw_message ~ '^\w{3} +\d{1,2} ' THEN 'syslog header not stripped'
+    ELSE                                          'unrecognised format (check lengths for truncation)'
+  END                                        AS likely_cause,
+  COUNT(*)                                   AS events,
+  MIN(LENGTH(rl.raw_message))                AS min_len,
+  MAX(LENGTH(rl.raw_message))                AS max_len,
+  MODE() WITHIN GROUP (ORDER BY LENGTH(rl.raw_message)) AS most_common_len,
+  COUNT(*) FILTER (WHERE LENGTH(rl.raw_message) BETWEEN 1000 AND 1024) AS at_1k_cap
 FROM parsed_logs pl
 JOIN raw_logs rl ON rl.id = pl.raw_log_id
 WHERE pl.parser_id IS NULL
   AND pl.timestamp > NOW() - INTERVAL '24 hours'
 GROUP BY 1
 ORDER BY events DESC;
+SQL
 ```
 
-Run it with:
+`max_len` well above 1024 rules out sender truncation. A large `at_1k_cap` with
+`most_common_len` pinned just under 1024 is the signature of a device capping
+its UDP datagrams — move that source to TCP.
+
+Then drill into one format to see whether a specific parser is missing or a
+present one is being defeated. Substitute your own marker for `CEF:`:
 
 ```bash
-docker compose exec postgres psql -U siembox -d siembox -f - <<'SQL'
--- paste the query above
+docker compose exec -T postgres psql -U siembox -d siembox <<'SQL'
+SELECT COUNT(*)                                            AS unparsed,
+       COUNT(*) FILTER (WHERE rl.raw_message LIKE E'%\n%') AS packed,
+       MIN(LENGTH(rl.raw_message))                         AS min_len,
+       MAX(LENGTH(rl.raw_message))                         AS max_len
+FROM parsed_logs pl JOIN raw_logs rl ON rl.id = pl.raw_log_id
+WHERE pl.parser_id IS NULL
+  AND pl.timestamp > NOW() - INTERVAL '24 hours'
+  AND rl.raw_message LIKE '%CEF:%';
+
+-- a full sample with newlines marked, so a packed record is unmistakable
+SELECT LENGTH(rl.raw_message) AS len,
+       replace(rl.raw_message, E'\n', '[NL]') AS message
+FROM parsed_logs pl JOIN raw_logs rl ON rl.id = pl.raw_log_id
+WHERE pl.parser_id IS NULL
+  AND pl.timestamp > NOW() - INTERVAL '24 hours'
+  AND rl.raw_message LIKE '%CEF:%'
+ORDER BY pl.id DESC LIMIT 2;
 SQL
 ```
 
@@ -355,6 +381,7 @@ SQL
 |--------|---------|-----|
 | **packed datagram** | The sender put several events in one UDP datagram (or one TCP write). `.` never crosses a newline, so no `^…$` parser can match. | Fixed in the release containing this note — upgrade the backend image. |
 | **syslog header not stripped** | The `<PRI>TIMESTAMP HOSTNAME` header parse failed, so the whole line was stored. | Check the sender's timestamp format against RFC 3164/5424. |
+| **min_len 0** | Empty records from blank lines / keepalive newlines in a datagram. | Fixed in the release containing this note — blank frames are dropped on ingest. |
 | **likely truncated by the sender** | The message ends mid key=value. Many devices cap UDP syslog at 1024 bytes. | Switch that source to TCP, which has no such cap. |
 | **no parser matches** | Genuinely unrecognised format. | Install a parser from the catalog, or write one. |
 

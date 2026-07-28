@@ -160,3 +160,71 @@ test('PROXY-002 declares the flags it depends on', () => {
   const cond = doc.conditions.find((c: any) => c.operator === 'regex');
   assert.equal(cond.flags, 'i');
 });
+
+
+// ---------------------------------------------------------------------------
+// PROXY-005 keys on user_agent, which scanners capitalise inconsistently. Plain
+// case-insensitivity is NOT enough here: several tokens are short words that
+// occur inside legitimate agents, so `flags: i` alone starts firing on
+// Zapier/1.0 and HydrationTracker. The word boundaries are load-bearing — and
+// they also fix a false positive that predates the flag, since lowercase
+// "zapier/1.0" matched the bare "zap" alternative.
+// ---------------------------------------------------------------------------
+
+const SCANNER_UA = ruleRegex('reverse-proxy/PROXY-005-malicious-user-agent.yaml', 'user_agent');
+
+const SCANNER_AGENTS: Array<[string, string]> = [
+  ['sqlmap lowercase', 'sqlmap/1.7.2#stable (http://sqlmap.org)'],
+  ['SQLMap capitalised', 'SQLMap/1.7.2'],
+  ['Nikto', 'Mozilla/5.00 (Nikto/2.5.0) (Evasions:None)'],
+  ['Nmap NSE', 'Mozilla/5.0 (compatible; Nmap Scripting Engine; https://nmap.org/book/nse.html)'],
+  ['ZAP', 'Mozilla/5.0 (X11; Linux x86_64) ZAP/2.14.0'],
+  ['zaproxy', 'zaproxy/2.14.0'],
+  ['Burp Suite', 'Mozilla/5.0 (Burp Suite Professional)'],
+  ['masscan', 'masscan/1.3.2'],
+  ['WPScan', 'WPScan v3.8.22 (https://wpscan.com/wordpress-security-scanner)'],
+  ['gobuster', 'gobuster/3.6'],
+  ['Nessus', 'Mozilla/5.0 (compatible; Nessus)'],
+  ['w3af', 'w3af.org'],
+  ['Hydra', 'Hydra/9.5'],
+];
+
+const LEGITIMATE_AGENTS: Array<[string, string]> = [
+  ['Chrome', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36'],
+  ['Firefox', 'Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0'],
+  ['Safari iOS', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) Version/17.5 Safari/604.1'],
+  ['curl', 'curl/8.5.0'],
+  ['Googlebot', 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'],
+  // Contains "zap". Capitalised did not match before the flag; lowercase DID —
+  // an existing false positive the word boundaries remove.
+  ['Zapier capitalised', 'Zapier/1.0'],
+  ['zapier lowercase', 'zapier/1.0'],
+  ['Uptime Kuma', 'Uptime-Kuma/1.23.13'],
+  ['Postman', 'PostmanRuntime/7.39.0'],
+  ['Datadog', 'Datadog Agent/7.54.0'],
+  ['python-requests', 'python-requests/2.32.3'],
+  ['app containing "hydra"', 'HydrationTracker/2.1 (iOS)'],
+];
+
+for (const [label, ua] of SCANNER_AGENTS) {
+  test(`PROXY-005 detects scanner user-agent: ${label}`, () => {
+    assert.ok(SCANNER_UA.test(ua), `pattern did not match ${ua}`);
+  });
+}
+
+test('PROXY-005 does not fire on legitimate user agents', () => {
+  const firing = LEGITIMATE_AGENTS.filter(([, ua]) => SCANNER_UA.test(ua)).map(([l]) => l);
+  assert.deepEqual(firing, [], `false positives on: ${firing.join(', ')}`);
+});
+
+test('PROXY-005 keeps the word boundaries its flags depend on', () => {
+  // Regression guard: dropping \b while keeping flags: i reintroduces the
+  // Zapier/HydrationTracker false positives measured when this was written.
+  const doc = yaml.load(
+    fs.readFileSync(path.join(RULES, 'reverse-proxy/PROXY-005-malicious-user-agent.yaml'), 'utf8')
+  ) as any;
+  const cond = doc.conditions.find((c: any) => c.operator === 'regex');
+  assert.equal(cond.flags, 'i');
+  assert.match(String(cond.value), /^\\b\(/, 'alternation must be wrapped in word boundaries');
+  assert.match(String(cond.value), /\)\\b$/, 'alternation must be wrapped in word boundaries');
+});

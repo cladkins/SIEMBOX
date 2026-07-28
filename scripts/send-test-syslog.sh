@@ -55,8 +55,9 @@ printf '%s srv01 sshd[4242]: Accepted password for root from 203.0.113.51 port 5
 # ACCESS-001 Sudo to Root by Non-Admin (high) — linux-sudo
 printf '%s srv01 sudo:  bob : TTY=pts/0 ; PWD=/home/bob ; USER=root ; COMMAND=/bin/bash\n' "$TS" | send
 
-# PROXY-001 SQL Injection (high) — apache-nginx-access-log
-printf '%s web01 nginx: 203.0.113.52 - - [%s] "GET /search?q=1+UNION+SELECT+*+FROM+users-- HTTP/1.1" 200 512 "-" "Mozilla/5.0"\n' "$TS" "$CLF" | send
+# PROXY-001 SQL Injection (high). Percent-encoded and lowercase, i.e. what
+# sqlmap actually emits — the rule used to miss exactly this shape.
+printf '%s web01 nginx: 203.0.113.52 - - [%s] "GET /product?id=-1%%20union%%20select%%201,2,3 HTTP/1.1" 200 512 "-" "Mozilla/5.0"\n' "$TS" "$CLF" | send
 
 # PROXY-002 Command Injection (high) — also trips PROXY-001, the ";" matches both
 printf '%s web01 nginx: 203.0.113.59 - - [%s] "GET /ping?host=127.0.0.1;cat+/etc/passwd HTTP/1.1" 200 128 "-" "Mozilla/5.0"\n' "$TS" "$CLF" | send
@@ -70,11 +71,9 @@ printf '%s web01 nginx: 203.0.113.55 - - [%s] "TRACE /debug HTTP/1.1" 405 128 "-
 # ACCESS-002 Unauthorized Admin Access (medium)
 printf '%s web01 nginx: 203.0.113.56 - - [%s] "GET /wp-admin/index.php HTTP/1.1" 200 300 "-" "Mozilla/5.0"\n' "$TS" "$CLF" | send
 
-# PROXY-005 Malicious User-Agent (medium) — nginx-proxy-manager.
-# NOTE: deliberately NOT a plain nginx line. apache-nginx-access-log (priority
-# 20) claims those before standard-nginx-access (40) and captures no
-# user_agent, so this rule cannot fire from a plain nginx/apache access log.
-printf '%s npm01 npm: [%s] - 200 200 - GET https app.example.com "/login" [Client 203.0.113.53] [Length 512] [Gzip -] [Sent-to 192.168.1.20] "sqlmap/1.7.2#stable (http://sqlmap.org)" "-"\n' "$TS" "$CLF" | send
+# PROXY-005 Malicious User-Agent (medium) — a plain nginx COMBINED line, which
+# now routes to standard-nginx-access and so actually carries a user_agent.
+printf '%s web01 nginx: 203.0.113.53 - - [%s] "GET /login HTTP/1.1" 200 512 "-" "sqlmap/1.7.2#stable (http://sqlmap.org)"\n' "$TS" "$CLF" | send
 
 # UNIFI-IPS-002 Threat NOT Blocked (high) — same envelope, act=allowed
 unifi_ips not-blocked 203.0.113.57 allowed | send
@@ -85,7 +84,7 @@ printf '%s UCG-Max CEF:0|Ubiquiti|UniFi Network|10.4.57|300|Admin Login|3|UNIFIc
 cat <<EOF
 sent 13 test events to $HOST:$PORT over UDP
   3 framing checks (1 single datagram + 2 packed into one)
-  10 detection triggers across ssh / sudo / nginx / nginx-proxy-manager / UniFi
+  10 detection triggers across ssh / sudo / nginx / UniFi
 
 Expected: all 13 events parsed (no (UNPARSED) rows) and at least 12 alerts
 spanning low -> critical. Counts can run slightly higher: PROXY-002's ";"

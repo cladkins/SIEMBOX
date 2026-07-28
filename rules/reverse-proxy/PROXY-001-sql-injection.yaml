@@ -2,7 +2,9 @@ name: SQL Injection Attempt
 description: >
   Detects SQL injection attack patterns in HTTP requests targeting web applications.
   Monitors URL paths and parameters for common SQL injection signatures including quotes, SQL keywords (UNION, SELECT, OR),
-  comment indicators, and SQL operators.
+  comment indicators, and SQL operators. Matches both literal and percent-encoded
+  payloads, and is case-insensitive on the high-signal keywords, so the encoded
+  lowercase requests real tooling emits are caught.
   Even failed attempts indicate active reconnaissance and should be investigated.
 severity: high
 enabled: true
@@ -11,7 +13,15 @@ tags: [web, sql-injection, attack, reverse-proxy, exploitation]
 conditions:
   - field: path
     operator: regex
-    value: '(''|"|;|--|\bOR\b|\bUNION\b|\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bDROP\b|0x[0-9a-f]+|\*\s*FROM\s*|\bAND\b.*=)'
+    # Matches percent-encoded payloads as well as literal ones. Two traps this
+    # works around: the rules engine compiles patterns with no flags, so
+    # matching is CASE-SENSITIVE; and \b does not help after an encoded
+    # separator, because in "%20UNION" the char before U is '0' — a word
+    # character, so there is no boundary. The high-signal keywords therefore
+    # get explicit case classes and a not-a-letter lookaround instead.
+    # OR/AND stay uppercase + \b on purpose: a case-insensitive bare "or"
+    # would fire on any URL containing the word "or" (e.g. ?q=cats+or+dogs).
+    value: '(''|%27|"|%22|;|%3[Bb]|--|(?:%2[Dd]){2}|\bOR\b|\bUNION\b|\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bDROP\b|0[Xx][0-9A-Fa-f]+|\*\s*FROM\s*|\bAND\b.*=|(?<![A-Za-z])(?:[Uu][Nn][Ii][Oo][Nn]|[Ss][Ee][Ll][Ee][Cc][Tt]|[Ii][Nn][Ss][Ee][Rr][Tt]|[Uu][Pp][Dd][Aa][Tt][Ee]|[Dd][Ee][Ll][Ee][Tt][Ee]|[Dd][Rr][Oo][Pp])(?![A-Za-z]))'
 
 alert:
   title: "SQL Injection Attempt from {client_ip}"

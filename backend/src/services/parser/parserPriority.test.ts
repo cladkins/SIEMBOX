@@ -141,6 +141,57 @@ test('CEF from a vendor with no specific parser still falls back to generic CEF'
   assert.equal(picked!.result.fields.device_vendor, 'Trend Micro');
 });
 
+// A standard COMBINED-format access line: client, request, status, size, then
+// the referer and user-agent pair. Both nginx parsers match it.
+const NGINX_COMBINED =
+  '203.0.113.53 - - [28/Jul/2026:14:00:04 +0000] "GET /login HTTP/1.1" 200 512 ' +
+  '"-" "sqlmap/1.7.2#stable (http://sqlmap.org)"';
+
+// COMMON format — no referer/user-agent pair. Only the looser parser matches.
+const NGINX_COMMON = '203.0.113.11 - - [28/Jul/2026:14:00:04 +0000] "GET /health HTTP/1.1" 200 2';
+
+test('a combined-format access log goes to the parser that captures user_agent', () => {
+  // apache-nginx-access-log matches this line too but extracts no user_agent.
+  // It used to sit at priority 20, ahead of standard-nginx-access (40), so
+  // user_agent was never populated for ordinary nginx/apache logs — which made
+  // PROXY-005 (malicious user-agent) impossible to fire from its main source.
+  const picked = selectParser(NGINX_COMBINED);
+
+  assert.ok(picked, 'expected a parser to claim a combined-format access log');
+  assert.equal(picked!.parser.name, 'standard-nginx-access');
+  assert.equal(picked!.result.fields.user_agent, 'sqlmap/1.7.2#stable (http://sqlmap.org)');
+});
+
+test('a common-format access log still falls back to the looser parser', () => {
+  // The strict parser requires the referer/user-agent pair, so this must not
+  // become unparsed as a side effect of the reordering.
+  const picked = selectParser(NGINX_COMMON);
+
+  assert.ok(picked, 'expected a parser to claim a common-format access log');
+  assert.equal(picked!.parser.name, 'apache-nginx-access-log');
+  assert.equal(picked!.result.fields.path, '/health');
+});
+
+test('both nginx parsers still populate path, which the PROXY-00x rules key on', () => {
+  for (const line of [NGINX_COMBINED, NGINX_COMMON]) {
+    const picked = selectParser(line);
+    assert.ok(picked!.result.fields.path, `no path from ${picked!.parser.name}`);
+  }
+});
+
+test('the strict access-log parser sorts ahead of the looser one', () => {
+  const byName = new Map(loadAll().map((p) => [p.name, p.priority ?? 100]));
+  const strict = byName.get('standard-nginx-access');
+  const loose = byName.get('apache-nginx-access-log');
+
+  assert.ok(strict !== undefined && loose !== undefined);
+  assert.ok(
+    strict! < loose!,
+    `standard-nginx-access (${strict}) must sort before apache-nginx-access-log (${loose}); ` +
+      'the looser parser captures no user_agent and would shadow it'
+  );
+});
+
 test('the generic CEF parsers sit in the generic priority band, behind vendor-specific ones', () => {
   // The structural invariant behind the tests above: PARSERS.md reserves
   // 100-500 for generic parsers. cef-syslog/cef-standard were at 4/5, ahead of

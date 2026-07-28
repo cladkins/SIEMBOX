@@ -1,0 +1,40 @@
+name: Blocked Traffic from Known-Malicious IP
+description: >
+  Traffic from an IP on an enabled threat-intel feed (abuse.ch C2, Tor exit,
+  blocklist.de, etc.) that your gateway STOPPED — either a firewall drop/reject
+  or an IDS/IPS block. The companion to TI-001, which covers the same sources
+  when their traffic got THROUGH.
+  Low severity on purpose: the traffic was blocked, so this is corroboration
+  rather than an incident. Its value is the pattern — a source that probes
+  persistently, or one that shows up here first and in TI-001 later.
+  The event_type gate keeps the feed lookup off the hot path for unrelated logs.
+severity: low
+enabled: true
+tags: [network, threat-intel, firewall, ids-ips, blocklist, ioc]
+
+conditions:
+  # Both vocabularies, because two different subsystems do the blocking and they
+  # do not share terms: netfilter-firewall emits firewall_event + drop/reject,
+  # while the UniFi IDS/IPS parsers emit ids_ips_alert + blocked. Pairing one
+  # subsystem's event_type with the other's action is a rule that matches
+  # nothing at all, and nothing warns you about it.
+  - field: event_type
+    operator: in
+    value: ["firewall_event", "ids_ips_alert"]
+  - field: action
+    operator: in
+    value: ["drop", "reject", "blocked"]
+  - field: source_ip
+    operator: on_threat_feed
+    value: true
+
+alert:
+  title: "Blocked traffic from known-malicious IP {source_ip}"
+  description: >
+    {source_ip} — listed on threat feeds: {threat_feeds} — was blocked while
+    attempting to reach {dest_ip}:{dest_port}.
+    The traffic did not get through, so treat this as corroboration rather than
+    an incident: check whether the same source appears in other alerts, whether
+    it is probing repeatedly, and whether anything from it was ever ACCEPTED
+    (see TI-001). A blocklisted source hammering one port is worth a firewall
+    rule; a single hit is routine internet background noise.

@@ -9,6 +9,7 @@ import { startAutoDiscoveryJob, stopAutoDiscoveryJob } from './jobs/autoDiscover
 import { startScheduledScansJob, stopScheduledScansJob } from './jobs/scheduledScans';
 import { startIngestionHealthJob, stopIngestionHealthJob } from './jobs/ingestionHealth';
 import { startThreatFeedsJob, stopThreatFeedsJob } from './jobs/threatFeeds';
+import { startGeoipUpdateJob, stopGeoipUpdateJob } from './jobs/geoipUpdate';
 import { startYaraRulesJob, stopYaraRulesJob } from './jobs/yaraRules';
 import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
 import { TemplateService } from './services/scanner/templateService';
@@ -118,6 +119,10 @@ const startServer = async () => {
     // Start the external threat-feed refresher (populates blocklist indicators).
     startThreatFeedsJob();
 
+    // Keep the GeoIP database current. Without it, country enrichment is off and
+    // the GeoIP map / Threat Intel country tables have nothing to show.
+    startGeoipUpdateJob();
+
     // Start the EDR YARA-Forge refresher (opt-in via EDR_YARA_FORGE_ENABLED).
     startYaraRulesJob();
 
@@ -154,6 +159,7 @@ process.on('SIGTERM', async () => {
   stopScheduledScansJob();
   stopIngestionHealthJob();
   stopThreatFeedsJob();
+  stopGeoipUpdateJob();
   stopYaraRulesJob();
   pool.end(() => {
     logger.info('Database pool closed');
@@ -173,6 +179,7 @@ process.on('SIGINT', async () => {
   stopScheduledScansJob();
   stopIngestionHealthJob();
   stopThreatFeedsJob();
+  stopGeoipUpdateJob();
   stopYaraRulesJob();
   pool.end(() => {
     logger.info('Database pool closed');

@@ -10,7 +10,12 @@ tags: [port-scan, scanning, reconnaissance, infrastructure, network]
 conditions:
   - field: message
     operator: regex
-    value: "(connection refused|connection attempt|SYN|port.*closed|no route to host)"
+    # Deliberately NOT flags: i. "SYN" is a TCP flag written in caps, and a
+    # case-insensitive "syn" matches ordinary words — "syntax error" would
+    # alert as a port scan. The prose phrases get explicit case classes instead,
+    # because logs capitalise them inconsistently ("Connection refused" is the
+    # canonical form in most daemons, and was missed entirely).
+    value: "([Cc]onnection [Rr]efused|[Cc]onnection [Aa]ttempt|SYN|[Pp]ort.*[Cc]losed|[Nn]o [Rr]oute [Tt]o [Hh]ost)"
 
 aggregation:
   field: source_ip

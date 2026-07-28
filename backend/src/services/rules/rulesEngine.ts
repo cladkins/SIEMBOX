@@ -4,6 +4,7 @@ import { ParsedLog } from '../../models/ParsedLog';
 import { logger } from '../../utils/logger';
 import { query } from '../../config/database';
 import { ErrorLogService } from '../errors/errorLogService';
+import { testUserRegex } from './userRegex';
 import { NotificationService } from '../notifications/notificationService';
 import { FeedService } from '../threatintel/feedService';
 import { PURE_CONDITION_OPERATORS, evaluatePureCondition } from './conditionMatch';
@@ -25,6 +26,11 @@ interface RuleCondition {
     | 'not_on_threat_feed'
     | 'exists';
   value: string | number | boolean | Array<string | number>;
+  /**
+   * Regex flags for the `regex` operator, e.g. "i". Optional; a leading inline
+   * group in the pattern ("(?i)...") works too. See services/rules/userRegex.
+   */
+  flags?: string;
 }
 
 interface RuleAggregation {
@@ -152,17 +158,21 @@ export class RulesEngine {
 
     switch (operator) {
       case 'regex': {
-        // Compiles a caller-supplied detection pattern — the one place that builds
-        // a dynamic RegExp; kept here rather than in the DB-free pure module.
+        // Compiled via the shared user-regex module so the engine, the
+        // recommendations preview and the validator cannot disagree, and so an
+        // author can ask for case-insensitivity (`flags: i`, or a leading
+        // `(?i)`) instead of hand-rolling [Uu][Nn]... character classes.
         const valueStr = String(value);
-        const fieldStr = String(fieldValue);
-        try {
-          const regex = new RegExp(valueStr);
-          return regex.test(fieldStr);
-        } catch (error) {
-          logger.error('Invalid regex pattern:', { pattern: valueStr, error });
-          return false;
+        const result = testUserRegex(valueStr, String(fieldValue), condition.flags);
+        if (result.error) {
+          // A pattern that cannot compile means the rule silently never fires;
+          // surface it rather than leaving it to be discovered by absence.
+          logger.error('Invalid regex pattern:', { pattern: valueStr, error: result.error });
+          ErrorLogService.logBackgroundError('rules-engine', `invalid regex in rule: ${result.error}`, {
+            dedupeKey: `regex:${valueStr}`,
+          });
         }
+        return result.matched;
       }
 
       case 'not_in_whitelist':

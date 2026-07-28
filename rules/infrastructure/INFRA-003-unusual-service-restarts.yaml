@@ -10,6 +10,10 @@ tags: [service-restart, availability, infrastructure, systemd, tampering]
 conditions:
   - field: message
     operator: regex
+    # flags: i — the pattern mixed cases already (Starting/Stopped capitalised
+    # for systemd, "restarting" lowercase), so "Restarting docker" — the form
+    # Docker actually logs — was missed.
+    flags: i
     value: "(service.*restart|systemd.*restart|Starting.*service|Stopped.*service|restarting)"
 
 aggregation:

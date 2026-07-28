@@ -10,6 +10,9 @@ tags: [authentication, brute-force, sso, authelia, authentik, keycloak, attack]
 conditions:
   - field: service
     operator: regex
+    # flags: i — `service` is not normalised to lowercase (parsers emit Audit,
+    # CRON, HTTPS), so a capitalised SSO service name would be missed.
+    flags: i
     value: "authelia|authentik|keycloak"
   - field: event
     operator: contains

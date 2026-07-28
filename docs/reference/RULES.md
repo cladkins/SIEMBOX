@@ -93,7 +93,7 @@ Each detection rule contains:
 **Conditions** - Filters applied to incoming logs:
 - `equals` - Exact value match
 - `contains` - Substring match
-- `regex` - Regular expression pattern
+- `regex` - Regular expression pattern (see **Regex conditions** below)
 - `greater_than` / `less_than` - Numeric comparison
 - `in` / `not_in` - Membership in a list
 - `exists` - Field is present (`value: true`) or absent (`value: false`)
@@ -105,6 +105,45 @@ Each detection rule contains:
   relevant traffic. Alerts raised this way carry a `{threat_feeds}` variable
   naming the feeds that flagged the IP. See the `TI-*` (network) and
   `PROXY-009` (reverse-proxy) rules.
+
+**Regex conditions** - patterns are compiled by JavaScript's `RegExp`, and are
+**case-sensitive by default**. Ask for flags one of two ways:
+
+```yaml
+conditions:
+  # explicit — preferred, it is obvious at a glance
+  - field: path
+    operator: regex
+    value: 'union\s+select'
+    flags: i
+
+  # or an inline leading group, the PCRE/Python syntax
+  - field: user_agent
+    operator: regex
+    value: '(?i)(sqlmap|nikto|nmap)'
+```
+
+Supported flags are `i` (ignore case), `m` (multiline `^`/`$`), `s` (dot matches
+newline) and `u` (unicode). `g` and `y` are rejected: both make the pattern
+stateful via `lastIndex`, so the same input would alternate between matching and
+not matching.
+
+> Before flags were supported, `(?i)` raised a `SyntaxError` that was swallowed
+> into "no match" — a rule written that way silently never fired. Invalid
+> patterns now surface in the Admin dashboard's Recent Errors panel instead of
+> failing quietly.
+
+Two things worth knowing when writing one:
+
+- **Blanket `(?i)` can cost precision.** `PROXY-001` keeps `\bOR\b` and `\bAND\b`
+  case-sensitive on purpose — a case-insensitive bare `or` fires on any URL
+  containing the word, e.g. `?q=cats+or+dogs`. Where only some tokens should be
+  case-insensitive, spell those out (`[Uu][Nn][Ii][Oo][Nn]`) rather than
+  flagging the whole pattern.
+- **Match what is on the wire.** HTTP fields arrive percent-encoded, and `\b`
+  does not help after an encoded separator: in `%20UNION` the character before
+  `U` is `0`, a word character, so there is no boundary. Match the encoded forms
+  (`%27`, `%3B`, `%2D%2D`) alongside the literal ones.
 
 **Aggregation** - Groups events before alerting:
 - Counts occurrences of matching events

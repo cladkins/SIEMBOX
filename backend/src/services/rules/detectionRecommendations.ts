@@ -19,6 +19,7 @@
  * layer supplies samples + candidates.
  */
 import { PURE_CONDITION_OPERATORS, evaluatePureCondition } from './conditionMatch';
+import { testUserRegex } from './userRegex';
 
 /** Weight per rule severity: matching traffic on a critical rule counts 10×. */
 export const SEVERITY_WEIGHTS: Record<string, number> = {
@@ -95,13 +96,14 @@ export function conditionsMatchSample(
     }
 
     if (condition.operator === 'regex') {
-      try {
-        if (!new RegExp(String(condition.value)).test(String(fieldValue).slice(0, MAX_FIELD_LENGTH))) {
-          return false;
-        }
-      } catch {
-        return false;
-      }
+      // Same compile path as the live engine — a preview that used different
+      // regex semantics would recommend rules that then never fire.
+      const { matched } = testUserRegex(
+        String(condition.value),
+        String(fieldValue).slice(0, MAX_FIELD_LENGTH),
+        (condition as any).flags
+      );
+      if (!matched) return false;
       continue;
     }
 

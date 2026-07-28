@@ -11,7 +11,12 @@ tags: [cryptomining, malware, infrastructure, resource-theft, compromise]
 conditions:
   - field: message
     operator: regex
-    value: "(xmrig|minergate|ethminer|cpuminer|cgminer|bfgminer|minerd|claymore|phoenixminer|t-rex|lolminer)"
+    # Deliberately NOT flags: i. "t-rex" is a real miner but also an ordinary
+    # word — case-insensitive it alerts on a "T-Rex" page, so it stays
+    # lowercase-only. The miners that genuinely capitalise themselves (XMRig,
+    # MinerGate, Claymore, PhoenixMiner, lolMiner) get explicit case classes;
+    # the rest are lowercase binary names (ethminer, cpuminer, minerd, ...).
+    value: "([Xx][Mm][Rr][Ii][Gg]|[Mm]iner[Gg]ate|ethminer|cpuminer|cgminer|bfgminer|minerd|[Cc]laymore|[Pp]hoenix[Mm]iner|t-rex|[Ll]ol[Mm]iner)"
 
 alert:
   title: "Cryptocurrency Mining Detected: {program}"

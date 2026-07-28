@@ -4,6 +4,8 @@ description: >
   Monitors for shell metacharacters, command separators, and common shell commands in URL paths and parameters.
   Command injection successful execution leads to complete system compromise.
   Patterns include semicolons, pipes, backticks, command substitution, and common utilities like curl, wget, bash.
+  Matching is case-insensitive and covers percent-encoded separators, so the
+  encoded mixed-case requests real tooling emits are caught.
 severity: high
 enabled: true
 tags: [web, command-injection, attack, reverse-proxy, exploitation]
@@ -11,7 +13,17 @@ tags: [web, command-injection, attack, reverse-proxy, exploitation]
 conditions:
   - field: path
     operator: regex
-    value: '(;\s*(ls|cat|curl|wget|bash|sh|cmd\.exe|powershell)|\||&&|`|\$\(|%0a|%0d|\|\s*(cat|ls|id|whoami|uname))'
+    # flags: i — shell commands are case-insensitive on the wire (CURL, WGET,
+    # PowerShell), and the engine compiles rule patterns with no flags by
+    # default. Safe here because every alternative already requires a shell
+    # metacharacter; the bare-punctuation branches are case-independent anyway.
+    #
+    # The %3B / %7C / %24%28 branches mirror the literal ones for
+    # percent-encoded requests. Bare encoded punctuation is deliberately NOT
+    # matched on its own: %3B alone is weak signal and PROXY-001 already alerts
+    # on it, so adding it here would only duplicate that alert.
+    flags: i
+    value: '(;\s*(ls|cat|curl|wget|bash|sh|cmd\.exe|powershell)|%3B\s*(ls|cat|curl|wget|bash|sh|cmd\.exe|powershell)|\||&&|`|\$\(|%24%28|%0a|%0d|\|\s*(cat|ls|id|whoami|uname)|%7C\s*(cat|ls|id|whoami|uname))'
 
 alert:
   title: "Command Injection Attempt from {client_ip}"

@@ -3,7 +3,7 @@
   "name": "apache-nginx-access-log",
   "description": "Parses standard Apache/Nginx access logs",
   "parser_type": "regex",
-  "priority": 20,
+  "priority": 41,
   "pattern": "^(?<client_ip>[\\d.]+) - - \\[(?<timestamp>[^\\]]+)\\] \"(?<method>\\S+) (?<path>\\S+) (?<protocol>[^\"]+)\" (?<status>\\d+) (?<size>\\d+)",
   "field_mappings": {
     "client_ip": "client_ip",

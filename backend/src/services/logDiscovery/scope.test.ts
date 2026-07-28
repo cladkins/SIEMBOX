@@ -46,20 +46,26 @@ test('isValidCidr accepts well-formed CIDRs and rejects garbage', () => {
   assert.equal(isValidCidr('192.168.1.0'), false); // missing prefix
 });
 
-test('resolveScope merges detected + valid manual CIDRs and reports rejects', () => {
+test('resolveScope returns only valid manual CIDRs and reports rejects', () => {
   const interfaces: LocalInterface[] = [
     { name: 'eth0', address: '192.168.1.10', netmask: '255.255.255.0', cidr: '192.168.1.0/24' },
   ];
   const result = resolveScope(['10.0.0.0/24', 'bogus'], interfaces);
-  assert.deepEqual(result.cidrs.sort(), ['10.0.0.0/24', '192.168.1.0/24']);
+  assert.deepEqual(result.cidrs, ['10.0.0.0/24']);
   assert.deepEqual(result.rejected, ['bogus']);
   assert.ok(result.warning); // single-homed
 });
 
-test('resolveScope dedupes when a manual CIDR matches an auto-detected one', () => {
+test('resolveScope excludes the auto-detected interface CIDR from the returned scope', () => {
   const interfaces: LocalInterface[] = [
     { name: 'eth0', address: '192.168.1.10', netmask: '255.255.255.0', cidr: '192.168.1.0/24' },
   ];
-  const result = resolveScope(['192.168.1.0/24'], interfaces);
+  const result = resolveScope([], interfaces);
+  assert.deepEqual(result.cidrs, []);
+  assert.ok(result.warning); // still fires -- vlanWarning is independent of what's displayed as "scope"
+});
+
+test('resolveScope dedupes repeated manual CIDR entries', () => {
+  const result = resolveScope(['192.168.1.0/24', '192.168.1.0/24'], []);
   assert.deepEqual(result.cidrs, ['192.168.1.0/24']);
 });

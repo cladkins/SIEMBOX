@@ -72,15 +72,22 @@ export interface ScopeResult {
 }
 
 /**
- * Resolve the full scan scope: auto-detected local CIDRs plus any valid
- * manually-entered ones, deduped. Invalid manual entries are reported back
- * rather than silently dropped, so the UI can flag the typo.
+ * Resolve the full scan scope: valid manually-entered CIDRs, deduped. Invalid
+ * entries are reported back rather than silently dropped, so the UI can flag
+ * the typo.
+ *
+ * Deliberately excludes the auto-detected local interface CIDR from `cidrs`.
+ * It's still used for the VLAN warning below, but surfacing it as a "scope"
+ * is misleading -- in the common Docker Compose deployment it's just the
+ * container's own bridge network (e.g. 172.20.0.0/16), not the user's LAN,
+ * and nothing in discovery actually scans by CIDR today: passive discovery
+ * reads the ARP table/mDNS/SSDP directly, and active discovery only probes
+ * hosts passive discovery already found. Manual CIDRs exist for when that
+ * changes (a real subnet sweep) or for documentation of intent.
  */
 export function resolveScope(manualCidrs: string[] = [], interfaces: LocalInterface[] = detectLocalInterfaces()): ScopeResult {
   const rejected = manualCidrs.filter((c) => !isValidCidr(c));
-  const validManual = manualCidrs.filter((c) => isValidCidr(c));
-  const auto = interfaces.map((i) => i.cidr);
-  const cidrs = Array.from(new Set([...auto, ...validManual]));
+  const cidrs = Array.from(new Set(manualCidrs.filter((c) => isValidCidr(c))));
 
   return { cidrs, warning: vlanWarning(interfaces), rejected };
 }

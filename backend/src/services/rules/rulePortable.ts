@@ -5,6 +5,7 @@
  * actually supports, so a rule that passes CI imports and evaluates cleanly.
  */
 import yaml from 'js-yaml';
+import { validateUserRegex } from './userRegex';
 
 /** Condition operators the rules engine implements (see rulesEngine.ts). */
 export const RULE_OPERATORS = [
@@ -29,6 +30,8 @@ export interface RuleCondition {
   field: string;
   operator: (typeof RULE_OPERATORS)[number];
   value?: string | number | boolean | Array<string | number>;
+  /** Regex flags for the `regex` operator, e.g. "i" (see services/rules/userRegex). */
+  flags?: string;
 }
 
 export interface PortableRule {
@@ -102,7 +105,13 @@ export function validateRule(obj: unknown, opts: { strict?: boolean } = {}): Rul
         errors.push(`${at}.value for "${c.operator}" must be numeric`);
       }
       if (c.operator === 'regex' && typeof c.value === 'string') {
-        try { new RegExp(c.value); } catch (e) { errors.push(`${at}.value is not a valid regex: ${(e as Error).message}`); }
+        // Validated through the engine's own compiler, so CI accepts exactly
+        // what runtime accepts — including inline (?i) and an explicit `flags`.
+        const err = validateUserRegex(c.value, typeof c.flags === 'string' ? c.flags : undefined);
+        if (err) errors.push(`${at}.value is not a valid regex: ${err}`);
+      }
+      if (c.flags !== undefined && typeof c.flags !== 'string') {
+        errors.push(`${at}.flags must be a string (e.g. "i")`);
       }
     });
   }

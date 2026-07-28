@@ -34,6 +34,19 @@
         </el-form-item>
 
         <el-form-item>
+          <el-tooltip
+            content="One log can satisfy several detection rules, so a single event otherwise appears as several rows. Grouped shows one row per event, titled by its most severe detection."
+            placement="top"
+          >
+            <el-switch
+              v-model="groupByEvent"
+              active-text="Group by event"
+              @change="toggleGrouping"
+            />
+          </el-tooltip>
+        </el-form-item>
+
+        <el-form-item>
           <el-button type="primary" @click="applySearch">
             <el-icon><Search /></el-icon> Search
           </el-button>
@@ -54,7 +67,56 @@
     </el-card>
 
     <el-card class="table-card">
-      <el-table :data="alertsStore.alerts" v-loading="alertsStore.loading" stripe>
+      <el-table
+        :data="alertsStore.alerts"
+        v-loading="alertsStore.loading"
+        stripe
+        :row-class-name="rowClassName"
+      >
+        <el-table-column v-if="groupByEvent" type="expand">
+          <template #default="{ row }">
+            <div v-if="groupSize(row) > 1" class="correlated">
+              <div class="correlated-head">
+                {{ groupSize(row) }} rules matched this event — one piece of evidence, {{ groupSize(row) }} independent detections.
+              </div>
+              <el-table :data="row.correlated" size="small" stripe>
+                <el-table-column label="Severity" width="110">
+                  <template #default="{ row: c }">
+                    <el-tag :type="getSeverityType(c.severity)" size="small">
+                      {{ c.severity.toUpperCase() }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="title" label="Detection" min-width="320" show-overflow-tooltip />
+                <el-table-column label="Status" width="140">
+                  <template #default="{ row: c }">
+                    <el-tag :type="getStatusType(c.status)" size="small">{{ formatStatus(c.status) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="Created" width="180">
+                  <template #default="{ row: c }">{{ formatDate(c.created_at) }}</template>
+                </el-table-column>
+                <el-table-column label="Actions" width="200">
+                  <template #default="{ row: c }">
+                    <el-button
+                      type="primary"
+                      size="small"
+                      :loading="loadingCorrelated === c.id"
+                      @click="openCorrelated(c, 'view')"
+                    >View</el-button>
+                    <el-button
+                      type="success"
+                      size="small"
+                      :loading="loadingCorrelated === c.id"
+                      @click="openCorrelated(c, 'update')"
+                    >Update</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </template>
+        </el-table-column>
+
         <el-table-column prop="severity" label="Severity" width="120" sortable>
           <template #default="{ row }">
             <el-tag :type="getSeverityType(row.severity)">
@@ -63,7 +125,18 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="title" label="Title" min-width="300" show-overflow-tooltip />
+        <el-table-column label="Title" min-width="300" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span>{{ row.title }}</span>
+            <el-tooltip
+              v-if="groupSize(row) > 1"
+              :content="`${groupSize(row)} detection rules matched this single event. The most severe one titles the row; expand to see the rest.`"
+              placement="top"
+            >
+              <el-tag size="small" type="info" class="group-badge">+{{ groupSize(row) - 1 }}</el-tag>
+            </el-tooltip>
+          </template>
+        </el-table-column>
 
         <el-table-column prop="status" label="Status" width="150">
           <template #default="{ row }">
@@ -165,8 +238,29 @@ const filters = ref({
   search: '',
 });
 
+// One log can satisfy several rules — the engine evaluates all of them with no
+// early exit — so the flat list shows one event as N rows. Grouped is the
+// default because that fan-out reads as N separate problems otherwise; the
+// toggle restores the flat, one-row-per-alert view.
+const groupByEvent = ref(true);
+
 const currentPage = ref(1);
 const pageSize = ref(20);
+
+/** Number of alerts in this row's event group (1 when ungrouped). */
+function groupSize(row: any): number {
+  return row?.correlated_count ?? 1;
+}
+
+/** Element Plus always draws the expand arrow; hide it where there is nothing to open. */
+function rowClassName({ row }: { row: any }): string {
+  return groupSize(row) > 1 ? '' : 'no-expand';
+}
+
+function toggleGrouping() {
+  currentPage.value = 1; // page N of the grouped list is not page N of the flat one
+  fetchAlerts();
+}
 
 const detailDialogVisible = ref(false);
 const detailInitialTab = ref<'details' | 'triage'>('details');
@@ -212,6 +306,9 @@ const fetchAlerts = async () => {
   }
   if (filters.value.search && filters.value.search.trim()) {
     params.search = filters.value.search.trim();
+  }
+  if (groupByEvent.value) {
+    params.group = 'event';
   }
 
   try {
@@ -288,6 +385,33 @@ const triageVerdictType = (v?: string | null) =>
     string
   >)[v || 'inconclusive'] || 'info';
 const triageVerdictLabel = (v?: string | null) => (v || 'inconclusive').replace('_', ' ');
+
+/** Which correlated alert is being fetched, so only its buttons show a spinner. */
+const loadingCorrelated = ref<number | null>(null);
+
+/**
+ * Open a correlated (non-representative) alert in the normal detail or status
+ * dialog.
+ *
+ * The `correlated` entries carried by a grouped row are summaries — id,
+ * severity, title, status, created_at — deliberately without `description` or
+ * `matched_data`. Those are the large fields, and repeating them for every
+ * member of every group would balloon the list response for data most rows
+ * never open. So fetch the full alert on demand; the detail endpoint already
+ * exists and the dialogs are unchanged.
+ */
+async function openCorrelated(summary: { id: number }, mode: 'view' | 'update') {
+  loadingCorrelated.value = summary.id;
+  try {
+    const { data } = await api.getAlert(summary.id);
+    if (mode === 'view') viewAlert(data);
+    else updateStatus(data);
+  } catch (error) {
+    ElMessage.error('Failed to load alert');
+  } finally {
+    loadingCorrelated.value = null;
+  }
+}
 
 const submitStatusUpdate = async () => {
   if (!selectedAlert.value) return;
@@ -369,5 +493,28 @@ const formatDate = (date: string) => {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* Event grouping: correlated detections shown inside an expanded row. */
+.group-badge {
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.correlated {
+  padding: 8px 16px 12px 48px;
+}
+
+.correlated-head {
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+/* Element Plus renders the expand arrow on every row; a group of one has
+   nothing to open, so hide the control rather than offer an empty drawer. */
+.el-table :deep(.no-expand) .el-table__expand-icon {
+  visibility: hidden;
+  cursor: default;
 }
 </style>

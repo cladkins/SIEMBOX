@@ -4,6 +4,8 @@ description: >
   Security tools like sqlmap, nikto, nmap, metasploit, and burp suite should never access production homelab services
   except during authorized penetration testing.
   Detection of these user agents indicates unauthorized security scanning or active exploitation attempts.
+  Matching is case-insensitive and word-bounded, so SQLMap and ZAP are caught
+  while legitimate agents that merely contain a token (Zapier) are not.
 severity: medium
 enabled: true
 tags: [web, scanning, user-agent, reverse-proxy, reconnaissance]
@@ -11,7 +13,15 @@ tags: [web, scanning, user-agent, reverse-proxy, reconnaissance]
 conditions:
   - field: user_agent
     operator: regex
-    value: "(sqlmap|nikto|nmap|nessus|masscan|metasploit|burp|burpsuite|zap|zaproxy|acunetix|openvas|w3af|wpscan|dirbuster|gobuster|wfuzz|hydra|havij)"
+    # flags: i — scanners capitalise themselves inconsistently (SQLMap, Nikto,
+    # ZAP, Burp Suite, Nessus all missed while lowercase sqlmap matched).
+    #
+    # \b is required, not cosmetic: several tokens are short words that occur
+    # inside legitimate agents. Without boundaries, case-insensitive matching
+    # fires on Zapier/1.0 and HydrationTracker. The boundaries also fix an
+    # existing false positive — lowercase "zapier/1.0" matches "zap" today.
+    flags: i
+    value: "\\b(sqlmap|nikto|nmap|nessus|masscan|metasploit|burp|burpsuite|zap|zaproxy|acunetix|openvas|w3af|wpscan|dirbuster|gobuster|wfuzz|hydra|havij)\\b"
 
 alert:
   title: "Security Scanner User-Agent from {client_ip}"

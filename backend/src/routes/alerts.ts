@@ -43,7 +43,12 @@ router.get('/', async (req: Request, res: Response) => {
     const minRiskScore = req.query.minRiskScore ? parseInt(req.query.minRiskScore as string) : undefined;
     const sortBy = req.query.sortBy === 'risk_score' ? 'risk_score' : undefined;
 
-    const result = await AlertModel.findAll({
+    // ?group=event collapses the list to one row per triggering log, since one
+    // event can satisfy several rules. Opt-in: the flat list stays the default
+    // so existing callers and the export are unaffected.
+    const groupByEvent = req.query.group === 'event';
+
+    const filters = {
       limit,
       offset,
       severity,
@@ -55,14 +60,17 @@ router.get('/', async (req: Request, res: Response) => {
       triageStatus,
       triageVerdict,
       minRiskScore,
-      sortBy,
-    });
+    };
+    const result = groupByEvent
+      ? await AlertModel.findAllGrouped(filters)
+      : await AlertModel.findAll({ ...filters, sortBy });
 
     res.json({
       alerts: result.alerts,
       total: result.total,
       limit,
       offset,
+      grouped: groupByEvent,
     });
   } catch (error) {
     throw new ApiError(500, 'Failed to fetch alerts');

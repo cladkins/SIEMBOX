@@ -18,6 +18,19 @@ export interface Alert {
   triage_status?: 'pending' | 'analyzing' | 'complete' | 'failed' | 'skipped' | null;
   triage_verdict?: 'true_positive' | 'false_positive' | 'suspicious' | 'inconclusive' | null;
   triage_risk_score?: number | null;
+  // Present only when the list was requested with ?group=event. The row is then
+  // the most severe alert of its triggering event, and `correlated` holds every
+  // alert that event raised — including this one, so correlated_count is the
+  // true group size.
+  correlated_count?: number;
+  correlated?: Array<{
+    id: number;
+    rule_id: number;
+    severity: Alert['severity'];
+    title: string;
+    status: Alert['status'];
+    created_at: string;
+  }>;
 }
 
 export interface AlertStatistics {

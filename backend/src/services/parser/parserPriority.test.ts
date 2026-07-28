@@ -141,6 +141,57 @@ test('CEF from a vendor with no specific parser still falls back to generic CEF'
   assert.equal(picked!.result.fields.device_vendor, 'Trend Micro');
 });
 
+// A standard COMBINED-format access line: client, request, status, size, then
+// the referer and user-agent pair. Both nginx parsers match it.
+const NGINX_COMBINED =
+  '203.0.113.53 - - [28/Jul/2026:14:00:04 +0000] "GET /login HTTP/1.1" 200 512 ' +
+  '"-" "sqlmap/1.7.2#stable (http://sqlmap.org)"';
+
+// COMMON format — no referer/user-agent pair. Only the looser parser matches.
+const NGINX_COMMON = '203.0.113.11 - - [28/Jul/2026:14:00:04 +0000] "GET /health HTTP/1.1" 200 2';
+
+test('a combined-format access log goes to the parser that captures user_agent', () => {
+  // apache-nginx-access-log matches this line too but extracts no user_agent.
+  // It used to sit at priority 20, ahead of standard-nginx-access (40), so
+  // user_agent was never populated for ordinary nginx/apache logs — which made
+  // PROXY-005 (malicious user-agent) impossible to fire from its main source.
+  const picked = selectParser(NGINX_COMBINED);
+
+  assert.ok(picked, 'expected a parser to claim a combined-format access log');
+  assert.equal(picked!.parser.name, 'standard-nginx-access');
+  assert.equal(picked!.result.fields.user_agent, 'sqlmap/1.7.2#stable (http://sqlmap.org)');
+});
+
+test('a common-format access log still falls back to the looser parser', () => {
+  // The strict parser requires the referer/user-agent pair, so this must not
+  // become unparsed as a side effect of the reordering.
+  const picked = selectParser(NGINX_COMMON);
+
+  assert.ok(picked, 'expected a parser to claim a common-format access log');
+  assert.equal(picked!.parser.name, 'apache-nginx-access-log');
+  assert.equal(picked!.result.fields.path, '/health');
+});
+
+test('both nginx parsers still populate path, which the PROXY-00x rules key on', () => {
+  for (const line of [NGINX_COMBINED, NGINX_COMMON]) {
+    const picked = selectParser(line);
+    assert.ok(picked!.result.fields.path, `no path from ${picked!.parser.name}`);
+  }
+});
+
+test('the strict access-log parser sorts ahead of the looser one', () => {
+  const byName = new Map(loadAll().map((p) => [p.name, p.priority ?? 100]));
+  const strict = byName.get('standard-nginx-access');
+  const loose = byName.get('apache-nginx-access-log');
+
+  assert.ok(strict !== undefined && loose !== undefined);
+  assert.ok(
+    strict! < loose!,
+    `standard-nginx-access (${strict}) must sort before apache-nginx-access-log (${loose}); ` +
+      'the looser parser captures no user_agent and would shadow it'
+  );
+});
+
 test('the generic CEF parsers sit in the generic priority band, behind vendor-specific ones', () => {
   // The structural invariant behind the tests above: PARSERS.md reserves
   // 100-500 for generic parsers. cef-syslog/cef-standard were at 4/5, ahead of
@@ -173,4 +224,80 @@ test('the generic CEF parsers sit in the generic priority band, behind vendor-sp
       `${name} (priority ${priority}) must sort before the generic CEF parsers (${worstGeneric}) to be reachable`
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// authentik ships three log shapes and two of them are JSON, so the same
+// priority trap as CEF applies: authentik-audit is `parser_type: json` with an
+// empty pattern, i.e. it claims ANY JSON line. At priority 24 it sat ahead of
+// the ASGI access parser and swallowed every HTTP request, mapping authentik's
+// `event` key (which holds the request PATH) onto the canonical `event` field
+// and leaving method/path/status_code/user_agent unset — so the PROXY-00x and
+// ACCESS-00x rules had nothing to key on for the identity provider itself.
+// ---------------------------------------------------------------------------
+
+const AUTHENTIK_ASGI =
+  '{"auth_via": "session", "event": "/if/user/", "host": "auth.example.com", "level": "info", ' +
+  '"logger": "authentik.asgi", "method": "GET", "remote": "198.51.100.5", "scheme": "https", ' +
+  '"status": 200, "timestamp": "2026-07-28T19:51:04.688425", "user": "alice", "user_agent": "curl/8.5.0"}';
+
+// The same line as docker compose renders it, with the container-name gutter.
+const AUTHENTIK_ASGI_PREFIXED = `server-1      | ${AUTHENTIK_ASGI}`;
+
+test('authentik ASGI access logs beat the generic authentik JSON parser', () => {
+  for (const [shape, line] of [
+    ['bare JSON', AUTHENTIK_ASGI],
+    ['docker compose prefix', AUTHENTIK_ASGI_PREFIXED],
+  ] as Array<[string, string]>) {
+    const picked = selectParser(line);
+    assert.ok(picked, `nothing claimed the ${shape} form`);
+    assert.equal(picked!.parser.name, 'authentik-asgi-access', `${shape} went to the wrong parser`);
+  }
+});
+
+test('the ASGI parser derives the HTTP fields the audit parser cannot', () => {
+  // authentik-audit produces event="/if/user/" and no HTTP fields at all; these
+  // are what make an authentik install visible to the web-attack rules.
+  const { result } = selectParser(AUTHENTIK_ASGI_PREFIXED)!;
+
+  assert.equal(result.fields.path, '/if/user/');
+  assert.equal(result.fields.method, 'GET');
+  assert.equal(result.fields.status_code, '200');
+  assert.equal(result.fields.user_agent, 'curl/8.5.0');
+  assert.equal(result.fields.user, 'alice');
+  assert.equal(result.fields.host, 'auth.example.com');
+  assert.equal(result.fields.service, 'authentik');
+  // The real client, not the packet sender — authentik-audit looks for `ip`,
+  // which ASGI logs do not have, so client_ip silently fell back to the forwarder.
+  assert.equal(result.fields.source_ip, '198.51.100.5');
+  assert.equal(result.fields.client_ip, '198.51.100.5');
+});
+
+test('the ASGI parser claims only the authentik.asgi logger', () => {
+  // It sits at priority 23, ahead of authentik-audit, so a loose discriminator
+  // would hijack every JSON log on the install.
+  const others: Array<[string, string]> = [
+    ['audit JSON', '{"timestamp":"2024-01-15T12:00:00Z","event":"login","user":"alice","ip":"203.0.113.5","success":false}'],
+    ['a different logger', 'server-1      | {"logger": "gunicorn.access", "event": "/x", "status": 200}'],
+    ['authentik events logger', 'server-1      | {"logger": "authentik.events", "event": "login_failed", "user": "eve"}'],
+  ];
+
+  for (const [label, line] of others) {
+    assert.notEqual(selectParser(line)?.parser.name, 'authentik-asgi-access', `hijacked ${label}`);
+  }
+});
+
+test('the ASGI parser stores the payload once, not twice', () => {
+  // An identity provider's access log is the highest-volume source on the box.
+  // Capturing the JSON into a scratch field leaves a second full copy in the
+  // row on top of `message` (and a third in raw_logs), so the capture group is
+  // mapped straight onto `message` and the derivations read it back from there.
+  const { result } = selectParser(AUTHENTIK_ASGI_PREFIXED)!;
+
+  const copies = Object.entries(result.fields).filter(
+    ([, v]) => typeof v === 'string' && v.includes('"logger"')
+  );
+  assert.equal(copies.length, 1, `payload duplicated across: ${copies.map(([k]) => k).join(', ')}`);
+  // And the container gutter is stripped, so `message` is valid JSON.
+  assert.doesNotThrow(() => JSON.parse(String(result.fields.message)));
 });

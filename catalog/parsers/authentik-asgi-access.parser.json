@@ -1,0 +1,220 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "authentik-asgi-access",
+  "description": "Authentik ASGI access logs (JSON from the authentik.asgi logger), with or without a Docker container-name prefix. Complements authentik-audit, which covers authentik's event/audit JSON; this parser covers the per-request access log and is the only source of method/path/status/user_agent for an authentik install.",
+  "parser_type": "regex",
+  "priority": 23,
+  "pattern": "^(?=.*\"logger\"\\s*:\\s*\"authentik\\.asgi\")(?:[^|\\s]+[ \\t]+\\|[ \\t]+)?(?<json>\\{.*\\})\\s*$",
+  "field_mappings": {
+    "json": "message"
+  },
+  "derivations": [
+    {
+      "extract": {
+        "source_ip": {
+          "from": "message",
+          "group": 1,
+          "pattern": "\"remote\"\\s*:\\s*\"([^\"]+)\""
+        }
+      }
+    },
+    {
+      "extract": {
+        "user": {
+          "from": "message",
+          "group": 1,
+          "pattern": "\"user\"\\s*:\\s*\"([^\"]+)\""
+        }
+      }
+    },
+    {
+      "extract": {
+        "host": {
+          "from": "message",
+          "group": 1,
+          "pattern": "\"host\"\\s*:\\s*\"([^\"]+)\""
+        }
+      }
+    },
+    {
+      "extract": {
+        "method": {
+          "from": "message",
+          "group": 1,
+          "pattern": "\"method\"\\s*:\\s*\"([^\"]+)\""
+        }
+      }
+    },
+    {
+      "extract": {
+        "path": {
+          "from": "message",
+          "group": 1,
+          "pattern": "\"event\"\\s*:\\s*\"([^\"]+)\""
+        }
+      }
+    },
+    {
+      "extract": {
+        "status_code": {
+          "from": "message",
+          "group": 1,
+          "pattern": "\"status\"\\s*:\\s*(\\d+)"
+        }
+      }
+    },
+    {
+      "extract": {
+        "logger": {
+          "from": "message",
+          "group": 1,
+          "pattern": "\"logger\"\\s*:\\s*\"([^\"]+)\""
+        }
+      }
+    },
+    {
+      "extract": {
+        "timestamp": {
+          "from": "message",
+          "group": 1,
+          "pattern": "\"timestamp\"\\s*:\\s*\"([^\"]+)\""
+        }
+      }
+    },
+    {
+      "extract": {
+        "user_agent": {
+          "from": "message",
+          "group": 1,
+          "pattern": "\"user_agent\"\\s*:\\s*\"([^\"]+)\""
+        }
+      }
+    },
+    {
+      "extract": {
+        "auth_via": {
+          "from": "message",
+          "group": 1,
+          "pattern": "\"auth_via\"\\s*:\\s*\"([^\"]+)\""
+        }
+      }
+    },
+    {
+      "set": {
+        "service": "authentik"
+      }
+    },
+    {
+      "set": {
+        "event": "http_request_success"
+      },
+      "when": {
+        "status_code": {
+          "in": ["200", "201", "204", "301", "302", "304"]
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "http_request_client_error"
+      },
+      "when": {
+        "status_code": {
+          "in": ["400", "401", "403", "404", "405", "429"]
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "http_request_server_error"
+      },
+      "when": {
+        "status_code": {
+          "in": ["500", "502", "503", "504"]
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "http_request"
+      },
+      "when": {
+        "event": {
+          "exists": false
+        }
+      }
+    }
+  ],
+  "event_type": "authentik_access",
+  "enabled": true,
+  "metadata": {
+    "author": "cladkins",
+    "log_source": "Authentik ASGI access log (JSON)",
+    "tags": ["sso", "authentik", "identity", "http"],
+    "references": ["https://docs.goauthentik.io/docs/troubleshooting/logs"]
+  },
+  "test_samples": [
+    {
+      "input": "server-1      | {\"auth_via\": \"session\", \"domain_url\": \"auth.example.com\", \"event\": \"/if/user/\", \"host\": \"auth.example.com\", \"level\": \"info\", \"logger\": \"authentik.asgi\", \"method\": \"GET\", \"pid\": 2310394, \"remote\": \"198.51.100.5\", \"request_id\": \"34584f481cd14679af5101a01c171557\", \"runtime\": 41, \"schema_name\": \"public\", \"scheme\": \"https\", \"status\": 200, \"timestamp\": \"2026-07-28T19:51:04.688425\", \"user\": \"alice\", \"user_agent\": \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5.2 Safari/605.1.15\"}",
+      "expect": {
+        "host": "auth.example.com",
+        "path": "/if/user/",
+        "user": "alice",
+        "event": "http_request_success",
+        "method": "GET",
+        "logger": "authentik.asgi",
+        "service": "authentik",
+        "source_ip": "198.51.100.5",
+        "client_ip": "198.51.100.5",
+        "status_code": "200",
+        "auth_via": "session",
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5.2 Safari/605.1.15"
+      }
+    },
+    {
+      "input": "server-1      | {\"auth_via\": \"session\", \"domain_url\": \"auth.example.com\", \"event\": \"/api/v3/events/notifications/?ordering=-created&seen=false&user=5\", \"host\": \"auth.example.com\", \"level\": \"info\", \"logger\": \"authentik.asgi\", \"method\": \"GET\", \"pid\": 2310394, \"remote\": \"198.51.100.5\", \"request_id\": \"7f74f4748c1f4d159df72e6361f38e04\", \"runtime\": 55, \"schema_name\": \"public\", \"scheme\": \"https\", \"status\": 200, \"timestamp\": \"2026-07-28T19:51:06.372382\", \"user\": \"alice\", \"user_agent\": \"curl/8.5.0\"}",
+      "expect": {
+        "path": "/api/v3/events/notifications/?ordering=-created&seen=false&user=5",
+        "user": "alice",
+        "event": "http_request_success",
+        "source_ip": "198.51.100.5",
+        "status_code": "200"
+      }
+    },
+    {
+      "input": "{\"auth_via\": \"unauthenticated\", \"domain_url\": \"auth.example.com\", \"event\": \"/api/v3/core/users/me/\", \"host\": \"auth.example.com\", \"level\": \"info\", \"logger\": \"authentik.asgi\", \"method\": \"POST\", \"pid\": 2310394, \"remote\": \"203.0.113.77\", \"request_id\": \"87cd1557442640958527e7274ef94fb5\", \"runtime\": 356, \"schema_name\": \"public\", \"scheme\": \"https\", \"status\": 403, \"timestamp\": \"2026-07-28T19:51:05.938884\", \"user\": \"\", \"user_agent\": \"python-requests/2.32.3\"}",
+      "expect": {
+        "path": "/api/v3/core/users/me/",
+        "event": "http_request_client_error",
+        "method": "POST",
+        "service": "authentik",
+        "source_ip": "203.0.113.77",
+        "status_code": "403",
+        "auth_via": "unauthenticated",
+        "user_agent": "python-requests/2.32.3"
+      }
+    },
+    {
+      "input": "authentik-server-1  | {\"event\": \"/flows/-/default/invalidation/\", \"host\": \"auth.example.com\", \"level\": \"info\", \"logger\": \"authentik.asgi\", \"method\": \"GET\", \"remote\": \"198.51.100.5\", \"runtime\": 12, \"scheme\": \"https\", \"status\": 500, \"timestamp\": \"2026-07-28T19:52:00.000000\", \"user\": \"bob\", \"user_agent\": \"Mozilla/5.0\"}",
+      "expect": {
+        "path": "/flows/-/default/invalidation/",
+        "user": "bob",
+        "event": "http_request_server_error",
+        "service": "authentik",
+        "source_ip": "198.51.100.5",
+        "status_code": "500"
+      }
+    },
+    {
+      "input": "server-1      | {\"event\": \"/application/o/authorize/\", \"host\": \"auth.example.com\", \"level\": \"info\", \"logger\": \"authentik.asgi\", \"method\": \"GET\", \"remote\": \"198.51.100.5\", \"runtime\": 8, \"scheme\": \"https\", \"status\": 307, \"timestamp\": \"2026-07-28T19:53:00.000000\", \"user\": \"alice\", \"user_agent\": \"Mozilla/5.0\"}",
+      "expect": {
+        "path": "/application/o/authorize/",
+        "user": "alice",
+        "event": "http_request",
+        "service": "authentik",
+        "source_ip": "198.51.100.5",
+        "status_code": "307"
+      }
+    }
+  ]
+}

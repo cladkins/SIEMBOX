@@ -31,11 +31,49 @@ export interface ChannelResult {
 
 /** Build the exact message a real new-alert notification produces (shared by the
  *  live alert path and the test-alert preview so the email is identical). */
-function buildAlertMessage(params: { severity: string; ruleName: string; title: string; description?: string }): NotificationMessage {
+export function buildAlertMessage(params: { severity: string; ruleName: string; title: string; description?: string }): NotificationMessage {
   return {
     title: `[SIEMBox] ${params.severity.toUpperCase()} alert: ${params.title}`,
     body: `Rule: ${params.ruleName}\nSeverity: ${params.severity}\n${params.description || ''}`.trim(),
     severity: params.severity,
+  };
+}
+
+/**
+ * One message for several rules that all fired on the SAME event.
+ *
+ * Detection rules are independent hypotheses about one piece of evidence, so a
+ * single nasty request routinely satisfies more than one — `;cat /etc/passwd`
+ * is both suspicious punctuation (PROXY-001) and a command-injection signature
+ * (PROXY-002). Sending one notification per rule pages the operator three times
+ * for one event and reads as three problems instead of one seen three ways.
+ *
+ * The worst severity leads, because that is what decides how urgently someone
+ * has to look; the rest are listed as corroboration.
+ */
+export function buildAlertGroupMessage(
+  alerts: Array<{ severity: string; ruleName: string; title: string; description?: string }>
+): NotificationMessage {
+  // One alert is not a group: fall through to the original message rather than
+  // emitting "1 detection rules matched" and "(+0 more)". Held here rather than
+  // in the caller so the guarantee cannot be lost by a future call site.
+  if (alerts.length === 1) return buildAlertMessage(alerts[0]);
+
+  const worst = [...alerts].sort(
+    (a, b) => (SEVERITY_RANK[b.severity?.toLowerCase()] ?? 0) - (SEVERITY_RANK[a.severity?.toLowerCase()] ?? 0)
+  )[0];
+
+  const lines = [
+    `${alerts.length} detection rules matched a single event.`,
+    '',
+    ...alerts.map((a) => `- [${(a.severity || '').toUpperCase()}] ${a.ruleName}: ${a.title}`),
+  ];
+  if (worst.description) lines.push('', worst.description);
+
+  return {
+    title: `[SIEMBox] ${worst.severity.toUpperCase()} alert: ${worst.title} (+${alerts.length - 1} more)`,
+    body: lines.join('\n').trim(),
+    severity: worst.severity,
   };
 }
 
@@ -48,7 +86,7 @@ async function getSetting(key: string, fallback: string): Promise<string> {
   }
 }
 
-function severityPasses(eventSeverity: string | undefined, minSeverity: string): boolean {
+export function severityPasses(eventSeverity: string | undefined, minSeverity: string): boolean {
   const ev = SEVERITY_RANK[(eventSeverity || 'info').toLowerCase()] ?? 0;
   const min = SEVERITY_RANK[(minSeverity || 'info').toLowerCase()] ?? 0;
   return ev >= min;
@@ -156,10 +194,30 @@ export const NotificationService = {
   },
 
   async notifyAlert(params: { severity: string; ruleName: string; title: string; description?: string }): Promise<void> {
+    return NotificationService.notifyAlertGroup([params]);
+  },
+
+  /**
+   * Notify about every alert raised by ONE event, as a single message.
+   *
+   * The min-severity gate is applied per alert, exactly as it is for a lone
+   * alert, and only the survivors are reported — so grouping never causes an
+   * alert to be announced that would have been filtered out on its own. A group
+   * of one produces the identical message `notifyAlert` always sent, which is
+   * what the EDR path and every single-rule event still get.
+   */
+  async notifyAlertGroup(
+    alerts: Array<{ severity: string; ruleName: string; title: string; description?: string }>
+  ): Promise<void> {
     try {
+      if (alerts.length === 0) return;
       if ((await getSetting('notify_alerts_enabled', 'false')) !== 'true') return;
-      if (!severityPasses(params.severity, await getSetting('notify_alerts_min_severity', 'high'))) return;
-      await dispatch(buildAlertMessage(params));
+
+      const minSeverity = await getSetting('notify_alerts_min_severity', 'high');
+      const passing = alerts.filter((a) => severityPasses(a.severity, minSeverity));
+      if (passing.length === 0) return;
+
+      await dispatch(buildAlertGroupMessage(passing));
     } catch (err) {
       logger.error('[Notifications] notifyAlert failed:', err);
       ErrorLogService.logBackgroundError('notifications', err, { dedupeKey: 'notifyAlert' });

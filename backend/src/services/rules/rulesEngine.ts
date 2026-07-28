@@ -9,6 +9,14 @@ import { NotificationService } from '../notifications/notificationService';
 import { FeedService } from '../threatintel/feedService';
 import { PURE_CONDITION_OPERATORS, evaluatePureCondition } from './conditionMatch';
 
+/** What one raised alert contributes to its event's single notification. */
+interface AlertNotice {
+  severity: string;
+  ruleName: string;
+  title: string;
+  description?: string;
+}
+
 interface RuleCondition {
   field: string;
   operator:
@@ -81,6 +89,13 @@ export class RulesEngine {
   }
 
   async evaluateLog(parsedLog: ParsedLog): Promise<void> {
+    // Every rule is evaluated against every log — deliberately no early exit.
+    // Rules are independent hypotheses about the same evidence, not candidates
+    // competing to own it (that is the parser engine's model). First-match-wins
+    // here would make the winner depend on rule load order, so adding a rule
+    // could silently disable another.
+    const raised: AlertNotice[] = [];
+
     for (const rule of this.rules) {
       try {
         // A match that the cooldown or whitelist then suppresses is routine —
@@ -88,22 +103,28 @@ export class RulesEngine {
         // matches at info level spammed one line per ingested log. Only actual
         // alert creation is operator-noteworthy; createAlert logs it (and logs
         // suppressions at debug).
-        await this.evaluateRule(rule, parsedLog);
+        const notice = await this.evaluateRule(rule, parsedLog);
+        if (notice) raised.push(notice);
       } catch (error) {
         logger.error(`Error evaluating rule ${rule.name}:`, error);
       }
     }
+
+    // One notification per EVENT, not per rule. Sent after the full pass so the
+    // message can name every rule that fired; a single-rule event produces the
+    // exact message that was sent before this was grouped.
+    if (raised.length > 0) void NotificationService.notifyAlertGroup(raised);
   }
 
-  /** Returns true when an alert was actually created (not merely matched). */
-  private async evaluateRule(rule: DetectionRule, parsedLog: ParsedLog): Promise<boolean> {
+  /** Returns the alert's notification payload when one was actually created (not merely matched). */
+  private async evaluateRule(rule: DetectionRule, parsedLog: ParsedLog): Promise<AlertNotice | null> {
     const ruleLogic: RuleLogic = rule.rule_logic;
 
     // Evaluate conditions (now async)
     const conditionsMatch = await this.evaluateConditions(ruleLogic.conditions, parsedLog.parsed_data);
 
     if (!conditionsMatch) {
-      return false;
+      return null;
     }
 
     // If rule has aggregation, check if threshold is met
@@ -118,7 +139,7 @@ export class RulesEngine {
         return this.createAlert(rule, parsedLog, ruleLogic.aggregation);
       }
 
-      return false;
+      return null;
     } else {
       // No aggregation, create alert immediately
       return this.createAlert(rule, parsedLog);
@@ -388,12 +409,12 @@ export class RulesEngine {
     }
   }
 
-  /** Returns true when the alert was created, false when suppressed or failed. */
+  /** Returns the notification payload when the alert was created, null when suppressed or failed. */
   private async createAlert(
     rule: DetectionRule,
     parsedLog: ParsedLog,
     aggregation?: RuleAggregation
-  ): Promise<boolean> {
+  ): Promise<AlertNotice | null> {
     try {
       // Extract variables for alert title/description
       const variables: Record<string, any> = {
@@ -454,7 +475,7 @@ export class RulesEngine {
       // the IP is NOT whitelisted.)
       if (alertIp && !(await this.checkIpNotInWhitelist(alertIp))) {
         logger.debug('Alert suppressed: whitelisted IP', { rule: rule.name, ip: alertIp });
-        return false;
+        return null;
       }
 
       // Cooldown: collapse alert storms to a single alert per (rule, title)
@@ -467,7 +488,7 @@ export class RulesEngine {
       );
       if ((recent.rowCount || 0) > 0) {
         logger.debug('Alert suppressed: duplicate within cooldown', { rule: rule.name, title });
-        return false;
+        return null;
       }
 
       await AlertModel.create({
@@ -479,18 +500,14 @@ export class RulesEngine {
         matched_data: variables,
       });
 
-      void NotificationService.notifyAlert({
-        severity: rule.severity,
-        ruleName: rule.name,
-        title,
-        description,
-      });
-
       logger.info('Alert created', { rule: rule.name, title });
-      return true;
+      // Notification is NOT sent here: evaluateLog batches every alert raised by
+      // this event into one message. Returning the payload keeps the decision
+      // about what got suppressed (whitelist, cooldown) in one place.
+      return { severity: rule.severity, ruleName: rule.name, title, description };
     } catch (error) {
       logger.error('Failed to create alert:', { error, rule: rule.name });
-      return false;
+      return null;
     }
   }
 

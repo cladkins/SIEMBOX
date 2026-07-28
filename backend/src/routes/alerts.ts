@@ -15,23 +15,22 @@ router.get('/', async (req: Request, res: Response) => {
     const startTime = req.query.startTime ? new Date(req.query.startTime as string) : undefined;
     const endTime = req.query.endTime ? new Date(req.query.endTime as string) : undefined;
     const search = (req.query.search as string)?.trim().slice(0, 200) || undefined;
+    // ?group=event collapses the list to one row per triggering log, since one
+    // event can satisfy several rules. Opt-in: the flat list stays the default
+    // so existing callers and the export are unaffected.
+    const groupByEvent = req.query.group === 'event';
 
-    const result = await AlertModel.findAll({
-      limit,
-      offset,
-      severity,
-      status,
-      ruleId,
-      startTime,
-      endTime,
-      search,
-    });
+    const filters = { limit, offset, severity, status, ruleId, startTime, endTime, search };
+    const result = groupByEvent
+      ? await AlertModel.findAllGrouped(filters)
+      : await AlertModel.findAll(filters);
 
     res.json({
       alerts: result.alerts,
       total: result.total,
       limit,
       offset,
+      grouped: groupByEvent,
     });
   } catch (error) {
     throw new ApiError(500, 'Failed to fetch alerts');

@@ -23,6 +23,7 @@ import {
   HIGH_SEVERITY_MAX,
 } from '../services/parser/parserRecommendations';
 import { generateParser } from '../services/ai/aiService';
+import { scanParserRedos } from '../services/parser/redos';
 import { authorize } from '../middleware/auth';
 import { ApiError } from '../middleware/errorHandler';
 import { query } from '../config/database';
@@ -434,7 +435,13 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
     const portable = toPortableParser(parser);
     const validation = validatePortableParser(portable, { strict: true });
     const selfTest = validation.ok ? runSelfTests(portable) : null;
-    const ready = validation.ok && !!selfTest?.ok;
+    // ReDoS gate mirrors the published catalog's CI, so users see (and fix) a
+    // vulnerable pattern here instead of hitting a red CI on their PR. Graceful:
+    // if the analyzer isn't installed it reports nothing rather than blocking.
+    // Only a PROVEN-vulnerable regex blocks the link; 'unknown' is surfaced but
+    // not blocking (matches the validate-parsers CLI gate).
+    const redos = validation.ok ? scanParserRedos(portable) : [];
+    const ready = validation.ok && !!selfTest?.ok && !redos.some((f) => f.status === 'vulnerable');
 
     const filePath = `${getCatalogSource().path}/${parser.name}.parser.json`;
     const content = JSON.stringify(portable, null, 2);
@@ -445,9 +452,23 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
       path: filePath,
       content,
       valid: validation.ok,
-      errors: validation.errors,
-      warnings: validation.warnings,
+      // Fold ReDoS findings into the lists the dialog already renders: proven
+      // vulnerabilities alongside errors (they block `ready`), indeterminate
+      // results as warnings.
+      errors: [
+        ...validation.errors,
+        ...redos
+          .filter((f) => f.status === 'vulnerable')
+          .map((f) => `ReDoS: regex at ${f.location} is vulnerable${f.complexity ? ` (${f.complexity})` : ''} — rewrite it linear before contributing`),
+      ],
+      warnings: [
+        ...validation.warnings,
+        ...redos
+          .filter((f) => f.status !== 'vulnerable')
+          .map((f) => `ReDoS: regex at ${f.location} could not be proven safe (${f.status})`),
+      ],
       self_test: selfTest,
+      redos, // vulnerable/indeterminate regexes, if any (empty = clean)
       ready, // only offer the PR link when it would pass the catalog's CI
       contribute_url: ready ? catalogNewFileUrl(filePath, content) : null,
     });

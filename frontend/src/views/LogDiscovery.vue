@@ -34,7 +34,7 @@
         <span class="scope-label">Scan scope:</span>
         <el-tag v-for="cidr in scope?.cidrs || []" :key="cidr" size="small" style="margin-right: 6px">{{ cidr }}</el-tag>
         <span v-if="!scope?.cidrs?.length" class="scope-empty">No subnets added yet — passive discovery still works without one.</span>
-        <el-button link size="small" @click="showManualCidrDialog = true">Add a subnet</el-button>
+        <el-button link size="small" @click="openManualCidrDialog">Add a subnet</el-button>
       </div>
 
       <el-collapse v-if="scans.length > 0" style="margin: 16px 0">
@@ -107,7 +107,7 @@
       <el-input v-model="manualCidrInput" placeholder="192.168.20.0/24, 10.10.4.0/24" />
       <template #footer>
         <el-button @click="showManualCidrDialog = false">Cancel</el-button>
-        <el-button type="primary" @click="previewManualCidrs">Preview</el-button>
+        <el-button type="primary" @click="previewManualCidrs">Save</el-button>
       </template>
     </el-dialog>
 
@@ -154,6 +154,11 @@ const fingerprints = ref<FingerprintEntry[]>([]);
 
 const showManualCidrDialog = ref(false);
 const manualCidrInput = ref('');
+// The CIDRs actually confirmed via the dialog -- distinct from scope.value.cidrs, which is
+// just whatever GET /scope last echoed back (and gets overwritten on every refreshAll()).
+// This is what's threaded into both loadScope() and every triggerScan() call, so a subnet
+// you've added keeps applying to scans instead of silently resetting to none.
+const manualCidrs = ref<string[]>([]);
 
 const showOnboardDialog = ref(false);
 const onboardTarget = ref<RankedSource | null>(null);
@@ -182,7 +187,7 @@ const onboardMethods = computed(() => {
 });
 
 async function loadScope() {
-  scope.value = await logDiscoveryService.getScope();
+  scope.value = await logDiscoveryService.getScope(manualCidrs.value);
 }
 
 async function loadScans() {
@@ -213,7 +218,7 @@ function refreshAll() {
 async function triggerScan(mode: DiscoveryScanMode) {
   scanning.value = true;
   try {
-    const result = await logDiscoveryService.triggerScan(mode);
+    const result = await logDiscoveryService.triggerScan(mode, manualCidrs.value);
     ElMessage.success(`Scan #${result.scan_id} started`);
     if (result.vlan_warning) ElMessage.warning(result.vlan_warning);
     setTimeout(refreshAll, 3000);
@@ -224,12 +229,18 @@ async function triggerScan(mode: DiscoveryScanMode) {
   }
 }
 
+function openManualCidrDialog() {
+  manualCidrInput.value = manualCidrs.value.join(', ');
+  showManualCidrDialog.value = true;
+}
+
 async function previewManualCidrs() {
   const cidrs = manualCidrInput.value.split(',').map((c) => c.trim()).filter(Boolean);
   scope.value = await logDiscoveryService.getScope(cidrs);
   if (scope.value.rejected_cidrs.length > 0) {
     ElMessage.warning(`Ignored invalid or too-large CIDR(s) (max /22): ${scope.value.rejected_cidrs.join(', ')}`);
   }
+  manualCidrs.value = scope.value.cidrs;
   showManualCidrDialog.value = false;
 }
 

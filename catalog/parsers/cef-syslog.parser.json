@@ -3,7 +3,7 @@
   "name": "cef-syslog",
   "description": "Parses CEF logs that include a syslog header prefix (common when CEF is transported via syslog)",
   "parser_type": "regex",
-  "priority": 4,
+  "priority": 499,
   "pattern": "^(?:(?<syslog_timestamp>\\w+\\s+\\d+\\s+[\\d:]+)\\s+(?<syslog_host>\\S+)\\s+)?CEF:(?<cef_version>\\d+)\\|(?<device_vendor>[^|]*)\\|(?<device_product>[^|]*)\\|(?<device_version>[^|]*)\\|(?<signature_id>[^|]*)\\|(?<event_name>[^|]*)\\|(?<severity>[^|]*)\\|(?<extension>.*)$",
   "field_mappings": {
     "syslog_timestamp": "syslog_timestamp",

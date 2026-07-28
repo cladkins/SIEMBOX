@@ -64,6 +64,13 @@
             <el-table-column label="Started" width="180">
               <template #default="{ row }">{{ formatDate(row.started_at) }}</template>
             </el-table-column>
+            <el-table-column label="" width="90">
+              <template #default="{ row }">
+                <el-button v-if="row.status === 'running'" size="small" type="danger" plain @click="cancelScan(row)">
+                  Cancel
+                </el-button>
+              </template>
+            </el-table-column>
           </el-table>
         </el-collapse-item>
       </el-collapse>
@@ -226,6 +233,20 @@ async function triggerScan(mode: DiscoveryScanMode) {
     ElMessage.error(err.response?.data?.message || 'Failed to start scan');
   } finally {
     scanning.value = false;
+  }
+}
+
+async function cancelScan(row: DiscoveryScan) {
+  try {
+    const result = await logDiscoveryService.cancelScan(row.id);
+    if (result.cancelled) {
+      ElMessage.success(`Scan #${row.id} cancelled`);
+    } else {
+      ElMessage.info(`Scan #${row.id} already finished (${result.scan.status})`);
+    }
+    loadScans();
+  } catch (err: any) {
+    ElMessage.error(err.response?.data?.message || 'Failed to cancel scan');
   }
 }
 

@@ -228,3 +228,119 @@ test('PROXY-005 keeps the word boundaries its flags depend on', () => {
   assert.match(String(cond.value), /^\\b\(/, 'alternation must be wrapped in word boundaries');
   assert.match(String(cond.value), /\)\\b$/, 'alternation must be wrapped in word boundaries');
 });
+
+
+// ---------------------------------------------------------------------------
+// AUTH / INFRA case audit.
+//
+// `contains` is already case-insensitive (conditionMatch lowercases both
+// sides), so most AUTH rules were fine. The `regex` conditions were not, and
+// six of them missed the capitalisation real logs use. Two could NOT simply
+// take flags: i — the cases worth pinning, because the naive fix is wrong:
+//
+//   INFRA-001 matches "SYN", a TCP flag written in caps. Case-insensitively,
+//   "syn" matches "syntax error" — an ordinary log line would alert as a port
+//   scan. The prose phrases get case classes; SYN stays case-sensitive.
+//
+//   INFRA-004 matches "t-rex", a real miner and an ordinary word.
+//   Case-insensitively it alerts on a "T-Rex" page. Only the miners that
+//   genuinely capitalise themselves get case classes.
+// ---------------------------------------------------------------------------
+
+const CASE_AUDIT: Array<{
+  file: string;
+  field: string;
+  detects: Array<[string, string]>;
+  ignores: Array<[string, string]>;
+}> = [
+  {
+    file: 'authentication/AUTH-007-sso-authentication-failures.yaml',
+    field: 'service',
+    detects: [
+      ['lowercase', 'authelia'],
+      ['capitalised', 'Authelia'],
+      ['upper', 'AUTHENTIK'],
+      ['keycloak event source', 'org.keycloak.events'],
+    ],
+    ignores: [['nginx', 'nginx'], ['cron', 'CRON']],
+  },
+  {
+    file: 'authentication/AUTH-011-admin-interface-unusual-ip.yaml',
+    field: 'path',
+    detects: [
+      ['lowercase admin', '/admin/index.php'],
+      ['capitalised admin', '/Admin/index.php'],
+      ['capitalised manage', '/Manage/Users'],
+      ['console', '/console'],
+    ],
+    // These matched before the word boundary was added — existing false positives.
+    ignores: [
+      ['managers report', '/managers-report.pdf'],
+      ['administrators guide', '/administrators-guide'],
+      ['static asset', '/static/app.js'],
+    ],
+  },
+  {
+    file: 'infrastructure/INFRA-001-port-scanning.yaml',
+    field: 'message',
+    detects: [
+      ['lowercase phrase', 'connection refused from 10.0.0.5'],
+      ['canonical capitalisation', 'Connection refused'],
+      ['capitalised attempt', 'Connection attempt from 10.0.0.5 rejected'],
+      ['no route to host', 'No route to host'],
+      ['TCP SYN flag', 'SYN flood detected'],
+    ],
+    // The reason SYN stays case-sensitive.
+    ignores: [
+      ['syntax error', 'syntax error near line 4'],
+      ['time sync', 'synchronizing time'],
+      ['ordinary request', 'GET /index.html 200'],
+    ],
+  },
+  {
+    file: 'infrastructure/INFRA-003-unusual-service-restarts.yaml',
+    field: 'message',
+    detects: [
+      ['systemd Starting', 'Starting nginx.service'],
+      ['systemd Stopped', 'Stopped nginx.service'],
+      ['lowercase restarting', 'restarting docker'],
+      ['capitalised Restarting', 'Restarting docker'],
+    ],
+    ignores: [['login', 'user alice logged in'], ['request', 'GET /health 200']],
+  },
+  {
+    file: 'infrastructure/INFRA-004-cryptomining-detection.yaml',
+    field: 'message',
+    detects: [
+      ['lowercase binary', 'xmrig started'],
+      ['XMRig own banner', 'XMRig 6.21.0 starting'],
+      ['PhoenixMiner', 'PhoenixMiner 5.9'],
+      ['Claymore', 'Claymore v15'],
+      ['lolMiner', 'lolMiner 1.76'],
+      ['minerd', 'minerd connecting to pool'],
+    ],
+    // The reason t-rex stays case-sensitive, plus words containing "miner".
+    ignores: [
+      ['T-Rex page', 'T-Rex dinosaur exhibit page'],
+      ['determiner', 'determiner parsing done'],
+      ['examiner', 'examiner login'],
+      ['coal miner report', 'coal-miner-report.pdf requested'],
+    ],
+  },
+];
+
+for (const spec of CASE_AUDIT) {
+  const re = ruleRegex(spec.file, spec.field);
+  const id = path.basename(spec.file).replace('.yaml', '');
+
+  for (const [label, subject] of spec.detects) {
+    test(`${id} detects ${label}`, () => {
+      assert.ok(re.test(subject), `did not match ${JSON.stringify(subject)}`);
+    });
+  }
+
+  test(`${id} ignores ordinary log lines`, () => {
+    const firing = spec.ignores.filter(([, s]) => re.test(s)).map(([l]) => l);
+    assert.deepEqual(firing, [], `false positives on: ${firing.join(', ')}`);
+  });
+}

@@ -10,7 +10,12 @@ tags: [admin, access-control, web, authentication, policy-violation]
 conditions:
   - field: path
     operator: regex
-    value: "/admin|/administration|/manage|/console"
+    # flags: i — some applications serve /Admin or /Console.
+    # \b matters independently of the flag: without it "/manage" matched
+    # /managers-report.pdf and "/admin" matched /administrators-guide, which
+    # were false positives before this change.
+    flags: i
+    value: "(/admin|/administration|/manage|/console)\\b"
   - field: client_ip
     operator: not_in_whitelist
     value: true

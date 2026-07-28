@@ -1,0 +1,189 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "ubiquiti-unifi-client-devices",
+  "parser_type": "regex",
+  "pattern": "^(?:(?<syslog_time>\\w{3} {1,2}\\d{1,2} [\\d:]{7,8}) (?<syslog_host>\\S{1,64}) )?CEF:(?<cef_version>\\d{1,3})\\|(?<cef_vendor>[^|]{0,64})\\|(?<cef_product>[^|]{0,64})\\|(?<cef_product_version>[^|]{0,64})\\|(?<cef_sig_id>[^|]{0,64})\\|(?<cef_name>[^|]{0,128})\\|(?<cef_severity>[^|]{0,16})\\|(?<extension>UNIFIcategory=Client Devices .*)$",
+  "field_mappings": {
+    "syslog_host": "host",
+    "cef_name": "event",
+    "cef_sig_id": "signature_id",
+    "cef_severity": "severity_label",
+    "extension": "extension"
+  },
+  "description": "Parses UniFi Network client-device events (WiFi/wired client connected, disconnected, roamed, blocked) shipped as CEF over syslog. The regex captures only the CEF envelope (linear, ReDoS-safe); the engine's CEF extension parser explodes the key=value pairs, and derivations map them to canonical fields. Connect events name the AP as UNIFIconnectedTo*, disconnect events as UNIFIlastConnectedTo* — both are mapped onto the same ap_* fields so a query does not have to know which. Requires the extension to start with UNIFIcategory=Client Devices (the discriminator vs. the Security and Audit parsers). The syslog time/host prefix is optional so the header-stripped message SIEMBox stores also matches.",
+  "priority": 200,
+  "derivations": [
+    {
+      "extract": {
+        "message": {
+          "from": "msg",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "client_ip": {
+          "from": "UNIFIclientIp",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "client_mac": {
+          "from": "UNIFIclientMac",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "client_hostname": {
+          "from": "UNIFIclientHostname",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "client_alias": {
+          "from": "UNIFIclientAlias",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "ssid": {
+          "from": "UNIFIwifiName",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "wifi_band": {
+          "from": "UNIFIwifiBand",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "wifi_channel": {
+          "from": "UNIFIwifiChannel",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "auth_method": {
+          "from": "UNIFIauthMethod",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "network_name": {
+          "from": "UNIFInetworkName",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "network_vlan": {
+          "from": "UNIFInetworkVlan",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "sensor_ip": {
+          "from": "UNIFIhostIp",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "session_duration": {
+          "from": "UNIFIduration",
+          "pattern": "^([\\s\\S]+)$"
+        }
+      },
+      "overwrite": true
+    },
+    {
+      "extract": {
+        "ap_name": {
+          "from": "UNIFIconnectedToDeviceName",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "ap_ip": {
+          "from": "UNIFIconnectedToDeviceIp",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "ap_mac": {
+          "from": "UNIFIconnectedToDeviceMac",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "ap_model": {
+          "from": "UNIFIconnectedToDeviceModel",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "wifi_rssi": {
+          "from": "UNIFIWiFiRssi",
+          "pattern": "^(-?\\d{1,4})$"
+        }
+      }
+    },
+    {
+      "extract": {
+        "ap_name": {
+          "from": "UNIFIlastConnectedToDeviceName",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "ap_ip": {
+          "from": "UNIFIlastConnectedToDeviceIp",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "ap_mac": {
+          "from": "UNIFIlastConnectedToDeviceMac",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "ap_model": {
+          "from": "UNIFIlastConnectedToDeviceModel",
+          "pattern": "^([\\s\\S]+)$"
+        },
+        "wifi_rssi": {
+          "from": "UNIFIlastConnectedToWiFiRssi",
+          "pattern": "^(-?\\d{1,4})$"
+        }
+      }
+    },
+    {
+      "when": {
+        "event": {
+          "matches": "[Dd]isconnected"
+        }
+      },
+      "set": {
+        "action": "disconnected"
+      }
+    },
+    {
+      "when": {
+        "event": {
+          "matches": "[Cc]onnected"
+        }
+      },
+      "set": {
+        "action": "connected"
+      }
+    },
+    {
+      "when": {
+        "event": {
+          "matches": "[Bb]locked"
+        }
+      },
+      "set": {
+        "action": "blocked"
+      }
+    }
+  ],
+  "event_type": "wifi_client_session",
+  "enabled": true,
+  "test_samples": [
+    {
+      "input": "Jul 28 13:30:45 UCG-Max CEF:0|Ubiquiti|UniFi Network|10.4.57|400|WiFi Client Connected|1|UNIFIcategory=Client Devices UNIFIhost=UCG Max UNIFIconnectedToDeviceName=AP Living Room UNIFIconnectedToDeviceIp=192.168.1.196 UNIFIconnectedToDeviceMac=1c:0b:8b:00:00:01 UNIFIconnectedToDeviceModel=U7-Lite UNIFIconnectedToDeviceVersion=8.6.11 UNIFIclientAlias=Watch aa:bb UNIFIclientHostname=Watch UNIFIclientIp=192.168.3.119 UNIFIclientMac=0e:d4:94:00:00:02 UNIFIwifiChannel=6 UNIFIwifiChannelWidth=20 UNIFIwifiName=HomeIoT UNIFIwifiBand=ng UNIFIauthMethod=wpapsk UNIFIWiFiRssi=-53 UNIFInetworkName=IOT UNIFInetworkSubnet=192.168.3.0/24 UNIFInetworkVlan=2 UNIFIutcTime=2026-07-28T18:30:45.682Z msg=Watch aa:bb connected to HomeIoT on AP Living Room. Connection Info: Ch. 6 (2.4 GHz, 20 MHz), -53 dBm. IP: 192.168.3.119",
+      "expect": {
+        "host": "UCG-Max",
+        "event": "WiFi Client Connected",
+        "action": "connected",
+        "client_ip": "192.168.3.119",
+        "source_ip": "192.168.3.119",
+        "client_mac": "0e:d4:94:00:00:02",
+        "client_hostname": "Watch",
+        "ssid": "HomeIoT",
+        "network_vlan": "2",
+        "auth_method": "wpapsk",
+        "ap_name": "AP Living Room",
+        "ap_ip": "192.168.1.196",
+        "ap_model": "U7-Lite",
+        "wifi_rssi": "-53"
+      }
+    },
+    {
+      "input": "CEF:0|Ubiquiti|UniFi Network|10.4.57|401|WiFi Client Disconnected|2|UNIFIcategory=Client Devices UNIFIhost=UCG Max UNIFIlastConnectedToDeviceName=AP Living Room UNIFIlastConnectedToDeviceIp=192.168.1.196 UNIFIlastConnectedToDeviceMac=1c:0b:8b:00:00:01 UNIFIlastConnectedToDeviceModel=U7-Lite UNIFIlastConnectedToDeviceVersion=8.6.11 UNIFIclientAlias=Watch cc:dd UNIFIclientHostname=Watch UNIFIclientIp=192.168.1.8 UNIFIclientMac=de:56:d0:00:00:03 UNIFIwifiChannel=100 UNIFIwifiChannelWidth=20 UNIFIwifiName=HomeNet UNIFIwifiBand=na UNIFIlastConnectedToWiFiRssi=-64 UNIFIduration=52m 3s UNIFIusageDown=4.17 MB UNIFIusageUp=9.01 KB UNIFInetworkName=Default UNIFInetworkSubnet=192.168.1.0/24 UNIFInetworkVlan=1 UNIFIutcTime=2026-07-28T18:30:32.951Z msg=Watch cc:dd disconnected from HomeNet. Time Connected: 52m 3s.",
+      "expect": {
+        "event": "WiFi Client Disconnected",
+        "action": "disconnected",
+        "client_ip": "192.168.1.8",
+        "client_mac": "de:56:d0:00:00:03",
+        "ssid": "HomeNet",
+        "ap_name": "AP Living Room",
+        "ap_mac": "1c:0b:8b:00:00:01",
+        "wifi_rssi": "-64",
+        "session_duration": "52m 3s"
+      }
+    }
+  ]
+}

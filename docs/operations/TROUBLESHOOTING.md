@@ -287,6 +287,126 @@ See [PARSERS.md](../../PARSERS.md) for detailed parser creation guide.
 4. Adjust priorities to ensure correct parser matches
 5. Save changes
 
+**A generic parser is shadowing a specific one:** matching stops at the first
+hit, so a broad parser with a low priority number claims logs a specific parser
+was written for. The symptom is a log that *is* parsed but into the wrong
+`event_type` with few fields (e.g. a UniFi IDS/IPS event landing as a bare
+`cef_event`). Give the specific parser a lower priority number than the generic
+one — `Logs → Parsed Logs → Parser` column shows which one actually claimed it.
+
+---
+
+### Issue: Long Logs Not Parsed (CEF, Windows Events, verbose JSON)
+
+**Symptoms:**
+- Short logs from the same device parse fine; long ones do not
+- Raw Logs shows a message that looks cut off mid-field, or two messages joined
+- Backend logs show `RFC 3164 match failed` with a `messageLength` well above
+  your typical line
+
+**Root Cause:** Syslog framing. Both transports are newline-delimited, and long
+messages are the ones that expose framing bugs:
+
+- **TCP is a byte stream.** A 1 KB+ line routinely arrives split across several
+  socket reads. Each fragment must be reassembled before parsing — treated
+  separately, one log becomes several corrupt records.
+- **UDP datagrams can carry more than one line.** Senders and relays batch them.
+  Stored as a single record, nothing anchored with `^…$` can match, because `.`
+  does not cross a newline.
+
+Both are handled from the release containing this note; earlier versions
+mis-framed them. If you are on an older build, upgrade the backend image.
+
+**Diagnosis:**
+
+Run this against the database — it classifies each unparsed log by *why* it
+looks wrong, which points at a different fix in each case:
+
+Note `-T`: without it `docker compose exec` allocates a TTY and the heredoc is
+swallowed. Paste the whole block, including the `SQL` terminator — not the bare
+SELECT into a shell prompt.
+
+```bash
+docker compose exec -T postgres psql -U siembox -d siembox <<'SQL'
+SELECT
+  CASE
+    WHEN rl.raw_message LIKE E'%\n%'         THEN 'packed datagram (several events in one record)'
+    WHEN rl.raw_message ~ '^\w{3} +\d{1,2} ' THEN 'syslog header not stripped'
+    ELSE                                          'unrecognised format (check lengths for truncation)'
+  END                                        AS likely_cause,
+  COUNT(*)                                   AS events,
+  MIN(LENGTH(rl.raw_message))                AS min_len,
+  MAX(LENGTH(rl.raw_message))                AS max_len,
+  MODE() WITHIN GROUP (ORDER BY LENGTH(rl.raw_message)) AS most_common_len,
+  COUNT(*) FILTER (WHERE LENGTH(rl.raw_message) BETWEEN 1000 AND 1024) AS at_1k_cap
+FROM parsed_logs pl
+JOIN raw_logs rl ON rl.id = pl.raw_log_id
+WHERE pl.parser_id IS NULL
+  AND pl.timestamp > NOW() - INTERVAL '24 hours'
+GROUP BY 1
+ORDER BY events DESC;
+SQL
+```
+
+`max_len` well above 1024 rules out sender truncation. A large `at_1k_cap` with
+`most_common_len` pinned just under 1024 is the signature of a device capping
+its UDP datagrams — move that source to TCP.
+
+Then drill into one format to see whether a specific parser is missing or a
+present one is being defeated. Substitute your own marker for `CEF:`:
+
+```bash
+docker compose exec -T postgres psql -U siembox -d siembox <<'SQL'
+SELECT COUNT(*)                                            AS unparsed,
+       COUNT(*) FILTER (WHERE rl.raw_message LIKE E'%\n%') AS packed,
+       MIN(LENGTH(rl.raw_message))                         AS min_len,
+       MAX(LENGTH(rl.raw_message))                         AS max_len
+FROM parsed_logs pl JOIN raw_logs rl ON rl.id = pl.raw_log_id
+WHERE pl.parser_id IS NULL
+  AND pl.timestamp > NOW() - INTERVAL '24 hours'
+  AND rl.raw_message LIKE '%CEF:%';
+
+-- a full sample with newlines marked, so a packed record is unmistakable
+SELECT LENGTH(rl.raw_message) AS len,
+       replace(rl.raw_message, E'\n', '[NL]') AS message
+FROM parsed_logs pl JOIN raw_logs rl ON rl.id = pl.raw_log_id
+WHERE pl.parser_id IS NULL
+  AND pl.timestamp > NOW() - INTERVAL '24 hours'
+  AND rl.raw_message LIKE '%CEF:%'
+ORDER BY pl.id DESC LIMIT 2;
+SQL
+```
+
+| Result | Meaning | Fix |
+|--------|---------|-----|
+| **packed datagram** | The sender put several events in one UDP datagram (or one TCP write). `.` never crosses a newline, so no `^…$` parser can match. | Fixed in the release containing this note — upgrade the backend image. |
+| **syslog header not stripped** | The `<PRI>TIMESTAMP HOSTNAME` header parse failed, so the whole line was stored. | Check the sender's timestamp format against RFC 3164/5424. |
+| **min_len 0** | Empty records from blank lines / keepalive newlines in a datagram. | Fixed in the release containing this note — blank frames are dropped on ingest. |
+| **likely truncated by the sender** | The message ends mid key=value. Many devices cap UDP syslog at 1024 bytes. | Switch that source to TCP, which has no such cap. |
+| **no parser matches** | Genuinely unrecognised format. | Install a parser from the catalog, or write one. |
+
+Also useful:
+
+```bash
+# Fragmented or joined messages show up as unusual raw_message lengths
+docker compose logs backend | grep "RFC 3164 match failed"
+```
+
+In the UI: **Logs → Parsed Logs → Parse Status: "Unparsed only"**, then compare
+the raw message length against a working log from the same device. Note the Raw
+Logs table renders a message on a single line, so a packed record with embedded
+newlines looks deceptively like one normal event — the query above is the
+reliable check.
+
+**Also check:**
+
+- **Sender-side truncation.** Many devices cap syslog at 1024 bytes. If the raw
+  message ends mid-field, the sender truncated it — switch that source to TCP,
+  which has no such limit.
+- **`\r\n` line endings.** A stray trailing `\r` defeats a `$`-anchored parser.
+  This is stripped on ingest now, but a custom parser that captures it will
+  still fail.
+
 ---
 
 ## Log Shipper Issues

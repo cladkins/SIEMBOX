@@ -4,6 +4,7 @@
 // discovery work is this feature's own (ARP/mDNS/SSDP/DHCP + scoped port/HTTP/TLS
 // probing), since nothing like it existed before this feature.
 import { logger } from '../../utils/logger';
+import { ErrorLogService } from '../errors/errorLogService';
 import { query } from '../../config/database';
 import { DiscoveryScanModel, DiscoveryScanMode } from '../../models/DiscoveryScan';
 import { DiscoverySourceModel, DiscoverySource } from '../../models/DiscoverySource';
@@ -265,10 +266,17 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
     .catch(async (err: any) => {
       if (err instanceof ScanCancelledError) {
         // Row was already failed by the cancel endpoint / watchdog; the guarded
-        // fail() below is a no-op in that case.
+        // fail() below is a no-op in that case. Deliberately NOT reported to the
+        // dashboard's error log: a cancel (or a watchdog timeout, which cancels)
+        // is an intended outcome, not a fault to investigate.
         logger.info(`[logDiscovery] scan ${scan.id} stopped: ${err.message}`);
       } else {
         logger.error(`[logDiscovery] scan ${scan.id} failed:`, err);
+        ErrorLogService.logBackgroundError('log-discovery', err, {
+          dedupeKey: `scan-${scan.id}`,
+          scanId: scan.id,
+          mode: opts.mode,
+        });
       }
       await DiscoveryScanModel.fail(scan.id, err?.message || 'Scan execution failed').catch(() => {});
     })

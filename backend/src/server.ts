@@ -13,8 +13,29 @@ import { startYaraRulesJob, stopYaraRulesJob } from './jobs/yaraRules';
 import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
 import { TemplateService } from './services/scanner/templateService';
 import { CredentialEncryption } from './services/credentials/credentialEncryption';
+import { ErrorLogService } from './services/errors/errorLogService';
 
 dotenv.config();
+
+// Last-resort capture. Anything that escaped a service's own try/catch — a
+// rejected promise nobody awaited, a throw from a timer callback — used to
+// vanish into stdout, so the dashboard's Recent Errors panel could look clean
+// while the process was failing. Log-only: an uncaught exception leaves the
+// process in an undefined state, but crashing here would take the whole SIEM
+// down for one bad callback, and the container restart policy is the safety net.
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled promise rejection:', reason);
+  ErrorLogService.logBackgroundError('unhandled-rejection', reason, {
+    dedupeKey: reason instanceof Error ? reason.message : String(reason),
+  });
+});
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught exception:', error);
+  ErrorLogService.logBackgroundError('uncaught-exception', error, {
+    dedupeKey: error?.message,
+  });
+});
 
 const PORT = process.env.PORT || 8421;
 const HOST = process.env.HOST || '0.0.0.0';

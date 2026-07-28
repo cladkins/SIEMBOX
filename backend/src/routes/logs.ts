@@ -47,6 +47,8 @@ router.get('/raw', async (req: Request, res: Response) => {
     const limit = parseInt(req.query.limit as string) || 100;
     const offset = parseInt(req.query.offset as string) || 0;
     const sourceIp = req.query.source_ip as string;
+    const appName = req.query.app_name as string;
+    const hostname = req.query.hostname as string;
     const search = req.query.search as string;
     const severity = req.query.severity !== undefined ? parseInt(req.query.severity as string) : undefined;
     const startTime = req.query.start_date ? new Date(req.query.start_date as string) : undefined;
@@ -56,6 +58,8 @@ router.get('/raw', async (req: Request, res: Response) => {
       limit,
       offset,
       sourceIp,
+      appName,
+      hostname,
       search,
       severity,
       startTime,
@@ -85,6 +89,11 @@ router.get('/parsed', async (req: Request, res: Response) => {
       req.query.parser_id !== undefined && req.query.parser_id !== ''
         ? parseInt(req.query.parser_id as string, 10)
         : undefined;
+    // parse_status separates real parser matches from the generic unparsed
+    // fallback, which is stored in parsed_logs too but never runs detections.
+    const rawParseStatus = (req.query.parse_status as string) || '';
+    const parseStatus =
+      rawParseStatus === 'parsed' || rawParseStatus === 'unparsed' ? rawParseStatus : undefined;
     const search = req.query.search as string;
     const startTime = req.query.start_date ? new Date(req.query.start_date as string) : undefined;
     const endTime = req.query.end_date ? new Date(req.query.end_date as string) : undefined;
@@ -96,6 +105,7 @@ router.get('/parsed', async (req: Request, res: Response) => {
       eventType,
       appName,
       parserId,
+      parseStatus,
       search,
       startTime,
       endTime,

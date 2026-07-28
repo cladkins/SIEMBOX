@@ -10,6 +10,8 @@ import * as path from 'path';
 import * as yaml from 'js-yaml';
 import * as https from 'https';
 import { exec } from 'child_process';
+import { logger } from '../../utils/logger';
+import { ErrorLogService } from '../errors/errorLogService';
 
 // Default template directory (Nuclei's default location in container)
 const TEMPLATES_DIR = process.env.NUCLEI_TEMPLATES_DIR || '/root/nuclei-templates';
@@ -289,8 +291,12 @@ export class TemplateService {
   static async warmCache(): Promise<void> {
     try {
       await this.getAllTemplates();
-    } catch {
-      // best-effort; the endpoints fall back to defaults if this fails
+    } catch (error) {
+      // Best-effort — the endpoints fall back to defaults. But a swallowed
+      // failure here means the first (heavy) template request pays the full
+      // parse cost and may time out, with nothing anywhere explaining why.
+      logger.warn('Nuclei template cache warm failed:', error);
+      ErrorLogService.logBackgroundError('template-cache', error, { dedupeKey: 'warm' });
     }
   }
 

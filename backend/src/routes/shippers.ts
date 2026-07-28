@@ -445,12 +445,21 @@ router.post('/register', async (req: Request, res: Response) => {
 // the SIEMBox host's own containers. Auth: the shipper API key (in the body).
 router.post('/containers', async (req: Request, res: Response) => {
   try {
-    const { api_key, containers } = req.body ?? {};
+    const { api_key, containers, docker_available, docker_reason } = req.body ?? {};
     if (!api_key) throw new ApiError(400, 'API key is required');
     if (!Array.isArray(containers)) throw new ApiError(400, 'containers must be an array');
 
     const shipper = await LogShipperModel.findByApiKey(api_key);
     if (!shipper) throw new ApiError(404, 'Invalid API key');
+
+    // A shipper with no Docker socket still reports (containers: [],
+    // docker_available: false) so the operator sees "this host can't see
+    // Docker" instead of an unexplained gap in the inventory. Older shippers
+    // omit the flag entirely; treat those as available, which is what they
+    // meant before the field existed.
+    const dockerAvailable = docker_available !== false;
+    const dockerReason =
+      dockerAvailable ? null : String(docker_reason ?? 'Docker not reachable from the shipper').slice(0, 500);
 
     // Map the shipper's {image,name,image_id,running} items to the Docker socket
     // shape, then reuse the exact grouping + scannable logic the local discovery
@@ -468,6 +477,9 @@ router.post('/containers', async (req: Request, res: Response) => {
     }));
     const images = groupContainers(mapped);
     await ShipperContainerModel.replaceForShipper(shipper.id, images);
+    await LogShipperModel.recordContainerReport(shipper.id, dockerAvailable, dockerReason).catch(
+      () => {}
+    );
 
     // A report is also a sign of life.
     const ip_address = req.ip || req.socket.remoteAddress || 'unknown';

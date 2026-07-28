@@ -2,6 +2,9 @@ import { query } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { ErrorLogService } from '../errors/errorLogService';
 import { batchedDelete } from '../../utils/batchDelete';
+import { registerRecurringJob, trackJobRun, markJobSkipped } from '../jobs/jobRegistry';
+
+const JOB_KEY = 'retention-cleanup';
 
 /**
  * The current (or most recent) cleanup job — automated sweep or manual purge.
@@ -67,11 +70,17 @@ export class CleanupService {
   start(): void {
     logger.info('Starting cleanup service scheduler');
 
+    const intervalMs = this.cleanupIntervalHours * 60 * 60 * 1000;
+    registerRecurringJob({
+      key: JOB_KEY,
+      name: 'Retention cleanup',
+      description: 'Deletes raw logs, parsed logs and closed alerts past their retention window.',
+      intervalMs,
+    });
+
     // Run cleanup immediately on start
     this.runCleanup();
 
-    // Schedule periodic cleanup
-    const intervalMs = this.cleanupIntervalHours * 60 * 60 * 1000;
     this.intervalId = setInterval(() => {
       this.runCleanup();
     }, intervalMs);
@@ -100,6 +109,7 @@ export class CleanupService {
     // A running manual job takes priority — the auto sweep catches up next cycle.
     if (currentJob?.status === 'running') {
       logger.info(`Skipping automated cleanup: a ${currentJob.trigger} cleanup is already running`);
+      markJobSkipped(JOB_KEY, `a ${currentJob.trigger} cleanup is already running`);
       return;
     }
 
@@ -111,6 +121,7 @@ export class CleanupService {
       );
       if (enabledResult.rows.length === 0 || enabledResult.rows[0].value !== 'true') {
         logger.info('Auto cleanup is disabled, skipping');
+        markJobSkipped(JOB_KEY, 'auto cleanup disabled in settings');
         return;
       }
       settings = await this.getRetentionSettings();
@@ -135,36 +146,42 @@ export class CleanupService {
     logger.info('Starting automated log cleanup');
 
     try {
-      // Delete in bounded batches so a large purge never holds a long lock. A
-      // single unbounded DELETE here once ran 15h and jammed a boot-time migration.
-      if (settings.raw_logs_days > 0) {
-        job.results.raw_logs_deleted = await batchedDelete(
-          'raw_logs',
-          "timestamp < NOW() - INTERVAL '1 day' * $1",
-          [settings.raw_logs_days],
-          { label: 'retention', onProgress: (n) => (job.results.raw_logs_deleted = n) }
-        );
-      }
+      await trackJobRun(JOB_KEY, async () => {
+        // Delete in bounded batches so a large purge never holds a long lock. A
+        // single unbounded DELETE here once ran 15h and jammed a boot-time migration.
+        if (settings.raw_logs_days > 0) {
+          job.results.raw_logs_deleted = await batchedDelete(
+            'raw_logs',
+            "timestamp < NOW() - INTERVAL '1 day' * $1",
+            [settings.raw_logs_days],
+            { label: 'retention', onProgress: (n) => (job.results.raw_logs_deleted = n) }
+          );
+        }
 
-      if (settings.parsed_logs_days > 0) {
-        job.results.parsed_logs_deleted = await batchedDelete(
-          'parsed_logs',
-          "timestamp < NOW() - INTERVAL '1 day' * $1",
-          [settings.parsed_logs_days],
-          { label: 'retention', onProgress: (n) => (job.results.parsed_logs_deleted = n) }
-        );
-      }
+        if (settings.parsed_logs_days > 0) {
+          job.results.parsed_logs_deleted = await batchedDelete(
+            'parsed_logs',
+            "timestamp < NOW() - INTERVAL '1 day' * $1",
+            [settings.parsed_logs_days],
+            { label: 'retention', onProgress: (n) => (job.results.parsed_logs_deleted = n) }
+          );
+        }
 
-      if (settings.alerts_days > 0) {
-        job.results.alerts_deleted = await batchedDelete(
-          'alerts',
-          "created_at < NOW() - INTERVAL '1 day' * $1 AND status = 'closed'",
-          [settings.alerts_days],
-          { label: 'retention', onProgress: (n) => (job.results.alerts_deleted = n) }
-        );
-      }
+        if (settings.alerts_days > 0) {
+          job.results.alerts_deleted = await batchedDelete(
+            'alerts',
+            "created_at < NOW() - INTERVAL '1 day' * $1 AND status = 'closed'",
+            [settings.alerts_days],
+            { label: 'retention', onProgress: (n) => (job.results.alerts_deleted = n) }
+          );
+        }
 
-      await refreshPlannerStats();
+        await refreshPlannerStats();
+        return (
+          `${job.results.raw_logs_deleted} raw, ${job.results.parsed_logs_deleted} parsed, ` +
+          `${job.results.alerts_deleted} alert row(s) deleted`
+        );
+      });
       job.status = 'completed';
       logger.info('Automated log cleanup completed', job.results);
     } catch (error) {

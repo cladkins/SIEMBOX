@@ -153,6 +153,13 @@ export class ParserEngine {
       }
     } catch (error) {
       logger.error('Error processing log:', { error, rawLogId: rawLog.id });
+      // Deduped by message (60s) so a systemic failure — every log erroring —
+      // surfaces on the dashboard once a minute instead of not at all, without
+      // one bad pattern flooding application_errors at ingest rate.
+      ErrorLogService.logBackgroundError('parser-engine', error, {
+        dedupeKey: `process:${error instanceof Error ? error.message : String(error)}`,
+        rawLogId: rawLog.id,
+      });
     }
   }
 

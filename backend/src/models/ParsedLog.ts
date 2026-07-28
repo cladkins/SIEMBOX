@@ -23,6 +23,89 @@ export interface CreateParsedLogParams {
   event_type?: string | null;
 }
 
+export interface ParsedLogFilters {
+  limit?: number;
+  offset?: number;
+  sourceIp?: string;
+  eventType?: string;
+  appName?: string;
+  parserId?: number;
+  /**
+   * 'parsed'   -> only logs a catalog parser actually matched
+   * 'unparsed' -> only the generic fallback records (parser_id IS NULL)
+   * undefined  -> both (the historical behaviour)
+   */
+  parseStatus?: 'parsed' | 'unparsed';
+  search?: string;
+  startTime?: Date;
+  endTime?: Date;
+}
+
+/**
+ * Build the WHERE clause + bind params shared by the count and page queries.
+ * Extracted so the bind-index bookkeeping is testable without a database — an
+ * off-by-one there silently returns the wrong rows rather than erroring.
+ */
+export function buildParsedLogFilters(options?: ParsedLogFilters): {
+  whereClause: string;
+  params: any[];
+} {
+  const conditions: string[] = [];
+  const params: any[] = [];
+  let paramIndex = 1;
+
+  if (options?.sourceIp) {
+    conditions.push(`pl.source_ip = $${paramIndex++}`);
+    params.push(options.sourceIp);
+  }
+
+  if (options?.eventType) {
+    conditions.push(`pl.event_type = $${paramIndex++}`);
+    params.push(options.eventType);
+  }
+
+  if (options?.appName) {
+    conditions.push(`rl.app_name = $${paramIndex++}`);
+    params.push(options.appName);
+  }
+
+  if (options?.parserId !== undefined && !Number.isNaN(options.parserId)) {
+    conditions.push(`pl.parser_id = $${paramIndex++}`);
+    params.push(options.parserId);
+  }
+
+  // Unparsed logs are stored here too (parser_id IS NULL, event_type
+  // 'unparsed') so nothing is invisible, but they carry no extracted fields and
+  // detections never run on them — so the viewer needs to be able to separate
+  // the two populations. No bind param: the values are a closed set, and NULL
+  // comparison needs IS [NOT] NULL rather than `= $n` anyway.
+  if (options?.parseStatus === 'parsed') {
+    conditions.push('pl.parser_id IS NOT NULL');
+  } else if (options?.parseStatus === 'unparsed') {
+    conditions.push('pl.parser_id IS NULL');
+  }
+
+  if (options?.search) {
+    conditions.push(`pl.parsed_data::text ILIKE $${paramIndex++}`);
+    params.push(`%${options.search}%`);
+  }
+
+  if (options?.startTime) {
+    conditions.push(`pl.timestamp >= $${paramIndex++}`);
+    params.push(options.startTime);
+  }
+
+  if (options?.endTime) {
+    conditions.push(`pl.timestamp <= $${paramIndex++}`);
+    params.push(options.endTime);
+  }
+
+  return {
+    whereClause: conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '',
+    params,
+  };
+}
+
 export class ParsedLogModel {
   static async create(params: CreateParsedLogParams): Promise<ParsedLog> {
     const result = await query(
@@ -47,57 +130,9 @@ export class ParsedLogModel {
     return result.rows[0] || null;
   }
 
-  static async findAll(options?: {
-    limit?: number;
-    offset?: number;
-    sourceIp?: string;
-    eventType?: string;
-    appName?: string;
-    parserId?: number;
-    search?: string;
-    startTime?: Date;
-    endTime?: Date;
-  }): Promise<{ logs: ParsedLog[]; total: number }> {
-    const conditions: string[] = [];
-    const params: any[] = [];
-    let paramIndex = 1;
-
-    if (options?.sourceIp) {
-      conditions.push(`pl.source_ip = $${paramIndex++}`);
-      params.push(options.sourceIp);
-    }
-
-    if (options?.eventType) {
-      conditions.push(`pl.event_type = $${paramIndex++}`);
-      params.push(options.eventType);
-    }
-
-    if (options?.appName) {
-      conditions.push(`rl.app_name = $${paramIndex++}`);
-      params.push(options.appName);
-    }
-
-    if (options?.parserId !== undefined && !Number.isNaN(options.parserId)) {
-      conditions.push(`pl.parser_id = $${paramIndex++}`);
-      params.push(options.parserId);
-    }
-
-    if (options?.search) {
-      conditions.push(`pl.parsed_data::text ILIKE $${paramIndex++}`);
-      params.push(`%${options.search}%`);
-    }
-
-    if (options?.startTime) {
-      conditions.push(`pl.timestamp >= $${paramIndex++}`);
-      params.push(options.startTime);
-    }
-
-    if (options?.endTime) {
-      conditions.push(`pl.timestamp <= $${paramIndex++}`);
-      params.push(options.endTime);
-    }
-
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  static async findAll(options?: ParsedLogFilters): Promise<{ logs: ParsedLog[]; total: number }> {
+    const { whereClause, params } = buildParsedLogFilters(options);
+    let paramIndex = params.length + 1;
 
     // Get total count
     const countResult = await query(

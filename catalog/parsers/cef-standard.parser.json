@@ -3,7 +3,7 @@
   "name": "cef-standard",
   "description": "Parses Common Event Format (CEF) logs used by security products like ArcSight, Trend Micro, and many SIEM integrations",
   "parser_type": "regex",
-  "priority": 5,
+  "priority": 500,
   "pattern": "^CEF:(?<cef_version>\\d+)\\|(?<device_vendor>[^|]*)\\|(?<device_product>[^|]*)\\|(?<device_version>[^|]*)\\|(?<signature_id>[^|]*)\\|(?<event_name>[^|]*)\\|(?<severity>[^|]*)\\|(?<extension>.*)$",
   "field_mappings": {
     "cef_version": "cef_version",

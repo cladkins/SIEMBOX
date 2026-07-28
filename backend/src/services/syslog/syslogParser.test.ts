@@ -142,3 +142,58 @@ test('CEF envelope is never split off as a syslog TAG', () => {
   assert.notEqual(out.appName, 'CEF');
   assert.ok(out.message.startsWith('CEF:0|Ubiquiti|'));
 });
+
+// ---------------------------------------------------------------------------
+// Trailing line terminators.
+//
+// JavaScript's `$` (without /m) matches strictly at end of input — unlike
+// Perl/Python it does NOT match before a final newline. So one trailing \n
+// defeats every $-anchored pattern: this module's own RFC 3164 regex first,
+// and then every catalog parser downstream.
+//
+// The strip used to live inside the `if (priMatch)` branch, so it only ran for
+// messages carrying a PRI. A sender that omits the PRI and terminates its
+// datagram with a newline — a real UniFi gateway shipping CEF — had its whole
+// line stored verbatim, header included, and matched nothing at all.
+// ---------------------------------------------------------------------------
+
+const CEF_BODY =
+  'Jul 28 13:30:45 UCG-Max CEF:0|Ubiquiti|UniFi Network|10.4.57|400|WiFi Client Connected|1|' +
+  'UNIFIcategory=Client Devices UNIFIhost=UCG Max UNIFIclientIp=192.168.3.119 msg=Watch connected.';
+
+test('no PRI + trailing newline: header is still stripped', () => {
+  const out = parseSyslogMessage(`${CEF_BODY}\n`);
+
+  assert.equal(out.hostname, 'UCG-Max', 'hostname must be extracted, not left in the message');
+  assert.ok(out.message.startsWith('CEF:0|Ubiquiti|'), `header not stripped: ${out.message.slice(0, 40)}`);
+  assert.ok(!/[\r\n]$/.test(out.message), 'trailing terminator must not survive into raw_message');
+});
+
+test('no PRI + CRLF: header is still stripped', () => {
+  const out = parseSyslogMessage(`${CEF_BODY}\r\n`);
+
+  assert.equal(out.hostname, 'UCG-Max');
+  assert.ok(out.message.startsWith('CEF:0|Ubiquiti|'));
+  assert.ok(!/[\r\n]$/.test(out.message));
+});
+
+test('PRI + trailing newline keeps working (the case that always did)', () => {
+  const out = parseSyslogMessage(`<134>${CEF_BODY}\n`);
+
+  assert.equal(out.hostname, 'UCG-Max');
+  assert.equal(out.severity, 6);
+  assert.ok(out.message.startsWith('CEF:0|Ubiquiti|'));
+  assert.ok(!/[\r\n]$/.test(out.message));
+});
+
+test('a message that is only a line terminator yields an empty message, not a crash', () => {
+  assert.equal(parseSyslogMessage('\n').message, '');
+  assert.equal(parseSyslogMessage('\r\n').message, '');
+});
+
+test('interior newlines are preserved — only the terminator is stripped', () => {
+  // Multi-line payloads (stack traces) must not be silently joined or cut.
+  const out = parseSyslogMessage('<134>Jul 28 13:30:45 host app: line one\nline two\n');
+
+  assert.equal(out.message, 'line one\nline two');
+});

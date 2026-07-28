@@ -12,6 +12,12 @@ export interface LogShipper {
   hostname: string | null;
   config: any;
   metadata: any;
+  /** Last time this shipper reported its host's container inventory (migration 027). */
+  containers_reported_at: Date | null;
+  /** Whether the shipper could reach a Docker daemon on its host at that report. */
+  containers_available: boolean | null;
+  /** Why it couldn't, when containers_available is false. */
+  containers_unavailable_reason: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -127,6 +133,27 @@ export class LogShipperModel {
        SET last_seen = NOW(), status = 'online', ip_address = $2
        WHERE api_key = $1`,
       [apiKey, ipAddress]
+    );
+  }
+
+  /**
+   * Record the outcome of a container-inventory report. Written even when the
+   * shipper found no Docker daemon — "reported, saw nothing" and "never
+   * reported" are different diagnoses and the UI has to be able to tell them
+   * apart.
+   */
+  static async recordContainerReport(
+    id: number,
+    available: boolean,
+    reason: string | null
+  ): Promise<void> {
+    await pool.query(
+      `UPDATE log_shippers
+       SET containers_reported_at = NOW(),
+           containers_available = $2,
+           containers_unavailable_reason = $3
+       WHERE id = $1`,
+      [id, available, reason]
     );
   }
 

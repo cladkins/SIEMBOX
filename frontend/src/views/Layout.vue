@@ -244,6 +244,7 @@ const pageTitle = computed(() => {
     '/': 'Dashboard',
     '/ai-analyst': 'AI Analyst',
     '/getting-started': 'Getting Started',
+    '/threat-intel': 'Threat Intel',
     '/alerts': 'Alerts',
     '/logs': 'Logs',
     '/parsers': 'Parsers',
@@ -253,6 +254,10 @@ const pageTitle = computed(() => {
     '/asset-inventory': 'Asset Inventory',
     '/vulnerability-scanning': 'Vulnerability Scanning',
     '/vulnerability-management': 'Vulnerability Management',
+    '/container-scanning': 'Container Scanning',
+    '/scheduled-scans': 'Scheduled Scans',
+    '/endpoints': 'Endpoints',
+    '/log-discovery': 'Log Discovery',
     '/templates': 'Nuclei Templates',
     '/users': 'User Management',
     '/admin': 'Admin Dashboard',
@@ -289,13 +294,45 @@ const handleLogout = () => {
   overflow: hidden;
 }
 
+/* The menu is the only growable child of the sidebar column, so it has to be
+   the thing that scrolls. `min-height: 0` is required: a flex item defaults to
+   min-height:auto and refuses to shrink below its content, which pushed the
+   items below the fold — with both SIEM and Assets & Vulns expanded on a short
+   screen, Admin Dashboard and Settings became unreachable. */
 .sidebar-menu {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   border-right: none;
+  overscroll-behavior: contain;
 }
 
 .sidebar-menu:not(.el-menu--collapse) {
   width: 220px;
+}
+
+/* Thin, low-contrast scrollbar so it doesn't fight the dark sidebar. */
+.sidebar-menu {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+
+.sidebar-menu::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-menu::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+}
+
+.sidebar-menu::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.4);
 }
 
 .logo {

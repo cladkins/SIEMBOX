@@ -223,6 +223,8 @@ Retrieve raw syslog messages.
 | `limit` | integer | 100 | Number of logs to return |
 | `offset` | integer | 0 | Pagination offset |
 | `source_ip` | string | - | Filter by source IP address |
+| `app_name` | string | - | Filter by syslog tag/program (shown as "Source" in the UI) |
+| `hostname` | string | - | Filter by syslog hostname |
 | `search` | string | - | Search in raw message |
 | `severity` | integer | - | Filter by syslog severity (0-7) |
 | `start_date` | ISO 8601 | - | Start time filter |
@@ -244,6 +246,7 @@ GET /api/logs/raw?limit=50&source_ip=192.168.1.100&severity=3
       "facility": 1,
       "severity": 3,
       "hostname": "server1",
+      "app_name": "sshd",
       "raw_message": "<11>Nov 30 19:30:15 server1 sshd[1234]: Failed password for root from 192.168.1.100 port 54321"
     }
   ],
@@ -278,13 +281,27 @@ Retrieve parsed logs with extracted fields.
 | `offset` | integer | 0 | Pagination offset |
 | `source_ip` | string | - | Filter by source IP |
 | `event_type` | string | - | Filter by event type |
+| `app_name` | string | - | Filter by the originating raw log's syslog tag ("Source") |
+| `parser_id` | integer | - | Filter by the parser that matched |
+| `parse_status` | string | - | `parsed` (a parser matched) or `unparsed` (generic fallback record); omit for both |
 | `search` | string | - | Search in parsed data |
 | `start_date` | ISO 8601 | - | Start time filter |
 | `end_date` | ISO 8601 | - | End time filter |
 
+Logs that no parser matched are still stored in `parsed_logs` as a minimal
+fallback record — `parser_id: null`, `event_type: "unparsed"` — so every log
+stays searchable. Detection rules are **not** evaluated against them. Use
+`parse_status=parsed` to exclude them, or `parse_status=unparsed` to review what
+is missing parser coverage.
+
+Note that `parsed_logs.parser_id` is `ON DELETE SET NULL`: deleting a parser
+moves the events it produced into the `unparsed` population (their
+`parsed_data` is retained; only the attribution is lost).
+
 **Example Request:**
 ```http
 GET /api/logs/parsed?event_type=ssh_failed_auth&limit=20
+GET /api/logs/parsed?parse_status=unparsed&limit=20
 ```
 
 **Response (200):**
@@ -3370,7 +3387,15 @@ Get recent application errors with human-readable messages.
 
 ### GET /api/admin/jobs
 
-Get unified view of all background jobs (scans).
+Unified view of background work. Returns two lists:
+
+- `jobs` — one-off jobs from every job table (vulnerability, asset-discovery,
+  container-image and log-discovery scans), merged and paged as one list.
+- `recurring` — the periodic in-process services (retention cleanup, asset
+  auto-discovery, the scheduled-scan dispatcher, ingestion health, threat-feed
+  refresh, YARA-Forge refresh). These own no rows, so their state is tracked in
+  memory and **resets on backend restart** — `"status": "idle"` with
+  `"lastRunAt": null` right after a restart is expected, not a fault.
 
 **Authentication:** Required (Admin)
 
@@ -3399,12 +3424,30 @@ Get unified view of all background jobs (scans).
       "initiated_by": 1,
       "initiated_by_username": "admin",
       "created_at": "2026-01-28T10:00:00Z",
-      "updated_at": "2026-01-28T10:05:00Z",
+      "source": "vulnerability_scans",
+      "job_key": "vulnerability_scans:15",
       "results_summary": {
         "progress": {
           "percentComplete": 45
         }
       }
+    }
+  ],
+  "recurring": [
+    {
+      "key": "retention-cleanup",
+      "name": "Retention cleanup",
+      "description": "Deletes raw logs, parsed logs and closed alerts past their retention window.",
+      "intervalMs": 86400000,
+      "status": "ok",
+      "lastRunAt": "2026-01-28T09:00:00Z",
+      "lastSuccessAt": "2026-01-28T09:00:12Z",
+      "lastDurationMs": 12400,
+      "lastResult": "1204 raw, 980 parsed, 0 alert row(s) deleted",
+      "lastError": null,
+      "nextRunAt": "2026-01-29T09:00:00Z",
+      "runs": 3,
+      "failures": 0
     }
   ],
   "counts": {
@@ -3421,9 +3464,14 @@ Get unified view of all background jobs (scans).
 }
 ```
 
+`id` is only unique within a source table — use `job_key`
+(`"<source>:<id>"`) as the stable identifier across the merged list.
+
 **Job Types:**
 - `asset_discovery` - Nmap network discovery scans
 - `vulnerability` - Nuclei vulnerability scans
+- `container` - Trivy container image scans
+- `log-discovery` - Log source discovery scans
 
 **Job Statuses:**
 - `queued` - Waiting to start
@@ -3431,6 +3479,14 @@ Get unified view of all background jobs (scans).
 - `completed` - Finished successfully
 - `failed` - Finished with errors
 - `cancelled` - Cancelled by user
+
+**Recurring Job Statuses:**
+- `idle` - Registered, not yet run in this process
+- `running` - Cycle in progress
+- `ok` - Last cycle succeeded
+- `failed` - Last cycle threw (see `lastError`)
+- `skipped` - Ran but deliberately did nothing (switched off in settings, or nothing due)
+- `disabled` - Not scheduled in this process at all
 
 ---
 

@@ -19,6 +19,8 @@ import { ErrorLogService } from '../errors/errorLogService';
  * Returns the number of scans reconciled.
  */
 export async function reconcileInterruptedScans(): Promise<number> {
+  let total = 0;
+
   try {
     const result = await query(
       `UPDATE vulnerability_scans
@@ -31,25 +33,52 @@ export async function reconcileInterruptedScans(): Promise<number> {
     );
 
     const count = result.rowCount || 0;
-    if (count === 0) {
-      logger.info('No interrupted scans to reconcile on startup');
-      return 0;
+    total += count;
+    if (count > 0) {
+      const ids = result.rows.map((r: { id: number }) => r.id);
+      logger.warn(`Reconciled ${count} interrupted scan(s) on startup: ${ids.join(', ')}`);
+
+      // Surface in the admin dashboard. Deduped per startup so a crash loop
+      // can't flood the error table.
+      ErrorLogService.logBackgroundError(
+        'scan-reconcile',
+        `${count} scan(s) marked failed after a backend restart left them orphaned (ids: ${ids.join(', ')})`,
+        { dedupeKey: 'startup', scanIds: ids }
+      );
     }
-
-    const ids = result.rows.map((r: { id: number }) => r.id);
-    logger.warn(`Reconciled ${count} interrupted scan(s) on startup: ${ids.join(', ')}`);
-
-    // Surface in the admin dashboard. Deduped per startup so a crash loop
-    // can't flood the error table.
-    ErrorLogService.logBackgroundError(
-      'scan-reconcile',
-      `${count} scan(s) marked failed after a backend restart left them orphaned (ids: ${ids.join(', ')})`,
-      { dedupeKey: 'startup', scanIds: ids }
-    );
-
-    return count;
   } catch (error) {
     logger.error('Failed to reconcile interrupted scans on startup:', error);
-    return 0;
   }
+
+  // Log Discovery scans run the same way (job row + in-memory worker), so a
+  // restart orphans them identically — they used to stay 'running' forever.
+  try {
+    const result = await query(
+      `UPDATE discovery_scans
+       SET status = 'failed',
+           error_message = 'Interrupted by backend restart',
+           completed_at = NOW()
+       WHERE status = 'running'
+       RETURNING id`
+    );
+
+    const count = result.rowCount || 0;
+    total += count;
+    if (count > 0) {
+      const ids = result.rows.map((r: { id: number }) => r.id);
+      logger.warn(`Reconciled ${count} interrupted discovery scan(s) on startup: ${ids.join(', ')}`);
+      ErrorLogService.logBackgroundError(
+        'scan-reconcile',
+        `${count} log-discovery scan(s) marked failed after a backend restart left them orphaned (ids: ${ids.join(', ')})`,
+        { dedupeKey: 'startup-discovery', scanIds: ids }
+      );
+    }
+  } catch (error) {
+    logger.error('Failed to reconcile interrupted discovery scans on startup:', error);
+  }
+
+  if (total === 0) {
+    logger.info('No interrupted scans to reconcile on startup');
+  }
+  return total;
 }

@@ -101,6 +101,11 @@ class LogDiscoveryServiceClient {
     return response.data;
   }
 
+  async cancelScan(id: number): Promise<{ cancelled: boolean; scan: DiscoveryScan }> {
+    const response = await apiClient.post(`/log-discovery/scans/${id}/cancel`);
+    return response.data;
+  }
+
   async getSources(): Promise<RankedSources> {
     const response = await apiClient.get('/log-discovery/sources');
     return response.data;

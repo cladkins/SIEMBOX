@@ -64,6 +64,10 @@
             <el-icon><Upload /></el-icon>
             <span>Log Shippers</span>
           </el-menu-item>
+          <el-menu-item index="/log-discovery" v-if="authStore.user?.role === 'admin' || authStore.user?.role === 'operator'">
+            <el-icon><Connection /></el-icon>
+            <span>Log Discovery</span>
+          </el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="assets" v-if="authStore.user?.role === 'admin' || authStore.user?.role === 'analyst' || authStore.user?.role === 'operator'">
@@ -74,10 +78,6 @@
           <el-menu-item index="/asset-inventory">
             <el-icon><Box /></el-icon>
             <span>Assets</span>
-          </el-menu-item>
-          <el-menu-item index="/log-discovery" v-if="authStore.user?.role === 'admin' || authStore.user?.role === 'operator'">
-            <el-icon><Connection /></el-icon>
-            <span>Log Discovery</span>
           </el-menu-item>
           <el-menu-item index="/vulnerability-scanning" v-if="authStore.user?.role === 'admin' || authStore.user?.role === 'operator'">
             <el-icon><Search /></el-icon>

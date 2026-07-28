@@ -33,6 +33,7 @@
       <div class="scope-line">
         <span class="scope-label">Scan scope:</span>
         <el-tag v-for="cidr in scope?.cidrs || []" :key="cidr" size="small" style="margin-right: 6px">{{ cidr }}</el-tag>
+        <span v-if="!scope?.cidrs?.length" class="scope-empty">No subnets added yet — passive discovery still works without one.</span>
         <el-button link size="small" @click="showManualCidrDialog = true">Add a subnet</el-button>
       </div>
 
@@ -297,6 +298,10 @@ onMounted(() => {
   gap: 6px;
   flex-wrap: wrap;
   margin-bottom: 8px;
+}
+.scope-empty {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 .scope-label {
   font-weight: 600;

@@ -1,0 +1,27 @@
+id: nginx-proxy-manager
+name: Nginx Proxy Manager
+category: reverse-proxy
+security_value: 9
+signals:
+  ports:
+    - {port: 81, weight: 50}
+    - {port: 443, weight: 5}
+    - {port: 80, weight: 5}
+  http:
+    - {path: /login, expect: "Nginx Proxy Manager", weight: 50}
+  mdns: []
+  ssdp: []
+  tls: []
+  mac_oui: []
+confidence_floor: 50
+attack_data_sources:
+  - web logs
+  - network traffic content
+  - application logs
+log_access:
+  - {method: file, path: /data/logs/proxy-host-*_access.log}
+  - {method: file, path: /data/logs/fallback_access.log}
+onboard_template: templates/file_tail.j2
+credentials:
+  required: false
+  optional: []

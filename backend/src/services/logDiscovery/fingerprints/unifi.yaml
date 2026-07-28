@@ -1,0 +1,27 @@
+id: unifi-controller
+name: UniFi Network
+category: network
+security_value: 9
+signals:
+  ports:
+    - {port: 8443, weight: 40}
+    - {port: 8080, weight: 20}
+  http:
+    - {path: /manage/account/login, expect: "UniFi", weight: 40}
+  mdns: []
+  ssdp: []
+  tls:
+    - {subject_cn: "UniFi", weight: 30}
+  mac_oui: []
+confidence_floor: 50
+attack_data_sources:
+  - network traffic flow
+  - firewall logs
+  - authentication logs
+log_access:
+  - {method: syslog_push, target_port: 514, format: rfc3164, auth: none}
+  - {method: file, path: /usr/lib/unifi/logs/server.log}
+onboard_template: templates/syslog_source.j2
+credentials:
+  required: false
+  optional: []

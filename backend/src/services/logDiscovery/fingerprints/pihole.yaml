@@ -1,0 +1,26 @@
+id: pihole
+name: Pi-hole
+category: dns
+security_value: 8
+signals:
+  ports:
+    - {port: 53, weight: 20}
+    - {port: 80, weight: 10}
+  http:
+    - {path: /admin/, expect: "Pi-hole", weight: 60}
+  mdns: []
+  ssdp: []
+  tls: []
+  mac_oui: []
+confidence_floor: 50
+attack_data_sources:
+  - dns queries
+  - network traffic flow
+log_access:
+  - {method: file, path: /var/log/pihole/pihole.log}
+  - {method: api_pull, endpoint: /admin/api.php, auth: api_token}
+onboard_template: templates/file_tail.j2
+credentials:
+  required: false
+  optional:
+    - {type: api_token, unlocks: [api_pull]}

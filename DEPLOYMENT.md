@@ -334,6 +334,30 @@ Uncomment this volume in `compose.prod.yaml` under the `backend` service:
 If your Docker socket lives somewhere non-standard, set `DOCKER_SOCKET_PATH` on
 the backend to point at it (defaults to `/var/run/docker.sock`).
 
+## Log Discovery and Network Visibility
+
+**Log Discovery** (under *Assets & Vulnerabilities*) finds security log sources
+on your network -- firewalls, DNS filters, reverse proxies, hypervisors, etc.
+-- fingerprints them, ranks them by security value, and hands back copy-paste
+onboarding instructions. It never writes device or collector config itself.
+
+By default the backend container only sees whatever subnet its own Docker
+bridge network is on (`siembox-network` in `compose.prod.yaml`), so a passive
+scan (ARP table, mDNS, SSDP) and the scoped active probe that follows it only
+discover hosts on that one subnet. If your homelab spans more than one VLAN,
+the Log Discovery page surfaces this as a warning and lets you add the other
+CIDRs manually -- discovery will actively probe them, but passive
+techniques (ARP/mDNS/SSDP) still only see traffic reachable from wherever the
+container's network interface actually sits.
+
+To let discovery see your LAN directly instead of just the Docker bridge, run
+the backend with `network_mode: host` (Linux only) instead of the default
+`siembox-network` in `compose.prod.yaml`. This is a bigger tradeoff than the
+Docker socket mount above: the container shares the host's entire network
+stack, so treat it the same as running the process directly on the host. Left
+at the default bridge network, discovery still works -- it's just scoped to
+one subnet until you add others manually.
+
 ## Threat Intelligence Feeds
 
 The **Threat Intel** page enriches an IP lookup with external intelligence: which

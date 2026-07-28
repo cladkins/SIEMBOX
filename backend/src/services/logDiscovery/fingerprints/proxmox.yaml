@@ -1,0 +1,29 @@
+id: proxmox-ve
+name: Proxmox VE
+category: hypervisor
+security_value: 8
+signals:
+  ports:
+    - {port: 8006, weight: 60}
+    - {port: 22, weight: 5}
+  http:
+    - {path: /, expect: "Proxmox", weight: 40}
+  tls:
+    - {subject_cn: "pve", weight: 20}
+  mdns: []
+  ssdp: []
+  mac_oui: []
+confidence_floor: 50
+attack_data_sources:
+  - authentication logs
+  - process creation
+  - application logs
+log_access:
+  - {method: syslog_push, target_port: 514, format: rfc3164, auth: none}
+  - {method: file, path: /var/log/pveproxy/access.log}
+  - {method: file, path: /var/log/auth.log}
+onboard_template: templates/syslog_source.j2
+credentials:
+  required: false
+  optional:
+    - {type: api_token, unlocks: [task_log_pull]}

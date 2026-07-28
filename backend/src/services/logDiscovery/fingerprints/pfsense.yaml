@@ -1,0 +1,26 @@
+id: pfsense
+name: pfSense
+category: firewall
+security_value: 10
+signals:
+  ports:
+    - {port: 443, weight: 20}
+    - {port: 80, weight: 5}
+  http:
+    - {path: /, expect: "pfSense", weight: 60}
+  tls:
+    - {subject_cn: "pfSense", weight: 40}
+  mdns: []
+  ssdp: []
+  mac_oui: []
+confidence_floor: 50
+attack_data_sources:
+  - firewall logs
+  - network traffic flow
+  - dns queries
+log_access:
+  - {method: syslog_push, target_port: 514, format: rfc5424, auth: none}
+onboard_template: templates/syslog_source.j2
+credentials:
+  required: false
+  optional: []

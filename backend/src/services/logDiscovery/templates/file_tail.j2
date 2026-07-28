@@ -1,0 +1,15 @@
+{{ name }} at {{ ip }} — tail its log file with the SIEMBOX log-shipper
+
+Run the log-shipper agent somewhere with filesystem access to {{ name }}'s log
+(directly on {{ ip }}, or on whatever host mounts its volume), then add this
+source to its config.yml:
+
+files:
+  - path: "{{ log_path }}"
+    tag: "{{ id }}"
+    facility: local0
+
+The shipper needs its own API key -- create one from the Shippers page if you
+don't already have one running here -- and it forwards each new line as
+syslog to {{ siembox_host }}:{{ siembox_port }} on its own, no restart of
+SIEMBOX required.

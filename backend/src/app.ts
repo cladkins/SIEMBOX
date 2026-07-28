@@ -27,6 +27,7 @@ import threatIntelRoutes from './routes/threatIntel';
 import threatFeedsRoutes from './routes/threatFeeds';
 import edrRoutes from './routes/edr';
 import packsRoutes from './routes/packs';
+import logDiscoveryRoutes from './routes/logDiscovery';
 
 const app: Application = express();
 
@@ -121,6 +122,7 @@ app.use('/api/threat-intel', authenticate, threatIntelRoutes); // IP-centric geo
 app.use('/api/threat-feeds', authenticate, threatFeedsRoutes); // External threat feeds + IP reputation
 app.use('/api/edr', edrRoutes); // EDR endpoint agents (enroll + agent-auth ingest + admin UI)
 app.use('/api/packs', authenticate, packsRoutes); // Content Packs (curated parser+detection bundles)
+app.use('/api/log-discovery', authenticate, logDiscoveryRoutes); // Log source discovery, fingerprinting + onboarding
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

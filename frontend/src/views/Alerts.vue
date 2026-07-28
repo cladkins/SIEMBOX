@@ -96,6 +96,22 @@
                 <el-table-column label="Created" width="180">
                   <template #default="{ row: c }">{{ formatDate(c.created_at) }}</template>
                 </el-table-column>
+                <el-table-column label="Actions" width="200">
+                  <template #default="{ row: c }">
+                    <el-button
+                      type="primary"
+                      size="small"
+                      :loading="loadingCorrelated === c.id"
+                      @click="openCorrelated(c, 'view')"
+                    >View</el-button>
+                    <el-button
+                      type="success"
+                      size="small"
+                      :loading="loadingCorrelated === c.id"
+                      @click="openCorrelated(c, 'update')"
+                    >Update</el-button>
+                  </template>
+                </el-table-column>
               </el-table>
             </div>
           </template>
@@ -367,6 +383,33 @@ const updateStatus = (alert: Alert) => {
   };
   statusDialogVisible.value = true;
 };
+
+/** Which correlated alert is being fetched, so only its buttons show a spinner. */
+const loadingCorrelated = ref<number | null>(null);
+
+/**
+ * Open a correlated (non-representative) alert in the normal detail or status
+ * dialog.
+ *
+ * The `correlated` entries carried by a grouped row are summaries — id,
+ * severity, title, status, created_at — deliberately without `description` or
+ * `matched_data`. Those are the large fields, and repeating them for every
+ * member of every group would balloon the list response for data most rows
+ * never open. So fetch the full alert on demand; the detail endpoint already
+ * exists and the dialogs are unchanged.
+ */
+async function openCorrelated(summary: { id: number }, mode: 'view' | 'update') {
+  loadingCorrelated.value = summary.id;
+  try {
+    const { data } = await api.getAlert(summary.id);
+    if (mode === 'view') viewAlert(data);
+    else updateStatus(data);
+  } catch (error) {
+    ElMessage.error('Failed to load alert');
+  } finally {
+    loadingCorrelated.value = null;
+  }
+}
 
 const submitStatusUpdate = async () => {
   if (!selectedAlert.value) return;

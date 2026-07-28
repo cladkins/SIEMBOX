@@ -319,13 +319,57 @@ mis-framed them. If you are on an older build, upgrade the backend image.
 
 **Diagnosis:**
 
+Run this against the database — it classifies each unparsed log by *why* it
+looks wrong, which points at a different fix in each case:
+
+```sql
+SELECT
+  CASE
+    WHEN rl.raw_message LIKE E'%\n%'          THEN 'packed datagram (multiple events in one record)'
+    WHEN rl.raw_message ~ '^\w{3} +\d{1,2} '  THEN 'syslog header not stripped'
+    WHEN rl.raw_message ~ '=[^ ]*$'
+         AND LENGTH(rl.raw_message) > 900     THEN 'likely truncated by the sender'
+    ELSE                                           'no parser matches this format'
+  END                        AS likely_cause,
+  COUNT(*)                   AS events,
+  MIN(LENGTH(rl.raw_message)) AS min_len,
+  MAX(LENGTH(rl.raw_message)) AS max_len,
+  MIN(rl.hostname)           AS example_host
+FROM parsed_logs pl
+JOIN raw_logs rl ON rl.id = pl.raw_log_id
+WHERE pl.parser_id IS NULL
+  AND pl.timestamp > NOW() - INTERVAL '24 hours'
+GROUP BY 1
+ORDER BY events DESC;
+```
+
+Run it with:
+
+```bash
+docker compose exec postgres psql -U siembox -d siembox -f - <<'SQL'
+-- paste the query above
+SQL
+```
+
+| Result | Meaning | Fix |
+|--------|---------|-----|
+| **packed datagram** | The sender put several events in one UDP datagram (or one TCP write). `.` never crosses a newline, so no `^…$` parser can match. | Fixed in the release containing this note — upgrade the backend image. |
+| **syslog header not stripped** | The `<PRI>TIMESTAMP HOSTNAME` header parse failed, so the whole line was stored. | Check the sender's timestamp format against RFC 3164/5424. |
+| **likely truncated by the sender** | The message ends mid key=value. Many devices cap UDP syslog at 1024 bytes. | Switch that source to TCP, which has no such cap. |
+| **no parser matches** | Genuinely unrecognised format. | Install a parser from the catalog, or write one. |
+
+Also useful:
+
 ```bash
 # Fragmented or joined messages show up as unusual raw_message lengths
 docker compose logs backend | grep "RFC 3164 match failed"
-
-# In the UI: Logs → Parsed Logs → Parse Status: "Unparsed only",
-# then compare the raw message length against a working log from the same device
 ```
+
+In the UI: **Logs → Parsed Logs → Parse Status: "Unparsed only"**, then compare
+the raw message length against a working log from the same device. Note the Raw
+Logs table renders a message on a single line, so a packed record with embedded
+newlines looks deceptively like one normal event — the query above is the
+reliable check.
 
 **Also check:**
 

@@ -89,6 +89,40 @@ test('the UniFi IDS/IPS parser derives the canonical fields the generic one cann
   assert.equal(result.fields.dest_ip, '192.168.1.194');
 });
 
+test('UniFi Client-Devices CEF goes to its own parser, not generic CEF', () => {
+  // These are the highest-volume UniFi CEF events (every WiFi connect and
+  // disconnect). Without a category-specific parser they fell through to the
+  // generic one and lost every client field.
+  const parser = loadAll().find((p) => p.name === 'ubiquiti-unifi-client-devices')!;
+  const sample = (parser.test_samples as any[])[0].input as string;
+
+  const picked = selectParser(sample);
+  assert.ok(picked, 'expected a parser to claim a UniFi client-device event');
+  assert.equal(picked!.parser.name, 'ubiquiti-unifi-client-devices');
+  assert.equal(picked!.result.event_type, 'wifi_client_session');
+  assert.equal(picked!.result.fields.client_ip, '192.168.3.119');
+  assert.equal(picked!.result.fields.ssid, 'HomeIoT');
+  assert.equal(picked!.result.fields.action, 'connected');
+});
+
+test('the three UniFi CEF categories do not steal each other\'s events', () => {
+  // They share one envelope and are told apart only by UNIFIcategory, so a
+  // loosened discriminator would silently reroute a whole category.
+  const byName = new Map(loadAll().map((p) => [p.name, p]));
+  const expected: Array<[string, string]> = [
+    ['ubiquiti-unifi-client-devices', 'ubiquiti-unifi-client-devices'],
+    ['ubiquiti-unifi-ids-ips', 'ubiquiti-unifi-ids-ips'],
+    ['ubiquiti-unifi-cef-audit', 'ubiquiti-unifi-cef-audit'],
+  ];
+
+  for (const [source, winner] of expected) {
+    for (const sample of (byName.get(source)!.test_samples as any[])) {
+      const picked = selectParser(sample.input as string);
+      assert.equal(picked?.parser.name, winner, `${source} sample was claimed by ${picked?.parser.name}`);
+    }
+  }
+});
+
 test('UniFi Audit CEF goes to the audit parser, not the IDS/IPS one', () => {
   const picked = selectParser(UNIFI_AUDIT);
 
@@ -115,7 +149,11 @@ test('the generic CEF parsers sit in the generic priority band, behind vendor-sp
   const byName = new Map(parsers.map((p) => [p.name, p.priority ?? 100]));
 
   const genericCef = ['cef-syslog', 'cef-standard'];
-  const specificCef = ['ubiquiti-unifi-ids-ips', 'ubiquiti-unifi-cef-audit'];
+  const specificCef = [
+    'ubiquiti-unifi-ids-ips',
+    'ubiquiti-unifi-cef-audit',
+    'ubiquiti-unifi-client-devices',
+  ];
 
   for (const name of genericCef) {
     const priority = byName.get(name);

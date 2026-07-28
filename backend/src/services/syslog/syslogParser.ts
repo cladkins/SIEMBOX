@@ -78,7 +78,10 @@ interface TagParts {
  * deliberately avoided.
  */
 function extractTag(rest: string): TagParts | null {
-  const firstColon = rest.match(/^([^:]+):(.*)$/);
+  // The tag itself can never span lines, but the message after it can (a shipped
+  // stack trace), so the body group must be [\s\S] — with `.` a multi-line
+  // payload failed the split entirely and the header was left in the message.
+  const firstColon = rest.match(/^([^:\r\n]+):([\s\S]*)$/);
   if (!firstColon) return null;
   const rawTag = firstColon[1];
   const message = firstColon[2].replace(/^\s+/, '');
@@ -121,6 +124,23 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
   };
 
   try {
+    // Strip trailing newline/carriage return FIRST, for every message — not
+    // only the ones carrying a PRI, which is where this used to live.
+    //
+    // JavaScript's `$` (without /m) matches strictly at end of input; unlike
+    // Perl/Python it does NOT match before a final newline. So one trailing
+    // \n defeats every $-anchored pattern here AND every catalog parser
+    // downstream. A sender that omits the PRI and terminates its datagram with
+    // a newline therefore had its whole line stored verbatim — header and all —
+    // and then matched nothing, landing every event in the unparsed bucket.
+    // (Loop instead of /[\r\n]+$/ — quadratic on hostile input.)
+    let end = rawMessage.length;
+    while (end > 0 && (rawMessage[end - 1] === '\n' || rawMessage[end - 1] === '\r')) end--;
+    if (end < rawMessage.length) {
+      rawMessage = rawMessage.slice(0, end);
+      result.message = rawMessage;
+    }
+
     // Extract PRI (priority) value: <number>
     const priMatch = rawMessage.match(/^<(\d+)>/);
     if (priMatch) {
@@ -130,19 +150,17 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
 
       // Remove PRI from message
       rawMessage = rawMessage.substring(priMatch[0].length);
-
-      // Strip trailing newline/carriage return characters that break regex
-      // matching. (Loop instead of /[\r\n]+$/ — quadratic on hostile input.)
-      let end = rawMessage.length;
-      while (end > 0 && (rawMessage[end - 1] === '\n' || rawMessage[end - 1] === '\r')) end--;
-      if (end < rawMessage.length) rawMessage = rawMessage.slice(0, end);
+      result.message = rawMessage;
     }
 
     // Try RFC 5424 format first (has VERSION after PRI). The message group
     // starts non-space so the \s+ separator owns the run (keeps it linear —
     // this runs on every raw network packet).
+    // [\s\S] rather than . for the message body: a payload with interior
+    // newlines (a shipped stack trace) would otherwise fail the header match
+    // entirely and get stored verbatim, losing hostname/app/severity.
     const rfc5424Match = rawMessage.match(
-      /^(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S.*)?$/
+      /^(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S[\s\S]*)?$/
     );
 
     if (rfc5424Match) {
@@ -158,7 +176,7 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
     } else {
       // Try RFC 3164 format: TIMESTAMP HOSTNAME TAG: MESSAGE. As above, the
       // rest group starts non-space to keep the match linear.
-      const rfc3164Pattern = /^(\S+\s+\d+\s+\d+:\d+:\d+)\s+(\S+)\s+(\S.*)$/;
+      const rfc3164Pattern = /^(\S+\s+\d+\s+\d+:\d+:\d+)\s+(\S+)\s+(\S[\s\S]*)$/;
       const rfc3164Match = rawMessage.match(rfc3164Pattern);
 
       if (rfc3164Match) {

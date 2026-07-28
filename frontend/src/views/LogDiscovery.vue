@@ -42,6 +42,12 @@
           <el-table :data="scans" size="small">
             <el-table-column prop="id" label="ID" width="70" />
             <el-table-column prop="mode" label="Mode" width="140" />
+            <el-table-column label="Subnet" min-width="160">
+              <template #default="{ row }">
+                <span v-if="row.cidrs?.length">{{ row.cidrs.join(', ') }}</span>
+                <span v-else class="scope-empty">none added</span>
+              </template>
+            </el-table-column>
             <el-table-column label="Status" width="120">
               <template #default="{ row }">
                 <el-tag :type="scanStatusColor(row.status)" size="small">{{ row.status }}</el-tag>

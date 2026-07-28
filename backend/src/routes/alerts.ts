@@ -1,8 +1,31 @@
 import { Router, Request, Response } from 'express';
 import { AlertModel } from '../models/Alert';
+import { AlertTriageModel } from '../models/AlertTriage';
+import { triageAlert } from '../services/ai/triageService';
+import { getTriageOperationalConfig } from '../services/ai/aiService';
 import { ApiError } from '../middleware/errorHandler';
+import { authorize } from '../middleware/auth';
 
 const router = Router();
+
+const SEVERITY_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+
+// Per-user sliding-window rate limit for manual re-run, mirroring routes/ai.ts's
+// chat guard — re-run is cheap to spam-click but still costs one LLM call.
+const rerunHits = new Map<number, number[]>();
+const RERUN_RATE_MAX = 10;
+const RERUN_RATE_WINDOW_MS = 5 * 60 * 1000;
+function allowRerun(userId: number): boolean {
+  const now = Date.now();
+  const arr = (rerunHits.get(userId) || []).filter((t) => now - t < RERUN_RATE_WINDOW_MS);
+  if (arr.length >= RERUN_RATE_MAX) {
+    rerunHits.set(userId, arr);
+    return false;
+  }
+  arr.push(now);
+  rerunHits.set(userId, arr);
+  return true;
+}
 
 // Get all alerts
 router.get('/', async (req: Request, res: Response) => {
@@ -15,6 +38,10 @@ router.get('/', async (req: Request, res: Response) => {
     const startTime = req.query.startTime ? new Date(req.query.startTime as string) : undefined;
     const endTime = req.query.endTime ? new Date(req.query.endTime as string) : undefined;
     const search = (req.query.search as string)?.trim().slice(0, 200) || undefined;
+    const triageStatus = req.query.triageStatus as string | undefined;
+    const triageVerdict = req.query.triageVerdict as string | undefined;
+    const minRiskScore = req.query.minRiskScore ? parseInt(req.query.minRiskScore as string) : undefined;
+    const sortBy = req.query.sortBy === 'risk_score' ? 'risk_score' : undefined;
 
     const result = await AlertModel.findAll({
       limit,
@@ -25,6 +52,10 @@ router.get('/', async (req: Request, res: Response) => {
       startTime,
       endTime,
       search,
+      triageStatus,
+      triageVerdict,
+      minRiskScore,
+      sortBy,
     });
 
     res.json({
@@ -139,6 +170,55 @@ router.get('/:id', async (req: Request, res: Response) => {
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch alert');
+  }
+});
+
+// Get an alert's AI triage verdict (or its current pending/analyzing/absent
+// state). Always 200 — `triage: null` means "no run yet" rather than a 404,
+// so the frontend's poll never trips the axios error interceptor.
+router.get('/:id/triage', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const alert = await AlertModel.findById(id);
+    if (!alert) throw new ApiError(404, 'Alert not found');
+
+    const [triage, opCfg] = await Promise.all([
+      AlertTriageModel.findByAlertId(id),
+      getTriageOperationalConfig(),
+    ]);
+    const rank = SEVERITY_RANK[alert.severity] ?? 0;
+    const minRank = SEVERITY_RANK[opCfg.minSeverity] ?? 1;
+
+    res.json({
+      triage,
+      enabled: opCfg.enabled,
+      eligible: rank >= minRank,
+    });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to fetch alert triage');
+  }
+});
+
+// Manually (re-)run AI triage for an alert, bypassing the severity/dedupe
+// gates. Responds immediately — the analysis (up to ~110s) runs in the
+// background; the frontend polls GET /:id/triage for the result.
+router.post('/:id/triage/rerun', authorize('admin', 'analyst', 'operator'), async (req: Request, res: Response) => {
+  try {
+    if (!req.user) throw new ApiError(401, 'Authentication required');
+    const id = parseInt(req.params.id);
+    const alert = await AlertModel.findById(id);
+    if (!alert) throw new ApiError(404, 'Alert not found');
+
+    if (!allowRerun(req.user.id)) {
+      throw new ApiError(429, 'Too many re-run requests — please wait a moment and try again.');
+    }
+
+    void triageAlert(id, { triggeredBy: 'manual', requestedBy: req.user.id, force: true });
+    res.status(202).json({ status: 'pending' });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to start triage re-run');
   }
 });
 

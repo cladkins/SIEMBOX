@@ -999,6 +999,18 @@ Generate a detection rule from a natural-language description.
 > alternatively provide the key via the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`
 > environment variable.
 
+### AI Triage Settings
+
+Automatic, agentic per-alert analysis — see [AI Security Analyst → Automated triage](../../wiki/AI-Security-Analyst.md#automated-triage). Off by default.
+
+**Authentication:** Admin (`GET /api/ai/triage/health` below is available to any authenticated user — a non-secret subset used to gate the UI).
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /api/settings/ai-triage` | Current triage config: provider/model/baseUrl (inherits AI Analyst if unset), whether a key is configured, plus operational settings (`enabled`, `minSeverity`, `dailyCap`, `maxConcurrent`, `dedupeHours`). Key itself is never returned. |
+| `PUT /api/settings/ai-triage` | Update triage config. Body (all optional): `{ "provider": "anthropic" \| "openai" \| "ollama" \| "", "model": "…", "baseUrl": "…", "apiKey": "…", "enabled": true, "minSeverity": "medium", "dailyCap": 200, "maxConcurrent": 2, "dedupeHours": 6 }`. Empty `provider` reverts to inheriting the AI Analyst config. |
+| `GET /api/ai/triage/health` | `{ "configured": bool, "enabled": bool, "minSeverity": "…" }` — lets the Alerts/SOC Triage UI know whether to render triage state. |
+
 ---
 
 ## Alerts Endpoints
@@ -1019,6 +1031,10 @@ Get all alerts with filtering.
 | `ruleId` | integer | - | Filter by rule ID |
 | `startTime` | ISO 8601 | - | Start time filter |
 | `endTime` | ISO 8601 | - | End time filter |
+| `triageStatus` | string | - | Filter by AI triage status (pending/analyzing/complete/failed/skipped) |
+| `triageVerdict` | string | - | Filter by AI triage verdict (true_positive/false_positive/suspicious/inconclusive) |
+| `minRiskScore` | integer | - | Minimum AI triage risk score (0-100) |
+| `sortBy` | string | created_at | `risk_score` sorts highest-risk-first (used by the SOC Triage queue view); any other value sorts by `created_at` |
 
 **Example Request:**
 ```http
@@ -1043,7 +1059,10 @@ GET /api/alerts?severity=high&status=new&limit=50
       },
       "assigned_to": null,
       "created_at": "2025-11-30T19:35:00Z",
-      "updated_at": "2025-11-30T19:35:00Z"
+      "updated_at": "2025-11-30T19:35:00Z",
+      "triage_status": "complete",
+      "triage_verdict": "true_positive",
+      "triage_risk_score": 82
     }
   ],
   "total": 87,
@@ -1051,6 +1070,8 @@ GET /api/alerts?severity=high&status=new&limit=50
   "offset": 0
 }
 ```
+
+`triage_status`/`triage_verdict`/`triage_risk_score` are `null` until [AI triage](../../wiki/AI-Security-Analyst.md#automated-triage) has run for an alert (or if it's disabled). Fetch the full verdict via `GET /api/alerts/:id/triage` below.
 
 **Alert Statuses:**
 - `new` - Alert just created, not reviewed
@@ -1148,6 +1169,64 @@ Update alert (change status, assign user, add notes).
 
 **Errors:**
 - `404` - Alert not found
+
+---
+
+### GET /api/alerts/:id/triage
+
+Get an alert's [AI triage](../../wiki/AI-Security-Analyst.md#automated-triage) verdict, or its pending/absent state. Always `200` (never `404` for "no run yet") so a frontend poll doesn't need special-case error handling.
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+{
+  "triage": {
+    "alert_id": 123,
+    "status": "complete",
+    "verdict": "true_positive",
+    "risk_score": 82,
+    "confidence": "high",
+    "summary": "Repeated failed SSH logins from an external IP.",
+    "reasoning": "...(markdown)...",
+    "evidence": [{ "claim": "12 failed logins in 5 minutes", "source": "alert" }],
+    "suggested_queries": [{ "label": "Check IP reputation", "tool": "lookup_ip", "args": { "ip": "192.168.1.100" } }],
+    "remediation": {
+      "proposed_status": "investigating",
+      "urgency": "high",
+      "steps": ["Block 192.168.1.100 at the firewall"]
+    },
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "created_at": "2025-11-30T19:35:10Z",
+    "updated_at": "2025-11-30T19:36:40Z"
+  },
+  "enabled": true,
+  "eligible": true
+}
+```
+
+`triage` is `null` when no run has happened yet (not yet eligible, still queued, or triage disabled). `eligible` reflects whether the alert's severity meets the configured minimum for automatic triage.
+
+**Errors:**
+- `404` - Alert not found
+
+---
+
+### POST /api/alerts/:id/triage/rerun
+
+Manually (re-)run AI triage for an alert, bypassing the severity and duplicate-alert gates (but not the daily cost cap or concurrency limit). Responds immediately; the analysis runs in the background (up to ~110s) — poll `GET /api/alerts/:id/triage` for the result.
+
+**Authentication:** Required (admin, analyst, or operator role). Rate-limited per user (10 requests / 5 minutes).
+
+**Response (202):**
+```json
+{ "status": "pending" }
+```
+
+**Errors:**
+- `404` - Alert not found
+- `429` - Too many re-run requests
 
 ---
 

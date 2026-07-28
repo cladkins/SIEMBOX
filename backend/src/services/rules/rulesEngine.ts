@@ -5,6 +5,7 @@ import { logger } from '../../utils/logger';
 import { query } from '../../config/database';
 import { ErrorLogService } from '../errors/errorLogService';
 import { NotificationService } from '../notifications/notificationService';
+import { maybeTriageAlert } from '../ai/triageService';
 import { FeedService } from '../threatintel/feedService';
 import { PURE_CONDITION_OPERATORS, evaluatePureCondition } from './conditionMatch';
 
@@ -460,7 +461,7 @@ export class RulesEngine {
         return false;
       }
 
-      await AlertModel.create({
+      const alert = await AlertModel.create({
         rule_id: rule.id,
         parsed_log_id: parsedLog.id,
         severity: rule.severity,
@@ -475,6 +476,11 @@ export class RulesEngine {
         title,
         description,
       });
+
+      // Background AI triage (opt-in + severity-gated). Fire-and-forget on the
+      // hot ingest path, exactly like notifyAlert above — never blocks or
+      // fails alerting.
+      maybeTriageAlert({ id: alert.id, severity: rule.severity, source: 'rule' });
 
       logger.info('Alert created', { rule: rule.name, title });
       return true;

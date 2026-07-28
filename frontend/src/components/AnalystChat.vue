@@ -106,10 +106,9 @@
 
 <script setup lang="ts">
 import { ref, onMounted, watch, nextTick } from 'vue';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
 import { ChatDotRound, MagicStick, User, Plus, Delete, Loading } from '@element-plus/icons-vue';
 import { useChatStore } from '@/stores/chat';
+import { renderMarkdown } from '@/utils/markdown';
 
 withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
 
@@ -123,16 +122,8 @@ const SUGGESTIONS = [
   'Which assets are most at risk right now?',
 ];
 
-// Sanitized markdown for assistant answers. Links open safely; no raw HTML/scripts.
-DOMPurify.addHook('afterSanitizeAttributes', (node: any) => {
-  if (node.tagName === 'A') {
-    node.setAttribute('target', '_blank');
-    node.setAttribute('rel', 'noopener noreferrer');
-  }
-});
 function renderMd(text: string): string {
-  const html = marked.parse(text || '', { breaks: true, async: false }) as string;
-  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+  return renderMarkdown(text);
 }
 
 function shortArgs(args: any): string {

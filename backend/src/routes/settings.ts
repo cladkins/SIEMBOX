@@ -13,6 +13,8 @@ import {
   AiProvider,
   getChatAiPublicConfig,
   saveChatAiConfig,
+  getTriagePublicConfig,
+  saveTriageConfig,
 } from '../services/ai/aiService';
 
 const router = Router();
@@ -73,6 +75,62 @@ router.put('/ai-chat', authorize('admin'), async (req: Request, res: Response) =
     throw new ApiError(500, error?.message?.includes('CREDENTIAL_ENCRYPTION_KEY')
       ? 'Set CREDENTIAL_ENCRYPTION_KEY to store an API key, or use the ANTHROPIC_API_KEY/OPENAI_API_KEY env var instead.'
       : 'Failed to update AI analyst settings');
+  }
+});
+
+// Current AI Triage (automatic alert analysis) config — a third model
+// selection that falls back to the chat analyst's config when unset (see
+// getTriageAiConfig), plus the operational knobs (enabled, severity gate,
+// cost caps). Never returns the key.
+router.get('/ai-triage', authorize('admin'), async (_req: Request, res: Response) => {
+  try {
+    res.json(await getTriagePublicConfig());
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch AI triage settings');
+  }
+});
+
+// Update the triage config. Empty provider ('') reverts to inheriting the chat
+// analyst config. Pass apiKey to set it (encrypted at rest), '' to clear it.
+router.put('/ai-triage', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const { provider, model, baseUrl, apiKey, enabled, minSeverity, dailyCap, maxConcurrent, dedupeHours } =
+      req.body ?? {};
+    if (provider && provider !== '' && !['anthropic', 'openai', 'ollama'].includes(provider)) {
+      throw new ApiError(400, "provider must be anthropic, openai, ollama, or '' to inherit");
+    }
+    if (minSeverity !== undefined && !['low', 'medium', 'high', 'critical'].includes(minSeverity)) {
+      throw new ApiError(400, 'minSeverity must be low, medium, high, or critical');
+    }
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+      throw new ApiError(400, 'enabled must be a boolean');
+    }
+    if (dailyCap !== undefined && (!Number.isFinite(dailyCap) || dailyCap < 0 || dailyCap > 10000)) {
+      throw new ApiError(400, 'dailyCap must be between 0 and 10000');
+    }
+    if (maxConcurrent !== undefined && (!Number.isFinite(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 10)) {
+      throw new ApiError(400, 'maxConcurrent must be between 1 and 10');
+    }
+    if (dedupeHours !== undefined && (!Number.isFinite(dedupeHours) || dedupeHours < 0 || dedupeHours > 168)) {
+      throw new ApiError(400, 'dedupeHours must be between 0 and 168');
+    }
+    await saveTriageConfig({
+      provider: provider as AiProvider | '',
+      model,
+      baseUrl,
+      apiKey,
+      enabled,
+      minSeverity,
+      dailyCap,
+      maxConcurrent,
+      dedupeHours,
+    });
+    res.json(await getTriagePublicConfig());
+  } catch (error: any) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, error?.message?.includes('CREDENTIAL_ENCRYPTION_KEY')
+      ? 'Set CREDENTIAL_ENCRYPTION_KEY to store an API key, or use the ANTHROPIC_API_KEY/OPENAI_API_KEY env var instead.'
+      : 'Failed to update AI triage settings');
   }
 });
 

@@ -14,6 +14,10 @@ export interface Alert {
   assigned_to: number | null;
   created_at: string;
   updated_at: string;
+  // Joined from alert_triage — present once AI triage has run for this alert.
+  triage_status?: 'pending' | 'analyzing' | 'complete' | 'failed' | 'skipped' | null;
+  triage_verdict?: 'true_positive' | 'false_positive' | 'suspicious' | 'inconclusive' | null;
+  triage_risk_score?: number | null;
 }
 
 export interface AlertStatistics {

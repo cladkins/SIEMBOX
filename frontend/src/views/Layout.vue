@@ -44,6 +44,10 @@
             <el-icon><Bell /></el-icon>
             <span>Alerts</span>
           </el-menu-item>
+          <el-menu-item index="/soc-triage" v-if="canAnalyst">
+            <el-icon><MagicStick /></el-icon>
+            <span>SOC Triage</span>
+          </el-menu-item>
           <el-menu-item index="/logs">
             <el-icon><Document /></el-icon>
             <span>Logs</span>
@@ -199,7 +203,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
 import { useChatStore } from '@/stores/chat';
 import AnalystChat from '@/components/AnalystChat.vue';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim, Cpu, ChatDotRound, Compass, Connection } from '@element-plus/icons-vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim, Cpu, ChatDotRound, Compass, Connection, MagicStick } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();
@@ -246,6 +250,7 @@ const pageTitle = computed(() => {
     '/getting-started': 'Getting Started',
     '/threat-intel': 'Threat Intel',
     '/alerts': 'Alerts',
+    '/soc-triage': 'SOC Triage',
     '/logs': 'Logs',
     '/parsers': 'Parsers',
     '/rules': 'Detection Rules',

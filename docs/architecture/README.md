@@ -27,6 +27,13 @@ Technical specification for parser and rule implementation:
 - Condition matching algorithms
 - Performance considerations
 
+### [AI-TRIAGE.md](./AI-TRIAGE.md)
+Design record for agentic SOC triage (automatic per-alert LLM analysis):
+- Why it's a second consumer of the AI Analyst's tool loop, not a new subsystem
+- The verdict schema and validation/repair ladder
+- Trigger, cost controls, and the two alert-creation call sites
+- Threat model notes and the "thin and extensible" tool-registry extension point
+
 ### [VAULTWARDEN-PARSER-IMPLEMENTATION.md](./VAULTWARDEN-PARSER-IMPLEMENTATION.md)
 Implementation details for Vaultwarden password manager parser:
 - Log format analysis

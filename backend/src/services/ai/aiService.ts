@@ -213,6 +213,137 @@ export async function saveChatAiConfig(input: {
   }
 }
 
+// ---- Agentic SOC triage config ----------------------------------------------
+// A THIRD independent model selection, for the unattended per-alert triage
+// agent (triageAgent.ts). Inheritance chain is triage -> chat -> main (not
+// straight to main): triage shares the chat analyst's JSON-tool-protocol
+// requirement, so it makes more sense to inherit a model already known to
+// follow that protocol. Also carries triage's operational knobs (enabled,
+// severity gate, cost caps) alongside the model config, since the UI edits
+// them together.
+
+export interface TriageOperationalConfig {
+  enabled: boolean;
+  minSeverity: 'low' | 'medium' | 'high' | 'critical';
+  dailyCap: number;
+  maxConcurrent: number;
+  dedupeHours: number;
+}
+
+/** Full triage config incl. resolved key — server-side use only. */
+export async function getTriageAiConfig(): Promise<AiConfig> {
+  const chat = await getChatAiConfig();
+  const triageProvider = (await getSetting('ai_triage_provider')) as AiProvider | undefined;
+  const provider = (triageProvider as AiProvider) || chat.provider;
+  const sameAsChat = provider === chat.provider;
+
+  const model =
+    (await getSetting('ai_triage_model')) || (sameAsChat ? chat.model : DEFAULT_MODELS[provider]) || '';
+  const baseUrl =
+    (await getSetting('ai_triage_base_url')) || (sameAsChat ? chat.baseUrl : DEFAULT_BASE_URLS[provider]);
+
+  let apiKey: string | undefined;
+  const stored = await getSetting('ai_triage_api_key');
+  if (stored) {
+    try {
+      const { encrypted, iv, authTag } = JSON.parse(stored);
+      apiKey = CredentialEncryption.decrypt(encrypted, iv, authTag);
+    } catch (e) {
+      logger.warn('AI: stored ai_triage api key could not be decrypted; falling back', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  if (!apiKey) apiKey = sameAsChat ? chat.apiKey : envKeyFor(provider);
+  return { provider, model, baseUrl, apiKey };
+}
+
+/** Cheap operational-only read (no key decryption) — safe for the hot ingest path. */
+export async function getTriageOperationalConfig(): Promise<TriageOperationalConfig> {
+  const enabled = (await getSetting('ai_triage_enabled')) === 'true';
+  const minSeverity = ((await getSetting('ai_triage_min_severity')) ||
+    'medium') as TriageOperationalConfig['minSeverity'];
+  const dailyCap = parseInt((await getSetting('ai_triage_daily_cap')) || '200', 10);
+  const maxConcurrent = parseInt((await getSetting('ai_triage_max_concurrent')) || '2', 10);
+  const dedupeHours = parseInt((await getSetting('ai_triage_dedupe_hours')) || '6', 10);
+  return {
+    enabled,
+    minSeverity,
+    dailyCap: Number.isFinite(dailyCap) ? dailyCap : 200,
+    maxConcurrent: Number.isFinite(maxConcurrent) ? maxConcurrent : 2,
+    dedupeHours: Number.isFinite(dedupeHours) ? dedupeHours : 6,
+  };
+}
+
+/** Triage config safe for the UI (no key); `inheritsFrom` tells if it uses chat's config. */
+export async function getTriagePublicConfig(): Promise<
+  {
+    provider: AiProvider;
+    model: string;
+    baseUrl?: string;
+    configured: boolean;
+    keySource: 'stored' | 'env' | 'none';
+    inheritsFrom: 'triage' | 'chat';
+  } & TriageOperationalConfig
+> {
+  const hasTriageProvider = !!(await getSetting('ai_triage_provider'));
+  const inheritsFrom: 'triage' | 'chat' = hasTriageProvider ? 'triage' : 'chat';
+  const cfg = await getTriageAiConfig();
+  let keySource: 'stored' | 'env' | 'none';
+  if (inheritsFrom === 'chat') {
+    keySource = (await getChatAiPublicConfig()).keySource;
+  } else {
+    const hasStored = !!(await getSetting('ai_triage_api_key'));
+    if (hasStored) {
+      keySource = 'stored';
+    } else {
+      // Same "don't misreport an inherited key as env" fix as getChatAiPublicConfig.
+      const chat = await getChatAiPublicConfig();
+      keySource = cfg.provider === chat.provider ? chat.keySource : cfg.apiKey ? 'env' : 'none';
+    }
+  }
+  const op = await getTriageOperationalConfig();
+  return {
+    provider: cfg.provider,
+    model: cfg.model,
+    baseUrl: cfg.baseUrl,
+    configured: cfg.provider === 'ollama' ? true : !!cfg.apiKey,
+    keySource,
+    inheritsFrom,
+    ...op,
+  };
+}
+
+/** Persist triage provider/model/base_url/key plus the operational knobs. Empty provider reverts to inheriting chat. */
+export async function saveTriageConfig(input: {
+  provider?: AiProvider | '';
+  model?: string;
+  baseUrl?: string;
+  apiKey?: string | null;
+  enabled?: boolean;
+  minSeverity?: string;
+  dailyCap?: number;
+  maxConcurrent?: number;
+  dedupeHours?: number;
+}): Promise<void> {
+  if (input.provider !== undefined) await setSetting('ai_triage_provider', input.provider || '');
+  if (input.model !== undefined) await setSetting('ai_triage_model', input.model);
+  if (input.baseUrl !== undefined) await setSetting('ai_triage_base_url', input.baseUrl);
+
+  if (input.apiKey === null || input.apiKey === '') {
+    await setSetting('ai_triage_api_key', '');
+  } else if (typeof input.apiKey === 'string') {
+    const enc = CredentialEncryption.encrypt(input.apiKey); // throws if CREDENTIAL_ENCRYPTION_KEY unset
+    await setSetting('ai_triage_api_key', JSON.stringify(enc));
+  }
+
+  if (input.enabled !== undefined) await setSetting('ai_triage_enabled', input.enabled ? 'true' : 'false');
+  if (input.minSeverity !== undefined) await setSetting('ai_triage_min_severity', input.minSeverity);
+  if (input.dailyCap !== undefined) await setSetting('ai_triage_daily_cap', String(input.dailyCap));
+  if (input.maxConcurrent !== undefined) await setSetting('ai_triage_max_concurrent', String(input.maxConcurrent));
+  if (input.dedupeHours !== undefined) await setSetting('ai_triage_dedupe_hours', String(input.dedupeHours));
+}
+
 // ---- LLM call (provider-specific) -------------------------------------------
 
 /** A single chat completion: system + user -> text. Injectable for tests. */

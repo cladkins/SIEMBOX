@@ -287,6 +287,55 @@ See [PARSERS.md](../../PARSERS.md) for detailed parser creation guide.
 4. Adjust priorities to ensure correct parser matches
 5. Save changes
 
+**A generic parser is shadowing a specific one:** matching stops at the first
+hit, so a broad parser with a low priority number claims logs a specific parser
+was written for. The symptom is a log that *is* parsed but into the wrong
+`event_type` with few fields (e.g. a UniFi IDS/IPS event landing as a bare
+`cef_event`). Give the specific parser a lower priority number than the generic
+one — `Logs → Parsed Logs → Parser` column shows which one actually claimed it.
+
+---
+
+### Issue: Long Logs Not Parsed (CEF, Windows Events, verbose JSON)
+
+**Symptoms:**
+- Short logs from the same device parse fine; long ones do not
+- Raw Logs shows a message that looks cut off mid-field, or two messages joined
+- Backend logs show `RFC 3164 match failed` with a `messageLength` well above
+  your typical line
+
+**Root Cause:** Syslog framing. Both transports are newline-delimited, and long
+messages are the ones that expose framing bugs:
+
+- **TCP is a byte stream.** A 1 KB+ line routinely arrives split across several
+  socket reads. Each fragment must be reassembled before parsing — treated
+  separately, one log becomes several corrupt records.
+- **UDP datagrams can carry more than one line.** Senders and relays batch them.
+  Stored as a single record, nothing anchored with `^…$` can match, because `.`
+  does not cross a newline.
+
+Both are handled from the release containing this note; earlier versions
+mis-framed them. If you are on an older build, upgrade the backend image.
+
+**Diagnosis:**
+
+```bash
+# Fragmented or joined messages show up as unusual raw_message lengths
+docker compose logs backend | grep "RFC 3164 match failed"
+
+# In the UI: Logs → Parsed Logs → Parse Status: "Unparsed only",
+# then compare the raw message length against a working log from the same device
+```
+
+**Also check:**
+
+- **Sender-side truncation.** Many devices cap syslog at 1024 bytes. If the raw
+  message ends mid-field, the sender truncated it — switch that source to TCP,
+  which has no such limit.
+- **`\r\n` line endings.** A stray trailing `\r` defeats a `$`-anchored parser.
+  This is stripped on ingest now, but a custom parser that captures it will
+  still fail.
+
 ---
 
 ## Log Shipper Issues

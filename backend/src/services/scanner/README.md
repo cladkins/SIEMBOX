@@ -109,7 +109,13 @@ const recentScans = await NucleiScanner.getRecentScans(20);
 **Template Selection Options**:
 - `all`: Use all available templates (can be slow)
 - `cves`: Use CVE templates only
-- `templates`: Array of specific template paths
+- `templates`: Array of specific templates -- either a template ID (e.g.
+  `openwebui-panel`, the YAML `id:` field returned by template search/selection
+  in the UI) or an explicit path/category (e.g. `cves/2021/CVE-2021-44228.yaml`,
+  `http/`). IDs are resolved against the parsed template cache before Nuclei
+  runs, since Nuclei's `-t` flag only understands paths, not IDs; an ID that
+  can't be resolved (renamed/removed upstream) is dropped and logged rather
+  than passed through.
 - `tags`: Filter templates by tags (e.g., ['apache', 'nginx', 'wordpress'])
 - `severities`: Filter by severity levels
 - `exclude`: Exclude specific templates or directories
@@ -423,6 +429,11 @@ export PATH=$PATH:~/go/bin
 # Update Nuclei templates
 nuclei -update-templates
 ```
+
+**Problem**: Scan fails instantly with "None of the selected templates could be found"
+- The requested template ID(s) don't match anything in the current template
+  cache -- they may have been renamed or removed upstream. Refresh templates
+  (`POST /api/vulnerabilities/templates/refresh`) and re-select from search.
 
 **Problem**: Scan runs forever
 - Set explicit timeout in scan options

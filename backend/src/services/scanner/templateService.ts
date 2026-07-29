@@ -459,6 +459,31 @@ export class TemplateService {
   }
 
   /**
+   * Resolve template IDs (the YAML `id:` field, e.g. "openwebui-panel" -- what
+   * template search/selection in the UI returns) to the absolute file path
+   * Nuclei's `-t` flag needs. Nuclei only matches `-t` against a real path
+   * (relative to cwd/-ud, or absolute); it never looks a bare ID up itself, so
+   * callers that accept IDs from users must translate them here first.
+   */
+  static async resolveTemplateIds(ids: string[]): Promise<{ found: Map<string, string>; missing: string[] }> {
+    const templates = await this.getAllTemplates();
+    const byId = new Map(templates.map(t => [t.id, t.filePath]));
+
+    const found = new Map<string, string>();
+    const missing: string[] = [];
+    for (const id of ids) {
+      const filePath = byId.get(id);
+      if (filePath) {
+        found.set(id, filePath);
+      } else {
+        missing.push(id);
+      }
+    }
+
+    return { found, missing };
+  }
+
+  /**
    * Clear the cache (useful after template updates)
    */
   static clearCache(): void {

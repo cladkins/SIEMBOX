@@ -38,7 +38,7 @@ export interface TriageRow {
   evidence: TriageEvidenceItem[] | null;
   suggested_queries: TriageSuggestedQuery[] | null;
   remediation: TriageRemediation | null;
-  trace: Array<{ step: number; tool: string; args: any; ok: boolean; ms: number; error?: string }> | null;
+  trace: Array<{ step: number; tool: string; args: any; ok: boolean; ms: number; error?: string; result?: string }> | null;
   provider: string | null;
   model: string | null;
   truncated: boolean;

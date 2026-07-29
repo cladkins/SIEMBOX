@@ -307,6 +307,20 @@
               <el-input-number v-model="triageForm.maxConcurrent" :min="1" :max="10" style="width: 160px" />
             </el-form-item>
 
+            <el-form-item label="Max tool calls">
+              <el-input-number v-model="triageForm.maxToolCalls" :min="1" :max="12" style="width: 160px" />
+              <el-text size="small" type="info" style="margin-left: 10px">
+                per-alert depth cap — more calls dig deeper but cost more and take longer
+              </el-text>
+            </el-form-item>
+
+            <el-form-item label="Time budget">
+              <el-input-number v-model="triageForm.wallBudgetSeconds" :min="20" :max="280" :step="10" style="width: 160px" />
+              <el-text size="small" type="info" style="margin-left: 10px">
+                seconds per alert before the agent must wrap up with what it has gathered so far
+              </el-text>
+            </el-form-item>
+
             <el-divider />
 
             <el-form-item label="Provider">
@@ -1216,6 +1230,8 @@ const triageForm = reactive({
   minSeverity: 'medium',
   dailyCap: 200,
   maxConcurrent: 2,
+  maxToolCalls: 6,
+  wallBudgetSeconds: 110,
 });
 
 const triageModelPlaceholder = computed(() =>
@@ -1254,6 +1270,8 @@ async function fetchTriageSettings() {
     triageForm.minSeverity = data.minSeverity || 'medium';
     triageForm.dailyCap = data.dailyCap ?? 200;
     triageForm.maxConcurrent = data.maxConcurrent ?? 2;
+    triageForm.maxToolCalls = data.maxToolCalls ?? 6;
+    triageForm.wallBudgetSeconds = data.wallBudgetSeconds ?? 110;
   } catch (error) {
     // non-admins — leave defaults
   } finally {
@@ -1270,6 +1288,8 @@ async function saveTriageSettings() {
       minSeverity: triageForm.minSeverity,
       dailyCap: triageForm.dailyCap,
       maxConcurrent: triageForm.maxConcurrent,
+      maxToolCalls: triageForm.maxToolCalls,
+      wallBudgetSeconds: triageForm.wallBudgetSeconds,
     };
     if (triageForm.provider) {
       payload.model = triageForm.model;

@@ -94,8 +94,19 @@ router.get('/ai-triage', authorize('admin'), async (_req: Request, res: Response
 // analyst config. Pass apiKey to set it (encrypted at rest), '' to clear it.
 router.put('/ai-triage', authorize('admin'), async (req: Request, res: Response) => {
   try {
-    const { provider, model, baseUrl, apiKey, enabled, minSeverity, dailyCap, maxConcurrent, dedupeHours } =
-      req.body ?? {};
+    const {
+      provider,
+      model,
+      baseUrl,
+      apiKey,
+      enabled,
+      minSeverity,
+      dailyCap,
+      maxConcurrent,
+      dedupeHours,
+      maxToolCalls,
+      wallBudgetSeconds,
+    } = req.body ?? {};
     if (provider && provider !== '' && !['anthropic', 'openai', 'ollama'].includes(provider)) {
       throw new ApiError(400, "provider must be anthropic, openai, ollama, or '' to inherit");
     }
@@ -114,6 +125,15 @@ router.put('/ai-triage', authorize('admin'), async (req: Request, res: Response)
     if (dedupeHours !== undefined && (!Number.isFinite(dedupeHours) || dedupeHours < 0 || dedupeHours > 168)) {
       throw new ApiError(400, 'dedupeHours must be between 0 and 168');
     }
+    if (maxToolCalls !== undefined && (!Number.isFinite(maxToolCalls) || maxToolCalls < 1 || maxToolCalls > 12)) {
+      throw new ApiError(400, 'maxToolCalls must be between 1 and 12');
+    }
+    if (
+      wallBudgetSeconds !== undefined &&
+      (!Number.isFinite(wallBudgetSeconds) || wallBudgetSeconds < 20 || wallBudgetSeconds > 280)
+    ) {
+      throw new ApiError(400, 'wallBudgetSeconds must be between 20 and 280');
+    }
     await saveTriageConfig({
       provider: provider as AiProvider | '',
       model,
@@ -124,6 +144,8 @@ router.put('/ai-triage', authorize('admin'), async (req: Request, res: Response)
       dailyCap,
       maxConcurrent,
       dedupeHours,
+      maxToolCalls,
+      wallBudgetSeconds,
     });
     res.json(await getTriagePublicConfig());
   } catch (error: any) {

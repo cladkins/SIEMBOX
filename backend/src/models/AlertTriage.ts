@@ -63,6 +63,14 @@ export interface TriageResultMeta {
   trace?: any[];
 }
 
+/** Counts of completed triage verdicts bucketed by risk_score band (see getRiskRatingSummary). */
+export interface TriageRiskRatingSummary {
+  low: number;
+  medium: number;
+  high: number;
+  critical: number;
+}
+
 function clipError(msg: unknown): string {
   return String(msg ?? 'unknown error').slice(0, 500);
 }
@@ -220,5 +228,32 @@ export class AlertTriageModel {
       [alertId, hours]
     );
     return r.rows[0] || null;
+  }
+
+  /**
+   * Distribution of completed triage verdicts across risk bands, for the
+   * dashboard's risk-rating chart. Bands mirror this module's own
+   * severity -> default risk_score convention (deterministicFallback in
+   * triageAgent.ts: low=20, medium=45, high=70, critical=85), so a completed
+   * verdict lands in the band matching its severity's default in the common
+   * case. Only 'complete' rows are counted — risk_score is null otherwise.
+   */
+  static async getRiskRatingSummary(): Promise<TriageRiskRatingSummary> {
+    const r = await query(
+      `SELECT
+         COUNT(*) FILTER (WHERE risk_score < 40)                     AS low,
+         COUNT(*) FILTER (WHERE risk_score >= 40 AND risk_score < 60) AS medium,
+         COUNT(*) FILTER (WHERE risk_score >= 60 AND risk_score < 80) AS high,
+         COUNT(*) FILTER (WHERE risk_score >= 80)                     AS critical
+       FROM alert_triage
+       WHERE status = 'complete'`
+    );
+    const row = r.rows[0] || {};
+    return {
+      low: Number(row.low) || 0,
+      medium: Number(row.medium) || 0,
+      high: Number(row.high) || 0,
+      critical: Number(row.critical) || 0,
+    };
   }
 }

@@ -164,6 +164,18 @@ router.get('/by-country', async (req: Request, res: Response) => {
   }
 });
 
+// Distribution of completed SOC triage verdicts by risk band, for the
+// dashboard's "SOC Triage Risk Rating" chart. Must stay ahead of '/:id'
+// below, or express would match this path as an alert id.
+router.get('/triage-risk-summary', async (_req: Request, res: Response) => {
+  try {
+    const summary = await AlertTriageModel.getRiskRatingSummary();
+    res.json(summary);
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch triage risk summary');
+  }
+});
+
 // Get single alert
 router.get('/:id', async (req: Request, res: Response) => {
   try {

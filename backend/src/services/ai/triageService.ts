@@ -129,7 +129,10 @@ async function runOne(alertId: number, opts: TriageOpts): Promise<void> {
 
     const t0 = Date.now();
     const providerCfg = await getTriageAiConfig();
-    const res = await runAlertTriage({ alert: toTriageInput(alert) });
+    const res = await runAlertTriage(
+      { alert: toTriageInput(alert) },
+      { maxToolCalls: cfg.maxToolCalls, wallBudgetMs: cfg.wallBudgetSeconds * 1000 }
+    );
 
     await AlertTriageModel.saveResult(alertId, res.verdict, {
       provider: providerCfg.provider,

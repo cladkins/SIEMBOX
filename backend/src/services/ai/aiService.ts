@@ -228,6 +228,10 @@ export interface TriageOperationalConfig {
   dailyCap: number;
   maxConcurrent: number;
   dedupeHours: number;
+  /** Per-analysis depth/cost cap — how many read-only tool calls the triage agent may make for one alert. */
+  maxToolCalls: number;
+  /** Per-analysis wall-clock cap, in seconds, before the agent is forced to synthesize a verdict from what it has. */
+  wallBudgetSeconds: number;
 }
 
 /** Full triage config incl. resolved key — server-side use only. */
@@ -266,12 +270,16 @@ export async function getTriageOperationalConfig(): Promise<TriageOperationalCon
   const dailyCap = parseInt((await getSetting('ai_triage_daily_cap')) || '200', 10);
   const maxConcurrent = parseInt((await getSetting('ai_triage_max_concurrent')) || '2', 10);
   const dedupeHours = parseInt((await getSetting('ai_triage_dedupe_hours')) || '6', 10);
+  const maxToolCalls = parseInt((await getSetting('ai_triage_max_tool_calls')) || '6', 10);
+  const wallBudgetSeconds = parseInt((await getSetting('ai_triage_wall_budget_seconds')) || '110', 10);
   return {
     enabled,
     minSeverity,
     dailyCap: Number.isFinite(dailyCap) ? dailyCap : 200,
     maxConcurrent: Number.isFinite(maxConcurrent) ? maxConcurrent : 2,
     dedupeHours: Number.isFinite(dedupeHours) ? dedupeHours : 6,
+    maxToolCalls: Number.isFinite(maxToolCalls) ? maxToolCalls : 6,
+    wallBudgetSeconds: Number.isFinite(wallBudgetSeconds) ? wallBudgetSeconds : 110,
   };
 }
 
@@ -325,6 +333,8 @@ export async function saveTriageConfig(input: {
   dailyCap?: number;
   maxConcurrent?: number;
   dedupeHours?: number;
+  maxToolCalls?: number;
+  wallBudgetSeconds?: number;
 }): Promise<void> {
   if (input.provider !== undefined) await setSetting('ai_triage_provider', input.provider || '');
   if (input.model !== undefined) await setSetting('ai_triage_model', input.model);
@@ -342,6 +352,9 @@ export async function saveTriageConfig(input: {
   if (input.dailyCap !== undefined) await setSetting('ai_triage_daily_cap', String(input.dailyCap));
   if (input.maxConcurrent !== undefined) await setSetting('ai_triage_max_concurrent', String(input.maxConcurrent));
   if (input.dedupeHours !== undefined) await setSetting('ai_triage_dedupe_hours', String(input.dedupeHours));
+  if (input.maxToolCalls !== undefined) await setSetting('ai_triage_max_tool_calls', String(input.maxToolCalls));
+  if (input.wallBudgetSeconds !== undefined)
+    await setSetting('ai_triage_wall_budget_seconds', String(input.wallBudgetSeconds));
 }
 
 // ---- LLM call (provider-specific) -------------------------------------------

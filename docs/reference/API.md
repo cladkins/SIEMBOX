@@ -1007,8 +1007,8 @@ Automatic, agentic per-alert analysis — see [AI Security Analyst → Automated
 
 | Method & Path | Purpose |
 |---|---|
-| `GET /api/settings/ai-triage` | Current triage config: provider/model/baseUrl (inherits AI Analyst if unset), whether a key is configured, plus operational settings (`enabled`, `minSeverity`, `dailyCap`, `maxConcurrent`, `dedupeHours`). Key itself is never returned. |
-| `PUT /api/settings/ai-triage` | Update triage config. Body (all optional): `{ "provider": "anthropic" \| "openai" \| "ollama" \| "", "model": "…", "baseUrl": "…", "apiKey": "…", "enabled": true, "minSeverity": "medium", "dailyCap": 200, "maxConcurrent": 2, "dedupeHours": 6 }`. Empty `provider` reverts to inheriting the AI Analyst config. |
+| `GET /api/settings/ai-triage` | Current triage config: provider/model/baseUrl (inherits AI Analyst if unset), whether a key is configured, plus operational settings (`enabled`, `minSeverity`, `dailyCap`, `maxConcurrent`, `dedupeHours`, `maxToolCalls`, `wallBudgetSeconds`). Key itself is never returned. |
+| `PUT /api/settings/ai-triage` | Update triage config. Body (all optional): `{ "provider": "anthropic" \| "openai" \| "ollama" \| "", "model": "…", "baseUrl": "…", "apiKey": "…", "enabled": true, "minSeverity": "medium", "dailyCap": 200, "maxConcurrent": 2, "dedupeHours": 6, "maxToolCalls": 6, "wallBudgetSeconds": 110 }`. Empty `provider` reverts to inheriting the AI Analyst config. `maxToolCalls` (1-12) and `wallBudgetSeconds` (20-280) bound how deep/long a single alert's analysis can go before it's forced to synthesize a verdict from whatever it has. |
 | `GET /api/ai/triage/health` | `{ "configured": bool, "enabled": bool, "minSeverity": "…" }` — lets the Alerts/SOC Triage UI know whether to render triage state. |
 
 ---

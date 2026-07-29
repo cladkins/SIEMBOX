@@ -20,19 +20,19 @@
           <span>Dashboard</span>
         </el-menu-item>
 
-        <el-menu-item index="/getting-started">
-          <el-icon><Compass /></el-icon>
-          <span>Getting Started</span>
-        </el-menu-item>
-
-        <el-menu-item index="/threat-intel">
-          <el-icon><Aim /></el-icon>
-          <span>Threat Intel</span>
+        <el-menu-item index="/soc-triage" v-if="canAnalyst">
+          <el-icon><MagicStick /></el-icon>
+          <span>SOC Triage</span>
         </el-menu-item>
 
         <el-menu-item index="/ai-analyst" v-if="canAnalyst">
           <el-icon><ChatDotRound /></el-icon>
           <span>AI Analyst</span>
+        </el-menu-item>
+
+        <el-menu-item index="/threat-intel">
+          <el-icon><Aim /></el-icon>
+          <span>Threat Intel</span>
         </el-menu-item>
 
         <el-sub-menu index="siem">
@@ -43,10 +43,6 @@
           <el-menu-item index="/alerts">
             <el-icon><Bell /></el-icon>
             <span>Alerts</span>
-          </el-menu-item>
-          <el-menu-item index="/soc-triage" v-if="canAnalyst">
-            <el-icon><MagicStick /></el-icon>
-            <span>SOC Triage</span>
           </el-menu-item>
           <el-menu-item index="/logs">
             <el-icon><Document /></el-icon>
@@ -108,6 +104,11 @@
             <span>Templates</span>
           </el-menu-item>
         </el-sub-menu>
+
+        <el-menu-item index="/getting-started">
+          <el-icon><Compass /></el-icon>
+          <span>Getting Started</span>
+        </el-menu-item>
 
         <el-menu-item index="/users" v-if="authStore.user?.role === 'admin'">
           <el-icon><User /></el-icon>

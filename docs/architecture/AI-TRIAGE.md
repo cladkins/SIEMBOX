@@ -99,6 +99,18 @@ engine):
 4. **Concurrency limit + bounded queue** — caps how many analyses run at
    once; on overflow, the newest alert is skipped (visibly, via
    `status='skipped'`) rather than growing unbounded.
+5. **Per-analysis budget** — `maxToolCalls` (default 6) and `wallBudgetSeconds`
+   (default 110) bound how deep and how long a single alert's analysis can go;
+   both are admin-configurable (Settings → AI Triage /
+   `TriageOperationalConfig`) and passed into `runAlertTriage` via
+   `TriageAgentDeps`. `triageAgent.ts`'s internal iteration cap is *derived*
+   from `maxToolCalls` (`+2`, for a reprompt and the final synthesis turn) so
+   it can never silently override a raised tool-call budget. `TOTAL_TOOL_BYTES`
+   (aggregate tool-result bytes fed back to the model) stays a fixed internal
+   safety rail, not exposed — it protects the model's context, not analysis
+   depth. Hitting either exposed cap forces `SYNTHESIS_PROMPT` to produce a
+   verdict from whatever was already gathered (`truncated: true` on the
+   result, surfaced in the UI as "stopped early at the analysis budget").
 
 ## Threat model notes
 

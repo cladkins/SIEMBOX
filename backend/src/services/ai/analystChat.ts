@@ -40,6 +40,8 @@ export interface AnalystTraceEntry {
   ms: number;
   bytes: number;
   error?: string;
+  /** The tool's result (already length-capped to PER_TOOL_RESULT_BYTES), for UI drill-down. */
+  result?: string;
 }
 
 export interface AnalystChatResult {

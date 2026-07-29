@@ -241,7 +241,7 @@ export class NucleiScanner {
           // Process results
           try {
             console.log(`[Nuclei] Starting processScanResults for scan ${scanId}...`);
-            await this.processScanResults(scanId, results, options.userId, options.target);
+            await this.processScanResults(scanId, results, options.userId, options.target, templatesTotal);
             console.log(`[Nuclei] processScanResults completed, now updating status to completed...`);
             await this.updateScanStatus(scanId, 'completed', undefined, new Date());
             console.log(`[Nuclei] Scan ${scanId} completed successfully - status updated`);
@@ -403,7 +403,8 @@ export class NucleiScanner {
     scanId: number,
     results: NucleiResult[],
     userId: number,
-    target: string
+    target: string,
+    templatesLoaded: number
   ): Promise<void> {
     console.log(`[Nuclei] Processing ${results.length} results for scan ${scanId}`);
 
@@ -459,7 +460,7 @@ export class NucleiScanner {
 
     // Update scan summary (headline count = persisted findings)
     console.log(`[Nuclei] Updating scan summary for scan ${scanId}...`);
-    await this.updateScanSummary(scanId, storedCount, severityCounts, rawCount, droppedCount);
+    await this.updateScanSummary(scanId, storedCount, severityCounts, rawCount, droppedCount, templatesLoaded);
     console.log(`[Nuclei] Scan summary updated for scan ${scanId}`);
 
     // Notify on findings (respects notification preferences / severity threshold).
@@ -856,7 +857,8 @@ export class NucleiScanner {
     vulnerabilitiesFound: number,
     severityCounts: Record<string, number>,
     rawCount?: number,
-    droppedCount?: number
+    droppedCount?: number,
+    templatesLoaded?: number
   ): Promise<void> {
     console.log(`[Nuclei] updateScanSummary called: scanId=${scanId}, vulnsFound=${vulnerabilitiesFound}`);
     try {
@@ -875,6 +877,11 @@ export class NucleiScanner {
         // Raw Nuclei output vs what actually persisted, for transparency
         vulnerabilitiesScanned: rawCount ?? vulnerabilitiesFound,
         vulnerabilitiesDropped: droppedCount ?? 0,
+        // How many templates Nuclei actually loaded and ran, parsed from its
+        // -stats output during the run. Distinguishes "found nothing because
+        // nothing matched" from "found nothing because ~0 templates ran" --
+        // e.g. an empty/misconfigured template directory (see resolveTemplateSelection).
+        templatesLoaded: templatesLoaded ?? 0,
         severityCounts,
         completedAt: new Date().toISOString(),
       };

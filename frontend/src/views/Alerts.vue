@@ -221,6 +221,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
+import { useRoute } from 'vue-router';
 import { useAlertsStore, type Alert } from '@/stores/alerts';
 import { useTriageStore } from '@/stores/triage';
 import { ElMessage } from 'element-plus';
@@ -229,6 +230,7 @@ import { Search, Download, ArrowDown, Loading } from '@element-plus/icons-vue';
 import { api } from '@/services/api';
 import AlertDetailDialog from '@/components/AlertDetailDialog.vue';
 
+const route = useRoute();
 const alertsStore = useAlertsStore();
 const triageStore = useTriageStore();
 
@@ -237,6 +239,13 @@ const filters = ref({
   status: '',
   search: '',
 });
+
+// Deep-link support: the dashboard's severity charts click through here as
+// e.g. /alerts?severity=critical.
+const initialSeverity = route.query.severity;
+if (typeof initialSeverity === 'string') {
+  filters.value.severity = initialSeverity;
+}
 
 // One log can satisfy several rules — the engine evaluates all of them with no
 // early exit — so the flat list shows one event as N rows. Grouped is the

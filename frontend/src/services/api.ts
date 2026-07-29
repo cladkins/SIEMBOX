@@ -186,6 +186,7 @@ export const api = {
   rerunAlertTriage: (id: number) => apiClient.post(`/alerts/${id}/triage/rerun`),
   getTriageAiSettings: () => apiClient.get('/settings/ai-triage'),
   updateTriageAiSettings: (data: any) => apiClient.put('/settings/ai-triage', data),
+  getTriageRiskSummary: () => apiClient.get('/alerts/triage-risk-summary'),
 
   // Alerts
   getAlerts: (params?: any) => apiClient.get('/alerts', { params }),

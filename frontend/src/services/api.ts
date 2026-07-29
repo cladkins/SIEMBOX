@@ -180,6 +180,13 @@ export const api = {
   getChatAiSettings: () => apiClient.get('/settings/ai-chat'),
   updateChatAiSettings: (data: any) => apiClient.put('/settings/ai-chat', data),
 
+  // Agentic SOC triage (automatic alert analysis)
+  getTriageHealth: () => apiClient.get('/ai/triage/health'),
+  getAlertTriage: (id: number) => apiClient.get(`/alerts/${id}/triage`),
+  rerunAlertTriage: (id: number) => apiClient.post(`/alerts/${id}/triage/rerun`),
+  getTriageAiSettings: () => apiClient.get('/settings/ai-triage'),
+  updateTriageAiSettings: (data: any) => apiClient.put('/settings/ai-triage', data),
+
   // Alerts
   getAlerts: (params?: any) => apiClient.get('/alerts', { params }),
   exportAlerts: (params: any, format: 'csv' | 'json') =>

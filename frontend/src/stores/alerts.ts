@@ -14,6 +14,10 @@ export interface Alert {
   assigned_to: number | null;
   created_at: string;
   updated_at: string;
+  // Joined from alert_triage — present once AI triage has run for this alert.
+  triage_status?: 'pending' | 'analyzing' | 'complete' | 'failed' | 'skipped' | null;
+  triage_verdict?: 'true_positive' | 'false_positive' | 'suspicious' | 'inconclusive' | null;
+  triage_risk_score?: number | null;
   // Present only when the list was requested with ?group=event. The row is then
   // the most severe alert of its triggering event, and `correlated` holds every
   // alert that event raised — including this one, so correlated_count is the

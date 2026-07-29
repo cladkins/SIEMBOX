@@ -6,6 +6,7 @@ import { query } from '../../config/database';
 import { ErrorLogService } from '../errors/errorLogService';
 import { testUserRegex } from './userRegex';
 import { NotificationService } from '../notifications/notificationService';
+import { maybeTriageAlert } from '../ai/triageService';
 import { FeedService } from '../threatintel/feedService';
 import { PURE_CONDITION_OPERATORS, evaluatePureCondition } from './conditionMatch';
 
@@ -491,7 +492,7 @@ export class RulesEngine {
         return null;
       }
 
-      await AlertModel.create({
+      const alert = await AlertModel.create({
         rule_id: rule.id,
         parsed_log_id: parsedLog.id,
         severity: rule.severity,
@@ -499,6 +500,11 @@ export class RulesEngine {
         description,
         matched_data: variables,
       });
+
+      // Background AI triage (opt-in + severity-gated). Fire-and-forget on the
+      // hot ingest path, exactly like the batched notification below — never
+      // blocks or fails alerting.
+      maybeTriageAlert({ id: alert.id, severity: rule.severity, source: 'rule' });
 
       logger.info('Alert created', { rule: rule.name, title });
       // Notification is NOT sent here: evaluateLog batches every alert raised by

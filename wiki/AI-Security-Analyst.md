@@ -36,6 +36,9 @@ Each turn, the model emits exactly one action — either a **tool call** or a **
 | `lookup_ip` | Threat-feed hits + reputation for an IP |
 | `search_logs` | Search parsed logs (time-bounded) |
 | `list_edr_agents` | Endpoint list *(admin only)* |
+| `get_asset_context` | Asset-360 for one host: EDR agent, log shipper, GeoIP, open vulns, recent alerts |
+| `get_related_alerts` | Other recent alerts sharing the same rule, asset, or source IP as a given alert |
+| `get_alert_history_stats` | How a rule/title has historically been dispositioned (new/investigating/closed/false_positive counts) |
 
 The analyst typically gathers 2–4 results, then answers — it is tuned to stop investigating once it can respond.
 
@@ -55,6 +58,29 @@ Leave a field blank to **inherit** the main AI builder config, so you can run th
 ## Conversations
 
 Chats are saved as **per-user threads** (you only see your own). Rename or delete threads from the thread list. Assistant replies render as sanitized Markdown, and each turn shows a collapsible **trace** of which read-only tools ran (with timing) so you can see exactly how an answer was reached.
+
+## Automated triage
+
+Beyond the interactive chat, SIEMBox can run the **same read-only tool loop automatically** on new alerts to produce a structured, saved verdict instead of a conversational answer — a first-pass triage so an operator doesn't have to manually chase every alert's context by hand.
+
+**Off by default, and gated when on:**
+- **Opt-in** — nothing runs until an admin enables it under *Settings → AI Triage*.
+- **Severity-gated** — only alerts at or above a configurable minimum severity (default: medium) are analyzed.
+- **Cost-bounded** — a daily cap on analysis runs, a per-process concurrency limit, and a dedupe window that skips re-analyzing an equivalent alert (same rule + title) triaged recently.
+
+**What it produces**, per alert:
+- A **verdict** (`true_positive` / `false_positive` / `suspicious` / `inconclusive`) and a **0-100 risk score**, with a confidence level.
+- A short **summary** and markdown **reasoning**, grounded in evidence it gathered via the tools above.
+- **Suggested next-step queries** — specific follow-ups an operator (or the interactive analyst) could run.
+- A **proposed remediation plan** (status suggestion, urgency, imperative steps) — this is always *data for a human to act on*, never an executed action. Applying it (e.g. changing the alert's status) still goes through the normal manual `Update Status` flow; triage has no write path of its own.
+
+**Same safety model as the chat analyst**, with one addition: because there's no human typing the question, the alert record itself (title, description, matched data — all attacker-influenced content) is explicitly treated as untrusted data in the prompt, on top of the existing untrusted-tool-result handling. The output is also schema-validated: an unrecognized verdict, an out-of-range risk score, or a suggested query naming a tool that doesn't exist is corrected or dropped in code before it's ever stored, so a model behaving badly can skew a verdict but can't do anything else.
+
+**Where to see it:**
+- A **Triage** column and a per-alert tab in Alerts' detail view.
+- A dedicated **SOC Triage** page (sidebar, under SIEM) — a queue view across all triaged alerts, sortable by risk score and filterable by verdict/status, for scanning many at once.
+
+Configuration is a **third independent model selection** (provider/model/base URL/key), inheriting the AI Analyst (chat) config when left unset — see [Configuration](Configuration#ai-triage-optional).
 
 ## Example questions
 

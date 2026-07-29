@@ -278,6 +278,89 @@
 
         <el-card style="margin-top: 20px">
           <template #header>
+            <span>AI Triage (automatic alert analysis) <HelpTip text="Runs the AI Analyst's read-only tool loop automatically on new alerts to produce a risk score, verdict, evidence, and a PROPOSED remediation plan — nothing is ever auto-executed; a human still applies status changes manually. Off by default." /></span>
+          </template>
+
+          <el-form :model="triageForm" label-width="200px" v-loading="triageLoading">
+            <el-form-item label="Enabled">
+              <el-switch v-model="triageForm.enabled" />
+              <el-text size="small" type="info" style="margin-left: 10px">
+                Automatically analyze new alerts at or above the minimum severity below
+              </el-text>
+            </el-form-item>
+
+            <el-form-item label="Minimum severity">
+              <el-select v-model="triageForm.minSeverity" style="width: 160px">
+                <el-option label="Low" value="low" />
+                <el-option label="Medium" value="medium" />
+                <el-option label="High" value="high" />
+                <el-option label="Critical" value="critical" />
+              </el-select>
+            </el-form-item>
+
+            <el-form-item label="Daily cap">
+              <el-input-number v-model="triageForm.dailyCap" :min="0" :max="10000" style="width: 160px" />
+              <el-text size="small" type="info" style="margin-left: 10px">max analyses per 24h</el-text>
+            </el-form-item>
+
+            <el-form-item label="Max concurrent">
+              <el-input-number v-model="triageForm.maxConcurrent" :min="1" :max="10" style="width: 160px" />
+            </el-form-item>
+
+            <el-divider />
+
+            <el-form-item label="Provider">
+              <el-select v-model="triageForm.provider" style="width: 260px">
+                <el-option label="Inherit AI Analyst config" value="" />
+                <el-option label="Anthropic (Claude)" value="anthropic" />
+                <el-option label="OpenAI" value="openai" />
+                <el-option label="Ollama (local)" value="ollama" />
+              </el-select>
+            </el-form-item>
+
+            <template v-if="triageForm.provider">
+              <el-form-item label="Model">
+                <el-input v-model="triageForm.model" style="width: 320px" :placeholder="triageModelPlaceholder" />
+              </el-form-item>
+
+              <el-form-item v-if="triageForm.provider !== 'anthropic'" label="Base URL">
+                <el-input
+                  v-model="triageForm.baseUrl"
+                  style="width: 320px"
+                  :placeholder="triageForm.provider === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com/v1'"
+                />
+              </el-form-item>
+
+              <el-form-item v-if="triageForm.provider !== 'ollama'" label="API Key">
+                <el-input
+                  v-model="triageForm.apiKey"
+                  type="password"
+                  show-password
+                  style="width: 320px"
+                  :placeholder="triageKeyPlaceholder"
+                />
+                <el-text size="small" :type="triageConfigured ? 'success' : 'warning'" style="margin-left: 10px">
+                  {{ triageKeyStatus }}
+                </el-text>
+              </el-form-item>
+            </template>
+
+            <el-form-item>
+              <el-button type="primary" @click="saveTriageSettings" :loading="triageSaving">
+                <el-icon><Check /></el-icon> Save Triage Settings
+              </el-button>
+            </el-form-item>
+            <el-text size="small" type="info">
+              Read-only, same as the AI Analyst — no create/update/delete tools. Costs roughly one LLM call per
+              analyzed alert, so a strong instruction-following model works best; the tool loop works on local
+              Ollama models too. Key stored encrypted at rest; leave blank to keep the existing one.
+              <span v-if="triageInheritsFrom === 'chat'"> Currently inheriting the AI Analyst config.</span>
+            </el-text>
+          </el-form>
+        </el-card>
+
+        <el-card style="margin-top: 20px">
+          <template #header>
             <span>Syslog Server Configuration</span>
           </template>
 
@@ -1117,6 +1200,92 @@ async function saveChatSettings() {
   }
 }
 
+// AI Triage settings — automatic per-alert analysis, inherits the AI Analyst
+// (chat) config when its own provider is unset.
+const triageLoading = ref(false);
+const triageSaving = ref(false);
+const triageConfigured = ref(false);
+const triageKeySource = ref<'stored' | 'env' | 'none'>('none');
+const triageInheritsFrom = ref<'triage' | 'chat'>('chat');
+const triageForm = reactive({
+  provider: '',
+  model: '',
+  baseUrl: '',
+  apiKey: '',
+  enabled: false,
+  minSeverity: 'medium',
+  dailyCap: 200,
+  maxConcurrent: 2,
+});
+
+const triageModelPlaceholder = computed(() =>
+  ({ anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', ollama: 'llama3.1' } as Record<string, string>)[
+    triageForm.provider
+  ] || 'inherits AI Analyst config'
+);
+const triageKeyPlaceholder = computed(() =>
+  triageKeySource.value === 'stored'
+    ? '•••••••• (saved — leave blank to keep)'
+    : triageKeySource.value === 'env'
+    ? 'set via environment variable'
+    : 'paste your API key'
+);
+const triageKeyStatus = computed(() =>
+  triageConfigured.value
+    ? triageKeySource.value === 'env'
+      ? 'Configured via environment variable'
+      : 'Key configured'
+    : 'No API key configured'
+);
+
+async function fetchTriageSettings() {
+  triageLoading.value = true;
+  try {
+    const { data } = await api.getTriageAiSettings();
+    triageInheritsFrom.value = data.inheritsFrom || 'chat';
+    const own = data.inheritsFrom === 'triage';
+    triageForm.provider = own ? data.provider || '' : '';
+    triageForm.model = own ? data.model || '' : '';
+    triageForm.baseUrl = own ? data.baseUrl || '' : '';
+    triageForm.apiKey = '';
+    triageConfigured.value = !!data.configured;
+    triageKeySource.value = data.keySource || 'none';
+    triageForm.enabled = !!data.enabled;
+    triageForm.minSeverity = data.minSeverity || 'medium';
+    triageForm.dailyCap = data.dailyCap ?? 200;
+    triageForm.maxConcurrent = data.maxConcurrent ?? 2;
+  } catch (error) {
+    // non-admins — leave defaults
+  } finally {
+    triageLoading.value = false;
+  }
+}
+
+async function saveTriageSettings() {
+  triageSaving.value = true;
+  try {
+    const payload: any = {
+      provider: triageForm.provider,
+      enabled: triageForm.enabled,
+      minSeverity: triageForm.minSeverity,
+      dailyCap: triageForm.dailyCap,
+      maxConcurrent: triageForm.maxConcurrent,
+    };
+    if (triageForm.provider) {
+      payload.model = triageForm.model;
+      payload.baseUrl = triageForm.baseUrl;
+      if (triageForm.apiKey) payload.apiKey = triageForm.apiKey; // only send when changing
+    }
+    await api.updateTriageAiSettings(payload);
+    ElMessage.success('AI Triage settings saved');
+    await fetchTriageSettings();
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Failed to save triage settings');
+  } finally {
+    triageSaving.value = false;
+  }
+}
+
 const syslogForm = reactive({
   syslog_host: '',
   syslog_port: 514,
@@ -1188,6 +1357,7 @@ onMounted(async () => {
   fetchRetentionSettings();
   fetchAiSettings();
   fetchChatSettings();
+  fetchTriageSettings();
   fetchSyslogSettings();
   fetchAutoDiscoverySettings();
   fetchStatistics();

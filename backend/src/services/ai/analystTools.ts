@@ -14,6 +14,7 @@ import { ParsedLogModel } from '../../models/ParsedLog';
 import { EdrAgentModel } from '../../models/EdrAgent';
 import { AssetRepository } from '../assets/assetRepository';
 import { AutoDiscoveryService } from '../assets/autoDiscoveryService';
+import { getAssetContext } from '../assets/assetContext';
 import { VulnerabilityProcessor } from '../scanner/vulnerabilityProcessor';
 import { FeedService } from '../threatintel/feedService';
 import { ReputationService } from '../threatintel/reputationService';
@@ -304,6 +305,64 @@ const ALL_TOOLS: AnalystTool[] = [
           recent_detections: g.recent_detections,
         })),
       };
+    },
+  },
+  {
+    name: 'get_asset_context',
+    description:
+      'Everything known about a host in one call: its EDR agent status, matched log shipper, GeoIP, open vulnerabilities, and recent alerts. Use when an alert has an asset_id, to judge blast radius and host criticality.',
+    args: 'assetId(number, required)',
+    run: async (a) => {
+      const assetId = clampInt(a.assetId, 1, Number.MAX_SAFE_INTEGER, 0);
+      if (!assetId) return { error: 'assetId is required' };
+      const ctx = await getAssetContext(assetId);
+      if (!ctx) return { error: `asset ${assetId} not found` };
+      return {
+        agent: ctx.agent && pick(ctx.agent, ['hostname', 'os', 'status', 'last_seen', 'online']),
+        shipper: ctx.shipper && pick(ctx.shipper, ['name', 'status', 'last_seen']),
+        geo: ctx.geo && pick(ctx.geo, ['country_name', 'country_code']),
+        vulnerabilities: (ctx.vulnerabilities || [])
+          .slice(0, 10)
+          .map((v: any) => pick(v, ['cve_id', 'severity', 'cvss_score', 'status'])),
+        recent_alerts: (ctx.alerts || []).slice(0, 10).map((al: any) =>
+          pick(al, ['id', 'severity', 'title', 'status', 'created_at'])
+        ),
+        total_alerts: (ctx.alerts || []).length,
+      };
+    },
+  },
+  {
+    name: 'get_related_alerts',
+    description:
+      'Other recent alerts sharing the same rule, asset, or source IP as a given alert. Use to judge whether a detection is an isolated event or part of a burst/pattern.',
+    args: 'alertId(number, required), sinceHours?(1-168, default 24), limit?(1-20, default 10)',
+    run: async (a) => {
+      const alertId = clampInt(a.alertId, 1, Number.MAX_SAFE_INTEGER, 0);
+      if (!alertId) return { error: 'alertId is required' };
+      const sinceHours = clampInt(a.sinceHours, 1, 168, 24);
+      const limit = clampInt(a.limit, 1, 20, 10);
+      const rows = await AlertModel.findRelated({ alertId, sinceHours, limit });
+      return {
+        total: rows.length,
+        related: rows.map((al: any) => ({
+          ...pick(al, ['id', 'severity', 'status', 'title', 'created_at']),
+          shares: al.shares,
+        })),
+      };
+    },
+  },
+  {
+    name: 'get_alert_history_stats',
+    description:
+      'How this rule/title has historically been dispositioned (new/investigating/closed/false_positive counts). The single best signal for whether a detection is routine noise.',
+    args: 'alertId(number, required), days?(1-90, default 30)',
+    run: async (a) => {
+      const alertId = clampInt(a.alertId, 1, Number.MAX_SAFE_INTEGER, 0);
+      if (!alertId) return { error: 'alertId is required' };
+      const days = clampInt(a.days, 1, 90, 30);
+      const al: any = await AlertModel.findById(alertId);
+      if (!al) return { error: `alert ${alertId} not found` };
+      return AlertModel.getDispositionHistory({ title: al.title, ruleId: al.rule_id, days });
     },
   },
 ];

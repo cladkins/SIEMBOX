@@ -146,6 +146,20 @@
           </template>
         </el-table-column>
 
+        <el-table-column v-if="triageStore.enabled" label="Triage" width="150">
+          <template #default="{ row }">
+            <span v-if="!row.triage_status" class="triage-dash">—</span>
+            <el-tag v-else-if="row.triage_status === 'pending' || row.triage_status === 'analyzing'" type="warning" size="small">
+              <el-icon class="spin"><Loading /></el-icon> analyzing
+            </el-tag>
+            <el-tag v-else-if="row.triage_status === 'complete'" :type="triageVerdictType(row.triage_verdict)" size="small">
+              {{ triageVerdictLabel(row.triage_verdict) }} · {{ row.triage_risk_score ?? '—' }}
+            </el-tag>
+            <el-tag v-else-if="row.triage_status === 'failed'" type="danger" size="small">failed</el-tag>
+            <el-tag v-else type="info" size="small">skipped</el-tag>
+          </template>
+        </el-table-column>
+
         <el-table-column prop="created_at" label="Created" width="180" sortable>
           <template #default="{ row }">
             {{ formatDate(row.created_at) }}
@@ -173,47 +187,12 @@
     </el-card>
 
     <!-- Alert Detail Dialog -->
-    <el-dialog v-model="detailDialogVisible" title="Alert Details" width="800px">
-      <div v-if="selectedAlert" class="alert-detail">
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="Severity">
-            <el-tag :type="getSeverityType(selectedAlert.severity)">
-              {{ selectedAlert.severity.toUpperCase() }}
-            </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="Status">
-            <el-tag :type="getStatusType(selectedAlert.status)">
-              {{ formatStatus(selectedAlert.status) }}
-            </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="Title" :span="2">
-            {{ selectedAlert.title }}
-          </el-descriptions-item>
-          <el-descriptions-item label="Description" :span="2">
-            {{ selectedAlert.description || 'N/A' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="Created">
-            {{ formatDate(selectedAlert.created_at) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="Updated">
-            {{ formatDate(selectedAlert.updated_at) }}
-          </el-descriptions-item>
-        </el-descriptions>
-
-        <div class="matched-data">
-          <h4>Matched Data</h4>
-          <pre>{{ JSON.stringify(selectedAlert.matched_data, null, 2) }}</pre>
-        </div>
-
-        <div class="alert-explain">
-          <ExplainWithAI
-            kind="alert"
-            :data="explainPayload(selectedAlert)"
-            label="Explain this alert"
-          />
-        </div>
-      </div>
-    </el-dialog>
+    <AlertDetailDialog
+      v-model="detailDialogVisible"
+      :alert="selectedAlert"
+      :initial-tab="detailInitialTab"
+      @edit-status="onEditStatus"
+    />
 
     <!-- Update Status Dialog -->
     <el-dialog v-model="statusDialogVisible" title="Update Alert Status" width="500px">
@@ -241,26 +220,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { useAlertsStore, type Alert } from '@/stores/alerts';
+import { useTriageStore } from '@/stores/triage';
 import { ElMessage } from 'element-plus';
 import { format } from 'date-fns';
-import { Search, Download, ArrowDown } from '@element-plus/icons-vue';
+import { Search, Download, ArrowDown, Loading } from '@element-plus/icons-vue';
 import { api } from '@/services/api';
-import ExplainWithAI from '@/components/ExplainWithAI.vue';
+import AlertDetailDialog from '@/components/AlertDetailDialog.vue';
 
 const alertsStore = useAlertsStore();
-
-// Trim an alert to the fields worth sending to the AI assistant (skip noisy
-// internal ids / the full raw_result blob inside matched_data).
-const explainPayload = (alert: Alert) => ({
-  severity: alert.severity,
-  status: alert.status,
-  title: alert.title,
-  description: alert.description,
-  created_at: alert.created_at,
-  matched_data: alert.matched_data,
-});
+const triageStore = useTriageStore();
 
 const filters = ref({
   severity: '',
@@ -293,6 +263,7 @@ function toggleGrouping() {
 }
 
 const detailDialogVisible = ref(false);
+const detailInitialTab = ref<'details' | 'triage'>('details');
 const statusDialogVisible = ref(false);
 const selectedAlert = ref<Alert | null>(null);
 const statusForm = ref({
@@ -301,8 +272,24 @@ const statusForm = ref({
 });
 const updating = ref(false);
 
+let triagePollTimer: number | null = null;
+
 onMounted(() => {
   fetchAlerts();
+  triageStore.checkHealth();
+  // Only refetch the list while some visible row is still being analyzed —
+  // mirrors ContainerScanning.vue's self-terminating poll (no websockets in
+  // this app).
+  triagePollTimer = window.setInterval(() => {
+    const hasPending = alertsStore.alerts.some(
+      (a) => a.triage_status === 'pending' || a.triage_status === 'analyzing'
+    );
+    if (hasPending) fetchAlerts();
+  }, 8000);
+});
+
+onUnmounted(() => {
+  if (triagePollTimer) window.clearInterval(triagePollTimer);
 });
 
 const fetchAlerts = async () => {
@@ -372,17 +359,32 @@ const exportAlerts = async (fmt: 'csv' | 'json') => {
 
 const viewAlert = (alert: Alert) => {
   selectedAlert.value = alert;
+  detailInitialTab.value = 'details';
   detailDialogVisible.value = true;
 };
 
 const updateStatus = (alert: Alert) => {
+  onEditStatus(alert);
+};
+
+// Triggered either by the row's "Update" button or the detail dialog's
+// footer/"Use suggested status" action (the latter passes the AI's proposed
+// status as a pre-fill — the actual change still requires this explicit form submit).
+const onEditStatus = (alert: Alert, proposedStatus?: string) => {
   selectedAlert.value = alert;
   statusForm.value = {
-    status: alert.status,
+    status: proposedStatus || alert.status,
     description: alert.description || '',
   };
   statusDialogVisible.value = true;
 };
+
+const triageVerdictType = (v?: string | null) =>
+  ({ true_positive: 'danger', suspicious: 'warning', false_positive: 'success', inconclusive: 'info' } as Record<
+    string,
+    string
+  >)[v || 'inconclusive'] || 'info';
+const triageVerdictLabel = (v?: string | null) => (v || 'inconclusive').replace('_', ' ');
 
 /** Which correlated alert is being fetched, so only its buttons show a spinner. */
 const loadingCorrelated = ref<number | null>(null);
@@ -479,25 +481,18 @@ const formatDate = (date: string) => {
   justify-content: flex-end;
 }
 
-.alert-detail {
-  padding: 10px 0;
+.triage-dash {
+  color: var(--siembox-text-secondary);
 }
 
-.matched-data {
-  margin-top: 20px;
+.spin {
+  animation: spin 1s linear infinite;
 }
 
-.matched-data h4 {
-  margin-bottom: 10px;
-  color: var(--siembox-text-color);
-}
-
-.matched-data pre {
-  background: var(--siembox-bg-color);
-  padding: 15px;
-  border-radius: 4px;
-  overflow-x: auto;
-  font-size: 12px;
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Event grouping: correlated detections shown inside an expanded row. */

@@ -51,6 +51,17 @@ See [Parsers → AI builder](Parsers#ai-builder) and [Detection Rules](Detection
 
 The **[AI Security Analyst](AI-Security-Analyst)** has its own model configuration under **Settings → AI Analyst** — provider (`ollama` / `openai` / `anthropic`), model, base URL, and (for cloud) API key (encrypted with `CREDENTIAL_ENCRYPTION_KEY`). Leave a field blank to **inherit** the AI builder config above, so the Analyst can reuse the same provider or point at a different — e.g. a local Ollama — model. The `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` env vars apply here too.
 
+## AI Triage (optional)
+
+[Automated triage](AI-Security-Analyst#automated-triage) runs the Analyst's read-only tool loop automatically on new alerts. It's **off by default**; enable it and set its options under **Settings → AI Triage**:
+
+- **Enabled** — off until switched on.
+- **Minimum severity** — only alerts at or above this severity are analyzed automatically (default: medium).
+- **Daily cap** / **Max concurrent** — bound cost and load; a duplicate-alert dedupe window is also applied automatically.
+- **Provider / Model / Base URL / API key** — a third independent model selection. Leave the provider blank to **inherit** the AI Analyst (chat) config above (which itself may inherit the AI builder config), or point triage at its own model.
+
+Applying a manual "Analyze now" / "Re-run" from the UI bypasses the severity gate (but not the daily cap or concurrency limit) and works even while automatic triage is disabled.
+
 ## Parser / detection catalog
 
 | Variable | Default | Notes |
@@ -90,6 +101,7 @@ Some configuration lives in **Settings** rather than env vars:
 
 - **AI Builder** — provider, model, base URL, API key.
 - **AI Analyst** — the analyst's provider/model (inherits AI Builder if left blank). See [AI Security Analyst](AI-Security-Analyst).
+- **AI Triage** — automatic per-alert analysis (off by default, severity-gated, inherits AI Analyst if left blank). See [Automated triage](AI-Security-Analyst#automated-triage).
 - **Endpoints / YARA** — endpoint enrollment tokens and the server YARA bundle (incl. *Pull YARA-Forge now*). See [SIEMBOX Endpoint](SIEMBOX-Endpoint).
 - **Threat Feeds & Reputation** — enable/disable feeds, add AbuseIPDB/AlienVault OTX keys (admin-gated). See [Threat Intel](Threat-Intel).
 - **Notifications** — Email / Slack / NTFY alert delivery.

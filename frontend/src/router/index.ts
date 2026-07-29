@@ -24,6 +24,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/Alerts.vue'),
       },
       {
+        path: 'soc-triage',
+        name: 'SocTriage',
+        component: () => import('@/views/SocTriage.vue'),
+        meta: { allowedRoles: ['admin', 'analyst', 'operator'] },
+      },
+      {
         path: 'threat-intel',
         name: 'ThreatIntel',
         component: () => import('@/views/ThreatIntel.vue'),

@@ -12,6 +12,10 @@ export interface Alert {
   assigned_to: number | null;
   created_at: Date;
   updated_at: Date;
+  // Joined from alert_triage by findAll()/findAllGrouped() — undefined when not requested/joined.
+  triage_status?: 'pending' | 'analyzing' | 'complete' | 'failed' | 'skipped' | null;
+  triage_verdict?: 'true_positive' | 'false_positive' | 'suspicious' | 'inconclusive' | null;
+  triage_risk_score?: number | null;
 }
 
 export interface AlertFilterOptions {
@@ -21,6 +25,9 @@ export interface AlertFilterOptions {
   startTime?: Date;
   endTime?: Date;
   search?: string;
+  triageStatus?: string;
+  triageVerdict?: string;
+  minRiskScore?: number;
 }
 
 /** One alert's summary as it appears inside a correlated group. */
@@ -55,6 +62,10 @@ export interface CreateAlertParams {
 }
 
 export class AlertModel {
+  // Both findAll and findAllGrouped join alert_triage — alert_id is its PRIMARY
+  // KEY (migration 028), so the join is always 1:1 and never multiplies rows.
+  private static readonly FROM_CLAUSE = `FROM alerts a LEFT JOIN alert_triage t ON t.alert_id = a.id`;
+
   static async create(params: CreateAlertParams): Promise<Alert> {
     const result = await query(
       `INSERT INTO alerts (rule_id, parsed_log_id, severity, title, description, matched_data, status, assigned_to)
@@ -82,7 +93,10 @@ export class AlertModel {
 
   /**
    * Shared WHERE clause for the flat and grouped list views, so a filter added
-   * to one cannot silently go missing from the other.
+   * to one cannot silently go missing from the other. Every condition is
+   * qualified `a.`/`t.` because both views join alert_triage as `t` —
+   * unqualified `status` (alerts.status vs. alert_triage.status) would be
+   * ambiguous and fail at query time.
    */
   private static buildFilters(options?: AlertFilterOptions): { whereClause: string; params: any[]; nextIndex: number } {
     const conditions: string[] = [];
@@ -90,12 +104,12 @@ export class AlertModel {
     let paramIndex = 1;
 
     if (options?.severity) {
-      conditions.push(`severity = $${paramIndex++}`);
+      conditions.push(`a.severity = $${paramIndex++}`);
       params.push(options.severity);
     }
 
     if (options?.status) {
-      conditions.push(`status = $${paramIndex++}`);
+      conditions.push(`a.status = $${paramIndex++}`);
       params.push(options.status);
     }
 
@@ -103,23 +117,38 @@ export class AlertModel {
       // Keyword / IP search across the alert title, description, and matched_data
       // (where the source IP and other matched fields live). ILIKE = case-insensitive.
       const p = paramIndex++;
-      conditions.push(`(title ILIKE $${p} OR description ILIKE $${p} OR matched_data::text ILIKE $${p})`);
+      conditions.push(`(a.title ILIKE $${p} OR a.description ILIKE $${p} OR a.matched_data::text ILIKE $${p})`);
       params.push(`%${options.search}%`);
     }
 
     if (options?.ruleId) {
-      conditions.push(`rule_id = $${paramIndex++}`);
+      conditions.push(`a.rule_id = $${paramIndex++}`);
       params.push(options.ruleId);
     }
 
     if (options?.startTime) {
-      conditions.push(`created_at >= $${paramIndex++}`);
+      conditions.push(`a.created_at >= $${paramIndex++}`);
       params.push(options.startTime);
     }
 
     if (options?.endTime) {
-      conditions.push(`created_at <= $${paramIndex++}`);
+      conditions.push(`a.created_at <= $${paramIndex++}`);
       params.push(options.endTime);
+    }
+
+    if (options?.triageStatus) {
+      conditions.push(`t.status = $${paramIndex++}`);
+      params.push(options.triageStatus);
+    }
+
+    if (options?.triageVerdict) {
+      conditions.push(`t.verdict = $${paramIndex++}`);
+      params.push(options.triageVerdict);
+    }
+
+    if (options?.minRiskScore !== undefined) {
+      conditions.push(`t.risk_score >= $${paramIndex++}`);
+      params.push(options.minRiskScore);
     }
 
     return {
@@ -129,27 +158,31 @@ export class AlertModel {
     };
   }
 
-  static async findAll(options?: AlertFilterOptions & { limit?: number; offset?: number }): Promise<{
-    alerts: Alert[];
-    total: number;
-  }> {
+  static async findAll(
+    options?: AlertFilterOptions & { limit?: number; offset?: number; sortBy?: 'created_at' | 'risk_score' }
+  ): Promise<{ alerts: Alert[]; total: number }> {
     const built = this.buildFilters(options);
     const whereClause = built.whereClause;
     const params = built.params;
     let paramIndex = built.nextIndex;
 
     // Get total count
-    const countResult = await query(`SELECT COUNT(*) FROM alerts ${whereClause}`, params);
+    const countResult = await query(`SELECT COUNT(*) ${this.FROM_CLAUSE} ${whereClause}`, params);
     const total = parseInt(countResult.rows[0].count, 10);
 
     // Get alerts
     const limit = options?.limit ?? 100;
     const offset = options?.offset ?? 0;
+    const orderClause =
+      options?.sortBy === 'risk_score'
+        ? 'ORDER BY t.risk_score DESC NULLS LAST, a.created_at DESC'
+        : 'ORDER BY a.created_at DESC';
 
     params.push(limit, offset);
     const alertsResult = await query(
-      `SELECT * FROM alerts ${whereClause}
-       ORDER BY created_at DESC
+      `SELECT a.*, t.status AS triage_status, t.verdict AS triage_verdict, t.risk_score AS triage_risk_score
+       ${this.FROM_CLAUSE} ${whereClause}
+       ${orderClause}
        LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
       params
     );
@@ -174,7 +207,9 @@ export class AlertModel {
    * than collapsing into one giant NULL bucket, so those key off the alert id.
    *
    * The representative is the most severe member, newest first to break ties,
-   * because that is what decides how urgently the event needs attention.
+   * because that is what decides how urgently the event needs attention. It
+   * carries its own triage verdict (not an aggregate across the group) so the
+   * grouped view shows the same per-alert triage badge as the flat view.
    */
   static async findAllGrouped(
     options?: AlertFilterOptions & { limit?: number; offset?: number }
@@ -183,11 +218,11 @@ export class AlertModel {
     let paramIndex = nextIndex;
 
     // 'p'/'a' prefixes keep a parsed_log_id and an alert id from ever colliding.
-    const GROUP_KEY = `COALESCE('p' || parsed_log_id::text, 'a' || id::text)`;
-    const SEV_RANK = `CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END`;
+    const GROUP_KEY = `COALESCE('p' || a.parsed_log_id::text, 'a' || a.id::text)`;
+    const SEV_RANK = `CASE a.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END`;
 
     const countResult = await query(
-      `SELECT COUNT(*) FROM (SELECT DISTINCT ${GROUP_KEY} AS group_key FROM alerts ${whereClause}) g`,
+      `SELECT COUNT(*) FROM (SELECT DISTINCT ${GROUP_KEY} AS group_key ${this.FROM_CLAUSE} ${whereClause}) g`,
       params
     );
     const total = parseInt(countResult.rows[0].count, 10);
@@ -198,8 +233,9 @@ export class AlertModel {
 
     const result = await query(
       `WITH filtered AS (
-         SELECT *, ${GROUP_KEY} AS group_key, ${SEV_RANK} AS sev_rank
-         FROM alerts ${whereClause}
+         SELECT a.*, t.status AS triage_status, t.verdict AS triage_verdict, t.risk_score AS triage_risk_score,
+                ${GROUP_KEY} AS group_key, ${SEV_RANK} AS sev_rank
+         ${this.FROM_CLAUSE} ${whereClause}
        ),
        grouped AS (
          SELECT
@@ -218,12 +254,14 @@ export class AlertModel {
        representative AS (
          SELECT DISTINCT ON (group_key)
            id, rule_id, parsed_log_id, severity, title, description,
-           matched_data, status, assigned_to, created_at, updated_at, group_key
+           matched_data, status, assigned_to, created_at, updated_at, group_key,
+           triage_status, triage_verdict, triage_risk_score
          FROM filtered
          ORDER BY group_key, sev_rank DESC, created_at DESC, id DESC
        )
        SELECT r.id, r.rule_id, r.parsed_log_id, r.severity, r.title, r.description,
               r.matched_data, r.status, r.assigned_to, r.created_at, r.updated_at,
+              r.triage_status, r.triage_verdict, r.triage_risk_score,
               g.correlated_count, g.correlated
        FROM representative r
        JOIN grouped g ON g.group_key = r.group_key
@@ -233,6 +271,86 @@ export class AlertModel {
     );
 
     return { alerts: result.rows, total };
+  }
+
+  /**
+   * Sibling alerts that share the rule, the asset, or the extracted source IP
+   * with the given alert — used by the triage agent's get_related_alerts tool
+   * to spot bursts/patterns without a free-text log search.
+   */
+  static async findRelated(options: {
+    alertId: number;
+    sinceHours?: number;
+    limit?: number;
+  }): Promise<Array<Alert & { shares: 'rule' | 'asset' | 'source_ip' }>> {
+    const sinceHours = options.sinceHours ?? 24;
+    const limit = options.limit ?? 10;
+    const r = await query(
+      `SELECT b.*,
+              CASE
+                WHEN b.rule_id IS NOT NULL AND b.rule_id = a.rule_id THEN 'rule'
+                WHEN b.asset_id IS NOT NULL AND b.asset_id = a.asset_id THEN 'asset'
+                ELSE 'source_ip'
+              END AS shares
+         FROM alerts a
+         JOIN alerts b
+           ON b.id <> a.id
+          AND b.created_at >= NOW() - ($2 || ' hours')::interval
+          AND (
+                (b.rule_id IS NOT NULL AND b.rule_id = a.rule_id)
+             OR (b.asset_id IS NOT NULL AND b.asset_id = a.asset_id)
+             OR (
+                  a.matched_data->>'source_ip' IS NOT NULL
+                  AND b.matched_data->>'source_ip' = a.matched_data->>'source_ip'
+                )
+              )
+        WHERE a.id = $1
+        ORDER BY b.created_at DESC
+        LIMIT $3`,
+      [options.alertId, sinceHours, limit]
+    );
+    return r.rows;
+  }
+
+  /**
+   * How this rule/title has historically been dispositioned — the strongest
+   * available false-positive signal ("12 of the last 14 were closed as FP").
+   */
+  static async getDispositionHistory(options: {
+    title: string;
+    ruleId?: number | null;
+    days?: number;
+  }): Promise<{
+    same_rule_count: number;
+    first_seen: string | null;
+    dispositions: Record<'new' | 'investigating' | 'closed' | 'false_positive', number>;
+  }> {
+    const days = options.days ?? 30;
+    const r = await query(
+      `SELECT
+         COUNT(*)::int AS total,
+         MIN(created_at) AS first_seen,
+         COUNT(*) FILTER (WHERE status = 'new')::int AS new_count,
+         COUNT(*) FILTER (WHERE status = 'investigating')::int AS investigating_count,
+         COUNT(*) FILTER (WHERE status = 'closed')::int AS closed_count,
+         COUNT(*) FILTER (WHERE status = 'false_positive')::int AS false_positive_count
+       FROM alerts
+       WHERE title = $1
+         AND ($2::int IS NULL OR rule_id = $2)
+         AND created_at >= NOW() - ($3 || ' days')::interval`,
+      [options.title, options.ruleId ?? null, days]
+    );
+    const row = r.rows[0] || {};
+    return {
+      same_rule_count: row.total ?? 0,
+      first_seen: row.first_seen ?? null,
+      dispositions: {
+        new: row.new_count ?? 0,
+        investigating: row.investigating_count ?? 0,
+        closed: row.closed_count ?? 0,
+        false_positive: row.false_positive_count ?? 0,
+      },
+    };
   }
 
   static async update(

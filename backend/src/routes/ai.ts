@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { ApiError } from '../middleware/errorHandler';
-import { explain, getChatAiPublicConfig } from '../services/ai/aiService';
+import { explain, getChatAiPublicConfig, getTriagePublicConfig } from '../services/ai/aiService';
 import { runAnalystChat } from '../services/ai/analystChat';
 import { ChatThreadModel } from '../models/ChatThread';
 import type { Role } from '../services/ai/analystTools';
@@ -71,6 +71,18 @@ router.get('/chat/health', async (_req: Request, res: Response) => {
     res.json(await getChatAiPublicConfig());
   } catch (error) {
     throw new ApiError(500, 'Failed to read AI analyst config');
+  }
+});
+
+// Public, non-admin-safe subset of the triage config — no provider/model/key,
+// just whether the alerts UI should render triage state at all. The full
+// config lives behind GET /api/settings/ai-triage (admin-only).
+router.get('/triage/health', async (_req: Request, res: Response) => {
+  try {
+    const cfg = await getTriagePublicConfig();
+    res.json({ configured: cfg.configured, enabled: cfg.enabled, minSeverity: cfg.minSeverity });
+  } catch (error) {
+    throw new ApiError(500, 'Failed to read AI triage config');
   }
 });
 

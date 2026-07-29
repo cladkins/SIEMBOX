@@ -11,6 +11,7 @@ import { AuditService } from '../audit/auditService';
 import pool from '../../config/database';
 import { ErrorLogService } from '../errors/errorLogService';
 import { NotificationService } from '../notifications/notificationService';
+import { TemplateService } from './templateService';
 import {
   NucleiResult,
   NucleiError,
@@ -110,7 +111,7 @@ export class NucleiScanner {
       }
 
       // Build Nuclei command arguments
-      const args = this.buildNucleiArgs(options);
+      const args = await this.buildNucleiArgs(scanId, options);
       console.log(`[Nuclei] Command: nuclei ${args.join(' ')}`);
 
       // Set timeout (default: 30 minutes for vuln scans)
@@ -276,9 +277,44 @@ export class NucleiScanner {
   }
 
   /**
+   * Resolve a mixed list of template selectors to paths Nuclei's `-t` can
+   * actually load. Nuclei only matches `-t` against a real path (relative to
+   * cwd or -ud, or absolute) -- it never resolves the YAML `id:` field itself.
+   * Category paths ("http/") and explicit file paths ("cves/2021/CVE-....yaml")
+   * already satisfy that and pass through untouched; bare IDs (e.g.
+   * "openwebui-panel", what the UI's template search returns) are looked up
+   * against the parsed template cache and swapped for their real file path.
+   * IDs that can't be matched are dropped (and logged) rather than handed to
+   * Nuclei, which would otherwise fail the whole process with a cryptic
+   * "could not find template file" error.
+   */
+  private static async resolveTemplateSelection(scanId: number, selectors: string[]): Promise<string[]> {
+    const pathLike = selectors.filter(s => s.endsWith('/') || s.includes('/') || /\.ya?ml$/i.test(s));
+    const bareIds = selectors.filter(s => !pathLike.includes(s));
+
+    const resolved = [...pathLike];
+
+    if (bareIds.length > 0) {
+      const { found, missing } = await TemplateService.resolveTemplateIds(bareIds);
+      resolved.push(...found.values());
+
+      if (missing.length > 0) {
+        console.warn(`[Nuclei] Scan ${scanId}: could not resolve ${missing.length} template ID(s), skipping:`, missing);
+        ErrorLogService.logBackgroundError(
+          'vuln-scan',
+          `Could not resolve template ID(s) to a file: ${missing.join(', ')}`,
+          { dedupeKey: `template-resolution:${missing.slice().sort().join(',')}`, scanId }
+        );
+      }
+    }
+
+    return resolved;
+  }
+
+  /**
    * Build Nuclei command arguments
    */
-  private static buildNucleiArgs(options: ScanOptions): string[] {
+  private static async buildNucleiArgs(scanId: number, options: ScanOptions): Promise<string[]> {
     const args: string[] = [];
 
     // Target
@@ -300,8 +336,24 @@ export class NucleiScanner {
     } else {
       // Specific templates
       if (ts.templates && ts.templates.length > 0) {
-        for (const template of ts.templates) {
+        const resolvedTemplates = await this.resolveTemplateSelection(scanId, ts.templates);
+
+        for (const template of resolvedTemplates) {
           args.push('-t', template);
+        }
+
+        // Every requested template was a bare ID Nuclei couldn't resolve. If
+        // nothing else in this selection (tags/cves) gives Nuclei something
+        // to run, fail fast with a clear reason now instead of letting Nuclei
+        // exit with "no templates provided for scan" after an instant, empty
+        // "scan" -- see resolveTemplateSelection for why IDs can go missing.
+        if (resolvedTemplates.length === 0 && !ts.tags?.length && !ts.cves) {
+          throw new NucleiError(
+            `None of the selected templates could be found: ${ts.templates.join(', ')}. ` +
+              `Template IDs may have been renamed or removed upstream. Try refreshing the ` +
+              `template cache and re-selecting from search.`,
+            NucleiErrorCode.TEMPLATE_NOT_FOUND
+          );
         }
       }
 

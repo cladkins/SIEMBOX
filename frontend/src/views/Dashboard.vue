@@ -122,21 +122,6 @@
         </el-card>
       </el-col>
 
-      <el-col :xs="24" :md="12">
-        <el-card>
-          <template #header>
-            <div class="card-header">
-              <span>Vulnerability Criticality</span>
-              <el-text size="small" type="info">Click a row to investigate</el-text>
-            </div>
-          </template>
-          <RankedBarList :items="vulnItems" @item-click="goToVulnsBySeverity" />
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <!-- Section: Detection pipeline health -->
-    <el-row :gutter="16" class="stats-row">
       <el-col :xs="24" :sm="12" :md="6">
         <el-card class="stat-card coverage" :class="{ 'is-warning': !coverageHealthy }">
           <div class="stat-content">
@@ -152,6 +137,7 @@
           </div>
         </el-card>
       </el-col>
+
       <el-col :xs="24" :sm="12" :md="6">
         <el-card class="stat-card coverage-unparsed" :class="{ 'is-warning': !coverageHealthy }">
           <div class="stat-content">
@@ -163,6 +149,20 @@
               <div class="stat-label">Unparsed Logs (24h)</div>
             </div>
           </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="16" class="stats-row">
+      <el-col :xs="24">
+        <el-card>
+          <template #header>
+            <div class="card-header">
+              <span>Vulnerability Criticality</span>
+              <el-text size="small" type="info">Click a row to investigate</el-text>
+            </div>
+          </template>
+          <RankedBarList :items="vulnItems" @item-click="goToVulnsBySeverity" />
         </el-card>
       </el-col>
     </el-row>

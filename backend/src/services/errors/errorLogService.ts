@@ -20,6 +20,16 @@ interface ErrorContext {
   userId?: number;
   requestBody?: any;
   stack?: string;
+  /**
+   * Skip translateError()'s automatic guess and use this instead. The
+   * ECONNREFUSED/ETIMEDOUT/ENOTFOUND entries in ERROR_TRANSLATIONS assume
+   * those Node socket error codes mean the Postgres connection -- true for
+   * most of this codebase's error sources, but not for a caller that makes
+   * its own outbound HTTP calls (e.g. the Log Discovery API poller talking to
+   * a discovery source) and can hit the exact same codes for an unrelated
+   * reason. Pass this when the caller already knows better than the guess.
+   */
+  translation?: { human: string; category: string; severity: string; resolution: string };
   [key: string]: any;
 }
 
@@ -160,8 +170,9 @@ export class ErrorLogService {
 
       const stack = error instanceof Error ? error.stack : undefined;
 
-      // Translate the error to human-readable form
-      const translation = this.translateError(errorType, message);
+      // Translate the error to human-readable form, unless the caller already
+      // knows better than the automatic guess (see ErrorContext.translation).
+      const translation = context.translation ?? this.translateError(errorType, message);
 
       const result = await query(
         `INSERT INTO application_errors

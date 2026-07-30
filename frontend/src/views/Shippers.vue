@@ -72,6 +72,56 @@
       </el-col>
     </el-row>
 
+    <!-- API-Polled Sources (Log Discovery) -- separate from the shippers above: these have no
+         agent/heartbeat/API key of their own, SIEMBox reaches out to them on a schedule instead.
+         Read-only here; credential save/rotate/revoke stays in Log Discovery so there's one place
+         that owns that flow rather than two drifting copies of it. -->
+    <el-row v-if="apiPolledSources.length > 0" :gutter="20" style="margin-top: 20px">
+      <el-col :span="24">
+        <el-card>
+          <template #header>
+            <div class="card-header">
+              <span>API-Polled Sources</span>
+              <el-button @click="fetchApiPolledSources" :icon="Refresh" circle />
+            </div>
+          </template>
+          <el-text size="small" type="info" style="display: block; margin-bottom: 12px">
+            Sources configured in Log Discovery to pull events via their own API instead of pushing/shipping logs here.
+          </el-text>
+          <el-table :data="apiPolledSources" stripe>
+            <el-table-column label="Host" min-width="160">
+              <template #default="{ row }">
+                <div>{{ row.hostname || row.ip }}</div>
+                <div v-if="row.hostname" class="ip-sub">{{ row.ip }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="Source" min-width="140">
+              <template #default="{ row }">{{ fingerprintName(row.matched_fingerprint_id) }}</template>
+            </el-table-column>
+            <el-table-column label="Status" width="140">
+              <template #default="{ row }">
+                <el-tag v-if="!row.poller.enabled" size="small" type="info">paused</el-tag>
+                <el-tag v-else :type="row.poller.last_status === 'error' ? 'danger' : 'success'" size="small">
+                  {{ row.poller.last_status === 'error' ? 'error' : 'polling' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="Last Polled" width="180">
+              <template #default="{ row }">
+                <span v-if="row.poller.last_polled_at">{{ formatDate(row.poller.last_polled_at) }}</span>
+                <el-text v-else type="info">Never</el-text>
+              </template>
+            </el-table-column>
+            <el-table-column label="Actions" width="140" align="center">
+              <template #default>
+                <el-button size="small" @click="goToLogDiscovery">Manage</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <!-- Create/Edit Shipper Dialog -->
     <el-dialog
       v-model="shipperDialogVisible"
@@ -485,6 +535,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, reactive } from 'vue';
+import { useRouter } from 'vue-router';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
@@ -496,12 +547,17 @@ import {
   CopyDocument,
 } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
+import logDiscoveryService, { type RankedSource, type FingerprintEntry } from '@/services/logDiscoveryService';
+
+const router = useRouter();
 
 const loading = ref(false);
 const saving = ref(false);
 const shippers = ref<any[]>([]);
 const currentShipper = ref<any>(null);
 const unknownSources = ref<any[]>([]);
+const apiPolledSources = ref<RankedSource[]>([]);
+const dlFingerprints = ref<FingerprintEntry[]>([]);
 const activityLog = ref<any[]>([]);
 const activityLoading = ref(false);
 
@@ -540,7 +596,27 @@ const volumeForm = reactive({
 onMounted(() => {
   fetchShippers();
   fetchUnknownSources();
+  fetchApiPolledSources();
 });
+
+function fingerprintName(id: string | null): string {
+  if (!id) return 'Unknown';
+  return dlFingerprints.value.find((f) => f.id === id)?.name || id;
+}
+
+async function fetchApiPolledSources() {
+  try {
+    const [sources, fps] = await Promise.all([logDiscoveryService.getSources(), logDiscoveryService.getFingerprints()]);
+    dlFingerprints.value = fps;
+    apiPolledSources.value = [...sources.top, ...sources.advanced].filter((s) => s.poller?.configured);
+  } catch {
+    apiPolledSources.value = [];
+  }
+}
+
+function goToLogDiscovery() {
+  router.push({ name: 'LogDiscovery' });
+}
 
 async function fetchShippers() {
   loading.value = true;
@@ -1043,5 +1119,10 @@ function formatActivityType(type: string): string {
   white-space: pre-wrap;
   word-break: break-all;
   overflow-x: auto;
+}
+
+.ip-sub {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 </style>

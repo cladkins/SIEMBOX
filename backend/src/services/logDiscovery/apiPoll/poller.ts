@@ -74,7 +74,19 @@ export async function pollOneSource(row: DiscoverySourcePoller): Promise<PollOut
   } catch (err: any) {
     const msg = (err?.name === 'AbortError' ? 'Fetch timed out' : err?.message || 'Poll failed').slice(0, 500);
     await DiscoverySourcePollerModel.recordResult(sourceId, { ok: false, count: 0, error: msg }).catch(() => {});
-    ErrorLogService.logBackgroundError('discovery-api-poller', msg, { dedupeKey: `poll-${sourceId}` });
+    // Explicit translation: this is an outbound HTTP call to a discovery source, not
+    // the app's own Postgres connection -- without this, ERROR_TRANSLATIONS'
+    // substring scan mislabels any ECONNREFUSED/ETIMEDOUT here as a database error
+    // ("Check PostgreSQL is running") on the dashboard, which is actively wrong.
+    ErrorLogService.logBackgroundError('discovery-api-poller', msg, {
+      dedupeKey: `poll-${sourceId}`,
+      translation: {
+        human: `Couldn't reach ${row.fingerprint_id} source for polling`,
+        category: 'network',
+        severity: 'warning',
+        resolution: 'Check the source is online and reachable at its discovered address, and that the saved credential is still valid',
+      },
+    });
     logger.warn(`[DiscoveryApiPoller] source ${sourceId} (${row.fingerprint_id}) poll failed: ${msg}`);
     return { ok: false, count: 0, error: msg };
   }

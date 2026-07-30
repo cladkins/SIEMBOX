@@ -2090,6 +2090,47 @@ Regenerate shipper API key (invalidates old key).
 
 ---
 
+### POST /api/shippers/:id/http-push-key
+
+Generate (or rotate) the HTTP log-push key for a shipper. This is a **separate key** from the syslog `api_key` above — it authenticates `POST /api/shippers/logs` only, and is never returned again after this call.
+
+**Authentication:** Required (Admin)
+
+**Response (200):**
+```json
+{
+  "http_push_key": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6a7b8c9d0e1f2"
+}
+```
+
+**Security Behavior:**
+- Only a sha256 hash of the key is stored server-side — the plaintext is shown exactly once, in this response
+- Rotating replaces the previous push key; the old one stops working immediately
+- Unlike the syslog `api_key`, there is no "ghost shipper" grace period — a revoked or rotated-away push key is rejected on the very next request
+
+**Errors:**
+- `404` - Shipper not found
+- `403` - Insufficient permissions (requires admin role)
+
+---
+
+### DELETE /api/shippers/:id/http-push-key
+
+Revoke the HTTP log-push key for a shipper. `POST /api/shippers/logs` immediately starts rejecting requests for this shipper until a new key is generated.
+
+**Authentication:** Required (Admin)
+
+**Response (200):**
+```json
+{ "revoked": true }
+```
+
+**Errors:**
+- `404` - Shipper not found
+- `403` - Insufficient permissions (requires admin role)
+
+---
+
 ### POST /api/shippers/register
 
 **PUBLIC ENDPOINT** - Shipper registration and heartbeat.
@@ -2213,6 +2254,45 @@ Regenerate shipper API key (invalidates old key).
 
 **Errors:**
 - `404` - Invalid API key
+
+---
+
+### POST /api/shippers/logs
+
+**PUBLIC ENDPOINT** (shipper-authenticated) — HTTP log-push ingestion. For homelab/self-hosted tools that can POST JSON but can't (or shouldn't) speak syslog. Complements syslog ingestion on port 514/UDP+TCP; both land in the same `raw_logs` table and go through the same parser engine.
+
+**Authentication:** `Authorization: Bearer <http_push_key>` + `X-Shipper-ID: <shipper id>` (see `POST /api/shippers/:id/http-push-key` above — this is **not** the syslog `api_key` and **not** a JWT).
+
+**Request Body — single entry:**
+```json
+{
+  "message": "Failed password for root from 203.0.113.5 port 51515 ssh2",
+  "hostname": "nas01",
+  "app_name": "sshd",
+  "timestamp": "2026-07-30T14:22:01Z",
+  "facility": 4,
+  "severity": 3,
+  "event_id": "optional-client-dedup-key"
+}
+```
+
+**Request Body — batch:**
+```json
+{ "logs": [ { "message": "..." }, { "message": "..." } ] }
+```
+
+Only `message` is required. It must be the **bare extracted message** — the same thing `syslogParser.ts` produces after stripping `<PRI>TIMESTAMP HOSTNAME TAG:` — not a full syslog-framed line; parsers match only the extracted message (see CLAUDE.md). All other fields are optional; invalid `facility` (0–23) or `severity` (0–7) values are stored as `null` rather than rejecting the entry. `event_id`, if supplied, dedupes retried/at-least-once deliveries — a repeated `event_id` from the same shipper is counted, not re-ingested. Batches are capped at 1000 entries per request.
+
+**Response (202):**
+```json
+{ "accepted": 1, "duplicate": 0, "rejected": 0, "errors": [] }
+```
+
+A malformed entry in a batch doesn't fail the whole request — it's counted in `rejected`, with up to 20 `{index, error}` entries returned in `errors`.
+
+**Errors:**
+- `400` - Body isn't a single log object or `{ "logs": [...] }`, empty `logs` array, or batch exceeds 1000 entries
+- `401` - Missing/invalid `X-Shipper-ID` or Bearer key, or HTTP push not provisioned for this shipper
 
 ---
 
@@ -3663,4 +3743,4 @@ Webhook notifications are on the roadmap. Planned features:
 
 ---
 
-**Last Updated:** 2026-01-28
+**Last Updated:** 2026-07-30

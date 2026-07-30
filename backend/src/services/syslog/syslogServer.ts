@@ -199,6 +199,13 @@ export class SyslogServer {
         shipper_id: parsed.shipperId,
       });
 
+      // rawLog is only ever null when a caller sets ingest_event_id (HTTP push
+      // dedup, see 029_shipper_http_push.sql); syslog ingestion never does.
+      if (!rawLog) {
+        logger.error('Unexpected null from RawLogModel.create() during syslog ingestion');
+        return;
+      }
+
       logger.debug('Raw log stored', { id: rawLog.id, hostname: parsed.hostname });
 
       // Apply parsers to transform the log

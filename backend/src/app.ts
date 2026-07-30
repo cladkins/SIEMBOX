@@ -62,6 +62,8 @@ const limiter = rateLimit({
     // exempt authenticated agent traffic (enroll, which has no X-Agent-ID, stays limited).
     const url = req.originalUrl || req.url || '';
     if (url.startsWith('/api/edr/') && req.headers['x-agent-id']) return true;
+    // Same reasoning for HTTP log-push shippers (X-Shipper-ID identifies the caller).
+    if (url.startsWith('/api/shippers/logs') && req.headers['x-shipper-id']) return true;
     return false;
   },
 });

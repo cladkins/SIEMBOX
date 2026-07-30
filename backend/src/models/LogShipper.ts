@@ -18,8 +18,20 @@ export interface LogShipper {
   containers_available: boolean | null;
   /** Why it couldn't, when containers_available is false. */
   containers_unavailable_reason: string | null;
+  /** sha256 hash of the HTTP log-push key; null means HTTP push isn't provisioned (migration 029). */
+  http_push_key_hash: string | null;
+  http_push_key_created_at: Date | null;
+  http_push_last_seen: Date | null;
   created_at: Date;
   updated_at: Date;
+}
+
+/** Strips the push-key hash before a shipper record leaves the server, replacing it with a boolean. */
+export function withHttpPushStatus<T extends { http_push_key_hash?: string | null }>(
+  shipper: T
+): Omit<T, 'http_push_key_hash'> & { http_push_enabled: boolean } {
+  const { http_push_key_hash, ...safe } = shipper;
+  return { ...safe, http_push_enabled: !!http_push_key_hash };
 }
 
 export interface ShipperSource {
@@ -154,6 +166,46 @@ export class LogShipperModel {
            containers_unavailable_reason = $3
        WHERE id = $1`,
       [id, available, reason]
+    );
+  }
+
+  // Provision (or rotate) the HTTP log-push key. Only the hash is stored;
+  // the plaintext key is returned once by the route handler and never again.
+  static async setHttpPushKey(id: number, keyHash: string): Promise<LogShipper | null> {
+    const result = await pool.query(
+      `UPDATE log_shippers
+       SET http_push_key_hash = $2, http_push_key_created_at = NOW(), updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [id, keyHash]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Revoke the HTTP log-push key. Unlike a revoked syslog shipper (which keeps
+  // accepting logs from its cached config, see CLAUDE.md's "ghost shippers"),
+  // a revoked push key 401s on the very next request.
+  static async revokeHttpPushKey(id: number): Promise<LogShipper | null> {
+    const result = await pool.query(
+      `UPDATE log_shippers
+       SET http_push_key_hash = NULL, http_push_key_created_at = NULL, updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [id]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Record a successful HTTP push. Also updates the generic last_seen/status/
+  // ip_address so an HTTP-push-only shipper shows "online" in the main list
+  // instead of stuck "pending" (which only the syslog/register/heartbeat path
+  // used to set).
+  static async touchHttpPush(id: number, ipAddress: string): Promise<void> {
+    await pool.query(
+      `UPDATE log_shippers
+       SET http_push_last_seen = NOW(), last_seen = NOW(), status = 'online', ip_address = $2
+       WHERE id = $1`,
+      [id, ipAddress]
     );
   }
 

@@ -240,11 +240,15 @@ const filters = ref({
   search: '',
 });
 
-// Deep-link support: the dashboard's severity charts click through here as
-// e.g. /alerts?severity=critical.
+// Deep-link support: the dashboard's severity/status panels click through
+// here as e.g. /alerts?severity=critical or /alerts?status=new.
 const initialSeverity = route.query.severity;
 if (typeof initialSeverity === 'string') {
   filters.value.severity = initialSeverity;
+}
+const initialStatus = route.query.status;
+if (typeof initialStatus === 'string') {
+  filters.value.status = initialStatus;
 }
 
 // One log can satisfy several rules — the engine evaluates all of them with no

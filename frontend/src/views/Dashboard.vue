@@ -36,18 +36,16 @@
     <div class="section-header">
       <h3>Alerts</h3>
     </div>
-    <el-row :gutter="20" class="charts-row">
+    <el-row :gutter="16" class="charts-row">
       <el-col :xs="24" :sm="12" :md="8">
         <el-card>
           <template #header>
             <div class="card-header">
               <span>Alerts by Severity</span>
-              <el-text size="small" type="info">Click a slice to investigate</el-text>
+              <el-text size="small" type="info">Click a row to investigate</el-text>
             </div>
           </template>
-          <div class="chart-container">
-            <canvas ref="severityChart"></canvas>
-          </div>
+          <RankedBarList :items="severityItems" @item-click="goToAlertsBySeverity" />
         </el-card>
       </el-col>
 
@@ -59,9 +57,7 @@
               <el-text size="small" type="info">Click a bar to open SOC Triage</el-text>
             </div>
           </template>
-          <div class="chart-container">
-            <canvas ref="riskChart"></canvas>
-          </div>
+          <RankedBarList :items="riskItems" @item-click="goToSocTriage" />
         </el-card>
       </el-col>
 
@@ -70,17 +66,16 @@
           <template #header>
             <div class="card-header">
               <span>Alerts by Status</span>
+              <el-text size="small" type="info">Click a row to investigate</el-text>
             </div>
           </template>
-          <div class="chart-container">
-            <canvas ref="statusChart"></canvas>
-          </div>
+          <RankedBarList :items="statusItems" @item-click="goToAlertsByStatus" />
         </el-card>
       </el-col>
     </el-row>
 
     <!-- Geo Row: alerts by country (world map) -->
-    <el-row :gutter="20" class="charts-row">
+    <el-row :gutter="16" class="charts-row">
       <el-col :xs="24">
         <el-card>
           <template #header>
@@ -98,12 +93,12 @@
     <div class="section-header">
       <h3>Assets & Vulnerabilities</h3>
     </div>
-    <el-row :gutter="20" class="stats-row">
+    <el-row :gutter="16" class="stats-row">
       <el-col :xs="24" :sm="12" :md="6">
         <el-card class="stat-card assets">
           <div class="stat-content">
             <div class="stat-icon">
-              <el-icon :size="40"><Monitor /></el-icon>
+              <el-icon :size="28"><Monitor /></el-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ Number(assetStats?.active_assets || 0) + Number(assetStats?.offline_assets || 0) }}</div>
@@ -114,10 +109,10 @@
       </el-col>
 
       <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card assets-online">
+        <el-card class="stat-card assets-online" :class="{ 'is-warning': !assetsHealthy }">
           <div class="stat-content">
             <div class="stat-icon">
-              <el-icon :size="40"><CircleCheck /></el-icon>
+              <el-icon :size="28"><CircleCheck v-if="assetsHealthy" /><WarningFilled v-else /></el-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ Number(assetStats?.active_assets || 0) }}</div>
@@ -127,28 +122,11 @@
         </el-card>
       </el-col>
 
-      <el-col :xs="24" :md="12">
-        <el-card>
-          <template #header>
-            <div class="card-header">
-              <span>Vulnerability Criticality</span>
-              <el-text size="small" type="info">Click a slice to investigate</el-text>
-            </div>
-          </template>
-          <div class="chart-container">
-            <canvas ref="vulnChart"></canvas>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <!-- Section: Detection pipeline health -->
-    <el-row :gutter="20" class="stats-row">
       <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card coverage">
+        <el-card class="stat-card coverage" :class="{ 'is-warning': !coverageHealthy }">
           <div class="stat-content">
             <div class="stat-icon">
-              <el-icon :size="40"><View /></el-icon>
+              <el-icon :size="28"><CircleCheck v-if="coverageHealthy" /><WarningFilled v-else /></el-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">
@@ -159,17 +137,32 @@
           </div>
         </el-card>
       </el-col>
+
       <el-col :xs="24" :sm="12" :md="6">
-        <el-card class="stat-card coverage-unparsed">
+        <el-card class="stat-card coverage-unparsed" :class="{ 'is-warning': !coverageHealthy }">
           <div class="stat-content">
             <div class="stat-icon">
-              <el-icon :size="40"><Hide /></el-icon>
+              <el-icon :size="28"><Hide /></el-icon>
             </div>
             <div class="stat-info">
               <div class="stat-value">{{ (parseCoverage?.unparsed ?? 0).toLocaleString() }}</div>
               <div class="stat-label">Unparsed Logs (24h)</div>
             </div>
           </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="16" class="stats-row">
+      <el-col :xs="24">
+        <el-card>
+          <template #header>
+            <div class="card-header">
+              <span>Vulnerability Criticality</span>
+              <el-text size="small" type="info">Click a row to investigate</el-text>
+            </div>
+          </template>
+          <RankedBarList :items="vulnItems" @item-click="goToVulnsBySeverity" />
         </el-card>
       </el-col>
     </el-row>
@@ -183,7 +176,7 @@
         </div>
       </template>
 
-      <el-table :data="recentAlerts" v-loading="loading" stripe>
+      <el-table :data="recentAlerts" v-loading="loading" stripe size="small">
         <el-table-column prop="severity" label="Severity" width="120">
           <template #default="{ row }">
             <el-tag :type="getSeverityType(row.severity)">
@@ -219,19 +212,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAlertsStore } from '@/stores/alerts';
 import { api } from '@/services/api';
-import { Chart, registerables } from 'chart.js';
 import { format } from 'date-fns';
-import { Monitor, CircleCheck, View, Hide } from '@element-plus/icons-vue';
+import { Monitor, CircleCheck, WarningFilled, Hide } from '@element-plus/icons-vue';
 import AlertsCountryMap from '@/components/AlertsCountryMap.vue';
-
-Chart.register(...registerables);
+import RankedBarList from '@/components/RankedBarList.vue';
 
 // Shared 4-tier criticality vocabulary (severity, vuln criticality, and risk
-// rating all use it) so color coding stays consistent across every chart.
+// rating all use it) so color coding stays consistent across every panel.
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low'] as const;
 const SEVERITY_LABELS = ['Critical', 'High', 'Medium', 'Low'];
 const SEVERITY_COLORS: Record<string, string> = {
@@ -239,6 +230,11 @@ const SEVERITY_COLORS: Record<string, string> = {
   high: '#e6a23c',
   medium: '#409eff',
   low: '#67c23a',
+};
+const STATUS_COLORS: Record<string, string> = {
+  new: '#409eff',
+  investigating: '#e6a23c',
+  closed: '#67c23a',
 };
 
 const router = useRouter();
@@ -260,20 +256,58 @@ const vulnStats = ref<any>(null);
 const parseCoverage = ref<any>(null);
 const riskSummary = ref<any>(null);
 
-const severityChart = ref<HTMLCanvasElement>();
-const statusChart = ref<HTMLCanvasElement>();
-const riskChart = ref<HTMLCanvasElement>();
-const vulnChart = ref<HTMLCanvasElement>();
-let severityChartInstance: Chart | null = null;
-let statusChartInstance: Chart | null = null;
-let riskChartInstance: Chart | null = null;
-let vulnChartInstance: Chart | null = null;
-
 const alertsByCountry = ref<Array<{ country_code: string; country_name: string; count: number; foreign_count: number }>>([]);
+
+// Detection coverage and asset health drive the stat tiles' color/icon state
+// (green + check vs. orange + warning) — the 50% threshold matches the
+// blind-spot warning banner above, so the two stay consistent about what
+// counts as "healthy".
+const coverageHealthy = computed(() => {
+  if (!parseCoverage.value || parseCoverage.value.total <= 0) return true;
+  return (parseCoverage.value.parsed_pct ?? 100) >= 50;
+});
+const assetsHealthy = computed(() => Number(assetStats.value?.offline_assets || 0) === 0);
+
+const severityItems = computed(() =>
+  SEVERITY_ORDER.map((s, i) => ({
+    key: s,
+    label: SEVERITY_LABELS[i],
+    value: alertStats.value ? Number(alertStats.value[`${s}_count`] ?? 0) : 0,
+    color: SEVERITY_COLORS[s],
+  }))
+);
+
+const riskItems = computed(() =>
+  SEVERITY_ORDER.map((s, i) => ({
+    key: s,
+    label: SEVERITY_LABELS[i],
+    value: riskSummary.value ? Number(riskSummary.value[s] ?? 0) : 0,
+    color: SEVERITY_COLORS[s],
+  }))
+);
+
+const vulnItems = computed(() =>
+  SEVERITY_ORDER.map((s, i) => ({
+    key: s,
+    label: SEVERITY_LABELS[i],
+    value: vulnStats.value ? Number(vulnStats.value[`${s}_count`] ?? 0) : 0,
+    color: SEVERITY_COLORS[s],
+  }))
+);
+
+const statusItems = computed(() => [
+  { key: 'new', label: 'New', value: alertStats.value ? Number(alertStats.value.new_count ?? 0) : 0, color: STATUS_COLORS.new },
+  {
+    key: 'investigating',
+    label: 'Investigating',
+    value: alertStats.value ? Number(alertStats.value.investigating_count ?? 0) : 0,
+    color: STATUS_COLORS.investigating,
+  },
+  { key: 'closed', label: 'Closed', value: alertStats.value ? Number(alertStats.value.closed_count ?? 0) : 0, color: STATUS_COLORS.closed },
+]);
 
 onMounted(async () => {
   await loadData();
-  createCharts();
 });
 
 // Click a country on the map -> investigate it on the Threat Intel tab.
@@ -281,9 +315,12 @@ function goToCountry(code: string) {
   router.push({ path: '/threat-intel', query: { country: code } });
 }
 
-// Click a severity slice -> that severity's alerts / vulnerabilities.
+// Click a row -> that severity's/status's alerts, or that severity's vulns.
 function goToAlertsBySeverity(severity: string) {
   router.push({ path: '/alerts', query: { severity } });
+}
+function goToAlertsByStatus(status: string) {
+  router.push({ path: '/alerts', query: { status } });
 }
 function goToVulnsBySeverity(severity: string) {
   router.push({ path: '/vulnerability-management', query: { severity } });
@@ -291,15 +328,6 @@ function goToVulnsBySeverity(severity: string) {
 function goToSocTriage() {
   router.push('/soc-triage');
 }
-
-// alertStats/vulnStats/riskSummary each arrive asynchronously (and can
-// refresh independently). The original code built the charts once in
-// onMounted and bailed out (early return) whenever the stats weren't loaded
-// yet, leaving the canvases permanently blank. Rebuild whenever any of them
-// change; createCharts() destroys the prior instances first.
-watch(alertStats, () => createCharts());
-watch(vulnStats, () => createCharts());
-watch(riskSummary, () => createCharts());
 
 const loadData = async () => {
   loading.value = true;
@@ -370,151 +398,6 @@ const loadRiskSummary = async () => {
   }
 };
 
-// Chart.js only shows a pointer cursor for elements it knows are interactive;
-// wire that up generically for every clickable chart's onHover.
-function pointerOnHover(evt: any, elements: any[]) {
-  const target = evt?.native?.target as HTMLElement | undefined;
-  if (target) target.style.cursor = elements.length ? 'pointer' : 'default';
-}
-
-const createCharts = () => {
-  // Destroy any prior instances before recreating — Chart.js throws "Canvas is
-  // already in use" if a new chart is attached to a canvas that still owns one,
-  // and leaving them around leaks on every refresh.
-  severityChartInstance?.destroy();
-  severityChartInstance = null;
-  statusChartInstance?.destroy();
-  statusChartInstance = null;
-  riskChartInstance?.destroy();
-  riskChartInstance = null;
-  vulnChartInstance?.destroy();
-  vulnChartInstance = null;
-
-  // Severity Chart — pie, click a slice to see those alerts
-  if (alertStats.value && severityChart.value) {
-    const stats = alertStats.value;
-    severityChartInstance = new Chart(severityChart.value, {
-      type: 'pie',
-      data: {
-        labels: SEVERITY_LABELS,
-        datasets: [
-          {
-            data: SEVERITY_ORDER.map((s) => stats[`${s}_count`] ?? 0),
-            backgroundColor: SEVERITY_ORDER.map((s) => SEVERITY_COLORS[s]),
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: true,
-        plugins: {
-          legend: {
-            position: 'bottom',
-          },
-        },
-        onHover: pointerOnHover,
-        onClick: (_evt, elements) => {
-          if (!elements.length) return;
-          goToAlertsBySeverity(SEVERITY_ORDER[elements[0].index]);
-        },
-      },
-    });
-  }
-
-  // Status Chart — unchanged, not clickable
-  if (alertStats.value && statusChart.value) {
-    statusChartInstance = new Chart(statusChart.value, {
-      type: 'pie',
-      data: {
-        labels: ['New', 'Investigating', 'Closed'],
-        datasets: [
-          {
-            data: [
-              alertStats.value.new_count,
-              alertStats.value.investigating_count,
-              alertStats.value.closed_count,
-            ],
-            backgroundColor: ['#409eff', '#e6a23c', '#67c23a'],
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: true,
-        plugins: {
-          legend: {
-            position: 'bottom',
-          },
-        },
-      },
-    });
-  }
-
-  // SOC Triage Risk Rating — horizontal bar, click a band to open SOC Triage
-  if (riskSummary.value && riskChart.value) {
-    const risk = riskSummary.value;
-    riskChartInstance = new Chart(riskChart.value, {
-      type: 'bar',
-      data: {
-        labels: SEVERITY_LABELS,
-        datasets: [
-          {
-            data: SEVERITY_ORDER.map((s) => risk[s] ?? 0),
-            backgroundColor: SEVERITY_ORDER.map((s) => SEVERITY_COLORS[s]),
-          },
-        ],
-      },
-      options: {
-        indexAxis: 'y',
-        responsive: true,
-        maintainAspectRatio: true,
-        scales: {
-          x: { beginAtZero: true, ticks: { precision: 0 } },
-        },
-        plugins: {
-          legend: { display: false },
-        },
-        onHover: pointerOnHover,
-        onClick: (_evt, elements) => {
-          if (!elements.length) return;
-          goToSocTriage();
-        },
-      },
-    });
-  }
-
-  // Vulnerability Criticality — pie, click a slice to see those vulnerabilities
-  if (vulnStats.value && vulnChart.value) {
-    const vulns = vulnStats.value;
-    vulnChartInstance = new Chart(vulnChart.value, {
-      type: 'pie',
-      data: {
-        labels: SEVERITY_LABELS,
-        datasets: [
-          {
-            data: SEVERITY_ORDER.map((s) => vulns[`${s}_count`] ?? 0),
-            backgroundColor: SEVERITY_ORDER.map((s) => SEVERITY_COLORS[s]),
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: true,
-        plugins: {
-          legend: {
-            position: 'bottom',
-          },
-        },
-        onHover: pointerOnHover,
-        onClick: (_evt, elements) => {
-          if (!elements.length) return;
-          goToVulnsBySeverity(SEVERITY_ORDER[elements[0].index]);
-        },
-      },
-    });
-  }
-};
-
 const getSeverityType = (severity: string) => {
   const types: Record<string, any> = {
     critical: 'danger',
@@ -558,105 +441,110 @@ const viewAlert = (alert: any) => {
 }
 
 .section-header {
-  margin-bottom: 15px;
-  margin-top: 10px;
+  margin-bottom: 12px;
+  margin-top: 8px;
 }
 
 .section-header h3 {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--siembox-text-color);
   margin: 0;
-  padding-bottom: 10px;
+  padding-bottom: 8px;
   border-bottom: 1px solid var(--siembox-border-color, #dcdfe6);
 }
 
-.stats-row {
-  margin-bottom: 20px;
+.stats-row,
+.charts-row {
+  margin-bottom: 16px;
+}
+
+:deep(.el-card__body) {
+  padding: 14px 18px;
 }
 
 .stat-card {
-  margin-bottom: 20px;
+  margin-bottom: 0;
   background-color: var(--siembox-card-bg, #fff);
-  transition: background-color 0.3s;
+  border-left: 3px solid transparent;
+  transition: background-color 0.3s, border-color 0.3s;
 }
 
 .stat-content {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 14px;
 }
 
 .stat-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 70px;
-  height: 70px;
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
   background: rgba(64, 158, 255, 0.1);
   color: #409eff;
+  flex-shrink: 0;
 }
 
+.stat-card.assets {
+  border-left-color: #409eff;
+}
 .stat-card.assets .stat-icon {
   background: rgba(64, 158, 255, 0.1);
   color: #409eff;
 }
 
+.stat-card.assets-online {
+  border-left-color: #67c23a;
+}
 .stat-card.assets-online .stat-icon {
   background: rgba(103, 194, 58, 0.1);
   color: #67c23a;
 }
 
+.stat-card.coverage {
+  border-left-color: #67c23a;
+}
 .stat-card.coverage .stat-icon {
   background: rgba(103, 194, 58, 0.1);
   color: #67c23a;
 }
 
+.stat-card.coverage-unparsed {
+  border-left-color: #67c23a;
+}
 .stat-card.coverage-unparsed .stat-icon {
+  background: rgba(103, 194, 58, 0.1);
+  color: #67c23a;
+}
+
+/* Shared "unhealthy" override for any stat tile, regardless of its base color. */
+.stat-card.is-warning {
+  border-left-color: #e6a23c;
+}
+.stat-card.is-warning .stat-icon {
   background: rgba(230, 162, 60, 0.1);
   color: #e6a23c;
 }
 
 .stat-info {
   flex: 1;
+  min-width: 0;
 }
 
 .stat-value {
-  font-size: 32px;
+  font-size: 26px;
   font-weight: bold;
+  line-height: 1.2;
   color: var(--siembox-text-color);
 }
 
 .stat-label {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--siembox-text-secondary, #909399);
-  margin-top: 5px;
-}
-
-.charts-row {
-  margin-bottom: 20px;
-}
-
-.chart-container {
-  height: 300px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* The country bar chart grows with the number of countries; give it room and
-   let it fill the width (maintainAspectRatio is off for the horizontal bar). */
-.chart-container--wide {
-  height: 360px;
-  width: 100%;
-}
-
-.empty-geo {
-  padding: 32px 16px;
-  text-align: center;
-  color: var(--siembox-text-secondary, #909399);
-  font-size: 14px;
+  margin-top: 3px;
 }
 
 .card-header {

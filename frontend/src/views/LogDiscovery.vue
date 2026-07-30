@@ -125,9 +125,67 @@
           <strong>{{ onboardTarget.hostname || onboardTarget.ip }}</strong>
           — {{ fingerprintName(onboardTarget.matched_fingerprint_id) }}
         </p>
-        <el-select v-if="onboardMethods.length > 1" v-model="onboardMethodIndex" @change="loadOnboardPreview" style="margin-bottom: 12px">
+        <el-select v-if="onboardMethods.length > 1" v-model="onboardMethodIndex" @change="onOnboardMethodChange" style="margin-bottom: 12px">
           <el-option v-for="(m, idx) in onboardMethods" :key="idx" :label="m.method" :value="idx" />
         </el-select>
+
+        <!-- API-pull polling panel: only for fingerprints with a real adapter. Left in place
+             alongside the manual instructions below rather than replacing them -- the copy-paste
+             cron+curl+logger recipe is still a valid fallback if you'd rather not store a token here. -->
+        <div v-if="isPollableMethod" class="poller-panel">
+          <div class="poller-head">
+            Poll this API directly
+            <el-tag v-if="pollerStatus?.configured" type="success" size="small">configured</el-tag>
+            <el-tag v-else type="info" size="small">not configured</el-tag>
+          </div>
+          <el-text size="small" type="info">
+            SIEMBox will pull events on its own schedule instead of you running the recipe below.
+            The token is encrypted at rest and never shown again after saving.
+          </el-text>
+
+          <el-alert
+            v-if="pollerStatus?.last_status === 'error'"
+            type="error"
+            :closable="false"
+            show-icon
+            :title="pollerStatus.last_error || 'Last poll failed'"
+            style="margin: 8px 0"
+          />
+
+          <div class="poller-form">
+            <el-input
+              v-if="onboardMethod?.auth === 'basic'"
+              v-model="pollerUsername"
+              placeholder="Username"
+              class="poller-username"
+            />
+            <el-input
+              v-model="pollerSecret"
+              :placeholder="pollerStatus?.configured ? 'Replace token…' : 'Paste API token…'"
+              type="password"
+              show-password
+              clearable
+              class="poller-secret"
+            />
+            <el-button type="primary" :loading="savingCredential" @click="savePollerCredential">
+              {{ pollerStatus?.configured ? 'Update' : 'Save' }}
+            </el-button>
+            <el-button v-if="pollerStatus?.configured" type="danger" plain @click="revokePollerCredential">Revoke</el-button>
+          </div>
+
+          <div v-if="pollerStatus?.configured" class="poller-controls">
+            <el-switch v-model="pollerEnabled" active-text="Polling on" inactive-text="Polling off" @change="togglePolling" />
+            <span class="poller-interval-label">every</span>
+            <el-input-number v-model="pollerInterval" :min="1" :max="1440" size="small" @change="updatePollerInterval" />
+            <span class="poller-interval-label">min</span>
+            <el-button link size="small" :loading="runningNow" @click="runPollNow">Poll now</el-button>
+            <span v-if="pollerStatus.last_polled_at" class="poller-last-polled">
+              last polled {{ formatDate(pollerStatus.last_polled_at) }}
+              <template v-if="pollerStatus.last_status === 'ok'">— {{ pollerStatus.last_event_count ?? 0 }} event(s)</template>
+            </span>
+          </div>
+        </div>
+
         <pre class="onboard-instructions">{{ onboardInstructions }}</pre>
       </div>
       <template #footer>
@@ -148,6 +206,7 @@ import logDiscoveryService, {
   type ScopePreview,
   type FingerprintEntry,
   type DiscoveryScanMode,
+  type PollerStatus,
 } from '@/services/logDiscoveryService';
 import DiscoverySourcesTable from '@/components/DiscoverySourcesTable.vue';
 
@@ -172,6 +231,15 @@ const onboardTarget = ref<RankedSource | null>(null);
 const onboardInstructions = ref('');
 const onboardMethodIndex = ref(0);
 
+const pollableFingerprintIds = ref<string[]>([]);
+const pollerStatus = ref<PollerStatus | null>(null);
+const pollerSecret = ref('');
+const pollerUsername = ref('');
+const pollerInterval = ref(5);
+const pollerEnabled = ref(true);
+const savingCredential = ref(false);
+const runningNow = ref(false);
+
 function formatDate(date: string) {
   return new Date(date).toLocaleString();
 }
@@ -193,6 +261,15 @@ const onboardMethods = computed(() => {
   return fp?.log_access || [];
 });
 
+const onboardMethod = computed(() => onboardMethods.value[onboardMethodIndex.value] || null);
+
+const isPollableMethod = computed(
+  () =>
+    onboardMethod.value?.method === 'api_pull' &&
+    !!onboardTarget.value?.matched_fingerprint_id &&
+    pollableFingerprintIds.value.includes(onboardTarget.value.matched_fingerprint_id)
+);
+
 async function loadScope() {
   scope.value = await logDiscoveryService.getScope(manualCidrs.value);
 }
@@ -203,6 +280,10 @@ async function loadScans() {
 
 async function loadFingerprints() {
   fingerprints.value = await logDiscoveryService.getFingerprints();
+}
+
+async function loadPollableFingerprints() {
+  pollableFingerprintIds.value = await logDiscoveryService.getPollableFingerprintIds();
 }
 
 async function loadSources() {
@@ -289,11 +370,91 @@ async function loadOnboardPreview() {
   onboardInstructions.value = preview.instructions;
 }
 
+async function loadPollerStatus() {
+  if (!onboardTarget.value || !isPollableMethod.value) {
+    pollerStatus.value = null;
+    return;
+  }
+  pollerStatus.value = await logDiscoveryService.getPollerStatus(onboardTarget.value.id);
+  pollerEnabled.value = pollerStatus.value.enabled ?? true;
+  pollerInterval.value = pollerStatus.value.poll_interval_minutes ?? 5;
+}
+
+async function onOnboardMethodChange() {
+  pollerSecret.value = '';
+  pollerUsername.value = '';
+  await Promise.all([loadOnboardPreview(), loadPollerStatus()]);
+}
+
 async function openOnboard(source: RankedSource) {
   onboardTarget.value = source;
   onboardMethodIndex.value = 0;
+  pollerSecret.value = '';
+  pollerUsername.value = '';
+  pollerStatus.value = null;
   showOnboardDialog.value = true;
-  await loadOnboardPreview();
+  await Promise.all([loadOnboardPreview(), loadPollerStatus()]);
+}
+
+async function savePollerCredential() {
+  if (!onboardTarget.value || !pollerSecret.value.trim()) return;
+  savingCredential.value = true;
+  try {
+    pollerStatus.value = await logDiscoveryService.savePollerCredential(
+      onboardTarget.value.id,
+      pollerSecret.value.trim(),
+      pollerUsername.value.trim() || undefined
+    );
+    pollerSecret.value = '';
+    pollerEnabled.value = pollerStatus.value.enabled ?? true;
+    pollerInterval.value = pollerStatus.value.poll_interval_minutes ?? 5;
+    ElMessage.success('Token saved — polling will start on the next cycle');
+    loadSources();
+  } catch (err: any) {
+    ElMessage.error(err.response?.data?.message || 'Failed to save token');
+  } finally {
+    savingCredential.value = false;
+  }
+}
+
+async function revokePollerCredential() {
+  if (!onboardTarget.value) return;
+  try {
+    await ElMessageBox.confirm('Stop polling this source and forget the saved token?', 'Revoke token', { type: 'warning' });
+  } catch {
+    return; // user cancelled
+  }
+  await logDiscoveryService.revokePollerCredential(onboardTarget.value.id);
+  pollerStatus.value = { configured: false };
+  ElMessage.success('Token revoked');
+  loadSources();
+}
+
+async function togglePolling(enabled: boolean) {
+  if (!onboardTarget.value) return;
+  pollerStatus.value = await logDiscoveryService.setPolling(onboardTarget.value.id, { enabled });
+  loadSources();
+}
+
+async function updatePollerInterval(minutes: number | undefined) {
+  if (!onboardTarget.value || !minutes) return;
+  pollerStatus.value = await logDiscoveryService.setPolling(onboardTarget.value.id, { poll_interval_minutes: minutes });
+}
+
+async function runPollNow() {
+  if (!onboardTarget.value) return;
+  runningNow.value = true;
+  try {
+    const result = await logDiscoveryService.runPollNow(onboardTarget.value.id);
+    if (result.ok) {
+      ElMessage.success(`Polled successfully — ${result.count} event(s)`);
+    } else {
+      ElMessage.error(result.error || 'Poll failed');
+    }
+    await loadPollerStatus();
+  } finally {
+    runningNow.value = false;
+  }
 }
 
 async function copyInstructions() {
@@ -311,6 +472,7 @@ async function confirmOnboard() {
 
 onMounted(() => {
   loadFingerprints();
+  loadPollableFingerprints();
   refreshAll();
 });
 </script>
@@ -364,5 +526,47 @@ onMounted(() => {
   color: var(--el-text-color-secondary);
   font-size: 13px;
   margin-bottom: 12px;
+}
+.poller-panel {
+  background: var(--el-fill-color-light);
+  border-radius: 4px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.poller-head {
+  font-weight: 600;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.poller-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.poller-secret {
+  flex: 1;
+  min-width: 200px;
+}
+.poller-username {
+  width: 140px;
+}
+.poller-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.poller-interval-label {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+.poller-last-polled {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  margin-left: auto;
 }
 </style>

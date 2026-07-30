@@ -36,10 +36,28 @@ export interface DiscoverySourceUpsertInput {
   last_scan_id: number;
 }
 
+/** discovery_sources joined with its (optional) poller row, for the bulk sources list. */
+export interface DiscoverySourceWithPoller extends DiscoverySource {
+  poller_configured: boolean;
+  poller_enabled: boolean | null;
+  poller_last_status: string | null;
+  poller_last_polled_at: string | null;
+  poller_last_error: string | null;
+}
+
 export const DiscoverySourceModel = {
-  async findAll(): Promise<DiscoverySource[]> {
+  /** LEFT JOINs discovery_source_pollers so the sources list can show polling status without N+1 requests. */
+  async findAll(): Promise<DiscoverySourceWithPoller[]> {
     const result = await query(
-      `SELECT * FROM discovery_sources ORDER BY security_value DESC NULLS LAST, confidence DESC`
+      `SELECT ds.*,
+              (dsp.discovery_source_id IS NOT NULL) AS poller_configured,
+              dsp.enabled AS poller_enabled,
+              dsp.last_status AS poller_last_status,
+              dsp.last_polled_at AS poller_last_polled_at,
+              dsp.last_error AS poller_last_error
+         FROM discovery_sources ds
+         LEFT JOIN discovery_source_pollers dsp ON dsp.discovery_source_id = ds.id
+        ORDER BY ds.security_value DESC NULLS LAST, ds.confidence DESC`
     );
     return result.rows;
   },

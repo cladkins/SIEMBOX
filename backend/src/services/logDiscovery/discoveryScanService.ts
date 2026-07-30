@@ -310,7 +310,16 @@ function toRuntimeSource(row: DiscoverySource): RuntimeSource {
 export async function getRankedSources(): Promise<RankedResult> {
   const rows = await DiscoverySourceModel.findAll();
   const items: RankableItem[] = rows.map((row) => ({
-    source: toRuntimeSource(row),
+    source: {
+      ...toRuntimeSource(row),
+      poller: {
+        configured: row.poller_configured,
+        enabled: row.poller_enabled ?? false,
+        last_status: (row.poller_last_status as 'ok' | 'error' | null) ?? null,
+        last_polled_at: row.poller_last_polled_at,
+        last_error: row.poller_last_error,
+      },
+    },
     fingerprint: row.matched_fingerprint_id ? getFingerprintById(row.matched_fingerprint_id) || null : null,
   }));
   return rankSources(items);

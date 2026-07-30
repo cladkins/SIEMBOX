@@ -17,9 +17,17 @@
       </template>
     </el-table-column>
     <el-table-column label="Why" min-width="220" prop="reason" />
-    <el-table-column label="Status" width="110">
+    <el-table-column label="Status" width="150">
       <template #default="{ row }">
         <el-tag size="small">{{ row.status }}</el-tag>
+        <el-tag
+          v-if="row.poller?.configured && row.poller.enabled"
+          size="small"
+          :type="row.poller.last_status === 'error' ? 'danger' : 'success'"
+          style="margin-left: 4px"
+        >
+          polling
+        </el-tag>
       </template>
     </el-table-column>
     <el-table-column label="Actions" width="260">

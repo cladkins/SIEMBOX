@@ -13,6 +13,8 @@ export interface RawLog {
   shipper_id: string | null;
   /** Client-supplied dedup key for HTTP-pushed logs (see 029_shipper_http_push.sql). Always null for syslog-ingested rows. */
   ingest_event_id: string | null;
+  /** Set for logs pulled by the Log Discovery API poller (030_discovery_api_poller.sql); mutually exclusive with shipper_id. */
+  discovery_source_id: number | null;
   created_at: Date;
 }
 
@@ -26,6 +28,7 @@ export interface CreateRawLogParams {
   app_name?: string | null;
   shipper_id?: string | null;
   ingest_event_id?: string | null;
+  discovery_source_id?: number | null;
 }
 
 export interface RawLogFilters {
@@ -100,16 +103,24 @@ export function buildRawLogFilters(options?: RawLogFilters): {
 export class RawLogModel {
   /**
    * Returns null when `ingest_event_id` is set and a row with the same
-   * (shipper_id, ingest_event_id) already exists — a retried HTTP push
-   * (timeout, at-least-once delivery) is silently deduped rather than
-   * creating a second row and re-firing detections. Callers that never pass
-   * `ingest_event_id` (syslog ingestion) always get a row back.
+   * (shipper_id, ingest_event_id) — or (discovery_source_id, ingest_event_id)
+   * for poller-attributed rows — already exists: a retried HTTP push or an
+   * overlapping poll window is silently deduped rather than creating a second
+   * row and re-firing detections. Callers that never pass `ingest_event_id`
+   * (syslog ingestion) always get a row back. `shipper_id` and
+   * `discovery_source_id` are mutually exclusive by construction (push vs.
+   * pull ingestion paths never set both), so exactly one partial unique index
+   * is ever a candidate conflict target for a given row.
    */
   static async create(params: CreateRawLogParams): Promise<RawLog | null> {
+    const conflictClause =
+      params.discovery_source_id != null
+        ? `ON CONFLICT (discovery_source_id, ingest_event_id) WHERE discovery_source_id IS NOT NULL AND ingest_event_id IS NOT NULL DO NOTHING`
+        : `ON CONFLICT (shipper_id, ingest_event_id) WHERE ingest_event_id IS NOT NULL DO NOTHING`;
     const result = await query(
-      `INSERT INTO raw_logs (timestamp, raw_message, source_ip, facility, severity, hostname, app_name, shipper_id, ingest_event_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (shipper_id, ingest_event_id) WHERE ingest_event_id IS NOT NULL DO NOTHING
+      `INSERT INTO raw_logs (timestamp, raw_message, source_ip, facility, severity, hostname, app_name, shipper_id, ingest_event_id, discovery_source_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ${conflictClause}
        RETURNING *`,
       [
         params.timestamp,
@@ -121,6 +132,7 @@ export class RawLogModel {
         params.app_name ?? null,
         params.shipper_id ?? null,
         params.ingest_event_id ?? null,
+        params.discovery_source_id ?? null,
       ]
     );
 

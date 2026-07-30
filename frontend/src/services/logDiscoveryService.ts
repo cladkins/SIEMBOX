@@ -24,6 +24,14 @@ export interface FingerprintEntry {
   credentials: { required: boolean; optional: Array<{ type: string; unlocks?: string[] }> };
 }
 
+export interface RankedSourcePollerStatus {
+  configured: boolean;
+  enabled: boolean;
+  last_status: 'ok' | 'error' | null;
+  last_polled_at: string | null;
+  last_error: string | null;
+}
+
 export interface RankedSource {
   id: number;
   ip: string;
@@ -38,6 +46,7 @@ export interface RankedSource {
   selected_log_access: LogAccessMethod | null;
   evidence: Record<string, unknown>;
   reason: string;
+  poller?: RankedSourcePollerStatus;
 }
 
 export interface RankedSources {
@@ -72,6 +81,24 @@ export interface TriggerScanResponse {
 export interface OnboardPreview {
   instructions: string;
   log_access: LogAccessMethod;
+}
+
+export interface PollerStatus {
+  configured: boolean;
+  fingerprint_id?: string;
+  credential_username?: string | null;
+  enabled?: boolean;
+  poll_interval_minutes?: number;
+  last_polled_at?: string | null;
+  last_status?: 'ok' | 'error' | null;
+  last_error?: string | null;
+  last_event_count?: number | null;
+}
+
+export interface PollNowResult {
+  ok: boolean;
+  count: number;
+  error?: string;
 }
 
 class LogDiscoveryServiceClient {
@@ -131,6 +158,37 @@ class LogDiscoveryServiceClient {
       method_index: methodIndex,
       confirm: true,
     });
+    return response.data;
+  }
+
+  /** Fingerprint ids with a real poll adapter — so the UI doesn't hardcode which of the 10 bundled fingerprints support it. */
+  async getPollableFingerprintIds(): Promise<string[]> {
+    const response = await apiClient.get('/log-discovery/poller/supported-fingerprints');
+    return response.data;
+  }
+
+  async getPollerStatus(id: number): Promise<PollerStatus> {
+    const response = await apiClient.get(`/log-discovery/sources/${id}/poller`);
+    return response.data;
+  }
+
+  async savePollerCredential(id: number, secret: string, username?: string): Promise<PollerStatus> {
+    const response = await apiClient.post(`/log-discovery/sources/${id}/poller/credential`, { secret, username });
+    return response.data;
+  }
+
+  async revokePollerCredential(id: number): Promise<{ cleared: boolean }> {
+    const response = await apiClient.delete(`/log-discovery/sources/${id}/poller/credential`);
+    return response.data;
+  }
+
+  async setPolling(id: number, changes: { enabled?: boolean; poll_interval_minutes?: number }): Promise<PollerStatus> {
+    const response = await apiClient.patch(`/log-discovery/sources/${id}/poller`, changes);
+    return response.data;
+  }
+
+  async runPollNow(id: number): Promise<PollNowResult> {
+    const response = await apiClient.post(`/log-discovery/sources/${id}/poller/run-now`);
     return response.data;
   }
 }

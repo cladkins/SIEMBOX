@@ -9,6 +9,7 @@ import { startAutoDiscoveryJob, stopAutoDiscoveryJob } from './jobs/autoDiscover
 import { startScheduledScansJob, stopScheduledScansJob } from './jobs/scheduledScans';
 import { startIngestionHealthJob, stopIngestionHealthJob } from './jobs/ingestionHealth';
 import { startThreatFeedsJob, stopThreatFeedsJob } from './jobs/threatFeeds';
+import { startDiscoveryApiPollerJob, stopDiscoveryApiPollerJob } from './jobs/discoveryApiPoller';
 import { startGeoipUpdateJob, stopGeoipUpdateJob } from './jobs/geoipUpdate';
 import { startYaraRulesJob, stopYaraRulesJob } from './jobs/yaraRules';
 import { startTriageReconcilerJob, stopTriageReconcilerJob } from './jobs/triageReconciler';
@@ -120,6 +121,10 @@ const startServer = async () => {
     // Start the external threat-feed refresher (populates blocklist indicators).
     startThreatFeedsJob();
 
+    // Start the Log Discovery API poller (pulls events from sources configured
+    // for polling instead of the manual cron+curl+logger recipe).
+    startDiscoveryApiPollerJob();
+
     // Keep the GeoIP database current. Without it, country enrichment is off and
     // the GeoIP map / Threat Intel country tables have nothing to show.
     startGeoipUpdateJob();
@@ -165,6 +170,7 @@ process.on('SIGTERM', async () => {
   stopScheduledScansJob();
   stopIngestionHealthJob();
   stopThreatFeedsJob();
+  stopDiscoveryApiPollerJob();
   stopGeoipUpdateJob();
   stopYaraRulesJob();
   stopTriageReconcilerJob();
@@ -186,6 +192,7 @@ process.on('SIGINT', async () => {
   stopScheduledScansJob();
   stopIngestionHealthJob();
   stopThreatFeedsJob();
+  stopDiscoveryApiPollerJob();
   stopGeoipUpdateJob();
   stopYaraRulesJob();
   stopTriageReconcilerJob();

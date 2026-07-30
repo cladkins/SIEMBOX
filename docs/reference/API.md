@@ -2537,6 +2537,12 @@ Discovery is read-only; only the `onboard/confirm` endpoint records a user
 decision, and it never writes device or collector config itself (manual mode
 only -- see `backend/src/services/logDiscovery/`).
 
+For sources whose fingerprint declares an `api_pull` log-access method
+(Authentik, Home Assistant, Pi-hole, AdGuard Home today), the poller endpoints
+below are the alternative to the manual copy-paste recipe: save a token and
+SIEMBOX pulls that source's events on a schedule instead. See
+`backend/src/services/logDiscovery/apiPoll/`.
+
 ### GET /api/log-discovery/scope
 
 Preview the scan scope: the single-VLAN warning (SIEMBOX only sees its own
@@ -2726,6 +2732,104 @@ never onboards without user confirmation.
   "instructions": "OPNsense at 192.168.1.1 — point it at SIEMBOX's syslog listener\n..."
 }
 ```
+
+---
+
+### GET /api/log-discovery/poller/supported-fingerprints
+
+Fingerprint ids with a real poll adapter (e.g. `["authentik", "home-assistant", "pihole", "adguard-home"]`) -- lets the UI know which sources can offer API polling without hardcoding the list.
+
+**Authentication:** Required
+
+---
+
+### GET /api/log-discovery/sources/:id/poller
+
+Poller status for a source. Never includes the credential itself.
+
+**Authentication:** Required
+
+**Response (200) — configured:**
+```json
+{
+  "configured": true,
+  "fingerprint_id": "authentik",
+  "credential_username": null,
+  "enabled": true,
+  "poll_interval_minutes": 5,
+  "last_polled_at": "2025-12-17T10:05:00Z",
+  "last_status": "ok",
+  "last_error": null,
+  "last_event_count": 3
+}
+```
+**Response (200) — not configured:** `{ "configured": false }`
+
+---
+
+### POST /api/log-discovery/sources/:id/poller/credential
+
+Save (or replace) the token for this source's `api_pull` method and start polling it. Resolves the fingerprint's `api_pull` entry itself (not `method_index` -- most fingerprints list a `file`/`syslog_push` method first), so this always targets the right one regardless of what's shown in the onboarding dialog. Also sets `selected_log_access` and marks the source `onboarded`, same outcome as the manual `onboard/confirm` flow.
+
+**Authentication:** Required (Admin)
+
+**Request Body:**
+```json
+{ "username": null, "secret": "the-api-token-or-password" }
+```
+- `secret` (required) - the token/password. Encrypted at rest (AES-256-GCM); never returned again after this call.
+- `username` (optional) - only used by HTTP Basic auth sources (AdGuard Home today)
+
+**Response (200):** Same shape as `GET .../poller` above.
+
+**Errors:**
+- `400` - missing/empty `secret`, source has no matched fingerprint, or the fingerprint has no `api_pull` log-access method
+- `404` - source or fingerprint not found
+
+---
+
+### DELETE /api/log-discovery/sources/:id/poller/credential
+
+Full revoke: stops polling and forgets the credential, interval, and cursor (not just the secret) -- resuming later starts from scratch, not where it left off.
+
+**Authentication:** Required (Admin)
+
+**Response (200):** `{ "cleared": true }`
+
+---
+
+### PATCH /api/log-discovery/sources/:id/poller
+
+Toggle polling on/off and/or change the poll interval.
+
+**Authentication:** Required (Admin)
+
+**Request Body:**
+```json
+{ "enabled": true, "poll_interval_minutes": 10 }
+```
+Both fields optional; `poll_interval_minutes` is clamped to `[1, 1440]`.
+
+**Response (200):** Same shape as `GET .../poller` above.
+
+**Errors:**
+- `404` - no poller configured for this source yet (save a credential first)
+
+---
+
+### POST /api/log-discovery/sources/:id/poller/run-now
+
+Poll immediately instead of waiting for the next scheduled cycle -- for UI feedback right after saving a credential.
+
+**Authentication:** Required (Admin)
+
+**Response (200):**
+```json
+{ "ok": true, "count": 3 }
+```
+
+**Errors:**
+- `404` - no poller configured for this source yet
 
 ---
 

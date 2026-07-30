@@ -113,6 +113,15 @@ export interface FingerprintMatch {
 
 export type SourceStatus = 'candidate' | 'confirmed' | 'onboarded' | 'ignored';
 
+/** Bulk poller status for the sources table — never includes the credential itself. */
+export interface RuntimeSourcePollerStatus {
+  configured: boolean;
+  enabled: boolean;
+  last_status: 'ok' | 'error' | null;
+  last_polled_at: string | null;
+  last_error: string | null;
+}
+
 export interface RuntimeSource {
   id: number;
   ip: string;
@@ -126,6 +135,7 @@ export interface RuntimeSource {
   status: SourceStatus;
   selected_log_access: LogAccessMethod | null;
   evidence: Record<string, unknown>;
+  poller?: RuntimeSourcePollerStatus;
 }
 
 export interface RankedSource extends RuntimeSource {

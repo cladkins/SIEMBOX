@@ -18,6 +18,28 @@ name: "SIEMBox CodeQL config"
 # just those two call sites. If some other, unreviewed file starts disabling
 # cert validation in the future, this query will no longer catch it either --
 # revisit this exclusion if that ever becomes a concern.
+#
+# Also excludes js/insufficient-password-hash.
+#
+# Why: backend/src/models/EdrAgent.ts's sha256hex() hashes server-generated,
+# high-entropy random tokens (API keys, enrollment tokens, HTTP log-push
+# keys) for O(1) equality-checked Bearer-token auth -- not user-chosen
+# passwords. The query's source heuristic treats any "apiKey"-named value as
+# a password (see edrService.ts's enrollAgent, which hashes a local variable
+# literally named apiKey), so it fires here even though a slow/adaptive hash
+# (bcrypt/scrypt/Argon2) would add real per-request latency for zero benefit
+# against a 256-bit random token that's already infeasible to brute-force.
+# An inline `codeql[js/insufficient-password-hash]` suppression comment on
+# sha256hex() (see that function's doc comment) did not clear the alert, so
+# this repo-wide exclusion was used instead, matching the pattern above.
+#
+# Tradeoff: same as above -- this also stops the query from catching a real
+# weak-password-hash mistake anywhere else in the repo (e.g. in
+# routes/auth.ts or routes/users.ts, which handle actual user passwords).
+# Revisit if that ever becomes a concern, or if inline suppression starts
+# working and this can be narrowed back down.
 query-filters:
   - exclude:
       id: js/disabling-certificate-validation
+  - exclude:
+      id: js/insufficient-password-hash

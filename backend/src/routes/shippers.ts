@@ -1,11 +1,15 @@
 import { Router, Request, Response } from 'express';
-import { LogShipperModel, ShipperSourceModel, ShipperVolumeModel, ShipperActivityModel } from '../models/LogShipper';
+import { LogShipperModel, ShipperSourceModel, ShipperVolumeModel, ShipperActivityModel, withHttpPushStatus } from '../models/LogShipper';
 import { ApiError } from '../middleware/errorHandler';
 import { query } from '../config/database';
 import { logger } from '../utils/logger';
 import crypto from 'crypto';
 import { groupContainers, DockerContainer } from '../services/scanner/dockerDiscovery';
 import { ShipperContainerModel } from '../models/ShipperContainer';
+import { authenticate, authorize } from '../middleware/auth';
+import { authenticateShipperPush } from '../middleware/shipperPushAuth';
+import { sha256hex } from '../models/EdrAgent';
+import { ingestPushedLogs, MAX_LOG_PUSH_BATCH_SIZE } from '../services/shippers/logPushService';
 
 const router = Router();
 
@@ -65,7 +69,7 @@ router.get('/', async (_req: Request, res: Response) => {
 
     // Calculate dynamic status based on last_seen
     const shippersWithStatus = shippers.map((shipper: any) => ({
-      ...shipper,
+      ...withHttpPushStatus(shipper),
       status: calculateStatus(shipper.last_seen, shipper.status)
     }));
 
@@ -89,7 +93,8 @@ router.get('/unknown-sources', async (_req: Request, res: Response) => {
       WITH shipper_hashes AS (
         SELECT
           LOWER(SUBSTRING(MD5(decode(api_key, 'hex')), 1, 8)) AS md5_id,
-          LOWER(SUBSTRING(ENCODE(SHA256(decode(api_key, 'hex')), 'hex'), 1, 8)) AS sha256_id
+          LOWER(SUBSTRING(ENCODE(SHA256(decode(api_key, 'hex')), 'hex'), 1, 8)) AS sha256_id,
+          LOWER(SUBSTRING(http_push_key_hash, 1, 8)) AS http_push_id
         FROM log_shippers
         WHERE api_key ~ '^([0-9a-fA-F]{2})+$'
       )
@@ -107,6 +112,7 @@ router.get('/unknown-sources', async (_req: Request, res: Response) => {
           SELECT 1 FROM shipper_hashes sh
           WHERE LOWER(rl.shipper_id) = sh.md5_id
              OR LOWER(rl.shipper_id) = sh.sha256_id
+             OR LOWER(rl.shipper_id) = sh.http_push_id
         )
       GROUP BY rl.shipper_id
       ORDER BY MAX(rl.created_at) DESC
@@ -142,7 +148,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     // Calculate dynamic status
     shipper.status = calculateStatus(shipper.last_seen, shipper.status);
 
-    res.json(shipper);
+    res.json(withHttpPushStatus(shipper));
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch shipper');
@@ -393,6 +399,55 @@ router.post('/:id/regenerate-key', async (req: Request, res: Response) => {
 });
 
 // ============================================================================
+// HTTP LOG-PUSH KEY MANAGEMENT (admin only — a key SEPARATE from the syslog
+// api_key above, used only to authenticate POST /shippers/logs. The router as
+// a whole isn't gated by app.ts, so these two routes gate themselves rather
+// than inheriting the "no auth" posture the rest of this file has today.)
+// ============================================================================
+
+// Generate (or rotate) the HTTP push key. Returned once — never retrievable
+// again, unlike the syslog api_key above.
+router.post('/:id/http-push-key', authenticate, authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const shipper = await LogShipperModel.findById(id);
+    if (!shipper) {
+      throw new ApiError(404, 'Shipper not found');
+    }
+
+    const pushKey = generateApiKey();
+    await LogShipperModel.setHttpPushKey(id, sha256hex(pushKey));
+    await ShipperActivityModel.log(id, 'http_push_key_generated', 'HTTP log-push key (re)generated');
+
+    res.json({ http_push_key: pushKey });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to generate HTTP push key');
+  }
+});
+
+// Revoke the HTTP push key. Disables POST /shippers/logs for this shipper
+// immediately (no "ghost shipper" grace period — that concept only applies
+// to the syslog path, see CLAUDE.md).
+router.delete('/:id/http-push-key', authenticate, authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const shipper = await LogShipperModel.findById(id);
+    if (!shipper) {
+      throw new ApiError(404, 'Shipper not found');
+    }
+
+    await LogShipperModel.revokeHttpPushKey(id);
+    await ShipperActivityModel.log(id, 'http_push_key_revoked', 'HTTP log-push key revoked');
+
+    res.json({ revoked: true });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to revoke HTTP push key');
+  }
+});
+
+// ============================================================================
 // PUBLIC ENDPOINTS (for shippers to call - no authentication required)
 // ============================================================================
 
@@ -427,9 +482,11 @@ router.post('/register', async (req: Request, res: Response) => {
     const config = await LogShipperModel.getFullConfig(shipper.id);
     const syslogSettings = await getSyslogSettings();
 
-    // Inject syslog settings at top level (not nested in config.config)
+    // Inject syslog settings at top level (not nested in config.config).
+    // config is stripped of http_push_key_hash first — this is the shipper's
+    // own record, but the hash still has no reason to leave the server.
     const fullConfig = {
-      ...config,
+      ...(config ? withHttpPushStatus(config) : config),
       ...syslogSettings,
     };
 
@@ -511,9 +568,11 @@ router.get('/config/:api_key', async (req: Request, res: Response) => {
     const config = await LogShipperModel.getFullConfig(shipper.id);
     const syslogSettings = await getSyslogSettings();
 
-    // Inject syslog settings at top level (not nested in config.config)
+    // Inject syslog settings at top level (not nested in config.config).
+    // config is stripped of http_push_key_hash first — this is the shipper's
+    // own record, but the hash still has no reason to leave the server.
     const fullConfig = {
-      ...config,
+      ...(config ? withHttpPushStatus(config) : config),
       ...syslogSettings,
     };
 
@@ -521,6 +580,46 @@ router.get('/config/:api_key', async (req: Request, res: Response) => {
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch configuration');
+  }
+});
+
+// ============================================================================
+// HTTP LOG-PUSH INGESTION (shipper push-key authenticated — see
+// middleware/shipperPushAuth.ts. NOT JWT, NOT the syslog api_key above.)
+// ============================================================================
+
+// Accepts a single log ({"message": "..."}) or a batch ({"logs": [...]}).
+// message must be the bare extracted message, not a syslog-framed line (see
+// CLAUDE.md: "Parsers match only the extracted message"). One bad entry in a
+// batch is counted in `rejected`, not a whole-request failure.
+router.post('/logs', authenticateShipperPush, async (req: Request, res: Response) => {
+  try {
+    const shipper = req.pushShipper!;
+    const body = req.body ?? {};
+
+    let rawEntries: unknown[];
+    if (Array.isArray(body.logs)) {
+      rawEntries = body.logs;
+    } else if (typeof body.message === 'string') {
+      rawEntries = [body];
+    } else {
+      throw new ApiError(400, 'Body must be a single log object with "message", or { "logs": [...] }');
+    }
+    if (rawEntries.length === 0) {
+      throw new ApiError(400, 'logs array is empty');
+    }
+    if (rawEntries.length > MAX_LOG_PUSH_BATCH_SIZE) {
+      throw new ApiError(400, `Too many entries in one request (max ${MAX_LOG_PUSH_BATCH_SIZE})`);
+    }
+
+    const sourceIp = req.ip || req.socket.remoteAddress || 'unknown';
+    const result = await ingestPushedLogs(shipper, rawEntries, sourceIp);
+    await LogShipperModel.touchHttpPush(shipper.id, sourceIp).catch(() => {});
+
+    res.status(202).json(result);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to ingest logs');
   }
 });
 

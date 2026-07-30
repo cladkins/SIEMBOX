@@ -11,6 +11,8 @@ export interface RawLog {
   hostname: string | null;
   app_name: string | null;
   shipper_id: string | null;
+  /** Client-supplied dedup key for HTTP-pushed logs (see 029_shipper_http_push.sql). Always null for syslog-ingested rows. */
+  ingest_event_id: string | null;
   created_at: Date;
 }
 
@@ -23,6 +25,7 @@ export interface CreateRawLogParams {
   hostname?: string | null;
   app_name?: string | null;
   shipper_id?: string | null;
+  ingest_event_id?: string | null;
 }
 
 export interface RawLogFilters {
@@ -95,10 +98,18 @@ export function buildRawLogFilters(options?: RawLogFilters): {
 }
 
 export class RawLogModel {
-  static async create(params: CreateRawLogParams): Promise<RawLog> {
+  /**
+   * Returns null when `ingest_event_id` is set and a row with the same
+   * (shipper_id, ingest_event_id) already exists — a retried HTTP push
+   * (timeout, at-least-once delivery) is silently deduped rather than
+   * creating a second row and re-firing detections. Callers that never pass
+   * `ingest_event_id` (syslog ingestion) always get a row back.
+   */
+  static async create(params: CreateRawLogParams): Promise<RawLog | null> {
     const result = await query(
-      `INSERT INTO raw_logs (timestamp, raw_message, source_ip, facility, severity, hostname, app_name, shipper_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO raw_logs (timestamp, raw_message, source_ip, facility, severity, hostname, app_name, shipper_id, ingest_event_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (shipper_id, ingest_event_id) WHERE ingest_event_id IS NOT NULL DO NOTHING
        RETURNING *`,
       [
         params.timestamp,
@@ -109,10 +120,11 @@ export class RawLogModel {
         params.hostname ?? null,
         params.app_name ?? null,
         params.shipper_id ?? null,
+        params.ingest_event_id ?? null,
       ]
     );
 
-    return result.rows[0];
+    return result.rows[0] || null;
   }
 
   static async findById(id: number): Promise<RawLog | null> {

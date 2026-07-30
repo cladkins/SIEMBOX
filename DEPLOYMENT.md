@@ -542,6 +542,23 @@ Log shippers forward logs from remote sources to SIEMBox. Each shipper requires 
 
 See [Log Shipper README](./log-shipper/README.md) for detailed setup instructions.
 
+### HTTP Log Push (for tools that can't run the managed shipper)
+
+Some homelab/self-hosted tools can't speak syslog but can POST JSON — a webhook notifier, a small script, a cron job. For these, provision an HTTP log-push key instead of deploying a shipper container:
+
+1. In the SIEMBox UI, open (or create) a shipper on the Shippers page and click **Generate Key** under "HTTP Log Push". The plaintext key is shown once — copy it now.
+2. POST logs to the existing API port (8421) — no new firewall rule needed, unlike syslog's port 514:
+   ```bash
+   curl -X POST http://<siembox-host>:8421/api/shippers/logs \
+     -H "Authorization: Bearer <push_key>" \
+     -H "X-Shipper-ID: <shipper id>" \
+     -H "Content-Type: application/json" \
+     -d '{"message":"hello from my homelab tool"}'
+   ```
+3. `message` must be the bare log line (not syslog-framed) for catalog parsers to match it — see [PARSERS.md](./PARSERS.md).
+
+This key is separate from the syslog `api_key` above and revokes cleanly: unlike a ghost shipper, a revoked push key is rejected on the very next request, with no cached-config grace period. See [API.md](./docs/reference/API.md#post-apishipperslogs) for the full request/response shape.
+
 ### API Key Rotation
 
 When rotating shipper API keys:

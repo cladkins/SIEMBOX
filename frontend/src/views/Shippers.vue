@@ -124,7 +124,7 @@
           <el-descriptions-item label="API Key" :span="2">
             <el-input v-model="currentShipper.api_key" readonly>
               <template #append>
-                <el-button :icon="CopyDocument" @click="copyApiKey(currentShipper.api_key)">
+                <el-button :icon="CopyDocument" @click="copyToClipboard(currentShipper.api_key)">
                   Copy
                 </el-button>
                 <el-button
@@ -152,6 +152,32 @@
           </el-descriptions-item>
           <el-descriptions-item label="IP Address">
             {{ currentShipper.ip_address || 'N/A' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="HTTP Log Push" :span="2">
+            <template v-if="currentShipper.http_push_enabled">
+              <el-text size="small">
+                Created {{ currentShipper.http_push_key_created_at ? formatDate(currentShipper.http_push_key_created_at) : 'N/A' }}
+                &middot; Last used {{ currentShipper.http_push_last_seen ? formatDate(currentShipper.http_push_last_seen) : 'Never' }}
+              </el-text>
+              <div style="margin-top: 8px">
+                <el-button size="small" type="warning" :icon="Refresh" @click="generatePushKey(currentShipper)" :loading="saving">
+                  Rotate Key
+                </el-button>
+                <el-button size="small" type="danger" :icon="Delete" @click="revokePushKey(currentShipper)" :loading="saving">
+                  Revoke
+                </el-button>
+              </div>
+            </template>
+            <template v-else>
+              <el-text size="small" type="info">
+                Not configured — lets tools that can't send syslog POST logs here over HTTP instead.
+              </el-text>
+              <div style="margin-top: 8px">
+                <el-button size="small" type="primary" :icon="Plus" @click="generatePushKey(currentShipper)" :loading="saving">
+                  Generate Key
+                </el-button>
+              </div>
+            </template>
           </el-descriptions-item>
         </el-descriptions>
 
@@ -274,6 +300,24 @@
           <el-table-column prop="message" label="Description" min-width="300" />
         </el-table>
       </div>
+    </el-dialog>
+
+    <!-- HTTP Log Push Key Dialog (shown once at generation time — unlike the
+         syslog API key above, this key is never retrievable again) -->
+    <el-dialog v-model="httpPushKeyDialogVisible" title="HTTP Log Push Key" width="600px" :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" style="margin-bottom: 15px">
+        This key is shown once and can't be retrieved again. Copy it now — if it's lost, generate a new one (which invalidates this one).
+      </el-alert>
+      <el-input v-model="generatedPushKey" readonly>
+        <template #append>
+          <el-button :icon="CopyDocument" @click="copyToClipboard(generatedPushKey)">Copy</el-button>
+        </template>
+      </el-input>
+      <el-text size="small" type="info" style="margin-top: 10px; display: block;">Example:</el-text>
+      <pre class="push-key-example">{{ pushKeyCurlExample }}</pre>
+      <template #footer>
+        <el-button type="primary" @click="httpPushKeyDialogVisible = false">Done</el-button>
+      </template>
     </el-dialog>
 
     <!-- Add/Edit Source Dialog -->
@@ -466,7 +510,10 @@ const viewDialogVisible = ref(false);
 const sourceDialogVisible = ref(false);
 const volumeDialogVisible = ref(false);
 const unknownSourcesDialogVisible = ref(false);
+const httpPushKeyDialogVisible = ref(false);
 const editingShipper = ref(false);
+const generatedPushKey = ref('');
+const pushKeyCurlExample = ref('');
 
 const shipperForm = reactive({
   name: '',
@@ -621,7 +668,7 @@ async function regenerateApiKey(shipper: any) {
     currentShipper.value.api_key = response.data.api_key;
 
     // Auto-copy new key to clipboard for convenience (non-blocking)
-    copyApiKey(response.data.api_key);
+    copyToClipboard(response.data.api_key);
 
     ElMessage.success({
       message: 'API key regenerated successfully.',
@@ -630,6 +677,72 @@ async function regenerateApiKey(shipper: any) {
   } catch (error: any) {
     if (error !== 'cancel') {
       ElMessage.error('Failed to regenerate API key');
+    }
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function generatePushKey(shipper: any) {
+  try {
+    if (shipper.http_push_enabled) {
+      await ElMessageBox.confirm(
+        'Rotating the HTTP log-push key will immediately invalidate the old key. Are you sure?',
+        'Confirm Key Rotation',
+        {
+          confirmButtonText: 'Rotate Key',
+          cancelButtonText: 'Cancel',
+          type: 'warning',
+        }
+      );
+    }
+
+    saving.value = true;
+    const response = await api.generateShipperPushKey(shipper.id);
+    generatedPushKey.value = response.data.http_push_key;
+    pushKeyCurlExample.value =
+      `curl -X POST http://${window.location.hostname}:8421/api/shippers/logs \\\n` +
+      `  -H "Authorization: Bearer ${response.data.http_push_key}" \\\n` +
+      `  -H "X-Shipper-ID: ${shipper.id}" \\\n` +
+      `  -H "Content-Type: application/json" \\\n` +
+      `  -d '{"message":"hello from my homelab tool"}'`;
+    httpPushKeyDialogVisible.value = true;
+
+    // Refresh so http_push_enabled/timestamps reflect the change
+    const refreshed = await api.getShipper(shipper.id);
+    currentShipper.value = refreshed.data;
+    fetchShippers();
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error('Failed to generate HTTP push key');
+    }
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function revokePushKey(shipper: any) {
+  try {
+    await ElMessageBox.confirm(
+      `Revoking the HTTP log-push key immediately stops SIEMBox from accepting pushed logs for "${shipper.name}". Are you sure?`,
+      'Confirm Revoke',
+      {
+        confirmButtonText: 'Revoke',
+        cancelButtonText: 'Cancel',
+        type: 'warning',
+      }
+    );
+
+    saving.value = true;
+    await api.revokeShipperPushKey(shipper.id);
+    ElMessage.success('HTTP log-push key revoked');
+
+    const refreshed = await api.getShipper(shipper.id);
+    currentShipper.value = refreshed.data;
+    fetchShippers();
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error('Failed to revoke HTTP push key');
     }
   } finally {
     saving.value = false;
@@ -819,17 +932,17 @@ async function deleteVolume(volume: any) {
   }
 }
 
-async function copyApiKey(apiKey: string) {
+async function copyToClipboard(text: string) {
   // Check if clipboard API is available (requires HTTPS or localhost)
   if (navigator.clipboard && window.isSecureContext) {
     try {
-      await navigator.clipboard.writeText(apiKey);
-      ElMessage.success('API key copied to clipboard');
+      await navigator.clipboard.writeText(text);
+      ElMessage.success('Copied to clipboard');
     } catch (err) {
-      fallbackCopyToClipboard(apiKey);
+      fallbackCopyToClipboard(text);
     }
   } else {
-    fallbackCopyToClipboard(apiKey);
+    fallbackCopyToClipboard(text);
   }
 }
 
@@ -847,12 +960,12 @@ function fallbackCopyToClipboard(text: string) {
   try {
     const successful = document.execCommand('copy');
     if (successful) {
-      ElMessage.success('API key copied to clipboard');
+      ElMessage.success('Copied to clipboard');
     } else {
-      ElMessage.warning('Copy failed. Please select and copy the API key manually.');
+      ElMessage.warning('Copy failed. Please select and copy manually.');
     }
   } catch (err) {
-    ElMessage.warning('Copy not supported. Please select and copy the API key manually.');
+    ElMessage.warning('Copy not supported. Please select and copy manually.');
   }
 
   document.body.removeChild(textArea);
@@ -881,6 +994,8 @@ function getActivityType(type: string): string {
     volume_added: 'success',
     volume_deleted: 'danger',
     key_regenerated: 'warning',
+    http_push_key_generated: 'success',
+    http_push_key_revoked: 'danger',
   };
   return types[type] || 'info';
 }
@@ -915,5 +1030,18 @@ function formatActivityType(type: string): string {
 .section-header h3 {
   margin: 0;
   font-size: 16px;
+}
+
+.push-key-example {
+  margin-top: 5px;
+  padding: 10px;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  color: var(--el-text-color-primary);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-x: auto;
 }
 </style>

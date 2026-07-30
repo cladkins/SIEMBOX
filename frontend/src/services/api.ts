@@ -256,6 +256,10 @@ export const api = {
   // Shipper API Key Management
   regenerateShipperKey: (id: number) => apiClient.post(`/shippers/${id}/regenerate-key`),
 
+  // Shipper HTTP Log Push (separate key from the syslog api_key above)
+  generateShipperPushKey: (id: number) => apiClient.post(`/shippers/${id}/http-push-key`),
+  revokeShipperPushKey: (id: number) => apiClient.delete(`/shippers/${id}/http-push-key`),
+
   // Shipper Activity Log
   getShipperActivity: (id: number, limit?: number) =>
     apiClient.get(`/shippers/${id}/activity`, { params: { limit } }),

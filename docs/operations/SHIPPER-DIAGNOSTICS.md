@@ -35,6 +35,36 @@ When you set up a log shipper, you configure:
 - **Tag**: Label for logs (e.g., `NGINX`)
 - **Facility**: Syslog facility level (default `local0`)
 
+## HTTP Log Push (a separate ingestion path)
+
+Everything above describes the managed shipper: register → poll for config →
+tail files/containers → forward via syslog. **HTTP log push
+(`POST /api/shippers/logs`) is a second, independent ingestion mode** for
+tools that POST JSON directly instead of running the managed shipper — most
+of this guide doesn't apply to it:
+
+- There's no polling, no cached configuration, and no sources/volumes to
+  configure — the caller just POSTs `{"message": "..."}` (or a batch) with
+  its own Bearer key + `X-Shipper-ID` header.
+- **No ghost-shipper concept.** A revoked or rotated-away HTTP push key gets
+  a `401` on the very next request — there's no cached-config grace period
+  to fall back to, because there's no config being cached in the first
+  place.
+- **Verifying it's working:** open the shipper in the SIEMBox UI — the "HTTP
+  Log Push" section shows `Last used` (updated on every accepted request,
+  independent of the syslog `last_seen`). To confirm ingested content
+  specifically, search for it in the raw log viewer
+  (`GET /api/logs/raw?search=...`) or check that `POST /api/shippers/logs`
+  returned `202` with `accepted: 1` and no `errors`.
+- A pushed entry goes through the exact same parser engine as a syslog
+  entry, so "logs arrived but aren't parsing" is diagnosed the same way as
+  for syslog: confirm `message` was the bare log line (no `<PRI>...` framing)
+  and check the Parsed Logs view for an `unparsed` fallback.
+
+See [API.md](../reference/API.md#post-apishipperslogs) for the full request/
+response shape and [DEPLOYMENT.md](../../DEPLOYMENT.md#http-log-push-for-tools-that-cant-run-the-managed-shipper)
+for setup steps.
+
 ## Common Issues & Solutions
 
 ### Issue 1: Configuration Not Being Returned

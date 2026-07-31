@@ -176,8 +176,8 @@ export class ErrorLogService {
 
       const result = await query(
         `INSERT INTO application_errors
-         (error_type, message, human_message, category, severity, user_id, endpoint, context)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         (error_type, message, human_message, category, severity, resolution, user_id, endpoint, context)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id`,
         [
           errorType,
@@ -185,6 +185,7 @@ export class ErrorLogService {
           translation.human,
           translation.category,
           translation.severity,
+          translation.resolution,
           context.userId || null,
           context.endpoint || null,
           JSON.stringify({
@@ -351,7 +352,7 @@ export class ErrorLogService {
       const errorsResult = await query(
         `SELECT
            id, timestamp, error_type, message, human_message,
-           category, severity, user_id, endpoint, context
+           category, severity, resolution, user_id, endpoint, context
          FROM application_errors
          WHERE timestamp > NOW() - INTERVAL '1 hour' * $1
          ORDER BY timestamp DESC
@@ -391,13 +392,14 @@ export class ErrorLogService {
         }
       }
 
-      // Add resolution hints to errors
+      // Rows written before the `resolution` column existed (or before a
+      // caller passed ErrorContext.translation) have it NULL -- fall back to
+      // a fresh guess for those only. A stored value always wins: it may be a
+      // caller's explicit override (see ErrorContext.translation) that a live
+      // re-guess from the raw error_type/message would get wrong.
       const errors: LoggedError[] = errorsResult.rows.map((row: any) => {
-        const translation = this.translateError(row.error_type, row.message);
-        return {
-          ...row,
-          resolution: translation.resolution,
-        };
+        const resolution = row.resolution ?? this.translateError(row.error_type, row.message).resolution;
+        return { ...row, resolution };
       });
 
       return { errors, summary };

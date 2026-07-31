@@ -403,9 +403,9 @@ export class NmapScanner {
       if (completedAt) {
         fields.push(`completed_at = $${paramIndex++}`);
         params.push(completedAt);
-
-        // Calculate duration_seconds from started_at
-        fields.push(`duration_seconds = EXTRACT(EPOCH FROM ($${paramIndex - 1}::timestamp - started_at))::integer`);
+        // duration_seconds is computed by the update_scan_duration() trigger
+        // (001_initial_schema.sql) whenever completed_at is set -- no need to
+        // compute it here too.
       }
 
       if (errorMessage) {

@@ -78,7 +78,9 @@ services:
     # from the host. See DEPLOYMENT.md's "Log Discovery and Network
     # Visibility" section before enabling. To enable: comment out `networks:`
     # below AND the `ports:` block above, uncomment the line below, then set
-    # DB_HOST=localhost, BACKEND_UPSTREAM=host.docker.internal:8421, and
+    # DB_HOST=127.0.0.1 (the literal IP, not `localhost` -- Postgres's port
+    # publish is IPv4, and `localhost` can resolve to the IPv6 loopback first,
+    # which gets refused), BACKEND_UPSTREAM=host.docker.internal:8421, and
     # SIEMBOX_HOST_NETWORKING=true in your .env file.
     # network_mode: host
     networks:

@@ -400,10 +400,15 @@ block and `networks:`, uncomment `network_mode: host`:
 near the bottom of `.env.example`):
 
 ```bash
-DB_HOST=localhost
+DB_HOST=127.0.0.1
 BACKEND_UPSTREAM=host.docker.internal:8421
 SIEMBOX_HOST_NETWORKING=true
 ```
+
+Use the literal `127.0.0.1`, not `localhost` -- Postgres's port is only
+published on the IPv4 loopback (see `compose.prod.yaml`'s `postgres` service),
+and Node can resolve `localhost` to the IPv6 loopback first, which gets
+refused since nothing's listening there.
 
 **3. Redeploy:**
 

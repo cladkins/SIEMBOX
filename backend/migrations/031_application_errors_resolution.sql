@@ -1,0 +1,11 @@
+-- getRecentErrors() re-derives a "resolution" remediation hint at READ time by
+-- re-running translateError() against the raw error_type/message columns --
+-- it was never persisted. That broke ErrorContext.translation (added for the
+-- Log Discovery API poller's error-labeling fix): a caller-supplied override
+-- correctly persists to human_message/category (real INSERT columns) but the
+-- resolution hint was silently discarded and recomputed from the generic
+-- ECONNREFUSED-means-database guess every time the dashboard loads, even
+-- though the row's own human_message/category say otherwise. Store it for
+-- real; getRecentErrors() falls back to the live-computed guess only for
+-- pre-existing rows that predate this column.
+ALTER TABLE application_errors ADD COLUMN IF NOT EXISTS resolution TEXT;

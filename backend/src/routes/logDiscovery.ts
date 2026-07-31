@@ -29,6 +29,7 @@ router.get('/scope', (req: Request, res: Response) => {
     cidrs: scope.cidrs,
     vlan_warning: scope.warning,
     rejected_cidrs: scope.rejected,
+    detected_lan_cidr: scope.detectedLanCidr,
   });
 });
 

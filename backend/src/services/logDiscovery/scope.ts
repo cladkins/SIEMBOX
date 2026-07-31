@@ -57,6 +57,18 @@ export function vlanWarning(interfaces: LocalInterface[]): string | null {
   return null;
 }
 
+/**
+ * True only when the backend is deliberately running with the optional
+ * network_mode: host (see compose.prod.yaml/compose.yaml's commented-out
+ * block) -- set alongside DB_HOST/BACKEND_UPSTREAM as part of that same
+ * opt-in edit, never inferred from the detected interfaces themselves (an
+ * IP-range heuristic would misfire on a custom Docker bridge pool or a LAN
+ * that genuinely uses a 172.x range).
+ */
+export function isHostNetworked(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.SIEMBOX_HOST_NETWORKING === 'true';
+}
+
 const CIDR_PATTERN = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d|[12]\d|3[0-2])$/;
 
 export function isValidCidr(cidr: string): boolean {
@@ -113,6 +125,16 @@ export interface ScopeResult {
   cidrs: string[];
   warning: string | null;
   rejected: string[]; // manually-entered CIDRs that failed validation (malformed, or larger than MAX_SWEEP_HOSTS)
+  /**
+   * The host's real detected LAN CIDR, offered as a one-click scan-scope
+   * suggestion -- never auto-added to `cidrs` itself. Only ever non-null
+   * under the opt-in host-networking mode (isHostNetworked()); in the
+   * default bridge-networked deployment the detected interface is just the
+   * Docker bridge subnet, not the LAN, so suggesting it would be actively
+   * misleading. Picks the first detected interface when there's more than
+   * one -- a starting-point suggestion, not a claim it's the only subnet.
+   */
+  detectedLanCidr: string | null;
 }
 
 /**
@@ -120,17 +142,26 @@ export interface ScopeResult {
  * deduped. Invalid or too-large entries are reported back rather than
  * silently dropped, so the UI can flag the problem.
  *
- * Deliberately excludes the auto-detected local interface CIDR from `cidrs`.
- * It's still used for the VLAN warning below, but surfacing it as a "scope"
- * is misleading -- in the common Docker Compose deployment it's just the
- * container's own bridge network (e.g. 172.20.0.0/16), not the user's LAN.
- * Manual CIDRs are what actually get swept by active discovery (see
- * activeDiscovery.ts's sweepCidr) to find real LAN hosts passive discovery's
- * ARP/mDNS/SSDP techniques can't see from inside the container's own bridge.
+ * Deliberately excludes the auto-detected local interface CIDR from `cidrs`
+ * itself -- it's surfaced separately as `detectedLanCidr` (a suggestion the
+ * user can explicitly add) rather than folded into scan scope automatically,
+ * matching this subsystem's everywhere-else pattern of never acting without
+ * explicit confirmation. In the default bridge-networked deployment that
+ * detected interface is just the Docker bridge subnet (e.g. 172.20.0.0/16),
+ * not the user's LAN, so `detectedLanCidr` stays null there -- see
+ * isHostNetworked(). Manual CIDRs are what actually get swept by active
+ * discovery (see activeDiscovery.ts's sweepCidr) to find real LAN hosts
+ * passive discovery's ARP/mDNS/SSDP techniques can't see from inside the
+ * container's own bridge, unless the opt-in host-networking mode is active.
  */
-export function resolveScope(manualCidrs: string[] = [], interfaces: LocalInterface[] = detectLocalInterfaces()): ScopeResult {
+export function resolveScope(
+  manualCidrs: string[] = [],
+  interfaces: LocalInterface[] = detectLocalInterfaces(),
+  env: NodeJS.ProcessEnv = process.env
+): ScopeResult {
   const rejected = manualCidrs.filter((c) => !isSweepableCidr(c));
   const cidrs = Array.from(new Set(manualCidrs.filter((c) => isSweepableCidr(c))));
+  const detectedLanCidr = isHostNetworked(env) ? interfaces[0]?.cidr ?? null : null;
 
-  return { cidrs, warning: vlanWarning(interfaces), rejected };
+  return { cidrs, warning: vlanWarning(interfaces), rejected, detectedLanCidr };
 }

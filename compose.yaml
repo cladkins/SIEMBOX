@@ -39,8 +39,13 @@ services:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: ${PORT:-8421}
       HOST: 0.0.0.0
-      DB_HOST: postgres
+      DB_HOST: ${DB_HOST:-postgres}
       DB_PORT: 5432
+      # Set to true only alongside the optional network_mode: host below --
+      # tells Log Discovery it can trust the host's real detected network
+      # interface instead of the Docker bridge. See the comment on
+      # network_mode below.
+      SIEMBOX_HOST_NETWORKING: ${SIEMBOX_HOST_NETWORKING:-}
       DB_NAME: ${DB_NAME:-siembox}
       DB_USER: ${DB_USER:-siembox}
       DB_PASSWORD: ${DB_PASSWORD:-changeme}
@@ -56,12 +61,26 @@ services:
       - ./rules:/app/rules:ro  # Mount rules directory as read-only
       - ./nuclei-templates:/root/nuclei-templates  # Nuclei vulnerability templates (bind mount for easy customization)
     ports:
+      # Ignored entirely once network_mode: host is enabled below -- comment
+      # this block out too when you do.
       - "8421:8421"
       - "514:514/udp"  # Syslog UDP
       - "514:514/tcp"  # Syslog TCP
     depends_on:
       postgres:
         condition: service_healthy
+    # OPTIONAL -- Host networking for Log Discovery (Linux only). Passive
+    # discovery (ARP table read, mDNS, SSDP) can only ever see the network(s)
+    # this container is attached to -- on the bridge network below, that's
+    # just the Docker bridge subnet, not your real LAN. Host networking gives
+    # the backend the host's own network stack instead. Bigger tradeoff than
+    # the socket mount above: the container is no longer network-isolated
+    # from the host. See DEPLOYMENT.md's "Log Discovery and Network
+    # Visibility" section before enabling. To enable: comment out `networks:`
+    # below AND the `ports:` block above, uncomment the line below, then set
+    # DB_HOST=localhost, BACKEND_UPSTREAM=host.docker.internal:8421, and
+    # SIEMBOX_HOST_NETWORKING=true in your .env file.
+    # network_mode: host
     networks:
       - siembox-network
     restart: unless-stopped
@@ -74,12 +93,25 @@ services:
       args:
         VITE_API_URL: ${VITE_API_URL:-/api}
     container_name: siembox-frontend
+    environment:
+      # Where nginx proxies /api requests. Defaults to the backend's Docker-DNS
+      # name on siembox-network. If you've enabled the backend's optional
+      # network_mode: host above, set this to host.docker.internal:8421 in
+      # your .env instead (see DEPLOYMENT.md's "Log Discovery and Network
+      # Visibility" section).
+      BACKEND_UPSTREAM: ${BACKEND_UPSTREAM:-backend:8421}
     ports:
       - "8420:80"
     depends_on:
       - backend
     networks:
       - siembox-network
+    # Lets the frontend reach the backend on the Docker host when the backend
+    # is running with the optional network_mode: host. Unused/harmless
+    # otherwise -- same mechanism the backend already uses to reach a
+    # host-local Ollama.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
 volumes:

@@ -343,20 +343,96 @@ onboarding instructions. It never writes device or collector config itself.
 
 By default the backend container only sees whatever subnet its own Docker
 bridge network is on (`siembox-network` in `compose.prod.yaml`), so a passive
-scan (ARP table, mDNS, SSDP) and the scoped active probe that follows it only
-discover hosts on that one subnet. If your homelab spans more than one VLAN,
-the Log Discovery page surfaces this as a warning and lets you add the other
-CIDRs manually -- discovery will actively probe them, but passive
-techniques (ARP/mDNS/SSDP) still only see traffic reachable from wherever the
-container's network interface actually sits.
+scan (ARP table read, mDNS, SSDP) only discovers hosts on that one subnet. If
+your homelab spans more than one VLAN, the Log Discovery page surfaces this as
+a warning and lets you add the other CIDRs manually. An `active`/`full` scan
+already sweeps those manually-added CIDRs for real LAN hosts from the default
+bridge network -- Docker's outbound NAT rewrites the container's source IP
+before packets reach your LAN, so active/vulnerability scanning isn't actually
+limited by network mode. What manual CIDRs can't fix is *passive* discovery
+itself (ARP/mDNS/SSDP) -- those techniques are inherently scoped to whatever
+network the container is attached to and cannot cross the Docker bridge.
 
-To let discovery see your LAN directly instead of just the Docker bridge, run
-the backend with `network_mode: host` (Linux only) instead of the default
-`siembox-network` in `compose.prod.yaml`. This is a bigger tradeoff than the
-Docker socket mount above: the container shares the host's entire network
-stack, so treat it the same as running the process directly on the host. Left
-at the default bridge network, discovery still works -- it's just scoped to
-one subnet until you add others manually.
+### Optional: host networking (Linux only)
+
+To let passive discovery see your real LAN directly -- and make the
+single-VLAN warning above actually reflect your host's real interfaces -- run
+the backend with `network_mode: host` instead of the default bridge network.
+This applies to the **backend container only**; the frontend and Postgres stay
+on the bridge network as usual.
+
+> ⚠️ **Security tradeoff.** This is a bigger change than the Docker socket
+> mount above: the backend container shares the host's entire network stack
+> and is no longer network-isolated from it -- treat it the same as running
+> the backend process directly on the host. It's Linux-only (Docker Desktop on
+> Mac/Windows does not support host networking the same way). Left at the
+> default, discovery still works -- it's just scoped to whatever subnet(s) you
+> add manually.
+
+**Before you start**, confirm nothing on the host already holds the ports the
+backend will now bind directly -- there's no Docker publish layer left to
+remap them:
+
+```bash
+netstat -tuln | grep -E "514|8421"
+```
+
+If that returns nothing, you're clear to proceed.
+
+**1. Edit `compose.prod.yaml`'s `backend` service** -- comment out its `ports:`
+block and `networks:`, uncomment `network_mode: host`:
+
+```yaml
+    # ports:
+    #   - "8421:8421"
+    #   - "514:514/udp"
+    #   - "514:514/tcp"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    network_mode: host
+    # networks:
+    #   - siembox-network
+    restart: unless-stopped
+```
+
+**2. Edit `.env`** -- set these three (uncomment/change the existing lines
+near the bottom of `.env.example`):
+
+```bash
+DB_HOST=localhost
+BACKEND_UPSTREAM=host.docker.internal:8421
+SIEMBOX_HOST_NETWORKING=true
+```
+
+**3. Redeploy:**
+
+```bash
+docker compose -f compose.prod.yaml up -d
+```
+
+**4. Verify:**
+- `docker compose -f compose.prod.yaml logs backend` shows a successful
+  database connection (no `ECONNREFUSED` errors).
+- The frontend loads normally with no `502` errors on `/api/*` requests.
+- The Log Discovery page's "Detected LAN" suggestion (or `GET
+  /api/log-discovery/scope`'s `detected_lan_cidr` field) now shows a real LAN
+  subnet instead of `null`.
+- A passive scan's results show real LAN IPs with `arp`, `mdns`, or `ssdp`
+  among their discovery methods, not `172.x.x.x` bridge addresses.
+- Syslog ingestion still works from another machine on the LAN.
+
+**To revert:** re-comment `network_mode: host`, uncomment the `ports:` block
+and `networks:`, and either remove the three `.env` lines or set
+`DB_HOST=postgres` and leave `BACKEND_UPSTREAM`/`SIEMBOX_HOST_NETWORKING`
+unset -- then `docker compose -f compose.prod.yaml up -d` again. This cleanly
+restores today's default behavior.
+
+**What this does *not* improve:** DHCP lease parsing and LLDP capture are
+unaffected by network mode -- lease parsing reads host files that neither
+compose file mounts today, and LLDP capture has no implementation yet. Only
+ARP/mDNS/SSDP passive discovery and the single-VLAN warning's accuracy benefit
+from host networking.
 
 ## Threat Intelligence Feeds
 
@@ -470,6 +546,12 @@ SIEMBox requires these ports:
 - **514/UDP**: Syslog ingestion (UDP)
 - **514/TCP**: Syslog ingestion (TCP)
 - **5432**: PostgreSQL (only needed if accessing externally)
+
+If you've enabled the optional host networking mode (see "Log Discovery and
+Network Visibility" above), the backend's ports bind directly to the host
+instead of going through Docker's publish layer -- the port list above is
+unchanged, but firewall rules now apply to them directly rather than to a
+Docker-managed mapping.
 
 ### Firewall Rules Example (UFW)
 

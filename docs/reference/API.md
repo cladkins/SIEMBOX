@@ -2550,12 +2550,19 @@ subnet by default -- computed from the host's network interfaces regardless of
 what's below), and any manually-supplied CIDRs, validated and size-checked.
 
 `cidrs` only ever reflects manually-supplied subnets -- it deliberately excludes
-the auto-detected local interface CIDR, which in a Docker Compose deployment is
-just the backend container's own bridge network, not the user's LAN. Every
-CIDR that comes back here is exactly what an `active`/`full` scan will sweep
-host-by-host (see `POST /scans` below); each must be a /22 or smaller (1024
-addresses) to keep that sweep bounded -- larger or malformed entries land in
-`rejected_cidrs` instead.
+the auto-detected local interface CIDR, which in the default bridge-networked
+Docker Compose deployment is just the backend container's own bridge network,
+not the user's LAN. Every CIDR that comes back here is exactly what an
+`active`/`full` scan will sweep host-by-host (see `POST /scans` below); each
+must be a /22 or smaller (1024 addresses) to keep that sweep bounded -- larger
+or malformed entries land in `rejected_cidrs` instead.
+
+`detected_lan_cidr` is the host's real detected LAN subnet, offered as a
+one-click scan-scope suggestion -- never auto-added to `cidrs`. It's `null`
+unless the optional host-networking mode is active (see DEPLOYMENT.md's "Log
+Discovery and Network Visibility" section); under the default bridge network
+that detected interface is just the Docker bridge subnet, not the LAN, so it
+would be misleading to suggest there.
 
 **Authentication:** Required
 
@@ -2567,7 +2574,8 @@ addresses) to keep that sweep bounded -- larger or malformed entries land in
 {
   "cidrs": ["192.168.20.0/24"],
   "vlan_warning": "SIEMBOX only sees its own subnet by default. If your homelab spans more than one VLAN or subnet, add their CIDRs manually or this scan will miss them.",
-  "rejected_cidrs": []
+  "rejected_cidrs": [],
+  "detected_lan_cidr": null
 }
 ```
 

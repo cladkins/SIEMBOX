@@ -30,8 +30,14 @@ FROM nginx:alpine
 # Copy built files
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Copy nginx configuration
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Copy nginx configuration as a template -- the base image's own entrypoint
+# (docker-entrypoint.d/20-envsubst-on-templates.sh, still wired up since this
+# Dockerfile only overrides CMD, never ENTRYPOINT) envsubst's it into
+# conf.d/default.conf at container start, substituting BACKEND_UPSTREAM (see
+# compose.yaml/compose.prod.yaml). nginx's own runtime variables ($uri, $host,
+# etc.) pass through untouched -- that script only substitutes names that are
+# actual container env vars, and those aren't.
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 
 # Expose port
 EXPOSE 80

@@ -4,6 +4,7 @@ import {
   toCidr,
   detectLocalInterfaces,
   vlanWarning,
+  isHostNetworked,
   isValidCidr,
   isSweepableCidr,
   cidrHosts,
@@ -53,6 +54,33 @@ test('isValidCidr accepts well-formed CIDRs and rejects garbage', () => {
   assert.equal(isValidCidr('999.168.1.0/24'), false);
   assert.equal(isValidCidr('not-a-cidr'), false);
   assert.equal(isValidCidr('192.168.1.0'), false); // missing prefix
+});
+
+test('isHostNetworked is true only for the exact string "true"', () => {
+  assert.equal(isHostNetworked({ SIEMBOX_HOST_NETWORKING: 'true' }), true);
+  assert.equal(isHostNetworked({}), false);
+  assert.equal(isHostNetworked({ SIEMBOX_HOST_NETWORKING: 'false' }), false);
+  assert.equal(isHostNetworked({ SIEMBOX_HOST_NETWORKING: 'yes' }), false);
+});
+
+test('resolveScope leaves detectedLanCidr null when not host-networked, even with real-looking interfaces', () => {
+  const interfaces: LocalInterface[] = [
+    { name: 'eth0', address: '192.168.1.10', netmask: '255.255.255.0', cidr: '192.168.1.0/24' },
+  ];
+  assert.equal(resolveScope([], interfaces, {}).detectedLanCidr, null);
+});
+
+test('resolveScope populates detectedLanCidr from the first interface when host-networked', () => {
+  const interfaces: LocalInterface[] = [
+    { name: 'eth0', address: '192.168.1.10', netmask: '255.255.255.0', cidr: '192.168.1.0/24' },
+    { name: 'eth1', address: '10.0.0.10', netmask: '255.255.255.0', cidr: '10.0.0.0/24' },
+  ];
+  const result = resolveScope([], interfaces, { SIEMBOX_HOST_NETWORKING: 'true' });
+  assert.equal(result.detectedLanCidr, '192.168.1.0/24');
+});
+
+test('resolveScope reports detectedLanCidr as null when host-networked but no interfaces are visible', () => {
+  assert.equal(resolveScope([], [], { SIEMBOX_HOST_NETWORKING: 'true' }).detectedLanCidr, null);
 });
 
 test('resolveScope returns only valid manual CIDRs and reports rejects', () => {

@@ -124,8 +124,9 @@ async function runPassivePhase(): Promise<Map<string, Candidate>> {
  * MAX_SWEEP_HOSTS) for live hosts and folds them into `candidates` as new
  * entries, so runActivePhase probes them the same as passively-discovered
  * ones. This is what actually makes a manually-entered subnet find real LAN
- * hosts -- passive discovery's ARP/mDNS/SSDP only ever see the container's
- * own bridge network.
+ * hosts -- passive discovery's ARP/mDNS/SSDP only ever see whatever network
+ * the container itself is attached to, which by default is just the Docker
+ * bridge subnet, not the LAN (see scope.ts's isHostNetworked()).
  */
 async function runCidrSweep(cidrs: string[], candidates: Map<string, Candidate>): Promise<void> {
   if (cidrs.length === 0) return;

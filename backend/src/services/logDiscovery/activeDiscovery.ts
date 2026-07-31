@@ -117,7 +117,9 @@ export function probeLiveness(ip: string, ports: number[], timeoutMs: number): P
  * manually-approved subnet (scope.ts's isSweepableCidr already bounds this to
  * MAX_SWEEP_HOSTS) and return the ones that respond. This is what actually
  * lets a manually-entered CIDR find real hosts -- passive discovery's
- * ARP/mDNS/SSDP techniques only ever see the container's own bridge network.
+ * ARP/mDNS/SSDP techniques only ever see the container's own network
+ * attachment, which in the default bridge-networked deployment is just the
+ * Docker bridge subnet, not the LAN (see scope.ts's isHostNetworked()).
  */
 export async function sweepCidr(cidr: string, opts: ActiveProbeOptions = {}): Promise<string[]> {
   const timeoutMs = opts.portTimeoutMs ?? 800;

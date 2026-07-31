@@ -37,6 +37,12 @@
         <el-button link size="small" @click="openManualCidrDialog">Add a subnet</el-button>
       </div>
 
+      <div v-if="showDetectedCidrSuggestion" class="scope-line">
+        <span class="scope-label">Detected LAN:</span>
+        <el-tag type="success" size="small" style="margin-right: 6px">{{ scope?.detected_lan_cidr }}</el-tag>
+        <el-button link size="small" type="primary" @click="addDetectedCidr">Add to scan scope</el-button>
+      </div>
+
       <el-collapse v-if="scans.length > 0" style="margin: 16px 0">
         <el-collapse-item title="Recent scans" name="scans">
           <el-table :data="scans" size="small">
@@ -270,6 +276,12 @@ const isPollableMethod = computed(
     pollableFingerprintIds.value.includes(onboardTarget.value.matched_fingerprint_id)
 );
 
+// Only ever non-null under the opt-in host-networking mode (see ScopePreview.detected_lan_cidr) --
+// hidden once it's already been added so the suggestion doesn't linger after being accepted.
+const showDetectedCidrSuggestion = computed(
+  () => !!scope.value?.detected_lan_cidr && !manualCidrs.value.includes(scope.value.detected_lan_cidr)
+);
+
 async function loadScope() {
   scope.value = await logDiscoveryService.getScope(manualCidrs.value);
 }
@@ -344,6 +356,17 @@ async function previewManualCidrs() {
   }
   manualCidrs.value = scope.value.cidrs;
   showManualCidrDialog.value = false;
+}
+
+// Folds the detected LAN CIDR into the same manualCidrs/getScope flow previewManualCidrs()
+// uses for hand-entered subnets -- one click, no separate endpoint.
+async function addDetectedCidr() {
+  const detected = scope.value?.detected_lan_cidr;
+  if (!detected) return;
+  const cidrs = Array.from(new Set([...manualCidrs.value, detected]));
+  scope.value = await logDiscoveryService.getScope(cidrs);
+  manualCidrs.value = scope.value.cidrs;
+  ElMessage.success(`Added ${detected} to scan scope`);
 }
 
 async function confirmSource(source: RankedSource) {

@@ -69,6 +69,8 @@ export interface ScopePreview {
   cidrs: string[];
   vlan_warning: string | null;
   rejected_cidrs: string[];
+  /** The host's real detected LAN CIDR, offered as a one-click suggestion. Only ever non-null under the opt-in host-networking mode — see DEPLOYMENT.md's "Log Discovery and Network Visibility" section. */
+  detected_lan_cidr: string | null;
 }
 
 export interface TriggerScanResponse {

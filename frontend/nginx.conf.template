@@ -35,9 +35,15 @@ server {
         add_header X-XSS-Protection "1; mode=block" always;
     }
 
-    # Proxy API requests to backend
+    # Proxy API requests to backend. BACKEND_UPSTREAM is substituted at
+    # container start (see frontend/Dockerfile) — defaults to the Compose
+    # service name `backend:8421`; becomes `host.docker.internal:8421` when
+    # the backend's optional network_mode: host is enabled (see
+    # DEPLOYMENT.md's "Log Discovery and Network Visibility" section). Bare
+    # token deliberately, no ${VAR:-default} — envsubst doesn't support that
+    # syntax, the default lives at the Compose layer instead.
     location /api {
-        proxy_pass http://backend:8421;
+        proxy_pass http://${BACKEND_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';

@@ -1,0 +1,38 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "garp-ui-send-frame",
+  "parser_type": "regex",
+  "pattern": "^garp\\.ui_garp_send_frame\\(\\):\\s+(?<message>ARP table does not have IP for (?<mac>[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}))$",
+  "field_mappings": {
+    "mac": "source_mac",
+    "message": "message"
+  },
+  "description": "Parses GARP UI send frame log messages reporting missing ARP table IP entries for MAC addresses",
+  "priority": 400,
+  "derivations": [
+    {
+      "set": {
+        "event": "arp_missing_ip",
+        "service": "garp"
+      },
+      "when": {
+        "message": {
+          "contains": "ARP table does not have IP"
+        }
+      }
+    }
+  ],
+  "event_type": "arp_missing_ip",
+  "enabled": true,
+  "test_samples": [
+    {
+      "input": "garp.ui_garp_send_frame(): ARP table does not have IP for c0:49:ef:8c:07:2c",
+      "expect": {
+        "event": "arp_missing_ip",
+        "message": "ARP table does not have IP for c0:49:ef:8c:07:2c",
+        "service": "garp",
+        "source_mac": "c0:49:ef:8c:07:2c"
+      }
+    }
+  ]
+}

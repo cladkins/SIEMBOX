@@ -1,9 +1,9 @@
 {
   "schema": "siembox.parser/v1",
   "name": "json-parser",
-  "description": "Parses logs already in JSON format. Catch-all: runs after every format-specific JSON parser (it previously sat at priority 50, which shadowed specific JSON parsers like pihole-dns-adblock).",
+  "description": "Parses logs already in JSON format",
   "parser_type": "json",
-  "priority": 900,
+  "priority": 50,
   "pattern": ".*",
   "field_mappings": {},
   "event_type": "json_log",

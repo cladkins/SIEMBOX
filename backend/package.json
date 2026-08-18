@@ -37,7 +37,7 @@
     "mmdb-lib": "^3.0.3",
     "node-nmap": "^4.0.0",
     "nodemailer": "^9.0.5",
-    "pg": "^8.22.0",
+    "pg": "^8.23.0",
     "recheck": "^4.5.0",
     "winston": "^3.19.0"
   },
@@ -53,7 +53,7 @@
     "@typescript-eslint/parser": "^6.15.0",
     "eslint": "^8.56.0",
     "prettier": "^3.9.6",
-    "tsx": "^4.23.11",
+    "tsx": "^4.23.12",
     "typescript": "^5.3.3"
   }
 }

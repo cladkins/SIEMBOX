@@ -528,6 +528,18 @@ command:
   - "max_connections=100"
 ```
 
+### Log Ingestion Capacity
+
+Log ingestion has its own database connection pool and a bounded queue, so a
+slow web page or scan can't starve it. When the database genuinely can't keep
+up, **TCP syslog and HTTP push are slowed down and nothing is lost, but UDP
+syslog can only drop** (the backend counts the drops and logs a summary every
+10 seconds). Use TCP for sources you can't afford to lose. The defaults need no
+tuning for typical homelab volumes; if you do see drops, start with
+[Logs are dropped or ingestion is slow](./docs/operations/TROUBLESHOOTING.md#issue-logs-are-dropped-or-ingestion-is-slow),
+which also lists the tuning variables (`DB_INGEST_POOL_MAX`, `INGEST_CONCURRENCY`,
+`INGEST_QUEUE_MAX`, ...).
+
 ### Log Retention
 
 Configure in Settings UI:

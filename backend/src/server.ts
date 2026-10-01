@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import app from './app';
 import { logger } from './utils/logger';
-import pool from './config/database';
+import pool, { closePools } from './config/database';
 import { diagnoseDbConnectionError } from './config/dbDiagnostics';
 import { SyslogServer } from './services/syslog/syslogServer';
 import { CleanupService } from './services/cleanup/cleanupService';
@@ -161,32 +161,22 @@ const startServer = async () => {
 };
 
 // Graceful shutdown
-process.on('SIGTERM', async () => {
-  logger.info('SIGTERM signal received: closing servers');
-  if (syslogServer) {
-    await syslogServer.stop();
-  }
-  if (cleanupService) {
-    cleanupService.stop();
-  }
-  stopAutoDiscoveryJob();
-  stopScheduledScansJob();
-  stopIngestionHealthJob();
-  stopThreatFeedsJob();
-  stopDiscoveryApiPollerJob();
-  stopGeoipUpdateJob();
-  stopYaraRulesJob();
-  stopTriageReconcilerJob();
-  pool.end(() => {
-    logger.info('Database pool closed');
-    process.exit(0);
-  });
-});
+let shuttingDown = false;
 
-process.on('SIGINT', async () => {
-  logger.info('SIGINT signal received: closing servers');
+const shutdown = async (signal: string) => {
+  // A second signal (SIGTERM then SIGINT, or a repeated Ctrl-C) must not start a
+  // second teardown: the pools can only be closed once.
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info(`${signal} signal received: closing servers`);
   if (syslogServer) {
-    await syslogServer.stop();
+    try {
+      // Stops listening, then gives messages already accepted a few seconds to
+      // reach the database before the pools below are closed under them.
+      await syslogServer.stop();
+    } catch (error) {
+      logger.error('Error stopping syslog server:', error);
+    }
   }
   if (cleanupService) {
     cleanupService.stop();
@@ -199,10 +189,12 @@ process.on('SIGINT', async () => {
   stopGeoipUpdateJob();
   stopYaraRulesJob();
   stopTriageReconcilerJob();
-  pool.end(() => {
-    logger.info('Database pool closed');
-    process.exit(0);
-  });
-});
+  await closePools();
+  logger.info('Database pools closed');
+  process.exit(0);
+};
+
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
 
 startServer();

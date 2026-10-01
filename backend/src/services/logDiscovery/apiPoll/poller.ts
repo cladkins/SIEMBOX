@@ -7,6 +7,7 @@ import { ErrorLogService } from '../../errors/errorLogService';
 import { DiscoverySourceModel } from '../../../models/DiscoverySource';
 import { DiscoverySourcePoller, DiscoverySourcePollerModel } from '../../../models/DiscoverySourcePoller';
 import { RawLogModel } from '../../../models/RawLog';
+import { runInIngestContext } from '../../../config/database';
 import { ParserEngine } from '../../parser/parserEngine';
 import { getFingerprintById } from '../fingerprintLoader';
 import { getAdapter } from './registry';
@@ -53,21 +54,28 @@ export async function pollOneSource(row: DiscoverySourcePoller): Promise<PollOut
 
     const result = await adapter.fetchEvents(target, credential, row.poll_cursor);
 
-    let count = 0;
-    for (const evt of result.events) {
-      const created = await RawLogModel.create({
-        timestamp: evt.timestamp ?? new Date(),
-        raw_message: evt.message,
-        source_ip: source.ip_address,
-        hostname: source.hostname,
-        app_name: fingerprint.id,
-        discovery_source_id: source.id,
-        ingest_event_id: evt.eventId,
-      });
-      if (!created) continue; // deduped by (discovery_source_id, ingest_event_id)
-      await ParserEngine.getInstance().processLog(created);
-      count++;
-    }
+    // Storing and parsing the pulled events is ingestion, so it runs on the ingest
+    // pool (with connection retry) like syslog and HTTP push; the source/cursor
+    // bookkeeping around it stays on the main pool. A failure here aborts the
+    // poll WITHOUT advancing the cursor, so the next run re-fetches and dedupes.
+    const count = await runInIngestContext(async () => {
+      let stored = 0;
+      for (const evt of result.events) {
+        const created = await RawLogModel.create({
+          timestamp: evt.timestamp ?? new Date(),
+          raw_message: evt.message,
+          source_ip: source.ip_address,
+          hostname: source.hostname,
+          app_name: fingerprint.id,
+          discovery_source_id: source.id,
+          ingest_event_id: evt.eventId,
+        });
+        if (!created) continue; // deduped by (discovery_source_id, ingest_event_id)
+        await ParserEngine.getInstance().processLog(created);
+        stored++;
+      }
+      return stored;
+    });
 
     await DiscoverySourcePollerModel.recordResult(sourceId, { ok: true, count, cursor: result.nextCursor });
     return { ok: true, count };

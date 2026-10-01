@@ -683,6 +683,13 @@ In the SIEMBox UI, navigate to the **Shippers** page. If unknown sources are det
 - A yellow warning banner: "Unknown sources detected"
 - Details showing shipper ID, log count, timestamps, and source IPs
 
+The list covers the **last 24 hours**: log count, first/last seen and the
+IP/hostname/app lists are computed over that window, and a source that hasn't
+sent anything in the last 24 hours drops off the list. It is refreshed at most
+every 30 seconds (and immediately when you create, delete, or re-key a shipper),
+so a brand-new ghost can take up to half a minute to appear. If the database is
+too busy to answer, the Shippers page keeps showing the last good result.
+
 **How to Remediate:**
 
 1. **Identify the source IP** from the ghost shipper details in the UI

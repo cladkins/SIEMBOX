@@ -53,7 +53,7 @@ curl http://localhost:8421/api/health
 | Error Message | Likely Cause | Quick Fix |
 |---------------|--------------|-----------|
 | `ECONNREFUSED` | Service not running | `docker-compose restart <service>` |
-| `Error: connect ECONNREFUSED 127.0.0.1:5432` | Backend can't reach database | Check postgres health |
+| `Error: connect ECONNREFUSED 127.0.0.1:5432` | `DB_HOST` is a loopback address, so the backend is dialing its own container (Postgres can be perfectly healthy) | Set `DB_HOST=postgres` and **redeploy** the stack — see [below](#issue-backend-cant-reach-postgres-on-127001) |
 | `401 Unauthorized` | Invalid/expired token | Login again |
 | `Port 514: Permission denied` | Insufficient privileges | Run backend as root or use authbind |
 | `FATAL: password authentication failed` | Wrong database password | Check .env DB_PASSWORD |
@@ -91,6 +91,10 @@ curl http://localhost:8421/api/health
 - Verify database name, user, and password in `.env` match your configuration
 - Check network connectivity between backend and database
 - For remote databases, verify firewall rules allow access on port 5432
+- **Backend crash-loops on `connect ECONNREFUSED 127.0.0.1:5432` while Postgres
+  shows healthy:** `DB_HOST` is set to a loopback address (`localhost` /
+  `127.0.0.1`). Inside the backend container that is the container itself, not
+  Postgres. See [Backend can't reach Postgres on 127.0.0.1](#issue-backend-cant-reach-postgres-on-127001) below.
 
 **Insufficient System Resources**
 - Check available disk space (logs grow quickly)
@@ -101,6 +105,46 @@ curl http://localhost:8421/api/health
 - Ensure the deployment user has proper permissions for volumes/directories
 - Verify Docker/container engine has permission to access mounted paths
 - Check file permissions on log directories
+
+---
+
+### Issue: Backend can't reach Postgres on 127.0.0.1
+
+**Symptoms:**
+- The backend log repeats `Migration failed: connect ECONNREFUSED 127.0.0.1:5432`
+  every few seconds (the container exits and Docker restarts it with a growing
+  delay), followed by a `Database unreachable --` line naming the likely cause
+- `docker ps` shows `siembox-postgres` as `(healthy)`
+- Nothing is ingested: the syslog listener on port 514 never starts
+
+**Cause:** `DB_HOST` is `localhost` or `127.0.0.1`. Inside the backend container
+that address is the container itself, not Postgres, so the connection is refused
+even though the database is fine. Loopback is only correct with the optional
+`network_mode: host` setup for Log Discovery (see [DEPLOYMENT.md](../../DEPLOYMENT.md)),
+and setting `DB_HOST` without making the matching compose edits is the usual way
+to end up here.
+
+**Diagnose** (on the Docker host):
+
+```bash
+docker inspect siembox-backend --format '{{.HostConfig.NetworkMode}}'
+docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' siembox-backend | grep -E '^DB_(HOST|PORT)='
+docker ps -a --filter name=siembox-postgres --format '{{.Status}}   {{.Ports}}'
+```
+
+**Fix:**
+- **Network mode is the compose network (e.g. `siembox_siembox-network`) — the
+  default.** Set `DB_HOST=postgres` (or delete the line; the compose default is
+  `postgres`) wherever it is defined — the `.env` next to the compose file, or
+  the stack's Environment in Komodo/Portainer — then **redeploy**
+  (`docker compose -f compose.prod.yaml up -d`). A plain `docker restart` keeps
+  the container's old environment, so it will not help.
+- **Network mode is `host`.** Loopback is correct here, so the problem is
+  Postgres itself: confirm the third command shows `127.0.0.1:5432->5432/tcp`
+  (if not, redeploy so Postgres is recreated with the loopback publish), that
+  nothing else holds the port (`ss -ltnp 'sport = :5432'`), and that Postgres is
+  not crash-looping (`docker logs --tail 40 siembox-postgres`; check free disk
+  space with `df -h`).
 
 ---
 

@@ -13,6 +13,7 @@ Start by checking container health: `docker compose -f compose.prod.yaml ps` and
 - **Syslog sources:** confirm devices target the SIEMBox host on **`514`** (UDP or TCP) and nothing is dropping it in between.
 - **Shipper sources:** the shipper must be **online** in the UI. Check that `SIEMBOX_API_URL` points at **`http://<host>:8421/api`** (the **backend** port) and that the **API key** is correct.
 - Raw logs show up under **Logs → Raw Logs** even before a parser matches. If you see raw but not parsed logs, you need a **parser** for that source.
+- **Gaps while the database is busy:** if Postgres can't keep up (a long query, a scan, slow disk), **UDP** syslog can only drop messages. The backend logs `Ingestion is overloaded: dropped N UDP syslog message(s)` and it appears under Recent Errors on the Admin dashboard. TCP syslog and HTTP push are slowed down instead of dropping, so send anything important over TCP. Details and tuning: [Logs are dropped or ingestion is slow](https://github.com/cladkins/SIEMBOX/blob/main/docs/operations/TROUBLESHOOTING.md#issue-logs-are-dropped-or-ingestion-is-slow).
 
 ## A parser isn't matching
 

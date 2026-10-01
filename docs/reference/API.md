@@ -2290,6 +2290,8 @@ Only `message` is required. It must be the **bare extracted message** — the sa
 
 A malformed entry in a batch doesn't fail the whole request — it's counted in `rejected`, with up to 20 `{index, error}` entries returned in `errors`.
 
+If the database can't be reached (including a connection pool that stays exhausted past the backend's 30-second retry window), the entry that hit the problem is rejected with `database unavailable` and **the rest of the batch is rejected with the same error without being attempted**, so the request returns in roughly that window rather than hanging. Entries stored before the outage are kept and counted in `accepted`. Resend the rejected entries later; include `event_id` so a retry can't create duplicates.
+
 **Errors:**
 - `400` - Body isn't a single log object or `{ "logs": [...] }`, empty `logs` array, or batch exceeds 1000 entries
 - `401` - Missing/invalid `X-Shipper-ID` or Bearer key, or HTTP push not provisioned for this shipper

@@ -54,6 +54,7 @@ curl http://localhost:8421/api/health
 |---------------|--------------|-----------|
 | `ECONNREFUSED` | Service not running | `docker-compose restart <service>` |
 | `Error: connect ECONNREFUSED 127.0.0.1:5432` | `DB_HOST` is a loopback address, so the backend is dialing its own container (Postgres can be perfectly healthy) | Set `DB_HOST=postgres` and **redeploy** the stack — see [below](#issue-backend-cant-reach-postgres-on-127001) |
+| `timeout exceeded when trying to connect` | The backend ran out of free database connections (a heavy query or scan was holding them) | See [Logs are dropped or ingestion is slow](#issue-logs-are-dropped-or-ingestion-is-slow) |
 | `401 Unauthorized` | Invalid/expired token | Login again |
 | `Port 514: Permission denied` | Insufficient privileges | Run backend as root or use authbind |
 | `FATAL: password authentication failed` | Wrong database password | Check .env DB_PASSWORD |
@@ -450,6 +451,69 @@ reliable check.
 - **`\r\n` line endings.** A stray trailing `\r` defeats a `$`-anchored parser.
   This is stripped on ingest now, but a custom parser that captures it will
   still fail.
+
+---
+
+### Issue: Logs are dropped or ingestion is slow
+
+**Symptoms:**
+- Admin dashboard → Recent Errors shows `timeout exceeded when trying to connect` (usually from `background:parser-engine`) or a `background:syslog-ingest` entry
+- Backend log: `Ingestion is overloaded: dropped N UDP syslog message(s) in the last 10s ...`
+- Backend log: `Ingest database connections failed N time(s) in the last 10s and were retried ...`
+- Gaps in the Logs page that line up with a heavy page load, a scan, or database maintenance
+
+**How ingestion copes with a busy database:**
+
+Log ingestion (syslog, HTTP push, API polling) has its own database connection pool, separate from the one the web UI, API and background jobs use. In `pg_stat_activity` the two show up as `application_name = 'siembox-ingest'` and `'siembox-backend'`. A slow page or a running scan can no longer use up the connections that ingestion needs, and an ingestion burst can't freeze the UI.
+
+Every syslog message goes through a bounded queue, and what happens when it fills depends on the transport:
+
+| Source | When the database can't keep up |
+|--------|---------------------------------|
+| **TCP syslog** | The backend stops reading from the connection until there is room. The sender is slowed down by normal TCP flow control and **nothing is dropped** (the sender's own buffering decides how much it can absorb). |
+| **UDP syslog** | UDP can't be slowed down, so once the queue is full the newest datagrams are **dropped and counted**. One summary line is logged every 10 seconds, and one entry per minute lands in Recent Errors. |
+| **HTTP push** | The request waits for a connection. A batch that still can't reach the database stops early and reports the remaining entries as rejected with `database unavailable`; retry them (with `event_id` set, retries can't create duplicates). |
+
+Connection failures on the ingest path (no free connection, connection refused, `too many clients`) are retried with backoff for up to 30 seconds before a message is given up on. Only failures where the statement cannot have run are retried, so a retry never stores a log twice. A message whose insert was already in flight when its connection was cut (for example `terminating connection due to administrator command`) is not retried, because it may already have been stored; each of those is logged as `Error processing syslog message`. On `docker stop` the backend stops listening, then waits up to 5 seconds for queued messages to be stored; anything still unprocessed after that is logged (`Shutdown: N syslog message(s) were still unprocessed ... and are lost`).
+
+**Diagnosis:**
+```bash
+# Who holds connections, and what are they doing?
+docker exec siembox-postgres psql -U siembox -d siembox -c \
+  "SELECT application_name, state, count(*)
+   FROM pg_stat_activity WHERE datname = 'siembox'
+   GROUP BY 1, 2 ORDER BY 1, 2;"
+
+# Anything slow right now? (a long-running query is the usual culprit)
+docker exec siembox-postgres psql -U siembox -d siembox -c \
+  "SELECT pid, application_name, now() - query_start AS running, left(query, 100) AS query
+   FROM pg_stat_activity
+   WHERE state = 'active' AND datname = 'siembox'
+   ORDER BY running DESC LIMIT 10;"
+
+# Is something holding a lock that inserts are waiting on?
+docker exec siembox-postgres psql -U siembox -d siembox -c \
+  "SELECT pid, application_name, wait_event_type, wait_event, left(query, 80) AS query
+   FROM pg_stat_activity WHERE wait_event_type = 'Lock';"
+```
+
+Look at what is slow rather than the symptom: a long `siembox-backend` query points at a UI page, scan or job; a lock wait on `raw_logs` points at maintenance (`VACUUM FULL`, `ALTER TABLE`); a saturated disk shows up as everything being slow at once.
+
+**Solutions:**
+
+- **Move must-not-lose sources off UDP.** TCP syslog and HTTP push degrade gracefully; UDP can only drop. rsyslog and syslog-ng can forward over TCP, and many appliances offer a TCP option — check the sender's remote-syslog settings.
+- **Fix the cause** (the slow query, the lock, the disk) — the queue only buys time.
+- **Tune the ingest path** if the load is simply high. In our testing (a 4-core machine running Postgres alongside the backend) the defaults sustained roughly 2,500 messages per second:
+
+  | Variable | Default | Meaning |
+  |----------|---------|---------|
+  | `DB_INGEST_POOL_MAX` | `20` | Connections in the ingest pool. |
+  | `INGEST_CONCURRENCY` | pool size − 2 | Messages processed at once; keep it at or below the pool size. |
+  | `INGEST_QUEUE_MAX` | `20000` | Messages held in memory while all workers are busy; past this, UDP is dropped and TCP is slowed. |
+  | `DB_INGEST_ACQUIRE_TIMEOUT_MS` | `10000` | How long one attempt waits for a free connection. |
+  | `DB_INGEST_RETRY_MS` | `30000` | Total time spent retrying connection failures; `0` turns retrying off. |
+
+  The backend's compose file passes through only the variables it lists, so add any of these to the `backend` service's `environment:` and redeploy. The backend now uses up to 40 database connections at most (20 main + 20 ingest); Postgres' default `max_connections = 100` covers that, but see [Too Many Connections](#issue-too-many-connections-error) if you run other clients.
 
 ---
 

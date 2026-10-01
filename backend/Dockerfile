@@ -26,8 +26,14 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Install NMAP for asset discovery scanning
-RUN apk add --no-cache nmap
+# Install NMAP for asset discovery scanning.
+# On Alpine the script engine is split out of the base package: nse_main.lua
+# lives in nmap-nselibs (pulled in by nmap-scripts). Without it, every scan that
+# starts NSE -- service (-sV) and OS (-O -sV) scans, which run the "version"
+# scripts -- dies with "NSE: failed to initialize the script engine: could not
+# locate nse_main.lua". Ping (-sn) and port (-sT) scans don't use NSE, which is
+# why only some scan types were failing.
+RUN apk add --no-cache nmap nmap-scripts
 
 # Install Nuclei for vulnerability scanning.
 # Pin the version and download per-arch (TARGETARCH is provided automatically

@@ -2,7 +2,6 @@ import { Router, Request, Response } from 'express';
 import { LogShipperModel, ShipperSourceModel, ShipperVolumeModel, ShipperActivityModel, withHttpPushStatus } from '../models/LogShipper';
 import { ApiError } from '../middleware/errorHandler';
 import { query } from '../config/database';
-import { logger } from '../utils/logger';
 import crypto from 'crypto';
 import { groupContainers, DockerContainer } from '../services/scanner/dockerDiscovery';
 import { ShipperContainerModel } from '../models/ShipperContainer';
@@ -10,6 +9,7 @@ import { authenticate, authorize } from '../middleware/auth';
 import { authenticateShipperPush } from '../middleware/shipperPushAuth';
 import { sha256hex } from '../models/EdrAgent';
 import { ingestPushedLogs, MAX_LOG_PUSH_BATCH_SIZE } from '../services/shippers/logPushService';
+import { unknownSources, isDatabaseBusy } from '../services/shippers/unknownSources';
 
 const router = Router();
 
@@ -79,58 +79,20 @@ router.get('/', async (_req: Request, res: Response) => {
   }
 });
 
-// Get unknown sources (shipper IDs in raw_logs but not in log_shippers)
+// Get unknown sources (shipper IDs in raw_logs but not in log_shippers).
+// The heavy lifting -- the cheap skip-scan query, statement timeout, single-flight
+// cache and failure cooldown -- lives in services/shippers/unknownSources.ts; the
+// old inline query scanned the whole raw_logs table per request and routinely
+// outran the browser's 10 s timeout while Postgres kept grinding on it.
 router.get('/unknown-sources', async (_req: Request, res: Response) => {
   try {
-    // Query for shipper_ids in raw_logs that don't have a matching log_shipper
-    // NOTE: API keys are stored as 64-char hex strings. We must use decode(api_key, 'hex')
-    // to convert them to binary before hashing, matching the shipper script's behavior:
-    // echo -n "$api_key" | xxd -r -p | sha256sum | cut -c1-8
-    // Pre-compute each shipper's possible short IDs in a CTE. The WHERE filter
-    // runs before the SELECT projection, so decode() only ever sees valid hex —
-    // a single malformed api_key can no longer abort the whole query (#17).
-    const result = await query(`
-      WITH shipper_hashes AS (
-        SELECT
-          LOWER(SUBSTRING(MD5(decode(api_key, 'hex')), 1, 8)) AS md5_id,
-          LOWER(SUBSTRING(ENCODE(SHA256(decode(api_key, 'hex')), 'hex'), 1, 8)) AS sha256_id,
-          LOWER(SUBSTRING(http_push_key_hash, 1, 8)) AS http_push_id
-        FROM log_shippers
-        WHERE api_key ~ '^([0-9a-fA-F]{2})+$'
-      )
-      SELECT
-        rl.shipper_id,
-        COUNT(*) as log_count,
-        MIN(rl.created_at) as first_seen,
-        MAX(rl.created_at) as last_seen,
-        ARRAY_AGG(DISTINCT rl.source_ip) as source_ips,
-        ARRAY_AGG(DISTINCT rl.hostname) as hostnames,
-        ARRAY_AGG(DISTINCT rl.app_name) as app_names
-      FROM raw_logs rl
-      WHERE rl.shipper_id IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM shipper_hashes sh
-          WHERE LOWER(rl.shipper_id) = sh.md5_id
-             OR LOWER(rl.shipper_id) = sh.sha256_id
-             OR LOWER(rl.shipper_id) = sh.http_push_id
-        )
-      GROUP BY rl.shipper_id
-      ORDER BY MAX(rl.created_at) DESC
-    `);
-
-    const unknownSources = result.rows.map((row: any) => ({
-      shipper_id: row.shipper_id,
-      log_count: parseInt(row.log_count, 10),
-      first_seen: row.first_seen,
-      last_seen: row.last_seen,
-      source_ips: row.source_ips.filter((ip: string | null) => ip !== null),
-      hostnames: row.hostnames.filter((h: string | null) => h !== null),
-      app_names: row.app_names.filter((a: string | null) => a !== null),
-    }));
-
-    res.json(unknownSources);
+    res.json(await unknownSources.get());
   } catch (error) {
-    logger.error('Failed to fetch unknown sources:', error);
+    // The service already logged the failure. A busy database (statement timeout /
+    // pool exhausted) is "try again shortly", not a server fault.
+    if (isDatabaseBusy(error)) {
+      throw new ApiError(503, 'Unknown-source lookup timed out because the database is busy. Try again shortly.');
+    }
     throw new ApiError(500, 'Failed to fetch unknown sources');
   }
 });
@@ -174,6 +136,7 @@ router.post('/', async (req: Request, res: Response) => {
     });
 
     await ShipperActivityModel.log(shipper.id, 'created', 'Shipper created');
+    unknownSources.invalidate(); // a newly registered shipper may be an adopted unknown source
 
     res.status(201).json(shipper);
   } catch (error) {
@@ -198,6 +161,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     }
 
     await ShipperActivityModel.log(id, 'config_updated', 'Shipper configuration updated');
+    unknownSources.invalidate();
 
     res.json(shipper);
   } catch (error) {
@@ -216,6 +180,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
       throw new ApiError(404, 'Shipper not found');
     }
 
+    unknownSources.invalidate(); // its id may now be unknown (ghost shipper)
     res.json({ message: 'Shipper deleted successfully' });
   } catch (error) {
     if (error instanceof ApiError) throw error;
@@ -390,6 +355,7 @@ router.post('/:id/regenerate-key', async (req: Request, res: Response) => {
     }
 
     await ShipperActivityModel.log(id, 'key_regenerated', 'API key regenerated');
+    unknownSources.invalidate(); // the old key's short id is now unknown
 
     res.json({ api_key: newApiKey });
   } catch (error) {
@@ -418,6 +384,7 @@ router.post('/:id/http-push-key', authenticate, authorize('admin'), async (req: 
     const pushKey = generateApiKey();
     await LogShipperModel.setHttpPushKey(id, sha256hex(pushKey));
     await ShipperActivityModel.log(id, 'http_push_key_generated', 'HTTP log-push key (re)generated');
+    unknownSources.invalidate();
 
     res.json({ http_push_key: pushKey });
   } catch (error) {
@@ -439,6 +406,7 @@ router.delete('/:id/http-push-key', authenticate, authorize('admin'), async (req
 
     await LogShipperModel.revokeHttpPushKey(id);
     await ShipperActivityModel.log(id, 'http_push_key_revoked', 'HTTP log-push key revoked');
+    unknownSources.invalidate();
 
     res.json({ revoked: true });
   } catch (error) {

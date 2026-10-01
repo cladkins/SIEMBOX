@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import pool from '../config/database';
+import { diagnoseDbConnectionError } from '../config/dbDiagnostics';
 import { logger } from '../utils/logger';
 import bcrypt from 'bcrypt';
 
@@ -48,6 +49,11 @@ const runMigrations = async () => {
     process.exit(0);
   } catch (error) {
     logger.error('Migration failed:', error);
+    // A connection-level failure here is almost always a DB_HOST / networking
+    // mistake, not a database fault -- say so, since the container otherwise
+    // just crash-loops on a bare "connect ECONNREFUSED".
+    const hint = diagnoseDbConnectionError(error);
+    if (hint) logger.error(`Database unreachable -- ${hint}`);
     process.exit(1);
   }
 };

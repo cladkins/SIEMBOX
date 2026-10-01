@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import app from './app';
 import { logger } from './utils/logger';
 import pool from './config/database';
+import { diagnoseDbConnectionError } from './config/dbDiagnostics';
 import { SyslogServer } from './services/syslog/syslogServer';
 import { CleanupService } from './services/cleanup/cleanupService';
 import { importRules } from './scripts/import-rules';
@@ -153,6 +154,8 @@ const startServer = async () => {
     });
   } catch (error) {
     logger.error('Failed to start server:', error);
+    const hint = diagnoseDbConnectionError(error);
+    if (hint) logger.error(`Database unreachable -- ${hint}`);
     process.exit(1);
   }
 };

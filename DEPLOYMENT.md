@@ -405,6 +405,14 @@ BACKEND_UPSTREAM=host.docker.internal:8421
 SIEMBOX_HOST_NETWORKING=true
 ```
 
+> ⚠️ **Apply steps 1 and 2 together.** `DB_HOST=localhost` (or `127.0.0.1`) is
+> only correct once `network_mode: host` is actually active on the backend. Set
+> on its own, the backend dials its *own* container instead of Postgres and
+> crash-loops on `connect ECONNREFUSED 127.0.0.1:5432` while Postgres shows
+> healthy. The backend's log now spells this out. Changing the environment also
+> needs a redeploy -- a plain `docker restart` keeps the old values. See
+> [TROUBLESHOOTING.md](docs/operations/TROUBLESHOOTING.md#issue-backend-cant-reach-postgres-on-127001).
+
 **3. Redeploy:**
 
 ```bash

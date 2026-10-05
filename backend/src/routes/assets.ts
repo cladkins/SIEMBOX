@@ -6,9 +6,9 @@
  */
 
 import express, { Request, Response } from 'express';
-import { authenticate } from '../middleware/auth';
+import { authenticate, authorize } from '../middleware/auth';
 import { AssetRepository } from '../services/assets/assetRepository';
-import { NmapScanner } from '../services/scanner/nmapScanner';
+import { NmapScanner, validateScanTargets } from '../services/scanner/nmapScanner';
 import { AutoDiscoveryService } from '../services/assets/autoDiscoveryService';
 import { ScanRepository } from '../services/assets/scanRepository';
 import { AssetStatus, AssetCriticality, AssetType } from '../models/Asset';
@@ -366,13 +366,30 @@ router.get('/:id/services', async (req: Request, res: Response): Promise<void> =
 /**
  * POST /api/assets/scan
  * Trigger asset discovery scan
- * No authentication required
+ *
+ * Requires authentication plus the admin/analyst/operator roles the frontend
+ * already restricts the "Trigger Scan" button to (see `canTriggerScans` in
+ * frontend/src/views/Assets.vue) -- this route used to have no auth check at
+ * all. `targets` is validated against validateScanTargets() before it goes
+ * anywhere near nmap: node-nmap builds its argv by splitting the joined
+ * target string on whitespace before spawning the real `nmap` binary, so an
+ * unvalidated target containing a space could carry extra nmap flags through
+ * to that (root, in the container) process -- including ones that read or
+ * write files.
  */
 router.post(
   '/scan',
-  async (req: Request, res: Response) => {
+  authenticate,
+  authorize('admin', 'analyst', 'operator'),
+  async (req: Request, res: Response): Promise<void> => {
     try {
       const { targets, scanType, description } = req.body;
+
+      const targetError = validateScanTargets(targets);
+      if (targetError) {
+        res.status(400).json({ error: targetError });
+        return;
+      }
 
       console.log(`[ASSETS] POST /scan - received body:`, JSON.stringify(req.body));
       console.log(`[ASSETS] Targets:`, JSON.stringify(targets), `Type:`, typeof targets);
@@ -380,7 +397,7 @@ router.post(
       const scanId = await NmapScanner.scan({
         targets,
         scanType: scanType || 'port',
-        userId: 1, // Default to admin user for system scans
+        userId: req.user!.id,
         description,
       });
 
@@ -402,9 +419,13 @@ router.post(
 /**
  * POST /api/assets/discover
  * Trigger auto-discovery from logs
- * No authentication required
+ *
+ * Requires authentication. This duplicates on demand what the scheduled
+ * auto-discovery job (jobs/autoDiscovery.ts) already runs on its own --
+ * it has no frontend caller -- but as a mutating endpoint it shouldn't be
+ * triggerable by anyone who can merely reach the API.
  */
-router.post('/discover', async (_req: Request, res: Response) => {
+router.post('/discover', authenticate, async (_req: Request, res: Response) => {
   try {
     const result = await AutoDiscoveryService.runFullDiscovery();
 

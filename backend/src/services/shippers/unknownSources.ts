@@ -33,6 +33,12 @@
  */
 import { getClient } from '../../config/database';
 import { logger } from '../../utils/logger';
+import { QueryClient, runReadOnly, createSnapshotCache } from './snapshotCache';
+
+// Re-exported so existing importers keep working after the shared plumbing
+// moved to snapshotCache.ts.
+export { isStatementTimeout, isDatabaseBusy } from './snapshotCache';
+export type { QueryClient } from './snapshotCache';
 
 /** Window over which unknown sources are aggregated and considered "current". */
 export const UNKNOWN_SOURCES_WINDOW_HOURS = 24;
@@ -126,12 +132,6 @@ export interface UnknownSource {
   app_names: string[];
 }
 
-/** Minimal slice of a pg client this module needs (so it can be faked in tests). */
-export interface QueryClient {
-  query(text: string, params?: any[]): Promise<{ rows: any[] }>;
-  release(err?: Error | boolean): void;
-}
-
 const nonNull = (v: string | null): v is string => v !== null && v !== undefined;
 
 function toUnknownSource(row: UnknownSourceRow): UnknownSource {
@@ -146,22 +146,6 @@ function toUnknownSource(row: UnknownSourceRow): UnknownSource {
   };
 }
 
-/** Postgres query_canceled -- what statement_timeout raises. */
-export function isStatementTimeout(err: unknown): boolean {
-  return (err as { code?: string } | null)?.code === '57014';
-}
-
-/**
- * The database is busy rather than broken: our statement timeout fired, or the
- * pool could not hand out a connection in time. Callers should answer 503 (try
- * again shortly), not 500.
- */
-export function isDatabaseBusy(err: unknown): boolean {
-  if (isStatementTimeout(err)) return true;
-  const message = err instanceof Error ? err.message : '';
-  return /timeout exceeded when trying to connect/i.test(message);
-}
-
 /**
  * Run the unknown-sources query on a dedicated pooled client inside a
  * READ ONLY transaction with a LOCAL statement timeout (set_config is
@@ -169,25 +153,7 @@ export function isDatabaseBusy(err: unknown): boolean {
  */
 export function createDbFetcher(acquire: () => Promise<QueryClient>) {
   return async function fetchRows(windowHours: number, maxIds: number, timeoutMs: number): Promise<UnknownSourceRow[]> {
-    const client = await acquire();
-    let releaseArg: Error | undefined;
-    try {
-      await client.query('BEGIN READ ONLY');
-      await client.query("SELECT set_config('statement_timeout', $1, true)", [String(Math.trunc(timeoutMs))]);
-      const result = await client.query(UNKNOWN_SOURCES_SQL, [windowHours, maxIds]);
-      await client.query('COMMIT');
-      return result.rows as UnknownSourceRow[];
-    } catch (err) {
-      try {
-        await client.query('ROLLBACK');
-      } catch (rollbackErr) {
-        // The connection is in an unknown state -- have the pool discard it.
-        releaseArg = rollbackErr instanceof Error ? rollbackErr : new Error(String(rollbackErr));
-      }
-      throw err;
-    } finally {
-      client.release(releaseArg);
-    }
+    return (await runReadOnly(acquire, UNKNOWN_SOURCES_SQL, [windowHours, maxIds], timeoutMs)) as UnknownSourceRow[];
   };
 }
 
@@ -213,72 +179,24 @@ export interface UnknownSourcesService {
 }
 
 export function createUnknownSourcesService(deps: UnknownSourcesDeps, opts: UnknownSourcesOptions): UnknownSourcesService {
-  let cache: { at: number; generation: number; value: UnknownSource[] } | null = null;
-  let generation = 0;
-  let inflight: Promise<UnknownSource[]> | null = null;
-  let lastFailure: { at: number; error: unknown } | null = null;
-
-  async function refresh(): Promise<UnknownSource[]> {
-    // A result computed before an invalidate() may already be out of date (e.g.
-    // it still lists a shipper that was just registered), so it is returned to
-    // the callers that were waiting on it but never cached.
-    const startedGeneration = generation;
-    try {
-      const rows = await deps.fetchRows(opts.windowHours, opts.maxDistinctIds, opts.timeoutMs);
-      if (rows.length > 0 && Number(rows[0].ids_enumerated) >= opts.maxDistinctIds) {
-        deps.log.warn(
-          `unknown-sources: shipper_id enumeration hit its cap of ${opts.maxDistinctIds} distinct ids; ` +
-            `some unknown sources may not be listed (a sender may be spraying random shipper tags)`
-        );
-      }
-      const value = rows.map(toUnknownSource);
-      if (startedGeneration === generation) {
-        cache = { at: deps.now(), generation, value };
-      }
-      lastFailure = null;
-      return value;
-    } catch (error) {
-      lastFailure = { at: deps.now(), error };
-      if (cache) {
-        deps.log.warn('unknown-sources: refresh failed, serving the previous result', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return cache.value;
-      }
-      deps.log.error('unknown-sources: query failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
-  }
-
-  return {
-    async get(): Promise<UnknownSource[]> {
-      const t = deps.now();
-      if (cache && cache.generation === generation && t - cache.at < opts.ttlMs) {
-        return cache.value;
-      }
-      if (inflight) return inflight;
-      if (lastFailure && t - lastFailure.at < opts.failureCooldownMs) {
-        if (cache) return cache.value; // stale beats an error while the database recovers
-        throw lastFailure.error; // fail fast rather than start another doomed scan
-      }
-      const run = refresh();
-      inflight = run;
-      // Cleared from a chained handler (always a later microtask) rather than a
-      // `finally` inside refresh(), so a fetcher that throws synchronously can't
-      // clear `inflight` before it has been assigned and leave it pinned to a
-      // rejected promise.
-      const clear = () => {
-        if (inflight === run) inflight = null;
-      };
-      run.then(clear, clear);
-      return run;
+  return createSnapshotCache<UnknownSource[]>(
+    {
+      label: 'unknown-sources',
+      now: deps.now,
+      log: deps.log,
+      fetch: async () => {
+        const rows = await deps.fetchRows(opts.windowHours, opts.maxDistinctIds, opts.timeoutMs);
+        if (rows.length > 0 && Number(rows[0].ids_enumerated) >= opts.maxDistinctIds) {
+          deps.log.warn(
+            `unknown-sources: shipper_id enumeration hit its cap of ${opts.maxDistinctIds} distinct ids; ` +
+              `some unknown sources may not be listed (a sender may be spraying random shipper tags)`
+          );
+        }
+        return rows.map(toUnknownSource);
+      },
     },
-    invalidate(): void {
-      generation++;
-    },
-  };
+    { ttlMs: opts.ttlMs, failureCooldownMs: opts.failureCooldownMs }
+  );
 }
 
 /** The process-wide instance used by the shippers routes. */

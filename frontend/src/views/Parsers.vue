@@ -736,12 +736,21 @@ async function saveAiParser(force = false) {
   }
 }
 
-const rules: FormRules = {
+// A computed rule set, not a static one: JSON parsers don't take a pattern
+// (the backend agrees -- see parserPortable.ts's `pattern is required for
+// regex/grok parsers` and redos.ts's `parser_type !== 'json'` guard), so
+// requiring one here made every JSON parser impossible to save or update
+// through this form. Keyed off parserForm.parser_type so switching type (or
+// opening Edit on an existing JSON parser) updates the rule immediately.
+const rules = computed<FormRules>(() => ({
   name: [{ required: true, message: 'Name is required', trigger: 'blur' }],
   parser_type: [{ required: true, message: 'Type is required', trigger: 'change' }],
-  pattern: [{ required: true, message: 'Pattern is required', trigger: 'blur' }],
+  pattern:
+    parserForm.parser_type === 'json'
+      ? []
+      : [{ required: true, message: 'Pattern is required', trigger: 'blur' }],
   priority: [{ required: true, message: 'Priority is required', trigger: 'blur' }],
-};
+}));
 
 onMounted(async () => {
   // Sequential on purpose: the parser list + match counters are instant reads,

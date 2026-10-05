@@ -1,5 +1,30 @@
 import { Router, Request, Response } from 'express';
 import { ParserModel, Parser } from '../models/Parser';
+
+/**
+ * Validates the body of POST / (the "Create Parser" button). pattern must
+ * always be present as a string -- the column is NOT NULL -- but only needs
+ * to be non-empty for regex/grok; JSON parsers don't take one. Mirrors the
+ * same rule services/parser/parserPortable.ts already enforces on every
+ * other parser-ingestion path (validate/import/catalog install), which this
+ * one plain route predated and duplicated incorrectly.
+ * Returns an error message, or null if the body is valid.
+ */
+export function validateCreateParserBody(body: {
+  name?: unknown;
+  parser_type?: unknown;
+  pattern?: unknown;
+  field_mappings?: unknown;
+}): string | null {
+  const { name, parser_type, pattern, field_mappings } = body;
+  if (!name || !parser_type || !field_mappings || typeof pattern !== 'string') {
+    return 'Missing required fields';
+  }
+  if (parser_type !== 'json' && !pattern) {
+    return 'pattern is required for regex/grok parsers';
+  }
+  return null;
+}
 import { ParserEngine } from '../services/parser/parserEngine';
 import {
   validatePortableParser,
@@ -483,8 +508,9 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const { name, description, enabled, priority, parser_type, pattern, field_mappings, test_samples } = req.body;
 
-    if (!name || !parser_type || !pattern || !field_mappings) {
-      throw new ApiError(400, 'Missing required fields');
+    const bodyError = validateCreateParserBody(req.body);
+    if (bodyError) {
+      throw new ApiError(400, bodyError);
     }
 
     const parser = await ParserModel.create({

@@ -1103,7 +1103,9 @@ export class NucleiScanner {
           vulnerabilities_found,
           error_message,
           results_summary,
-          created_at
+          created_at,
+          assigned_shipper_id,
+          (SELECT name FROM log_shippers ls WHERE ls.id = vulnerability_scans.assigned_shipper_id) AS assigned_shipper_name
         FROM vulnerability_scans
         WHERE id = $1
       `;
@@ -1133,9 +1135,12 @@ export class NucleiScanner {
           vs.vulnerabilities_found,
           vs.error_message,
           vs.created_at,
+          vs.assigned_shipper_id,
+          ls.name as assigned_shipper_name,
           u.username as initiated_by_username
         FROM vulnerability_scans vs
         LEFT JOIN users u ON vs.initiated_by = u.id
+        LEFT JOIN log_shippers ls ON vs.assigned_shipper_id = ls.id
         WHERE vs.scan_type = 'vulnerability'
         ORDER BY vs.created_at DESC
         LIMIT $1

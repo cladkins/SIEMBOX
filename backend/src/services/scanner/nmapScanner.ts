@@ -12,6 +12,7 @@ import { AuditService } from '../audit/auditService';
 import pool from '../../config/database';
 import { ErrorLogService } from '../errors/errorLogService';
 import { AssetType, AssetCriticality, AssetStatus, DiscoveryMethod, ServiceState } from '../../models/Asset';
+import { isValidScanTarget } from '../../utils/typeGuards';
 
 /**
  * Scan options interface
@@ -24,6 +25,30 @@ export interface ScanOptions {
 }
 
 /**
+ * Validates a scan's target list. This is the authoritative gate against
+ * node-nmap's own argument handling: it builds its argv by splitting the
+ * *joined* target string on whitespace before spawning the real `nmap`
+ * binary (see node_modules/node-nmap/index.js), so a target containing a
+ * space can smuggle in extra nmap flags unless every entry is confirmed to be
+ * a bare IP, CIDR, or hostname first -- there is no shell involved, but
+ * node-nmap re-splits for us regardless. Called both here (so `scan()` is
+ * safe no matter what a caller already checked) and in routes/assets.ts
+ * (so a bad request gets a clean 400 instead of a 500 from deeper inside).
+ * Returns an error message, or null if `targets` is safe to use.
+ */
+export function validateScanTargets(targets: unknown): string | null {
+  if (!Array.isArray(targets) || targets.length === 0) {
+    return 'targets must be a non-empty array of IP addresses, CIDR ranges, or hostnames';
+  }
+  for (const target of targets) {
+    if (typeof target !== 'string' || !isValidScanTarget(target)) {
+      return `Invalid target: ${JSON.stringify(target)} is not a valid IP address, CIDR range, or hostname`;
+    }
+  }
+  return null;
+}
+
+/**
  * NMAP Scanner class
  */
 export class NmapScanner {
@@ -32,6 +57,11 @@ export class NmapScanner {
    * Returns scan ID for tracking progress
    */
   static async scan(options: ScanOptions): Promise<number> {
+    const targetError = validateScanTargets(options.targets);
+    if (targetError) {
+      throw new Error(targetError);
+    }
+
     // Create scan record in database
     const scanId = await this.createScanRecord(options);
 

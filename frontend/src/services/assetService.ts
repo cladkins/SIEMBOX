@@ -124,10 +124,23 @@ export interface AssetsResponse {
 export interface ScanRequest {
   targets: string[];
   scanType: string;
+  /** Run the scan from this log shipper (LAN-side). Omit/null = run on the backend. */
+  assignedShipperId?: number | null;
 }
 
 export interface ScanResponse {
   scanId: number;
+  status?: string;
+  assignedShipperId?: number | null;
+  message?: string;
+}
+
+/** A log shipper as returned by GET /api/shippers (only the fields the scan picker needs). */
+export interface ShipperSummary {
+  id: number;
+  name: string;
+  status: 'pending' | 'online' | 'offline' | 'error';
+  hostname?: string | null;
 }
 
 class AssetServiceClient {
@@ -171,8 +184,20 @@ class AssetServiceClient {
     return response.data;
   }
 
-  async triggerScan(targets: string[], scanType: string): Promise<ScanResponse> {
-    const response = await apiClient.post('/assets/scan', { targets, scanType });
+  async triggerScan(
+    targets: string[],
+    scanType: string,
+    assignedShipperId?: number | null
+  ): Promise<ScanResponse> {
+    const body: Record<string, unknown> = { targets, scanType };
+    if (assignedShipperId != null) body.assignedShipperId = assignedShipperId;
+    const response = await apiClient.post('/assets/scan', body);
+    return response.data;
+  }
+
+  /** List log shippers (for the "Run from" scan picker). */
+  async getShippers(): Promise<ShipperSummary[]> {
+    const response = await apiClient.get('/shippers');
     return response.data;
   }
 }

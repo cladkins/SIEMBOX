@@ -5,7 +5,7 @@
         <div class="card-header">
           <span class="title">Asset Inventory</span>
           <div class="header-actions">
-            <el-button type="primary" @click="showScanDialog = true" v-if="canTriggerScans">
+            <el-button type="primary" @click="openScanDialog" v-if="canTriggerScans">
               <el-icon><Search /></el-icon>
               Trigger Scan
             </el-button>
@@ -36,6 +36,13 @@
             <el-table-column prop="id" label="Scan ID" width="80" />
             <el-table-column prop="target" label="Target" width="200" />
             <el-table-column prop="scan_type" label="Type" width="120" />
+            <el-table-column label="Run from" width="140">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.assigned_shipper_name ? 'info' : undefined">
+                  {{ row.assigned_shipper_name || 'Built-in' }}
+                </el-tag>
+              </template>
+            </el-table-column>
             <el-table-column prop="status" label="Status" width="100">
               <template #default="{ row }">
                 <el-tag type="warning">{{ row.status }}</el-tag>
@@ -66,6 +73,13 @@
             <el-table :data="recentScans" style="width: 100%">
               <el-table-column prop="id" label="ID" width="70" />
               <el-table-column prop="target" label="Target" width="150" />
+              <el-table-column label="Run from" width="140">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.assigned_shipper_name ? 'info' : undefined">
+                    {{ row.assigned_shipper_name || 'Built-in' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
               <el-table-column prop="status" label="Status" width="100">
                 <template #default="{ row }">
                   <el-tag :type="getScanStatusColor(row.status)">{{ row.status }}</el-tag>
@@ -352,6 +366,26 @@
     <!-- Trigger Scan Dialog -->
     <el-dialog v-model="showScanDialog" title="Trigger Asset Scan" width="600px">
       <el-form :model="scanForm" label-width="120px">
+        <el-form-item label="Run from">
+          <el-select v-model="scanForm.assignedShipperId" placeholder="Select where to run the scan" style="width: 100%">
+            <el-option :label="'SIEMBox backend (built-in)'" :value="null" />
+            <el-option
+              v-for="s in shippers"
+              :key="s.id"
+              :label="`${s.name}${s.status !== 'online' ? ` (${s.status})` : ''}`"
+              :value="s.id"
+              :disabled="s.status !== 'online'"
+            />
+          </el-select>
+          <div class="field-hint">
+            <template v-if="scanForm.assignedShipperId">
+              Runs on the selected log shipper, out on its LAN. The scan stays queued until the shipper picks it up (within ~30s).
+            </template>
+            <template v-else>
+              Runs on the SIEMBox backend. From inside Docker it may only see the server's own subnet — use a shipper to scan your LAN.
+            </template>
+          </div>
+        </el-form-item>
         <el-form-item label="Scan Type">
           <el-select v-model="scanForm.scanType" placeholder="Select scan type">
             <el-option label="Ping Scan (Fast)" value="ping" />
@@ -389,6 +423,7 @@
           <el-descriptions-item label="Completed">{{ selectedScan.completed_at ? formatDate(selectedScan.completed_at) : 'In progress' }}</el-descriptions-item>
           <el-descriptions-item label="Duration">{{ selectedScan.duration_seconds ? `${selectedScan.duration_seconds}s` : '-' }}</el-descriptions-item>
           <el-descriptions-item label="Assets Found">{{ selectedScan.assets_discovered || 0 }}</el-descriptions-item>
+          <el-descriptions-item label="Run from">{{ selectedScan.assigned_shipper_name || 'SIEMBox backend (built-in)' }}</el-descriptions-item>
           <el-descriptions-item label="Initiated By" :span="2">{{ selectedScan.initiated_by_username || 'System' }}</el-descriptions-item>
         </el-descriptions>
 
@@ -412,7 +447,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Refresh, Cpu, Connection, Warning } from '@element-plus/icons-vue';
-import assetService, { type Asset, type AssetWithServices, type AssetRelated } from '@/services/assetService';
+import assetService, { type Asset, type AssetWithServices, type AssetRelated, type ShipperSummary } from '@/services/assetService';
 import { useAuthStore } from '@/stores/auth';
 import { api } from '@/services/api';
 
@@ -445,10 +480,28 @@ const openVulnCount = computed(
 
 const showScanDialog = ref(false);
 const scanLoading = ref(false);
-const scanForm = ref({
+const scanForm = ref<{ scanType: string; targets: string; assignedShipperId: number | null }>({
   scanType: 'ping',
-  targets: ''
+  targets: '',
+  assignedShipperId: null
 });
+
+// Log shippers available to run a scan from (for the "Run from" picker).
+const shippers = ref<ShipperSummary[]>([]);
+async function loadShippers() {
+  try {
+    shippers.value = await assetService.getShippers();
+  } catch (error) {
+    // Non-fatal: the picker just falls back to "Built-in" only.
+    shippers.value = [];
+    console.error('Failed to load shippers for scan picker', error);
+  }
+}
+
+function openScanDialog() {
+  showScanDialog.value = true;
+  loadShippers(); // refresh each time so newly-added/just-online shippers appear
+}
 
 // Scan status tracking
 const recentScans = ref<any[]>([]);
@@ -602,10 +655,14 @@ async function triggerScan() {
   scanLoading.value = true;
   try {
     const targets = scanForm.value.targets.split('\n').map(t => t.trim()).filter(t => t);
-    const result = await assetService.triggerScan(targets, scanForm.value.scanType);
-    ElMessage.success(`Scan initiated (ID: ${result.scanId}). Use the Refresh button to check status.`);
+    const result = await assetService.triggerScan(targets, scanForm.value.scanType, scanForm.value.assignedShipperId);
+    const via = scanForm.value.assignedShipperId
+      ? ' It will run on the selected shipper once it checks in.'
+      : '';
+    ElMessage.success(`Scan initiated (ID: ${result.scanId}).${via} Use the Refresh button to check status.`);
     showScanDialog.value = false;
     scanForm.value.targets = '';
+    scanForm.value.assignedShipperId = null;
     loadScans(); // Refresh scan list once
   } catch (error: any) {
     ElMessage.error(error.response?.data?.error || 'Failed to trigger scan');
@@ -686,6 +743,13 @@ onUnmounted(() => {
 <style scoped>
 .assets-container {
   padding: 20px;
+}
+
+.field-hint {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-text-color-secondary);
+  margin-top: 4px;
 }
 
 .card-header {

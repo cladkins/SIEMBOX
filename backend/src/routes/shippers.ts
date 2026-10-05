@@ -11,6 +11,7 @@ import { sha256hex } from '../models/EdrAgent';
 import { ingestPushedLogs, MAX_LOG_PUSH_BATCH_SIZE } from '../services/shippers/logPushService';
 import { unknownSources, isDatabaseBusy } from '../services/shippers/unknownSources';
 import { directSyslogSources } from '../services/shippers/directSyslogSources';
+import { NmapScanner } from '../services/scanner/nmapScanner';
 
 const router = Router();
 
@@ -564,6 +565,104 @@ router.get('/config/:api_key', async (req: Request, res: Response) => {
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch configuration');
+  }
+});
+
+// ============================================================================
+// REMOTE SCAN DISPATCH (shipper api_key authenticated — the SAME key used by
+// /register, /containers and /config above, NOT the HTTP push key below.)
+//
+// Lets a scan run from a log shipper out on the LAN instead of on the backend,
+// whose own nmap can't see the real network from inside the Docker bridge.
+// See migration 032 and services/scanner/nmapScanner.ts. The shipper only ever
+// runs server-built args against server-validated targets handed to it here; it
+// chooses neither.
+// ============================================================================
+
+// A shipper polls for scan jobs assigned to it. Claiming is atomic
+// (queued -> running), so each job is handed out exactly once even under
+// concurrent polls. Returns { jobs: [{ scanId, nmapArgs, targets }] }.
+router.get('/scan-jobs/:api_key', async (req: Request, res: Response) => {
+  try {
+    const { api_key } = req.params;
+
+    const shipper = await LogShipperModel.findByApiKey(api_key);
+    if (!shipper) {
+      throw new ApiError(404, 'Invalid API key');
+    }
+
+    // Polling is also a sign of life.
+    const ip_address = req.ip || req.socket.remoteAddress || 'unknown';
+    await LogShipperModel.updateHeartbeat(api_key, ip_address).catch(() => {});
+
+    const jobs = await NmapScanner.claimScanJobsForShipper(shipper.id);
+    res.json({ jobs });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to fetch scan jobs');
+  }
+});
+
+// A shipper posts back the result of a scan it ran. On success it sends the raw
+// `nmap -oX -` XML, which is parsed and ingested through the exact same path as
+// an in-process scan (so results are identical). On failure it sends { error }.
+// Auth + ownership: the api_key must own the scan (assigned_shipper_id), so a
+// shipper can't write results for another shipper's or a backend-run scan.
+router.post('/scan-results', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { api_key, scan_id, xml, error: scanError } = req.body ?? {};
+    if (!api_key) throw new ApiError(400, 'API key is required');
+
+    const scanId = Number(scan_id);
+    if (!Number.isInteger(scanId) || scanId <= 0) {
+      throw new ApiError(400, 'scan_id must be a positive integer');
+    }
+
+    const shipper = await LogShipperModel.findByApiKey(api_key);
+    if (!shipper) throw new ApiError(404, 'Invalid API key');
+
+    // Ownership: the scan must be one assigned to THIS shipper.
+    const owns = await query(
+      `SELECT initiated_by, status FROM vulnerability_scans WHERE id = $1 AND assigned_shipper_id = $2`,
+      [scanId, shipper.id]
+    );
+    if (owns.rowCount === 0) {
+      throw new ApiError(404, 'Scan not found for this shipper');
+    }
+    const userId: number = owns.rows[0].initiated_by;
+    const currentStatus: string = owns.rows[0].status;
+
+    const ip_address = req.ip || req.socket.remoteAddress || 'unknown';
+    await LogShipperModel.updateHeartbeat(api_key, ip_address).catch(() => {});
+
+    // Shipper couldn't run the scan (nmap missing, host unreachable, ...).
+    if (typeof scanError === 'string' && scanError.length > 0) {
+      // Don't let a late failure clobber results already ingested successfully.
+      if (currentStatus === 'completed') {
+        res.json({ status: 'completed' });
+        return;
+      }
+      await NmapScanner.failShipperScan(scanId, scanError.slice(0, 1000));
+      res.json({ status: 'failed' });
+      return;
+    }
+
+    if (typeof xml !== 'string' || xml.length === 0) {
+      throw new ApiError(400, 'xml (nmap -oX output) or error is required');
+    }
+
+    try {
+      await NmapScanner.ingestShipperResults(scanId, xml, userId);
+    } catch {
+      // ingestShipperResults already marked the scan 'failed'; report the bad
+      // payload rather than a server fault.
+      res.status(422).json({ status: 'failed', error: 'Could not parse or ingest nmap XML' });
+      return;
+    }
+    res.json({ status: 'completed' });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to record scan results');
   }
 });
 

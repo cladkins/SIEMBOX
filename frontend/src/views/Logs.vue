@@ -97,6 +97,7 @@
             range-separator="to"
             start-placeholder="Start date"
             end-placeholder="End date"
+            :shortcuts="dateShortcuts"
             style="width: 380px"
             @change="applyFilters"
           />
@@ -269,6 +270,31 @@ const filters = reactive({
 });
 
 const dateRange = ref<[Date, Date] | null>(null);
+
+/** [now - ms, now], freshly computed -- not a Date captured once at module load. */
+function lastDuration(ms: number): [Date, Date] {
+  const end = new Date();
+  return [new Date(end.getTime() - ms), end];
+}
+
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+// Quick-pick presets for the date-range picker's sidebar. Each `value` is a
+// function, not a precomputed pair, so "Last 15 minutes" etc. are relative to
+// the moment it's clicked rather than to whenever the page happened to load.
+const dateShortcuts = [
+  { text: 'Last 15 minutes', value: () => lastDuration(15 * MINUTE) },
+  { text: 'Last 30 minutes', value: () => lastDuration(30 * MINUTE) },
+  { text: 'Last hour', value: () => lastDuration(HOUR) },
+  { text: 'Last 4 hours', value: () => lastDuration(4 * HOUR) },
+  { text: 'Last 8 hours', value: () => lastDuration(8 * HOUR) },
+  { text: 'Last 24 hours', value: () => lastDuration(24 * HOUR) },
+  { text: 'Last 3 days', value: () => lastDuration(3 * DAY) },
+  { text: 'Last 7 days', value: () => lastDuration(7 * DAY) },
+  { text: 'Last 30 days', value: () => lastDuration(30 * DAY) },
+];
 
 // Parser list powers the "Parser" filter dropdown.
 const parsers = ref<{ id: number; name: string }[]>([]);

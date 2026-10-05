@@ -27,6 +27,10 @@ export interface ScanResult {
   vulnerabilities_found: number;
   initiated_by: number | null;
   initiated_by_username: string | null;
+  /** Shipper the scan was dispatched to (null = run in-process on the backend). */
+  assigned_shipper_id: number | null;
+  /** That shipper's display name, joined for the UI (null when unassigned or shipper deleted). */
+  assigned_shipper_name: string | null;
   scan_options: any;
   error_message: string | null;
   results_summary: any;
@@ -82,12 +86,15 @@ export class ScanRepository {
         vs.assets_discovered,
         vs.vulnerabilities_found,
         vs.initiated_by,
+        vs.assigned_shipper_id,
         vs.error_message,
         vs.created_at,
         vs.updated_at,
-        u.username as initiated_by_username
+        u.username as initiated_by_username,
+        ls.name as assigned_shipper_name
       FROM vulnerability_scans vs
       LEFT JOIN users u ON vs.initiated_by = u.id
+      LEFT JOIN log_shippers ls ON vs.assigned_shipper_id = ls.id
       ${whereClause}
       ORDER BY vs.created_at DESC
       LIMIT $${paramCount++} OFFSET $${paramCount}
@@ -116,14 +123,17 @@ export class ScanRepository {
         vs.assets_discovered,
         vs.vulnerabilities_found,
         vs.initiated_by,
+        vs.assigned_shipper_id,
         vs.scan_options,
         vs.error_message,
         vs.results_summary,
         vs.created_at,
         vs.updated_at,
-        u.username as initiated_by_username
+        u.username as initiated_by_username,
+        ls.name as assigned_shipper_name
       FROM vulnerability_scans vs
       LEFT JOIN users u ON vs.initiated_by = u.id
+      LEFT JOIN log_shippers ls ON vs.assigned_shipper_id = ls.id
       WHERE vs.id = $1
     `;
 
@@ -158,12 +168,15 @@ export class ScanRepository {
         vs.assets_discovered,
         vs.vulnerabilities_found,
         vs.initiated_by,
+        vs.assigned_shipper_id,
         vs.error_message,
         vs.created_at,
         vs.updated_at,
-        u.username as initiated_by_username
+        u.username as initiated_by_username,
+        ls.name as assigned_shipper_name
       FROM vulnerability_scans vs
       LEFT JOIN users u ON vs.initiated_by = u.id
+      LEFT JOIN log_shippers ls ON vs.assigned_shipper_id = ls.id
       WHERE ${whereClause}
       ORDER BY vs.created_at DESC
     `;
@@ -188,14 +201,17 @@ export class ScanRepository {
         vs.assets_discovered,
         vs.vulnerabilities_found,
         vs.initiated_by,
+        vs.assigned_shipper_id,
         vs.scan_options,
         vs.error_message,
         vs.results_summary,
         vs.created_at,
         vs.updated_at,
-        u.username as initiated_by_username
+        u.username as initiated_by_username,
+        ls.name as assigned_shipper_name
       FROM vulnerability_scans vs
       LEFT JOIN users u ON vs.initiated_by = u.id
+      LEFT JOIN log_shippers ls ON vs.assigned_shipper_id = ls.id
       WHERE vs.initiated_by = $1
       ORDER BY vs.created_at DESC
       LIMIT $2

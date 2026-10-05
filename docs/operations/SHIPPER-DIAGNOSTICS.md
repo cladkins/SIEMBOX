@@ -19,7 +19,7 @@ Poll for Updates (every CONFIG_POLL_INTERVAL seconds)
     ↓
 Send Heartbeat (every HEARTBEAT_INTERVAL seconds)
     ↓
-Poll for & run dispatched nmap scans (every SCAN_POLL_INTERVAL seconds)
+Poll for & run dispatched scans — nmap + nuclei (every SCAN_POLL_INTERVAL seconds)
 ```
 
 ## Shipper Configuration
@@ -217,41 +217,53 @@ when there isn't one, why.
 A failed report does not consume the throttle window — the shipper retries on
 the next poll rather than waiting out a full interval.
 
-### Issue 7: Dispatched nmap scan never completes
+### Issue 7: Dispatched scan never completes
 
 **Symptom**: A scan assigned to a shipper stays **queued** or **running** in
-SIEMBox and never finishes.
+SIEMBox and never finishes. Applies to both **asset (nmap)** and
+**vulnerability (nuclei)** scans.
 
 A shipper polls `GET /api/shippers/scan-jobs/<api_key>` every
 `SCAN_POLL_INTERVAL` seconds; that GET atomically **claims** any assigned scans
-(queued → running) and hands back the server-built nmap flags and validated
-targets. The shipper runs `nmap … -oX -` and POSTs the XML to
+(queued → running) and hands back the server-built flags and validated targets,
+each tagged with its `kind`. The shipper runs `nmap … -oX -` (asset) or
+`nuclei … -jsonl` (vuln) and POSTs the output to
 `POST /api/shippers/scan-results`.
 
 **Stuck as `queued`** — the shipper never claimed it:
 - Confirm the scan was assigned to *this* shipper (the right shipper runs it).
 - Confirm scanning isn't disabled: `SCAN_POLL_INTERVAL` must not be `0`.
-- **Shipper too old**: network scanning needs **1.2.0**+. `restart: unless-stopped`
-  does not re-pull `:latest` — force it:
+- **Shipper too old**: network scanning needs **1.2.0**+ for nmap, **1.3.0**+ for
+  nuclei (vulnerability) scans. `restart: unless-stopped` does not re-pull
+  `:latest` — force it:
   ```bash
   docker compose -f compose.prod.yaml pull
   docker compose -f compose.prod.yaml up -d
   ```
 
 **Stuck as `running`** — claimed, but no result posted. Check shipper logs for:
-- `nmap not installed in this image` — a custom base image without nmap.
+- `nmap not installed in this image` / `nuclei not installed in this image` — a
+  custom base image missing the scanner.
 - `Scan <id> timed out after <N>s` — the scan exceeded `SCAN_TIMEOUT`; it's
-  reported as failed. Narrow the targets or raise `SCAN_TIMEOUT`.
+  reported as failed. Narrow the target(s) or raise `SCAN_TIMEOUT`. (A nuclei
+  scan on its very first run can be slow if it's still downloading templates —
+  see below.)
 - `Scan <id> result POST failed (HTTP ...)` — the result couldn't be delivered
   (`000` = couldn't reach `SIEMBOX_API_URL`; `404` = key not recognised).
 - A shipper that is **restarted mid-scan** leaves the row `running` with no
   result; re-run the scan.
 
-**Scan runs but finds nothing on the LAN**: a bridged shipper can do TCP
+**nmap scan runs but finds nothing on the LAN**: a bridged shipper can do TCP
 connect/service scans (`-sT`, `-sV`) but not ARP ping sweeps (`-sn`) or OS
 detection (`-O`). Run the scanning shipper with `network_mode: host` (or
 `cap_add: [NET_RAW, NET_ADMIN]`). See the log-shipper README's **Network
 Scanning** section.
+
+**nuclei scan completes with no findings / errors about templates**: the shipper
+runs nuclei against its **own** template corpus, fetched at startup (`Updating
+nuclei templates in the background…` in the logs). The shipper needs outbound
+internet for that first fetch. For air-gapped hosts set
+`NUCLEI_UPDATE_TEMPLATES=false` and mount a template volume yourself.
 
 ## Diagnostic Procedure
 

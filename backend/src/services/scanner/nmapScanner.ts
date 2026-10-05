@@ -40,6 +40,7 @@ export interface ScanOptions {
  */
 export interface ShipperScanJob {
   scanId: number;
+  kind: 'nmap'; // the shipper dispatches on this (nuclei jobs carry kind: 'nuclei')
   nmapArgs: string[]; // e.g. ['-sV', '-p', '1-1000']
   targets: string[]; // validated IPs / CIDRs / hostnames
 }
@@ -145,7 +146,7 @@ export class NmapScanner {
               updated_at = NOW()
         WHERE id IN (
           SELECT id FROM vulnerability_scans
-           WHERE assigned_shipper_id = $1 AND status = 'queued'
+           WHERE assigned_shipper_id = $1 AND status = 'queued' AND scan_type = 'asset_discovery'
            ORDER BY created_at
            FOR UPDATE SKIP LOCKED
         )
@@ -172,7 +173,7 @@ export class NmapScanner {
         continue;
       }
 
-      jobs.push({ scanId: row.id, nmapArgs: this.nmapArgsFor(scanType), targets });
+      jobs.push({ scanId: row.id, kind: 'nmap', nmapArgs: this.nmapArgsFor(scanType), targets });
     }
 
     return jobs;

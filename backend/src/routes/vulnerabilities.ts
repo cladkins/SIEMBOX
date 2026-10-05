@@ -7,9 +7,10 @@
 
 import express, { Request, Response } from 'express';
 import { authenticate } from '../middleware/auth';
-import { NucleiScanner } from '../services/scanner/nucleiScanner';
+import { NucleiScanner, validateNucleiTarget } from '../services/scanner/nucleiScanner';
 import { VulnerabilityProcessor } from '../services/scanner/vulnerabilityProcessor';
 import { TemplateService } from '../services/scanner/templateService';
+import { LogShipperModel } from '../models/LogShipper';
 
 const router = express.Router();
 
@@ -432,6 +433,32 @@ router.post('/scans', authenticate, async (req: Request, res: Response) => {
       return;
     }
 
+    // Optional: run this scan from a log shipper out on the LAN instead of on
+    // the backend (whose nuclei can't reach the LAN from inside Docker). Accept
+    // either spelling. When set, the shipper must exist, and the target must
+    // pass the same validation the shipper re-applies at hand-out -- so reject a
+    // bad target/shipper here with a clean 400 rather than queueing a scan that
+    // can never run.
+    const rawShipperId = req.body.assignedShipperId ?? req.body.assigned_shipper_id;
+    let assignedShipperId: number | undefined;
+    if (rawShipperId !== undefined && rawShipperId !== null && rawShipperId !== '') {
+      assignedShipperId = Number(rawShipperId);
+      if (!Number.isInteger(assignedShipperId) || assignedShipperId <= 0) {
+        res.status(400).json({ error: 'assignedShipperId must be a positive integer' });
+        return;
+      }
+      const shipper = await LogShipperModel.findById(assignedShipperId);
+      if (!shipper) {
+        res.status(400).json({ error: `No log shipper with id ${assignedShipperId}` });
+        return;
+      }
+      const targetError = validateNucleiTarget(target);
+      if (targetError) {
+        res.status(400).json({ error: targetError });
+        return;
+      }
+    }
+
     // Build template selection
     const templateSelection: any = {};
 
@@ -477,14 +504,16 @@ router.post('/scans', authenticate, async (req: Request, res: Response) => {
       description,
       timeout,
       rateLimit,
+      assignedShipperId,
     });
 
     res.status(202).json({
-      message: 'Vulnerability scan initiated',
+      message: assignedShipperId ? 'Vulnerability scan queued for log shipper' : 'Vulnerability scan initiated',
       scanId,
       status: 'queued',
       target,
       templateSelection,
+      assignedShipperId: assignedShipperId ?? null,
     });
   } catch (error: any) {
     console.error('[VULN] Scan initiation error:', error);

@@ -41,6 +41,50 @@ export interface ScanOptions {
   description?: string;
   timeout?: number;
   rateLimit?: number;
+  /**
+   * Dispatch to a log shipper instead of running on the backend. When set, the
+   * scan is created 'queued' and left for that shipper to claim and run nuclei
+   * out on the LAN (the backend's own nuclei can't reach it from inside the
+   * Docker network -- see migration 032). null/undefined runs it in-process.
+   */
+  assignedShipperId?: number | null;
+}
+
+/**
+ * A nuclei scan job handed to a log shipper by the job-pull. Mirrors nmap's
+ * ShipperScanJob. `nucleiArgs` are portable flags (tags/severity/ids, -jsonl) --
+ * NOT backend template file paths -- so the shipper runs them against its own
+ * nuclei template corpus. `targets` is the validated target list (one for a
+ * vuln scan); the shipper expands each to `-target <t>`.
+ */
+export interface ShipperNucleiJob {
+  scanId: number;
+  kind: 'nuclei';
+  nucleiArgs: string[];
+  targets: string[];
+}
+
+/**
+ * Validate a nuclei scan target before it's handed to a shipper to run.
+ *
+ * The target is passed to the shipper's nuclei as a separate argv element, so
+ * there's no shell to inject into -- but a value starting with "-" would be
+ * read by nuclei as a FLAG, and whitespace could split it, so both are
+ * rejected. Accepts a URL (optional http/https scheme), hostname, IP, IP:port,
+ * or CIDR. Returns an error message, or null if the target is safe.
+ */
+export function validateNucleiTarget(target: unknown): string | null {
+  if (typeof target !== 'string' || target.trim() === '') {
+    return 'target must be a non-empty string';
+  }
+  const t = target.trim();
+  if (t.length > 255) return 'target is too long';
+  // No leading '-' (would be read as a nuclei flag), no whitespace, restricted
+  // charset covering URL/host/IP/CIDR. IPv6 literals are intentionally excluded.
+  if (!/^(https?:\/\/)?[A-Za-z0-9][A-Za-z0-9.\-:/_?=&%]*$/.test(t)) {
+    return `Invalid target: ${JSON.stringify(target)} is not a valid URL, hostname, IP, or CIDR`;
+  }
+  return null;
 }
 
 /**
@@ -70,18 +114,163 @@ export class NucleiScanner {
         target: options.target,
         templateSelection: options.templateSelection,
         description: options.description,
+        assignedShipperId: options.assignedShipperId ?? null,
       },
     });
 
-    // Execute scan asynchronously (don't await)
-    this.executeScan(scanId, options).catch(async (error) => {
-      console.error(`[Nuclei] Scan ${scanId} failed:`, error);
-      console.error(`[Nuclei] Error stack:`, error?.stack);
-      const errorMsg = error?.message || error?.toString() || 'Scan execution failed';
-      await this.updateScanStatus(scanId, 'failed', undefined, new Date(), errorMsg);
-    });
+    // When assigned to a log shipper the scan stays 'queued' for that shipper to
+    // claim (GET /api/shippers/scan-jobs/:api_key) and run nuclei out on the
+    // LAN; the backend does NOT run nuclei itself. The shipper posts findings
+    // back to POST /api/shippers/scan-results, which calls ingestShipperResults.
+    // An unassigned scan runs in-process exactly as before.
+    if (options.assignedShipperId == null) {
+      // Execute scan asynchronously (don't await)
+      this.executeScan(scanId, options).catch(async (error) => {
+        console.error(`[Nuclei] Scan ${scanId} failed:`, error);
+        console.error(`[Nuclei] Error stack:`, error?.stack);
+        const errorMsg = error?.message || error?.toString() || 'Scan execution failed';
+        await this.updateScanStatus(scanId, 'failed', undefined, new Date(), errorMsg);
+      });
+    } else {
+      console.log(`[Nuclei] Scan ${scanId} queued for shipper ${options.assignedShipperId}`);
+    }
 
     return scanId;
+  }
+
+  /**
+   * Build PORTABLE nuclei args for a dispatched scan -- flags only, no target,
+   * no backend template file paths, no `-ud`/`-stats`.
+   *
+   * The in-process scanner resolves template IDs to absolute backend file paths
+   * and points nuclei at the backend's template dir; none of that exists on a
+   * shipper. So here template selection stays portable: category/relative paths
+   * go to `-t` (resolved by the shipper's nuclei against its own corpus) and
+   * bare IDs go to `-id` (matched on the template `id:` field). The shipper adds
+   * `-target` for each validated target. Results are functionally equivalent to
+   * an in-process scan, not byte-identical (the shipper's template corpus is its
+   * own) -- unlike the nmap path, which is exact.
+   */
+  static nucleiDispatchArgs(options: ScanOptions): string[] {
+    const args: string[] = ['-jsonl'];
+    const ts = options.templateSelection || {};
+
+    if (ts.all) {
+      args.push('-tags', 'all');
+    } else {
+      if (ts.templates && ts.templates.length > 0) {
+        const pathLike = ts.templates.filter((s) => s.endsWith('/') || s.includes('/') || /\.ya?ml$/i.test(s));
+        const bareIds = ts.templates.filter((s) => !pathLike.includes(s));
+        for (const p of pathLike) args.push('-t', p);
+        if (bareIds.length > 0) args.push('-id', bareIds.join(','));
+      }
+      if (ts.tags && ts.tags.length > 0) args.push('-tags', ts.tags.join(','));
+      if (ts.cves) args.push('-tags', 'cve');
+      if (ts.severities && ts.severities.length > 0) args.push('-severity', ts.severities.join(','));
+    }
+
+    if (ts.excludeTags && ts.excludeTags.length > 0) args.push('-exclude-tags', ts.excludeTags.join(','));
+    if (options.rateLimit) args.push('-rate-limit', String(options.rateLimit));
+
+    return args;
+  }
+
+  /**
+   * Hand out and claim every queued VULNERABILITY scan assigned to a shipper.
+   *
+   * Mirrors NmapScanner.claimScanJobsForShipper but for scan_type='vulnerability'
+   * (the WHERE clause keeps the two tools' job-pulls from stealing each other's
+   * rows). Atomic one-shot claim via FOR UPDATE SKIP LOCKED. The stored target
+   * is re-validated here; a scan whose target no longer validates is failed and
+   * skipped rather than handed out.
+   */
+  static async claimScanJobsForShipper(shipperId: number): Promise<ShipperNucleiJob[]> {
+    const result = await pool.query(
+      `UPDATE vulnerability_scans
+          SET status = 'running',
+              claimed_at = NOW(),
+              started_at = COALESCE(started_at, NOW()),
+              updated_at = NOW()
+        WHERE id IN (
+          SELECT id FROM vulnerability_scans
+           WHERE assigned_shipper_id = $1 AND status = 'queued' AND scan_type = 'vulnerability'
+           ORDER BY created_at
+           FOR UPDATE SKIP LOCKED
+        )
+        RETURNING id, scan_options`,
+      [shipperId]
+    );
+
+    const jobs: ShipperNucleiJob[] = [];
+    for (const row of result.rows) {
+      const opts = typeof row.scan_options === 'string' ? JSON.parse(row.scan_options) : row.scan_options;
+      const target: string = opts?.target ?? '';
+
+      const targetError = validateNucleiTarget(target);
+      if (targetError) {
+        await this.updateScanStatus(
+          row.id,
+          'failed',
+          undefined,
+          new Date(),
+          `Stored scan target failed validation at hand-out: ${targetError}`
+        );
+        continue;
+      }
+
+      const dispatchArgs = this.nucleiDispatchArgs({
+        target,
+        templateSelection: opts?.templateSelection ?? {},
+        userId: 0, // not used for arg building
+        rateLimit: opts?.rateLimit,
+      });
+
+      jobs.push({ scanId: row.id, kind: 'nuclei', nucleiArgs: dispatchArgs, targets: [target] });
+    }
+
+    return jobs;
+  }
+
+  /**
+   * Ingest nuclei findings a shipper posted back (JSONL, one NucleiResult per
+   * line, exactly what `nuclei -jsonl` emits). Parsed and fed through the SAME
+   * processScanResults path as an in-process scan, so findings become
+   * vulnerabilities/assets/links identically. Marks the scan completed on
+   * success; on failure marks it failed and rethrows so the caller can respond.
+   */
+  static async ingestShipperResults(scanId: number, jsonl: string, userId: number): Promise<void> {
+    try {
+      const row = (await pool.query('SELECT target FROM vulnerability_scans WHERE id = $1', [scanId])).rows[0];
+      const target: string = row?.target ?? '';
+
+      const results: NucleiResult[] = [];
+      for (const line of jsonl.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          results.push(JSON.parse(trimmed) as NucleiResult);
+        } catch {
+          // Non-JSON line (nuclei info/progress that leaked to stdout) -- skip it.
+        }
+      }
+
+      console.log(`[Nuclei] Scan ${scanId} ingesting ${results.length} finding(s) from shipper`);
+      // templatesLoaded is unknown for a shipper-run scan (no live -stats); pass 0.
+      await this.processScanResults(scanId, results, userId, target, 0);
+      await this.updateScanStatus(scanId, 'completed', undefined, new Date());
+    } catch (error: any) {
+      const errorMsg = error?.message || error?.toString() || 'Failed to ingest shipper scan results';
+      console.error(`[Nuclei] Scan ${scanId} shipper-result ingestion failed:`, error);
+      await this.updateScanStatus(scanId, 'failed', undefined, new Date(), errorMsg);
+      throw error;
+    }
+  }
+
+  /**
+   * Mark a shipper-dispatched vuln scan as failed (shipper couldn't run nuclei).
+   */
+  static async failShipperScan(scanId: number, message: string): Promise<void> {
+    await this.updateScanStatus(scanId, 'failed', undefined, new Date(), message || 'Shipper reported scan failure');
   }
 
   /**
@@ -718,8 +907,9 @@ export class NucleiScanner {
           status,
           initiated_by,
           scan_options,
+          assigned_shipper_id,
           created_at
-        ) VALUES ($1, $2, $3, $4, $5, NOW())
+        ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
         RETURNING id
       `;
 
@@ -737,6 +927,7 @@ export class NucleiScanner {
         'queued',
         options.userId,
         JSON.stringify(scanOptions),
+        options.assignedShipperId ?? null,
       ]);
 
       return result.rows[0].id;

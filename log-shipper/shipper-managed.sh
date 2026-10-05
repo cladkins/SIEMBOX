@@ -12,7 +12,8 @@ SHIPPER_API_KEY="${SHIPPER_API_KEY}"
 # do X" apart from "this shipper is misconfigured".
 #   1.1.0 — reports container inventory (incl. explicit docker-unavailable reports)
 #   1.2.0 — runs nmap network scans SIEMBox dispatches to it (LAN-side scanning)
-SHIPPER_VERSION="1.2.0"
+#   1.3.0 — also runs dispatched nuclei vulnerability scans (LAN-side)
+SHIPPER_VERSION="1.3.0"
 CONFIG_POLL_INTERVAL="${CONFIG_POLL_INTERVAL:-30}" # seconds
 HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-60}" # seconds
 # How often to report this host's container images to SIEMBox for vuln scanning.
@@ -24,6 +25,10 @@ CONTAINER_REPORT_INTERVAL="${CONTAINER_REPORT_INTERVAL:-300}" # seconds
 # Docker network. SCAN_TIMEOUT caps the wall-clock of a single nmap run.
 SCAN_POLL_INTERVAL="${SCAN_POLL_INTERVAL:-30}" # seconds, 0 to disable
 SCAN_TIMEOUT="${SCAN_TIMEOUT:-900}" # seconds (matches the backend's 15-min cap)
+# For dispatched nuclei (vulnerability) scans the shipper uses its OWN nuclei
+# template corpus. Set false to skip the one-time background template update at
+# startup (e.g. air-gapped, or you mount a template volume yourself).
+NUCLEI_UPDATE_TEMPLATES="${NUCLEI_UPDATE_TEMPLATES:-true}"
 
 # Color output for logs
 GREEN='\033[0;32m'
@@ -603,21 +608,26 @@ report_containers() {
 }
 
 # ---------------------------------------------------------------------------
-# NETWORK SCANNING (optional). SIEMBox can dispatch nmap scans to this shipper
-# so they run out on the LAN, where the SIEMBox backend's own nmap can't reach
-# from inside its Docker network. We poll for jobs assigned to us and run
-# exactly the nmap command the server hands us -- server-built flags, server-
-# validated targets, chosen by neither us nor the client -- then post the raw
-# XML back for the backend to parse. See backend/src/services/scanner/
-# nmapScanner.ts and backend/src/routes/shippers.ts.
+# NETWORK SCANNING (optional). SIEMBox can dispatch scans to this shipper so
+# they run out on the LAN, where the SIEMBox backend's own nmap/nuclei can't
+# reach from inside its Docker network. We poll for jobs assigned to us and run
+# exactly the command the server hands us -- server-built flags, server-validated
+# targets, chosen by neither us nor the client -- then post the raw output back
+# for the backend to parse. Two job kinds, told apart by the job's `kind`:
+#   kind=nmap   -> run `nmap <nmapArgs> <targets> -oX -`, post the XML
+#   kind=nuclei -> run `nuclei <nucleiArgs> -target <t>...`, post the JSONL
+# See backend/src/services/scanner/{nmapScanner,nucleiScanner}.ts and
+# backend/src/routes/shippers.ts.
 # ---------------------------------------------------------------------------
 
-# POST a scan's raw nmap XML back to SIEMBox.
-post_scan_xml() {
-    local scan_id="$1" xml="$2"
+# POST a scan's raw output back to SIEMBox. $2 is the JSON field name the backend
+# expects for this scan kind ("xml" for nmap, "jsonl" for nuclei).
+post_scan_output() {
+    local scan_id="$1" field="$2" output="$3"
     local body
-    body=$(jq -n --arg key "$SHIPPER_API_KEY" --argjson sid "$scan_id" --arg xml "$xml" \
-        '{api_key:$key, scan_id:$sid, xml:$xml}' 2>/dev/null) || true
+    body=$(jq -n --arg key "$SHIPPER_API_KEY" --argjson sid "$scan_id" \
+        --arg field "$field" --arg out "$output" \
+        '{api_key:$key, scan_id:$sid} + {($field): $out}' 2>/dev/null) || true
     [ -z "$body" ] && { log_warn "Scan $scan_id: failed to build result body"; return; }
 
     local code
@@ -642,23 +652,21 @@ post_scan_error() {
         -H 'Content-Type: application/json' -d "$body" 2>/dev/null || true
 }
 
-# Run one scan job (a JSON object from the job-pull) and post the result. Runs
-# in the background (see poll_and_run_scans) so a long scan doesn't stall
-# heartbeats or config polling in the main loop.
-run_scan_job() {
-    local job="$1"
+# Run an nmap (asset discovery) job: `nmap <nmapArgs> <targets> -oX -`, post XML.
+# The server-built args and targets are read into bash ARRAYS so each token stays
+# a single argv element -- never a shell-split string. This is what stops a
+# target or flag from smuggling extra arguments into nmap (the backend also
+# validates both, but the shipper must not re-introduce the hole by joining and
+# re-splitting them through a shell).
+run_nmap_job() {
+    local scan_id="$1" job="$2"
 
-    local scan_id
-    scan_id=$(printf '%s' "$job" | jq -r '.scanId // empty' 2>/dev/null) || true
-    case "$scan_id" in
-        ''|*[!0-9]*) log_warn "Scan job has no numeric scanId; skipping"; return ;;
-    esac
+    if ! command -v nmap >/dev/null 2>&1; then
+        log_warn "Scan $scan_id: nmap not installed in this image"
+        post_scan_error "$scan_id" "nmap not installed on the shipper"
+        return
+    fi
 
-    # Read the server-built args and targets into bash ARRAYS so each token stays
-    # a single argv element -- never a shell-split string. This is what stops a
-    # target or flag from smuggling extra arguments into nmap (the backend also
-    # validates both, but the shipper must not re-introduce the hole by joining
-    # and re-splitting them through a shell).
     local nmap_args=() targets=()
     mapfile -t nmap_args < <(printf '%s' "$job" | jq -r '.nmapArgs[]?' 2>/dev/null) || true
     mapfile -t targets  < <(printf '%s' "$job" | jq -r '.targets[]?'  2>/dev/null) || true
@@ -682,8 +690,69 @@ run_scan_job() {
         log_warn "Scan $scan_id failed (nmap exit $rc)"
         post_scan_error "$scan_id" "nmap exited with code $rc on the shipper"
     else
-        post_scan_xml "$scan_id" "$xml"
+        post_scan_output "$scan_id" xml "$xml"
     fi
+}
+
+# Run a nuclei (vulnerability) job: `nuclei <nucleiArgs> -target <t>...`, post the
+# JSONL (one finding per line). Each target becomes its own `-target <t>` argv
+# pair (same no-re-split guarantee as nmap). nuclei uses its OWN template corpus
+# (see warm_nuclei_templates) -- the backend never hands it template file paths.
+run_nuclei_job() {
+    local scan_id="$1" job="$2"
+
+    if ! command -v nuclei >/dev/null 2>&1; then
+        log_warn "Scan $scan_id: nuclei not installed in this image"
+        post_scan_error "$scan_id" "nuclei not installed on the shipper"
+        return
+    fi
+
+    local nuclei_args=() targets=() target_args=()
+    mapfile -t nuclei_args < <(printf '%s' "$job" | jq -r '.nucleiArgs[]?' 2>/dev/null) || true
+    mapfile -t targets     < <(printf '%s' "$job" | jq -r '.targets[]?'     2>/dev/null) || true
+
+    if [ "${#targets[@]}" -eq 0 ]; then
+        log_warn "Scan $scan_id has no targets; reporting failure"
+        post_scan_error "$scan_id" "No targets in job"
+        return
+    fi
+    local t
+    for t in "${targets[@]}"; do target_args+=(-target "$t"); done
+
+    log_info "Running scan $scan_id: nuclei ${nuclei_args[*]} ${target_args[*]}"
+
+    local out rc=0
+    out=$(timeout "${SCAN_TIMEOUT}s" nuclei "${nuclei_args[@]}" "${target_args[@]}" 2>/dev/null) || rc=$?
+
+    if [ "$rc" -eq 124 ]; then
+        log_warn "Scan $scan_id timed out after ${SCAN_TIMEOUT}s"
+        post_scan_error "$scan_id" "Scan timed out after ${SCAN_TIMEOUT}s on the shipper"
+    elif [ "$rc" -ne 0 ]; then
+        log_warn "Scan $scan_id failed (nuclei exit $rc)"
+        post_scan_error "$scan_id" "nuclei exited with code $rc on the shipper"
+    else
+        # Empty output just means no findings -- still a valid completed scan.
+        post_scan_output "$scan_id" jsonl "$out"
+    fi
+}
+
+# Dispatch one scan job (a JSON object from the job-pull) by its `kind`. Runs in
+# the background (see poll_and_run_scans) so a long scan doesn't stall heartbeats
+# or config polling in the main loop.
+run_scan_job() {
+    local job="$1"
+
+    local scan_id kind
+    scan_id=$(printf '%s' "$job" | jq -r '.scanId // empty' 2>/dev/null) || true
+    case "$scan_id" in
+        ''|*[!0-9]*) log_warn "Scan job has no numeric scanId; skipping"; return ;;
+    esac
+
+    kind=$(printf '%s' "$job" | jq -r '.kind // "nmap"' 2>/dev/null) || true
+    case "$kind" in
+        nuclei) run_nuclei_job "$scan_id" "$job" ;;
+        nmap|*) run_nmap_job   "$scan_id" "$job" ;;
+    esac
 }
 
 # Poll for scan jobs assigned to this shipper and run them. Throttled by
@@ -698,10 +767,6 @@ poll_and_run_scans() {
     LAST_SCAN_POLL=$current_time
 
     command -v jq >/dev/null 2>&1 || return 0
-    if ! command -v nmap >/dev/null 2>&1; then
-        log_warn "nmap not installed in this image; cannot run dispatched scans"
-        return 0
-    fi
 
     local resp
     resp=$(curl -s --max-time 20 "${SIEMBOX_API_URL}/shippers/scan-jobs/${SHIPPER_API_KEY}" 2>/dev/null) || true
@@ -721,6 +786,19 @@ poll_and_run_scans() {
         [ -z "$job" ] && continue
         run_scan_job "$job" &   # background so the main loop keeps heartbeating
     done
+}
+
+# Kick a one-time nuclei template update in the background at startup so templates
+# are ready before the first dispatched vuln scan (nuclei would otherwise
+# download them during the first scan and risk hitting SCAN_TIMEOUT). Non-fatal;
+# skipped when scanning is disabled, nuclei isn't installed, or
+# NUCLEI_UPDATE_TEMPLATES=false (air-gapped / self-managed templates).
+warm_nuclei_templates() {
+    [ "${SCAN_POLL_INTERVAL:-0}" -gt 0 ] 2>/dev/null || return 0
+    [ "${NUCLEI_UPDATE_TEMPLATES:-true}" = "true" ] || return 0
+    command -v nuclei >/dev/null 2>&1 || return 0
+    log_info "Updating nuclei templates in the background (first run can take a minute)..."
+    ( nuclei -update-templates >/dev/null 2>&1 || true ) &
 }
 
 # Main loop
@@ -780,6 +858,10 @@ main() {
     # first poll: a restart is how an operator checks whether reporting works,
     # so the answer should land in the logs immediately.
     report_containers
+
+    # Pre-fetch nuclei templates (background) so the first dispatched vuln scan
+    # doesn't have to download them mid-scan.
+    warm_nuclei_templates
 
     log_info ""
     log_info "Log shipper running. Polling for configuration updates..."

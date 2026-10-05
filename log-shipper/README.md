@@ -28,8 +28,8 @@ The log shipper is **managed only** - there is no standalone/unauthenticated mod
 - **Multiple Sources**: Monitor multiple log sources simultaneously
 - **Real-Time Updates**: Configuration changes apply automatically (polls every 30s)
 - **Heartbeat Monitoring**: Track shipper health and last-seen status
-- **Network Scanning**: Run nmap scans SIEMBox dispatches to it, out on the LAN where the SIEMBox backend's own nmap can't reach — see [Network Scanning](#network-scanning-lan-side-nmap)
-- **Image**: Debian-slim based; bundles `journalctl` (for the systemd journal), the Docker CLI, and `nmap`
+- **Network Scanning**: Run nmap (asset) and nuclei (vulnerability) scans SIEMBox dispatches to it, out on the LAN where the SIEMBox backend's own scanners can't reach — see [Network Scanning](#network-scanning-lan-side)
+- **Image**: Debian-slim based; bundles `journalctl` (for the systemd journal), the Docker CLI, `nmap`, and `nuclei`
 - **Custom Tags**: Tag logs by source for easy filtering in SIEMBox
 
 ## Quick Start
@@ -153,8 +153,9 @@ The log shipper supports glob patterns for file paths:
 | `CONFIG_POLL_INTERVAL` | `30` | How often to check for config updates (seconds) |
 | `HEARTBEAT_INTERVAL` | `60` | How often to send heartbeat (seconds) |
 | `CONTAINER_REPORT_INTERVAL` | `300` | How often to report the host's container images for vuln scanning (seconds; `0` disables) |
-| `SCAN_POLL_INTERVAL` | `30` | How often to poll for dispatched nmap scan jobs (seconds; `0` disables scanning) |
-| `SCAN_TIMEOUT` | `900` | Max wall-clock for a single dispatched nmap scan (seconds) |
+| `SCAN_POLL_INTERVAL` | `30` | How often to poll for dispatched scan jobs — nmap + nuclei (seconds; `0` disables scanning) |
+| `SCAN_TIMEOUT` | `900` | Max wall-clock for a single dispatched scan (seconds) |
+| `NUCLEI_UPDATE_TEMPLATES` | `true` | Auto-update the nuclei template corpus at startup; set `false` for air-gapped / self-managed templates |
 
 ### Source Types
 
@@ -193,42 +194,49 @@ Forward the host's systemd journal — the usual way to ship a Linux server's sy
 - Mount the journal directory: `-v /var/log/journal:/var/log/journal:ro`
 - Reads the journal with `journalctl`; only new entries are forwarded (existing history is not replayed).
 
-## Network Scanning (LAN-side nmap)
+## Network Scanning (LAN-side)
 
-SIEMBox can **dispatch nmap scans to this shipper** so they run from where the
-shipper lives — out on your LAN — instead of from the SIEMBox backend. The
-backend container normally sits on a Docker bridge network and can only see its
-own bridge subnet, so its own nmap can't discover or scan real LAN hosts. A
-shipper already runs on the network you want to scan, so it's the natural place
-to run the scan from.
+SIEMBox can **dispatch scans to this shipper** so they run from where the shipper
+lives — out on your LAN — instead of from the SIEMBox backend. The backend
+container normally sits on a Docker bridge network and can only see its own
+bridge subnet, so its own `nmap`/`nuclei` can't discover or scan real LAN hosts.
+A shipper already runs on the network you want to scan, so it's the natural place
+to run the scan from. Two kinds of scan can be dispatched:
+
+- **Asset discovery (nmap)** — finds hosts, ports, and services.
+- **Vulnerability scanning (nuclei)** — checks a host/URL for known issues.
 
 **How it works:** the shipper polls `GET /api/shippers/scan-jobs/<api_key>` every
 `SCAN_POLL_INTERVAL` seconds. SIEMBox hands back any scans assigned to this
-shipper, each with the **exact nmap flags and the validated target list the
-server chose** — the shipper runs that command (`nmap … -oX -`) and POSTs the raw
-XML back to `POST /api/shippers/scan-results`. The backend parses it through the
-same code path as a backend-run scan, so results show up as assets and services
-identically. This is on by default; set `SCAN_POLL_INTERVAL=0` to turn it off.
+shipper, each tagged with its `kind` and carrying the **exact flags and the
+validated target(s) the server chose** — the shipper runs that command
+(`nmap … -oX -`, or `nuclei … -jsonl`) and POSTs the raw output back to
+`POST /api/shippers/scan-results`. The backend parses it through the same code
+path as a backend-run scan, so results show up identically (assets/services for
+nmap, vulnerabilities for nuclei). This is on by default; set
+`SCAN_POLL_INTERVAL=0` to turn it off.
 
 > **Security:** the shipper only ever runs flags and targets the server built
 > and validated; it never accepts a scan command from anywhere else, and it
-> passes every token to nmap as a separate argument (never a re-split string),
-> so a target can't smuggle in extra nmap flags.
+> passes every token to the scanner as a separate argument (never a re-split
+> string), so a target can't smuggle in extra flags.
 
-**Dispatching a scan to a shipper:** trigger an asset-discovery scan in SIEMBox
-and select this shipper to run it. (Via the API, `POST /api/assets/scan` accepts
-an `assignedShipperId`; omit it to run the scan on the backend as before.)
+**Dispatching a scan to a shipper:** trigger a scan in SIEMBox and select this
+shipper to run it. (Via the API, `POST /api/assets/scan` and
+`POST /api/vulnerabilities/scans` each accept an `assignedShipperId`; omit it to
+run the scan on the backend as before.)
 
 ### Deployment for effective discovery
 
 Where the shipper is on the network decides what it can find:
 
-- **TCP connect and service scans** (`-sT`, `-sV`) work from a normal bridged
-  container — outbound TCP is routed to the LAN by the host.
-- **Ping sweeps and OS detection** (`-sn` ARP discovery, `-O`) need raw sockets
-  and a direct link to the LAN segment. For these, run the shipper with **host
-  networking** (recommended for a scanning shipper) or grant the raw-socket
-  capabilities:
+- **nmap TCP connect/service scans** (`-sT`, `-sV`) and **nuclei** (which scans
+  specific hosts/URLs over TCP) work from a normal bridged container — outbound
+  TCP is routed to the LAN by the host.
+- **nmap ping sweeps and OS detection** (`-sn` ARP discovery, `-O`) need raw
+  sockets and a direct link to the LAN segment. For these, run the shipper with
+  **host networking** (recommended for a scanning shipper) or grant the
+  raw-socket capabilities:
 
   ```yaml
   # compose: host networking — the shipper shares the host's LAN directly
@@ -240,7 +248,18 @@ Where the shipper is on the network decides what it can find:
     - NET_ADMIN
   ```
 
-A scan that the shipper can't run (nmap error, host unreachable, or a
+### nuclei templates
+
+Dispatched vulnerability scans run against the shipper's **own** nuclei template
+corpus (SIEMBox sends only the selection — tags, severities, template IDs — never
+template files). The shipper fetches/updates templates in the background at
+startup, so the **shipper needs outbound internet** for that first fetch (it
+already reaches GitHub for other tooling). Results are therefore *functionally
+equivalent* to a backend-run scan, not byte-identical, since each side uses its
+own template snapshot. Set `NUCLEI_UPDATE_TEMPLATES=false` to skip the auto-update
+(air-gapped, or you mount a template volume yourself).
+
+A scan the shipper can't run (scanner error, host unreachable, or a
 `SCAN_TIMEOUT` of `900`s exceeded) is reported back and shown as **failed** in
 SIEMBox rather than left hanging.
 

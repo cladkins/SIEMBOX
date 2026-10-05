@@ -2333,18 +2333,19 @@ If the database can't be reached (including a connection pool that stays exhaust
 
 ### GET /api/shippers/scan-jobs/:api_key
 
-**PUBLIC ENDPOINT** (shipper-authenticated by the syslog `api_key` in the path, like `/config/:api_key`). A shipper polls this to pick up nmap scans dispatched to it. The GET itself **claims** the shipper's queued jobs atomically (`queued → running`, stamping `claimed_at`), so each job is handed out exactly once even under concurrent polls. Lets a scan run from a shipper out on the LAN, which the backend's own nmap can't reach from inside the Docker network (see migration `032`).
+**PUBLIC ENDPOINT** (shipper-authenticated by the syslog `api_key` in the path, like `/config/:api_key`). A shipper polls this to pick up scans dispatched to it. The GET itself **claims** the shipper's queued jobs atomically (`queued → running`, stamping `claimed_at`), so each job is handed out exactly once even under concurrent polls. Lets a scan run from a shipper out on the LAN, which the backend's own nmap/nuclei can't reach from inside the Docker network (see migration `032`). Returns both asset (nmap) and vulnerability (nuclei) jobs, each tagged with `kind`.
 
 **Response (200):**
 ```json
 {
   "jobs": [
-    { "scanId": 42, "nmapArgs": ["-sV", "-p", "1-1000"], "targets": ["192.168.1.0/24"] }
+    { "scanId": 42, "kind": "nmap",   "nmapArgs": ["-sV", "-p", "1-1000"], "targets": ["192.168.1.0/24"] },
+    { "scanId": 43, "kind": "nuclei", "nucleiArgs": ["-jsonl", "-severity", "high,critical"], "targets": ["http://192.168.1.10"] }
   ]
 }
 ```
 
-`nmapArgs` and `targets` are **built and validated by the server** from the scan's stored type and targets — the shipper runs exactly `nmap <nmapArgs> <targets> -oX -` and chooses neither. `jobs` is `[]` when nothing is queued for this shipper.
+The args and `targets` are **built and validated by the server** from the scan's stored type and targets — the shipper chooses neither. It runs exactly `nmap <nmapArgs> <targets> -oX -` for a `kind: "nmap"` job, or `nuclei <nucleiArgs> -target <t>…` for a `kind: "nuclei"` job. `nucleiArgs` carry only portable selection (tags/severity/IDs); the shipper runs them against its own template corpus. `jobs` is `[]` when nothing is queued for this shipper.
 
 **Errors:**
 - `404` - Invalid API key
@@ -2353,14 +2354,19 @@ If the database can't be reached (including a connection pool that stays exhaust
 
 ### POST /api/shippers/scan-results
 
-**PUBLIC ENDPOINT** (shipper-authenticated by the syslog `api_key` in the body). A shipper posts back the outcome of a dispatched scan. On success it sends the raw `nmap -oX -` XML, which the backend parses and ingests through the **same code path** as a backend-run scan (identical assets/services). On failure it sends `error`.
+**PUBLIC ENDPOINT** (shipper-authenticated by the syslog `api_key` in the body). A shipper posts back the outcome of a dispatched scan. The backend routes by the scan's own type (not by what the shipper claims): an **asset** scan sends raw `nmap -oX -` XML in `xml`; a **vulnerability** scan sends raw `nuclei -jsonl` output in `jsonl`. Either is parsed and ingested through the **same code path** as a backend-run scan (identical assets/services for nmap, vulnerabilities for nuclei). On failure it sends `error`.
 
-**Request Body — success:**
+**Request Body — asset (nmap) success:**
 ```json
 { "api_key": "<shipper api key>", "scan_id": 42, "xml": "<?xml version=\"1.0\"?>..." }
 ```
 
-**Request Body — failure:**
+**Request Body — vulnerability (nuclei) success:**
+```json
+{ "api_key": "<shipper api key>", "scan_id": 43, "jsonl": "{\"template-id\":\"CVE-...\",\"info\":{...}}\n{...}" }
+```
+
+**Request Body — failure (either kind):**
 ```json
 { "api_key": "<shipper api key>", "scan_id": 42, "error": "nmap exited with code 1 on the shipper" }
 ```
@@ -2370,9 +2376,9 @@ If the database can't be reached (including a connection pool that stays exhaust
 **Response (200):** `{ "status": "completed" }` or `{ "status": "failed" }`
 
 **Errors:**
-- `400` - Missing `api_key`, non-positive `scan_id`, or neither `xml` nor `error`
+- `400` - Missing `api_key`, non-positive `scan_id`, or no output (`xml` for an asset scan / `jsonl` for a vuln scan) and no `error`
 - `404` - Invalid API key, or the scan isn't assigned to this shipper
-- `422` - `xml` could not be parsed/ingested (the scan is marked `failed`)
+- `422` - the output could not be parsed/ingested (the scan is marked `failed`)
 
 ---
 

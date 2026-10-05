@@ -1,0 +1,151 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "qca-wlan-station-events",
+  "parser_type": "regex",
+  "pattern": "^\\[(?<kernel_time>[\\d.]+)\\]\\s+wlan:\\s+\\[(?<wlan_ctx>[^\\]]*)\\]\\s+\\[(?<wlan_level>[^\\]]*)\\]\\s+vap-(?<vap_id>\\d+)\\((?<interface>[^)]+)\\):\\s+\\[(?<mac>[0-9a-fA-F:]{17})\\](?<action_detail>.+)$",
+  "field_mappings": {
+    "kernel_time": "kernel_time",
+    "wlan_ctx": "wlan_ctx",
+    "wlan_level": "wlan_level",
+    "vap_id": "vap_id",
+    "interface": "interface",
+    "mac": "source_mac",
+    "action_detail": "action_detail"
+  },
+  "description": "Parses QCA/QSDK wireless driver 'wlan:' station lifecycle log lines (association, auth frame exchange) from AP kernel logs -- one parser covering every vap-N(...) event on this envelope rather than one per event text, since they all share the same wrapper and only the trailing text differs",
+  "priority": 310,
+  "derivations": [
+    {
+      "set": {
+        "event": "wifi_station_associated"
+      },
+      "when": {
+        "action_detail": {
+          "matches": "^station associated"
+        }
+      }
+    },
+    {
+      "when": {
+        "action_detail": {
+          "matches": "^station associated"
+        }
+      },
+      "extract": {
+        "aid": {
+          "from": "action_detail",
+          "pattern": "at aid (\\d+)",
+          "group": 1
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "wifi_auth_frame_duplicate"
+      },
+      "when": {
+        "action_detail": {
+          "matches": "^recv another auth frame"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "wifi_auth_frame_received"
+      },
+      "when": {
+        "action_detail": {
+          "matches": "^recv auth frame"
+        }
+      }
+    },
+    {
+      "when": {
+        "action_detail": {
+          "matches": "^recv auth frame"
+        }
+      },
+      "extract": {
+        "auth_algorithm": {
+          "from": "action_detail",
+          "pattern": "algorithm (\\d+)",
+          "group": 1
+        },
+        "auth_seq": {
+          "from": "action_detail",
+          "pattern": "seq (\\d+)",
+          "group": 1
+        },
+        "rssi": {
+          "from": "action_detail",
+          "pattern": "rssi:(\\d+)",
+          "group": 1
+        },
+        "min_rssi": {
+          "from": "action_detail",
+          "pattern": "minrssi:(\\d+)",
+          "group": 1
+        }
+      }
+    },
+    {
+      "when": {
+        "interface": {
+          "exists": true
+        }
+      },
+      "extract": {
+        "host": {
+          "from": "interface",
+          "group": 1,
+          "pattern": "^(wifi\\d+)"
+        }
+      }
+    }
+  ],
+  "event_type": "wifi_station_event",
+  "enabled": true,
+  "test_samples": [
+    {
+      "input": "[57659.581092] wlan: [0:I:ANY] [UNSPECIFIED] vap-1(wifi0ap1): [aa:bb:cc:dd:ee:ff]station associated at aid 2: short preamble, long slot time, QoS, HT40 cap 0x31",
+      "expect": {
+        "event": "wifi_station_associated",
+        "interface": "wifi0ap1",
+        "vap_id": "1",
+        "source_mac": "aa:bb:cc:dd:ee:ff",
+        "kernel_time": "57659.581092",
+        "aid": "2",
+        "host": "wifi0",
+        "auth_algorithm": null,
+        "rssi": null
+      }
+    },
+    {
+      "input": "[57659.493206] wlan: [0:I:ANY] [UNSPECIFIED] vap-1(wifi0ap1): [aa:bb:cc:dd:ee:ff]recv auth frame with algorithm 0 seq 1 rssi:61 minrssi:0",
+      "expect": {
+        "event": "wifi_auth_frame_received",
+        "interface": "wifi0ap1",
+        "source_mac": "aa:bb:cc:dd:ee:ff",
+        "auth_algorithm": "0",
+        "auth_seq": "1",
+        "rssi": "61",
+        "min_rssi": "0",
+        "aid": null
+      }
+    },
+    {
+      "input": "[57659.493226] wlan: [0:I:ANY] [UNSPECIFIED] vap-1(wifi0ap1): [aa:bb:cc:dd:ee:ff]recv another auth frame when previous is in progress",
+      "expect": {
+        "event": "wifi_auth_frame_duplicate",
+        "interface": "wifi0ap1",
+        "source_mac": "aa:bb:cc:dd:ee:ff",
+        "auth_algorithm": null,
+        "aid": null
+      }
+    }
+  ],
+  "metadata": {
+    "tags": ["kernel", "wifi", "wlan", "qca", "qsdk", "unifi", "network"],
+    "log_source": "QCA/QSDK-based AP wireless driver kernel log (wlan: vap-N station events) -- common on UniFi and other Qualcomm-chipset access points"
+  }
+}

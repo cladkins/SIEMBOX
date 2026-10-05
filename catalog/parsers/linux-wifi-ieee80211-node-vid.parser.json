@@ -1,0 +1,94 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "linux-wifi-ieee80211-node-vid",
+  "parser_type": "regex",
+  "pattern": "^\\[(?<kernel_time>[\\d.]+)\\]\\s+(?:\\[(?<interface>[^\\]]+)\\]\\s+(?<event_func>ieee80211_set_node_vid)\\s+node\\s+(?<mac>[0-9a-f:]{17})\\s+(?<lan_iface>\\S+)\\[(?<lan_index>\\d+)\\]\\s+dvlan\\s+stas\\s+(?<dvlan_stas>\\d+)|(?<event_func2>ieee80211_update_node_ecm_flags):\\s+node with aid\\s+(?<aid>\\d+)\\s+and mac\\s+(?<mac2>[0-9a-f:]{17})\\s+has been tagged\\s+\\[(?<ecm_flags>[^\\]]*)\\])$",
+  "field_mappings": {
+    "mac": "source_mac",
+    "mac2": "source_mac",
+    "interface": "interface",
+    "lan_iface": "lan_iface",
+    "lan_index": "lan_index",
+    "dvlan_stas": "dvlan_stas",
+    "event_func": "event_func",
+    "event_func2": "event_func",
+    "kernel_time": "kernel_time",
+    "aid": "aid",
+    "ecm_flags": "ecm_flags"
+  },
+  "description": "Parses Linux kernel ieee80211_* wireless node-state log messages: ieee80211_set_node_vid (node MAC, interface, LAN/VLAN, DVLAN station count) and ieee80211_update_node_ecm_flags (node MAC, association ID, ECM flag tags) -- one parser for this kernel function family rather than one per function, since both are the same wireless subsystem reporting on the same node lifecycle",
+  "priority": 400,
+  "derivations": [
+    {
+      "set": {
+        "event": "wifi_node_vid_set"
+      },
+      "when": {
+        "event_func": {
+          "equals": "ieee80211_set_node_vid"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "wifi_node_ecm_flags_tagged"
+      },
+      "when": {
+        "event_func": {
+          "equals": "ieee80211_update_node_ecm_flags"
+        }
+      }
+    },
+    {
+      "when": {
+        "interface": {
+          "exists": true
+        }
+      },
+      "extract": {
+        "host": {
+          "from": "interface",
+          "group": 1,
+          "pattern": "^(wifi\\d+)"
+        }
+      }
+    }
+  ],
+  "event_type": "wifi_node_vid",
+  "enabled": true,
+  "test_samples": [
+    {
+      "input": "[772908.384820] [wifi0ap1] ieee80211_set_node_vid node c0:49:ef:8c:07:2c lan[0] dvlan stas 0",
+      "expect": {
+        "event": "wifi_node_vid_set",
+        "interface": "wifi0ap1",
+        "lan_iface": "lan",
+        "lan_index": "0",
+        "dvlan_stas": "0",
+        "event_func": "ieee80211_set_node_vid",
+        "source_mac": "c0:49:ef:8c:07:2c",
+        "kernel_time": "772908.384820",
+        "aid": null,
+        "ecm_flags": null
+      }
+    },
+    {
+      "input": "[57659.581024] ieee80211_update_node_ecm_flags: node with aid 2 and mac aa:bb:cc:dd:ee:ff has been tagged [ dvlan ecm accelerated ]",
+      "expect": {
+        "event": "wifi_node_ecm_flags_tagged",
+        "event_func": "ieee80211_update_node_ecm_flags",
+        "source_mac": "aa:bb:cc:dd:ee:ff",
+        "aid": "2",
+        "ecm_flags": " dvlan ecm accelerated ",
+        "kernel_time": "57659.581024",
+        "interface": null,
+        "lan_iface": null,
+        "dvlan_stas": null
+      }
+    }
+  ],
+  "metadata": {
+    "tags": ["kernel", "wifi", "qca", "unifi", "network"],
+    "log_source": "Linux kernel ieee80211 wireless subsystem (node VID/ECM flag events) -- common on UniFi and other Qualcomm-chipset access points"
+  }
+}

@@ -1,0 +1,144 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "komodo-periphery",
+  "parser_type": "regex",
+  "pattern": "^(?<timestamp>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d+Z) {1,4}(?<level>TRACE|DEBUG|INFO|WARN|ERROR) {1,4}(?<message>[^\\r\\n]+)$",
+  "field_mappings": {
+    "level": "level",
+    "message": "message",
+    "timestamp": "timestamp"
+  },
+  "description": "Parses Komodo Periphery daemon log lines with RFC3339 timestamps and level/message fields",
+  "priority": 300,
+  "derivations": [
+    {
+      "set": {
+        "event": "dns_resolution_failure"
+      },
+      "when": {
+        "message": {
+          "contains": "Failed to resolve host public ip"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "startup"
+      },
+      "when": {
+        "message": {
+          "contains": "PeripheryStartup"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "server_start"
+      },
+      "when": {
+        "message": {
+          "contains": "Server starting on"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "core_connected"
+      },
+      "when": {
+        "message": {
+          "contains": "Logged in to Komodo Core"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "ssl_disabled"
+      },
+      "when": {
+        "message": {
+          "contains": "SSL Disabled"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "warn"
+      },
+      "when": {
+        "level": {
+          "equals": "WARN"
+        }
+      }
+    },
+    {
+      "set": {
+        "event": "error"
+      },
+      "when": {
+        "level": {
+          "equals": "ERROR"
+        }
+      }
+    },
+    {
+      "extract": {
+        "service": {
+          "from": "message",
+          "group": 1,
+          "pattern": "Komodo Periphery version:\\s*(\\S+)"
+        }
+      }
+    },
+    {
+      "extract": {
+        "dest_port": {
+          "from": "message",
+          "group": 1,
+          "pattern": "Server starting on https?://(?:[^:]+):(\\d+)"
+        }
+      }
+    }
+  ],
+  "event_type": "komodo-periphery",
+  "enabled": true,
+  "test_samples": [
+    {
+      "input": "2026-06-25T17:06:46.096302Z  WARN Failed to resolve host public ip | Failed to query OpenDNS resolvers for host public IP: DNS error: no records found for Query { name: Name(\"myip.opendns.com.\"), query_type: AAAA, query_class: IN }: no records found for Query { name: Name(\"myip.opendns.com.\"), query_type: AAAA, query_class: IN }",
+      "expect": {
+        "event": "dns_resolution_failure",
+        "level": "WARN",
+        "message": "Failed to resolve host public ip | Failed to query OpenDNS resolvers for host public IP: DNS error: no records found for Query { name: Name(\"myip.opendns.com.\"), query_type: AAAA, query_class: IN }: no records found for Query { name: Name(\"myip.opendns.com.\"), query_type: AAAA, query_class: IN }",
+        "timestamp": "2026-06-25T17:06:46.096302Z"
+      }
+    },
+    {
+      "input": "2026-06-25T17:06:45.833871Z  INFO Logged in to Komodo Core demo.komo.do websocket",
+      "expect": {
+        "event": "core_connected",
+        "level": "INFO",
+        "message": "Logged in to Komodo Core demo.komo.do websocket",
+        "timestamp": "2026-06-25T17:06:45.833871Z"
+      }
+    },
+    {
+      "input": "2026-06-18T15:30:35.949982Z  INFO PeripheryStartup: Komodo Periphery version: v2.2.0",
+      "expect": {
+        "event": "startup",
+        "level": "INFO",
+        "message": "PeripheryStartup: Komodo Periphery version: v2.2.0",
+        "service": "v2.2.0",
+        "timestamp": "2026-06-18T15:30:35.949982Z"
+      }
+    },
+    {
+      "input": "2026-06-25T17:06:41.185460Z  INFO 🔓 Server SSL Disabled",
+      "expect": {
+        "event": "ssl_disabled",
+        "level": "INFO",
+        "message": "🔓 Server SSL Disabled",
+        "timestamp": "2026-06-25T17:06:41.185460Z"
+      }
+    }
+  ]
+}

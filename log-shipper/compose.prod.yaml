@@ -43,6 +43,7 @@ services:
       - /var/log/journal:/var/log/journal:ro
       - /var/log/syslog:/var/log/syslog:ro
       - /var/log/messages:/var/log/messages:ro
+      - /var/log/auth.log:/var/log/auth.log:ro
       #
       # File-based logs — mount the directories/files your apps write to:
       # - /var/log/nginx:/var/log/nginx:ro

@@ -28,7 +28,8 @@ The log shipper is **managed only** - there is no standalone/unauthenticated mod
 - **Multiple Sources**: Monitor multiple log sources simultaneously
 - **Real-Time Updates**: Configuration changes apply automatically (polls every 30s)
 - **Heartbeat Monitoring**: Track shipper health and last-seen status
-- **Image**: Debian-slim based; bundles `journalctl` (for the systemd journal) and the Docker CLI
+- **Network Scanning**: Run nmap scans SIEMBox dispatches to it, out on the LAN where the SIEMBox backend's own nmap can't reach — see [Network Scanning](#network-scanning-lan-side-nmap)
+- **Image**: Debian-slim based; bundles `journalctl` (for the systemd journal), the Docker CLI, and `nmap`
 - **Custom Tags**: Tag logs by source for easy filtering in SIEMBox
 
 ## Quick Start
@@ -151,6 +152,9 @@ The log shipper supports glob patterns for file paths:
 | `SIEMBOX_API_URL` | `http://localhost:8421/api` | SIEMBox API endpoint |
 | `CONFIG_POLL_INTERVAL` | `30` | How often to check for config updates (seconds) |
 | `HEARTBEAT_INTERVAL` | `60` | How often to send heartbeat (seconds) |
+| `CONTAINER_REPORT_INTERVAL` | `300` | How often to report the host's container images for vuln scanning (seconds; `0` disables) |
+| `SCAN_POLL_INTERVAL` | `30` | How often to poll for dispatched nmap scan jobs (seconds; `0` disables scanning) |
+| `SCAN_TIMEOUT` | `900` | Max wall-clock for a single dispatched nmap scan (seconds) |
 
 ### Source Types
 
@@ -188,6 +192,57 @@ Forward the host's systemd journal — the usual way to ship a Linux server's sy
 **Requirements:**
 - Mount the journal directory: `-v /var/log/journal:/var/log/journal:ro`
 - Reads the journal with `journalctl`; only new entries are forwarded (existing history is not replayed).
+
+## Network Scanning (LAN-side nmap)
+
+SIEMBox can **dispatch nmap scans to this shipper** so they run from where the
+shipper lives — out on your LAN — instead of from the SIEMBox backend. The
+backend container normally sits on a Docker bridge network and can only see its
+own bridge subnet, so its own nmap can't discover or scan real LAN hosts. A
+shipper already runs on the network you want to scan, so it's the natural place
+to run the scan from.
+
+**How it works:** the shipper polls `GET /api/shippers/scan-jobs/<api_key>` every
+`SCAN_POLL_INTERVAL` seconds. SIEMBox hands back any scans assigned to this
+shipper, each with the **exact nmap flags and the validated target list the
+server chose** — the shipper runs that command (`nmap … -oX -`) and POSTs the raw
+XML back to `POST /api/shippers/scan-results`. The backend parses it through the
+same code path as a backend-run scan, so results show up as assets and services
+identically. This is on by default; set `SCAN_POLL_INTERVAL=0` to turn it off.
+
+> **Security:** the shipper only ever runs flags and targets the server built
+> and validated; it never accepts a scan command from anywhere else, and it
+> passes every token to nmap as a separate argument (never a re-split string),
+> so a target can't smuggle in extra nmap flags.
+
+**Dispatching a scan to a shipper:** trigger an asset-discovery scan in SIEMBox
+and select this shipper to run it. (Via the API, `POST /api/assets/scan` accepts
+an `assignedShipperId`; omit it to run the scan on the backend as before.)
+
+### Deployment for effective discovery
+
+Where the shipper is on the network decides what it can find:
+
+- **TCP connect and service scans** (`-sT`, `-sV`) work from a normal bridged
+  container — outbound TCP is routed to the LAN by the host.
+- **Ping sweeps and OS detection** (`-sn` ARP discovery, `-O`) need raw sockets
+  and a direct link to the LAN segment. For these, run the shipper with **host
+  networking** (recommended for a scanning shipper) or grant the raw-socket
+  capabilities:
+
+  ```yaml
+  # compose: host networking — the shipper shares the host's LAN directly
+  network_mode: host
+
+  # …or keep bridge networking but allow raw-socket scans:
+  cap_add:
+    - NET_RAW
+    - NET_ADMIN
+  ```
+
+A scan that the shipper can't run (nmap error, host unreachable, or a
+`SCAN_TIMEOUT` of `900`s exceeded) is reported back and shown as **failed** in
+SIEMBox rather than left hanging.
 
 ## Volume Mounts
 

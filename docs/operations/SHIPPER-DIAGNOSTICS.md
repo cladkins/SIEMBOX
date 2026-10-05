@@ -18,6 +18,8 @@ Apply Configuration (start tailing files/containers)
 Poll for Updates (every CONFIG_POLL_INTERVAL seconds)
     ↓
 Send Heartbeat (every HEARTBEAT_INTERVAL seconds)
+    ↓
+Poll for & run dispatched nmap scans (every SCAN_POLL_INTERVAL seconds)
 ```
 
 ## Shipper Configuration
@@ -214,6 +216,42 @@ when there isn't one, why.
 
 A failed report does not consume the throttle window — the shipper retries on
 the next poll rather than waiting out a full interval.
+
+### Issue 7: Dispatched nmap scan never completes
+
+**Symptom**: A scan assigned to a shipper stays **queued** or **running** in
+SIEMBox and never finishes.
+
+A shipper polls `GET /api/shippers/scan-jobs/<api_key>` every
+`SCAN_POLL_INTERVAL` seconds; that GET atomically **claims** any assigned scans
+(queued → running) and hands back the server-built nmap flags and validated
+targets. The shipper runs `nmap … -oX -` and POSTs the XML to
+`POST /api/shippers/scan-results`.
+
+**Stuck as `queued`** — the shipper never claimed it:
+- Confirm the scan was assigned to *this* shipper (the right shipper runs it).
+- Confirm scanning isn't disabled: `SCAN_POLL_INTERVAL` must not be `0`.
+- **Shipper too old**: network scanning needs **1.2.0**+. `restart: unless-stopped`
+  does not re-pull `:latest` — force it:
+  ```bash
+  docker compose -f compose.prod.yaml pull
+  docker compose -f compose.prod.yaml up -d
+  ```
+
+**Stuck as `running`** — claimed, but no result posted. Check shipper logs for:
+- `nmap not installed in this image` — a custom base image without nmap.
+- `Scan <id> timed out after <N>s` — the scan exceeded `SCAN_TIMEOUT`; it's
+  reported as failed. Narrow the targets or raise `SCAN_TIMEOUT`.
+- `Scan <id> result POST failed (HTTP ...)` — the result couldn't be delivered
+  (`000` = couldn't reach `SIEMBOX_API_URL`; `404` = key not recognised).
+- A shipper that is **restarted mid-scan** leaves the row `running` with no
+  result; re-run the scan.
+
+**Scan runs but finds nothing on the LAN**: a bridged shipper can do TCP
+connect/service scans (`-sT`, `-sV`) but not ARP ping sweeps (`-sn`) or OS
+detection (`-O`). Run the scanning shipper with `network_mode: host` (or
+`cap_add: [NET_RAW, NET_ADMIN]`). See the log-shipper README's **Network
+Scanning** section.
 
 ## Diagnostic Procedure
 

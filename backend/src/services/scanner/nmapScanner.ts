@@ -13,6 +13,7 @@ import pool from '../../config/database';
 import { ErrorLogService } from '../errors/errorLogService';
 import { AssetType, AssetCriticality, AssetStatus, DiscoveryMethod, ServiceState } from '../../models/Asset';
 import { isValidScanTarget } from '../../utils/typeGuards';
+import { parseNmapXml } from './nmapXml';
 
 /**
  * Scan options interface
@@ -22,6 +23,25 @@ export interface ScanOptions {
   scanType: 'ping' | 'port' | 'service' | 'os';
   userId: number;
   description?: string;
+  /**
+   * Dispatch to a log shipper instead of running on the backend. When set, the
+   * scan is created 'queued' and left for that shipper to claim and run (it's
+   * out on the LAN where the backend's own nmap can't reach -- see migration
+   * 032). null/undefined runs it in-process, exactly as before.
+   */
+  assignedShipperId?: number | null;
+}
+
+/**
+ * A scan job handed to a log shipper by the job-pull
+ * (GET /api/shippers/:api_key/scan-jobs). Everything the shipper needs to run
+ * one nmap invocation and nothing it gets to choose: the args and targets are
+ * both server-built and server-validated.
+ */
+export interface ShipperScanJob {
+  scanId: number;
+  nmapArgs: string[]; // e.g. ['-sV', '-p', '1-1000']
+  targets: string[]; // validated IPs / CIDRs / hostnames
 }
 
 /**
@@ -78,18 +98,116 @@ export class NmapScanner {
         targets: options.targets,
         scanType: options.scanType,
         description: options.description,
+        assignedShipperId: options.assignedShipperId ?? null,
       },
     });
 
-    // Execute scan asynchronously (don't await)
-    this.executeScan(scanId, options).catch(async (error) => {
-      console.error(`[NMAP] Scan ${scanId} failed:`, error);
-      console.error(`[NMAP] Error stack:`, error?.stack);
-      const errorMsg = error?.message || error?.toString() || 'Scan execution failed';
-      await this.updateScanStatus(scanId, 'failed', undefined, new Date(), errorMsg);
-    });
+    // When the scan is assigned to a log shipper it stays 'queued' for that
+    // shipper to claim (GET /api/shippers/:api_key/scan-jobs) and run out on
+    // the LAN; the backend does NOT run nmap itself, because its own nmap can't
+    // see the real network from inside the Docker bridge (see migration 032).
+    // The shipper posts results back to POST /api/shippers/scan-results, which
+    // calls ingestShipperResults(). An unassigned scan runs in-process exactly
+    // as before.
+    if (options.assignedShipperId == null) {
+      // Execute scan asynchronously (don't await)
+      this.executeScan(scanId, options).catch(async (error) => {
+        console.error(`[NMAP] Scan ${scanId} failed:`, error);
+        console.error(`[NMAP] Error stack:`, error?.stack);
+        const errorMsg = error?.message || error?.toString() || 'Scan execution failed';
+        await this.updateScanStatus(scanId, 'failed', undefined, new Date(), errorMsg);
+      });
+    } else {
+      console.log(`[NMAP] Scan ${scanId} queued for shipper ${options.assignedShipperId}`);
+    }
 
     return scanId;
+  }
+
+  /**
+   * Hand out and claim every queued scan assigned to a shipper.
+   *
+   * Flips each matching row queued -> running and stamps claimed_at/started_at
+   * in a single UPDATE ... RETURNING guarded by FOR UPDATE SKIP LOCKED, so two
+   * concurrent polls can't both claim the same job. Returns one job descriptor
+   * per claimed scan carrying the server-built nmap argument tokens and the
+   * validated target list the shipper must run -- the shipper never picks its
+   * own flags or targets. Stored targets are re-validated here at hand-out
+   * time; a scan whose stored targets no longer validate is failed and skipped
+   * rather than handed out.
+   */
+  static async claimScanJobsForShipper(shipperId: number): Promise<ShipperScanJob[]> {
+    const result = await pool.query(
+      `UPDATE vulnerability_scans
+          SET status = 'running',
+              claimed_at = NOW(),
+              started_at = COALESCE(started_at, NOW()),
+              updated_at = NOW()
+        WHERE id IN (
+          SELECT id FROM vulnerability_scans
+           WHERE assigned_shipper_id = $1 AND status = 'queued'
+           ORDER BY created_at
+           FOR UPDATE SKIP LOCKED
+        )
+        RETURNING id, scan_options`,
+      [shipperId]
+    );
+
+    const jobs: ShipperScanJob[] = [];
+    for (const row of result.rows) {
+      const opts = typeof row.scan_options === 'string' ? JSON.parse(row.scan_options) : row.scan_options;
+      const targets: string[] = Array.isArray(opts?.targets) ? opts.targets : [];
+      const scanType: string = opts?.scanType || 'port';
+
+      // Defence in depth: only ever hand a shipper a target list that still
+      // passes the same validation routes/assets.ts applied on the way in.
+      if (validateScanTargets(targets) !== null) {
+        await this.updateScanStatus(
+          row.id,
+          'failed',
+          undefined,
+          new Date(),
+          'Stored scan targets failed validation at hand-out'
+        );
+        continue;
+      }
+
+      jobs.push({ scanId: row.id, nmapArgs: this.nmapArgsFor(scanType), targets });
+    }
+
+    return jobs;
+  }
+
+  /**
+   * Ingest results posted back by a shipper that ran a dispatched scan.
+   *
+   * The shipper runs `nmap -oX -` out on the LAN and POSTs the raw XML. We
+   * parse it into the exact host shape node-nmap would have emitted (nmapXml.ts)
+   * and feed it through the same processScanResults path as an in-process scan,
+   * so a shipper-run scan and a backend-run scan produce identical assets and
+   * services. Marks the scan 'completed' on success; on a parse or processing
+   * failure it marks the scan 'failed' and rethrows so the caller can respond.
+   */
+  static async ingestShipperResults(scanId: number, xml: string, userId: number): Promise<void> {
+    try {
+      const hosts = await parseNmapXml(xml);
+      console.log(`[NMAP] Scan ${scanId} ingesting ${hosts.length} host(s) from shipper`);
+      await this.processScanResults(scanId, hosts, userId);
+      await this.updateScanStatus(scanId, 'completed', undefined, new Date());
+    } catch (error: any) {
+      const errorMsg = error?.message || error?.toString() || 'Failed to ingest shipper scan results';
+      console.error(`[NMAP] Scan ${scanId} shipper-result ingestion failed:`, error);
+      await this.updateScanStatus(scanId, 'failed', undefined, new Date(), errorMsg);
+      throw error;
+    }
+  }
+
+  /**
+   * Mark a shipper-dispatched scan as failed. Used when the shipper reports it
+   * could not run the scan at all (nmap missing, host unreachable, etc.).
+   */
+  static async failShipperScan(scanId: number, message: string): Promise<void> {
+    await this.updateScanStatus(scanId, 'failed', undefined, new Date(), message || 'Shipper reported scan failure');
   }
 
   /**
@@ -195,25 +313,39 @@ export class NmapScanner {
   }
 
   /**
-   * Build NMAP command options based on scan type
+   * The nmap argument tokens for a scan type, as an array. Single source of
+   * truth for what flags each scan type runs: buildNmapOptions() joins it for
+   * node-nmap's in-process scanner, and the shipper job-pull
+   * (claimScanJobsForShipper) hands the array straight to the shipper. Keeping
+   * one definition means a shipper-run scan and a backend-run scan of the same
+   * target always use identical flags. Server-dictated: a shipper only ever
+   * runs flags chosen here, never anything client-supplied.
    */
-  private static buildNmapOptions(scanType: string): string {
+  static nmapArgsFor(scanType: string): string[] {
     switch (scanType) {
       case 'ping':
-        return '-sn'; // Ping scan only (no port scan)
+        return ['-sn']; // Ping scan only (no port scan)
 
       case 'port':
-        return '-sT -p 1-1000'; // TCP connect scan, top 1000 ports
+        return ['-sT', '-p', '1-1000']; // TCP connect scan, top 1000 ports
 
       case 'service':
-        return '-sV -p 1-1000'; // Version detection, top 1000 ports
+        return ['-sV', '-p', '1-1000']; // Version detection, top 1000 ports
 
       case 'os':
-        return '-O -sV'; // OS detection + version detection
+        return ['-O', '-sV']; // OS detection + version detection
 
       default:
-        return '-sT -p 22,80,443'; // Default: common ports
+        return ['-sT', '-p', '22,80,443']; // Default: common ports
     }
+  }
+
+  /**
+   * Build NMAP command options based on scan type (space-joined form that
+   * node-nmap's in-process NmapScan expects).
+   */
+  private static buildNmapOptions(scanType: string): string {
+    return this.nmapArgsFor(scanType).join(' ');
   }
 
   /**
@@ -377,8 +509,9 @@ export class NmapScanner {
           status,
           initiated_by,
           scan_options,
+          assigned_shipper_id,
           created_at
-        ) VALUES ($1, $2, $3, $4, $5, NOW())
+        ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
         RETURNING id
       `;
 
@@ -394,6 +527,7 @@ export class NmapScanner {
         'queued',
         options.userId,
         JSON.stringify(scanOptions),
+        options.assignedShipperId ?? null,
       ]);
 
       return result.rows[0].id;

@@ -7,7 +7,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Runtime dependencies. `systemd` is installed only for its `journalctl`
 # binary, used to ship the host's systemd journal (the shipper never runs
-# systemd itself). The rest match what the shipper script needs.
+# systemd itself). `nmap` runs network scans SIEMBox dispatches to the shipper
+# (see shipper-managed.sh's poll_and_run_scans). The rest match what the
+# shipper script needs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bash \
         netcat-openbsd \
@@ -15,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         jq \
+        nmap \
         systemd \
     && rm -rf /var/lib/apt/lists/*
 

@@ -11,6 +11,7 @@ import { AssetRepository } from '../services/assets/assetRepository';
 import { NmapScanner, validateScanTargets } from '../services/scanner/nmapScanner';
 import { AutoDiscoveryService } from '../services/assets/autoDiscoveryService';
 import { ScanRepository } from '../services/assets/scanRepository';
+import { LogShipperModel } from '../models/LogShipper';
 import { AssetStatus, AssetCriticality, AssetType } from '../models/Asset';
 import { getAssetContext } from '../services/assets/assetContext';
 
@@ -391,6 +392,26 @@ router.post(
         return;
       }
 
+      // Optional: run this scan from a log shipper out on the LAN instead of on
+      // the backend (whose nmap can't see the real network from inside the
+      // Docker bridge). Accept either spelling from the client. When set, the
+      // shipper must exist -- otherwise the scan would queue forever with no one
+      // to claim it -- so validate here and 400 rather than relying on the FK.
+      const rawShipperId = req.body.assignedShipperId ?? req.body.assigned_shipper_id;
+      let assignedShipperId: number | undefined;
+      if (rawShipperId !== undefined && rawShipperId !== null && rawShipperId !== '') {
+        assignedShipperId = Number(rawShipperId);
+        if (!Number.isInteger(assignedShipperId) || assignedShipperId <= 0) {
+          res.status(400).json({ error: 'assignedShipperId must be a positive integer' });
+          return;
+        }
+        const shipper = await LogShipperModel.findById(assignedShipperId);
+        if (!shipper) {
+          res.status(400).json({ error: `No log shipper with id ${assignedShipperId}` });
+          return;
+        }
+      }
+
       console.log(`[ASSETS] POST /scan - received body:`, JSON.stringify(req.body));
       console.log(`[ASSETS] Targets:`, JSON.stringify(targets), `Type:`, typeof targets);
 
@@ -399,12 +420,16 @@ router.post(
         scanType: scanType || 'port',
         userId: req.user!.id,
         description,
+        assignedShipperId,
       });
 
       res.status(202).json({
-        message: 'Scan initiated successfully',
+        message: assignedShipperId
+          ? 'Scan queued for log shipper'
+          : 'Scan initiated successfully',
         scanId,
         status: 'queued',
+        assignedShipperId: assignedShipperId ?? null,
       });
     } catch (error: any) {
       console.error('Scan initiation error:', error);

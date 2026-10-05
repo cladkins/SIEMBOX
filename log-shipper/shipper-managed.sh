@@ -11,12 +11,19 @@ SHIPPER_API_KEY="${SHIPPER_API_KEY}"
 # server-visible capability: SIEMBox uses it to tell "this shipper is too old to
 # do X" apart from "this shipper is misconfigured".
 #   1.1.0 — reports container inventory (incl. explicit docker-unavailable reports)
-SHIPPER_VERSION="1.1.0"
+#   1.2.0 — runs nmap network scans SIEMBox dispatches to it (LAN-side scanning)
+SHIPPER_VERSION="1.2.0"
 CONFIG_POLL_INTERVAL="${CONFIG_POLL_INTERVAL:-30}" # seconds
 HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-60}" # seconds
 # How often to report this host's container images to SIEMBox for vuln scanning.
 # Set to 0 to disable. Containers change slowly, so the default is generous.
 CONTAINER_REPORT_INTERVAL="${CONTAINER_REPORT_INTERVAL:-300}" # seconds
+# Network scanning: how often to poll SIEMBox for nmap jobs assigned to this
+# shipper (0 disables scanning entirely). These scans run from the shipper, out
+# on the LAN, where the SIEMBox backend's own nmap can't reach from inside its
+# Docker network. SCAN_TIMEOUT caps the wall-clock of a single nmap run.
+SCAN_POLL_INTERVAL="${SCAN_POLL_INTERVAL:-30}" # seconds, 0 to disable
+SCAN_TIMEOUT="${SCAN_TIMEOUT:-900}" # seconds (matches the backend's 15-min cap)
 
 # Color output for logs
 GREEN='\033[0;32m'
@@ -83,6 +90,7 @@ CURRENT_CONFIG=""
 TAILING_PIDS=()
 LAST_HEARTBEAT=0
 LAST_CONTAINER_REPORT=0
+LAST_SCAN_POLL=0
 SHIPPER_ID="" # Short identifier derived from API key for log attribution
 CACHED_CONFIG_FILE="/tmp/siembox-cached-config.json" # Fallback config cache
 
@@ -594,6 +602,127 @@ report_containers() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# NETWORK SCANNING (optional). SIEMBox can dispatch nmap scans to this shipper
+# so they run out on the LAN, where the SIEMBox backend's own nmap can't reach
+# from inside its Docker network. We poll for jobs assigned to us and run
+# exactly the nmap command the server hands us -- server-built flags, server-
+# validated targets, chosen by neither us nor the client -- then post the raw
+# XML back for the backend to parse. See backend/src/services/scanner/
+# nmapScanner.ts and backend/src/routes/shippers.ts.
+# ---------------------------------------------------------------------------
+
+# POST a scan's raw nmap XML back to SIEMBox.
+post_scan_xml() {
+    local scan_id="$1" xml="$2"
+    local body
+    body=$(jq -n --arg key "$SHIPPER_API_KEY" --argjson sid "$scan_id" --arg xml "$xml" \
+        '{api_key:$key, scan_id:$sid, xml:$xml}' 2>/dev/null) || true
+    [ -z "$body" ] && { log_warn "Scan $scan_id: failed to build result body"; return; }
+
+    local code
+    code=$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' \
+        -X POST "${SIEMBOX_API_URL}/shippers/scan-results" \
+        -H 'Content-Type: application/json' -d "$body" 2>/dev/null) || true
+    case "$code" in
+        2*) log_info "Scan $scan_id results posted (HTTP $code)" ;;
+        *)  log_warn "Scan $scan_id result POST failed (HTTP ${code:-000})" ;;
+    esac
+}
+
+# Tell SIEMBox a scan could not be run (so it's marked failed, not stuck).
+post_scan_error() {
+    local scan_id="$1" message="$2"
+    local body
+    body=$(jq -n --arg key "$SHIPPER_API_KEY" --argjson sid "$scan_id" --arg err "$message" \
+        '{api_key:$key, scan_id:$sid, error:$err}' 2>/dev/null) || true
+    [ -z "$body" ] && return
+    curl -s --max-time 20 -o /dev/null \
+        -X POST "${SIEMBOX_API_URL}/shippers/scan-results" \
+        -H 'Content-Type: application/json' -d "$body" 2>/dev/null || true
+}
+
+# Run one scan job (a JSON object from the job-pull) and post the result. Runs
+# in the background (see poll_and_run_scans) so a long scan doesn't stall
+# heartbeats or config polling in the main loop.
+run_scan_job() {
+    local job="$1"
+
+    local scan_id
+    scan_id=$(printf '%s' "$job" | jq -r '.scanId // empty' 2>/dev/null) || true
+    case "$scan_id" in
+        ''|*[!0-9]*) log_warn "Scan job has no numeric scanId; skipping"; return ;;
+    esac
+
+    # Read the server-built args and targets into bash ARRAYS so each token stays
+    # a single argv element -- never a shell-split string. This is what stops a
+    # target or flag from smuggling extra arguments into nmap (the backend also
+    # validates both, but the shipper must not re-introduce the hole by joining
+    # and re-splitting them through a shell).
+    local nmap_args=() targets=()
+    mapfile -t nmap_args < <(printf '%s' "$job" | jq -r '.nmapArgs[]?' 2>/dev/null) || true
+    mapfile -t targets  < <(printf '%s' "$job" | jq -r '.targets[]?'  2>/dev/null) || true
+
+    if [ "${#targets[@]}" -eq 0 ]; then
+        log_warn "Scan $scan_id has no targets; reporting failure"
+        post_scan_error "$scan_id" "No targets in job"
+        return
+    fi
+
+    log_info "Running scan $scan_id: nmap ${nmap_args[*]} ${targets[*]}"
+
+    local xml rc=0
+    # No eval, no joined string: the arrays expand to separate argv elements.
+    xml=$(timeout "${SCAN_TIMEOUT}s" nmap "${nmap_args[@]}" "${targets[@]}" -oX - 2>/dev/null) || rc=$?
+
+    if [ "$rc" -eq 124 ]; then
+        log_warn "Scan $scan_id timed out after ${SCAN_TIMEOUT}s"
+        post_scan_error "$scan_id" "Scan timed out after ${SCAN_TIMEOUT}s on the shipper"
+    elif [ "$rc" -ne 0 ] || [ -z "$xml" ]; then
+        log_warn "Scan $scan_id failed (nmap exit $rc)"
+        post_scan_error "$scan_id" "nmap exited with code $rc on the shipper"
+    else
+        post_scan_xml "$scan_id" "$xml"
+    fi
+}
+
+# Poll for scan jobs assigned to this shipper and run them. Throttled by
+# SCAN_POLL_INTERVAL (0 disables). The GET itself claims the jobs server-side
+# (queued -> running), so each is handed out once.
+poll_and_run_scans() {
+    [ "${SCAN_POLL_INTERVAL:-0}" -gt 0 ] 2>/dev/null || return 0
+
+    local current_time
+    current_time=$(date +%s)
+    [ $((current_time - LAST_SCAN_POLL)) -ge "$SCAN_POLL_INTERVAL" ] || return 0
+    LAST_SCAN_POLL=$current_time
+
+    command -v jq >/dev/null 2>&1 || return 0
+    if ! command -v nmap >/dev/null 2>&1; then
+        log_warn "nmap not installed in this image; cannot run dispatched scans"
+        return 0
+    fi
+
+    local resp
+    resp=$(curl -s --max-time 20 "${SIEMBOX_API_URL}/shippers/scan-jobs/${SHIPPER_API_KEY}" 2>/dev/null) || true
+    [ -z "$resp" ] && return 0
+
+    local count
+    count=$(printf '%s' "$resp" | jq -r '.jobs | length' 2>/dev/null) || true
+    case "$count" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+    [ "$count" -eq 0 ] && return 0
+
+    log_info "Claimed $count scan job(s) from SIEMBox"
+    local i job
+    for i in $(seq 0 $((count - 1))); do
+        job=$(printf '%s' "$resp" | jq -c ".jobs[$i]" 2>/dev/null) || true
+        [ -z "$job" ] && continue
+        run_scan_job "$job" &   # background so the main loop keeps heartbeating
+    done
+}
+
 # Main loop
 main() {
     log_info "========================================="
@@ -665,6 +794,9 @@ main() {
 
         # Report container inventory for vuln scanning (throttled inside)
         report_containers
+
+        # Poll for and run any network-scan jobs assigned to this shipper
+        poll_and_run_scans
 
         # Fetch latest config
         if new_config=$(fetch_config "$SHIPPER_API_KEY"); then

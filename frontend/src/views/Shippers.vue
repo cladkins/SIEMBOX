@@ -72,6 +72,77 @@
       </el-col>
     </el-row>
 
+    <!-- Direct Syslog Sources -- devices sending syslog straight to 514/udp+tcp with no shipper
+         (a firewall, NAS, switch or UniFi device using its own remote-syslog setting). Kept apart
+         from installed shippers above: these have no agent, API key or config of their own. -->
+    <el-row :gutter="20" style="margin-top: 20px">
+      <el-col :span="24">
+        <el-card>
+          <template #header>
+            <div class="card-header">
+              <span>
+                Direct Syslog Sources
+                <el-tag v-if="directSources.length" size="small" type="info" style="margin-left: 8px">
+                  {{ directSources.length }}
+                </el-tag>
+              </span>
+              <el-button @click="fetchDirectSources" :icon="Refresh" :loading="directLoading" circle />
+            </div>
+          </template>
+          <el-text size="small" type="info" style="display: block; margin-bottom: 12px">
+            Devices sending syslog directly to SIEMBox on port 514 without a log shipper, in the last 24 hours.
+          </el-text>
+          <el-alert v-if="directError" type="warning" :closable="false" :title="directError" style="margin-bottom: 12px" />
+          <el-table
+            :data="directSources"
+            v-loading="directLoading"
+            stripe
+            :empty-text="directError ? 'Could not load direct syslog sources' : 'No devices have sent syslog directly in the last 24 hours'"
+          >
+            <el-table-column label="Source IP" min-width="140">
+              <template #default="{ row }">
+                <span>{{ row.source_ip || 'unknown' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="Status" width="100">
+              <template #default="{ row }">
+                <el-tag :type="isRecentlyActive(row.last_seen) ? 'success' : 'info'" size="small">
+                  {{ isRecentlyActive(row.last_seen) ? 'active' : 'quiet' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="Hostnames" min-width="180">
+              <template #default="{ row }">
+                <el-tag v-for="host in row.hostnames.slice(0, 3)" :key="host" size="small" type="info" style="margin: 2px">
+                  {{ host }}
+                </el-tag>
+                <el-tag v-if="row.hostname_count > 3" size="small" type="info">+{{ row.hostname_count - 3 }} more</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="Apps" min-width="200">
+              <template #default="{ row }">
+                <el-tag v-for="app in row.app_names.slice(0, 3)" :key="app" size="small" type="success" style="margin: 2px">
+                  {{ app }}
+                </el-tag>
+                <el-tag v-if="row.app_name_count > 3" size="small" type="info">+{{ row.app_name_count - 3 }} more</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="Logs (24h)" width="120" align="right" sortable :sort-method="(a: any, b: any) => a.log_count - b.log_count">
+              <template #default="{ row }">{{ row.log_count.toLocaleString() }}</template>
+            </el-table-column>
+            <el-table-column label="Last Seen" width="180">
+              <template #default="{ row }">{{ formatDate(row.last_seen) }}</template>
+            </el-table-column>
+            <el-table-column label="Actions" width="120" align="center">
+              <template #default="{ row }">
+                <el-button size="small" :disabled="!row.source_ip" @click="viewSourceLogs(row.source_ip)">View Logs</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <!-- API-Polled Sources (Log Discovery) -- separate from the shippers above: these have no
          agent/heartbeat/API key of their own, SIEMBox reaches out to them on a schedule instead.
          Read-only here; credential save/rotate/revoke stays in Log Discovery so there's one place
@@ -556,6 +627,21 @@ const saving = ref(false);
 const shippers = ref<any[]>([]);
 const currentShipper = ref<any>(null);
 const unknownSources = ref<any[]>([]);
+
+interface DirectSyslogSource {
+  source_ip: string | null;
+  log_count: number;
+  first_seen: string;
+  last_seen: string;
+  hostnames: string[];
+  hostname_count: number;
+  app_names: string[];
+  app_name_count: number;
+}
+const directSources = ref<DirectSyslogSource[]>([]);
+const directLoading = ref(false);
+const directError = ref('');
+
 const apiPolledSources = ref<RankedSource[]>([]);
 const dlFingerprints = ref<FingerprintEntry[]>([]);
 const activityLog = ref<any[]>([]);
@@ -596,8 +682,36 @@ const volumeForm = reactive({
 onMounted(() => {
   fetchShippers();
   fetchUnknownSources();
+  fetchDirectSources();
   fetchApiPolledSources();
 });
+
+async function fetchDirectSources() {
+  directLoading.value = true;
+  try {
+    const response = await api.getDirectSyslogSources();
+    directSources.value = response.data;
+    directError.value = '';
+  } catch (error: any) {
+    // Keep showing the previous list, if any; the backend already serves a
+    // stale result when it can, so an error here means there was none.
+    directError.value =
+      error.response?.status === 503
+        ? 'The database is busy right now; try refreshing in a moment.'
+        : 'Failed to load direct syslog sources.';
+  } finally {
+    directLoading.value = false;
+  }
+}
+
+/** Sent something in the last 15 minutes. */
+function isRecentlyActive(lastSeen: string): boolean {
+  return Date.now() - new Date(lastSeen).getTime() < 15 * 60 * 1000;
+}
+
+function viewSourceLogs(sourceIp: string) {
+  router.push({ name: 'Logs', query: { source_ip: sourceIp, tab: 'raw', range: '24h' } });
+}
 
 function fingerprintName(id: string | null): string {
   if (!id) return 'Unknown';

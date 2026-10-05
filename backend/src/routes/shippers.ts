@@ -10,6 +10,7 @@ import { authenticateShipperPush } from '../middleware/shipperPushAuth';
 import { sha256hex } from '../models/EdrAgent';
 import { ingestPushedLogs, MAX_LOG_PUSH_BATCH_SIZE } from '../services/shippers/logPushService';
 import { unknownSources, isDatabaseBusy } from '../services/shippers/unknownSources';
+import { directSyslogSources } from '../services/shippers/directSyslogSources';
 
 const router = Router();
 
@@ -94,6 +95,21 @@ router.get('/unknown-sources', async (_req: Request, res: Response) => {
       throw new ApiError(503, 'Unknown-source lookup timed out because the database is busy. Try again shortly.');
     }
     throw new ApiError(500, 'Failed to fetch unknown sources');
+  }
+});
+
+// Get direct syslog sources: hosts sending syslog straight to the listener with
+// no log shipper (shipper_id and discovery_source_id both NULL), last 24 h. See
+// services/shippers/directSyslogSources.ts for the query and its caching.
+// Authenticated: it is effectively a list of devices on the network.
+router.get('/direct-syslog-sources', authenticate, async (_req: Request, res: Response) => {
+  try {
+    res.json(await directSyslogSources.get());
+  } catch (error) {
+    if (isDatabaseBusy(error)) {
+      throw new ApiError(503, 'Direct-syslog lookup timed out because the database is busy. Try again shortly.');
+    }
+    throw new ApiError(500, 'Failed to fetch direct syslog sources');
   }
 });
 

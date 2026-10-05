@@ -1646,6 +1646,39 @@ Get all log shippers.
 
 ---
 
+### GET /api/shippers/direct-syslog-sources
+
+Hosts sending syslog directly to the listener (514/udp+tcp) **without a log shipper** — e.g. a firewall, NAS, switch, or UniFi device using its own remote-syslog setting. Shown in the "Direct Syslog Sources" section of the Shippers page, separate from installed shippers.
+
+Rows counted: `raw_logs` with `shipper_id IS NULL AND discovery_source_id IS NULL`, grouped by `source_ip` over the **last 24 hours**. (Lines carrying an unregistered shipper id are the separate [unknown-sources](#post-apishipperslogs) list; API-polled sources have `discovery_source_id` set and appear in their own section.)
+
+Served from a 30 s single-flight cache with the same statement-timeout / stale-on-busy behaviour as the unknown-sources list, so a page load can neither stack scans nor outrun the request.
+
+**Authentication:** Required (it is effectively a list of devices on the network).
+
+**Response (200):**
+```json
+[
+  {
+    "source_ip": "203.0.113.10",
+    "log_count": 14823,
+    "first_seen": "2026-10-05T10:00:00Z",
+    "last_seen": "2026-10-05T11:59:00Z",
+    "hostnames": ["fw-edge"],
+    "hostname_count": 1,
+    "app_names": ["kernel", "pf"],
+    "app_name_count": 2
+  }
+]
+```
+
+`hostnames` / `app_names` are capped at 25 entries each; `hostname_count` / `app_name_count` give the true totals. At most 500 senders are returned (most recently seen first).
+
+**Errors:**
+- `503` - The database was too busy to answer in time (try again shortly)
+
+---
+
 ### GET /api/shippers/:id
 
 Get single shipper with full configuration.

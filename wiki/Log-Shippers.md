@@ -4,6 +4,8 @@ The **log shipper** is a small, standalone container you install on any host who
 
 > Prefer syslog? Devices that already emit syslog can send directly to `udp/tcp 514` on the SIEMBox host with no shipper. The shipper is for hosts where you want to collect *files*, *Docker container logs*, or the *systemd journal*.
 
+> **Seeing what sends syslog directly:** the **Log Shippers** page has a **Direct Syslog Sources** section (separate from installed shippers) listing every host that sent syslog straight to port 514 with no shipper in the last 24 hours — source IP, hostnames, apps, log count, and a link through to its logs. It's the quickest way to confirm a firewall/NAS/switch you pointed at SIEMBox is actually arriving.
+
 ## What it can collect
 
 - **Log files** — any path you mount (e.g. `/var/log/...`).

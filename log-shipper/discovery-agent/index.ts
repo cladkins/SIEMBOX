@@ -48,7 +48,16 @@ async function main(): Promise<void> {
     log: (level, message) => process.stderr.write(`[discovery-agent] ${level}: ${message}\n`),
   });
 
-  process.stdout.write(JSON.stringify(signals));
+  // Always emit a valid JSON array -- an empty scan is "[]", never nothing -- and
+  // wait for the write to flush before the process exits. stdout is a pipe when
+  // the shipper captures us with $(...), and a bare process.stdout.write() can be
+  // truncated if Node exits before libuv drains that pipe. That truncation is
+  // what made the shipper see empty output and post a bogus "exited with code 0"
+  // error even though the agent had run to completion.
+  const out = JSON.stringify(signals ?? []);
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write(out, (err) => (err ? reject(err) : resolve()));
+  });
 }
 
 main().catch((err) => {

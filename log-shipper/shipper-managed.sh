@@ -16,7 +16,9 @@ SHIPPER_API_KEY="${SHIPPER_API_KEY}"
 #   1.4.0 — also runs dispatched log-discovery scans (bundled Node agent)
 #   1.4.1 — nuclei: ensure templates before running, honor per-scan timeout,
 #           surface the real nuclei error on failure
-SHIPPER_VERSION="1.4.1"
+#   1.4.2 — discovery: capture the agent's stderr into the failure reason, and
+#           distinguish "produced no output" from a nonzero exit
+SHIPPER_VERSION="1.4.2"
 CONFIG_POLL_INTERVAL="${CONFIG_POLL_INTERVAL:-30}" # seconds
 HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-60}" # seconds
 # How often to report this host's container images to SIEMBox for vuln scanning.
@@ -813,18 +815,30 @@ run_discovery_job() {
 
     log_info "Running discovery scan $scan_id"
 
-    local signals rc=0
-    signals=$(printf '%s' "$job" | timeout "${SCAN_TIMEOUT}s" node "$DISCOVERY_AGENT" 2>>/tmp/siembox-discovery-agent.log) || rc=$?
+    local signals rc=0 errfile reason
+    errfile=$(mktemp 2>/dev/null || echo "/tmp/siembox-discovery-err.$$")
+    # Capture the agent's stderr (its probe log plus any fatal) so a failure
+    # reports WHY, not just an exit code -- mirrors the nuclei path.
+    signals=$(printf '%s' "$job" | timeout "${SCAN_TIMEOUT}s" node "$DISCOVERY_AGENT" 2>"$errfile") || rc=$?
+    cat "$errfile" >> /tmp/siembox-discovery-agent.log 2>/dev/null || true
+    reason=$(tr '\n' ' ' < "$errfile" 2>/dev/null | tail -c 300)
 
     if [ "$rc" -eq 124 ]; then
         log_warn "Discovery scan $scan_id timed out after ${SCAN_TIMEOUT}s"
         post_discovery_error "$scan_id" "Discovery scan timed out after ${SCAN_TIMEOUT}s on the shipper"
-    elif [ "$rc" -ne 0 ] || [ -z "$signals" ]; then
-        log_warn "Discovery scan $scan_id failed (agent exit $rc)"
-        post_discovery_error "$scan_id" "discovery agent exited with code $rc on the shipper"
+    elif [ "$rc" -ne 0 ]; then
+        log_warn "Discovery scan $scan_id failed (agent exit $rc): ${reason}"
+        post_discovery_error "$scan_id" "discovery agent exited with code $rc on the shipper: ${reason:-no error output}"
+    elif [ -z "$signals" ]; then
+        # Exit 0 but nothing on stdout. The agent always prints at least "[]", so
+        # this means its output was lost, not that no hosts were seen -- report it
+        # as such instead of a nonsensical "exited with code 0".
+        log_warn "Discovery scan $scan_id produced no output: ${reason}"
+        post_discovery_error "$scan_id" "discovery agent produced no output on the shipper: ${reason:-no error output}"
     else
         post_discovery_results "$scan_id" "$signals"
     fi
+    rm -f "$errfile"
 }
 
 # Dispatch one scan job (a JSON object from the job-pull) by its `kind`. Runs in

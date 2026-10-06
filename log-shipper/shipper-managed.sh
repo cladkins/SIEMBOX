@@ -13,7 +13,8 @@ SHIPPER_API_KEY="${SHIPPER_API_KEY}"
 #   1.1.0 — reports container inventory (incl. explicit docker-unavailable reports)
 #   1.2.0 — runs nmap network scans SIEMBox dispatches to it (LAN-side scanning)
 #   1.3.0 — also runs dispatched nuclei vulnerability scans (LAN-side)
-SHIPPER_VERSION="1.3.0"
+#   1.4.0 — also runs dispatched log-discovery scans (bundled Node agent)
+SHIPPER_VERSION="1.4.0"
 CONFIG_POLL_INTERVAL="${CONFIG_POLL_INTERVAL:-30}" # seconds
 HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-60}" # seconds
 # How often to report this host's container images to SIEMBox for vuln scanning.
@@ -29,6 +30,9 @@ SCAN_TIMEOUT="${SCAN_TIMEOUT:-900}" # seconds (matches the backend's 15-min cap)
 # template corpus. Set false to skip the one-time background template update at
 # startup (e.g. air-gapped, or you mount a template volume yourself).
 NUCLEI_UPDATE_TEMPLATES="${NUCLEI_UPDATE_TEMPLATES:-true}"
+# Bundled Node agent that runs dispatched log-discovery scans (baked into the
+# image by the Dockerfile; see log-shipper/discovery-agent/).
+DISCOVERY_AGENT="${DISCOVERY_AGENT:-/usr/local/lib/siembox/discovery-agent.js}"
 
 # Color output for logs
 GREEN='\033[0;32m'
@@ -736,6 +740,69 @@ run_nuclei_job() {
     fi
 }
 
+# POST discovery signals (a JSON array the agent produced) back to SIEMBox.
+post_discovery_results() {
+    local scan_id="$1" signals="$2"
+    local body
+    body=$(jq -n --arg key "$SHIPPER_API_KEY" --argjson sid "$scan_id" --argjson signals "$signals" \
+        '{api_key:$key, scan_id:$sid, signals:$signals}' 2>/dev/null) || true
+    [ -z "$body" ] && { log_warn "Discovery scan $scan_id: failed to build result body"; return; }
+
+    local code
+    code=$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' \
+        -X POST "${SIEMBOX_API_URL}/shippers/discovery-results" \
+        -H 'Content-Type: application/json' -d "$body" 2>/dev/null) || true
+    case "$code" in
+        2*) log_info "Discovery scan $scan_id results posted (HTTP $code)" ;;
+        *)  log_warn "Discovery scan $scan_id result POST failed (HTTP ${code:-000})" ;;
+    esac
+}
+
+# Tell SIEMBox a discovery scan could not be run (so it's marked failed).
+post_discovery_error() {
+    local scan_id="$1" message="$2"
+    local body
+    body=$(jq -n --arg key "$SHIPPER_API_KEY" --argjson sid "$scan_id" --arg err "$message" \
+        '{api_key:$key, scan_id:$sid, error:$err}' 2>/dev/null) || true
+    [ -z "$body" ] && return
+    curl -s --max-time 20 -o /dev/null \
+        -X POST "${SIEMBOX_API_URL}/shippers/discovery-results" \
+        -H 'Content-Type: application/json' -d "$body" 2>/dev/null || true
+}
+
+# Run a log-discovery job: feed the whole job (mode + cidrs + probePlan) to the
+# bundled Node agent on stdin; it runs the same passive+active probe the backend
+# would and prints observed signals (JSON array) on stdout, which we post back.
+run_discovery_job() {
+    local scan_id="$1" job="$2"
+
+    if ! command -v node >/dev/null 2>&1; then
+        log_warn "Scan $scan_id: node not installed in this image"
+        post_discovery_error "$scan_id" "node runtime not available on the shipper"
+        return
+    fi
+    if [ ! -f "$DISCOVERY_AGENT" ]; then
+        log_warn "Scan $scan_id: discovery agent missing ($DISCOVERY_AGENT)"
+        post_discovery_error "$scan_id" "discovery agent not present on the shipper"
+        return
+    fi
+
+    log_info "Running discovery scan $scan_id"
+
+    local signals rc=0
+    signals=$(printf '%s' "$job" | timeout "${SCAN_TIMEOUT}s" node "$DISCOVERY_AGENT" 2>>/tmp/siembox-discovery-agent.log) || rc=$?
+
+    if [ "$rc" -eq 124 ]; then
+        log_warn "Discovery scan $scan_id timed out after ${SCAN_TIMEOUT}s"
+        post_discovery_error "$scan_id" "Discovery scan timed out after ${SCAN_TIMEOUT}s on the shipper"
+    elif [ "$rc" -ne 0 ] || [ -z "$signals" ]; then
+        log_warn "Discovery scan $scan_id failed (agent exit $rc)"
+        post_discovery_error "$scan_id" "discovery agent exited with code $rc on the shipper"
+    else
+        post_discovery_results "$scan_id" "$signals"
+    fi
+}
+
 # Dispatch one scan job (a JSON object from the job-pull) by its `kind`. Runs in
 # the background (see poll_and_run_scans) so a long scan doesn't stall heartbeats
 # or config polling in the main loop.
@@ -750,8 +817,9 @@ run_scan_job() {
 
     kind=$(printf '%s' "$job" | jq -r '.kind // "nmap"' 2>/dev/null) || true
     case "$kind" in
-        nuclei) run_nuclei_job "$scan_id" "$job" ;;
-        nmap|*) run_nmap_job   "$scan_id" "$job" ;;
+        nuclei)    run_nuclei_job    "$scan_id" "$job" ;;
+        discovery) run_discovery_job "$scan_id" "$job" ;;
+        nmap|*)    run_nmap_job      "$scan_id" "$job" ;;
     esac
 }
 

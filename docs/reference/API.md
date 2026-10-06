@@ -2333,19 +2333,21 @@ If the database can't be reached (including a connection pool that stays exhaust
 
 ### GET /api/shippers/scan-jobs/:api_key
 
-**PUBLIC ENDPOINT** (shipper-authenticated by the syslog `api_key` in the path, like `/config/:api_key`). A shipper polls this to pick up scans dispatched to it. The GET itself **claims** the shipper's queued jobs atomically (`queued → running`, stamping `claimed_at`), so each job is handed out exactly once even under concurrent polls. Lets a scan run from a shipper out on the LAN, which the backend's own nmap/nuclei can't reach from inside the Docker network (see migration `032`). Returns both asset (nmap) and vulnerability (nuclei) jobs, each tagged with `kind`.
+**PUBLIC ENDPOINT** (shipper-authenticated by the syslog `api_key` in the path, like `/config/:api_key`). A shipper polls this to pick up scans dispatched to it. The GET itself **claims** the shipper's queued jobs atomically (`queued → running`, stamping `claimed_at`), so each job is handed out exactly once even under concurrent polls. Lets a scan run from a shipper out on the LAN, which the backend's own nmap/nuclei/discovery can't reach from inside the Docker network (see migrations `032`/`033`). Returns asset (nmap), vulnerability (nuclei), and log-discovery jobs, each tagged with `kind`.
 
 **Response (200):**
 ```json
 {
   "jobs": [
-    { "scanId": 42, "kind": "nmap",   "nmapArgs": ["-sV", "-p", "1-1000"], "targets": ["192.168.1.0/24"] },
-    { "scanId": 43, "kind": "nuclei", "nucleiArgs": ["-jsonl", "-severity", "high,critical"], "targets": ["http://192.168.1.10"] }
+    { "scanId": 42, "kind": "nmap",      "nmapArgs": ["-sV", "-p", "1-1000"], "targets": ["192.168.1.0/24"] },
+    { "scanId": 43, "kind": "nuclei",    "nucleiArgs": ["-jsonl", "-severity", "high,critical"], "targets": ["http://192.168.1.10"] },
+    { "scanId": 7,  "kind": "discovery", "mode": "full", "cidrs": ["192.168.1.0/24"],
+      "probePlan": { "ports": [443, 8443, ...], "httpPaths": ["/", ...], "mdnsServices": ["_home-assistant._tcp", ...] } }
   ]
 }
 ```
 
-The args and `targets` are **built and validated by the server** from the scan's stored type and targets — the shipper chooses neither. It runs exactly `nmap <nmapArgs> <targets> -oX -` for a `kind: "nmap"` job, or `nuclei <nucleiArgs> -target <t>…` for a `kind: "nuclei"` job. `nucleiArgs` carry only portable selection (tags/severity/IDs); the shipper runs them against its own template corpus. `jobs` is `[]` when nothing is queued for this shipper.
+The args/targets (or, for discovery, the probe plan) are **built and validated by the server** — the shipper chooses neither. It runs exactly `nmap <nmapArgs> <targets> -oX -` for a `kind: "nmap"` job, `nuclei <nucleiArgs> -target <t>…` for `kind: "nuclei"`, or its bundled Node discovery agent (fed the job on stdin) for `kind: "discovery"`. `nucleiArgs` carry only portable selection (tags/severity/IDs); the discovery `probePlan` carries the ports/HTTP paths/mDNS services extracted from the fingerprint library (so the shipper needs no fingerprint files). `jobs` is `[]` when nothing is queued. The `scanId` namespaces differ per `kind` (discovery ids come from `discovery_scans`), which is why discovery results post to a separate endpoint below.
 
 **Errors:**
 - `404` - Invalid API key
@@ -2379,6 +2381,33 @@ The args and `targets` are **built and validated by the server** from the scan's
 - `400` - Missing `api_key`, non-positive `scan_id`, or no output (`xml` for an asset scan / `jsonl` for a vuln scan) and no `error`
 - `404` - Invalid API key, or the scan isn't assigned to this shipper
 - `422` - the output could not be parsed/ingested (the scan is marked `failed`)
+
+---
+
+### POST /api/shippers/discovery-results
+
+**PUBLIC ENDPOINT** (shipper-authenticated by the syslog `api_key` in the body). A shipper posts back the outcome of a dispatched **log-discovery** scan. Separate from `/scan-results` because discovery scans live in their own table (`discovery_scans`) with their own id sequence. On success the body carries `signals` — the observed per-host data the shipper's probe agent produced; the backend fingerprint-matches and upserts them into `discovery_sources` exactly like an in-process scan. On failure it sends `error`. Ownership is checked against `discovery_scans.assigned_shipper_id`.
+
+**Request Body — success:**
+```json
+{ "api_key": "<shipper api key>", "scan_id": 7,
+  "signals": [ { "ip": "192.168.1.10", "mac": "...", "hostname": "...",
+                 "open_ports": [443], "http_responses": [...], "tls_subjects": [...],
+                 "banners": [], "mdns_services": [...], "ssdp_services": [...],
+                 "discovery_methods": ["arp","active_probe"] } ] }
+```
+
+**Request Body — failure:**
+```json
+{ "api_key": "<shipper api key>", "scan_id": 7, "error": "node runtime not available on the shipper" }
+```
+
+**Response (200):** `{ "status": "completed" }` or `{ "status": "failed" }`
+
+**Errors:**
+- `400` - Missing `api_key`, non-positive `scan_id`, or neither `signals` (array) nor `error`
+- `404` - Invalid API key, or the discovery scan isn't assigned to this shipper
+- `422` - signals could not be ingested (the scan is marked `failed`)
 
 ---
 

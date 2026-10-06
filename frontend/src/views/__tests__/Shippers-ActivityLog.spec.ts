@@ -11,7 +11,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount } from '@vue/test-utils';
 import Shippers from '../Shippers.vue';
-import { ElMessage } from 'element-plus';
 
 // Mock the API
 vi.mock('@/services/api', () => ({

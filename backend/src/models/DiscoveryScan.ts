@@ -17,18 +17,32 @@ export interface DiscoveryScan {
   created_by: number | null;
   /** Shipper this scan was dispatched to (null = run in-process on the backend). */
   assigned_shipper_id: number | null;
+  /** That shipper's display name, joined for the UI (null when unassigned or shipper deleted). */
+  assigned_shipper_name?: string | null;
   claimed_at: string | null;
   created_at: string;
 }
 
 export const DiscoveryScanModel = {
   async findAll(limit = 20): Promise<DiscoveryScan[]> {
-    const result = await query(`SELECT * FROM discovery_scans ORDER BY started_at DESC LIMIT $1`, [limit]);
+    const result = await query(
+      `SELECT ds.*, ls.name AS assigned_shipper_name
+         FROM discovery_scans ds
+         LEFT JOIN log_shippers ls ON ds.assigned_shipper_id = ls.id
+        ORDER BY ds.started_at DESC LIMIT $1`,
+      [limit]
+    );
     return result.rows;
   },
 
   async findById(id: number): Promise<DiscoveryScan | null> {
-    const result = await query(`SELECT * FROM discovery_scans WHERE id = $1`, [id]);
+    const result = await query(
+      `SELECT ds.*, ls.name AS assigned_shipper_name
+         FROM discovery_scans ds
+         LEFT JOIN log_shippers ls ON ds.assigned_shipper_id = ls.id
+        WHERE ds.id = $1`,
+      [id]
+    );
     return result.rows[0] || null;
   },
 
@@ -97,6 +111,22 @@ export const DiscoveryScanModel = {
     const result = await query(
       `UPDATE discovery_scans SET status = 'failed', completed_at = NOW(), error_message = $2
        WHERE id = $1 AND status = 'running'`,
+      [id, errorMessage]
+    );
+    return (result.rowCount || 0) > 0;
+  },
+
+  /**
+   * Cancel a scan that is still 'running' OR 'queued'. A shipper-dispatched scan
+   * sits in 'queued' until that shipper claims it, so this is the only way to
+   * clear one whose shipper never comes back to poll (vs. fail(), which guards
+   * 'running' so a finishing worker can't resurrect a cancelled run). Returns
+   * whether a row transitioned.
+   */
+  async cancel(id: number, errorMessage: string): Promise<boolean> {
+    const result = await query(
+      `UPDATE discovery_scans SET status = 'failed', completed_at = NOW(), error_message = $2
+       WHERE id = $1 AND status IN ('running', 'queued')`,
       [id, errorMessage]
     );
     return (result.rowCount || 0) > 0;

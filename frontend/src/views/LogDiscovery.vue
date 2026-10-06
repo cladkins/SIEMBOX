@@ -5,6 +5,21 @@
         <div class="card-header">
           <span class="title">Log Discovery</span>
           <div class="header-actions">
+            <el-select
+              v-model="selectedShipperId"
+              size="default"
+              style="width: 230px"
+              placeholder="Run from…"
+            >
+              <el-option :label="'Run from: Built-in'" :value="null" />
+              <el-option
+                v-for="s in shippers"
+                :key="s.id"
+                :label="`Run from: ${s.name}${s.status !== 'online' ? ` (${s.status})` : ''}`"
+                :value="s.id"
+                :disabled="s.status !== 'online'"
+              />
+            </el-select>
             <el-button @click="triggerScan('passive')" :loading="scanning">
               <el-icon><Aim /></el-icon>
               Scan (passive)
@@ -43,11 +58,24 @@
         <el-button link size="small" type="primary" @click="addDetectedCidr">Add to scan scope</el-button>
       </div>
 
+      <div v-if="selectedShipperId" class="scope-line">
+        <el-text size="small" type="info">
+          Scans run on the selected log shipper, out on its LAN. Passive discovery (ARP/mDNS/SSDP) needs that shipper on host networking to see the segment — otherwise it falls back to the active sweep.
+        </el-text>
+      </div>
+
       <el-collapse v-if="scans.length > 0" style="margin: 16px 0">
         <el-collapse-item title="Recent scans" name="scans">
           <el-table :data="scans" size="small">
             <el-table-column prop="id" label="ID" width="70" />
             <el-table-column prop="mode" label="Mode" width="140" />
+            <el-table-column label="Run from" width="130">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.assigned_shipper_name ? 'info' : undefined">
+                  {{ row.assigned_shipper_name || 'Built-in' }}
+                </el-tag>
+              </template>
+            </el-table-column>
             <el-table-column label="Subnet" min-width="160">
               <template #default="{ row }">
                 <span v-if="row.cidrs?.length">{{ row.cidrs.join(', ') }}</span>
@@ -72,7 +100,13 @@
             </el-table-column>
             <el-table-column label="" width="90">
               <template #default="{ row }">
-                <el-button v-if="row.status === 'running'" size="small" type="danger" plain @click="cancelScan(row)">
+                <el-button
+                  v-if="row.status === 'running' || row.status === 'queued'"
+                  size="small"
+                  type="danger"
+                  plain
+                  @click="cancelScan(row)"
+                >
                   Cancel
                 </el-button>
               </template>
@@ -213,6 +247,7 @@ import logDiscoveryService, {
   type FingerprintEntry,
   type DiscoveryScanMode,
   type PollerStatus,
+  type ShipperSummary,
 } from '@/services/logDiscoveryService';
 import DiscoverySourcesTable from '@/components/DiscoverySourcesTable.vue';
 
@@ -220,6 +255,10 @@ const loading = ref(false);
 const scanning = ref(false);
 const scope = ref<ScopePreview | null>(null);
 const scans = ref<DiscoveryScan[]>([]);
+
+// Optional LAN-side dispatch: run the scan from a log shipper (null = backend).
+const shippers = ref<ShipperSummary[]>([]);
+const selectedShipperId = ref<number | null>(null);
 const top = ref<RankedSource[]>([]);
 const advanced = ref<RankedSource[]>([]);
 const fingerprints = ref<FingerprintEntry[]>([]);
@@ -298,6 +337,16 @@ async function loadPollableFingerprints() {
   pollableFingerprintIds.value = await logDiscoveryService.getPollableFingerprintIds();
 }
 
+// The "Run from" picker is a convenience, not a dependency: if the shippers list
+// can't be fetched, fall back to an empty list so the page still runs built-in scans.
+async function loadShippers() {
+  try {
+    shippers.value = await logDiscoveryService.getShippers();
+  } catch {
+    shippers.value = [];
+  }
+}
+
 async function loadSources() {
   loading.value = true;
   try {
@@ -318,7 +367,7 @@ function refreshAll() {
 async function triggerScan(mode: DiscoveryScanMode) {
   scanning.value = true;
   try {
-    const result = await logDiscoveryService.triggerScan(mode, manualCidrs.value);
+    const result = await logDiscoveryService.triggerScan(mode, manualCidrs.value, selectedShipperId.value);
     ElMessage.success(`Scan #${result.scan_id} started`);
     if (result.vlan_warning) ElMessage.warning(result.vlan_warning);
     setTimeout(refreshAll, 3000);
@@ -496,6 +545,7 @@ async function confirmOnboard() {
 onMounted(() => {
   loadFingerprints();
   loadPollableFingerprints();
+  loadShippers();
   refreshAll();
 });
 </script>

@@ -207,7 +207,14 @@
             <el-table-column prop="target" label="Target" min-width="200" show-overflow-tooltip />
             <el-table-column prop="status" label="Status" width="100">
               <template #default="{ row }">
-                <el-tag :type="getStatusType(row.status)" size="small">{{ row.status }}</el-tag>
+                <el-tooltip
+                  v-if="row.status === 'failed' && row.error_message"
+                  :content="row.error_message"
+                  placement="top"
+                >
+                  <el-tag :type="getStatusType(row.status)" size="small" style="cursor: help">{{ row.status }}</el-tag>
+                </el-tooltip>
+                <el-tag v-else :type="getStatusType(row.status)" size="small">{{ row.status }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column label="Started" width="160">
@@ -223,8 +230,13 @@
                 <span v-else>-</span>
               </template>
             </el-table-column>
-            <el-table-column label="Results" width="130">
-              <template #default="{ row }">{{ jobResultLabel(row) }}</template>
+            <el-table-column label="Results" min-width="200">
+              <template #default="{ row }">
+                <el-text v-if="row.status === 'failed'" type="danger" size="small">
+                  <el-icon style="vertical-align: -2px; margin-right: 2px"><WarningFilled /></el-icon>{{ row.error_message || 'Failed (no detail reported)' }}
+                </el-text>
+                <span v-else>{{ jobResultLabel(row) }}</span>
+              </template>
             </el-table-column>
             <el-table-column prop="initiated_by_username" label="User" width="100" />
           </el-table>
@@ -393,7 +405,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage } from 'element-plus';
-import { Refresh, Search, InfoFilled } from '@element-plus/icons-vue';
+import { Refresh, Search, InfoFilled, WarningFilled } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
 import HelpTip from '@/components/HelpTip.vue';
 

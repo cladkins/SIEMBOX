@@ -84,7 +84,14 @@
             </el-table-column>
             <el-table-column label="Status" width="120">
               <template #default="{ row }">
-                <el-tag :type="scanStatusColor(row.status)" size="small">{{ row.status }}</el-tag>
+                <el-tooltip
+                  v-if="row.status === 'failed' && row.error_message"
+                  :content="row.error_message"
+                  placement="top"
+                >
+                  <el-tag :type="scanStatusColor(row.status)" size="small" style="cursor: help">{{ row.status }}</el-tag>
+                </el-tooltip>
+                <el-tag v-else :type="scanStatusColor(row.status)" size="small">{{ row.status }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column label="Hosts">

@@ -3,6 +3,7 @@ import { ApiError } from '../middleware/errorHandler';
 import { authorize } from '../middleware/auth';
 import { DiscoveryScanModel } from '../models/DiscoveryScan';
 import { DiscoverySourceModel } from '../models/DiscoverySource';
+import { LogShipperModel } from '../models/LogShipper';
 import { DiscoverySourcePollerModel } from '../models/DiscoverySourcePoller';
 import { resolveScope, detectLocalInterfaces } from '../services/logDiscovery/scope';
 import { runScan, requestCancel, getRankedSources, buildOnboardPreview } from '../services/logDiscovery/discoveryScanService';
@@ -48,12 +49,29 @@ router.post('/scans', async (req: Request, res: Response) => {
     throw new ApiError(400, 'manual_cidrs must be an array of CIDR strings');
   }
 
-  const result = await runScan({ mode, manualCidrs: manual_cidrs, createdBy: req.user?.id ?? null });
+  // Optional: run this discovery scan from a log shipper out on the LAN (the
+  // backend can't probe the LAN from inside Docker). When set, the shipper must
+  // exist -- otherwise the scan would queue forever with no one to claim it.
+  const rawShipperId = req.body?.assignedShipperId ?? req.body?.assigned_shipper_id;
+  let assignedShipperId: number | undefined;
+  if (rawShipperId !== undefined && rawShipperId !== null && rawShipperId !== '') {
+    assignedShipperId = Number(rawShipperId);
+    if (!Number.isInteger(assignedShipperId) || assignedShipperId <= 0) {
+      throw new ApiError(400, 'assignedShipperId must be a positive integer');
+    }
+    const shipper = await LogShipperModel.findById(assignedShipperId);
+    if (!shipper) {
+      throw new ApiError(400, `No log shipper with id ${assignedShipperId}`);
+    }
+  }
+
+  const result = await runScan({ mode, manualCidrs: manual_cidrs, createdBy: req.user?.id ?? null, assignedShipperId });
   res.status(202).json({
     scan_id: result.scanId,
     cidrs: result.cidrs,
     vlan_warning: result.vlanWarning,
     rejected_cidrs: result.rejectedCidrs,
+    assigned_shipper_id: assignedShipperId ?? null,
   });
 });
 

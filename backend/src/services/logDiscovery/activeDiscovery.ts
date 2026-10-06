@@ -260,14 +260,19 @@ export function bannerGrab(ip: string, port: number, opts: ActiveProbeOptions = 
 }
 
 /**
- * Full active phase for one candidate host: scoped port scan, then TLS probe +
- * HTTP probe of every declared path on each open port, falling back to a
- * banner grab on ports that answered neither.
+ * Full active phase for one candidate host, driven by an explicit plan (the
+ * ports + HTTP paths to probe) rather than the fingerprint library directly.
+ * This is what lets the identical probe run both in-process (probeHost, which
+ * builds the plan from the library) and on a log shipper (which is handed the
+ * plan in its job -- it never needs the fingerprint files).
  */
-export async function probeHost(ip: string, library: FingerprintEntry[], opts: ActiveProbeOptions = {}): Promise<DiscoveredSignals> {
-  const ports = selectPortsToScan(library);
-  const openPorts = await tcpConnectScan(ip, ports, opts);
-  const httpPaths = selectHttpProbes(library);
+export async function probeHostWithPlan(
+  ip: string,
+  plan: { ports: number[]; httpPaths: string[] },
+  opts: ActiveProbeOptions = {}
+): Promise<DiscoveredSignals> {
+  const openPorts = await tcpConnectScan(ip, plan.ports, opts);
+  const httpPaths = plan.httpPaths;
 
   const http_responses: HttpProbeResult[] = [];
   const tls_subjects: TlsProbeResult[] = [];
@@ -302,4 +307,9 @@ export async function probeHost(ip: string, library: FingerprintEntry[], opts: A
     ssdp_services: [],
     discovery_methods: ['active_probe'],
   };
+}
+
+/** In-process active phase: build the probe plan from the library, then probe. */
+export async function probeHost(ip: string, library: FingerprintEntry[], opts: ActiveProbeOptions = {}): Promise<DiscoveredSignals> {
+  return probeHostWithPlan(ip, { ports: selectPortsToScan(library), httpPaths: selectHttpProbes(library) }, opts);
 }

@@ -28,8 +28,8 @@ The log shipper is **managed only** - there is no standalone/unauthenticated mod
 - **Multiple Sources**: Monitor multiple log sources simultaneously
 - **Real-Time Updates**: Configuration changes apply automatically (polls every 30s)
 - **Heartbeat Monitoring**: Track shipper health and last-seen status
-- **Network Scanning**: Run nmap (asset) and nuclei (vulnerability) scans SIEMBox dispatches to it, out on the LAN where the SIEMBox backend's own scanners can't reach — see [Network Scanning](#network-scanning-lan-side)
-- **Image**: Debian-slim based; bundles `journalctl` (for the systemd journal), the Docker CLI, `nmap`, and `nuclei`
+- **Network Scanning**: Run nmap (asset), nuclei (vulnerability), and log-source discovery scans SIEMBox dispatches to it, out on the LAN where the SIEMBox backend's own scanners can't reach — see [Network Scanning](#network-scanning-lan-side)
+- **Image**: Debian-slim based; bundles `journalctl` (for the systemd journal), the Docker CLI, `nmap`, `nuclei`, and `nodejs` (for the discovery agent)
 - **Custom Tags**: Tag logs by source for easy filtering in SIEMBox
 
 ## Quick Start
@@ -201,20 +201,24 @@ lives — out on your LAN — instead of from the SIEMBox backend. The backend
 container normally sits on a Docker bridge network and can only see its own
 bridge subnet, so its own `nmap`/`nuclei` can't discover or scan real LAN hosts.
 A shipper already runs on the network you want to scan, so it's the natural place
-to run the scan from. Two kinds of scan can be dispatched:
+to run the scan from. Three kinds of scan can be dispatched:
 
 - **Asset discovery (nmap)** — finds hosts, ports, and services.
 - **Vulnerability scanning (nuclei)** — checks a host/URL for known issues.
+- **Log-source discovery** — the Log Discovery feature's passive+active probe
+  (ARP/mDNS/SSDP + port/HTTP/TLS), run by a small bundled Node agent, to find and
+  fingerprint devices whose logs you can onboard.
 
 **How it works:** the shipper polls `GET /api/shippers/scan-jobs/<api_key>` every
 `SCAN_POLL_INTERVAL` seconds. SIEMBox hands back any scans assigned to this
-shipper, each tagged with its `kind` and carrying the **exact flags and the
-validated target(s) the server chose** — the shipper runs that command
-(`nmap … -oX -`, or `nuclei … -jsonl`) and POSTs the raw output back to
-`POST /api/shippers/scan-results`. The backend parses it through the same code
+shipper, each tagged with its `kind` and carrying the **exact flags/targets (or,
+for discovery, the probe plan) the server chose** — the shipper runs it
+(`nmap … -oX -`, `nuclei … -jsonl`, or the Node discovery agent) and POSTs the
+raw output back (`POST /api/shippers/scan-results`, or
+`…/discovery-results` for discovery). The backend parses it through the same code
 path as a backend-run scan, so results show up identically (assets/services for
-nmap, vulnerabilities for nuclei). This is on by default; set
-`SCAN_POLL_INTERVAL=0` to turn it off.
+nmap, vulnerabilities for nuclei, discovery sources for discovery). This is on by
+default; set `SCAN_POLL_INTERVAL=0` to turn it off.
 
 > **Security:** the shipper only ever runs flags and targets the server built
 > and validated; it never accepts a scan command from anywhere else, and it
@@ -247,6 +251,12 @@ Where the shipper is on the network decides what it can find:
     - NET_RAW
     - NET_ADMIN
   ```
+- **Log-source discovery's passive techniques** (ARP table, mDNS, SSDP) are
+  link-local — they only see the segment the container is actually on. A bridged
+  shipper will fall back to the active CIDR sweep + probes (still useful), but to
+  get the full passive signal run the discovery shipper with **`network_mode: host`**.
+  The discovery agent is pure Node stdlib — no extra packages, just the `nodejs`
+  already in the image.
 
 ### nuclei templates
 

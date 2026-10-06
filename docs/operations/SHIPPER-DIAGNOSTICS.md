@@ -19,7 +19,7 @@ Poll for Updates (every CONFIG_POLL_INTERVAL seconds)
     ↓
 Send Heartbeat (every HEARTBEAT_INTERVAL seconds)
     ↓
-Poll for & run dispatched scans — nmap + nuclei (every SCAN_POLL_INTERVAL seconds)
+Poll for & run dispatched scans — nmap + nuclei + log-discovery (every SCAN_POLL_INTERVAL seconds)
 ```
 
 ## Shipper Configuration
@@ -234,16 +234,17 @@ each tagged with its `kind`. The shipper runs `nmap … -oX -` (asset) or
 - Confirm the scan was assigned to *this* shipper (the right shipper runs it).
 - Confirm scanning isn't disabled: `SCAN_POLL_INTERVAL` must not be `0`.
 - **Shipper too old**: network scanning needs **1.2.0**+ for nmap, **1.3.0**+ for
-  nuclei (vulnerability) scans. `restart: unless-stopped` does not re-pull
-  `:latest` — force it:
+  nuclei (vulnerability) scans, **1.4.0**+ for log-discovery scans.
+  `restart: unless-stopped` does not re-pull `:latest` — force it:
   ```bash
   docker compose -f compose.prod.yaml pull
   docker compose -f compose.prod.yaml up -d
   ```
 
 **Stuck as `running`** — claimed, but no result posted. Check shipper logs for:
-- `nmap not installed in this image` / `nuclei not installed in this image` — a
-  custom base image missing the scanner.
+- `nmap not installed in this image` / `nuclei not installed in this image` /
+  `node not installed` or `discovery agent missing` — a custom base image missing
+  the scanner or the bundled Node discovery agent.
 - `Scan <id> timed out after <N>s` — the scan exceeded `SCAN_TIMEOUT`; it's
   reported as failed. Narrow the target(s) or raise `SCAN_TIMEOUT`. (A nuclei
   scan on its very first run can be slow if it's still downloading templates —
@@ -264,6 +265,13 @@ runs nuclei against its **own** template corpus, fetched at startup (`Updating
 nuclei templates in the background…` in the logs). The shipper needs outbound
 internet for that first fetch. For air-gapped hosts set
 `NUCLEI_UPDATE_TEMPLATES=false` and mount a template volume yourself.
+
+**log-discovery scan finds few/no devices**: a discovery scan's **passive**
+techniques (ARP/mDNS/SSDP) are link-local and only see the segment the container
+is on — a bridged shipper gets little from them and falls back to the active CIDR
+sweep + probes. Run the discovery shipper with `network_mode: host` for the full
+passive signal. The agent's own warnings go to `/tmp/siembox-discovery-agent.log`
+inside the container.
 
 ## Diagnostic Procedure
 

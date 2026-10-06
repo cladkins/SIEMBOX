@@ -10,21 +10,12 @@ import { DiscoveryScanModel, DiscoveryScanMode } from '../../models/DiscoverySca
 import { DiscoverySourceModel, DiscoverySource } from '../../models/DiscoverySource';
 import { loadFingerprintLibrary, getFingerprintById } from './fingerprintLoader';
 import { resolveScope } from './scope';
-import { readArpTable, readDhcpLeases, queryMdnsServices, discoverSsdp, captureLldp } from './passiveDiscovery';
-import { probeHost, sweepCidr, selectPortsToScan, selectHttpProbes } from './activeDiscovery';
+import { selectPortsToScan, selectHttpProbes } from './activeDiscovery';
+import { gatherSignals } from './probePipeline';
 import { matchHost } from './matcher';
 import { rankSources, RankableItem } from './ranker';
 import { renderOnboardInstructions, SiemboxSyslogSettings } from './onboarder';
 import { DiscoveredSignals, LogAccessMethod, ProbePlan, RankedResult, RuntimeSource } from './types';
-
-interface Candidate {
-  ip: string;
-  mac?: string;
-  hostname?: string;
-  mdns_services: string[];
-  ssdp_services: Array<{ st?: string; server?: string }>;
-  discovery_methods: Set<string>;
-}
 
 // ---------------------------------------------------------------------------
 // Cancellation + watchdog. The worker is an in-memory promise chained off a job
@@ -64,147 +55,19 @@ function throwIfCancelled(scanId: number): void {
   if (cancelRequested.has(scanId)) throw new ScanCancelledError(scanId);
 }
 
-function ensureCandidate(candidates: Map<string, Candidate>, ip: string): Candidate {
-  let c = candidates.get(ip);
-  if (!c) {
-    c = { ip, mdns_services: [], ssdp_services: [], discovery_methods: new Set() };
-    candidates.set(ip, c);
-  }
-  return c;
-}
-
-async function runPassivePhase(): Promise<Map<string, Candidate>> {
-  const candidates = new Map<string, Candidate>();
-  const ensure = (ip: string): Candidate => ensureCandidate(candidates, ip);
-
-  const [arp, leases] = await Promise.all([readArpTable(), readDhcpLeases()]);
-  for (const entry of arp) {
-    const c = ensure(entry.ip);
-    c.mac = entry.mac;
-    c.discovery_methods.add('arp');
-  }
-  for (const lease of leases) {
-    const c = ensure(lease.ip);
-    c.mac = c.mac || lease.mac;
-    c.hostname = c.hostname || lease.hostname;
-    c.discovery_methods.add('dhcp_lease');
-  }
-
-  const library = loadFingerprintLibrary();
-  const mdnsServices = Array.from(new Set(library.flatMap((fp) => fp.signals.mdns.map((s) => s.service))));
-  if (mdnsServices.length > 0) {
-    const responders = await queryMdnsServices(mdnsServices).catch((err) => {
-      logger.warn(`[logDiscovery] mDNS phase failed: ${err?.message || err}`);
-      return [];
-    });
-    for (const r of responders) {
-      const c = ensure(r.ip);
-      if (!c.mdns_services.includes(r.service)) c.mdns_services.push(r.service);
-      c.discovery_methods.add('mdns');
-    }
-  }
-
-  const ssdpResponders = await discoverSsdp().catch((err) => {
-    logger.warn(`[logDiscovery] SSDP phase failed: ${err?.message || err}`);
-    return [];
-  });
-  for (const r of ssdpResponders) {
-    const c = ensure(r.ip);
-    c.ssdp_services.push({ st: r.st, server: r.server });
-    c.discovery_methods.add('ssdp');
-  }
-
-  await captureLldp(); // no-op today; documented in passiveDiscovery.ts
-
-  return candidates;
-}
-
-/**
- * Sweeps every manually-approved CIDR (scope.ts already bounds each to
- * MAX_SWEEP_HOSTS) for live hosts and folds them into `candidates` as new
- * entries, so runActivePhase probes them the same as passively-discovered
- * ones. This is what actually makes a manually-entered subnet find real LAN
- * hosts -- passive discovery's ARP/mDNS/SSDP only ever see whatever network
- * the container itself is attached to, which by default is just the Docker
- * bridge subnet, not the LAN (see scope.ts's isHostNetworked()).
- */
-async function runCidrSweep(cidrs: string[], candidates: Map<string, Candidate>): Promise<void> {
-  if (cidrs.length === 0) return;
-
-  const results = await Promise.all(
-    cidrs.map((cidr) =>
-      sweepCidr(cidr).catch((err: any) => {
-        logger.warn(`[logDiscovery] CIDR sweep of ${cidr} failed: ${err?.message || err}`);
-        return [] as string[];
-      })
-    )
-  );
-
-  for (const ips of results) {
-    for (const ip of ips) {
-      ensureCandidate(candidates, ip).discovery_methods.add('active_sweep');
-    }
-  }
-}
-
-async function runActivePhase(candidates: Map<string, Candidate>, signalsByIp: Map<string, DiscoveredSignals>): Promise<void> {
-  const ips = Array.from(candidates.keys());
-  const concurrency = 4;
-  let next = 0;
-
-  async function worker() {
-    while (next < ips.length) {
-      const ip = ips[next++];
-      try {
-        const active = await probeHost(ip, loadFingerprintLibrary());
-        const existing = signalsByIp.get(ip);
-        if (!existing) continue;
-        existing.open_ports = active.open_ports;
-        existing.http_responses = active.http_responses;
-        existing.tls_subjects = active.tls_subjects;
-        existing.banners = active.banners;
-        existing.discovery_methods = Array.from(new Set([...existing.discovery_methods, ...active.discovery_methods]));
-      } catch (err: any) {
-        logger.warn(`[logDiscovery] active probe of ${ip} failed: ${err?.message || err}`);
-      }
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(concurrency, ips.length) }, worker));
-}
-
 async function executeScan(scanId: number, mode: DiscoveryScanMode, cidrs: string[]): Promise<void> {
   const library = loadFingerprintLibrary();
-  const candidates = await runPassivePhase();
-  throwIfCancelled(scanId);
-
-  if (mode === 'active' || mode === 'full') {
-    await runCidrSweep(cidrs, candidates);
-    throwIfCancelled(scanId);
-  }
-
-  const signalsByIp = new Map<string, DiscoveredSignals>();
-  for (const [ip, c] of candidates) {
-    signalsByIp.set(ip, {
-      ip,
-      mac: c.mac,
-      hostname: c.hostname,
-      open_ports: [],
-      http_responses: [],
-      tls_subjects: [],
-      banners: [],
-      mdns_services: c.mdns_services,
-      ssdp_services: c.ssdp_services,
-      discovery_methods: Array.from(c.discovery_methods),
-    });
-  }
-
-  if (mode === 'active' || mode === 'full') {
-    await runActivePhase(candidates, signalsByIp);
-    throwIfCancelled(scanId);
-  }
-
-  await ingestSignals(scanId, Array.from(signalsByIp.values()), library);
+  // Same plan-driven pipeline a shipper runs (see probePipeline.ts), just
+  // in-process here with the backend logger and cooperative cancellation.
+  const signals = await gatherSignals({
+    mode,
+    cidrs,
+    plan: buildProbePlan(library),
+    log: (level, message) =>
+      level === 'warn' ? logger.warn(`[logDiscovery] ${message}`) : logger.info(`[logDiscovery] ${message}`),
+    checkCancel: () => throwIfCancelled(scanId),
+  });
+  await ingestSignals(scanId, signals, library);
 }
 
 /**

@@ -10,7 +10,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # systemd itself). `nmap` runs asset-discovery scans SIEMBox dispatches to the
 # shipper; `nuclei` (installed below) runs dispatched vulnerability scans (see
 # shipper-managed.sh's poll_and_run_scans). `unzip` is only needed to unpack the
-# nuclei release archive. The rest match what the shipper script needs.
+# nuclei release archive. `nodejs` runs the bundled log-discovery agent (a single
+# pure-stdlib JS file -- no npm packages needed). The rest match what the shipper
+# script needs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bash \
         netcat-openbsd \
@@ -19,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         jq \
         nmap \
+        nodejs \
         unzip \
         systemd \
     && rm -rf /var/lib/apt/lists/*
@@ -54,6 +57,10 @@ RUN set -eux; \
     mv /tmp/nuclei/nuclei /usr/local/bin/nuclei; \
     rm -rf /tmp/nuclei /tmp/nuclei.zip; \
     nuclei -version
+
+# Bundled log-discovery agent (a standalone Node script; regenerate with
+# log-shipper/build-discovery-agent.mjs when the discovery probe code changes).
+COPY discovery-agent.js /usr/local/lib/siembox/discovery-agent.js
 
 # Copy managed shipper script
 COPY shipper-managed.sh /usr/local/bin/shipper

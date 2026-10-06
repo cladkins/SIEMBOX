@@ -245,10 +245,13 @@ each tagged with its `kind`. The shipper runs `nmap … -oX -` (asset) or
 - `nmap not installed in this image` / `nuclei not installed in this image` /
   `node not installed` or `discovery agent missing` — a custom base image missing
   the scanner or the bundled Node discovery agent.
-- `Scan <id> timed out after <N>s` — the scan exceeded `SCAN_TIMEOUT`; it's
-  reported as failed. Narrow the target(s) or raise `SCAN_TIMEOUT`. (A nuclei
-  scan on its very first run can be slow if it's still downloading templates —
-  see below.)
+- `Scan <id> timed out after <N>s` — the scan exceeded its budget and was
+  reported failed. nmap/discovery use the shipper's `SCAN_TIMEOUT`; **nuclei uses
+  the scan's own timeout** sent by the server (default 30 min). A nuclei scan of a
+  whole CIDR (e.g. a `/24`) is heavy — narrow the target to specific hosts/URLs or
+  tighten the template selection (severity/tags) rather than just raising the
+  timeout. (nuclei now fetches templates before scanning, so the first run no
+  longer fails for that — see below.)
 - `Scan <id> result POST failed (HTTP ...)` — the result couldn't be delivered
   (`000` = couldn't reach `SIEMBOX_API_URL`; `404` = key not recognised).
 - A shipper that is **restarted mid-scan** leaves the row `running` with no

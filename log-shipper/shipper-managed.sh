@@ -14,7 +14,9 @@ SHIPPER_API_KEY="${SHIPPER_API_KEY}"
 #   1.2.0 — runs nmap network scans SIEMBox dispatches to it (LAN-side scanning)
 #   1.3.0 — also runs dispatched nuclei vulnerability scans (LAN-side)
 #   1.4.0 — also runs dispatched log-discovery scans (bundled Node agent)
-SHIPPER_VERSION="1.4.0"
+#   1.4.1 — nuclei: ensure templates before running, honor per-scan timeout,
+#           surface the real nuclei error on failure
+SHIPPER_VERSION="1.4.1"
 CONFIG_POLL_INTERVAL="${CONFIG_POLL_INTERVAL:-30}" # seconds
 HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-60}" # seconds
 # How often to report this host's container images to SIEMBox for vuln scanning.
@@ -30,6 +32,10 @@ SCAN_TIMEOUT="${SCAN_TIMEOUT:-900}" # seconds (matches the backend's 15-min cap)
 # template corpus. Set false to skip the one-time background template update at
 # startup (e.g. air-gapped, or you mount a template volume yourself).
 NUCLEI_UPDATE_TEMPLATES="${NUCLEI_UPDATE_TEMPLATES:-true}"
+# Marker written once nuclei templates are confirmed present, so a dispatched
+# vuln scan never runs before templates exist (which fails instantly with a bare
+# "exit 1"). Set by the startup warm-up and by the first job's synchronous fetch.
+NUCLEI_TEMPLATES_MARKER="${NUCLEI_TEMPLATES_MARKER:-/tmp/siembox-nuclei-templates.ready}"
 # Bundled Node agent that runs dispatched log-discovery scans (baked into the
 # image by the Dockerfile; see log-shipper/discovery-agent/).
 DISCOVERY_AGENT="${DISCOVERY_AGENT:-/usr/local/lib/siembox/discovery-agent.js}"
@@ -723,21 +729,39 @@ run_nuclei_job() {
     local t
     for t in "${targets[@]}"; do target_args+=(-target "$t"); done
 
-    log_info "Running scan $scan_id: nuclei ${nuclei_args[*]} ${target_args[*]}"
+    # Ensure templates exist first, so the scan doesn't fail with a bare "exit 1"
+    # while the startup template update is still in flight (e.g. after a restart).
+    if ! ensure_nuclei_templates "$scan_id"; then
+        post_scan_error "$scan_id" "nuclei templates not available on the shipper — needs outbound internet for the first fetch, or set NUCLEI_UPDATE_TEMPLATES=false and mount a template volume"
+        return
+    fi
 
-    local out rc=0
-    out=$(timeout "${SCAN_TIMEOUT}s" nuclei "${nuclei_args[@]}" "${target_args[@]}" 2>/dev/null) || rc=$?
+    # Honor the per-scan timeout the server set (it clamps/defaults it); fall back
+    # to SCAN_TIMEOUT for older servers that don't send one.
+    local timeout_s
+    timeout_s=$(printf '%s' "$job" | jq -r '.timeoutSeconds // empty' 2>/dev/null) || true
+    case "$timeout_s" in ''|*[!0-9]*) timeout_s="$SCAN_TIMEOUT" ;; esac
+
+    log_info "Running scan $scan_id: nuclei ${nuclei_args[*]} ${target_args[*]} (timeout ${timeout_s}s)"
+
+    local out rc=0 errfile
+    errfile=$(mktemp 2>/dev/null || echo "/tmp/siembox-nuclei-err.$$")
+    # Capture nuclei's stderr so a failure reports WHY (not just the exit code).
+    out=$(timeout "${timeout_s}s" nuclei "${nuclei_args[@]}" "${target_args[@]}" 2>"$errfile") || rc=$?
 
     if [ "$rc" -eq 124 ]; then
-        log_warn "Scan $scan_id timed out after ${SCAN_TIMEOUT}s"
-        post_scan_error "$scan_id" "Scan timed out after ${SCAN_TIMEOUT}s on the shipper"
+        log_warn "Scan $scan_id timed out after ${timeout_s}s"
+        post_scan_error "$scan_id" "Scan timed out after ${timeout_s}s on the shipper"
     elif [ "$rc" -ne 0 ]; then
-        log_warn "Scan $scan_id failed (nuclei exit $rc)"
-        post_scan_error "$scan_id" "nuclei exited with code $rc on the shipper"
+        local reason
+        reason=$(tr '\n' ' ' < "$errfile" 2>/dev/null | tail -c 300)
+        log_warn "Scan $scan_id failed (nuclei exit $rc): ${reason}"
+        post_scan_error "$scan_id" "nuclei exited with code $rc on the shipper: ${reason:-no error output}"
     else
         # Empty output just means no findings -- still a valid completed scan.
         post_scan_output "$scan_id" jsonl "$out"
     fi
+    rm -f "$errfile"
 }
 
 # POST discovery signals (a JSON array the agent produced) back to SIEMBox.
@@ -866,7 +890,24 @@ warm_nuclei_templates() {
     [ "${NUCLEI_UPDATE_TEMPLATES:-true}" = "true" ] || return 0
     command -v nuclei >/dev/null 2>&1 || return 0
     log_info "Updating nuclei templates in the background (first run can take a minute)..."
-    ( nuclei -update-templates >/dev/null 2>&1 || true ) &
+    ( nuclei -update-templates >/dev/null 2>&1 && touch "$NUCLEI_TEMPLATES_MARKER" || true ) &
+}
+
+# Make sure nuclei has templates before running a dispatched scan. Returns 0 when
+# templates are (now) present, 1 when they couldn't be fetched. Idempotent and
+# cheap once the marker exists; only the first job after a restart pays the fetch.
+ensure_nuclei_templates() {
+    local scan_id="$1"
+    [ -f "$NUCLEI_TEMPLATES_MARKER" ] && return 0
+    # User manages templates themselves (auto-update off) -- trust nuclei to find them.
+    [ "${NUCLEI_UPDATE_TEMPLATES:-true}" = "true" ] || return 0
+    log_info "Scan $scan_id: fetching nuclei templates before first scan (one-time)..."
+    if timeout 600 nuclei -update-templates >>/tmp/siembox-nuclei.log 2>&1; then
+        touch "$NUCLEI_TEMPLATES_MARKER"
+        return 0
+    fi
+    log_warn "Scan $scan_id: nuclei template update failed (see /tmp/siembox-nuclei.log)"
+    return 1
 }
 
 # Main loop

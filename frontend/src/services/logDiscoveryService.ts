@@ -2,7 +2,15 @@ import apiClient from './api';
 
 export type DiscoverySourceStatus = 'candidate' | 'confirmed' | 'onboarded' | 'ignored';
 export type DiscoveryScanMode = 'passive' | 'active' | 'full';
-export type DiscoveryScanStatus = 'running' | 'completed' | 'failed';
+export type DiscoveryScanStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+/** A log shipper as returned by GET /api/shippers (only the fields the picker needs). */
+export interface ShipperSummary {
+  id: number;
+  name: string;
+  status: 'pending' | 'online' | 'offline' | 'error';
+  hostname?: string | null;
+}
 
 export interface LogAccessMethod {
   method: string;
@@ -63,6 +71,9 @@ export interface DiscoveryScan {
   completed_at: string | null;
   error_message: string | null;
   results_summary: { hosts_seen: number; hosts_matched: number } | null;
+  /** Shipper the scan ran on (null/absent = ran on the SIEMBox backend). */
+  assigned_shipper_id?: number | null;
+  assigned_shipper_name?: string | null;
 }
 
 export interface ScopePreview {
@@ -115,8 +126,20 @@ class LogDiscoveryServiceClient {
     return response.data;
   }
 
-  async triggerScan(mode: DiscoveryScanMode, manualCidrs: string[] = []): Promise<TriggerScanResponse> {
-    const response = await apiClient.post('/log-discovery/scans', { mode, manual_cidrs: manualCidrs });
+  async triggerScan(
+    mode: DiscoveryScanMode,
+    manualCidrs: string[] = [],
+    assignedShipperId?: number | null
+  ): Promise<TriggerScanResponse> {
+    const body: Record<string, unknown> = { mode, manual_cidrs: manualCidrs };
+    if (assignedShipperId != null) body.assignedShipperId = assignedShipperId;
+    const response = await apiClient.post('/log-discovery/scans', body);
+    return response.data;
+  }
+
+  /** List log shippers (for the "Run from" discovery-scan picker). */
+  async getShippers(): Promise<ShipperSummary[]> {
+    const response = await apiClient.get('/shippers');
     return response.data;
   }
 

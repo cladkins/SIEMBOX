@@ -2716,11 +2716,13 @@ Trigger a scan. Runs asynchronously; returns immediately with the job id.
 ```json
 {
   "mode": "full",
-  "manual_cidrs": ["192.168.20.0/24"]
+  "manual_cidrs": ["192.168.20.0/24"],
+  "assignedShipperId": 3
 }
 ```
 - `mode` - `passive` (ARP/mDNS/SSDP/DHCP-lease only), `active` (sweeps every approved manual CIDR for live hosts, then scoped port/HTTP/TLS probing of those plus whatever passive discovery found), or `full` (both passive and active)
 - `manual_cidrs` (optional) - CIDRs to sweep on this scan (each /22 or smaller; see `GET /scope`)
+- `assignedShipperId` (optional) - run the whole probe pipeline on this log shipper (out on the LAN) instead of in-process on the backend. Must be an existing shipper id (400 otherwise). When set, the scan is created `queued` and waits for that shipper to claim it on its next job poll; omit (or `null`) to run on the backend. See the `/api/shippers/discovery-*` endpoints.
 
 **Response (202):**
 ```json
@@ -2728,9 +2730,11 @@ Trigger a scan. Runs asynchronously; returns immediately with the job id.
   "scan_id": 7,
   "cidrs": ["192.168.1.0/24", "192.168.20.0/24"],
   "vlan_warning": null,
-  "rejected_cidrs": []
+  "rejected_cidrs": [],
+  "assigned_shipper_id": 3
 }
 ```
+- `assigned_shipper_id` - the shipper the scan was dispatched to, or `null` when it runs on the backend.
 
 ---
 
@@ -2758,9 +2762,33 @@ A single scan job's status.
   "started_at": "2025-12-17T10:00:00Z",
   "completed_at": "2025-12-17T10:00:42Z",
   "error_message": null,
-  "results_summary": { "hosts_seen": 24, "hosts_matched": 9 }
+  "results_summary": { "hosts_seen": 24, "hosts_matched": 9 },
+  "assigned_shipper_id": null,
+  "assigned_shipper_name": null
 }
 ```
+- `status` - `queued` (dispatched to a shipper, awaiting claim), `running`, `completed`, or `failed`. An in-process scan starts straight at `running`.
+- `assigned_shipper_id` / `assigned_shipper_name` - the shipper the scan ran on, or `null`/absent when it ran on the backend (the name is joined for display).
+
+---
+
+### POST /api/log-discovery/scans/:id/cancel
+
+Stop a scan. Works on a `running` scan (interrupting its worker if one is live in
+this process) and on a shipper-dispatched scan still `queued` — clearing one whose
+shipper never came back to claim it. Also the remedy for a row orphaned `running`
+by a previous process. Any other status is left untouched.
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+{
+  "cancelled": true,
+  "scan": { "id": 7, "status": "failed", "error_message": "Cancelled by user" }
+}
+```
+- `cancelled` - `true` if this call transitioned the scan to `failed`; `false` if it was already in a terminal state (the current `scan` is returned either way).
 
 ---
 

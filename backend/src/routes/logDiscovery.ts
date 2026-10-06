@@ -89,22 +89,32 @@ router.get('/scans/:id', async (req: Request, res: Response) => {
   res.json(scan);
 });
 
-// POST /scans/:id/cancel - stop a running scan. Also the remedy for a scan row
-// orphaned 'running' by a previous process (no in-memory worker): the status
-// still flips to failed, it just has nothing to interrupt.
+// POST /scans/:id/cancel - stop a running scan. Also the remedy for two stuck
+// states: a scan row orphaned 'running' by a previous process (no in-memory
+// worker), and a shipper-dispatched scan stuck 'queued' because its shipper
+// never came back to claim it. In every case the status flips to failed; there
+// may just be nothing to interrupt.
 router.post('/scans/:id/cancel', async (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id)) throw new ApiError(400, 'Invalid scan id');
   const scan = await DiscoveryScanModel.findById(id);
   if (!scan) throw new ApiError(404, 'Scan not found');
-  if (scan.status !== 'running') {
+  if (scan.status !== 'running' && scan.status !== 'queued') {
     res.json({ cancelled: false, scan });
     return;
   }
 
-  const hadWorker = requestCancel(id);
-  await DiscoveryScanModel.fail(id, hadWorker ? 'Cancelled by user' : 'Cancelled by user (orphaned run — no active worker)');
-  res.json({ cancelled: true, scan: await DiscoveryScanModel.findById(id) });
+  // Only a 'running' scan can have a worker in this process to interrupt; a
+  // 'queued' one has never started, so skip the cancel flag (and its cleanup).
+  const hadWorker = scan.status === 'running' ? requestCancel(id) : false;
+  const reason =
+    scan.status === 'queued'
+      ? 'Cancelled by user before the shipper claimed it'
+      : hadWorker
+        ? 'Cancelled by user'
+        : 'Cancelled by user (orphaned run — no active worker)';
+  const cancelled = await DiscoveryScanModel.cancel(id, reason);
+  res.json({ cancelled, scan: await DiscoveryScanModel.findById(id) });
 });
 
 // GET /sources - ranked discovery results: { top, advanced }

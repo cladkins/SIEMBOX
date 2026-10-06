@@ -11,11 +11,11 @@ import { DiscoverySourceModel, DiscoverySource } from '../../models/DiscoverySou
 import { loadFingerprintLibrary, getFingerprintById } from './fingerprintLoader';
 import { resolveScope } from './scope';
 import { readArpTable, readDhcpLeases, queryMdnsServices, discoverSsdp, captureLldp } from './passiveDiscovery';
-import { probeHost, sweepCidr } from './activeDiscovery';
+import { probeHost, sweepCidr, selectPortsToScan, selectHttpProbes } from './activeDiscovery';
 import { matchHost } from './matcher';
 import { rankSources, RankableItem } from './ranker';
 import { renderOnboardInstructions, SiemboxSyslogSettings } from './onboarder';
-import { DiscoveredSignals, LogAccessMethod, RankedResult, RuntimeSource } from './types';
+import { DiscoveredSignals, LogAccessMethod, ProbePlan, RankedResult, RuntimeSource } from './types';
 
 interface Candidate {
   ip: string;
@@ -204,12 +204,28 @@ async function executeScan(scanId: number, mode: DiscoveryScanMode, cidrs: strin
     throwIfCancelled(scanId);
   }
 
+  await ingestSignals(scanId, Array.from(signalsByIp.values()), library);
+}
+
+/**
+ * Match a batch of observed host signals against the fingerprint library, upsert
+ * each into discovery_sources, and complete the scan. Shared by the in-process
+ * path (executeScan above) and the shipper path (ingestShipperDiscovery below),
+ * so a shipper-run discovery scan produces the same discovery_sources rows as a
+ * backend-run one. The fingerprint library lives only here -- the shipper just
+ * returns raw signals.
+ */
+export async function ingestSignals(
+  scanId: number,
+  signalsList: DiscoveredSignals[],
+  library = loadFingerprintLibrary()
+): Promise<void> {
   let hostsMatched = 0;
-  for (const [ip, signals] of signalsByIp) {
+  for (const signals of signalsList) {
     throwIfCancelled(scanId);
     const best = matchHost(signals, library)[0] || null;
     await DiscoverySourceModel.upsert({
-      ip_address: ip,
+      ip_address: signals.ip,
       mac_address: signals.mac || null,
       hostname: signals.hostname || null,
       open_ports: signals.open_ports,
@@ -230,13 +246,30 @@ async function executeScan(scanId: number, mode: DiscoveryScanMode, cidrs: strin
     if (best) hostsMatched++;
   }
 
-  await DiscoveryScanModel.complete(scanId, { hosts_seen: signalsByIp.size, hosts_matched: hostsMatched });
+  await DiscoveryScanModel.complete(scanId, { hosts_seen: signalsList.length, hosts_matched: hostsMatched });
+}
+
+/**
+ * Extract the portable probe targets (ports, HTTP paths, mDNS services) from the
+ * fingerprint library. Sent to a shipper in its discovery job so it runs the
+ * same probing without needing the fingerprint files.
+ */
+export function buildProbePlan(library = loadFingerprintLibrary()): ProbePlan {
+  const mdnsServices = Array.from(new Set(library.flatMap((fp) => fp.signals.mdns.map((s) => s.service))));
+  return { ports: selectPortsToScan(library), httpPaths: selectHttpProbes(library), mdnsServices };
 }
 
 export interface RunScanOptions {
   mode: DiscoveryScanMode;
   manualCidrs?: string[];
   createdBy?: number | null;
+  /**
+   * Dispatch to a log shipper instead of running on the backend. When set, the
+   * scan is created 'queued' and left for that shipper to claim and run the full
+   * passive+active probe out on the LAN (migration 033). null/undefined runs it
+   * in-process, exactly as before.
+   */
+  assignedShipperId?: number | null;
 }
 
 export interface RunScanResult {
@@ -249,6 +282,16 @@ export interface RunScanResult {
 /** Kick off a scan asynchronously (like NmapScanner.scan) and return immediately with its job id. */
 export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
   const scope = resolveScope(opts.manualCidrs || []);
+
+  // Dispatched to a shipper: create 'queued' and return. The shipper claims it
+  // via the job-pull and runs the probe out on the LAN; no in-process worker or
+  // watchdog here (the shipper owns the run), exactly like the nmap/nuclei path.
+  if (opts.assignedShipperId != null) {
+    const scan = await DiscoveryScanModel.createAssigned(opts.mode, scope.cidrs, opts.createdBy ?? null, opts.assignedShipperId);
+    logger.info(`[logDiscovery] scan ${scan.id} queued for shipper ${opts.assignedShipperId}`);
+    return { scanId: scan.id, cidrs: scope.cidrs, vlanWarning: scope.warning, rejectedCidrs: scope.rejected };
+  }
+
   const scan = await DiscoveryScanModel.create(opts.mode, scope.cidrs, opts.createdBy ?? null);
 
   activeScanIds.add(scan.id);
@@ -288,6 +331,85 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
     });
 
   return { scanId: scan.id, cidrs: scope.cidrs, vlanWarning: scope.warning, rejectedCidrs: scope.rejected };
+}
+
+/**
+ * A discovery job handed to a log shipper by the job-pull. Carries the probe
+ * plan (so the shipper needs no fingerprint files) and the CIDRs to sweep.
+ */
+export interface ShipperDiscoveryJob {
+  scanId: number;
+  kind: 'discovery';
+  mode: DiscoveryScanMode;
+  cidrs: string[];
+  probePlan: ProbePlan;
+}
+
+/** Atomically claim a shipper's queued discovery scans and turn them into jobs. */
+export async function claimDiscoveryJobsForShipper(shipperId: number): Promise<ShipperDiscoveryJob[]> {
+  const claimed = await DiscoveryScanModel.claimForShipper(shipperId);
+  if (claimed.length === 0) return [];
+  const probePlan = buildProbePlan();
+  return claimed.map((s) => ({
+    scanId: s.id,
+    kind: 'discovery',
+    mode: s.mode,
+    cidrs: Array.isArray(s.cidrs) ? s.cidrs : [],
+    probePlan,
+  }));
+}
+
+const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+
+/**
+ * Coerce the raw JSON a shipper posts into safe DiscoveredSignals: every array
+ * defaulted, non-IPv4 hosts dropped (discovery is IPv4, and ip_address is INET
+ * so a bad value would fail the upsert). Defensive -- the shipper is trusted to
+ * run our agent, but a malformed payload must not break ingestion.
+ */
+export function normalizeDiscoveredSignals(raw: unknown): DiscoveredSignals[] {
+  if (!Array.isArray(raw)) return [];
+  const out: DiscoveredSignals[] = [];
+  for (const h of raw) {
+    if (!h || typeof h !== 'object') continue;
+    const ip = String((h as any).ip ?? '');
+    const m = IPV4_RE.exec(ip);
+    if (!m || m.slice(1).some((o) => Number(o) > 255)) continue;
+    out.push({
+      ip,
+      mac: (h as any).mac ? String((h as any).mac) : undefined,
+      hostname: (h as any).hostname ? String((h as any).hostname) : undefined,
+      open_ports: Array.isArray((h as any).open_ports) ? (h as any).open_ports.filter((n: any) => Number.isInteger(n)) : [],
+      http_responses: Array.isArray((h as any).http_responses) ? (h as any).http_responses : [],
+      tls_subjects: Array.isArray((h as any).tls_subjects) ? (h as any).tls_subjects : [],
+      banners: Array.isArray((h as any).banners) ? (h as any).banners : [],
+      mdns_services: Array.isArray((h as any).mdns_services) ? (h as any).mdns_services.map(String) : [],
+      ssdp_services: Array.isArray((h as any).ssdp_services) ? (h as any).ssdp_services : [],
+      discovery_methods: Array.isArray((h as any).discovery_methods) ? (h as any).discovery_methods.map(String) : [],
+    });
+  }
+  return out;
+}
+
+/**
+ * Ingest the signals a shipper posted back for a dispatched discovery scan.
+ * Normalizes, then runs the SAME matcher/upsert/complete path as an in-process
+ * scan. Marks the scan failed and rethrows on error so the caller can respond.
+ */
+export async function ingestShipperDiscovery(scanId: number, rawSignals: unknown): Promise<void> {
+  try {
+    const signals = normalizeDiscoveredSignals(rawSignals);
+    logger.info(`[logDiscovery] scan ${scanId} ingesting ${signals.length} host(s) from shipper`);
+    await ingestSignals(scanId, signals);
+  } catch (err: any) {
+    await DiscoveryScanModel.fail(scanId, err?.message || 'Failed to ingest discovery results').catch(() => {});
+    throw err;
+  }
+}
+
+/** Mark a shipper-dispatched discovery scan failed (shipper couldn't run it). */
+export async function failDiscoveryScan(scanId: number, message: string): Promise<void> {
+  await DiscoveryScanModel.fail(scanId, message || 'Shipper reported discovery scan failure').catch(() => {});
 }
 
 function toRuntimeSource(row: DiscoverySource): RuntimeSource {

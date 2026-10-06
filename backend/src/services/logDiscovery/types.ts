@@ -70,6 +70,19 @@ export interface FingerprintEntry {
   credentials: FingerprintCredentials;
 }
 
+/**
+ * The portable probe targets a scan should use, extracted from the fingerprint
+ * library on the backend. Sent to a shipper in its discovery job so the shipper
+ * runs the exact same passive+active probing a backend scan would -- the shipper
+ * never needs the fingerprint files themselves (the backend stays the source of
+ * truth and does the matching on the signals the shipper returns).
+ */
+export interface ProbePlan {
+  ports: number[]; // union of every port any fingerprint declares
+  httpPaths: string[]; // union of every HTTP path any fingerprint declares
+  mdnsServices: string[]; // union of every mDNS service any fingerprint declares
+}
+
 // What a scan observed about one host, before matching.
 export interface HttpProbeResult {
   port: number;

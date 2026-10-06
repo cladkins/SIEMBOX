@@ -1,7 +1,9 @@
 import { query } from '../config/database';
 
 export type DiscoveryScanMode = 'passive' | 'active' | 'full';
-export type DiscoveryScanStatus = 'running' | 'completed' | 'failed';
+// 'queued' is a shipper-dispatched scan waiting to be claimed (migration 033);
+// an in-process scan is created straight into 'running'.
+export type DiscoveryScanStatus = 'queued' | 'running' | 'completed' | 'failed';
 
 export interface DiscoveryScan {
   id: number;
@@ -13,6 +15,9 @@ export interface DiscoveryScan {
   error_message: string | null;
   results_summary: Record<string, unknown> | null;
   created_by: number | null;
+  /** Shipper this scan was dispatched to (null = run in-process on the backend). */
+  assigned_shipper_id: number | null;
+  claimed_at: string | null;
   created_at: string;
 }
 
@@ -33,6 +38,45 @@ export const DiscoveryScanModel = {
       [mode, JSON.stringify(cidrs), createdBy]
     );
     return result.rows[0];
+  },
+
+  /**
+   * Create a scan dispatched to a shipper: status 'queued' (NOT run in-process),
+   * waiting for that shipper to claim it via claimForShipper.
+   */
+  async createAssigned(
+    mode: DiscoveryScanMode,
+    cidrs: string[],
+    createdBy: number | null,
+    shipperId: number
+  ): Promise<DiscoveryScan> {
+    const result = await query(
+      `INSERT INTO discovery_scans (mode, cidrs, status, created_by, assigned_shipper_id)
+       VALUES ($1, $2, 'queued', $3, $4) RETURNING *`,
+      [mode, JSON.stringify(cidrs), createdBy, shipperId]
+    );
+    return result.rows[0];
+  },
+
+  /**
+   * Atomically hand out and claim every queued scan assigned to a shipper
+   * (queued -> running, stamping claimed_at), so a job is claimed once even
+   * under concurrent polls. Mirrors the nmap/nuclei claim.
+   */
+  async claimForShipper(shipperId: number): Promise<DiscoveryScan[]> {
+    const result = await query(
+      `UPDATE discovery_scans
+          SET status = 'running', claimed_at = NOW(), started_at = NOW()
+        WHERE id IN (
+          SELECT id FROM discovery_scans
+           WHERE assigned_shipper_id = $1 AND status = 'queued'
+           ORDER BY created_at
+           FOR UPDATE SKIP LOCKED
+        )
+        RETURNING *`,
+      [shipperId]
+    );
+    return result.rows;
   },
 
   // complete/fail only transition OUT of 'running', so a scan that was already

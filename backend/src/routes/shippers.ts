@@ -13,6 +13,12 @@ import { unknownSources, isDatabaseBusy } from '../services/shippers/unknownSour
 import { directSyslogSources } from '../services/shippers/directSyslogSources';
 import { NmapScanner } from '../services/scanner/nmapScanner';
 import { NucleiScanner } from '../services/scanner/nucleiScanner';
+import {
+  claimDiscoveryJobsForShipper,
+  ingestShipperDiscovery,
+  failDiscoveryScan,
+} from '../services/logDiscovery/discoveryScanService';
+import { DiscoveryScanModel } from '../models/DiscoveryScan';
 
 const router = Router();
 
@@ -599,13 +605,15 @@ router.get('/scan-jobs/:api_key', async (req: Request, res: Response) => {
     const ip_address = req.ip || req.socket.remoteAddress || 'unknown';
     await LogShipperModel.updateHeartbeat(api_key, ip_address).catch(() => {});
 
-    // Each scanner claims only its own scan_type, so they never steal each
-    // other's rows; the shipper dispatches on each job's `kind`.
-    const [nmapJobs, nucleiJobs] = await Promise.all([
+    // Each source claims only its own rows (asset_discovery / vulnerability scans
+    // from vulnerability_scans, discovery scans from discovery_scans), so they
+    // never steal each other's work; the shipper dispatches on each job's `kind`.
+    const [nmapJobs, nucleiJobs, discoveryJobs] = await Promise.all([
       NmapScanner.claimScanJobsForShipper(shipper.id),
       NucleiScanner.claimScanJobsForShipper(shipper.id),
+      claimDiscoveryJobsForShipper(shipper.id),
     ]);
-    res.json({ jobs: [...nmapJobs, ...nucleiJobs] });
+    res.json({ jobs: [...nmapJobs, ...nucleiJobs, ...discoveryJobs] });
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch scan jobs');
@@ -692,6 +700,65 @@ router.post('/scan-results', async (req: Request, res: Response): Promise<void> 
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to record scan results');
+  }
+});
+
+// A shipper posts back the result of a dispatched LOG-DISCOVERY scan. Separate
+// endpoint from /scan-results because discovery scans live in their own table
+// (discovery_scans) with their own id sequence -- a shared endpoint keyed on
+// scan_id alone could collide with a vulnerability_scans id. On success the body
+// carries `signals` (the observed hosts the shipper's probe produced); the
+// backend fingerprint-matches and upserts them exactly like an in-process scan.
+// On failure it sends { error }. Ownership is checked against
+// discovery_scans.assigned_shipper_id.
+router.post('/discovery-results', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { api_key, scan_id, signals, error: scanError } = req.body ?? {};
+    if (!api_key) throw new ApiError(400, 'API key is required');
+
+    const scanId = Number(scan_id);
+    if (!Number.isInteger(scanId) || scanId <= 0) {
+      throw new ApiError(400, 'scan_id must be a positive integer');
+    }
+
+    const shipper = await LogShipperModel.findByApiKey(api_key);
+    if (!shipper) throw new ApiError(404, 'Invalid API key');
+
+    // Ownership: the discovery scan must be one assigned to THIS shipper.
+    const scan = await DiscoveryScanModel.findById(scanId);
+    if (!scan || scan.assigned_shipper_id !== shipper.id) {
+      throw new ApiError(404, 'Discovery scan not found for this shipper');
+    }
+
+    const ip_address = req.ip || req.socket.remoteAddress || 'unknown';
+    await LogShipperModel.updateHeartbeat(api_key, ip_address).catch(() => {});
+
+    // Shipper couldn't run the probe.
+    if (typeof scanError === 'string' && scanError.length > 0) {
+      if (scan.status === 'completed') {
+        res.json({ status: 'completed' });
+        return;
+      }
+      await failDiscoveryScan(scanId, scanError.slice(0, 1000));
+      res.json({ status: 'failed' });
+      return;
+    }
+
+    if (!Array.isArray(signals)) {
+      throw new ApiError(400, 'signals (an array of observed hosts) or error is required');
+    }
+
+    try {
+      await ingestShipperDiscovery(scanId, signals);
+    } catch {
+      // ingestShipperDiscovery already marked the scan 'failed'.
+      res.status(422).json({ status: 'failed', error: 'Could not ingest discovery signals' });
+      return;
+    }
+    res.json({ status: 'completed' });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to record discovery results');
   }
 });
 

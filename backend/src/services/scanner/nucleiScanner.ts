@@ -62,6 +62,9 @@ export interface ShipperNucleiJob {
   kind: 'nuclei';
   nucleiArgs: string[];
   targets: string[];
+  /** Wall-clock budget for this scan on the shipper, so a dispatched scan gets
+   *  the same time an in-process one would (not the shipper's flat SCAN_TIMEOUT). */
+  timeoutSeconds: number;
 }
 
 /**
@@ -225,7 +228,12 @@ export class NucleiScanner {
         rateLimit: opts?.rateLimit,
       });
 
-      jobs.push({ scanId: row.id, kind: 'nuclei', nucleiArgs: dispatchArgs, targets: [target] });
+      // Same budget an in-process scan gets (executeScan defaults to 30 min),
+      // not the shipper's flat SCAN_TIMEOUT. opts.timeout is in ms when set.
+      const timeoutMs = typeof opts?.timeout === 'number' && opts.timeout > 0 ? opts.timeout : 30 * 60 * 1000;
+      const timeoutSeconds = Math.min(3600, Math.max(60, Math.round(timeoutMs / 1000)));
+
+      jobs.push({ scanId: row.id, kind: 'nuclei', nucleiArgs: dispatchArgs, targets: [target], timeoutSeconds });
     }
 
     return jobs;

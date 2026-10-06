@@ -2340,7 +2340,7 @@ If the database can't be reached (including a connection pool that stays exhaust
 {
   "jobs": [
     { "scanId": 42, "kind": "nmap",      "nmapArgs": ["-sV", "-p", "1-1000"], "targets": ["192.168.1.0/24"] },
-    { "scanId": 43, "kind": "nuclei",    "nucleiArgs": ["-jsonl", "-severity", "high,critical"], "targets": ["http://192.168.1.10"] },
+    { "scanId": 43, "kind": "nuclei",    "nucleiArgs": ["-jsonl", "-severity", "high,critical"], "targets": ["http://192.168.1.10"], "timeoutSeconds": 1800 },
     { "scanId": 7,  "kind": "discovery", "mode": "full", "cidrs": ["192.168.1.0/24"],
       "probePlan": { "ports": [443, 8443, ...], "httpPaths": ["/", ...], "mdnsServices": ["_home-assistant._tcp", ...] } }
   ]

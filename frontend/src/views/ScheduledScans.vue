@@ -33,6 +33,12 @@
           </template>
         </el-table-column>
 
+        <el-table-column label="Run from" width="140">
+          <template #default="{ row }">
+            <el-text size="small">{{ formatRunFrom(row) }}</el-text>
+          </template>
+        </el-table-column>
+
         <el-table-column label="Interval" width="140">
           <template #default="{ row }">
             <el-text size="small">{{ formatInterval(row.interval_minutes) }}</el-text>
@@ -219,6 +225,23 @@
           </el-form-item>
         </template>
 
+        <!-- Run from (asset/vuln only; container = Trivy, no LAN scan) -->
+        <el-form-item v-if="scheduledScanForm.scan_type !== 'container'" label="Run from">
+          <el-select v-model="scheduledScanForm.assignedShipperId" placeholder="Select where to run the scan" style="width: 100%">
+            <el-option :label="'SIEMBox backend (built-in)'" :value="null" />
+            <el-option
+              v-for="s in schedShippers"
+              :key="s.id"
+              :label="`${s.name}${s.status !== 'online' ? ` (${s.status})` : ''}`"
+              :value="s.id"
+              :disabled="s.status !== 'online'"
+            />
+          </el-select>
+          <el-text size="small" type="info">
+            Each run executes on the selected log shipper, out on its LAN. Leave as built-in to run on the SIEMBox backend.
+          </el-text>
+        </el-form-item>
+
         <el-form-item label="Interval" required>
           <el-select v-model="scheduledScanForm.interval_minutes" style="width: 100%">
             <el-option label="Every hour" :value="60" />
@@ -254,6 +277,7 @@ import vulnerabilityService, {
   type Template,
   type TemplateCategory,
   type TemplateTag,
+  type ShipperSummary,
 } from '@/services/vulnerabilityService';
 
 const scheduledScansLoading = ref(false);
@@ -279,7 +303,30 @@ const scheduledScanForm = reactive({
   vulnSeverities: [] as string[],
   // container
   imageRef: '',
+  // optional LAN-side dispatch (asset/vuln only); null = run on the backend
+  assignedShipperId: null as number | null,
 });
+
+// Log shippers available to run a scan from (for the "Run from" picker).
+const schedShippers = ref<ShipperSummary[]>([]);
+async function loadSchedShippers() {
+  try {
+    schedShippers.value = await vulnerabilityService.getShippers();
+  } catch (error) {
+    schedShippers.value = [];
+    console.error('Failed to load shippers for scheduled-scan picker', error);
+  }
+}
+
+// Render the "Run from" column for a schedule row: the shipper's name, or
+// "Built-in" for asset/vuln on the backend, or "—" for container (Trivy).
+function formatRunFrom(row: any): string {
+  if (row?.scan_type === 'container') return '—';
+  const id = row?.scan_options?.assignedShipperId;
+  if (id == null) return 'Built-in';
+  const match = schedShippers.value.find((s) => s.id === id);
+  return match ? match.name : `shipper #${id}`;
+}
 
 // Template data for the vuln-scan template selector (same source as the one-off
 // scan form). Loaded lazily when the dialog opens.
@@ -290,6 +337,7 @@ const schedLoadingTemplates = ref(false);
 
 onMounted(() => {
   fetchScheduledScans();
+  loadSchedShippers();
 });
 
 async function fetchScheduledScans() {
@@ -385,6 +433,7 @@ function resetScheduledScanForm() {
   scheduledScanForm.vulnTemplates = [];
   scheduledScanForm.vulnSeverities = [];
   scheduledScanForm.imageRef = '';
+  scheduledScanForm.assignedShipperId = null;
 }
 
 function showCreateSchedule() {
@@ -402,6 +451,7 @@ function editSchedule(scan: any) {
   scheduledScanForm.interval_minutes = scan.interval_minutes;
 
   const options = scan.scan_options || {};
+  scheduledScanForm.assignedShipperId = options.assignedShipperId ?? null;
   if (scan.scan_type === 'asset') {
     scheduledScanForm.assetTargets = Array.isArray(options.targets) ? options.targets.join('\n') : '';
     scheduledScanForm.assetScanType = options.scanType || 'ping';
@@ -501,6 +551,12 @@ async function saveSchedule() {
       target: scheduledScanForm.vulnTarget.trim(),
       templateSelection: buildTemplateSelection(),
     };
+  }
+
+  // LAN-side dispatch (asset/vuln only). Stored inside scan_options, like the
+  // other per-type options; omitted when running on the backend.
+  if (scheduledScanForm.scan_type !== 'container' && scheduledScanForm.assignedShipperId) {
+    scan_options.assignedShipperId = scheduledScanForm.assignedShipperId;
   }
 
   const payload = {

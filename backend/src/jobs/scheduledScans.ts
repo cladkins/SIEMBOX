@@ -10,6 +10,7 @@ import { ScheduledScanModel, ScheduledScan } from '../models/ScheduledScan';
 import { NucleiScanner } from '../services/scanner/nucleiScanner';
 import { NmapScanner } from '../services/scanner/nmapScanner';
 import { TrivyScanner } from '../services/scanner/trivyScanner';
+import { LogShipperModel } from '../models/LogShipper';
 import { logger } from '../utils/logger';
 import { ErrorLogService } from '../services/errors/errorLogService';
 import { registerRecurringJob, trackJobRun, markJobResult } from '../services/jobs/jobRegistry';
@@ -28,6 +29,29 @@ export async function triggerScheduledScan(schedule: ScheduledScan): Promise<num
   const userId = schedule.created_by || 1;
   const description = `Scheduled: ${schedule.name}`;
 
+  // Container scans are Trivy image scans (no LAN scan), so they are never
+  // dispatched to a shipper -- handle first, before resolving any shipper.
+  if (schedule.scan_type === 'container') {
+    return TrivyScanner.scan(opts.image_ref, userId);
+  }
+
+  // Optional LAN-side dispatch: run this scheduled scan from a log shipper
+  // (stored as scan_options.assignedShipperId). Re-check the shipper still
+  // exists at fire time -- it may have been deleted since the schedule was
+  // configured -- and fall back to an in-process scan rather than failing the
+  // run (a hard FK insert would otherwise throw and the schedule would error
+  // every cycle).
+  let assignedShipperId: number | null = opts.assignedShipperId ?? null;
+  if (assignedShipperId != null) {
+    const shipper = await LogShipperModel.findById(assignedShipperId);
+    if (!shipper) {
+      logger.warn(
+        `[Scheduled Scans] Schedule #${schedule.id} ("${schedule.name}") references missing shipper ${assignedShipperId}; running on the backend instead`
+      );
+      assignedShipperId = null;
+    }
+  }
+
   if (schedule.scan_type === 'vulnerability') {
     return NucleiScanner.scan({
       target: opts.target,
@@ -36,11 +60,8 @@ export async function triggerScheduledScan(schedule: ScheduledScan): Promise<num
       description,
       timeout: opts.timeout,
       rateLimit: opts.rateLimit,
+      assignedShipperId,
     });
-  }
-
-  if (schedule.scan_type === 'container') {
-    return TrivyScanner.scan(opts.image_ref, userId);
   }
 
   return NmapScanner.scan({
@@ -48,6 +69,7 @@ export async function triggerScheduledScan(schedule: ScheduledScan): Promise<num
     scanType: opts.scanType || 'port',
     userId,
     description,
+    assignedShipperId,
   });
 }
 

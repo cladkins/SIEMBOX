@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { ScheduledScanModel, ScheduledScanType } from '../models/ScheduledScan';
 import { ApiError } from '../middleware/errorHandler';
 import { triggerScheduledScan } from '../jobs/scheduledScans';
+import { LogShipperModel } from '../models/LogShipper';
 
 const router = Router();
 
@@ -21,6 +22,26 @@ function validateScanOptions(scanType: ScheduledScanType, opts: any): void {
     if (!opts.target || typeof opts.target !== 'string') {
       throw new ApiError(400, 'Vulnerability scans require scan_options.target (a host/IP string)');
     }
+  }
+
+  // Optional shipper dispatch (asset/vuln only -- container scans are Trivy, no
+  // LAN scan). Shape check here; existence is verified in assertShipperExists.
+  if (scanType !== 'container' && opts.assignedShipperId !== undefined && opts.assignedShipperId !== null) {
+    if (!Number.isInteger(opts.assignedShipperId) || opts.assignedShipperId <= 0) {
+      throw new ApiError(400, 'scan_options.assignedShipperId must be a positive integer');
+    }
+  }
+}
+
+// Verify a chosen shipper exists at config time, so a bad id is a clean 400 now
+// rather than a schedule that errors (or silently falls back) when it fires.
+async function assertShipperExists(scanType: ScheduledScanType, opts: any): Promise<void> {
+  if (scanType === 'container') return;
+  const id = opts?.assignedShipperId;
+  if (id === undefined || id === null) return;
+  const shipper = await LogShipperModel.findById(id);
+  if (!shipper) {
+    throw new ApiError(400, `No log shipper with id ${id}`);
   }
 }
 
@@ -48,6 +69,7 @@ router.post('/', async (req: Request, res: Response) => {
   }
   validateInterval(interval_minutes);
   validateScanOptions(scan_type, scan_options);
+  await assertShipperExists(scan_type, scan_options);
 
   const created = await ScheduledScanModel.create({
     name,
@@ -81,7 +103,9 @@ router.put('/:id', async (req: Request, res: Response) => {
     validateInterval(interval_minutes);
   }
   if (scan_options !== undefined) {
-    validateScanOptions((scan_type as ScheduledScanType) || existing.scan_type, scan_options);
+    const effectiveType = (scan_type as ScheduledScanType) || existing.scan_type;
+    validateScanOptions(effectiveType, scan_options);
+    await assertShipperExists(effectiveType, scan_options);
   }
 
   await ScheduledScanModel.update(id, { name, scan_type, scan_options, interval_minutes, enabled });

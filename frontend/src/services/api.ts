@@ -234,6 +234,12 @@ export const api = {
   updateSyslogSettings: (data: any) => apiClient.put('/settings/syslog', data),
   getSyslogStatus: () => apiClient.get('/settings/syslog/status'),
 
+  // Settings - Auto-Discovery
+  // Backend exposes a single JSON endpoint ({ enabled, interval_minutes,
+  // stale_threshold_days }) — there are no per-key setting routes.
+  getAutoDiscoverySettings: () => apiClient.get('/settings/auto-discovery'),
+  updateAutoDiscoverySettings: (data: any) => apiClient.put('/settings/auto-discovery', data),
+
   // Log Shippers
   getShippers: () => apiClient.get('/shippers'),
   getShipper: (id: number) => apiClient.get(`/shippers/${id}`),

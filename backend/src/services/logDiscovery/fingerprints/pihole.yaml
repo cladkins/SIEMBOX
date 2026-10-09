@@ -18,7 +18,7 @@ attack_data_sources:
   - network traffic flow
 log_access:
   - {method: file, path: /var/log/pihole/pihole.log}
-  - {method: api_pull, endpoint: /admin/api.php, auth: api_token}
+  - {method: api_pull, endpoint: /admin/api.php, auth: api_token, target_port: 80}
 onboard_template: templates/file_tail.j2
 credentials:
   required: false

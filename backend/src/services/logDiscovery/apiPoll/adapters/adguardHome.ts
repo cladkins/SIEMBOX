@@ -10,8 +10,13 @@ import { httpFetch, basicAuthHeader } from '../httpFetch';
 
 const PAGE_LIMIT = 500;
 
-function buildBaseUrl(target: PollTarget): string {
-  return `http://${target.ip}:3000`;
+export function buildBaseUrl(target: PollTarget): string {
+  // Default (scan-discovered source): AdGuard Home's admin UI/API on http://ip:3000.
+  // A manual source may override the port and/or switch to https; absent both, this
+  // is byte-for-byte the previous http://ip:3000.
+  const https = target.tls != null ? target.tls : false;
+  const port = target.port ?? 3000;
+  return `${https ? 'https' : 'http'}://${target.ip}:${port}`;
 }
 
 function synthesizeEventId(entry: any): string {

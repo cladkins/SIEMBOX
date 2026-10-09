@@ -1,8 +1,9 @@
+import net from 'net';
 import { Router, Request, Response } from 'express';
 import { ApiError } from '../middleware/errorHandler';
 import { authorize } from '../middleware/auth';
 import { DiscoveryScanModel } from '../models/DiscoveryScan';
-import { DiscoverySourceModel } from '../models/DiscoverySource';
+import { DiscoverySourceModel, DiscoverySourceManualInput } from '../models/DiscoverySource';
 import { LogShipperModel } from '../models/LogShipper';
 import { DiscoverySourcePollerModel } from '../models/DiscoverySourcePoller';
 import { resolveScope, detectLocalInterfaces, isValidCidr, isSweepableCidr } from '../services/logDiscovery/scope';
@@ -24,6 +25,77 @@ function parseSourceId(req: Request): number {
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id)) throw new ApiError(400, 'Invalid source id');
   return id;
+}
+
+export type ManualSourceValidation =
+  | { ok: true; value: DiscoverySourceManualInput }
+  | { ok: false; status: number; message: string };
+
+/**
+ * Validate + normalize the body of POST /sources/manual. Pure (no DB), so it's
+ * unit-testable on its own. Rejects a DNS name for ip_address up front — INET is
+ * NOT NULL and casting a hostname would surface as a 500, not a clean 400. The
+ * fingerprint checks mirror POST /sources/:id/poller/credential exactly: the id
+ * must have a real poll adapter AND an api_pull log_access entry.
+ */
+export function validateManualSourceInput(body: unknown): ManualSourceValidation {
+  const b = (body ?? {}) as Record<string, unknown>;
+
+  const ipRaw = typeof b.ip_address === 'string' ? b.ip_address.trim() : '';
+  if (!ipRaw || net.isIP(ipRaw) === 0) {
+    return { ok: false, status: 400, message: 'ip_address must be a literal IPv4 or IPv6 address (not a DNS name)' };
+  }
+
+  const pollable = listPollableFingerprintIds();
+  const fingerprintId = typeof b.fingerprint_id === 'string' ? b.fingerprint_id : '';
+  if (!fingerprintId || !pollable.includes(fingerprintId)) {
+    return { ok: false, status: 400, message: `fingerprint_id must be a pollable device type (one of: ${pollable.join(', ')})` };
+  }
+  const fingerprint = getFingerprintById(fingerprintId);
+  if (!fingerprint) {
+    return { ok: false, status: 404, message: `Fingerprint "${fingerprintId}" is no longer in the library` };
+  }
+  const logAccess = fingerprint.log_access.find((la) => la.method === 'api_pull');
+  if (!logAccess) {
+    return { ok: false, status: 400, message: `${fingerprint.name} has no api_pull log access method` };
+  }
+
+  // port: an explicit 1-65535 integer, else the fingerprint's api_pull target_port.
+  let target_port: number;
+  if (b.port === undefined || b.port === null) {
+    target_port = typeof logAccess.target_port === 'number' ? logAccess.target_port : NaN;
+    if (!Number.isInteger(target_port) || target_port < 1 || target_port > 65535) {
+      return { ok: false, status: 400, message: 'port is required (this fingerprint declares no default api_pull target_port)' };
+    }
+  } else if (typeof b.port === 'number' && Number.isInteger(b.port) && b.port >= 1 && b.port <= 65535) {
+    target_port = b.port;
+  } else {
+    return { ok: false, status: 400, message: 'port must be an integer between 1 and 65535' };
+  }
+
+  // tls: explicit boolean, else default true for authentik (https:9443) / false elsewhere.
+  let tls: boolean;
+  if (b.tls === undefined || b.tls === null) {
+    tls = fingerprintId === 'authentik';
+  } else if (typeof b.tls === 'boolean') {
+    tls = b.tls;
+  } else {
+    return { ok: false, status: 400, message: 'tls must be a boolean' };
+  }
+
+  const hostname = typeof b.hostname === 'string' && b.hostname.trim().length > 0 ? b.hostname.trim() : null;
+
+  return {
+    ok: true,
+    value: {
+      ip_address: ipRaw,
+      hostname,
+      fingerprint_id: fingerprintId,
+      target_port,
+      tls,
+      security_value: fingerprint.security_value ?? null,
+    },
+  };
 }
 
 // GET /scope - preview of the scan scope + the single-VLAN warning. Shows the
@@ -152,6 +224,35 @@ router.post('/scans/:id/cancel', async (req: Request, res: Response) => {
 // GET /sources - ranked discovery results: { top, advanced }
 router.get('/sources', async (_req: Request, res: Response) => {
   res.json(await getRankedSources());
+});
+
+// POST /sources/manual - admin manually adds an api_pull source for a device they
+// already know about (device type + IP + port + scheme), without waiting for a scan
+// to discover and fingerprint it. Creates a scan-less, 'confirmed' discovery_sources
+// row (its port/scheme stored in evidence); the credential + polling are then saved
+// through the SAME existing poller routes the Onboard dialog uses. Admin-gated like
+// the other mutating log-discovery routes. Defined before the "/sources/:id/*"
+// routes so "manual" is never parsed as an id.
+router.post('/sources/manual', authorize('admin'), async (req: Request, res: Response) => {
+  const parsed = validateManualSourceInput(req.body);
+  if (!parsed.ok) throw new ApiError(parsed.status, parsed.message);
+  const source = await DiscoverySourceModel.upsertManual(parsed.value);
+  res.status(201).json(source);
+});
+
+// DELETE /sources/:id - delete a MANUALLY added source (the poller row cascades via
+// its ON DELETE CASCADE FK). Scoped to manual rows on purpose: a scan-discovered
+// source is removed by re-scanning or ignoring it, not deleted here, so this won't
+// let an admin wipe scan history. 404 if missing, 403 if it isn't a manual row.
+router.delete('/sources/:id', authorize('admin'), async (req: Request, res: Response) => {
+  const id = parseSourceId(req);
+  const source = await DiscoverySourceModel.findById(id);
+  if (!source) throw new ApiError(404, 'Discovery source not found');
+  if ((source.evidence as Record<string, unknown> | null)?.manual !== true) {
+    throw new ApiError(403, 'Only manually added sources can be deleted here');
+  }
+  await DiscoverySourceModel.deleteById(id);
+  res.json({ deleted: true });
 });
 
 // POST /sources/:id/confirm - user confirms a candidate is what the matcher thinks it is

@@ -28,6 +28,10 @@
               <el-icon><Search /></el-icon>
               Scan (passive + active)
             </el-button>
+            <el-button type="success" @click="openManualSourceDialog">
+              <el-icon><Plus /></el-icon>
+              Add API pull source
+            </el-button>
             <el-button @click="refreshAll">
               <el-icon><Refresh /></el-icon>
               Refresh
@@ -141,6 +145,7 @@
           @confirm="confirmSource"
           @ignore="ignoreSource"
           @onboard="openOnboard"
+          @delete="deleteSource"
         />
       </div>
 
@@ -152,6 +157,7 @@
             @confirm="confirmSource"
             @ignore="ignoreSource"
             @onboard="openOnboard"
+            @delete="deleteSource"
           />
         </el-collapse-item>
       </el-collapse>
@@ -169,6 +175,61 @@
       <template #footer>
         <el-button @click="showManualCidrDialog = false">Cancel</el-button>
         <el-button type="primary" @click="previewManualCidrs">Save</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Add API pull source dialog (manual, scan-less). Separate from the Onboard dialog,
+         which operates on an already-discovered source. -->
+    <el-dialog v-model="showManualSourceDialog" title="Add an API pull source" width="560px">
+      <p class="dialog-hint">
+        Already know a device SIEMBox can poll (Authentik, Home Assistant, Pi-hole, AdGuard Home)?
+        Add it here by type, address and token — no network scan needed. SIEMBox pulls its events on
+        the schedule below; the token is encrypted at rest and never shown again after saving.
+      </p>
+      <el-form label-position="top">
+        <el-form-item label="Device type">
+          <el-select
+            v-model="manualForm.fingerprint_id"
+            placeholder="Select a device type"
+            style="width: 100%"
+            @change="onManualFingerprintChange"
+          >
+            <el-option v-for="f in pollableFingerprints" :key="f.id" :label="f.name" :value="f.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="IP address">
+          <el-input v-model="manualForm.ip_address" placeholder="192.168.1.50" />
+          <span class="field-hint">The poller connects directly to this IP — enter a literal address, not a DNS name.</span>
+        </el-form-item>
+        <el-form-item label="Port">
+          <el-input-number v-model="manualForm.port" :min="1" :max="65535" controls-position="right" />
+          <span class="field-hint">Pre-filled from the device type; edit it if the device runs on a custom port.</span>
+        </el-form-item>
+        <el-form-item label="Use HTTPS">
+          <el-switch v-model="manualForm.tls" />
+        </el-form-item>
+        <el-form-item v-if="manualAuthBasic" label="Username">
+          <el-input v-model="manualForm.username" placeholder="Username" />
+        </el-form-item>
+        <el-form-item label="API token / secret">
+          <el-input
+            v-model="manualForm.secret"
+            type="password"
+            show-password
+            clearable
+            placeholder="Paste API token…"
+          />
+        </el-form-item>
+        <el-form-item label="Poll every (minutes)">
+          <el-input-number v-model="manualForm.poll_interval_minutes" :min="1" :max="1440" controls-position="right" />
+        </el-form-item>
+        <el-form-item label="Start polling now">
+          <el-switch v-model="manualForm.enabled" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showManualSourceDialog = false">Cancel</el-button>
+        <el-button type="primary" :loading="submittingManual" @click="submitManualSource">Add source</el-button>
       </template>
     </el-dialog>
 
@@ -253,7 +314,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Search, Refresh, Aim } from '@element-plus/icons-vue';
+import { Search, Refresh, Aim, Plus } from '@element-plus/icons-vue';
 import logDiscoveryService, {
   type RankedSource,
   type DiscoveryScan,
@@ -299,6 +360,30 @@ const pollerEnabled = ref(true);
 const savingCredential = ref(false);
 const runningNow = ref(false);
 
+// "Add API pull source" dialog: a manual, scan-less entry point. Reuses the same
+// poller machinery (credential/polling/run-now) as the discovered-source flow.
+const showManualSourceDialog = ref(false);
+const submittingManual = ref(false);
+const manualForm = ref<{
+  fingerprint_id: string;
+  ip_address: string;
+  port: number | undefined;
+  tls: boolean;
+  username: string;
+  secret: string;
+  poll_interval_minutes: number;
+  enabled: boolean;
+}>({
+  fingerprint_id: '',
+  ip_address: '',
+  port: undefined,
+  tls: false,
+  username: '',
+  secret: '',
+  poll_interval_minutes: 5,
+  enabled: true,
+});
+
 function formatDate(date: string) {
   return new Date(date).toLocaleString();
 }
@@ -328,6 +413,17 @@ const isPollableMethod = computed(
     !!onboardTarget.value?.matched_fingerprint_id &&
     pollableFingerprintIds.value.includes(onboardTarget.value.matched_fingerprint_id)
 );
+
+// Only device types that actually have a poll adapter can be added manually.
+const pollableFingerprints = computed(() =>
+  fingerprints.value.filter((f) => pollableFingerprintIds.value.includes(f.id))
+);
+const manualFingerprint = computed(
+  () => fingerprints.value.find((f) => f.id === manualForm.value.fingerprint_id) || null
+);
+const manualApiPull = computed(() => manualFingerprint.value?.log_access.find((la) => la.method === 'api_pull') || null);
+// adguard-home uses HTTP Basic → it needs a username alongside the secret (mirrors the Onboard panel).
+const manualAuthBasic = computed(() => manualApiPull.value?.auth === 'basic');
 
 // Only ever non-null under the opt-in host-networking mode (see ScopePreview.detected_lan_cidr) --
 // hidden once it's already been added so the suggestion doesn't linger after being accepted.
@@ -482,6 +578,87 @@ async function ignoreSource(source: RankedSource) {
   }
   await logDiscoveryService.ignoreSource(source.id);
   loadSources();
+}
+
+function openManualSourceDialog() {
+  manualForm.value = {
+    fingerprint_id: '',
+    ip_address: '',
+    port: undefined,
+    tls: false,
+    username: '',
+    secret: '',
+    poll_interval_minutes: 5,
+    enabled: true,
+  };
+  showManualSourceDialog.value = true;
+}
+
+// Prefill the port from the chosen device type's api_pull target_port, and default
+// HTTPS on for Authentik (served on 9443/TLS) and off for the others — the admin can
+// still override both. Clear a stale username when the new type isn't Basic-auth.
+function onManualFingerprintChange() {
+  manualForm.value.port = manualApiPull.value?.target_port;
+  manualForm.value.tls = manualForm.value.fingerprint_id === 'authentik';
+  if (!manualAuthBasic.value) manualForm.value.username = '';
+}
+
+async function submitManualSource() {
+  const form = manualForm.value;
+  if (!form.fingerprint_id) return ElMessage.warning('Pick a device type');
+  if (!form.ip_address.trim()) return ElMessage.warning('Enter the IP address');
+  if (!form.port) return ElMessage.warning('Enter the port');
+  if (manualAuthBasic.value && !form.username.trim()) return ElMessage.warning('This device type needs a username');
+  if (!form.secret.trim()) return ElMessage.warning('Paste the API token / secret');
+
+  submittingManual.value = true;
+  try {
+    // 1) create the scan-less source, 2-3) reuse the existing poller routes to save
+    // the credential + polling schedule, 4) poll once immediately for instant feedback.
+    const { id } = await logDiscoveryService.createManualSource({
+      ip_address: form.ip_address.trim(),
+      fingerprint_id: form.fingerprint_id,
+      port: form.port,
+      tls: form.tls,
+    });
+    await logDiscoveryService.savePollerCredential(
+      id,
+      form.secret.trim(),
+      manualAuthBasic.value ? form.username.trim() : undefined
+    );
+    await logDiscoveryService.setPolling(id, { poll_interval_minutes: form.poll_interval_minutes, enabled: form.enabled });
+    const poll = await logDiscoveryService.runPollNow(id);
+    if (poll.ok) {
+      ElMessage.success(`Source added — first poll pulled ${poll.count} event(s)`);
+    } else {
+      ElMessage.warning(`Source added, but the first poll failed: ${poll.error || 'unknown error'}`);
+    }
+    showManualSourceDialog.value = false;
+    loadSources();
+  } catch (err: any) {
+    ElMessage.error(err.response?.data?.message || 'Failed to add source');
+  } finally {
+    submittingManual.value = false;
+  }
+}
+
+async function deleteSource(source: RankedSource) {
+  try {
+    await ElMessageBox.confirm(
+      `Delete ${source.hostname || source.ip}? This removes the source and stops polling it.`,
+      'Delete source',
+      { type: 'warning' }
+    );
+  } catch {
+    return; // user cancelled
+  }
+  try {
+    await logDiscoveryService.deleteSource(source.id);
+    ElMessage.success('Source deleted');
+    loadSources();
+  } catch (err: any) {
+    ElMessage.error(err.response?.data?.message || 'Failed to delete source');
+  }
 }
 
 async function loadOnboardPreview() {
@@ -649,6 +826,13 @@ onMounted(async () => {
   color: var(--el-text-color-secondary);
   font-size: 13px;
   margin-bottom: 12px;
+}
+.field-hint {
+  display: block;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 2px;
 }
 .poller-panel {
   background: var(--el-fill-color-light);

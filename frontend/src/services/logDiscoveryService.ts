@@ -114,6 +114,16 @@ export interface PollNowResult {
   error?: string;
 }
 
+/** Body for POST /log-discovery/sources/manual. port/scheme are persisted in the source's evidence server-side. */
+export interface ManualSourcePayload {
+  ip_address: string;
+  hostname?: string;
+  /** A pollable device-type id (from getPollableFingerprintIds). */
+  fingerprint_id: string;
+  port: number;
+  tls: boolean;
+}
+
 class LogDiscoveryServiceClient {
   async getScope(manualCidrs: string[] = []): Promise<ScopePreview> {
     const params = manualCidrs.length > 0 ? `?manual_cidrs=${encodeURIComponent(manualCidrs.join(','))}` : '';
@@ -226,6 +236,23 @@ class LogDiscoveryServiceClient {
 
   async runPollNow(id: number): Promise<PollNowResult> {
     const response = await apiClient.post(`/log-discovery/sources/${id}/poller/run-now`);
+    return response.data;
+  }
+
+  /**
+   * Manually add an api_pull source for a device the admin already knows about,
+   * without a scan. Returns the created discovery_sources row (we need its id to
+   * then reuse savePollerCredential/setPolling/runPollNow). port/tls are stored
+   * server-side in the source's evidence.
+   */
+  async createManualSource(payload: ManualSourcePayload): Promise<{ id: number }> {
+    const response = await apiClient.post('/log-discovery/sources/manual', payload);
+    return response.data;
+  }
+
+  /** Delete a manually added source (403 from the server for a scan-discovered one). */
+  async deleteSource(id: number): Promise<{ deleted: boolean }> {
+    const response = await apiClient.delete(`/log-discovery/sources/${id}`);
     return response.data;
   }
 }

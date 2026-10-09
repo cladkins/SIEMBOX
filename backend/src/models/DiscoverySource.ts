@@ -36,6 +36,24 @@ export interface DiscoverySourceUpsertInput {
   last_scan_id: number;
 }
 
+/**
+ * A manually added api_pull source — an admin who already knows a device
+ * (type + IP + port) onboards it without waiting for a scan to find and
+ * fingerprint it. See DiscoverySourceModel.upsertManual.
+ */
+export interface DiscoverySourceManualInput {
+  ip_address: string;
+  hostname?: string | null;
+  /** The chosen device type; also the poll adapter key. */
+  fingerprint_id: string;
+  /** Base-URL port the adapter should connect to (stored in evidence + open_ports). */
+  target_port: number;
+  /** https when true, http when false — stored in evidence. */
+  tls: boolean;
+  /** The fingerprint's security_value, so the ranker places it the same as a discovered match. */
+  security_value: number | null;
+}
+
 /** discovery_sources joined with its (optional) poller row, for the bulk sources list. */
 export interface DiscoverySourceWithPoller extends DiscoverySource {
   poller_configured: boolean;
@@ -105,6 +123,56 @@ export const DiscoverySourceModel = {
       ]
     );
     return result.rows[0];
+  },
+
+  /**
+   * Insert (or refresh) a MANUALLY added api_pull source. Separate from upsert():
+   * that one is scan-driven and requires a non-null last_scan_id + refreshes
+   * re-observed scan signals, whereas this row never came from a scan
+   * (last_scan_id stays NULL). A manual row is a known device: confidence=100,
+   * is_guess=false, status 'confirmed', open_ports = [target_port], and its chosen
+   * base-URL port/scheme live in evidence ({manual:true, target_port, tls}) — no DDL
+   * (last_scan_id is nullable, evidence is JSONB). ON CONFLICT refreshes the
+   * fingerprint/port/evidence in place and un-ignores a previously dismissed host,
+   * but otherwise leaves the user's own status decision untouched.
+   */
+  async upsertManual(input: DiscoverySourceManualInput): Promise<DiscoverySource> {
+    const evidence = { manual: true, target_port: input.target_port, tls: input.tls };
+    const result = await query(
+      `INSERT INTO discovery_sources
+         (ip_address, hostname, open_ports, matched_fingerprint_id, confidence, is_guess, security_value, evidence, status)
+       VALUES ($1, $2, $3, $4, 100, false, $5, $6, 'confirmed')
+       ON CONFLICT (ip_address) DO UPDATE SET
+         matched_fingerprint_id = EXCLUDED.matched_fingerprint_id,
+         open_ports = EXCLUDED.open_ports,
+         evidence = EXCLUDED.evidence,
+         hostname = COALESCE(EXCLUDED.hostname, discovery_sources.hostname),
+         confidence = 100,
+         is_guess = false,
+         status = CASE WHEN discovery_sources.status = 'ignored' THEN 'confirmed' ELSE discovery_sources.status END,
+         updated_at = NOW()
+       RETURNING *`,
+      [
+        input.ip_address,
+        input.hostname ?? null,
+        [input.target_port],
+        input.fingerprint_id,
+        input.security_value,
+        JSON.stringify(evidence),
+      ]
+    );
+    return result.rows[0];
+  },
+
+  /**
+   * Hard-delete a source row. The poller row (discovery_source_pollers) cascades
+   * via its ON DELETE CASCADE FK, and raw_logs.discovery_source_id is set NULL.
+   * Only reachable from the admin-gated manual-source delete route, which first
+   * checks evidence.manual === true.
+   */
+  async deleteById(id: number): Promise<boolean> {
+    const r = await query(`DELETE FROM discovery_sources WHERE id = $1`, [id]);
+    return (r.rowCount ?? 0) > 0;
   },
 
   async setStatus(id: number, status: DiscoverySourceStatus): Promise<DiscoverySource | null> {

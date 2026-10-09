@@ -44,11 +44,19 @@ export async function pollOneSource(row: DiscoverySourcePoller): Promise<PollOut
     }
 
     const credential = DiscoverySourcePollerModel.decryptCredential(row);
+    // A manually added source pins its base-URL port/scheme in evidence (see
+    // DiscoverySourceModel.upsertManual); a scan-discovered source has neither,
+    // so these stay undefined and each adapter keeps its default derivation.
+    const evidence = source.evidence || {};
+    const port = typeof evidence.target_port === 'number' ? evidence.target_port : undefined;
+    const tls = typeof evidence.tls === 'boolean' ? evidence.tls : undefined;
     const target: PollTarget = {
       sourceId: source.id,
       ip: source.ip_address,
       openPorts: source.open_ports || [],
-      evidence: source.evidence || {},
+      evidence,
+      port,
+      tls,
       logAccess,
     };
 

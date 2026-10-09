@@ -8,8 +8,13 @@ import { httpFetch } from '../httpFetch';
 
 const FIRST_POLL_LOOKBACK_SECONDS = 60 * 60; // 1h — bounds the very first pull
 
-function buildBaseUrl(target: PollTarget): string {
-  return `http://${target.ip}`;
+export function buildBaseUrl(target: PollTarget): string {
+  // Default (scan-discovered source): classic Pi-hole is served on the bare host
+  // (port 80, no explicit :port in the URL). A manual source may pin a custom port
+  // and/or switch to https; with neither this is byte-for-byte the previous
+  // http://ip (no port appended, exactly as before).
+  const scheme = (target.tls != null ? target.tls : false) ? 'https' : 'http';
+  return target.port != null ? `${scheme}://${target.ip}:${target.port}` : `${scheme}://${target.ip}`;
 }
 
 function synthesizeEventId(row: unknown[]): string {

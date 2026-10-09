@@ -2328,6 +2328,9 @@ If the database can't be reached (including a connection pool that stays exhaust
 **Errors:**
 - `400` - Body isn't a single log object or `{ "logs": [...] }`, empty `logs` array, or batch exceeds 1000 entries
 - `401` - Missing/invalid `X-Shipper-ID` or Bearer key, or HTTP push not provisioned for this shipper
+- `429` - Too many log-push requests from this IP (see rate limit below)
+
+**Rate limit:** this endpoint has its own per-IP limiter (default **6000 requests / 15 min**, override with the `SHIPPER_LOG_PUSH_MAX` env var) that runs *before* authentication, so unauthenticated or invalid-key traffic is throttled rather than hammering the auth lookup unbounded. It's well above the generic UI limit — batch your pushes (up to 1000 entries each) to stay comfortably under it.
 
 ---
 

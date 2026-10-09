@@ -18,7 +18,7 @@ attack_data_sources:
   - network traffic flow
 log_access:
   - {method: file, path: /opt/adguardhome/work/data/querylog.json, format: json}
-  - {method: api_pull, endpoint: /control/querylog, auth: basic}
+  - {method: api_pull, endpoint: /control/querylog, auth: basic, target_port: 3000}
 onboard_template: templates/file_tail.j2
 credentials:
   required: false

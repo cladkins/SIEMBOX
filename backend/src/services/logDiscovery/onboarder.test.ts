@@ -111,3 +111,54 @@ test('renderOnboardInstructions fills the api_poller template', () => {
   assert.match(text, /https:\/\/192\.168\.1\.50:8123\/api\/error_log/);
   assert.match(text, /logger -n 10\.0\.0\.5 -P 514/);
 });
+
+test('buildTemplateVars prefers the log access target_port over everything else', () => {
+  const vars = buildTemplateVars(
+    fingerprint({ signals: { ports: [{ port: 8123, weight: 40 }], http: [], mdns: [], ssdp: [], tls: [], mac_oui: [] } }),
+    source({ open_ports: [443] }),
+    { method: 'api_pull', endpoint: '/api/error_log', target_port: 9999 },
+    { host: '10.0.0.5', port: 514 }
+  );
+  assert.equal(vars.port, 9999); // target_port wins over signal port (8123) and web-port guess (443)
+});
+
+test('buildTemplateVars uses the highest-weight signal port when the scan found no open ports', () => {
+  // mDNS-matched source: open_ports is empty, so there is nothing to guess from.
+  const ha = fingerprint({
+    id: 'home-assistant',
+    signals: { ports: [{ port: 8123, weight: 40 }, { port: 80, weight: 5 }], http: [], mdns: [], ssdp: [], tls: [], mac_oui: [] },
+  });
+  const vars = buildTemplateVars(ha, source({ open_ports: [] }), { method: 'api_pull', endpoint: '/api/error_log' }, { host: '10.0.0.5', port: 514 });
+  assert.equal(vars.port, 8123); // not blank, and the high-weight port beats the low-weight one
+});
+
+test('buildTemplateVars falls back to a visible PORT placeholder when no port is known', () => {
+  const vars = buildTemplateVars(fingerprint(), source({ open_ports: [] }), { method: 'api_pull', endpoint: '/api/error_log' }, { host: '10.0.0.5', port: 514 });
+  assert.equal(vars.port, 'PORT'); // never undefined -> never a dangling "ip:/path"
+});
+
+test('buildTemplateVars uses a SIEMBOX_HOST placeholder when the syslog host is unset', () => {
+  const vars = buildTemplateVars(fingerprint(), source(), { method: 'file' }, { host: '', port: 514 });
+  assert.equal(vars.siembox_host, 'SIEMBOX_HOST'); // not '' -> `logger -n SIEMBOX_HOST` stays valid
+});
+
+test('renderOnboardInstructions renders a real port and host placeholder for an mDNS-matched api_pull source with no syslog host', () => {
+  // Reproduces the reported bug: Home Assistant at 192.168.1.1 matched via mDNS
+  // (empty open_ports), syslog host never configured.
+  const ha = fingerprint({
+    id: 'home-assistant',
+    name: 'Home Assistant',
+    signals: { ports: [{ port: 8123, weight: 40 }], http: [], mdns: [], ssdp: [], tls: [], mac_oui: [] },
+    log_access: [{ method: 'api_pull', endpoint: '/api/error_log', auth: 'bearer_token', target_port: 8123 }],
+    onboard_template: 'templates/api_poller.j2',
+  });
+  const text = renderOnboardInstructions(
+    ha,
+    source({ matched_fingerprint_id: 'home-assistant', ip: '192.168.1.1', open_ports: [] }),
+    { method: 'api_pull', endpoint: '/api/error_log', target_port: 8123 },
+    { host: '', port: 514 }
+  );
+  assert.match(text, /https:\/\/192\.168\.1\.1:8123\/api\/error_log/);
+  assert.doesNotMatch(text, /192\.168\.1\.1:\/api/); // no dangling colon
+  assert.match(text, /logger -n SIEMBOX_HOST -P 514/);
+});

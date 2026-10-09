@@ -17,7 +17,7 @@ attack_data_sources:
   - authentication logs
   - application logs
 log_access:
-  - {method: api_pull, endpoint: /api/error_log, auth: bearer_token}
+  - {method: api_pull, endpoint: /api/error_log, auth: bearer_token, target_port: 8123}
   - {method: file, path: /config/home-assistant.log}
 onboard_template: templates/api_poller.j2
 credentials:

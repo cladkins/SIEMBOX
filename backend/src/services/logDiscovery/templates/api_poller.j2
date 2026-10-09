@@ -12,3 +12,6 @@ Replace $YOUR_TOKEN with the credential from the optional credential step
 (see this source's fingerprint for what it unlocks). Adjust the */5 interval
 to match how often {{ name }} rotates through new events, and swap https for
 http if {{ name }} doesn't serve TLS on {{ port }}.
+
+If SIEMBOX_HOST or PORT appears above, fill it in before running: set the
+syslog destination under Settings → Syslog, and use {{ name }}'s real API port.

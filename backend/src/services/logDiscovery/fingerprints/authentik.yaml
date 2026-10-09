@@ -19,7 +19,7 @@ attack_data_sources:
   - user account authentication
   - logon session
 log_access:
-  - {method: api_pull, endpoint: /api/v3/events/events/, auth: bearer_token}
+  - {method: api_pull, endpoint: /api/v3/events/events/, auth: bearer_token, target_port: 9443}
 onboard_template: templates/api_poller.j2
 credentials:
   required: false

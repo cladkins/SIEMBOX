@@ -2314,6 +2314,28 @@ Revoke the HTTP log-push key for a shipper. `POST /api/shippers/logs` immediatel
 { "logs": [ { "message": "..." }, { "message": "..." } ] }
 ```
 
+**Example (curl):**
+```bash
+# The push key is shown once by POST /api/shippers/:id/http-push-key;
+# X-Shipper-ID is that shipper's numeric id.
+export SIEMBOX_PUSH_KEY=...   # the 64-hex-char key
+export SIEMBOX_URL=https://siembox.example.com
+
+# Single entry
+curl -sS -X POST "$SIEMBOX_URL/api/shippers/logs" \
+  -H "Authorization: Bearer $SIEMBOX_PUSH_KEY" \
+  -H "X-Shipper-ID: 7" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Failed password for root from 203.0.113.5 port 51515 ssh2","hostname":"nas01","app_name":"sshd"}'
+
+# Batch (up to 1000 entries per request)
+curl -sS -X POST "$SIEMBOX_URL/api/shippers/logs" \
+  -H "Authorization: Bearer $SIEMBOX_PUSH_KEY" \
+  -H "X-Shipper-ID: 7" \
+  -H "Content-Type: application/json" \
+  -d '{"logs":[{"message":"line one"},{"message":"line two"}]}'
+```
+
 Only `message` is required. It must be the **bare extracted message** — the same thing `syslogParser.ts` produces after stripping `<PRI>TIMESTAMP HOSTNAME TAG:` — not a full syslog-framed line; parsers match only the extracted message (see CLAUDE.md). All other fields are optional; invalid `facility` (0–23) or `severity` (0–7) values are stored as `null` rather than rejecting the entry. `event_id`, if supplied, dedupes retried/at-least-once deliveries — a repeated `event_id` from the same shipper is counted, not re-ingested. Batches are capped at 1000 entries per request.
 
 **Response (202):**

@@ -5,6 +5,7 @@
  * the admin UI endpoints. Wire format: docs/EDR_API.md in cladkins/SIEMBOX-EDR.
  */
 import { Router, Request, Response } from 'express';
+import rateLimit from 'express-rate-limit';
 import { ApiError } from '../middleware/errorHandler';
 import { authenticate, authorize } from '../middleware/auth';
 import { authenticateAgent, requireAgentMatchesParam } from '../middleware/edrAgentAuth';
@@ -28,6 +29,22 @@ import { refreshYaraForge } from '../services/edr/yaraForgeService';
 
 const router = Router();
 
+// The global IP limiter (app.ts) exempts agent-authenticated /api/edr/* traffic
+// based only on the X-Agent-ID header's presence, so without this an invalid or
+// unauthenticated request would reach authenticateAgent's DB lookup with no
+// throttle at all. This per-IP limiter runs in FRONT of agent auth to bound that
+// (and the work it triggers). The ceiling is high on purpose: many endpoint
+// agents legitimately share one NAT egress IP — raise EDR_AGENT_RATE_MAX for
+// large fleets behind a single public IP. Enrollment stays on the global limiter
+// (it carries no X-Agent-ID, so it was never exempt).
+const edrAgentLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: Number(process.env.EDR_AGENT_RATE_MAX) || 30000, // requests per IP per window
+  message: 'Too many agent requests from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // ---- Agent-facing endpoints -------------------------------------------------
 
 // Enrollment — unauthenticated; the body carries a one-time enrollment token.
@@ -39,7 +56,7 @@ router.post('/agents/enroll', async (req: Request, res: Response) => {
 // Heartbeat — agent auth; :id must match the authenticated agent. The returned
 // config_version is composite (agent row + current YARA version) so a new YARA
 // bundle makes it rise and the agent re-pulls config. See buildAgentConfig.
-router.post('/agents/:id/heartbeat', authenticateAgent, requireAgentMatchesParam, async (req: Request, res: Response) => {
+router.post('/agents/:id/heartbeat', edrAgentLimiter, authenticateAgent, requireAgentMatchesParam, async (req: Request, res: Response) => {
   const { status, agent_version } = req.body ?? {};
   const base = await EdrAgentModel.heartbeat(req.params.id, status, agent_version);
   const yaraVersion = await getCurrentYaraVersion();
@@ -47,7 +64,7 @@ router.post('/agents/:id/heartbeat', authenticateAgent, requireAgentMatchesParam
 });
 
 // Config pull — agent auth.
-router.get('/agents/:id/config', authenticateAgent, requireAgentMatchesParam, async (req: Request, res: Response) => {
+router.get('/agents/:id/config', edrAgentLimiter, authenticateAgent, requireAgentMatchesParam, async (req: Request, res: Response) => {
   const yaraVersion = await getCurrentYaraVersion();
   res.status(200).json(buildAgentConfig(req.edrAgent!.config_version, yaraVersion));
 });
@@ -55,7 +72,7 @@ router.get('/agents/:id/config', authenticateAgent, requireAgentMatchesParam, as
 // YARA rule pull — agent auth. Returns the curated bundle (highest version) as
 // raw text/plain. Empty body is valid; the agent appends its embedded baseline.
 // The agent only calls this when yara_rules_version increased, so it's low-traffic.
-router.get('/agents/:id/yara', authenticateAgent, requireAgentMatchesParam, async (_req: Request, res: Response) => {
+router.get('/agents/:id/yara', edrAgentLimiter, authenticateAgent, requireAgentMatchesParam, async (_req: Request, res: Response) => {
   const bundle = await getCurrentYaraBundle();
   res.status(200).type('text/plain').send(bundle?.rules ?? '');
 });
@@ -69,21 +86,21 @@ function assertBodyAgent(req: Request) {
 }
 
 // Inventory — agent auth; upsert the endpoint asset.
-router.post('/inventory', authenticateAgent, async (req: Request, res: Response) => {
+router.post('/inventory', edrAgentLimiter, authenticateAgent, async (req: Request, res: Response) => {
   assertBodyAgent(req);
   await ingestInventory(req.edrAgent!.agent_id, req.body?.inventory ?? {});
   res.status(202).json({ accepted: true });
 });
 
 // Events — agent auth; detections -> alerts (deduped on event id).
-router.post('/events', authenticateAgent, async (req: Request, res: Response) => {
+router.post('/events', edrAgentLimiter, authenticateAgent, async (req: Request, res: Response) => {
   assertBodyAgent(req);
   const created = await ingestEvents(req.edrAgent!.agent_id, req.body?.events ?? []);
   res.status(202).json({ accepted: true, alerts_created: created });
 });
 
 // Vulnerabilities — agent auth; upsert into the existing vuln tables.
-router.post('/vulnerabilities', authenticateAgent, async (req: Request, res: Response) => {
+router.post('/vulnerabilities', edrAgentLimiter, authenticateAgent, async (req: Request, res: Response) => {
   assertBodyAgent(req);
   const stored = await ingestVulnerabilities(req.edrAgent!.agent_id, req.body ?? {});
   res.status(202).json({ accepted: true, stored });
@@ -139,7 +156,8 @@ router.post('/yara/refresh', authenticate, authorize('admin'), async (_req: Requ
 router.get('/agents/:id', authenticate, authorize('admin'), async (req: Request, res: Response) => {
   const agent = await EdrAgentModel.findById(req.params.id);
   if (!agent) throw new ApiError(404, 'Agent not found');
-  const { api_key_hash, ...safe } = agent as any;
+  const safe: any = { ...agent };
+  delete safe.api_key_hash; // never expose the agent's auth secret
   res.json({ agent: safe });
 });
 

@@ -2662,15 +2662,16 @@ SIEMBOX pulls that source's events on a schedule instead. See
 
 Preview the scan scope: the single-VLAN warning (SIEMBOX only sees its own
 subnet by default -- computed from the host's network interfaces regardless of
-what's below), and any manually-supplied CIDRs, validated and size-checked.
+what's below), and the scan-scope CIDRs, validated and size-checked.
 
-`cidrs` only ever reflects manually-supplied subnets -- it deliberately excludes
-the auto-detected local interface CIDR, which in the default bridge-networked
-Docker Compose deployment is just the backend container's own bridge network,
-not the user's LAN. Every CIDR that comes back here is exactly what an
-`active`/`full` scan will sweep host-by-host (see `POST /scans` below); each
-must be a /22 or smaller (1024 addresses) to keep that sweep bounded -- larger
-or malformed entries land in `rejected_cidrs` instead.
+`cidrs` is the **persisted standing scan scope** (see `GET`/`PUT /scope/cidrs`),
+unioned with any ad-hoc subnets passed in `manual_cidrs` for a dry-run preview.
+It deliberately excludes the auto-detected local interface CIDR, which in the
+default bridge-networked Docker Compose deployment is just the backend
+container's own bridge network, not the user's LAN. Every CIDR that comes back
+here is exactly what an `active`/`full` scan will sweep host-by-host (see
+`POST /scans` below); each must be a /22 or smaller (1024 addresses) to keep
+that sweep bounded -- larger or malformed entries land in `rejected_cidrs`.
 
 `detected_lan_cidr` is the host's real detected LAN subnet, offered as a
 one-click scan-scope suggestion -- never auto-added to `cidrs`. It's `null`
@@ -2692,6 +2693,44 @@ would be misleading to suggest there.
   "rejected_cidrs": [],
   "detected_lan_cidr": null
 }
+```
+
+---
+
+### GET /api/log-discovery/scope/cidrs
+
+The **persisted standing scan scope** -- the manually-entered CIDRs stored
+server-side in `system_settings` (shared across admins/devices, survives
+restarts), rather than living only in the browser. The Log Discovery page loads
+this on mount so an added subnet still shows after leaving the page, and
+`POST /scans` falls back to it when a request omits `manual_cidrs`.
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+{ "cidrs": ["192.168.20.0/24", "10.10.4.0/24"] }
+```
+
+---
+
+### PUT /api/log-discovery/scope/cidrs
+
+Replace the persisted standing scan scope. Each CIDR is validated (well-formed
+**and** a /22 or smaller, same rule as `GET /scope`); accepted entries are
+upserted, invalid/too-large entries are reported back in `rejected` rather than
+silently dropped. An empty `cidrs` array clears the scope.
+
+**Authentication:** Required (admin)
+
+**Request Body:**
+```json
+{ "cidrs": ["192.168.20.0/24", "10.0.0.0/8"] }
+```
+
+**Response (200):**
+```json
+{ "cidrs": ["192.168.20.0/24"], "rejected": ["10.0.0.0/8"] }
 ```
 
 ---
@@ -2721,7 +2760,7 @@ Trigger a scan. Runs asynchronously; returns immediately with the job id.
 }
 ```
 - `mode` - `passive` (ARP/mDNS/SSDP/DHCP-lease only), `active` (sweeps every approved manual CIDR for live hosts, then scoped port/HTTP/TLS probing of those plus whatever passive discovery found), or `full` (both passive and active)
-- `manual_cidrs` (optional) - CIDRs to sweep on this scan (each /22 or smaller; see `GET /scope`)
+- `manual_cidrs` (optional) - CIDRs to sweep on this scan (each /22 or smaller; see `GET /scope`). When omitted, the scan falls back to the persisted standing scope (`GET /scope/cidrs`); an explicit array (including an empty one) is used as-is.
 - `assignedShipperId` (optional) - run the whole probe pipeline on this log shipper (out on the LAN) instead of in-process on the backend. Must be an existing shipper id (400 otherwise). When set, the scan is created `queued` and waits for that shipper to claim it on its next job poll; omit (or `null`) to run on the backend. See the `/api/shippers/discovery-*` endpoints.
 
 **Response (202):**

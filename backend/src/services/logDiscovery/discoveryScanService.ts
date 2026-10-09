@@ -122,8 +122,55 @@ export function buildProbePlan(library = loadFingerprintLibrary()): ProbePlan {
   return { ports: selectPortsToScan(library), httpPaths: selectHttpProbes(library), mdnsServices };
 }
 
+// ---------------------------------------------------------------------------
+// Persisted scan scope. The manually-entered CIDRs are stored server-side in
+// system_settings (shared across admins/devices, survives restarts) rather than
+// only in the Log Discovery page's component state, so a subnet added to the
+// scan scope sticks instead of vanishing when the page is left. Same key-value
+// table and upsert the settings routes use. Stored as a comma-joined string of
+// already-validated CIDRs; validation itself (isValidCidr + isSweepableCidr)
+// happens at the write edge (PUT /scope/cidrs) before this is called.
+// ---------------------------------------------------------------------------
+
+export const MANUAL_CIDRS_SETTING_KEY = 'log_discovery_manual_cidrs';
+
+/**
+ * The persisted scan-scope CIDRs (the standing scope). Returns [] when nothing
+ * has been saved yet, or if the read fails -- a missing scope must never break
+ * scan triggering or the scope preview, it just means "no manual subnets".
+ */
+export async function getPersistedScopeCidrs(): Promise<string[]> {
+  try {
+    const result = await query(`SELECT value FROM system_settings WHERE key = $1`, [MANUAL_CIDRS_SETTING_KEY]);
+    if (result.rows.length === 0) return [];
+    return String(result.rows[0].value)
+      .split(',')
+      .map((c) => c.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** Upsert the standing scan-scope CIDRs (comma-joined). Callers pass an already-validated set. */
+export async function savePersistedScopeCidrs(cidrs: string[]): Promise<void> {
+  const value = Array.from(new Set(cidrs)).join(',');
+  await query(
+    `INSERT INTO system_settings (key, value)
+     VALUES ($1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+    [MANUAL_CIDRS_SETTING_KEY, value]
+  );
+}
+
 export interface RunScanOptions {
   mode: DiscoveryScanMode;
+  /**
+   * CIDRs to sweep on this run. When omitted (undefined), the persisted
+   * standing scope (getPersistedScopeCidrs) is used instead -- so a scan
+   * triggered without an explicit list still sweeps the saved subnets. An
+   * explicit array (including an empty one) is honored as-is.
+   */
   manualCidrs?: string[];
   createdBy?: number | null;
   /**
@@ -144,7 +191,10 @@ export interface RunScanResult {
 
 /** Kick off a scan asynchronously (like NmapScanner.scan) and return immediately with its job id. */
 export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
-  const scope = resolveScope(opts.manualCidrs || []);
+  // No explicit list on the request -> fall back to the persisted standing
+  // scope so scans use the saved subnets. An explicit array (even []) wins.
+  const manualCidrs = opts.manualCidrs !== undefined ? opts.manualCidrs : await getPersistedScopeCidrs();
+  const scope = resolveScope(manualCidrs);
 
   // Dispatched to a shipper: create 'queued' and return. The shipper claims it
   // via the job-pull and runs the probe out on the LAN; no in-process worker or

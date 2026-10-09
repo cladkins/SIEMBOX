@@ -47,8 +47,15 @@
 
       <div class="scope-line">
         <span class="scope-label">Scan scope:</span>
-        <el-tag v-for="cidr in scope?.cidrs || []" :key="cidr" size="small" style="margin-right: 6px">{{ cidr }}</el-tag>
-        <span v-if="!scope?.cidrs?.length" class="scope-empty">No subnets added yet — passive discovery still works without one.</span>
+        <el-tag
+          v-for="cidr in manualCidrs"
+          :key="cidr"
+          size="small"
+          closable
+          style="margin-right: 6px"
+          @close="removeCidr(cidr)"
+        >{{ cidr }}</el-tag>
+        <span v-if="!manualCidrs.length" class="scope-empty">No subnets added yet — passive discovery still works without one.</span>
         <el-button link size="small" @click="openManualCidrDialog">Add a subnet</el-button>
       </div>
 
@@ -272,10 +279,10 @@ const fingerprints = ref<FingerprintEntry[]>([]);
 
 const showManualCidrDialog = ref(false);
 const manualCidrInput = ref('');
-// The CIDRs actually confirmed via the dialog -- distinct from scope.value.cidrs, which is
-// just whatever GET /scope last echoed back (and gets overwritten on every refreshAll()).
-// This is what's threaded into both loadScope() and every triggerScan() call, so a subnet
-// you've added keeps applying to scans instead of silently resetting to none.
+// The confirmed scan-scope CIDRs. Loaded from the server's persisted standing
+// scope on mount and re-saved on every change, so a subnet you add sticks
+// across page loads / devices instead of living only in this component. It's
+// also what's threaded into loadScope() and every triggerScan() call.
 const manualCidrs = ref<string[]>([]);
 
 const showOnboardDialog = ref(false);
@@ -330,6 +337,34 @@ const showDetectedCidrSuggestion = computed(
 
 async function loadScope() {
   scope.value = await logDiscoveryService.getScope(manualCidrs.value);
+}
+
+// Load the persisted standing scope into manualCidrs so the scope tags show it
+// and triggerScan() uses it. Best-effort: a failure just leaves the scope empty.
+async function loadScopeCidrs() {
+  try {
+    manualCidrs.value = await logDiscoveryService.getScopeCidrs();
+  } catch {
+    manualCidrs.value = [];
+  }
+}
+
+// Persist a new scan-scope set server-side and reflect the server's accepted
+// result back into local state. Shared by the add/preview/remove paths so the
+// scope always matches what's stored.
+async function persistScope(next: string[]) {
+  try {
+    const { cidrs, rejected } = await logDiscoveryService.saveScopeCidrs(next);
+    manualCidrs.value = cidrs;
+    if (rejected.length > 0) {
+      ElMessage.warning(`Ignored invalid or too-large CIDR(s) (max /22): ${rejected.join(', ')}`);
+    }
+    await loadScope();
+    return true;
+  } catch (err: any) {
+    ElMessage.error(err.response?.data?.message || 'Failed to save scan scope');
+    return false;
+  }
 }
 
 async function loadScans() {
@@ -404,25 +439,31 @@ function openManualCidrDialog() {
   showManualCidrDialog.value = true;
 }
 
+// The dialog is a full editor of the scope: whatever's in the box becomes the
+// new persisted set (the box is pre-filled with the current scope on open).
 async function previewManualCidrs() {
   const cidrs = manualCidrInput.value.split(',').map((c) => c.trim()).filter(Boolean);
-  scope.value = await logDiscoveryService.getScope(cidrs);
-  if (scope.value.rejected_cidrs.length > 0) {
-    ElMessage.warning(`Ignored invalid or too-large CIDR(s) (max /22): ${scope.value.rejected_cidrs.join(', ')}`);
-  }
-  manualCidrs.value = scope.value.cidrs;
+  await persistScope(cidrs);
   showManualCidrDialog.value = false;
 }
 
-// Folds the detected LAN CIDR into the same manualCidrs/getScope flow previewManualCidrs()
-// uses for hand-entered subnets -- one click, no separate endpoint.
+// Folds the detected LAN CIDR into the persisted scope -- one click, same flow
+// as a hand-entered subnet.
 async function addDetectedCidr() {
   const detected = scope.value?.detected_lan_cidr;
   if (!detected) return;
-  const cidrs = Array.from(new Set([...manualCidrs.value, detected]));
-  scope.value = await logDiscoveryService.getScope(cidrs);
-  manualCidrs.value = scope.value.cidrs;
-  ElMessage.success(`Added ${detected} to scan scope`);
+  const next = Array.from(new Set([...manualCidrs.value, detected]));
+  if (await persistScope(next)) {
+    ElMessage.success(`Added ${detected} to scan scope`);
+  }
+}
+
+// Remove one subnet from the scan scope and persist the smaller set.
+async function removeCidr(cidr: string) {
+  const next = manualCidrs.value.filter((c) => c !== cidr);
+  if (await persistScope(next)) {
+    ElMessage.success(`Removed ${cidr} from scan scope`);
+  }
 }
 
 async function confirmSource(source: RankedSource) {
@@ -549,10 +590,12 @@ async function confirmOnboard() {
   loadSources();
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadFingerprints();
   loadPollableFingerprints();
   loadShippers();
+  // Load the persisted scope before the first scope fetch so the tags render it.
+  await loadScopeCidrs();
   refreshAll();
 });
 </script>

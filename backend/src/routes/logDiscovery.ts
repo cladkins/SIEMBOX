@@ -5,8 +5,15 @@ import { DiscoveryScanModel } from '../models/DiscoveryScan';
 import { DiscoverySourceModel } from '../models/DiscoverySource';
 import { LogShipperModel } from '../models/LogShipper';
 import { DiscoverySourcePollerModel } from '../models/DiscoverySourcePoller';
-import { resolveScope, detectLocalInterfaces } from '../services/logDiscovery/scope';
-import { runScan, requestCancel, getRankedSources, buildOnboardPreview } from '../services/logDiscovery/discoveryScanService';
+import { resolveScope, detectLocalInterfaces, isValidCidr, isSweepableCidr } from '../services/logDiscovery/scope';
+import {
+  runScan,
+  requestCancel,
+  getRankedSources,
+  buildOnboardPreview,
+  getPersistedScopeCidrs,
+  savePersistedScopeCidrs,
+} from '../services/logDiscovery/discoveryScanService';
 import { loadFingerprintLibrary, getFingerprintById } from '../services/logDiscovery/fingerprintLoader';
 import { listPollableFingerprintIds } from '../services/logDiscovery/apiPoll/registry';
 import { pollOneSource } from '../services/logDiscovery/apiPoll/poller';
@@ -19,19 +26,44 @@ function parseSourceId(req: Request): number {
   return id;
 }
 
-// GET /scope - preview of auto-detected CIDRs + the single-VLAN warning, plus a
-// dry-run merge if the caller wants to preview manual CIDRs before scanning.
-router.get('/scope', (req: Request, res: Response) => {
-  const manualCidrs = typeof req.query.manual_cidrs === 'string' && req.query.manual_cidrs.length > 0
+// GET /scope - preview of the scan scope + the single-VLAN warning. Shows the
+// persisted standing scope by default, unioned with any ad-hoc manual CIDRs the
+// caller wants to preview before scanning (e.g. while editing the subnet list).
+router.get('/scope', async (req: Request, res: Response) => {
+  const adHocCidrs = typeof req.query.manual_cidrs === 'string' && req.query.manual_cidrs.length > 0
     ? req.query.manual_cidrs.split(',').map((c) => c.trim())
     : [];
-  const scope = resolveScope(manualCidrs, detectLocalInterfaces());
+  const persisted = await getPersistedScopeCidrs();
+  const scope = resolveScope([...persisted, ...adHocCidrs], detectLocalInterfaces());
   res.json({
     cidrs: scope.cidrs,
     vlan_warning: scope.warning,
     rejected_cidrs: scope.rejected,
     detected_lan_cidr: scope.detectedLanCidr,
   });
+});
+
+// GET /scope/cidrs - the persisted standing scan-scope CIDRs (server-side,
+// shared across admins/devices). This is what the page loads on mount so an
+// added subnet survives leaving the page.
+router.get('/scope/cidrs', async (_req: Request, res: Response) => {
+  res.json({ cidrs: await getPersistedScopeCidrs() });
+});
+
+// PUT /scope/cidrs - replace the persisted standing scan scope. Each CIDR is
+// validated (well-formed AND /22-or-smaller so the sweep stays bounded);
+// accepted ones are upserted, rejected ones are reported back rather than
+// silently dropped. Admin-gated like the other mutating log-discovery routes.
+router.put('/scope/cidrs', authorize('admin'), async (req: Request, res: Response) => {
+  const { cidrs } = req.body || {};
+  if (!Array.isArray(cidrs) || !cidrs.every((c) => typeof c === 'string')) {
+    throw new ApiError(400, 'cidrs must be an array of CIDR strings');
+  }
+  const trimmed = cidrs.map((c) => c.trim()).filter(Boolean);
+  const accepted = Array.from(new Set(trimmed.filter((c) => isValidCidr(c) && isSweepableCidr(c))));
+  const rejected = trimmed.filter((c) => !(isValidCidr(c) && isSweepableCidr(c)));
+  await savePersistedScopeCidrs(accepted);
+  res.json({ cidrs: accepted, rejected });
 });
 
 // GET /fingerprints - the loaded fingerprint library (read-only, for the UI to explain matches)

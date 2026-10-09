@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import rateLimit from 'express-rate-limit';
 import { LogShipperModel, ShipperSourceModel, ShipperVolumeModel, ShipperActivityModel, withHttpPushStatus } from '../models/LogShipper';
 import { ApiError } from '../middleware/errorHandler';
 import { query } from '../config/database';
@@ -767,11 +768,27 @@ router.post('/discovery-results', async (req: Request, res: Response): Promise<v
 // middleware/shipperPushAuth.ts. NOT JWT, NOT the syslog api_key above.)
 // ============================================================================
 
+// The global IP limiter (app.ts) exempts this path so a busy shipper isn't
+// throttled by the generic UI limit — but that exemption keys only off the
+// X-Shipper-ID header's presence, so unauthenticated/invalid-key requests would
+// otherwise hit the auth lookup with no throttle at all. This dedicated per-IP
+// limiter sits in front of auth to bound that (and the DB work auth does),
+// while still giving real shippers far more headroom than the UI limit.
+// Generous for batched pushes (each request carries up to 1000 entries);
+// override with SHIPPER_LOG_PUSH_MAX if you push harder.
+const logPushLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: Number(process.env.SHIPPER_LOG_PUSH_MAX) || 6000, // requests per IP per window
+  message: 'Too many log-push requests from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Accepts a single log ({"message": "..."}) or a batch ({"logs": [...]}).
 // message must be the bare extracted message, not a syslog-framed line (see
 // CLAUDE.md: "Parsers match only the extracted message"). One bad entry in a
 // batch is counted in `rejected`, not a whole-request failure.
-router.post('/logs', authenticateShipperPush, async (req: Request, res: Response) => {
+router.post('/logs', logPushLimiter, authenticateShipperPush, async (req: Request, res: Response) => {
   try {
     const shipper = req.pushShipper!;
     const body = req.body ?? {};

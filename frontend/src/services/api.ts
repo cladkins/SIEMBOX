@@ -283,7 +283,6 @@ export const api = {
 
   // Settings - General
   getSettings: () => apiClient.get('/settings'),
-  updateSetting: (key: string, data: any) => apiClient.put(`/settings/${key}`, data),
 
   // Assets
   getAssets: (params?: any) => apiClient.get('/assets', { params }),

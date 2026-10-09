@@ -121,6 +121,18 @@ class LogDiscoveryServiceClient {
     return response.data;
   }
 
+  /** The persisted standing scan-scope CIDRs (server-side, shared across admins/devices). */
+  async getScopeCidrs(): Promise<string[]> {
+    const response = await apiClient.get('/log-discovery/scope/cidrs');
+    return response.data.cidrs;
+  }
+
+  /** Replace the persisted scan scope. Returns the accepted set plus any CIDRs the server rejected (invalid or larger than /22). */
+  async saveScopeCidrs(cidrs: string[]): Promise<{ cidrs: string[]; rejected: string[] }> {
+    const response = await apiClient.put('/log-discovery/scope/cidrs', { cidrs });
+    return response.data;
+  }
+
   async getFingerprints(): Promise<FingerprintEntry[]> {
     const response = await apiClient.get('/log-discovery/fingerprints');
     return response.data;

@@ -587,7 +587,10 @@ async function main() {
     log: (level, message) => process.stderr.write(`[discovery-agent] ${level}: ${message}
 `)
   });
-  process.stdout.write(JSON.stringify(signals));
+  const out = JSON.stringify(signals ?? []);
+  await new Promise((resolve, reject) => {
+    process.stdout.write(out, (err) => err ? reject(err) : resolve());
+  });
 }
 main().catch((err) => {
   process.stderr.write(`[discovery-agent] fatal: ${err?.message || err}

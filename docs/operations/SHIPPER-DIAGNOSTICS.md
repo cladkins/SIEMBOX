@@ -274,7 +274,16 @@ techniques (ARP/mDNS/SSDP) are link-local and only see the segment the container
 is on — a bridged shipper gets little from them and falls back to the active CIDR
 sweep + probes. Run the discovery shipper with `network_mode: host` for the full
 passive signal. The agent's own warnings go to `/tmp/siembox-discovery-agent.log`
-inside the container.
+inside the container. A scan that simply finds nothing completes with **0
+sources** — it is not reported `failed`.
+
+**log-discovery scan reported `failed`** (**1.4.2**+): the error carries a snippet
+of the agent's stderr, shown on the scan in the UI — e.g. `discovery agent exited
+with code <N> on the shipper: <reason>`. `produced no output` is a distinct case:
+the agent exited cleanly but returned nothing. Because it always emits at least
+`[]` for an empty scan, that points at a truncated/lost run rather than "no
+devices found". The full agent log is at `/tmp/siembox-discovery-agent.log` inside
+the container.
 
 ## Diagnostic Procedure
 

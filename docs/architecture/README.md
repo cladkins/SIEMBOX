@@ -34,6 +34,13 @@ Design record for agentic SOC triage (automatic per-alert LLM analysis):
 - Trigger, cost controls, and the two alert-creation call sites
 - Threat model notes and the "thin and extensible" tool-registry extension point
 
+### [DIGITAL-RISK-AND-SETTINGS.md](./DIGITAL-RISK-AND-SETTINGS.md)
+Design for Digital Risk / Exposure Monitoring, the per-area settings hub, and onboarding:
+- Leaked-credential monitoring (HIBP, Pwned Passwords via k-anonymity) and its privacy guardrails
+- Domain monitoring: Certificate Transparency, lookalike/typosquat detection, RDAP, DNS drift
+- One role-gated settings page per functional area, plus a table mapping each old setting to its new page
+- An onboarding Digital Risk step that shares its API with the settings page; roadmap and default decisions
+
 ### [VAULTWARDEN-PARSER-IMPLEMENTATION.md](./VAULTWARDEN-PARSER-IMPLEMENTATION.md)
 Implementation details for Vaultwarden password manager parser:
 - Log format analysis

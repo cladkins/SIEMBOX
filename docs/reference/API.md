@@ -21,6 +21,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Assets](#assets-endpoints)
   - [Log Discovery](#log-discovery-endpoints)
   - [Vulnerabilities](#vulnerabilities-endpoints)
+  - [Exposure Monitoring (Digital Risk)](#exposure-monitoring-digital-risk)
   - [Admin Dashboard](#admin-dashboard-endpoints)
 
 ---
@@ -69,6 +70,7 @@ Authorization: Bearer YOUR_JWT_TOKEN
 | 403 | Forbidden | Insufficient permissions |
 | 404 | Not Found | Resource not found |
 | 409 | Conflict | Resource already exists |
+| 429 | Too Many Requests | Rate limit exceeded |
 | 500 | Internal Server Error | Server error |
 
 A request body that isn't valid JSON is rejected with `400` (`"Malformed request
@@ -3662,6 +3664,510 @@ Update vulnerability status for an asset.
 
 ---
 
+## Exposure Monitoring (Digital Risk)
+
+Watches for your organization's exposure **outside** your network:
+
+- **Leaked credentials** — monitored email addresses (and whole email domains)
+  are checked against [Have I Been Pwned](https://haveibeenpwned.com) (HIBP).
+  Each breach an identity appears in becomes an **exposure finding** and, the
+  first time it is seen, an **alert** (`alerts.source = "leaked-creds"`,
+  `rule_id = null`) in the normal alert queue.
+- **Password check** — a stateless, k-anonymous check of one password against
+  HIBP's Pwned Passwords corpus.
+- **Watched domains** — your own domains and brand names to protect. The
+  collectors that will watch them (certificate transparency, lookalike
+  domains, RDAP, DNS) ship in a later release; these endpoints already let the
+  UI and onboarding collect them, and `GET /status` reports
+  `domain_monitor_available: false` until then.
+
+HIBP is **bring-your-own-key** (an HIBP subscription; see
+[HIBP API keys](https://haveibeenpwned.com/API/Key)). Nothing is checked until a
+key is saved and the provider is enabled. The backend needs outbound HTTPS to
+`haveibeenpwned.com` (breach searches) and `api.pwnedpasswords.com` (password
+check; no key needed). Breach data is licensed CC BY 4.0:
+every finding carries `detail.attribution = "https://haveibeenpwned.com"` and its
+alert description names HIBP as the source — keep that attribution wherever the
+data is shown.
+
+**Authentication:** every endpoint requires a session. Reads (and the password
+check) are open to any authenticated user; **all writes require the admin role**.
+
+### How leaked-credential checks run
+
+- A background job (`leaked-creds` in [`GET /api/admin/jobs`](#get-apiadminjobs))
+  wakes every 15 minutes and checks the identities that are **due** — never
+  checked, or last checked more than their own `interval_minutes` ago (daily by
+  default) — one at a time.
+- `email` identities use HIBP's breached-account search. `email_domain`
+  identities use the domain search, which only works for domains you have
+  **verified in your HIBP domain dashboard**; it yields one finding per
+  alias + breach. An unverified domain is marked `last_status: "error"` with an
+  explanation and retried after its interval.
+- Calls are paced to the key's plan (requests per minute from HIBP's
+  subscription status; 10/min until known). A `429` pauses all checks until
+  HIBP's `retry-after` has passed; a rejected key (`401`) pauses them for an
+  hour or until the key is changed. Neither retries in a loop; unchecked
+  identities simply stay due.
+- Findings are deduplicated on `sha256(kind:value:[alias:]breach)`: re-checks
+  only update `last_seen`, never raise a second alert, and never reopen a
+  resolved finding.
+- **Severity:** `high` when the breach exposed credentials (Passwords,
+  Historical passwords, Auth tokens), is a stealer log, or is a sensitive breach;
+  `low` for spam lists and fabricated breaches without credentials; `medium`
+  otherwise.
+- **Notifications** are **opt-in**: `notify_exposure_enabled` defaults to
+  `false` and `notify_exposure_min_severity` to `medium`. Once enabled, new
+  findings go to the configured Slack / Email / NTFY channels, grouped into one
+  message per identity per check (so a large email domain can't flood a channel).
+  AI auto-triage is not run on these alerts.
+
+### Privacy guarantees
+
+- **The HIBP API key is write-only.** It is stored encrypted (AES-256-GCM via
+  `CREDENTIAL_ENCRYPTION_KEY`, like the threat-intel provider keys) and no
+  endpoint ever returns it — only `configured` / `enabled` booleans.
+- **Passwords never leave the server and are never stored or logged.**
+  `POST /password-check` hashes locally (SHA-1, as the range API requires) and
+  sends only the first 5 hex characters to `api.pwnedpasswords.com` with
+  response padding on; the match happens locally. The request body is dropped
+  from the request as soon as it is read, and nothing — password, hash, prefix or
+  response — is logged or persisted.
+- **No secrets in findings or alerts.** Every finding's `detail` (also copied into
+  the alert's `matched_data`) is scrubbed of any key matching
+  `/pass(word)?|pwd|hash|secret|token|api[_-]?key|credential/i`, at any depth.
+- **Malformed request bodies are never logged.** A JSON body that fails to
+  parse gets a `400` (`"Malformed request body: expected valid JSON"`) without
+  its contents reaching the logs or `application_errors` — this applies to every
+  endpoint, so a malformed login or key-save request can't leak a secret either.
+- The password check is rate limited to **30 requests per 15 minutes per client
+  IP** (admins included), so it can't be used as a high-volume oracle.
+
+### GET /api/exposure/status
+
+Feature flags, provider state (never the key), counts and the last run.
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+{
+  "features": {
+    "leaked_creds_enabled": true,
+    "password_check_available": true,
+    "domain_monitor_available": false
+  },
+  "notifications": { "enabled": false, "min_severity": "medium" },
+  "providers": [
+    {
+      "name": "hibp",
+      "label": "Have I Been Pwned",
+      "docsUrl": "https://haveibeenpwned.com/API/v3",
+      "signupUrl": "https://haveibeenpwned.com/API/Key",
+      "attribution": "https://haveibeenpwned.com",
+      "configured": true,
+      "enabled": true
+    }
+  ],
+  "counts": {
+    "identities": 3,
+    "identities_enabled": 3,
+    "identities_due": 0,
+    "domains": 1,
+    "domains_enabled": 1,
+    "findings_total": 5,
+    "findings_open": 4,
+    "findings_open_by_severity": { "high": 3, "medium": 1 }
+  },
+  "leaked_creds": {
+    "running": false,
+    "paused_until": null,
+    "pause_reason": null,
+    "last_run": {
+      "at": "2026-10-10T09:15:02Z",
+      "trigger": "schedule",
+      "summary": { "checked": 1, "newFindings": 2, "failed": 0, "remaining": 0, "skipped": false }
+    },
+    "job": {
+      "status": "ok",
+      "last_run_at": "2026-10-10T09:15:00Z",
+      "last_result": "checked 1 identity, 2 new findings",
+      "last_error": null,
+      "next_run_at": "2026-10-10T09:30:00Z"
+    }
+  }
+}
+```
+`last_run` and `job` describe this backend process only (they reset on restart);
+`paused_until`/`pause_reason` are set while HIBP has asked us to back off or has
+rejected the key.
+
+---
+
+### GET /api/exposure/settings
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+{
+  "notify_exposure_enabled": false,
+  "notify_exposure_min_severity": "medium",
+  "exposure_leaked_creds_enabled": true
+}
+```
+
+### PUT /api/exposure/settings
+
+Update any subset of the settings above.
+
+**Authentication:** Required (Admin)
+
+**Request Body:**
+```json
+{ "notify_exposure_enabled": true, "notify_exposure_min_severity": "high" }
+```
+- `notify_exposure_enabled`, `exposure_leaked_creds_enabled` — JSON booleans
+- `notify_exposure_min_severity` — `low` | `medium` | `high` | `critical`
+
+**Response (200):** the full settings object.
+
+**Errors:** `400` - a value of the wrong type or an unknown severity
+
+---
+
+### GET /api/exposure/providers
+
+The breach-data providers, without keys: `[{ "name": "hibp", ..., "configured": true, "enabled": true }]`
+(same objects as `providers` in `GET /status`).
+
+**Authentication:** Required
+
+### PUT /api/exposure/providers/hibp
+
+Save the HIBP API key and/or enable the provider. Saving (or re-enabling) also
+lifts any rate-limit or rejected-key pause.
+
+**Authentication:** Required (Admin)
+
+**Request Body:**
+```json
+{ "api_key": "0123456789abcdef0123456789abcdef", "enabled": true }
+```
+- `api_key` (optional) - a 32-character hex HIBP key. Encrypted at rest; never
+  returned. `""` or `null` clears it.
+- `enabled` (optional) - boolean
+
+**Response (200):** the public provider object (`configured` / `enabled`, never the key).
+
+**Errors:**
+- `400` - `api_key` is not a 32-character hex key, `enabled` is not a boolean, or
+  `CREDENTIAL_ENCRYPTION_KEY` is missing/invalid (the message says how to fix it)
+
+### POST /api/exposure/providers/hibp/test
+
+Validate a key with HIBP's cheapest authenticated call (`subscription/status`).
+Tests the `api_key` in the body if given (so a key can be checked before it is
+saved), otherwise the stored key. Nothing is saved.
+
+**Authentication:** Required (Admin)
+
+**Request Body:** `{ "api_key": "…" }` (optional)
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "subscription": {
+    "name": "Pwned 1",
+    "description": "…",
+    "subscribed_until": "2027-01-01T00:00:00",
+    "rpm": 10,
+    "domain_search_max_breached_accounts": 25,
+    "includes_stealer_logs": false
+  }
+}
+```
+
+**Errors:**
+- `400` - no key given or saved, a malformed key, or HIBP rejected the key
+  (HIBP's public test key `000…0` fails here: `subscription/status` refuses it,
+  although the breach searches accept it for HIBP's test accounts)
+- `429` - HIBP rate-limited the test
+- `502` - HIBP could not be reached
+
+---
+
+### GET /api/exposure/domains
+
+All watched domains, alphabetically.
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+[
+  {
+    "id": 1,
+    "domain": "example.com",
+    "scope": "own",
+    "enabled": true,
+    "interval_minutes": 1440,
+    "collectors": { "ct": true, "lookalike": true, "rdap": true, "dns": true },
+    "expected_cas": ["Let's Encrypt"],
+    "last_checked_at": null,
+    "next_run_at": null,
+    "last_status": null,
+    "last_error": null,
+    "created_at": "2026-10-10T09:00:00Z",
+    "updated_at": "2026-10-10T09:00:00Z"
+  }
+]
+```
+
+### POST /api/exposure/domains
+
+**Authentication:** Required (Admin)
+
+**Request Body:**
+```json
+{ "domain": "example.com", "scope": "own", "expected_cas": ["Let's Encrypt"] }
+```
+- `domain` (required) - a bare DNS name with a real TLD, at most 253 characters
+  (1-63 per label). Stored lowercase; a trailing root dot is dropped. **Rejected:**
+  URLs and schemes, ports, paths/queries, `user@`, wildcards (`*.example.com`),
+  IP addresses, and non-ASCII names (enter IDNs in punycode, `xn--…`).
+- `scope` (optional, default `own`) - `own` (your domain) or `brand` (a name to
+  protect from lookalikes)
+- `enabled` (optional) - boolean, default `true`
+- `interval_minutes` (optional) - whole minutes, `60`-`43200`, default `1440`
+- `collectors` (optional) - any of `ct`, `lookalike`, `rdap`, `dns` → boolean;
+  unspecified collectors stay on
+- `expected_cas` (optional) - up to 50 CA names expected to issue for the domain
+
+**Response (201):** the created domain.
+
+**Errors:**
+- `400` - invalid domain (the message says why), scope, interval, collectors or CA list
+- `409` - the domain is already watched
+
+### PUT /api/exposure/domains/:id
+
+Update `scope`, `enabled`, `interval_minutes`, `collectors` (merged over the
+current values) and/or `expected_cas` (replaced). The domain itself can't be
+changed — delete it and add the new one.
+
+**Authentication:** Required (Admin)
+
+**Response (200):** the updated domain.
+
+**Errors:** `400` - invalid id or field, or an attempt to change `domain`;
+`404` - not found
+
+### DELETE /api/exposure/domains/:id
+
+Deletes the domain and its findings (their alerts stay in the alert queue).
+
+**Authentication:** Required (Admin)
+
+**Response (200):** `{ "message": "Watched domain deleted" }` · **Errors:** `404` - not found
+
+---
+
+### GET /api/exposure/identities
+
+All monitored identities.
+
+**Authentication:** Required
+
+**Response (200):**
+```json
+[
+  {
+    "id": 3,
+    "kind": "email",
+    "value": "alice@example.com",
+    "enabled": true,
+    "interval_minutes": 1440,
+    "last_checked_at": "2026-10-10T09:15:01Z",
+    "last_status": "ok",
+    "last_error": null,
+    "created_at": "2026-10-09T18:00:00Z",
+    "updated_at": "2026-10-09T18:00:00Z"
+  }
+]
+```
+`last_status` is `ok` or `error` (with `last_error` saying why, e.g. an unverified
+domain).
+
+### POST /api/exposure/identities
+
+**Authentication:** Required (Admin)
+
+**Request Body:**
+```json
+{ "kind": "email", "value": "alice@example.com" }
+```
+- `kind` (required) - `email` or `email_domain`
+- `value` (required) - an email address (dot-atom local part; quoted local parts
+  aren't supported) for `email`, or a domain (same rules as watched domains) for
+  `email_domain`. Stored lowercase.
+- `enabled` (optional) - boolean, default `true`
+- `interval_minutes` (optional) - whole minutes, `60`-`43200`, default `1440`
+
+**Response (201):** the created identity. It is due immediately, so the next job
+tick (or `POST /run-now`) checks it.
+
+**Errors:** `400` - invalid kind or value; `409` - already monitored
+
+### PUT /api/exposure/identities/:id
+
+Update `enabled` and/or `interval_minutes`. `kind` and `value` can't be changed
+(findings are fingerprinted on them) — delete and re-add instead.
+
+**Authentication:** Required (Admin)
+
+**Response (200):** the updated identity · **Errors:** `400`, `404`
+
+### DELETE /api/exposure/identities/:id
+
+Deletes the identity and its findings. Their alerts stay in the alert queue; if
+the identity is added back, a re-found breach re-links its existing alert rather
+than raising a new one.
+
+**Authentication:** Required (Admin)
+
+**Response (200):** `{ "message": "Monitored identity deleted" }` · **Errors:** `404` - not found
+
+---
+
+### GET /api/exposure/findings
+
+Findings, newest first.
+
+**Authentication:** Required
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `source` | string | - | `leaked-creds` or `domain-monitor` |
+| `unresolved` | boolean | `false` | `true` (or `1`) for open findings only |
+| `severity` | string | - | `low`, `medium`, `high` or `critical` |
+| `identity_id` | integer | - | Findings for one identity |
+| `domain_id` | integer | - | Findings for one watched domain |
+| `limit` | integer | 50 | 1-200 |
+| `offset` | integer | 0 | Pagination offset |
+
+**Response (200):**
+```json
+{
+  "findings": [
+    {
+      "id": 12,
+      "source": "leaked-creds",
+      "identity_id": 3,
+      "domain_id": null,
+      "event_type": "breach",
+      "title": "alice@example.com found in Adobe breach",
+      "severity": "high",
+      "detail": {
+        "account": "alice@example.com",
+        "breach_name": "Adobe",
+        "breach_title": "Adobe",
+        "breach_domain": "adobe.com",
+        "breach_date": "2013-10-04",
+        "added_date": "2013-12-04T00:00:00Z",
+        "data_classes": ["Email addresses", "Password hints", "Passwords", "Usernames"],
+        "is_verified": true,
+        "is_sensitive": false,
+        "is_stealer_log": false,
+        "is_spam_list": false,
+        "is_fabricated": false,
+        "source": "hibp",
+        "attribution": "https://haveibeenpwned.com"
+      },
+      "alert_id": 4711,
+      "first_seen": "2026-10-10T09:15:01Z",
+      "last_seen": "2026-10-11T09:15:03Z",
+      "resolved_at": null,
+      "identity_kind": "email",
+      "identity_value": "alice@example.com",
+      "domain": null
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+Findings from an `email_domain` identity also carry `detail.alias` (the local part
+that was found).
+
+**Errors:** `400` - unknown `source`/`severity`, or a malformed id/limit/offset
+
+### POST /api/exposure/findings/:id/resolve
+
+Mark a finding resolved (e.g. the password was changed). Idempotent: resolving
+again keeps the first `resolved_at`. Re-checks never reopen it.
+
+**Authentication:** Required (Admin)
+
+**Response (200):** the finding · **Errors:** `404` - not found
+
+---
+
+### POST /api/exposure/run-now
+
+Run the leaked-credential check now instead of waiting for the job.
+
+**Authentication:** Required (Admin)
+
+**Request Body:** `{ "force": true }` (optional) - check every enabled identity,
+not just the due ones.
+
+Stops starting new checks after ~90 seconds (HIBP calls are paced to the key's
+plan, about 6 s apart on the smallest one); anything left stays due for the
+scheduled job. Allow a client timeout of a couple of minutes.
+
+**Response (200):**
+```json
+{ "checked": 3, "newFindings": 2, "failed": 0, "remaining": 0, "skipped": false }
+```
+- `skipped: true` with a `reason` when nothing ran (checks disabled, no provider
+  configured, paused, or nothing due)
+- `error` (and `rateLimitedUntil` for a `429`) when the run stopped early
+- `remaining` - identities still due afterwards
+
+**Errors:** `409` - a check is already running
+
+---
+
+### POST /api/exposure/password-check
+
+Check one password against Pwned Passwords using k-anonymity (see
+[Privacy guarantees](#privacy-guarantees)).
+
+**Authentication:** Required · **Rate limit:** 30 requests / 15 minutes per client IP
+
+**Request Body:**
+```json
+{ "password": "the password to check" }
+```
+At most 1024 characters.
+
+**Response (200)** (sent with `Cache-Control: no-store`):
+```json
+{ "pwned": true, "count": 52256 }
+```
+`count` is how many times the password appears in the corpus (`0` when not pwned).
+
+**Errors:**
+- `400` - missing, empty or over-long password, or a malformed JSON body
+- `429` - rate limit exceeded
+- `502` - the Pwned Passwords service could not be reached
+
+---
+
 ## Admin Dashboard Endpoints
 
 All admin endpoints require authentication with the **admin** role.
@@ -3875,7 +4381,7 @@ Unified view of background work. Returns two lists:
   container-image and log-discovery scans), merged and paged as one list.
 - `recurring` — the periodic in-process services (retention cleanup, asset
   auto-discovery, the scheduled-scan dispatcher, ingestion health, threat-feed
-  refresh, YARA-Forge refresh). These own no rows, so their state is tracked in
+  refresh, YARA-Forge refresh, leaked-credential checks). These own no rows, so their state is tracked in
   memory and **resets on backend restart** — `"status": "idle"` with
   `"lastRunAt": null` right after a restart is expected, not a fault.
 

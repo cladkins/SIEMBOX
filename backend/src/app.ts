@@ -28,6 +28,7 @@ import threatFeedsRoutes from './routes/threatFeeds';
 import edrRoutes from './routes/edr';
 import packsRoutes from './routes/packs';
 import logDiscoveryRoutes from './routes/logDiscovery';
+import exposureRoutes from './routes/exposure';
 
 const app: Application = express();
 
@@ -125,6 +126,7 @@ app.use('/api/threat-feeds', authenticate, threatFeedsRoutes); // External threa
 app.use('/api/edr', edrRoutes); // EDR endpoint agents (enroll + agent-auth ingest + admin UI)
 app.use('/api/packs', authenticate, packsRoutes); // Content Packs (curated parser+detection bundles)
 app.use('/api/log-discovery', authenticate, logDiscoveryRoutes); // Log source discovery, fingerprinting + onboarding
+app.use('/api/exposure', authenticate, exposureRoutes); // Digital Risk: leaked credentials, watched domains, findings
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

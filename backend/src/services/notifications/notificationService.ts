@@ -2,7 +2,7 @@
  * Notification Service
  *
  * Sends notifications to configured channels (Slack / Email / NTFY) for alerts,
- * vulnerability findings, and log-ingestion health. Per-event preferences
+ * vulnerability findings, exposure findings, and log-ingestion health. Per-event preferences
  * (enabled + minimum severity) live in system_settings; channels live in the
  * notification_channels table. All sends are best-effort — a failing channel is
  * logged and never blocks the others or the calling code.
@@ -72,6 +72,52 @@ export function buildAlertGroupMessage(
 
   return {
     title: `[SIEMBox] ${worst.severity.toUpperCase()} alert: ${worst.title} (+${alerts.length - 1} more)`,
+    body: lines.join('\n').trim(),
+    severity: worst.severity,
+  };
+}
+
+/** A new exposure finding (leaked credential, domain-monitor hit) to announce. */
+export interface ExposureNotice {
+  source: string;
+  severity: string;
+  title: string;
+  description?: string;
+}
+
+// A grouped message lists at most this many findings; the rest are counted.
+const EXPOSURE_GROUP_LIST_LIMIT = 10;
+
+/**
+ * One message for the exposure findings a check produced. A single finding
+ * reads like an alert; several (a monitored email domain can surface many
+ * accounts at once) become ONE message led by the worst finding, so a large
+ * first run cannot fan out into a burst of Slack/email/ntfy messages.
+ */
+export function buildExposureMessage(findings: ExposureNotice[]): NotificationMessage {
+  const rank = (f: ExposureNotice) => SEVERITY_RANK[f.severity?.toLowerCase()] ?? 0;
+  const sorted = [...findings].sort((a, b) => rank(b) - rank(a));
+  const worst = sorted[0];
+
+  if (findings.length === 1) {
+    return {
+      title: `[SIEMBox] ${worst.severity.toUpperCase()} exposure: ${worst.title}`,
+      body: `Source: ${worst.source}\nSeverity: ${worst.severity}\n${worst.description || ''}`.trim(),
+      severity: worst.severity,
+    };
+  }
+
+  const shown = sorted.slice(0, EXPOSURE_GROUP_LIST_LIMIT);
+  const lines = [
+    `${findings.length} new exposure findings.`,
+    '',
+    ...shown.map((f) => `- [${f.severity.toUpperCase()}] ${f.title}`),
+  ];
+  if (findings.length > shown.length) lines.push(`- ...and ${findings.length - shown.length} more`);
+  if (worst.description) lines.push('', worst.description);
+
+  return {
+    title: `[SIEMBox] ${worst.severity.toUpperCase()} exposure: ${worst.title} (+${findings.length - 1} more)`,
     body: lines.join('\n').trim(),
     severity: worst.severity,
   };
@@ -256,6 +302,26 @@ export const NotificationService = {
     } catch (err) {
       logger.error('[Notifications] notifyVulnScan failed:', err);
       ErrorLogService.logBackgroundError('notifications', err, { dedupeKey: 'notifyVulnScan' });
+    }
+  },
+
+  /**
+   * New exposure findings (Digital Risk). Opt-in like every other event:
+   * gated on notify_exposure_enabled, then each finding is held to
+   * notify_exposure_min_severity and only the survivors are announced, as one
+   * message (see buildExposureMessage).
+   */
+  async notifyExposure(findings: ExposureNotice[]): Promise<void> {
+    try {
+      if (findings.length === 0) return;
+      if ((await getSetting('notify_exposure_enabled', 'false')) !== 'true') return;
+      const min = await getSetting('notify_exposure_min_severity', 'medium');
+      const passing = findings.filter((f) => severityPasses(f.severity, min));
+      if (passing.length === 0) return;
+      await dispatch(buildExposureMessage(passing));
+    } catch (err) {
+      logger.error('[Notifications] notifyExposure failed:', err);
+      ErrorLogService.logBackgroundError('notifications', err, { dedupeKey: 'notifyExposure' });
     }
   },
 

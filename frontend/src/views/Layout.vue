@@ -242,9 +242,16 @@ watch(() => route.path, () => {
   mobileMenuOpen.value = false;
 });
 
-const activeMenu = computed(() => route.path);
+// The Settings hub's areas are nested routes (/settings/account, /settings/ai, ...).
+const isSettingsArea = computed(() => route.path.startsWith('/settings/'));
+
+// Keep the sidebar's Settings item highlighted on every settings area.
+const activeMenu = computed(() => (isSettingsArea.value ? '/settings' : route.path));
 
 const pageTitle = computed(() => {
+  // The hub's own header names the area, so the top bar just says Settings.
+  if (isSettingsArea.value) return 'Settings';
+
   const titles: Record<string, string> = {
     '/': 'Dashboard',
     '/ai-analyst': 'AI Analyst',

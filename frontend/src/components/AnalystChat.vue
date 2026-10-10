@@ -31,7 +31,7 @@
         title="AI Analyst model not configured"
       >
         An admin can set a provider/model in
-        <router-link to="/settings">Settings → AI Analyst</router-link>
+        <router-link to="/settings/ai">Settings → AI Analyst</router-link>
         (point it at a local Ollama model or a cloud provider).
       </el-alert>
 

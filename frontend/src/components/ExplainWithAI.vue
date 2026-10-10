@@ -22,7 +22,7 @@
         >
           <template v-if="notConfigured" #default>
             {{ error }}
-            <router-link to="/settings">Configure it in Settings → AI Builder.</router-link>
+            <router-link to="/settings/ai">Configure it in Settings → AI Builder.</router-link>
           </template>
         </el-alert>
 

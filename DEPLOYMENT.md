@@ -542,7 +542,7 @@ which also lists the tuning variables (`DB_INGEST_POOL_MAX`, `INGEST_CONCURRENCY
 
 ### Log Retention
 
-Configure in Settings UI:
+Configure in the UI under **Settings → Data Retention**:
 - Raw logs: 30 days (default)
 - Parsed logs: 90 days (default)
 - Alerts: 365 days (default)
@@ -624,7 +624,7 @@ SELECT
 
 ### Log Retention
 
-SIEMBox automatically cleans old logs according to retention policies. Configure retention via the Settings page in the web UI:
+SIEMBox automatically cleans old logs according to retention policies. Configure retention in the web UI under **Settings → Data Retention**:
 - Raw logs: Default 30 days
 - Parsed logs: Default 90 days
 - Alerts: Default 365 days

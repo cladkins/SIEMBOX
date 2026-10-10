@@ -9,7 +9,7 @@
       title="AI Triage is not configured"
     >
       An admin can enable automatic alert analysis in
-      <router-link to="/settings">Settings → AI Triage</router-link>.
+      <router-link to="/settings/ai">Settings → AI Triage</router-link>.
     </el-alert>
 
     <template v-else-if="!row">

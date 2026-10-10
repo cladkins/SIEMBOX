@@ -46,8 +46,8 @@
                   </el-button>
                 </el-form-item>
               </el-form>
-              <el-button size="small" @click="go('/settings')">
-                {{ mfaEnabled ? 'MFA enabled — manage in Settings' : 'Enable MFA in Settings → Security' }} →
+              <el-button size="small" @click="go('/settings/account')">
+                {{ mfaEnabled ? 'MFA enabled — manage in Settings' : 'Enable MFA in Settings → Account' }} →
               </el-button>
             </div>
           </template>
@@ -94,7 +94,7 @@
           <template #description>
             <div class="step-body">
               <p>Add an AI provider key to unlock <em>Generate with AI</em> and the AI Security Analyst. Optional.</p>
-              <el-button size="small" @click="go('/settings')">Settings → AI Builder →</el-button>
+              <el-button size="small" @click="go('/settings/ai')">Settings → AI Builder →</el-button>
             </div>
           </template>
         </el-step>
@@ -108,7 +108,7 @@
           <template #description>
             <div class="step-body">
               <p>Add an Email / Slack / ntfy channel so alerts reach you, then send a test alert to confirm.</p>
-              <el-button size="small" @click="go('/settings')">Settings → Notifications →</el-button>
+              <el-button size="small" @click="go('/settings/notifications')">Settings → Notifications →</el-button>
             </div>
           </template>
         </el-step>

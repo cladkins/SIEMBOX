@@ -9,7 +9,7 @@
       title="AI Triage is not configured"
     >
       An admin can enable automatic alert analysis in
-      <router-link to="/settings">Settings → AI Triage</router-link>. Once enabled, new
+      <router-link to="/settings/ai">Settings → AI Triage</router-link>. Once enabled, new
       {{ triageStore.minSeverity }}+ severity alerts are analyzed automatically and appear here.
     </el-alert>
 

@@ -31,7 +31,8 @@
         title="AI Analyst model not configured"
       >
         An admin can set a provider/model in
-        <router-link to="/settings/ai">Settings → AI Analyst</router-link>
+        <router-link v-if="authStore.isAdmin" to="/settings/ai">Settings → AI Analyst</router-link>
+        <template v-else>Settings → AI Analyst</template>
         (point it at a local Ollama model or a cloud provider).
       </el-alert>
 
@@ -108,11 +109,13 @@
 import { ref, onMounted, watch, nextTick } from 'vue';
 import { ChatDotRound, MagicStick, User, Plus, Delete, Loading } from '@element-plus/icons-vue';
 import { useChatStore } from '@/stores/chat';
+import { useAuthStore } from '@/stores/auth';
 import { renderMarkdown } from '@/utils/markdown';
 
 withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
 
 const store = useChatStore();
+const authStore = useAuthStore();
 const input = ref('');
 const scrollRef = ref<any>(null);
 

@@ -22,7 +22,8 @@
         >
           <template v-if="notConfigured" #default>
             {{ error }}
-            <router-link to="/settings/ai">Configure it in Settings → AI Builder.</router-link>
+            <router-link v-if="authStore.isAdmin" to="/settings/ai">Configure it in Settings → AI Builder.</router-link>
+            <template v-else>An administrator can configure it in Settings → AI Builder.</template>
           </template>
         </el-alert>
 

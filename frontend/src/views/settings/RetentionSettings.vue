@@ -94,8 +94,30 @@
   </div>
 </template>
 
+<script lang="ts">
+// Module scope, shared by every instance of this page: the cleanup-job poll
+// that is running, if any. Only one may run at a time, so coming back to the
+// page while a cleanup runs can't start a second poll (and a second
+// "completed" toast).
+interface CleanupPoll {
+  stopped: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+  wake?: () => void;
+}
+let activeCleanupPoll: CleanupPoll | null = null;
+
+// Cancel a poll's pending 2s wait and wake it so it exits without touching
+// the UI. The purge itself keeps running on the server.
+function stopCleanupPoll(poll: CleanupPoll) {
+  poll.stopped = true;
+  clearTimeout(poll.timer);
+  poll.wake?.();
+  if (activeCleanupPoll === poll) activeCleanupPoll = null;
+}
+</script>
+
 <script setup lang="ts">
-import { ref, onMounted, reactive } from 'vue';
+import { ref, onMounted, onUnmounted, reactive } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Check, Delete } from '@element-plus/icons-vue';
@@ -109,6 +131,9 @@ const cleanupProgress = ref('');
 
 // Refreshed when a cleanup finishes, so the totals reflect what was purged.
 const statsCard = ref<InstanceType<typeof SystemInformationCard> | null>(null);
+
+// The poll this instance started, so leaving the page stops exactly that one.
+let ownCleanupPoll: CleanupPoll | null = null;
 
 const retentionForm = reactive({
   raw_logs_days: 30,
@@ -126,6 +151,12 @@ onMounted(async () => {
     /* status is best-effort */
   }
   fetchRetentionSettings();
+});
+
+// Leaving the page stops its poll; coming back re-attaches above and shows the
+// job's progress again.
+onUnmounted(() => {
+  if (ownCleanupPoll) stopCleanupPoll(ownCleanupPoll);
 });
 
 async function fetchRetentionSettings() {
@@ -189,11 +220,17 @@ async function runManualCleanup() {
 }
 
 async function pollCleanupJob() {
+  // One poll at a time: one already running owns the progress display.
+  if (activeCleanupPoll) return;
+  const poll: CleanupPoll = { stopped: false };
+  activeCleanupPoll = poll;
+  ownCleanupPoll = poll;
   cleaning.value = true;
   let sawJob = false;
   try {
     for (;;) {
       const { data } = await api.getCleanupStatus();
+      if (poll.stopped) return;
       const job = data.job;
       if (!job) {
         // Job state is in backend memory; it disappearing mid-poll means the
@@ -226,12 +263,20 @@ async function pollCleanupJob() {
         ElMessage.error(`Cleanup failed: ${job.error || 'unknown error'}`);
         break;
       }
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await new Promise<void>((resolve) => {
+        poll.wake = resolve;
+        poll.timer = setTimeout(resolve, 2000);
+      });
+      if (poll.stopped) return;
     }
     statsCard.value?.fetchStatistics();
   } catch {
-    ElMessage.warning('Lost track of the cleanup job — it continues on the server. Reload to re-check.');
+    if (!poll.stopped) {
+      ElMessage.warning('Lost track of the cleanup job — it continues on the server. Reload to re-check.');
+    }
   } finally {
+    if (activeCleanupPoll === poll) activeCleanupPoll = null;
+    if (ownCleanupPoll === poll) ownCleanupPoll = null;
     cleaning.value = false;
     cleanupProgress.value = '';
   }

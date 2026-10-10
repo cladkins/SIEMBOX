@@ -37,7 +37,7 @@ const authStore = useAuthStore();
 // Admin-only areas are left out for everyone else; their routes also carry
 // meta.requiresAdmin, so the router guard blocks a typed-in URL too.
 const visibleAreas = computed(() =>
-  settingsAreas.filter((area) => !area.adminOnly || authStore.user?.role === 'admin')
+  settingsAreas.filter((area) => !area.adminOnly || authStore.isAdmin)
 );
 
 const activeArea = computed(() =>

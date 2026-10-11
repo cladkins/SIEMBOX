@@ -168,11 +168,22 @@ export const WatchedDomainModel = {
     );
     if (sets.length === 0) return WatchedDomainModel.findById(id);
     if (fields.interval_minutes !== undefined) {
-      // A new interval takes effect from the last check, not after the old one runs out.
+      // A new interval takes effect from the last full run (the schedule's anchor:
+      // early retry runs don't move it), not after the old interval runs out. A
+      // pending early retry keeps its time when that is sooner.
       params.push(fields.interval_minutes);
       sets.push(
         `next_run_at = CASE WHEN last_checked_at IS NULL THEN next_run_at
-                            ELSE last_checked_at + $${params.length} * INTERVAL '1 minute' END`
+           ELSE LEAST(
+             COALESCE(
+               CASE WHEN last_summary->>'full_run_at' ~ '^\\d{4}-\\d{2}-\\d{2}T'
+                    THEN (last_summary->>'full_run_at')::timestamptz END,
+               last_checked_at
+             ) + $${params.length} * INTERVAL '1 minute',
+             CASE WHEN jsonb_typeof(last_summary->'retry') = 'array'
+                       AND last_summary->'retry' <> '[]'::jsonb
+                  THEN next_run_at END
+           ) END`
       );
     }
     params.push(id);

@@ -27,6 +27,7 @@ import {
   registeredFromSnapshot,
   type LookalikeCandidate,
   type LookalikeSnapshot,
+  type RegisteredInfo,
 } from './lookalike';
 import { isValidHostname } from './names';
 import type { DnsResolverLike } from './resolver';
@@ -487,13 +488,148 @@ test('collector: a registration with neither address nor MX is medium', async ()
   );
 });
 
+/** ctx() `days` after its usual date. */
+const onDay = (previous: unknown, days: number, domain = 'example.com'): CollectorContext => ({
+  ...ctx(previous, domain),
+  now: new Date(Date.parse('2026-10-11T00:00:00Z') + days * 86_400_000),
+});
+
+test('collector: a lookalike registered again after a drop alerts again, with its own fingerprints', async () => {
+  const table: Record<string, Entry> = {};
+  const collector = createLookalikeCollector({
+    resolver: fakeResolver(table).resolver,
+    dnstwist: null,
+  });
+  let snap = (await collector(onDay(null, 0))).snapshot; // exmple.com confirmed free
+  table['exmple.com'] = { ns: ['ns1.squatter-a.example'], a: ['203.0.113.1'] };
+  const ownerA = await collector(onDay(snap, 10));
+  table['exmple.com'] = { ...table['exmple.com'], mx: ['mx.exmple.com'] };
+  const mxA = await collector(onDay(ownerA.snapshot, 20));
+  delete table['exmple.com']; // it lapses
+  snap = (await collector(onDay(mxA.snapshot, 100))).snapshot;
+  snap = (await collector(onDay(snap, 200))).snapshot;
+
+  // A drop-catcher registers it a year later.
+  table['exmple.com'] = { ns: ['ns1.dropcatcher-b.example'], a: ['198.51.100.7'] };
+  const ownerB = await collector(onDay(snap, 450));
+  const fp = (out: { findings: Array<{ fingerprint: string; title: string }> }) =>
+    out.findings.map((f) => f.fingerprint);
+  assert.deepEqual(
+    ownerB.findings.map((f) => f.title),
+    ['Lookalike domain registered: exmple.com (looks like example.com)']
+  );
+  assert.notDeepEqual(fp(ownerB), fp(ownerA), 'not deduplicated against the first owner');
+  assert.ok(ownerB.lookalikes?.priorDrops?.['exmple.com'], 'handed to CT');
+  // A re-run against the same baseline (a crash before it was saved) dedupes.
+  assert.deepEqual(fp(await collector(onDay(snap, 451))), fp(ownerB));
+
+  table['exmple.com'] = { ...table['exmple.com'], mx: ['mx.exmple.com'] };
+  const mxB = await collector(onDay(ownerB.snapshot, 460));
+  assert.deepEqual(
+    mxB.findings.map((f) => f.detail.change),
+    ['mx_added']
+  );
+  assert.notDeepEqual(fp(mxB), fp(mxA));
+  assert.equal(fp(mxA).length, 1);
+});
+
+test('collector: one failed dnstwist run keeps what was known about its candidates', async () => {
+  const table: Record<string, Entry> = {};
+  let dnstwistUp = true;
+  const collector = createLookalikeCollector({
+    resolver: fakeResolver(table).resolver,
+    dnstwist: async () => {
+      if (!dnstwistUp) throw new Error('dnstwist failed: timed out');
+      return ['example-login.com'];
+    },
+  });
+  const wide = (previous: unknown, days: number) => ({
+    ...onDay(previous, days),
+    config: { ...config, lookalikeMaxCandidates: 1000 },
+  });
+  let snap = (await collector(wide(null, 0))).snapshot;
+  assert.ok(parseLookalikeSnapshot(snap)?.unregistered['example-login.com'] !== undefined);
+  dnstwistUp = false;
+  const failed = await collector(wide(snap, 1));
+  assert.match((failed.warnings ?? []).join(' '), /dnstwist failed/);
+  snap = failed.snapshot;
+  assert.ok(
+    parseLookalikeSnapshot(snap)?.unregistered['example-login.com'] !== undefined,
+    'a failed lookup is not a state change'
+  );
+  dnstwistUp = true;
+  table['example-login.com'] = { ns: ['ns1.evil.example'], a: ['203.0.113.9'] };
+  const later = await collector(wide(snap, 2));
+  assert.deepEqual(
+    later.findings.map((f) => f.detail.lookalike),
+    ['example-login.com']
+  );
+});
+
+/** brand.ws: .ws answers A for every name; only delegated names have NS records. */
+function wildcardTld(
+  delegated: Set<string>,
+  options: { stripsNs?: boolean } = {}
+): DnsResolverLike {
+  const fail = (code: string) => Object.assign(new Error(code), { code });
+  const underWs = (n: string) => n.endsWith('.ws');
+  const noRecords = async (n: string): Promise<never> => {
+    throw fail(underWs(n) ? 'ENODATA' : 'ENOTFOUND');
+  };
+  return {
+    resolveNs: async (n) => {
+      if (options.stripsNs) throw fail('ENODATA'); // a resolver that answers NODATA for every non-A type
+      if (n === 'ws') return ['a.dns.ws', 'b.dns.ws'];
+      if (delegated.has(n)) return ['ns1.squatter.example'];
+      return noRecords(n);
+    },
+    resolve4: async (n) => (underWs(n) ? ['64.70.19.203'] : noRecords(n)),
+    resolve6: noRecords,
+    resolveMx: noRecords,
+    resolveTxt: async () => [],
+  };
+}
+
+test('collector: under a wildcard TLD, no delegation confirms a name free, so a later delegation alerts', async () => {
+  const delegated = new Set<string>();
+  const collector = createLookalikeCollector({ resolver: wildcardTld(delegated), dnstwist: null });
+  const baseline = await collector(onDay(null, 0, 'brand.ws'));
+  assert.ok(parseLookalikeSnapshot(baseline.snapshot)?.unregistered['brnad.ws'] !== undefined);
+  delegated.add('brnad.ws');
+  const out = await collector(onDay(baseline.snapshot, 1, 'brand.ws'));
+  assert.deepEqual(
+    out.findings.map((f) => [f.detail.lookalike, f.severity]),
+    [['brnad.ws', 'high']]
+  );
+  // A registered lookalike without a delegation is kept, never dropped on that alone.
+  delegated.delete('brnad.ws');
+  const after = await collector(onDay(out.snapshot, 2, 'brand.ws'));
+  assert.ok(registeredFromSnapshot(after.snapshot).includes('brnad.ws'));
+
+  // A resolver that hides every NS record proves nothing there: the names stay
+  // unknown, so long-standing delegations it hid are not "new" once it is replaced.
+  const hidden = await createLookalikeCollector({
+    resolver: wildcardTld(new Set(), { stripsNs: true }),
+    dnstwist: null,
+  })(onDay(null, 0, 'brand.ws'));
+  assert.equal(parseLookalikeSnapshot(hidden.snapshot)?.unregistered['brnad.ws'], undefined);
+  const replaced = await createLookalikeCollector({
+    resolver: wildcardTld(new Set(['brnad.ws'])),
+    dnstwist: null,
+  })(onDay(hidden.snapshot, 1, 'brand.ws'));
+  assert.deepEqual(replaced.findings, []);
+  assert.ok(registeredFromSnapshot(replaced.snapshot).includes('brnad.ws'));
+});
+
 const NOW_S = Math.floor(Date.parse('2026-10-11T00:00:00Z') / 1000);
 const DAY = 86_400;
-const info = (overrides: Partial<LookalikeSnapshot['registered'][string]> = {}) => ({
+const info = (overrides: Partial<RegisteredInfo> = {}): RegisteredInfo => ({
   mx: false,
   addr: true,
   fuzzer: 'omission',
   since: null,
+  seen_at: null,
+  prior_drop: null,
   ...overrides,
 });
 
@@ -583,6 +719,37 @@ test('diff: a lookalike that goes NXDOMAIN and comes back soon is the same regis
   });
   assert.deepEqual(
     reRegistered.newlyRegistered.map((c) => c.domain),
+    ['held.com']
+  );
+});
+
+test('diff: the comeback grace runs from when the name was last seen registered', () => {
+  // A 14-day interval: last seen registered at T, NXDOMAIN noticed at T+14d. A
+  // new owner can register it from T+35d at the earliest; it is seen at T+42d.
+  const candidates: LookalikeCandidate[] = [{ domain: 'held.com', fuzzer: 'omission' }];
+  const nx = new Map([['held.com', { state: 'unregistered' } as const]]);
+  const back = new Map([
+    ['held.com', { state: 'registered', ns: true, addr: true, mx: true } as const],
+  ]);
+  let snap: LookalikeSnapshot = {
+    v: 1,
+    registered: { 'held.com': info() },
+    unregistered: {},
+    dropped: {},
+  };
+  snap = diffLookalikes(snap, candidates, back, { nowSeconds: NOW_S }).next;
+  assert.equal(snap.registered['held.com'].seen_at, NOW_S);
+  snap = diffLookalikes(snap, candidates, nx, { nowSeconds: NOW_S + 14 * DAY }).next;
+  assert.deepEqual(snap.dropped, { 'held.com': NOW_S }, 'when it was last seen registered');
+  // Back within 30 days of that: the same registration (a hold lifted).
+  assert.deepEqual(
+    diffLookalikes(snap, candidates, back, { nowSeconds: NOW_S + 21 * DAY }).newlyRegistered,
+    []
+  );
+  snap = diffLookalikes(snap, candidates, nx, { nowSeconds: NOW_S + 28 * DAY }).next;
+  const later = diffLookalikes(snap, candidates, back, { nowSeconds: NOW_S + 42 * DAY });
+  assert.deepEqual(
+    later.newlyRegistered.map((c) => c.domain),
     ['held.com']
   );
 });

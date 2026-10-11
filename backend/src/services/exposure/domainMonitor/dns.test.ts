@@ -368,6 +368,36 @@ test('collector: the watched name going NXDOMAIN is a failure, not "DMARC policy
   );
 });
 
+test('collector: a resolver that hides NS records is not trusted for any empty answer — no drift either way', async () => {
+  // Seen in a real install: NODATA for NS, MX and TXT on a domain that has all three.
+  const filtering: Zone = {
+    'example.com': { a: ZONE['example.com'].a, aaaa: ZONE['example.com'].aaaa },
+    '_dmarc.example.com': {},
+  };
+  const collector = (zone: Zone) =>
+    createDnsCollector({ resolver: zoneResolver(zone), secondary: null });
+
+  // First run through it, then the real answers: nothing was "added".
+  const viaFilter = await collector(filtering)(ctx(null));
+  assert.deepEqual(Object.keys(parseDnsSnapshot(viaFilter.snapshot)?.records ?? {}).sort(), [
+    'A',
+    'AAAA',
+  ]);
+  assert.match((viaFilter.warnings ?? []).join(' | '), /MX: no records, from a resolver that also/);
+  const healthy = await collector(ZONE)(ctx(viaFilter.snapshot));
+  assert.deepEqual(healthy.findings, []);
+
+  // A healthy baseline, then one filtered run, then healthy again: nothing "removed" or "added".
+  const base = await collector(ZONE)(ctx(null));
+  const glitch = await collector(filtering)(ctx(base.snapshot));
+  assert.deepEqual(glitch.findings, []);
+  assert.deepEqual(
+    parseDnsSnapshot(glitch.snapshot)?.records,
+    parseDnsSnapshot(base.snapshot)?.records
+  );
+  assert.deepEqual((await collector(ZONE)(ctx(glitch.snapshot))).findings, []);
+});
+
 test('collector: a second resolver that fails is reported, and findings say which resolver answered', async () => {
   const first = await createDnsCollector({
     resolver: zoneResolver(ZONE),

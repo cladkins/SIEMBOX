@@ -141,8 +141,12 @@ export interface DomainMonitorRunSummary {
   /** Domains whose run completed (possibly with collector errors). */
   checked: number;
   newFindings: number;
-  /** Domains with at least one failed collector, or whose run could not complete. */
+  /** Checked domains with at least one failed collector. */
   failed: number;
+  /** Checked domains on which no collector worked (each one that applies failed). */
+  down: number;
+  /** Domains whose run could not complete (e.g. the database failed); they stay due. */
+  crashed: number;
   /** Domains still due after this cycle. */
   remaining: number;
   skipped: boolean;
@@ -440,10 +444,26 @@ const skippedCycle = (reason: string): DomainMonitorRunSummary => ({
   checked: 0,
   newFindings: 0,
   failed: 0,
+  down: 0,
+  crashed: 0,
   remaining: 0,
   skipped: true,
   reason,
 });
+
+const WORKING: ReadonlySet<CollectorRunStatus> = new Set(['ok', 'baseline', 'unsupported']);
+
+/**
+ * Did any collector work for the domain — in this run, or in an earlier run
+ * whose outcome a retry-only run carried over? When none did, the cause is
+ * systemic (no network, no DNS), not one upstream having a bad day.
+ */
+export function anyCollectorWorked(summary: Pick<DomainRunSummary, 'collectors'>): boolean {
+  return COLLECTOR_ORDER.some((name) => {
+    const status = summary.collectors[name]?.status;
+    return status !== undefined && WORKING.has(status);
+  });
+}
 
 /** Why a scheduled cycle would do nothing right now, or null when there is work. */
 export async function getDomainMonitorSkipReason(
@@ -456,13 +476,15 @@ export async function getDomainMonitorSkipReason(
 }
 
 /**
- * Why a scheduled cycle counts as failed for the job registry — every domain
- * it checked had errors (e.g. outbound HTTPS or DNS blocked) — or null.
- * Per-domain errors stay in each domain's last_error.
+ * Why a scheduled cycle counts as failed for the job registry, or null. It
+ * fails only when nothing worked: no collector worked for any domain it
+ * checked (e.g. no network or DNS), or no domain run could complete (e.g. the
+ * database). One collector failing — crt.sh having a bad day, or a permanent
+ * problem with one domain — is in that domain's last_error, not a failed job.
  */
 export function domainMonitorCycleFailure(s: DomainMonitorRunSummary): string | null {
-  if (s.skipped || s.failed === 0 || s.failed < s.checked) return null;
-  return `every domain checked had errors (${describeDomainMonitorRun(s)}); see each domain's last_error`;
+  if (s.skipped || s.checked - s.down > 0 || s.down + s.crashed === 0) return null;
+  return `nothing worked for any domain (${describeDomainMonitorRun(s)}); see each domain's last_error`;
 }
 
 /** One-line outcome for the job registry and logs. */
@@ -473,6 +495,7 @@ export function describeDomainMonitorRun(s: DomainMonitorRunSummary): string {
     `${s.newFindings} new finding${s.newFindings === 1 ? '' : 's'}`,
   ];
   if (s.failed) parts.push(`${s.failed} with errors`);
+  if (s.crashed) parts.push(`${s.crashed} could not be checked`);
   if (s.remaining) parts.push(`${s.remaining} still due`);
   return parts.join(', ');
 }
@@ -506,6 +529,8 @@ async function executeCycle(options: CycleOptions): Promise<DomainMonitorRunSumm
     checked: 0,
     newFindings: 0,
     failed: 0,
+    down: 0,
+    crashed: 0,
     remaining: 0,
     skipped: false,
   };
@@ -525,10 +550,13 @@ async function executeCycle(options: CycleOptions): Promise<DomainMonitorRunSumm
       });
       summary.checked++;
       summary.newFindings += result.new_findings;
-      if (result.status === 'error') summary.failed++;
+      if (result.status === 'error') {
+        summary.failed++;
+        if (!anyCollectorWorked(result)) summary.down++;
+      }
     } catch (err) {
       // The bookkeeping itself failed (e.g. the database): the domain stays due.
-      summary.failed++;
+      summary.crashed++;
       logger.error(`[DomainMonitor] run for ${domain.domain} (#${domain.id}) failed:`, err);
       ErrorLogService.logBackgroundError('domain-monitor', err, {
         dedupeKey: `domain-${domain.id}`,

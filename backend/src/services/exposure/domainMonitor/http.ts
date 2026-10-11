@@ -13,6 +13,7 @@
  * Bodies are only read for 2xx responses.
  */
 import https from 'https';
+import tls from 'tls';
 import type { IncomingHttpHeaders } from 'http';
 import type { LookupFunction } from 'net';
 import type { ResolvedAddress } from './netSafety';
@@ -25,9 +26,10 @@ export type HttpErrorKind = 'timeout' | 'network' | 'too_large' | 'blocked';
 export class HttpError extends Error {
   readonly kind: HttpErrorKind;
   /**
-   * For timeouts: 'connect' when no connection was ever made (often outbound
-   * traffic being dropped by a firewall), 'response' when the server was
-   * reached but did not finish answering.
+   * For timeouts: 'connect' when no connection was ever made — TCP or the TLS
+   * handshake never completed (often outbound traffic being dropped by a
+   * firewall or an SNI filter) — 'response' when the server was reached but
+   * did not finish answering.
    */
   readonly phase?: 'connect' | 'response';
 
@@ -121,6 +123,9 @@ function exchange(
     const tooLarge = () =>
       new HttpError('too_large', `the response is larger than ${options.maxBytes} bytes`);
 
+    // A TLS connection counts as made once its handshake completes, not when TCP
+    // connects: a filter that drops the ClientHello is a connection problem.
+    let connected = false;
     const request = options.request ?? https.request;
     const req = request(
       url,
@@ -136,6 +141,7 @@ function exchange(
         ...(options.resolve ? { lookup: pinnedLookup(options.resolve) } : {}),
       },
       (res) => {
+        connected = true;
         const status = res.statusCode ?? 0;
         if (status < 200 || status > 299) {
           finish(null, { status, headers: res.headers, body: Buffer.alloc(0) });
@@ -169,11 +175,17 @@ function exchange(
       }
     );
 
+    req.on('socket', (socket) => {
+      // https sockets are TLS sockets; a plain one (the tests' local server) counts once connected.
+      socket.once(socket instanceof tls.TLSSocket ? 'secureConnect' : 'connect', () => {
+        connected = true;
+      });
+    });
+
     // The deadline covers the whole exchange (connect, headers and body), not just idleness.
     armDeadline(
       setTimeout(() => {
-        // Still connecting (or still resolving the host) means no connection was ever made.
-        const connected = Boolean(req.socket) && !req.socket?.connecting;
+        // Still resolving, connecting or in the TLS handshake: no connection was ever made.
         const err = connected
           ? new HttpError(
               'timeout',

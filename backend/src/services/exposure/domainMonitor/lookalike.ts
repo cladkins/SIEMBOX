@@ -23,11 +23,14 @@
  * random, certainly-unregistered name per suffix is probed first: only a
  * definite NXDOMAIN for it clears the suffix; where it resolves (a wildcard
  * TLD, or a resolver rewriting NXDOMAIN to an ad server) or the probe fails,
- * only an NS delegation counts as a registration.
+ * only an NS delegation counts as a registration. There, when the resolver
+ * returns the suffix's own NS records (so it answers NS queries), NODATA for a
+ * candidate's NS means "not delegated", which confirms it unregistered.
  *
- * Snapshot: the registered lookalikes (whether they had an address / MX, and
- * when they were reported as newly registered), the candidates confirmed
- * unregistered, and registered ones that recently stopped resolving.
+ * Snapshot: the registered lookalikes (whether they had an address / MX, when
+ * they were last seen registered and when they were reported as newly
+ * registered), the candidates confirmed unregistered, and registered ones that
+ * recently stopped resolving.
  * Findings:
  *   lookalike_registered — a registration of a name that was confirmed
  *   unregistered before: high with an A/AAAA or MX record (a site or a mailbox
@@ -36,8 +39,10 @@
  * A name seen registered on its first definite answer — the first run, a
  * raised candidate cap, dnstwist appearing, a lookup that failed until now —
  * is recorded silently: nobody knows when it was registered. So is one that
- * comes back within REAPPEAR_GRACE_DAYS of going NXDOMAIN (a registry hold
- * lifted, or a flapping answer): it is the same registration.
+ * comes back within REAPPEAR_GRACE_DAYS of when it was last seen registered (a
+ * registry hold lifted, or a flapping answer): it is the same registration.
+ * One that comes back later may have a new owner: it is reported, and its
+ * findings are fingerprinted apart from the earlier registration's.
  */
 import { execFile } from 'child_process';
 import crypto from 'crypto';
@@ -298,10 +303,17 @@ export function detectDnstwist(now = Date.now()): DnstwistRunner | null {
 
 // ---- Registration check -----------------------------------------------------------------
 
-/** `addr` / `mx`: true, false, or null when the lookups that would tell failed. */
+/**
+ * `addr` / `mx`: true, false, or null when the lookups that would tell failed.
+ * `undelegated`: no NS delegation (NODATA) under a wildcard suffix whose
+ * resolver answers NS queries — not registered as far as DNS can tell. It
+ * confirms a candidate unregistered, but never drops a registered lookalike
+ * (see diffLookalikes).
+ */
 export type RegistrationState =
   | { state: 'registered'; ns: boolean; addr: boolean | null; mx: boolean | null }
   | { state: 'unregistered' }
+  | { state: 'undelegated' }
   | { state: 'unknown'; reason: string };
 
 export interface RegistrationCheckOptions {
@@ -330,16 +342,20 @@ const isDefinite = (outcome: QueryOutcome<unknown>) =>
  * Registration state of one candidate (1 query when unregistered, 4 when
  * registered). Under a suffix that answers for names that do not exist (a
  * wildcard TLD, or a resolver that rewrites NXDOMAIN into an ad server's
- * address), only an NS delegation proves a registration.
+ * address), only an NS delegation proves a registration; when the resolver is
+ * known to answer NS queries there (`nsAnswered`), NODATA for NS is a definite
+ * "not delegated".
  */
 export async function checkRegistration(
   name: string,
   resolver: DnsResolverLike,
   queryTimeoutMs = DEFAULT_QUERY_TIMEOUT_MS,
-  wildcardSuffix = false
+  wildcardSuffix = false,
+  nsAnswered = false
 ): Promise<RegistrationState> {
   const ns = await timedQuery(() => resolver.resolveNs(name), queryTimeoutMs);
   if (isCode(ns, NXDOMAIN)) return { state: 'unregistered' };
+  if (wildcardSuffix && nsAnswered && isCode(ns, NODATA)) return { state: 'undelegated' };
   const [a, aaaa, mx] = await Promise.all([
     timedQuery(() => resolver.resolve4(name), queryTimeoutMs),
     timedQuery(() => resolver.resolve6(name), queryTimeoutMs),
@@ -398,6 +414,24 @@ export async function findWildcardSuffixes(
   return new Set(suffixes.filter((_suffix, i) => !isCode(answers[i], NXDOMAIN)));
 }
 
+/**
+ * Of the wildcard suffixes, those whose own NS records the resolver returns:
+ * it answers NS queries there, so NODATA for a name's NS means "not
+ * delegated". A resolver that answers NODATA for every non-A type (they exist)
+ * fails this, and its NODATA proves nothing.
+ */
+export async function suffixesAnsweringNs(
+  wildcards: ReadonlySet<string>,
+  resolver: DnsResolverLike,
+  queryTimeoutMs = DEFAULT_QUERY_TIMEOUT_MS
+): Promise<Set<string>> {
+  const suffixes = [...wildcards].sort();
+  const answers = await mapWithConcurrency(suffixes, 5, (suffix) =>
+    timedQuery(() => resolver.resolveNs(suffix), queryTimeoutMs)
+  );
+  return new Set(suffixes.filter((_suffix, i) => hasRecords(answers[i])));
+}
+
 export async function checkRegistrations(
   names: readonly string[],
   options: RegistrationCheckOptions
@@ -410,16 +444,19 @@ export async function checkRegistrations(
     MAX_DNS_CONCURRENCY
   );
   const wildcards = await findWildcardSuffixes(names, options.resolver, options.queryTimeoutMs);
+  const nsAnswered = await suffixesAnsweringNs(wildcards, options.resolver, options.queryTimeoutMs);
   const states = await mapWithConcurrency(names, concurrency, async (name) => {
     if (now() - startedAt >= budget) {
       return { state: 'unknown', reason: 'time budget exhausted' } as RegistrationState;
     }
     try {
+      const suffix = suffixOf(name);
       return await checkRegistration(
         name,
         options.resolver,
         options.queryTimeoutMs,
-        wildcards.has(suffixOf(name))
+        wildcards.has(suffix),
+        nsAnswered.has(suffix)
       );
     } catch (err) {
       return {
@@ -436,21 +473,31 @@ export async function checkRegistrations(
 const DAY_SECONDS = 86_400;
 /**
  * A registered lookalike that goes NXDOMAIN and is back within this many days
- * is the same registration (a registry hold lifted, or one flapping answer).
- * A lapsed gTLD name stays NXDOMAIN for longer than this (30 days of
- * redemption plus 5 of pending delete) before anyone else can register it.
+ * of when it was last seen registered is the same registration (a registry
+ * hold lifted, or one flapping answer). A lapsed gTLD name stays NXDOMAIN for
+ * longer than this (30 days of redemption plus 5 of pending delete) before
+ * anyone else can register it, and it went NXDOMAIN after it was last seen
+ * registered — however long the domain's interval is.
  */
 export const REAPPEAR_GRACE_DAYS = 30;
 /** How long a reported registration counts as "newly registered" for the CT collector. */
 export const NEW_REGISTRATION_WINDOW_DAYS = 30;
 
-interface RegisteredInfo {
+export interface RegisteredInfo {
   /** null: the lookup failed every time so far (unknown, never "none"). */
   mx: boolean | null;
   addr: boolean | null;
   fuzzer: string;
   /** When it was reported as newly registered (epoch seconds); null when recorded silently. */
   since: number | null;
+  /** When it last had a definite registered answer (epoch seconds); null in older snapshots. */
+  seen_at: number | null;
+  /**
+   * Registered again after it had dropped: the `dropped` time of that drop,
+   * which tells this registration's findings apart from an earlier owner's
+   * (it is part of their fingerprints). null for a name never seen dropping.
+   */
+  prior_drop: number | null;
 }
 
 export interface LookalikeSnapshot {
@@ -458,12 +505,15 @@ export interface LookalikeSnapshot {
   /** Registered lookalike -> what it had when last resolved. */
   registered: Record<string, RegisteredInfo>;
   /**
-   * Candidates with a definite "not registered" (NXDOMAIN) answer -> since
-   * when (epoch seconds). Only a name confirmed unregistered can later be
-   * reported as newly registered.
+   * Candidates with a definite "not registered" answer (NXDOMAIN, or no
+   * delegation under a wildcard suffix) -> since when (epoch seconds). Only a
+   * name confirmed unregistered can later be reported as newly registered.
    */
   unregistered: Record<string, number>;
-  /** Registered lookalikes that went NXDOMAIN -> when (epoch seconds). */
+  /**
+   * Registered lookalikes that went NXDOMAIN -> when they were last seen
+   * registered (epoch seconds; the first NXDOMAIN answer in older snapshots).
+   */
   dropped: Record<string, number>;
 }
 
@@ -471,6 +521,8 @@ const MAX_SNAPSHOT_REGISTERED = 2 * MAX_CANDIDATES_CEILING;
 
 const optionalBoolean = (value: unknown): boolean | null =>
   typeof value === 'boolean' ? value : null;
+const optionalEpoch = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null;
 
 function epochMap(value: unknown): Record<string, number> {
   if (!isPlainObject(value)) return {};
@@ -491,7 +543,9 @@ export function parseLookalikeSnapshot(value: unknown): LookalikeSnapshot | null
       mx: optionalBoolean(info.mx),
       addr: optionalBoolean(info.addr),
       fuzzer: typeof info.fuzzer === 'string' ? info.fuzzer : 'unknown',
-      since: typeof info.since === 'number' && Number.isFinite(info.since) ? info.since : null,
+      since: optionalEpoch(info.since),
+      seen_at: optionalEpoch(info.seen_at),
+      prior_drop: optionalEpoch(info.prior_drop),
     };
   }
   return {
@@ -520,13 +574,24 @@ export function lookalikeStateFromSnapshot(
   const registered = parseLookalikeSnapshot(value)?.registered ?? {};
   const names = Object.keys(registered).sort();
   const recent = nowSeconds - NEW_REGISTRATION_WINDOW_DAYS * DAY_SECONDS;
+  const priorDrops: Record<string, number> = {};
+  for (const name of names) {
+    const priorDrop = registered[name].prior_drop;
+    if (priorDrop !== null) priorDrops[name] = priorDrop;
+  }
   return {
     registered: names,
     newlyRegistered: names.filter((name) => {
       const since = registered[name].since;
       return since !== null && since >= recent;
     }),
+    ...(Object.keys(priorDrops).length ? { priorDrops } : {}),
   };
+}
+
+/** Fingerprint parts that tell a registration after a drop apart from earlier ones. */
+export function registrationMarker(priorDrop: number | null | undefined): number[] {
+  return priorDrop === null || priorDrop === undefined ? [] : [priorDrop];
 }
 
 /** The organization's own names (every watched domain and its registered name): never lookalikes. */
@@ -555,6 +620,12 @@ export interface LookalikeDiffOptions {
   nowSeconds: number;
   /** Names that are never lookalikes (the organization's own, see ownDomainNames). */
   exclude?: ReadonlySet<string>;
+  /**
+   * This run's candidate list is incomplete (dnstwist failed): names the
+   * previous snapshot knew as unregistered or dropped that are not candidates
+   * now keep that state — a failed lookup is never a state change.
+   */
+  keepUnlisted?: boolean;
 }
 
 export function diffLookalikes(
@@ -571,9 +642,20 @@ export function diffLookalikes(
   for (const [name, info] of Object.entries(previous?.registered ?? {})) {
     if (!exclude.has(name)) registered[name] = info;
   }
-  // Rebuilt from this run's candidates, so both stay bounded by the candidate cap.
+  // Rebuilt from this run's candidates, so both stay bounded by the candidate
+  // cap; an incomplete list keeps the previous entries for the names it lacks.
   const unregistered: Record<string, number> = {};
   const dropped: Record<string, number> = {};
+  if (options.keepUnlisted && previous) {
+    const listed = new Set(candidates.map((c) => c.domain));
+    const unlisted = (name: string) => !listed.has(name) && !exclude.has(name);
+    for (const [name, at] of Object.entries(previous.unregistered)) {
+      if (unlisted(name)) unregistered[name] = at;
+    }
+    for (const [name, at] of Object.entries(previous.dropped)) {
+      if (unlisted(name)) dropped[name] = at;
+    }
+  }
   const newlyRegistered: LookalikeChange[] = [];
   const mxAdded: LookalikeChange[] = [];
   let unknown = 0;
@@ -583,6 +665,9 @@ export function diffLookalikes(
     const state = states.get(domain);
     const unregisteredSince = previous?.unregistered[domain];
     const droppedAt = previous?.dropped[domain];
+    // No delegation under a wildcard suffix never drops a registered lookalike
+    // (only NXDOMAIN does): it stays as it was.
+    if (state?.state === 'undelegated' && registered[domain]) continue;
     if (!state || state.state === 'unknown') {
       // Not answered this run: whatever was known stays known.
       unknown++;
@@ -590,11 +675,13 @@ export function diffLookalikes(
       if (droppedAt !== undefined) dropped[domain] = droppedAt;
       continue;
     }
-    if (state.state === 'unregistered') {
+    if (state.state === 'unregistered' || state.state === 'undelegated') {
       if (registered[domain]) {
         droppedNow++;
+        // The grace before a comeback counts as a new registration runs from
+        // when it was last seen registered, not from when the drop was noticed.
+        dropped[domain] = registered[domain].seen_at ?? nowSeconds;
         delete registered[domain];
-        dropped[domain] = nowSeconds;
       } else if (droppedAt !== undefined) {
         dropped[domain] = droppedAt;
       } else {
@@ -610,6 +697,8 @@ export function diffLookalikes(
       addr: state.addr ?? before?.addr ?? null,
       fuzzer: before?.fuzzer ?? fuzzer,
       since: before?.since ?? null,
+      seen_at: nowSeconds,
+      prior_drop: before?.prior_drop ?? null,
     };
     if (before) {
       if (before.mx === false && info.mx === true) {
@@ -622,6 +711,10 @@ export function diffLookalikes(
       // The same registration back from a hold (or one flapping answer): restored silently.
     } else if (unregisteredSince !== undefined || droppedAt !== undefined) {
       info.since = nowSeconds;
+      // Back after a drop: possibly a new owner, so its findings get their own
+      // fingerprints. droppedAt comes from the stored baseline, so a re-run
+      // after a crash still produces the same ones.
+      if (droppedAt !== undefined) info.prior_drop = droppedAt;
       newlyRegistered.push({ domain, fuzzer: info.fuzzer, info });
     }
     // Otherwise this is the first definite answer for the name (the first run,
@@ -684,7 +777,14 @@ function lookalikeFinding(
   return domainFinding({
     domainId: ctx.domain.id,
     eventType: 'lookalike_registered',
-    fingerprint: fingerprint('lookalike', kind, registrable, lookalike),
+    // A registration after a drop has its own marker: a new owner alerts again.
+    fingerprint: fingerprint(
+      'lookalike',
+      kind,
+      registrable,
+      lookalike,
+      ...registrationMarker(info.prior_drop)
+    ),
     severity,
     title,
     description,
@@ -718,10 +818,12 @@ export function createLookalikeCollector(deps: LookalikeCollectorDeps = {}): Col
 
     const dnstwist = deps.dnstwist === undefined ? detectDnstwist() : deps.dnstwist;
     let extra: string[] = [];
+    let dnstwistFailed = false;
     if (dnstwist) {
       try {
         extra = await dnstwist(registrable);
       } catch (err) {
+        dnstwistFailed = true;
         warnings.push(err instanceof Error ? err.message : String(err));
       }
     }
@@ -742,7 +844,12 @@ export function createLookalikeCollector(deps: LookalikeCollectorDeps = {}): Col
         budgetMs: deps.budgetMs,
       }
     );
-    const diff = diffLookalikes(previous, candidates, states, { nowSeconds, exclude: own });
+    const diff = diffLookalikes(previous, candidates, states, {
+      nowSeconds,
+      exclude: own,
+      // Its candidates are missing this run, not gone: they keep what was known about them.
+      keepUnlisted: dnstwistFailed,
+    });
     if (candidates.length > 0 && diff.unknown === candidates.length) {
       const reasons = sortedUnique(
         [...states.values()].flatMap((s) => (s.state === 'unknown' ? [s.reason] : []))

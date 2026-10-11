@@ -19,7 +19,9 @@
  * crt.sh also stops at 10,000 matching (certificate, name) rows, picked in no
  * particular order, and says so only in its HTML output: an answer that
  * reaches the limit (the rows' result_count values add up to it) is a random
- * subset, so it is refused as too large to monitor rather than diffed.
+ * subset, so it is refused as too large to monitor rather than diffed. For the
+ * domain's own certificates that refusal is a warning: the lookalike checks
+ * still run.
  *
  * Snapshot (per name): the certificates seen (key -> notAfter, pruned a week
  * after expiry), the host names they covered and the issuers that issued them.
@@ -59,7 +61,7 @@ import {
 } from './types';
 import { HttpError, httpsGet, type HttpGet } from './http';
 import { isValidHostname, isWithinDomain, normalizeName } from './names';
-import { lookalikeStateFromSnapshot, ownDomainNames } from './lookalike';
+import { lookalikeStateFromSnapshot, ownDomainNames, registrationMarker } from './lookalike';
 import type { FindingInput } from '../findingWriter';
 
 export const CRTSH_BASE = 'https://crt.sh/';
@@ -418,6 +420,12 @@ export interface CtSnapshot {
    * others instead of retrying the same name first every run.
    */
   lookalike_failures?: Record<string, CtLookalikeFailure>;
+  /**
+   * Newly registered lookalikes not checked successfully yet. Their first good
+   * check is judged as a site going up however long crt.sh takes to answer for
+   * them (the lookalike snapshot only lists them as new for a while).
+   */
+  pending_new?: string[];
 }
 
 function parseNameSnapshot(value: unknown): CtNameSnapshot | null {
@@ -439,6 +447,9 @@ export function parseCtSnapshot(value: unknown): CtSnapshot | null {
   if (domain) out.domain = domain;
   if (Array.isArray(value.expected_cas)) {
     out.expected_cas = value.expected_cas.filter((s): s is string => typeof s === 'string');
+  }
+  if (Array.isArray(value.pending_new)) {
+    out.pending_new = value.pending_new.filter((s): s is string => typeof s === 'string');
   }
   if (isPlainObject(value.lookalike_failures)) {
     out.lookalike_failures = {};
@@ -747,19 +758,26 @@ function lookalikeFindings(
   lookalike: string,
   diff: CertificateDiff,
   firstCheck: boolean,
-  newlyRegistered: boolean
+  newlyRegistered: boolean,
+  priorDrop: number | undefined
 ): FindingInput[] {
   const watched = ctx.domain.domain;
   if (firstCheck) {
     // Known lookalikes are baselined silently. One registered since the last
-    // run that already has certificates is a site going up: one finding.
+    // run that already has certificates is a site going up: one finding (per
+    // registration: a new owner after a drop is told apart by priorDrop).
     if (!newlyRegistered || diff.fresh.length === 0) return [];
     const certs = diff.fresh.map((f) => f.cert);
     return [
       domainFinding({
         domainId: ctx.domain.id,
         eventType: 'new_cert',
-        fingerprint: fingerprint('ct', 'lookalike_certs', lookalike),
+        fingerprint: fingerprint(
+          'ct',
+          'lookalike_certs',
+          lookalike,
+          ...registrationMarker(priorDrop)
+        ),
         severity: 'medium',
         title: `Newly registered lookalike ${lookalike} already has ${plural(certs.length, 'TLS certificate')}`,
         description:
@@ -836,16 +854,21 @@ function lookalikeState(ctx: CollectorContext, nowSeconds: number): SharedLookal
   return {
     registered: state.registered.filter((n) => !own.has(n)),
     newlyRegistered: state.newlyRegistered.filter((n) => !own.has(n)),
+    ...(state.priorDrops ? { priorDrops: state.priorDrops } : {}),
   };
 }
 
 /** A lookalike whose check failed for good (not transiently) is left alone this long. */
 const PERMANENT_FAILURE_BACKOFF_SECONDS = 7 * 86_400;
+/** A newly registered lookalike stays ahead of the rotation for this many failed checks in a row. */
+export const MAX_PENDING_ATTEMPTS = 3;
 
 /**
  * The lookalikes to check this run, at most `max`: newly registered ones never
- * tried yet first, then the rest by when they were last touched — checked or
- * tried — oldest (or never) first. A name that just failed goes to the back of
+ * tried yet first, then newly registered ones whose check failed transiently
+ * (fewer than MAX_PENDING_ATTEMPTS times in a row; least recently tried
+ * first), then the rest by when they were last touched — checked or tried —
+ * oldest (or never) first. Any other name that just failed goes to the back of
  * the rotation, so one crt.sh can't answer for never blocks the others; one
  * that failed for good waits PERMANENT_FAILURE_BACKOFF_SECONDS.
  */
@@ -859,8 +882,11 @@ export function selectLookalikesForCt(
   const fresh = new Set(state.newlyRegistered);
   const rank = (name: string): [number, number] => {
     const failure = failures[name];
-    if (fresh.has(name) && !failure) return [0, 0];
-    return [1, Math.max(checked[name]?.checked_at ?? 0, failure?.at ?? 0)];
+    if (fresh.has(name)) {
+      if (!failure) return [0, 0];
+      if (failure.transient && failure.count < MAX_PENDING_ATTEMPTS) return [1, failure.at];
+    }
+    return [2, Math.max(checked[name]?.checked_at ?? 0, failure?.at ?? 0)];
   };
   return [...new Set(state.registered)]
     .filter((name) => {
@@ -897,29 +923,46 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
     const notes: string[] = [];
 
     // 1. The domain's own certificates (own scope: its certificates are ours to police).
+    let ownCerts: CtCertificate[] | null = null;
     if (ctx.domain.scope === 'own') {
-      const certs = await source.certificatesFor(ctx.domain.domain);
+      try {
+        ownCerts = await source.certificatesFor(ctx.domain.domain);
+      } catch (err) {
+        // crt.sh struggling (transient) fails the collector, so it is retried
+        // soon. An answer retrying won't fix (too many certificates to monitor)
+        // must not stop the lookalike checks below: it is a warning, and the
+        // domain's own baseline stays as it was.
+        if (!(err instanceof CollectorError) || err.transient) throw err;
+        const message = errorMessage(err);
+        warnings.push(`${ctx.domain.domain}: ${message}`);
+        details.own_domain_error = message;
+        notes.push('own certificates not checked (see warnings)');
+      }
+    }
+    if (ownCerts !== null) {
       const firstRun = previous?.domain === undefined;
       const policy = normalizedPolicy(ctx.domain.expected_cas ?? []);
       const policyChanged =
         !firstRun && JSON.stringify(previous?.expected_cas ?? []) !== JSON.stringify(policy);
-      const diff = diffCertificates(previous?.domain ?? null, certs, nowSeconds);
+      const diff = diffCertificates(previous?.domain ?? null, ownCerts, nowSeconds);
       next.domain = diff.next;
       next.expected_cas = policy;
       const mode: OwnDomainMode = firstRun ? 'first' : policyChanged ? 'policy_changed' : 'normal';
-      findings.push(...ownDomainFindings(ctx, diff, mode, certs));
-      details.certificates = certs.length;
+      findings.push(...ownDomainFindings(ctx, diff, mode, ownCerts));
+      details.certificates = ownCerts.length;
       if (firstRun) {
-        notes.push(`baseline recorded: ${plural(certs.length, 'unexpired certificate')}`);
+        notes.push(`baseline recorded: ${plural(ownCerts.length, 'unexpired certificate')}`);
       } else {
         details.new_certificates = diff.fresh.length;
         details.renewals = diff.renewals;
         notes.push(
-          `${plural(certs.length, 'unexpired certificate')} (${diff.fresh.length} new, ${plural(diff.renewals, 'renewal')})`
+          `${plural(ownCerts.length, 'unexpired certificate')} (${diff.fresh.length} new, ${plural(diff.renewals, 'renewal')})`
         );
       }
     } else if (previous?.domain) {
-      next.domain = previous.domain; // scope switched to brand: keep it in case it switches back
+      // Not checked this run (refused above, or the scope switched to brand and
+      // may switch back): the baseline stays as it was.
+      next.domain = previous.domain;
       if (previous.expected_cas) next.expected_cas = previous.expected_cas;
     }
 
@@ -935,9 +978,15 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
         Object.entries(previous?.lookalike_failures ?? {}).filter(([name]) => registered.has(name))
       );
       // Newly registered lookalikes whose certificates were never checked: their
-      // first check is judged as a site going up (also when an earlier run's CT
-      // failed, or the per-run cap was reached).
-      const pending = new Set(state.newlyRegistered.filter((n) => !storedLookalikes[n]));
+      // first good check is judged as a site going up, however many runs that
+      // takes (CT failing, crt.sh not answering for them, the per-run cap). They
+      // are kept here because the lookalike snapshot lists them as new only for
+      // NEW_REGISTRATION_WINDOW_DAYS.
+      const pending = new Set(
+        [...(previous?.pending_new ?? []), ...state.newlyRegistered].filter(
+          (n) => registered.has(n) && !storedLookalikes[n]
+        )
+      );
       const selected = selectLookalikesForCt(
         { registered: state.registered, newlyRegistered: [...pending] },
         storedLookalikes,
@@ -955,8 +1004,16 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
           next.lookalikes[lookalike] = { ...diff.next, checked_at: nowSeconds };
           delete failures[lookalike];
           findings.push(
-            ...lookalikeFindings(ctx, lookalike, diff, before === null, pending.has(lookalike))
+            ...lookalikeFindings(
+              ctx,
+              lookalike,
+              diff,
+              before === null,
+              pending.has(lookalike),
+              state.priorDrops?.[lookalike]
+            )
           );
+          pending.delete(lookalike);
           checkedOk++;
         } catch (err) {
           warnings.push(`${lookalike}: ${errorMessage(err)}`);
@@ -974,9 +1031,11 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
         }
       }
       if (Object.keys(failures).length > 0) next.lookalike_failures = failures;
+      if (pending.size > 0) next.pending_new = [...pending].sort();
       if (ctx.domain.scope === 'brand' && selected.length > 0 && checkedOk === 0 && firstFailure) {
-        // Nothing was checked: retry the collector later, keeping only the record
-        // of what was tried so the retry starts with other lookalikes.
+        // Nothing was checked: retry the collector later, keeping only the
+        // bookkeeping (what was tried, what still awaits its first check) that
+        // decides which lookalikes the retry asks for.
         throw new CollectorError(firstFailure.message, firstFailure.transient, {
           progress: next,
         });
@@ -991,6 +1050,7 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
     } else {
       if (previous?.lookalikes) next.lookalikes = previous.lookalikes;
       if (previous?.lookalike_failures) next.lookalike_failures = previous.lookalike_failures;
+      if (previous?.pending_new) next.pending_new = previous.pending_new;
       if (ctx.domain.scope === 'brand') {
         return {
           findings: [],

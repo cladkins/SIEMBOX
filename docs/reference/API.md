@@ -3812,8 +3812,9 @@ check) are open to any authenticated user; **all writes require the admin role**
 - A background job (`domain-monitor` in [`GET /api/admin/jobs`](#get-apiadminjobs))
   wakes every 15 minutes (first run 2 minutes after startup) and checks the
   watched domains that are **due** — enabled, and `next_run_at` unset or passed —
-  one at a time, at most 25 per cycle and within a 10-minute budget. After a
-  run, `next_run_at` = now + the domain's `interval_minutes` (daily by default).
+  one at a time, at most 25 per cycle and within a 10-minute budget. A full run
+  is due the domain's `interval_minutes` (daily by default) after the previous
+  full run started; early retries (see below) can come sooner but never move it.
   The job is skipped, with the reason shown, when
   `exposure_domain_monitor_enabled` is `false` or nothing is due.
 - **Collectors by scope.** `own` domains run all four; `brand` domains (names to
@@ -3841,12 +3842,21 @@ check) are open to any authenticated user; **all writes require the admin role**
   candidate seen registered on its first definite DNS answer — the first run, a
   raised `exposure_lookalike_max_candidates`, `dnstwist` appearing, a lookup
   that kept failing until now — is recorded silently, because nobody knows when
-  it was registered. So is one that comes back within 30 days of going
-  NXDOMAIN (a registry hold lifted): it is the same registration. A failed
-  A/AAAA/MX lookup counts as unknown, never as "no MX", and your other watched
-  domains are never lookalikes (also when you start watching one that an older
-  baseline listed). A newly registered lookalike's first certificate check is
-  judged as a site going up even if crt.sh was down the day it was found.
+  it was registered. So is one that comes back within 30 days of when it was
+  last seen registered (a registry hold lifted): it is the same registration.
+  One that comes back later may have a new owner: it is reported as newly
+  registered again, with its own fingerprints, so it is not deduplicated
+  against the earlier owner's findings. Under a TLD that answers for every name
+  (a wildcard TLD such as `.ws`) only an NS delegation counts as a
+  registration, and a candidate without one counts as confirmed unregistered —
+  unless the resolver hides NS records altogether. A run in which `dnstwist`
+  fails keeps what was known about its candidates. A failed A/AAAA/MX lookup
+  counts as unknown, never as "no MX", and your other watched domains are
+  never lookalikes (also when you start watching one that an older baseline
+  listed). A newly registered lookalike's first certificate check is judged as
+  a site going up however long crt.sh takes to answer for it: it stays pending
+  until it has been checked, and is tried before the rotation (after 3 failed
+  tries in a row it takes its turn with the others instead).
 - **Deduplication.** Every finding has a stable fingerprint (per certificate,
   per lookalike, per before→after change, per expiry date and phase), so re-runs
   only update `last_seen` and never raise a second alert. More than 10
@@ -3857,20 +3867,26 @@ check) are open to any authenticated user; **all writes require the admin role**
   baseline untouched; a failed DNS lookup is neither "unchanged" nor "removed",
   and a watched name that does not resolve at all (NXDOMAIN, e.g. a registry
   hold) fails the `dns` collector instead of reading as every record — DMARC
-  included — removed. crt.sh 5xx/429/timeouts, DNS timeouts, registry outages
-  and unexpected errors (e.g. a database blip) are *transient*: the domain comes
-  back after 60 minutes (doubling per consecutive failure) and that early run
-  repeats only the failed collectors. Early runs never move the regular
-  schedule: the next full run is due `interval_minutes` after the last one
-  started (`last_summary.full_run_at`), so a collector that keeps failing never
-  holds the others back. A lookalike crt.sh can't answer for goes to the back
-  of the rotation (one whose answer is too large to monitor is left alone for a
-  week). Each collector's outcome is in the domain's `last_summary`.
+  included — removed. A resolver that answers NODATA for the domain's own NS
+  records is filtering or broken, so none of its empty answers (MX, TXT, DMARC,
+  A, AAAA) in that run are trusted either: they are warnings, and the baseline
+  keeps the last good values. crt.sh 5xx/429/timeouts, DNS timeouts, registry
+  outages and unexpected errors (e.g. a database blip) are *transient*: the
+  domain comes back after 60 minutes (doubling per consecutive failure) and
+  that early run repeats only the failed collectors. Early runs never move the
+  regular schedule: the next full run is due `interval_minutes` after the last
+  one started (`last_summary.full_run_at`), so a collector that keeps failing
+  never holds the others back. A lookalike crt.sh can't answer for goes to the
+  back of the rotation, except a newly registered one (see above); one whose
+  answer is too large to monitor is left alone for a week. Each collector's
+  outcome is in the domain's `last_summary`.
 - **crt.sh's result limit.** crt.sh returns at most 10,000 matching
   (certificate, name) rows per query, picked in no particular order, and says so
-  only in its HTML pages. A JSON answer that reaches the limit is refused (`ct`
-  error, not retried early: "too many to monitor reliably") rather than diffed,
-  since new certificates could be missing from it.
+  only in its HTML pages. A JSON answer that reaches the limit is refused ("too
+  many to monitor reliably") rather than diffed, since new certificates could be
+  missing from it. For the domain's own certificates that is a `ct` warning
+  (also in `details.own_domain_error`; its baseline is kept): the certificate
+  checks of its registered lookalikes still run.
 - **A/AAAA rotation** among addresses seen in the last 90 days (CDNs) is not
   drift; a never-seen address, or every address vanishing, is. Fields an RDAP
   server leaves out of a response are "not reported", never "removed"; grace
@@ -3985,7 +4001,7 @@ Feature flags, provider state (never the key), counts and the last run.
     "last_run": {
       "at": "2026-10-10T09:17:41Z",
       "trigger": "schedule",
-      "summary": { "checked": 1, "newFindings": 0, "failed": 0, "remaining": 0, "skipped": false }
+      "summary": { "checked": 1, "newFindings": 0, "failed": 0, "down": 0, "crashed": 0, "remaining": 0, "skipped": false }
     },
     "job": {
       "status": "ok",
@@ -4000,10 +4016,15 @@ Feature flags, provider state (never the key), counts and the last run.
 `last_run` and `job` describe this backend process only (they reset on restart);
 `paused_until`/`pause_reason` are set while HIBP has asked us to back off or has
 rejected the key. `domain_monitor.last_run` is the last scheduled cycle (a
-manual `run-now` returns its own result instead); `job.status` is `skipped`
-with the reason in `last_result` when monitoring is off or no domain is due, and
-`failed` (with `last_error`) when every domain a cycle checked had errors — e.g.
-outbound HTTPS blocked; each domain's own `last_error` says what failed.
+manual `run-now` returns its own result instead): `failed` counts the domains
+checked with at least one collector error, `down` those on which no collector
+worked, and `crashed` those whose run could not complete (they stay due).
+`job.status` is `skipped` with the reason in `last_result` when monitoring is
+off or no domain is due, and `failed` (with `last_error`) only when nothing
+worked — no collector worked for any domain checked (e.g. no network or DNS),
+or no domain run completed (e.g. the database). One collector failing (crt.sh
+having a bad day, or a permanent problem with one domain) leaves the job `ok`;
+each domain's own `last_error` says what failed.
 
 ---
 
@@ -4182,7 +4203,9 @@ All watched domains, alphabetically.
 Update `scope`, `enabled`, `interval_minutes`, `collectors` (merged over the
 current values) and/or `expected_cas` (replaced). The domain itself can't be
 changed — delete it and add the new one. A new `interval_minutes` takes effect
-from the last check (`next_run_at` = `last_checked_at` + the new interval).
+from the last full run (`next_run_at` = `last_summary.full_run_at`, else
+`last_checked_at`, + the new interval); an early retry already scheduled
+sooner keeps its time.
 
 **Authentication:** Required (Admin)
 

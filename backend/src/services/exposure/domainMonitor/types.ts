@@ -53,9 +53,16 @@ export interface SharedLookalikeState {
    * Registered lookalikes reported as newly registered recently (see
    * lookalike.ts NEW_REGISTRATION_WINDOW_DAYS). It is derived from the stored
    * snapshot, so the hand-off to CT survives a run in which CT did not run or
-   * failed.
+   * failed; CT also keeps the ones it has not checked yet (ct.ts pending_new).
    */
   newlyRegistered: string[];
+  /**
+   * Lookalikes registered again after they had dropped -> when that drop was
+   * recorded (lookalike.ts RegisteredInfo.prior_drop). It is part of finding
+   * fingerprints, so a new owner's registration is not deduplicated against an
+   * earlier owner's findings. Absent when there are none.
+   */
+  priorDrops?: Record<string, number>;
 }
 
 export interface CollectorContext {

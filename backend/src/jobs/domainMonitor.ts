@@ -39,7 +39,8 @@ async function tick(): Promise<void> {
 
     const summary = await trackJobRun(DOMAIN_MONITOR_JOB_KEY, async () => {
       const result = await runDomainChecks();
-      // Every domain failing (e.g. outbound HTTPS blocked) is a failed cycle, not an "ok" one.
+      // Nothing working for any domain (e.g. no network or DNS) is a failed cycle,
+      // not an "ok" one; one collector's error stays in that domain's last_error.
       const failure = domainMonitorCycleFailure(result);
       if (failure) throw new Error(failure);
       return result;

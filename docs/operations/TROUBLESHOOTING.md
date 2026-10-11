@@ -1359,15 +1359,22 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 - `ct: crt.sh is temporarily unavailable (HTTP 502)` / `did not answer in time`:
   crt.sh is a free, often overloaded service. These are transient — the failed
   collectors are retried after 60 minutes (backing off), the others keep their
-  regular schedule, and nothing is lost.
+  regular schedule, and nothing is lost: a newly registered lookalike crt.sh
+  failed on is checked first next time, and still counts as new.
 - `ct: could not connect to crt.sh within 45 s (is outbound HTTPS blocked?)` (or
-  the same for an RDAP server) — no connection was ever made: an egress
-  firewall or proxy is dropping outbound HTTPS from the backend. When every
-  domain fails, the `domain-monitor` job itself shows `failed`.
-- `ct: crt.sh returned only part of the certificates for <name> ... too many to
-  monitor reliably` — crt.sh stops at 10,000 matching names per query, picked in
-  no particular order, so CT can't be monitored for that name. Turn the `ct`
-  collector off for the domain, or watch a narrower name (e.g. a subdomain).
+  the same for an RDAP server) — no connection was ever made (TCP or the TLS
+  handshake never completed): an egress firewall, proxy or SNI filter is
+  dropping outbound HTTPS from the backend. The `domain-monitor` job itself
+  shows `failed` only when nothing worked for any domain (e.g. no network or
+  DNS at all); otherwise the failing collectors show in each domain's
+  `last_error`.
+- `ct` warning `<name>: crt.sh returned only part of the certificates for
+  <name> ... too many to monitor reliably` (also `details.own_domain_error`) —
+  crt.sh stops at 10,000 matching names per query, picked in no particular
+  order, so the domain's own certificates can't be monitored; the certificates
+  of its registered lookalikes still are. To monitor your own certificates,
+  watch a narrower name (e.g. a subdomain). Turning `ct` off for the domain
+  would stop the lookalike certificate checks too.
 - `rdap: unsupported` — the TLD publishes no RDAP service, or only a plain-HTTP
   one (refused on purpose); registration changes can't be monitored there.
 - `rdap: refused to contact ...` — the RDAP server named by IANA's bootstrap
@@ -1375,8 +1382,12 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   an SSRF guard. Check the backend's DNS for split-horizon or filtering setups.
 - `dns` warning `the resolver returned no NS records for a delegated domain` — a
   filtering or broken resolver; NS changes can't be judged until it answers
-  NS queries (the old baseline is kept, nothing is reported as removed).
-  Optionally set `exposure_dns_secondary_resolver` to a resolver you trust.
+  NS queries (the old baseline is kept, nothing is reported as removed). Its
+  other empty answers in that run are not trusted either (warnings `<type>: no
+  records, from a resolver that also returned no NS records; not trusted`), so
+  it can't record or report MX, TXT or DMARC records as removed — or as added
+  once it is fixed. Optionally set `exposure_dns_secondary_resolver` to a
+  resolver you trust.
 - `dns: every DNS lookup for <name> failed (NS: <name> does not resolve
   (NXDOMAIN); ...)` — the watched name doesn't exist right now: a registry or
   registrar hold (check the `rdap` status), a lapsed registration, or a

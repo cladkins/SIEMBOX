@@ -17,7 +17,9 @@
  * that type) is a real, empty answer. So is NXDOMAIN for _dmarc.<name>, but
  * only when <name> itself answered: if it does not resolve, the empty DMARC
  * answer is a sentinel too (otherwise a zone pulled by a registry hold would
- * read as "DMARC policy removed").
+ * read as "DMARC policy removed"). And a resolver that answered NODATA for a
+ * delegated domain's NS is filtering or broken, so none of its empty answers
+ * in that run are trusted either.
  *
  * Values are normalised and sorted so the comparison is order-insensitive.
  * NS, MX, TXT and DMARC compare as exact sets. A/AAAA are judged against the
@@ -84,6 +86,36 @@ function clampValue(value: string): string {
 
 const isAddressType = (type: DnsRecordType): type is AddressType => type === 'A' || type === 'AAAA';
 
+/** lookupRecordSet's sentinel for NODATA on a delegated domain's NS records. */
+export const NO_NS_FOR_DELEGATED_DOMAIN =
+  'the resolver returned no NS records for a delegated domain';
+
+/**
+ * One resolver's answers for every type, after lookupRecordSet. A resolver
+ * that answered NODATA for a delegated domain's NS records is filtering or
+ * broken (seen in practice: NODATA for NS, MX and TXT of a domain that
+ * publishes all three), so its other empty answers in the same run prove
+ * nothing either: they become sentinels too, and the baseline keeps the last
+ * good values instead of recording (or reporting) those record sets as gone.
+ */
+export function distrustEmptyAnswers(
+  sets: Record<DnsRecordType, RecordSet>
+): Record<DnsRecordType, RecordSet> {
+  const ns = sets.NS;
+  if (ns.ok || ns.error !== NO_NS_FOR_DELEGATED_DOMAIN) return sets;
+  const out = { ...sets };
+  for (const type of DNS_RECORD_TYPES) {
+    const set = sets[type];
+    if (set.ok && set.values.length === 0) {
+      out[type] = {
+        ok: false,
+        error: 'no records, from a resolver that also returned no NS records; not trusted',
+      };
+    }
+  }
+  return out;
+}
+
 export async function lookupRecordSet(
   resolver: DnsResolverLike,
   name: string,
@@ -129,9 +161,7 @@ export async function lookupRecordSet(
   }
   if (outcome.code === NODATA) {
     // Every delegated domain has NS records: NODATA there is a filtering or broken resolver.
-    if (type === 'NS' && options.apex) {
-      return { ok: false, error: 'the resolver returned no NS records for a delegated domain' };
-    }
+    if (type === 'NS' && options.apex) return { ok: false, error: NO_NS_FOR_DELEGATED_DOMAIN };
     return { ok: true, values: [] };
   }
   if (outcome.code === NXDOMAIN) {
@@ -374,29 +404,46 @@ export function createDnsCollector(deps: DnsCollectorDeps = {}): Collector {
       ? `system + ${ctx.config.secondaryResolver ?? 'second resolver'}`
       : 'system';
 
+    // Every type from one resolver, vetted as a whole (see distrustEmptyAnswers).
+    const lookupAll = async (resolver: DnsResolverLike) =>
+      distrustEmptyAnswers(
+        Object.fromEntries(
+          await Promise.all(
+            DNS_RECORD_TYPES.map(
+              async (type) =>
+                [
+                  type,
+                  await lookupRecordSet(resolver, name, type, {
+                    apex,
+                    timeoutMs: deps.queryTimeoutMs,
+                  }),
+                ] as const
+            )
+          )
+        ) as Record<DnsRecordType, RecordSet>
+      );
+    const firstSets = await lookupAll(primary);
+    const secondSets = secondary ? await lookupAll(secondary) : null;
+
     // Which resolver(s) each record set came from, and why when it is only one.
     const sources = {} as Record<DnsRecordType, string>;
     const oneResolverOnly = {} as Partial<Record<DnsRecordType, string>>;
-    const sets = Object.fromEntries(
-      await Promise.all(
-        DNS_RECORD_TYPES.map(async (type) => {
-          const options = { apex, timeoutMs: deps.queryTimeoutMs };
-          const first = await lookupRecordSet(primary, name, type, options);
-          const second = secondary ? await lookupRecordSet(secondary, name, type, options) : null;
-          sources[type] = resolvers;
-          if (second && first.ok && !second.ok) {
-            sources[type] = `system only (${secondName} failed)`;
-            oneResolverOnly[type] =
-              `${type}: ${secondName} failed (${second.error}); the system resolver's answer was used alone`;
-          } else if (second && !first.ok && second.ok) {
-            sources[type] = `${secondName} only (the system resolver failed)`;
-            oneResolverOnly[type] =
-              `${type}: the system resolver failed (${first.error}); ${secondName}'s answer was used alone`;
-          }
-          return [type, combineRecordSets(first, second)] as const;
-        })
-      )
-    ) as Record<DnsRecordType, RecordSet>;
+    const sets = {} as Record<DnsRecordType, RecordSet>;
+    for (const type of DNS_RECORD_TYPES) {
+      const first = firstSets[type];
+      const second = secondSets?.[type] ?? null;
+      sources[type] = resolvers;
+      if (second && first.ok && !second.ok) {
+        sources[type] = `system only (${secondName} failed)`;
+        oneResolverOnly[type] =
+          `${type}: ${secondName} failed (${second.error}); the system resolver's answer was used alone`;
+      } else if (second && !first.ok && second.ok) {
+        sources[type] = `${secondName} only (the system resolver failed)`;
+        oneResolverOnly[type] =
+          `${type}: the system resolver failed (${first.error}); ${secondName}'s answer was used alone`;
+      }
+      sets[type] = combineRecordSets(first, second);
+    }
     sets.DMARC = guardDmarc(sets, name);
 
     const failed = DNS_RECORD_TYPES.filter((type) => !sets[type].ok);

@@ -118,6 +118,31 @@ test('scheduling: due = enabled and next_run_at passed; markRun reschedules; a n
   assert.equal(row.last_error?.length, 500, 'errors are capped');
 });
 
+test('scheduling: a new interval counts from the last full run, and a pending early retry keeps its time', async (t) => {
+  if (!dbReady) return t.skip('Postgres with migration 035 is not reachable');
+  const domain = await makeDomain();
+  // A full run 420 minutes ago, early retries since (the last one just now), the next retry in 480.
+  const fullRun = new Date(Date.now() - 420 * 60_000);
+  const afterRetries = (retry: string[]) =>
+    pool.query(
+      `UPDATE watched_domains
+          SET last_checked_at = NOW(), next_run_at = NOW() + INTERVAL '480 minutes', last_summary = $2
+        WHERE id = $1`,
+      [domain.id, JSON.stringify({ collectors: {}, retry, full_run_at: fullRun.toISOString() })]
+    );
+  const changeInterval = async (minutes: number) => {
+    const row = await WatchedDomainModel.update(domain.id, { interval_minutes: minutes });
+    return Math.round((Date.parse(String(row?.next_run_at)) - fullRun.getTime()) / 60_000);
+  };
+
+  await afterRetries(['ct']);
+  assert.equal(await changeInterval(2880), 900, 'the pending retry keeps its time');
+  await afterRetries(['ct']);
+  assert.equal(await changeInterval(720), 720, 'the full run, when that is due sooner');
+  await afterRetries([]);
+  assert.equal(await changeInterval(2880), 2880, 'from the last full run, not the last retry');
+});
+
 test('run now through the real store: findings, one alert per fingerprint, baselines and bookkeeping', async (t) => {
   if (!dbReady) return t.skip('Postgres with migration 035 is not reachable');
   if (!monitorEnabled) return t.skip('exposure_domain_monitor_enabled is off in this database');

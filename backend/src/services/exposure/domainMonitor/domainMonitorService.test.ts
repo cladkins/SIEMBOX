@@ -522,19 +522,119 @@ test('end to end: a new lookalike’s certificates are still judged when CT fail
   );
 });
 
-test('the job counts a cycle as failed only when every domain it checked had errors', () => {
-  const cycle = (checked: number, failed: number) => ({
-    checked,
-    failed,
-    newFindings: 0,
-    remaining: 0,
-    skipped: false,
+test('end to end: crt.sh failing on a new lookalike (not on the domain) gets it judged on the next run', async () => {
+  // Weekly checks, with four older lookalikes in CT's rotation (3 checks per run).
+  const clock = { now: Date.parse('2026-10-11T00:00:00Z') };
+  const domains = [domainRow(1, 'example.com', { interval_minutes: 7 * 1440 })];
+  const { store, log } = memoryStore(domains, clock);
+  const w = world();
+  for (const old of ['example.org', 'example.co', 'example.io']) {
+    w.zone[old] = { ns: ['ns.someone-else.net'], a: ['198.51.100.1'] };
+  }
+  const failing = new Set<string>();
+  const ct = createCtCollector({
+    source: {
+      certificatesFor: async (name) => {
+        if (failing.has(name)) {
+          throw new CollectorError('crt.sh did not answer in time; will retry', true);
+        }
+        return w.certs[name] ?? [];
+      },
+    },
   });
-  assert.match(domainMonitorCycleFailure(cycle(2, 2)) ?? '', /every domain checked had errors/);
-  assert.equal(domainMonitorCycleFailure(cycle(3, 1)), null);
-  assert.equal(domainMonitorCycleFailure(cycle(0, 0)), null);
-  assert.notEqual(domainMonitorCycleFailure(cycle(0, 1)), null, 'the bookkeeping itself failed');
-  assert.equal(domainMonitorCycleFailure({ ...cycle(0, 0), skipped: true, reason: 'x' }), null);
+  const collectors = { ...w.collectors, ct };
+  const nextRun = async () => {
+    await runDomainChecks({ store, collectors, now: () => clock.now });
+    clock.now = Date.parse(domains[0].next_run_at as string);
+  };
+  await nextRun(); // baselines
+  await nextRun(); // a week later: the rotation is under way
+
+  // examp1e.com goes up with a certificate; crt.sh answers for everything but it.
+  w.zone['examp1e.com'] = { ns: ['ns1.bad-host.net'], a: ['203.0.113.66'] };
+  w.certs['examp1e.com'] = [cert('p1', ['examp1e.com', 'login.examp1e.com'])];
+  failing.add('examp1e.com');
+  await nextRun();
+  assert.deepEqual(
+    log.alerts.map((f) => f.eventType),
+    ['lookalike_registered']
+  );
+  assert.equal(domains[0].last_status, 'ok', 'CT itself succeeded: no early retry');
+
+  failing.clear();
+  await nextRun(); // the next weekly run checks it before the rotation
+  assert.deepEqual(
+    log.alerts.map((f) => [f.eventType, f.title]),
+    [
+      ['lookalike_registered', 'Lookalike domain registered: examp1e.com (looks like example.com)'],
+      ['new_cert', 'Newly registered lookalike examp1e.com already has 1 TLS certificate'],
+    ]
+  );
+});
+
+test('the job fails a cycle only when nothing worked for any domain', async (t) => {
+  t.mock.method(ErrorLogService, 'logBackgroundError', () => undefined);
+  const clock = { now: Date.parse('2026-10-11T00:00:00Z') };
+  const fine: Collector = async () => ({
+    snapshot: { v: 1 },
+    findings: [],
+    status: 'ok',
+    note: '',
+  });
+  const down: Collector = async () => {
+    throw new CollectorError('crt.sh is temporarily unavailable (HTTP 502); will retry', true);
+  };
+  const ctDown = { dns: fine, rdap: fine, lookalike: fine, ct: down };
+  const allDown = { dns: down, rdap: down, lookalike: down, ct: down };
+  const run = (store: DomainMonitorStore, collectors: Record<CollectorName, Collector>) =>
+    runDomainChecks({ store, collectors, now: () => clock.now });
+  const crashing = (store: DomainMonitorStore, ids: number[]): DomainMonitorStore => ({
+    ...store,
+    getBaselines: async (id) => {
+      if (ids.includes(id)) throw new Error('Connection terminated unexpectedly');
+      return store.getBaselines(id);
+    },
+  });
+
+  // One domain (the common install) with crt.sh down: not a failed job — neither
+  // the full run nor the early retry that re-runs CT alone.
+  const single = [domainRow(1, 'example.com')];
+  const singleStore = memoryStore(single, clock).store;
+  const full = await run(singleStore, ctDown);
+  assert.deepEqual([full.checked, full.failed, full.down], [1, 1, 0]);
+  assert.equal(domainMonitorCycleFailure(full), null);
+  clock.now = Date.parse(single[0].next_run_at as string);
+  const retry = await run(singleStore, ctDown);
+  assert.deepEqual((single[0].last_summary as { retry: string[] }).retry, ['ct']);
+  assert.deepEqual([retry.checked, retry.failed, retry.down], [1, 1, 0]);
+  assert.equal(domainMonitorCycleFailure(retry), null);
+
+  // One domain whose run could not complete does not make the others' look failed.
+  const mixed = crashing(
+    memoryStore([domainRow(1, 'ok.com'), domainRow(2, 'threw.com')], clock).store,
+    [2]
+  );
+  const partial = await run(mixed, { dns: fine, rdap: fine, lookalike: fine, ct: fine });
+  assert.deepEqual([partial.checked, partial.failed, partial.crashed], [1, 0, 1]);
+  assert.equal(domainMonitorCycleFailure(partial), null);
+  assert.equal(
+    describeDomainMonitorRun(partial),
+    'checked 1 domain, 0 new findings, 1 could not be checked, 1 still due'
+  );
+
+  // Nothing working anywhere (no network or DNS) fails the cycle; so does no run completing.
+  const everything = memoryStore(
+    [domainRow(1, 'example.com'), domainRow(2, 'brand.com', { scope: 'brand' })],
+    clock
+  ).store;
+  const nothing = await run(everything, allDown);
+  assert.deepEqual([nothing.checked, nothing.failed, nothing.down], [2, 2, 2]);
+  assert.match(domainMonitorCycleFailure(nothing) ?? '', /nothing worked for any domain/);
+  const dead = crashing(memoryStore([domainRow(1, 'example.com')], clock).store, [1]);
+  const crashed = await run(dead, ctDown);
+  assert.deepEqual([crashed.checked, crashed.crashed], [0, 1]);
+  assert.notEqual(domainMonitorCycleFailure(crashed), null);
+  assert.equal(domainMonitorCycleFailure({ ...crashed, skipped: true, reason: 'x' }), null);
 });
 
 test('scope and switches: brand domains run lookalike + ct; switched-off collectors never run', async () => {

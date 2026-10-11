@@ -10,7 +10,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'http';
 import type https from 'https';
-import type { AddressInfo } from 'net';
+import net, { type AddressInfo } from 'net';
 import { HttpError, httpsGet, type HttpGetOptions } from './http';
 import { UnsafeTargetError } from './netSafety';
 
@@ -123,6 +123,32 @@ test('a timeout before any connection was made says so (often a firewall droppin
       err.phase === 'connect' &&
       /could not connect/.test(err.message)
   );
+});
+
+test('a TLS handshake that never completes is a connect-phase timeout (e.g. an SNI filter)', async () => {
+  // TCP connects, but nothing ever answers the ClientHello: the real https client, no seam.
+  const sockets: net.Socket[] = [];
+  const tcp = net.createServer((socket) => sockets.push(socket));
+  await new Promise<void>((resolve) => tcp.listen(0, '127.0.0.1', resolve));
+  const tcpPort = (tcp.address() as AddressInfo).port;
+  try {
+    await assert.rejects(
+      httpsGet(new URL(`https://stalled-tls.test-host.net:${tcpPort}/json`), {
+        timeoutMs: 300,
+        maxBytes: 4_096,
+        resolve: async () => [{ address: '127.0.0.1', family: 4 }],
+      }),
+      (err: unknown) =>
+        err instanceof HttpError &&
+        err.kind === 'timeout' &&
+        err.phase === 'connect' &&
+        /could not connect/.test(err.message)
+    );
+    assert.equal(sockets.length, 1, 'the TCP connection itself was made');
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => tcp.close(() => resolve()));
+  }
 });
 
 test('non-HTTPS URLs are refused before any connection', async () => {

@@ -4,7 +4,7 @@
       <div class="card-header">
         <span>
           Findings
-          <HelpTip text="One finding per breach an identity appears in (domain findings will join them once domain monitoring ships). Re-checks only update Last seen and never alert twice; a resolved finding is never reopened. Each new finding also raised an alert in the alert queue." />
+          <HelpTip :text="helpText" />
         </span>
         <el-button size="small" :icon="Refresh" circle aria-label="Refresh findings" :loading="loading" @click="load()" />
       </div>
@@ -36,6 +36,35 @@
                 <el-tag v-for="c in row.breach.dataClasses" :key="c" size="small" effect="plain" class="data-class">{{ c }}</el-tag>
               </p>
               <p v-if="row.breach.flags.length"><strong>Flags:</strong> {{ row.breach.flags.join(', ') }}</p>
+            </template>
+            <template v-else-if="row.domainLines">
+              <div v-for="line in row.domainLines" :key="line.label" class="detail-line">
+                <strong>{{ line.label }}: </strong>
+                <a v-if="line.href" :href="line.href" target="_blank" rel="noopener noreferrer">{{ line.text }}</a>
+                <template v-else-if="line.items">
+                  <span v-if="!line.items.length" class="detail-none">none</span>
+                  <el-tag
+                    v-for="(item, i) in line.items"
+                    :key="i"
+                    size="small"
+                    effect="plain"
+                    :type="item.change === 'added' ? 'success' : item.change === 'removed' ? 'danger' : 'info'"
+                    :title="item.change"
+                    class="data-class"
+                  >{{ changeMark(item) }}{{ item.text }}</el-tag>
+                </template>
+                <span v-else-if="line.text">{{ line.text }}</span>
+                <ul v-if="line.list" class="detail-list">
+                  <li v-for="(entry, i) in line.list" :key="i">
+                    <a v-if="entry.href" :href="entry.href" target="_blank" rel="noopener noreferrer">{{ entry.text }}</a>
+                    <template v-else>{{ entry.text }}</template>
+                  </li>
+                </ul>
+              </div>
+              <el-button link type="primary" size="small" class="raw-toggle" @click="toggleRaw(row.id)">
+                {{ rawShown.has(row.id) ? 'Hide raw detail' : 'Raw detail' }}
+              </el-button>
+              <pre v-if="rawShown.has(row.id)" class="detail-json">{{ JSON.stringify(row.detail, null, 2) }}</pre>
             </template>
             <pre v-else class="detail-json">{{ JSON.stringify(row.detail, null, 2) }}</pre>
             <p v-if="row.alert_id"><strong>Alert:</strong> #{{ row.alert_id }} in the alert queue</p>
@@ -106,12 +135,12 @@
       @size-change="reloadFromStart"
     />
 
-    <HibpAttribution />
+    <HibpAttribution v-if="showsBreachData" />
   </el-card>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import HelpTip from '@/components/HelpTip.vue';
@@ -123,13 +152,40 @@ import exposureService, {
   type ExposureFindingSource,
   type ExposureSeverity,
 } from '@/services/exposureService';
-import { apiErrorMessage, apiErrorStatus, formatWhen, identityKindLabel } from '@/utils/exposure';
+import {
+  apiErrorMessage,
+  apiErrorStatus,
+  domainFindingDetail,
+  formatWhen,
+  identityKindLabel,
+  type DetailItem,
+  type DetailLine,
+  type DomainMonitorState,
+} from '@/utils/exposure';
 
+const props = defineProps<{ domainMonitor: DomainMonitorState }>();
 const emit = defineEmits<{ (e: 'changed'): void }>();
 
 const SOURCE_LABELS: Record<ExposureFindingSource, string> = {
   'leaked-creds': 'Leaked credentials',
   'domain-monitor': 'Domain monitoring',
+};
+
+const REPEATS =
+  'Re-checks only update Last seen and never alert twice; a resolved finding is never reopened. Each new finding also raised an alert in the alert queue.';
+const helpText = computed(() =>
+  props.domainMonitor === 'unavailable'
+    ? `One finding per breach an identity appears in (domain findings will join them once domain monitoring ships). ${REPEATS}`
+    : `Leaked-credential checks add one finding per breach an identity appears in; domain monitoring adds one per change it detects (a DNS or registration change, a new certificate, a newly registered lookalike). ${REPEATS}`
+);
+
+// Prefix of a value a domain change added or removed (the tag colour says it too).
+const changeMark = (item: DetailItem) => (item.change === 'added' ? '+ ' : item.change === 'removed' ? '− ' : '');
+
+// What "resolved" usually means, per source, in the Resolve confirmation.
+const RESOLVE_EXAMPLES: Record<ExposureFindingSource, string> = {
+  'leaked-creds': 'e.g. the password was changed',
+  'domain-monitor': 'e.g. the change was expected, or has been dealt with',
 };
 
 /** The breach fields of a leaked-credential finding, for the expanded row. */
@@ -141,9 +197,19 @@ interface BreachView {
   dataClasses: string[];
   flags: string[];
 }
-type FindingRow = ExposureFinding & { breach: BreachView | null };
+type FindingRow = ExposureFinding & { breach: BreachView | null; domainLines: DetailLine[] | null };
 
 const findings = ref<FindingRow[]>([]);
+// HIBP's data must be attributed wherever it is shown, and only there.
+const showsBreachData = computed(() => findings.value.some((f) => f.source === 'leaked-creds'));
+// Rows whose raw detail JSON is shown under the readable one.
+const rawShown = ref(new Set<number>());
+
+function toggleRaw(id: number) {
+  const next = new Set(rawShown.value);
+  if (!next.delete(id)) next.add(id);
+  rawShown.value = next;
+}
 const total = ref(0);
 const page = ref(1);
 const pageSize = ref(25);
@@ -177,7 +243,7 @@ async function load(): Promise<void> {
       page.value = lastPage;
       return load();
     }
-    findings.value = result.findings.map((f) => ({ ...f, breach: breachOf(f) }));
+    findings.value = result.findings.map((f) => ({ ...f, breach: breachOf(f), domainLines: domainFindingDetail(f) }));
     total.value = result.total;
   } catch (error) {
     if (thisLoad === latestLoad) ElMessage.error(apiErrorMessage(error, 'Failed to load findings'));
@@ -224,7 +290,7 @@ function breachOf(row: ExposureFinding): BreachView | null {
 async function resolve(row: ExposureFinding) {
   try {
     await ElMessageBox.confirm(
-      'Mark this finding as resolved (e.g. the password was changed)? This can’t be undone, and later checks won’t reopen it.',
+      `Mark this finding as resolved (${RESOLVE_EXAMPLES[row.source] ?? 'e.g. it has been dealt with'})? This can’t be undone, and later checks won’t reopen it.`,
       'Resolve finding',
       { confirmButtonText: 'Resolve', cancelButtonText: 'Cancel', type: 'info' }
     );
@@ -307,6 +373,28 @@ defineExpose({ reload: load });
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.detail-line {
+  margin: 0 0 6px;
+  word-break: break-word;
+}
+
+.detail-line a {
+  color: var(--el-color-primary);
+}
+
+.detail-none {
+  color: var(--el-text-color-secondary);
+}
+
+.detail-list {
+  margin: 4px 0 0;
+  padding-left: 20px;
+}
+
+.raw-toggle {
+  margin-bottom: 6px;
 }
 
 .pager {

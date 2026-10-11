@@ -10,26 +10,27 @@
         title="Couldn't load the Digital Risk status"
       >
         <p class="banner-line">{{ statusError }}</p>
-        <el-button link type="primary" size="small" @click="refreshStatus">Try again</el-button>
+        <el-button link type="primary" size="small" @click="refreshBanner">Try again</el-button>
       </el-alert>
       <el-alert v-else-if="banner" :type="banner.type" show-icon :closable="false" :title="banner.title">
         <p class="banner-line">{{ banner.detail }}</p>
         <p v-if="countsLine" class="banner-line banner-counts">
           {{ countsLine }}
-          <el-button link type="primary" size="small" :loading="statusLoading" @click="refreshStatus">Refresh</el-button>
+          <el-button link type="primary" size="small" :loading="statusLoading" @click="refreshBanner">Refresh</el-button>
         </p>
       </el-alert>
     </div>
 
     <ExposureDomainsCard
       scope="own"
-      :domain-monitor-available="domainMonitorAvailable"
+      :domain-monitor="domainMonitor"
       @changed="refreshStatus"
       @deleted="reloadFindings"
     />
     <ExposureIdentitiesCard
       ref="identitiesCard"
       class="section"
+      :status="status"
       @changed="refreshStatus"
       @deleted="reloadFindings"
       @loaded="identityRows = $event"
@@ -37,7 +38,7 @@
     <ExposureDomainsCard
       scope="brand"
       class="section"
-      :domain-monitor-available="domainMonitorAvailable"
+      :domain-monitor="domainMonitor"
       @changed="refreshStatus"
       @deleted="reloadFindings"
     />
@@ -48,7 +49,7 @@
       @encryption-error="encryptionError = $event"
     />
     <ExposureChecksCard class="section" @changed="refreshStatus" @ran="onCheckRan" />
-    <ExposureFindingsCard ref="findingsCard" class="section" @changed="refreshStatus" />
+    <ExposureFindingsCard ref="findingsCard" class="section" :domain-monitor="domainMonitor" @changed="refreshStatus" />
     <PasswordCheckCard class="section" />
   </div>
 </template>
@@ -60,7 +61,7 @@ import exposureService, {
   type ExposureStatus,
   type MonitoredIdentity,
 } from '@/services/exposureService';
-import { apiErrorMessage, describeExposureStatus, pluralize } from '@/utils/exposure';
+import { apiErrorMessage, describeExposureStatus, domainMonitorState, pluralize } from '@/utils/exposure';
 import ExposureChecksCard from './ExposureChecksCard.vue';
 import ExposureDomainsCard from './ExposureDomainsCard.vue';
 import ExposureFindingsCard from './ExposureFindingsCard.vue';
@@ -91,12 +92,11 @@ const banner = computed(() =>
     ? describeExposureStatus(status.value, {
         encryptionKeyError: encryptionError.value,
         failingIdentities: identityRows.value?.filter((i) => i.enabled && i.last_status === 'error').length,
-        // Not reactive, but every provider write is followed by a status refresh.
-        providerChangedAt: exposureService.providerChangedAt,
       })
     : null
 );
-const domainMonitorAvailable = computed(() => status.value?.features.domain_monitor_available ?? false);
+// While the status loads (or if it fails) this is 'on', so no "not checked" note flashes up.
+const domainMonitor = computed(() => domainMonitorState(status.value));
 
 const countsLine = computed(() => {
   const c = status.value?.counts;
@@ -127,6 +127,12 @@ async function refreshStatus() {
   } finally {
     if (thisLoad === latestStatusLoad) statusLoading.value = false;
   }
+}
+
+// The banner also counts failing identities from the identities list, which a
+// scheduled check may have changed since the page loaded.
+async function refreshBanner() {
+  await Promise.all([refreshStatus(), identitiesCard.value?.reload()]);
 }
 
 // A manual run changes identities' last-check state and may add findings.

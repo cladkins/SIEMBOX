@@ -135,11 +135,7 @@
                   {{ digitalRiskProblem.title }}
                 </el-text>
               </p>
-              <DigitalRiskQuickSetup
-                v-if="authStore.isAdmin"
-                :domain-monitor-available="exposureStatus?.features.domain_monitor_available ?? false"
-                @changed="refreshDigitalRisk"
-              />
+              <DigitalRiskQuickSetup v-if="authStore.isAdmin" :status="exposureStatus" @changed="refreshDigitalRisk" />
               <el-text v-else size="small" type="info">
                 An administrator can set up Digital Risk monitoring in Settings → Digital Risk.
               </el-text>
@@ -162,8 +158,8 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '@/services/api';
-import exposureService, { type ExposureStatus } from '@/services/exposureService';
-import { describeExposureStatus, pluralize } from '@/utils/exposure';
+import exposureService, { type ExposureStatus, type MonitoredIdentity } from '@/services/exposureService';
+import { breachChecksReady, describeExposureStatus, domainMonitorState, pluralize } from '@/utils/exposure';
 import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth';
@@ -179,22 +175,26 @@ const parserCount = ref(0);
 const ruleCount = ref(0);
 const channelCount = ref(0);
 const aiConfigured = ref(false);
-// GET /exposure/status, readable by every role.
+// GET /exposure/status and GET /exposure/identities, both readable by every role.
 const exposureStatus = ref<ExposureStatus | null>(null);
+const identityRows = ref<MonitoredIdentity[] | null>(null);
 
 const pw = reactive({ current: '', next: '' });
 const pwSaving = ref(false);
 const passwordChanged = ref(false);
 
-// What Digital Risk actually watches: enabled identities, and enabled domains
-// once the domain collectors exist (until then a domain is only saved).
+// What Digital Risk actually watches: enabled identities while breach checks
+// can run, and enabled domains while domain monitoring is on. Anything else is
+// only saved.
 const digitalRiskCounts = computed(() => {
   const s = exposureStatus.value;
+  const identities = s?.counts.identities_enabled ?? 0;
   const domains = s?.counts.domains_enabled ?? 0;
   return {
-    identities: s?.counts.identities_enabled ?? 0,
+    identities,
+    identitiesWatched: s && breachChecksReady(s) ? identities : 0,
     domains,
-    domainsWatched: s?.features.domain_monitor_available ? domains : 0,
+    domainsWatched: s && domainMonitorState(s) === 'on' ? domains : 0,
   };
 });
 
@@ -206,22 +206,25 @@ const steps = computed(() => ({
   ai: aiConfigured.value,
   notifications: channelCount.value > 0,
   // Done once something is being watched.
-  digitalRisk: digitalRiskCounts.value.identities + digitalRiskCounts.value.domainsWatched > 0,
+  digitalRisk: digitalRiskCounts.value.identitiesWatched + digitalRiskCounts.value.domainsWatched > 0,
 }));
 
 const digitalRiskTag = computed(() => {
-  const { identities, domains, domainsWatched } = digitalRiskCounts.value;
+  const { identities, identitiesWatched, domains, domainsWatched } = digitalRiskCounts.value;
   const parts: string[] = [];
   if (domains > 0) parts.push(`${pluralize(domains, 'domain')}${domainsWatched > 0 ? '' : ' saved'}`);
-  if (identities > 0) parts.push(pluralize(identities, 'identity', 'identities'));
+  if (identities > 0) parts.push(`${pluralize(identities, 'identity', 'identities')}${identitiesWatched > 0 ? '' : ' saved'}`);
   return parts.join(' · ');
 });
 
-// Identities are watched, but the settings banner says breach checks can't run
-// (no key, provider disabled, checks off, ...).
+// Identities are monitored, but the settings banner reports a problem: breach
+// checks can't run (no key, provider disabled, checks off, ...) or an identity's
+// last check failed (counted from the list, which outlives the last run).
 const digitalRiskProblem = computed(() => {
   if (!exposureStatus.value || digitalRiskCounts.value.identities === 0) return null;
-  const banner = describeExposureStatus(exposureStatus.value, { providerChangedAt: exposureService.providerChangedAt });
+  const banner = describeExposureStatus(exposureStatus.value, {
+    failingIdentities: identityRows.value?.filter((i) => i.enabled && i.last_status === 'error').length,
+  });
   return banner.type === 'success' ? null : banner;
 });
 
@@ -241,7 +244,7 @@ async function refresh() {
   try {
     // Admin-only endpoints are only requested for admins: anyone else gets a
     // 403, which the API client turns into a "no permission" popup.
-    const [profile, shippers, parsers, rules, channels, ai, exposure] = await Promise.allSettled([
+    const [profile, shippers, parsers, rules, channels, ai, exposure, identities] = await Promise.allSettled([
       api.getProfile(),
       api.getShippers(),
       api.getParsers(),
@@ -249,6 +252,7 @@ async function refresh() {
       api.getNotificationChannels(),
       authStore.isAdmin ? api.getAiSettings() : Promise.resolve(null),
       exposureService.getStatus(),
+      exposureService.listIdentities(),
     ]);
     if (profile.status === 'fulfilled') mfaEnabled.value = !!profile.value.data.mfa_enabled;
     if (shippers.status === 'fulfilled') shipperCount.value = (shippers.value.data || []).length;
@@ -260,18 +264,21 @@ async function refresh() {
       aiConfigured.value = !!(d.configured || d.api_key_set || d.apiKeySet || d.has_key);
     }
     if (exposure.status === 'fulfilled') exposureStatus.value = exposure.value;
+    if (identities.status === 'fulfilled') identityRows.value = identities.value;
   } finally {
     loading.value = false;
   }
 }
 
-// After the inline Digital Risk setup adds something: just re-read the status.
+// After the inline Digital Risk setup adds something: re-read just its state.
 async function refreshDigitalRisk() {
-  try {
-    exposureStatus.value = await exposureService.getStatus();
-  } catch {
-    // The API client already showed the error; the step keeps its last state.
-  }
+  // On failure the API client has shown the error and the step keeps its last state.
+  const [status, identities] = await Promise.allSettled([
+    exposureService.getStatus(),
+    exposureService.listIdentities(),
+  ]);
+  if (status.status === 'fulfilled') exposureStatus.value = status.value;
+  if (identities.status === 'fulfilled') identityRows.value = identities.value;
 }
 
 async function changePassword() {

@@ -11,6 +11,7 @@
 import { query } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { CredentialEncryption } from '../credentials/credentialEncryption';
+import crypto from 'crypto';
 import type { ExposureSeverity } from '../../models/Exposure';
 
 /** Every key this subsystem owns, with the value used when the row is missing. */
@@ -116,6 +117,13 @@ export interface ExposureProviderPublic {
   attribution: string;
   configured: boolean;
   enabled: boolean;
+  /**
+   * A key is saved and this backend can decrypt it. `configured` without
+   * `usable` means CREDENTIAL_ENCRYPTION_KEY is missing or has changed since
+   * the key was saved: breach checks are skipped until it is restored or the
+   * key is saved again.
+   */
+  usable: boolean;
 }
 
 /** Public provider view for the UI — never exposes the key itself. */
@@ -124,7 +132,30 @@ export async function getHibpProviderPublic(): Promise<ExposureProviderPublic> {
     getExposureSetting('exposure_hibp_key'),
     getExposureSetting('exposure_hibp_enabled'),
   ]);
-  return { ...HIBP_PROVIDER, configured: storedKey !== '', enabled: enabled === 'true' };
+  return {
+    ...HIBP_PROVIDER,
+    configured: storedKey !== '',
+    enabled: enabled === 'true',
+    usable: isStoredHibpKeyUsable(storedKey),
+  };
+}
+
+// GET /status and GET /providers report `usable` on every page view, and a
+// failed decrypt is logged, so each answer is kept while both of its inputs
+// stay the same: the stored value and CREDENTIAL_ENCRYPTION_KEY (by hash).
+let usableMemo: { stored: string; keyHash: string; usable: boolean } | null = null;
+
+/** Whether `stored` (the exposure_hibp_key setting) decrypts with the current CREDENTIAL_ENCRYPTION_KEY. */
+export function isStoredHibpKeyUsable(stored: string): boolean {
+  if (!stored) return false;
+  const keyHash = crypto
+    .createHash('sha256')
+    .update(process.env.CREDENTIAL_ENCRYPTION_KEY ?? '')
+    .digest('hex');
+  if (usableMemo?.stored === stored && usableMemo.keyHash === keyHash) return usableMemo.usable;
+  const usable = decryptStoredHibpKey(stored, false) !== undefined;
+  usableMemo = { stored, keyHash, usable };
+  return usable;
 }
 
 /**
@@ -157,7 +188,11 @@ export async function isHibpEnabled(): Promise<boolean> {
  * CREDENTIAL_ENCRYPTION_KEY changed since the key was saved).
  */
 export async function getHibpApiKey(): Promise<string | undefined> {
-  const stored = await getExposureSetting('exposure_hibp_key');
+  return decryptStoredHibpKey(await getExposureSetting('exposure_hibp_key'), true);
+}
+
+/** The key in a stored exposure_hibp_key value, or undefined when there is none this backend can decrypt. */
+function decryptStoredHibpKey(stored: string, warn: boolean): string | undefined {
   if (!stored) return undefined;
   let envelope: { encrypted?: string; iv?: string; authTag?: string };
   try {
@@ -165,7 +200,7 @@ export async function getHibpApiKey(): Promise<string | undefined> {
   } catch {
     // Deliberately not logging the parse error: V8 quotes the input in it, and
     // a hand-edited row could hold a plaintext key.
-    logger.warn('[Exposure] the stored HIBP API key is not an encrypted value; re-enter it');
+    if (warn) logger.warn('[Exposure] the stored HIBP API key is not an encrypted value; re-enter it');
     return undefined;
   }
   try {
@@ -176,9 +211,11 @@ export async function getHibpApiKey(): Promise<string | undefined> {
     );
   } catch (e) {
     // CredentialEncryption's messages are static (no key material).
-    logger.warn('[Exposure] the stored HIBP API key could not be decrypted; re-enter it', {
-      error: e instanceof Error ? e.message : String(e),
-    });
+    if (warn) {
+      logger.warn('[Exposure] the stored HIBP API key could not be decrypted; re-enter it', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
     return undefined;
   }
 }

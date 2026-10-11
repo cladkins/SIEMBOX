@@ -8,9 +8,13 @@
     </template>
 
     <p class="card-intro">{{ copy.intro }}</p>
-    <p v-if="!domainMonitorAvailable" class="card-note">
+    <p v-if="domainMonitor === 'unavailable'" class="card-note">
       Domain monitoring collectors are coming in a later release. Domains you add now are saved and
       will be watched as soon as they ship.
+    </p>
+    <p v-else-if="domainMonitor === 'off'" class="card-note">
+      Domain monitoring is switched off, so these domains are not checked. To turn it back on, set
+      <code>exposure_domain_monitor_enabled</code> to true with <code>PUT /api/exposure/settings</code>.
     </p>
 
     <el-form class="add-form" inline @submit.prevent="add">
@@ -74,7 +78,10 @@
       <el-table-column label="Last checked" min-width="150">
         <template #default="{ row }">
           <div>{{ formatWhen(row.last_checked_at) }}</div>
-          <el-text v-if="row.next_run_at" size="small" type="info">Next {{ formatRelative(row.next_run_at) }}</el-text>
+          <!-- Only for a domain that will actually be checked. -->
+          <el-text v-if="row.enabled && domainMonitor === 'on' && nextCheckLabel(row.next_run_at)" size="small" type="info">
+            {{ nextCheckLabel(row.next_run_at) }}
+          </el-text>
         </template>
       </el-table-column>
 
@@ -120,19 +127,20 @@ import {
   apiErrorStatus,
   checkStatusTag,
   domainAddedMessage,
-  formatRelative,
   formatWhen,
   intervalLabel,
   intervalOptionsFor,
+  nextCheckLabel,
   normalizeDomain,
+  type DomainMonitorState,
 } from '@/utils/exposure';
 
 // One card per watched-domain scope: 'own' (the organization's domains) and
 // 'brand' (names to protect from lookalikes). Both read the same list.
 const props = defineProps<{
   scope: DomainScope;
-  /** False until the domain collectors ship (GET /status features.domain_monitor_available). */
-  domainMonitorAvailable: boolean;
+  /** Whether domains are checked at all (see domainMonitorState). */
+  domainMonitor: DomainMonitorState;
 }>();
 
 const emit = defineEmits<{
@@ -146,7 +154,7 @@ const COPY: Record<DomainScope, { title: string; intro: string; help: string; pl
   own: {
     title: 'Owned domains',
     intro:
-      'Domains your organization owns. Domain monitoring watches them for certificates from unexpected CAs, DNS changes and registration (RDAP) changes.',
+      'Domains your organization owns. Domain monitoring watches their DNS records, their registration (RDAP changes and upcoming expiry) and new TLS certificates in Certificate Transparency logs, and looks for newly registered lookalikes.',
     help: 'Enter bare hostnames such as example.com: no scheme, port, path, wildcard or IP address. Enter internationalized names in punycode (xn--…).',
     placeholder: 'example.com',
     empty: 'No owned domains yet',
@@ -203,7 +211,7 @@ async function add() {
       interval_minutes: newInterval.value,
     });
     newDomain.value = '';
-    ElMessage.success(domainAddedMessage(checked.value, props.domainMonitorAvailable));
+    ElMessage.success(domainAddedMessage(checked.value, props.domainMonitor));
     await reload();
     emit('changed');
   } catch (error) {

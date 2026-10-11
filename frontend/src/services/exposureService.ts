@@ -139,8 +139,15 @@ export interface ExposureProvider {
   docsUrl: string;
   signupUrl: string;
   attribution: string;
+  /** A key is saved. */
   configured: boolean;
   enabled: boolean;
+  /**
+   * The backend can decrypt the saved key. False while `configured` means
+   * CREDENTIAL_ENCRYPTION_KEY is missing or has changed since the key was
+   * saved, so no breach check can run.
+   */
+  usable: boolean;
 }
 
 export interface HibpSubscription {
@@ -197,7 +204,10 @@ export interface ExposureStatus {
   features: {
     leaked_creds_enabled: boolean;
     password_check_available: boolean;
+    /** False until the backend includes the domain-monitoring collectors. */
     domain_monitor_available: boolean;
+    /** The exposure_domain_monitor_enabled setting; absent from backends without domain monitoring. */
+    domain_monitor_enabled?: boolean;
   };
   notifications: { enabled: boolean; min_severity: ExposureSeverity };
   providers: ExposureProvider[];
@@ -226,6 +236,10 @@ const RUN_NOW_TIMEOUT_MS = 150_000;
 const HIBP_TEST_TIMEOUT_MS = 30_000;
 const PASSWORD_CHECK_TIMEOUT_MS = 25_000;
 
+// For calls whose every caller shows the API's own message when they fail
+// (inline or as a toast): the client's generic error toast would repeat it.
+const HANDLED = { skipErrorToast: true } as const;
+
 /**
  * Forget the serialized request body an axios response or error holds on to,
  * so a secret sent in it (an API key, a password) doesn't outlive the request
@@ -238,13 +252,6 @@ function dropRequestBody(holder: unknown): void {
 }
 
 class ExposureServiceClient {
-  /**
-   * When this browser last changed the HIBP provider (key saved or removed,
-   * provider switched on or off), in ms since the epoch; 0 if it hasn't. The
-   * status banner treats a "no usable key" skip from before then as stale.
-   */
-  providerChangedAt = 0;
-
   // ---- Status & settings ----------------------------------------------------
 
   async getStatus(): Promise<ExposureStatus> {
@@ -253,13 +260,13 @@ class ExposureServiceClient {
   }
 
   async getSettings(): Promise<ExposureSettings> {
-    const response = await apiClient.get('/exposure/settings');
+    const response = await apiClient.get('/exposure/settings', HANDLED);
     return response.data;
   }
 
   /** Update any subset of the settings; returns the full settings. Admin only. */
   async updateSettings(changes: Partial<ExposureSettings>): Promise<ExposureSettings> {
-    const response = await apiClient.put('/exposure/settings', changes);
+    const response = await apiClient.put('/exposure/settings', changes, HANDLED);
     return response.data;
   }
 
@@ -283,9 +290,8 @@ class ExposureServiceClient {
     const body: { api_key: string; enabled?: boolean } = { api_key: key };
     if (enabled !== undefined) body.enabled = enabled;
     try {
-      const response = await apiClient.put('/exposure/providers/hibp', body);
+      const response = await apiClient.put('/exposure/providers/hibp', body, HANDLED);
       dropRequestBody(response);
-      this.providerChangedAt = Date.now();
       return response.data;
     } catch (error) {
       dropRequestBody(error);
@@ -295,15 +301,13 @@ class ExposureServiceClient {
 
   /** Turn the provider on or off without touching the stored key. Admin only. */
   async setHibpEnabled(enabled: boolean): Promise<ExposureProvider> {
-    const response = await apiClient.put('/exposure/providers/hibp', { enabled });
-    this.providerChangedAt = Date.now();
+    const response = await apiClient.put('/exposure/providers/hibp', { enabled }, HANDLED);
     return response.data;
   }
 
   /** Delete the stored HIBP key (the only call that clears it). Admin only. */
   async removeHibpKey(): Promise<ExposureProvider> {
-    const response = await apiClient.put('/exposure/providers/hibp', { api_key: null });
-    this.providerChangedAt = Date.now();
+    const response = await apiClient.put('/exposure/providers/hibp', { api_key: null }, HANDLED);
     return response.data;
   }
 
@@ -318,7 +322,7 @@ class ExposureServiceClient {
       const response = await apiClient.post(
         '/exposure/providers/hibp/test',
         key ? { api_key: key } : {},
-        { timeout: HIBP_TEST_TIMEOUT_MS }
+        { timeout: HIBP_TEST_TIMEOUT_MS, ...HANDLED }
       );
       dropRequestBody(response);
       return response.data;
@@ -337,18 +341,18 @@ class ExposureServiceClient {
 
   /** Admin only. 400 with the reason for an invalid domain; 409 when it is already watched. */
   async addDomain(input: WatchedDomainInput): Promise<WatchedDomain> {
-    const response = await apiClient.post('/exposure/domains', input);
+    const response = await apiClient.post('/exposure/domains', input, HANDLED);
     return response.data;
   }
 
   async updateDomain(id: number, changes: WatchedDomainUpdate): Promise<WatchedDomain> {
-    const response = await apiClient.put(`/exposure/domains/${id}`, changes);
+    const response = await apiClient.put(`/exposure/domains/${id}`, changes, HANDLED);
     return response.data;
   }
 
   /** Also deletes the domain's findings (their alerts stay). Admin only. */
   async deleteDomain(id: number): Promise<void> {
-    await apiClient.delete(`/exposure/domains/${id}`);
+    await apiClient.delete(`/exposure/domains/${id}`, HANDLED);
   }
 
   // ---- Monitored identities -------------------------------------------------
@@ -360,18 +364,18 @@ class ExposureServiceClient {
 
   /** Admin only. 400 with the reason for an invalid value; 409 when it is already monitored. */
   async addIdentity(input: MonitoredIdentityInput): Promise<MonitoredIdentity> {
-    const response = await apiClient.post('/exposure/identities', input);
+    const response = await apiClient.post('/exposure/identities', input, HANDLED);
     return response.data;
   }
 
   async updateIdentity(id: number, changes: MonitoredIdentityUpdate): Promise<MonitoredIdentity> {
-    const response = await apiClient.put(`/exposure/identities/${id}`, changes);
+    const response = await apiClient.put(`/exposure/identities/${id}`, changes, HANDLED);
     return response.data;
   }
 
   /** Also deletes the identity's findings (their alerts stay). Admin only. */
   async deleteIdentity(id: number): Promise<void> {
-    await apiClient.delete(`/exposure/identities/${id}`);
+    await apiClient.delete(`/exposure/identities/${id}`, HANDLED);
   }
 
   // ---- Findings -------------------------------------------------------------
@@ -385,13 +389,13 @@ class ExposureServiceClient {
     if (query.domain_id !== undefined) params.domain_id = query.domain_id;
     if (query.limit !== undefined) params.limit = query.limit;
     if (query.offset !== undefined) params.offset = query.offset;
-    const response = await apiClient.get('/exposure/findings', { params });
+    const response = await apiClient.get('/exposure/findings', { params, ...HANDLED });
     return response.data;
   }
 
   /** Idempotent; later checks never reopen a resolved finding. Admin only. */
   async resolveFinding(id: number): Promise<ExposureFinding> {
-    const response = await apiClient.post(`/exposure/findings/${id}/resolve`);
+    const response = await apiClient.post(`/exposure/findings/${id}/resolve`, undefined, HANDLED);
     return response.data;
   }
 
@@ -405,7 +409,7 @@ class ExposureServiceClient {
     const response = await apiClient.post(
       '/exposure/run-now',
       force ? { force: true } : {},
-      { timeout: RUN_NOW_TIMEOUT_MS }
+      { timeout: RUN_NOW_TIMEOUT_MS, ...HANDLED }
     );
     return response.data;
   }
@@ -421,7 +425,7 @@ class ExposureServiceClient {
       const response = await apiClient.post(
         '/exposure/password-check',
         { password },
-        { timeout: PASSWORD_CHECK_TIMEOUT_MS }
+        { timeout: PASSWORD_CHECK_TIMEOUT_MS, ...HANDLED }
       );
       dropRequestBody(response);
       return { pwned: response.data?.pwned === true, count: Number(response.data?.count) || 0 };

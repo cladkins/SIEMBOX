@@ -18,7 +18,7 @@
             Add
           </el-button>
         </div>
-        <div v-if="!domainMonitorAvailable" class="qs-hint">{{ DOMAIN_PENDING_HINT }}</div>
+        <div v-if="domainHint" class="qs-hint">{{ domainHint }}</div>
         <div v-if="ownDomains.length" class="qs-tags">
           <el-tag v-for="d in ownDomains.slice(0, MAX_TAGS)" :key="d.id" size="small" effect="plain">{{ d.domain }}</el-tag>
           <span v-if="ownDomains.length > MAX_TAGS" class="qs-more">+{{ ownDomains.length - MAX_TAGS }} more</span>
@@ -67,7 +67,7 @@
             Add
           </el-button>
         </div>
-        <div v-if="!domainMonitorAvailable" class="qs-hint">{{ DOMAIN_PENDING_HINT }}</div>
+        <div v-if="domainHint" class="qs-hint">{{ domainHint }}</div>
         <div v-if="brandDomains.length" class="qs-tags">
           <el-tag v-for="d in brandDomains.slice(0, MAX_TAGS)" :key="d.id" size="small" effect="plain">{{ d.domain }}</el-tag>
           <span v-if="brandDomains.length > MAX_TAGS" class="qs-more">+{{ brandDomains.length - MAX_TAGS }} more</span>
@@ -75,7 +75,11 @@
       </el-form-item>
 
       <el-form-item label="HIBP API key" :error="errors.key">
-        <template v-if="hibp?.configured">
+        <template v-if="hibp?.configured && hibp.usable === false">
+          <el-tag type="danger" size="small">Key configured · can’t be decrypted</el-tag>
+          <span class="qs-hint qs-inline">No breach checks run until it is saved again in Settings → Digital Risk.</span>
+        </template>
+        <template v-else-if="hibp?.configured">
           <el-tag :type="hibp.enabled ? 'success' : 'warning'" size="small">
             {{ hibp.enabled ? 'Key configured' : 'Key configured · provider disabled' }}
           </el-tag>
@@ -125,6 +129,7 @@ import { ElMessage } from 'element-plus';
 import exposureService, {
   type DomainScope,
   type ExposureProvider,
+  type ExposureStatus,
   type MonitoredIdentity,
   type WatchedDomain,
 } from '@/services/exposureService';
@@ -134,6 +139,8 @@ import {
   apiErrorMessage,
   apiErrorStatus,
   domainAddedMessage,
+  domainMonitorState,
+  identityAddedMessage,
   normalizeDomain,
   normalizeHibpKey,
   parseIdentityInput,
@@ -141,15 +148,20 @@ import {
 } from '@/utils/exposure';
 
 const props = defineProps<{
-  /** GET /status features.domain_monitor_available: false until the domain collectors ship. */
-  domainMonitorAvailable: boolean;
+  /** GET /status (the onboarding page's copy), or null while it loads or if it failed. */
+  status: ExposureStatus | null;
 }>();
 
 const emit = defineEmits<{ (e: 'changed'): void }>();
 
 const router = useRouter();
 const MAX_TAGS = 5;
-const DOMAIN_PENDING_HINT = 'Saved now, and watched once domain monitoring ships in a later release.';
+const domainMonitor = computed(() => domainMonitorState(props.status));
+const domainHint = computed(() => {
+  if (domainMonitor.value === 'unavailable') return 'Saved now, and watched once domain monitoring ships in a later release.';
+  if (domainMonitor.value === 'off') return 'Domain monitoring is switched off, so saved domains are not checked.';
+  return '';
+});
 
 type Field = 'own' | 'identity' | 'brand' | 'key';
 const inputs = reactive<Record<Field, string>>({ own: '', identity: '', brand: '', key: '' });
@@ -205,7 +217,7 @@ function addDomain(scope: DomainScope) {
   if (saving.value !== null || !inputs[scope].trim()) return;
   return submit(scope, normalizeDomain(inputs[scope]), async (domain) => {
     await exposureService.addDomain({ domain, scope });
-    return domainAddedMessage(domain, props.domainMonitorAvailable);
+    return domainAddedMessage(domain, domainMonitor.value);
   });
 }
 
@@ -214,7 +226,7 @@ function addIdentity() {
   const { kind, checked } = parseIdentityInput(inputs.identity);
   return submit('identity', checked, async (value) => {
     await exposureService.addIdentity({ kind, value });
-    return `Now monitoring ${value} for breaches`;
+    return identityAddedMessage(value, props.status);
   });
 }
 

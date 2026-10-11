@@ -42,10 +42,23 @@ apiClient.interceptors.request.use(
   }
 );
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /**
+     * The caller shows its own message for an error response, so the generic
+     * toast below would only repeat it. A 401 still signs out and says so.
+     */
+    skipErrorToast?: boolean;
+  }
+}
+
 // Response interceptor
 apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
+    if (error.response && error.response.status !== 401 && error.config?.skipErrorToast) {
+      return Promise.reject(error);
+    }
     const authStore = useAuthStore();
 
     if (error.response) {

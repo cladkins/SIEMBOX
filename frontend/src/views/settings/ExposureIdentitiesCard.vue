@@ -124,6 +124,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Delete, Plus } from '@element-plus/icons-vue';
 import HelpTip from '@/components/HelpTip.vue';
 import exposureService, {
+  type ExposureStatus,
   type IdentityKind,
   type MonitoredIdentity,
   type MonitoredIdentityUpdate,
@@ -136,11 +137,17 @@ import {
   apiErrorStatus,
   checkStatusTag,
   formatWhen,
+  identityAddedMessage,
   identityKindLabel,
   intervalLabel,
   intervalOptionsFor,
   normalizeIdentityValue,
 } from '@/utils/exposure';
+
+const props = defineProps<{
+  /** GET /status, for whether a new identity will actually be checked; null while it loads. */
+  status: ExposureStatus | null;
+}>();
 
 const emit = defineEmits<{
   /** A write succeeded. */
@@ -193,7 +200,7 @@ async function add() {
       interval_minutes: newInterval.value,
     });
     newValue.value = '';
-    ElMessage.success(`Now monitoring ${checked.value}`);
+    ElMessage.success(identityAddedMessage(checked.value, props.status));
     await reload();
     emit('changed');
   } catch (error) {

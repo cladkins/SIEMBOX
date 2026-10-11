@@ -7,7 +7,10 @@
           <HelpTip text="Breach searches use your own HIBP API key (an HIBP subscription). The key is stored encrypted with CREDENTIAL_ENCRYPTION_KEY and is write-only: no screen or API ever shows it again, so this field always starts empty." />
         </span>
         <div class="header-tags" v-if="provider">
-          <el-tag size="small" :type="provider.configured ? 'success' : 'warning'">
+          <el-tag v-if="provider.configured && provider.usable === false" size="small" type="danger">
+            Saved key can’t be decrypted
+          </el-tag>
+          <el-tag v-else size="small" :type="provider.configured ? 'success' : 'warning'">
             {{ provider.configured ? 'Key configured' : 'No key saved' }}
           </el-tag>
           <el-tag size="small" :type="provider.enabled ? 'success' : 'info'" effect="plain">

@@ -7,7 +7,7 @@
  * there, and its 400 message is always shown as-is.
  */
 import { format, formatDistanceToNow } from 'date-fns';
-import type { ExposureStatus, IdentityKind } from '@/services/exposureService';
+import type { ExposureFinding, ExposureStatus, IdentityKind } from '@/services/exposureService';
 
 // ---- Validation (mirrors the backend) ----------------------------------------
 
@@ -193,6 +193,24 @@ export function formatRelative(value: string | null | undefined): string {
   return Number.isNaN(date.getTime()) ? '' : formatDistanceToNow(date, { addSuffix: true });
 }
 
+/** "Oct 23, 2026", or '' for a missing/unparseable date. */
+export function formatDay(value: unknown): string {
+  if (typeof value !== 'string' || !value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : format(date, 'MMM dd, yyyy');
+}
+
+/**
+ * When a watched domain is checked next: "Due now" once that time has passed
+ * (it waits for the job's next tick), '' when it isn't scheduled.
+ */
+export function nextCheckLabel(nextRunAt: string | null | undefined, now = Date.now()): string {
+  if (!nextRunAt) return '';
+  const at = Date.parse(nextRunAt);
+  if (Number.isNaN(at)) return '';
+  return at <= now ? 'Due now' : `Next ${formatRelative(nextRunAt)}`;
+}
+
 export type TagType = 'success' | 'info' | 'warning' | 'danger';
 
 /** Tag for a watched domain's or identity's last check. */
@@ -215,11 +233,43 @@ export function pluralize(count: number, singular: string, plural = `${singular}
   return `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
 }
 
-/** Toast after adding a domain: until the domain collectors ship, a domain is only saved. */
-export function domainAddedMessage(domain: string, domainMonitorAvailable: boolean): string {
-  return domainMonitorAvailable
-    ? `Now watching ${domain}`
-    : `Saved ${domain}; it will be watched once domain monitoring ships`;
+/**
+ * Whether watched domains are checked: 'unavailable' on a backend without the
+ * domain collectors, 'off' while exposure_domain_monitor_enabled is false.
+ * Before the status has loaded (or when it failed to) nothing is known, and
+ * that counts as 'on' so no "not checked" note flashes up meanwhile.
+ */
+export type DomainMonitorState = 'on' | 'off' | 'unavailable';
+
+export function domainMonitorState(status: ExposureStatus | null): DomainMonitorState {
+  if (!status) return 'on';
+  if (!status.features.domain_monitor_available) return 'unavailable';
+  return status.features.domain_monitor_enabled === false ? 'off' : 'on';
+}
+
+/** Toast after adding a domain: it is only saved while domain monitoring is unavailable or off. */
+export function domainAddedMessage(domain: string, state: DomainMonitorState): string {
+  if (state === 'unavailable') return `Saved ${domain}; it will be watched once domain monitoring ships`;
+  if (state === 'off') return `Saved ${domain}; it isn't checked while domain monitoring is switched off`;
+  return `Now watching ${domain}`;
+}
+
+/**
+ * Whether breach checks can run at all: switched on, and an HIBP key saved,
+ * enabled and usable. A pause (rate limit, rejected key) passes on its own.
+ */
+export function breachChecksReady(status: ExposureStatus): boolean {
+  const hibp = status.providers.find((p) => p.name === 'hibp');
+  return status.features.leaked_creds_enabled && !!hibp?.configured && hibp.enabled && hibp.usable !== false;
+}
+
+/** Toast after adding an identity; `status` null (not loaded) is taken as ready. */
+export function identityAddedMessage(value: string, status: ExposureStatus | null): string {
+  if (!status || breachChecksReady(status)) return `Now monitoring ${value} for breaches`;
+  if (!status.features.leaked_creds_enabled) {
+    return `Saved ${value}; it will be checked once leaked-credential checks are switched on`;
+  }
+  return `Saved ${value}; it will be checked once a usable HIBP API key is saved and enabled`;
 }
 
 // ---- Status banner ------------------------------------------------------------
@@ -249,23 +299,22 @@ export interface ExposureStatusContext {
    * count stands in for it.
    */
   failingIdentities?: number | null;
-  /** When this browser last changed the HIBP provider (exposureService.providerChangedAt). */
-  providerChangedAt?: number;
 }
 
-// The job's skip reason when isConfigured() is false (leakedCredentialService.ts).
-const NO_USABLE_PROVIDER_RE = /no breach-data provider is configured/i;
-
 /**
- * The one state the feature is in, most urgent first: the server can't store
- * keys → checks switched off → no HIBP key → HIBP disabled → paused (rate
- * limit or rejected key) → saved key unusable → last run failed → nothing to
- * check → identities failing → healthy.
+ * The state of the leaked-credential (breach) checks, most urgent first: the
+ * server can't store keys → checks switched off → no HIBP key → saved key
+ * unusable → HIBP disabled → paused (rate limit or rejected key) → last run
+ * failed → nothing to check → identities failing → healthy. Domain monitoring
+ * reports per domain, in the domain cards.
  */
 export function describeExposureStatus(status: ExposureStatus, context: ExposureStatusContext = {}): StatusBanner {
   const provider = status.providers.find((p) => p.name === 'hibp') ?? null;
   const run = status.leaked_creds;
   const counts = status.counts;
+  // Until an identity is monitored nothing needs the key, so setting one up is
+  // a next step rather than a problem.
+  const keyNeeded = counts.identities_enabled > 0;
 
   if (context.encryptionKeyError) {
     return {
@@ -283,16 +332,28 @@ export function describeExposureStatus(status: ExposureStatus, context: Exposure
     };
   }
   if (!provider?.configured) {
+    const keyless = status.features.domain_monitor_available
+      ? 'Domain monitoring and the password check work without one.'
+      : 'The password check works without one.';
+    return {
+      type: keyNeeded ? 'warning' : 'info',
+      title: 'No Have I Been Pwned API key',
+      detail: `Breach checks for email addresses and email domains need an HIBP API key; add one under Have I Been Pwned below. ${keyless}`,
+    };
+  }
+  if (provider.usable === false) {
     return {
       type: 'warning',
-      title: 'No Have I Been Pwned API key',
+      title: 'The saved HIBP key can’t be used',
       detail:
-        'Breach checks for monitored email addresses and domains need an HIBP API key; add one under Have I Been Pwned below. The password check works without a key.',
+        "The backend can't decrypt the saved key, so no breach checks run. CREDENTIAL_ENCRYPTION_KEY is missing or has " +
+        'changed since the key was saved: put the original value back and restart the backend (the other stored ' +
+        'credentials need it too), or save the HIBP key again below.',
     };
   }
   if (!provider.enabled) {
     return {
-      type: 'warning',
+      type: keyNeeded ? 'warning' : 'info',
       title: 'Have I Been Pwned is disabled',
       detail: 'A key is saved, but the provider is switched off, so no breach checks run. Enable it under Have I Been Pwned below.',
     };
@@ -317,28 +378,6 @@ export function describeExposureStatus(status: ExposureStatus, context: Exposure
   // also catches a run that crashed before writing `last_run`. Trust the newer.
   const lastRunAt = run.last_run ? Date.parse(run.last_run.at) : 0;
   const jobRunAt = run.job?.last_run_at ? Date.parse(run.job.last_run_at) : 0;
-
-  // A key is saved and enabled, yet the scheduled job found no usable
-  // provider: the backend can't decrypt the key. Skips never write
-  // `last_run`, so the job is the only place this shows. A skip older than the
-  // last real run, or than this browser's last provider change, is stale.
-  if (
-    run.job?.status === 'skipped' &&
-    NO_USABLE_PROVIDER_RE.test(run.job.last_result ?? '') &&
-    jobRunAt > lastRunAt &&
-    jobRunAt > (context.providerChangedAt ?? 0)
-  ) {
-    const next = run.job.next_run_at ? ` (${formatRelative(run.job.next_run_at)})` : '';
-    return {
-      type: 'warning',
-      title: 'The saved HIBP key can’t be used',
-      detail:
-        `The last scheduled check, ${formatRelative(run.job.last_run_at)}, was skipped because the backend has no usable key. ` +
-        "It can't decrypt the saved one, usually because CREDENTIAL_ENCRYPTION_KEY is missing or has changed since the key was saved: " +
-        `restore it and restart the backend, or save the HIBP key again. If the key was saved or the provider enabled after that check, the next one${next} will use it.`,
-    };
-  }
-
   const jobFailedSince = run.job?.status === 'failed' && jobRunAt >= lastRunAt;
   const lastError = jobFailedSince ? run.job?.last_error : run.last_run?.summary.error;
   if (lastError) {
@@ -389,5 +428,155 @@ export function describeExposureStatus(status: ExposureStatus, context: Exposure
   else if (run.last_run) parts.push(`last check ${formatRelative(run.last_run.at)}`);
   else parts.push('waiting for the first check');
   if (run.job?.next_run_at) parts.push(`next ${formatRelative(run.job.next_run_at)}`);
-  return { type: 'success', title: 'Healthy', detail: `${parts.join(' · ')}.` };
+  return { type: 'success', title: 'Leaked-credential checks are healthy', detail: `${parts.join(' · ')}.` };
+}
+
+// ---- Domain-monitoring finding detail -------------------------------------------
+
+/** One value in a finding's detail; `change` marks a value the change added or removed. */
+export interface DetailItem {
+  text: string;
+  change?: 'added' | 'removed';
+}
+
+/** One labelled line of a finding's detail: plain text, a link, inline values or a list. */
+export interface DetailLine {
+  label: string;
+  text?: string;
+  /** A link, with `text` as its label. */
+  href?: string;
+  items?: DetailItem[];
+  list?: Array<{ text: string; href?: string }>;
+}
+
+const textOf = (v: unknown): string =>
+  typeof v === 'string' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : '';
+const textsOf = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+const objectOf = (v: unknown): Record<string, unknown> =>
+  v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+
+/** A crt.sh link built from the certificate's numeric id, never from a URL in the detail. */
+function crtshHref(id: unknown): string | undefined {
+  const n = typeof id === 'number' ? id : typeof id === 'string' && /^\d{1,15}$/.test(id) ? Number(id) : NaN;
+  return Number.isSafeInteger(n) && n > 0 ? `https://crt.sh/?id=${n}` : undefined;
+}
+
+function marked(values: string[], changed: string[], change: 'added' | 'removed'): DetailItem[] {
+  const set = new Set(changed);
+  return values.map((text) => (set.has(text) ? { text, change } : { text }));
+}
+
+/** Before and after, marking what the change removed and added. */
+function beforeAfter(d: Record<string, unknown>): DetailLine[] {
+  return [
+    { label: 'Before', items: marked(textsOf(d.before), textsOf(d.removed), 'removed') },
+    { label: 'After', items: marked(textsOf(d.after), textsOf(d.added), 'added') },
+  ];
+}
+
+const DNS_RECORD_LABELS: Record<string, string> = {
+  NS: 'Nameservers (NS)',
+  MX: 'Mail servers (MX)',
+  TXT: 'TXT records',
+  DMARC: 'DMARC policy',
+  A: 'IPv4 addresses (A)',
+  AAAA: 'IPv6 addresses (AAAA)',
+};
+
+const RDAP_FIELD_LABELS: Record<string, string> = {
+  nameservers: 'Nameservers',
+  registrar: 'Registrar',
+  status: 'Registry status',
+  dnssec: 'DNSSEC',
+};
+
+// has_address / has_mx are null when that DNS lookup failed.
+const yesNoUnknown = (v: unknown): string => (v === true ? 'yes' : v === false ? 'no' : 'unknown (the lookup failed)');
+
+function certificateEntry(cert: unknown): { text: string; href?: string } {
+  const c = objectOf(cert);
+  const names = textsOf(c.names);
+  const parts = [textOf(c.issuer_org) || textOf(c.issuer) || 'unknown issuer'];
+  if (names.length) parts.push(names.slice(0, 3).join(', ') + (names.length > 3 ? ` (+${names.length - 3} more)` : ''));
+  const until = formatDay(c.not_after);
+  if (until) parts.push(`valid until ${until}`);
+  return { text: parts.join(' · '), href: crtshHref(c.crtsh_id) };
+}
+
+/**
+ * A domain-monitoring finding's detail as labelled lines, keyed on its event
+ * type (the shapes the domain collectors write), or null for one this UI
+ * doesn't know, which is then shown as raw JSON.
+ */
+export function domainFindingDetail(finding: Pick<ExposureFinding, 'source' | 'event_type' | 'detail'>): DetailLine[] | null {
+  if (finding.source !== 'domain-monitor') return null;
+  const d = objectOf(finding.detail);
+  const lines: DetailLine[] = [];
+  const add = (label: string, text: string) => {
+    if (text) lines.push({ label, text });
+  };
+  const registrable = textOf(d.registrable);
+  if (registrable && registrable !== textOf(d.domain)) add('Registered domain', registrable);
+
+  switch (finding.event_type) {
+    case 'dns_drift': {
+      const type = textOf(d.record_type);
+      const kinds = textsOf(d.txt_kinds).map((k) => k.toUpperCase());
+      add('Record', `${DNS_RECORD_LABELS[type] ?? type}${kinds.length ? ` (${kinds.join(', ')})` : ''}`);
+      lines.push(...beforeAfter(d));
+      add('Resolvers', textOf(d.resolvers));
+      return lines;
+    }
+    case 'rdap_change': {
+      const field = textOf(d.field);
+      add('Changed', RDAP_FIELD_LABELS[field] ?? field);
+      lines.push(...beforeAfter(d));
+      return lines;
+    }
+    case 'expiry_warning': {
+      const day = formatDay(d.expires_at);
+      const left = typeof d.days_left === 'number' ? d.days_left : null;
+      if (d.expired === true) add('Expired', day || 'yes');
+      else if (left === null) add('Expires', day);
+      else add('Expires', `${day || 'soon'} (${left <= 0 ? 'today' : `${pluralize(left, 'day')} left`})`);
+      return lines;
+    }
+    case 'lookalike_registered': {
+      add('Lookalike', textOf(d.lookalike));
+      add('Technique', textOf(d.fuzzer));
+      if ('has_address' in d) add('Resolves to an address', yesNoUnknown(d.has_address));
+      if ('has_mx' in d) add('Mail (MX) record', yesNoUnknown(d.has_mx));
+      if (d.change === 'mx_added') add('Change', 'gained a mail (MX) record since the last check');
+      return lines;
+    }
+    case 'new_cert':
+    case 'unexpected_ca': {
+      add('Lookalike', textOf(d.lookalike));
+      const expected = textsOf(d.expected_cas);
+      if (expected.length) lines.push({ label: 'Expected CAs', items: expected.map((text) => ({ text })) });
+      if (Array.isArray(d.certificates)) {
+        // A grouped finding: one entry per certificate (the backend keeps up to 25).
+        add('Issuer', textOf(d.issuer_org));
+        const shown = d.certificates.length;
+        const count = typeof d.certificate_count === 'number' ? d.certificate_count : shown;
+        lines.push({
+          label: count > shown ? `Certificates (${shown} of ${count} shown)` : 'Certificates',
+          list: d.certificates.map(certificateEntry),
+        });
+        return lines;
+      }
+      add('Issuer', textOf(d.issuer_org) || textOf(d.issuer));
+      const names = textsOf(d.names);
+      if (names.length) lines.push({ label: 'Names', items: marked(names, textsOf(d.new_names), 'added') });
+      const from = formatDay(d.not_before);
+      const until = formatDay(d.not_after);
+      if (from || until) add('Valid', `${from || '?'} to ${until || '?'}`);
+      if (d.new_issuer === true) add('Issuer history', 'the first certificate from this issuer for this domain');
+      const href = crtshHref(d.crtsh_id);
+      if (href) lines.push({ label: 'Certificate', text: `crt.sh #${textOf(d.crtsh_id)}`, href });
+      return lines;
+    }
+    default:
+      return null;
+  }
 }

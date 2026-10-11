@@ -1,6 +1,6 @@
 import type { Component } from 'vue';
 import type { RouteRecordSingleView } from 'vue-router';
-import { Bell, Clock, Download, Filter, MagicStick, Odometer, Search, User } from '@element-plus/icons-vue';
+import { Bell, Clock, Download, Filter, MagicStick, Odometer, Search, User, View } from '@element-plus/icons-vue';
 
 /**
  * One functional area of the Settings hub.
@@ -93,6 +93,16 @@ export const settingsAreas: SettingsArea[] = [
     description: 'Automatic asset inventory built from the hosts seen in incoming logs.',
     adminOnly: true,
     component: () => import('./AssetDiscoverySettings.vue'),
+  },
+  {
+    key: 'digital-risk',
+    path: 'digital-risk',
+    title: 'Digital Risk',
+    icon: View,
+    description:
+      'Leaked-credential monitoring with Have I Been Pwned, watched and lookalike domains, and an on-demand password breach check.',
+    adminOnly: true,
+    component: () => import('./DigitalRiskSettings.vue'),
   },
   {
     key: 'system',

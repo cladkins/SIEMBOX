@@ -14,13 +14,18 @@ import path from 'path';
 import {
   FUZZER_ORDER,
   MAX_CANDIDATES_CEILING,
+  NEW_REGISTRATION_WINDOW_DAYS,
   checkRegistration,
   checkRegistrations,
   createLookalikeCollector,
   diffLookalikes,
   findOnPath,
   generateLookalikes,
+  lookalikeStateFromSnapshot,
+  ownDomainNames,
+  parseLookalikeSnapshot,
   registeredFromSnapshot,
+  type LookalikeCandidate,
   type LookalikeSnapshot,
 } from './lookalike';
 import { isValidHostname } from './names';
@@ -275,6 +280,61 @@ test('registration: under a suffix that answers for random names, only NS proves
   assert.equal(states.get('fake.ws')?.state, 'unknown', 'an A answer alone proves nothing here');
 });
 
+test('registration: a wildcard probe that fails leaves the suffix unproven, not clean', async () => {
+  // A wildcard suffix whose probe query is lost (timeout): candidates without an
+  // NS delegation must not all turn into registrations.
+  const probeTimesOut: DnsResolverLike = {
+    resolveNs: async (n) => {
+      if (n === 'real.ws') return ['ns1.real.ws'];
+      throw Object.assign(new Error('ENODATA'), { code: 'ENODATA' });
+    },
+    resolve4: async (n) => {
+      if (n.startsWith('siembox-nx-')) throw Object.assign(new Error('t'), { code: 'ETIMEOUT' });
+      return ['192.0.2.53'];
+    },
+    resolve6: async () => {
+      throw Object.assign(new Error('ENODATA'), { code: 'ENODATA' });
+    },
+    resolveMx: async () => {
+      throw Object.assign(new Error('ENODATA'), { code: 'ENODATA' });
+    },
+    resolveTxt: async () => [],
+  };
+  const states = await checkRegistrations(['real.ws', 'fake.ws'], { resolver: probeTimesOut });
+  assert.equal(states.get('real.ws')?.state, 'registered');
+  assert.equal(states.get('fake.ws')?.state, 'unknown');
+});
+
+test('registration: an address or MX lookup that fails is unknown (null), never "none"', async () => {
+  const fake = fakeResolver({
+    'mx-timeout.com': { ns: ['ns1.host.example'], a: ['203.0.113.7'], mx: { code: 'ETIMEOUT' } },
+    'addr-fail.com': {
+      ns: ['ns1.host.example'],
+      a: { code: 'ESERVFAIL' },
+      mx: ['mx.addr-fail.com'],
+    },
+    'none.com': { ns: ['ns1.host.example'] },
+  });
+  assert.deepEqual(await checkRegistration('mx-timeout.com', fake.resolver), {
+    state: 'registered',
+    ns: true,
+    addr: true,
+    mx: null,
+  });
+  assert.deepEqual(await checkRegistration('addr-fail.com', fake.resolver), {
+    state: 'registered',
+    ns: true,
+    addr: null,
+    mx: true,
+  });
+  assert.deepEqual(await checkRegistration('none.com', fake.resolver), {
+    state: 'registered',
+    ns: true,
+    addr: false,
+    mx: false,
+  });
+});
+
 // ---- snapshot & collector -----------------------------------------------------------------
 
 const config: DomainMonitorConfig = {
@@ -363,6 +423,56 @@ test('collector: the organization’s own watched domains are never reported as 
   assert.ok(!fake.queries.some((q) => q.name === 'example.net'), 'never even resolved');
 });
 
+test('collector: names answered for the first time are recorded silently, whenever that happens', async () => {
+  // Registered long ago, but their lookups time out on the baseline run.
+  const table: Record<string, Entry> = {
+    'exmple.com': { ns: { code: 'ETIMEOUT' } },
+    'examp1e.com': { ns: { code: 'ETIMEOUT' } },
+  };
+  const fake = fakeResolver(table);
+  const collector = createLookalikeCollector({ resolver: fake.resolver, dnstwist: null });
+  const narrow = (previous: unknown, max: number) => ({
+    ...ctx(previous),
+    config: { ...config, lookalikeMaxCandidates: max },
+  });
+  const baseline = await collector(narrow(null, 40));
+  assert.deepEqual(registeredFromSnapshot(baseline.snapshot), []);
+
+  // Next day the resolver answers, and the operator raises the candidate cap.
+  table['exmple.com'] = { ns: ['ns1.parked.example'], a: ['198.51.100.9'] };
+  table['examp1e.com'] = { ns: ['ns1.parked.example'], a: ['198.51.100.9'] };
+  table['exampleu.com'] = { ns: ['ns1.parked.example'], a: ['198.51.100.9'] }; // beyond the old cap
+  const next = await collector(narrow(baseline.snapshot, 300));
+  assert.deepEqual(next.findings, [], 'nobody knows when these were registered');
+  assert.deepEqual(next.lookalikes?.newlyRegistered, []);
+  assert.deepEqual(registeredFromSnapshot(next.snapshot), [
+    'examp1e.com',
+    'exampleu.com',
+    'exmple.com',
+  ]);
+
+  // A name confirmed free on an earlier run that gets registered is news.
+  table['exampie.com'] = { ns: ['ns1.bad.example'], a: ['203.0.113.5'] };
+  const later = await collector(narrow(next.snapshot, 300));
+  assert.deepEqual(
+    later.findings.map((f) => [f.detail.lookalike, f.severity]),
+    [['exampie.com', 'high']]
+  );
+  assert.deepEqual(later.lookalikes?.newlyRegistered, ['exampie.com']);
+});
+
+test('collector: a watched domain left over in an old baseline is dropped from it', async () => {
+  const fake = fakeResolver({ 'example.net': { ns: ['ns1.our-dns.net'], a: ['192.0.2.1'] } });
+  const collector = createLookalikeCollector({ resolver: fake.resolver, dnstwist: null });
+  const baseline = (await collector(ctx(null))).snapshot;
+  assert.ok(registeredFromSnapshot(baseline).includes('example.net'));
+  // The organization now watches example.net as well.
+  const out = await collector({ ...ctx(baseline), watchedDomains: ['example.com', 'example.net'] });
+  assert.ok(!registeredFromSnapshot(out.snapshot).includes('example.net'));
+  assert.ok(!out.lookalikes?.registered.includes('example.net'));
+  assert.deepEqual(parseLookalikeSnapshot(out.snapshot)?.unregistered['example.net'], undefined);
+});
+
 test('collector: a registration with neither address nor MX is medium', async () => {
   const fake = fakeResolver({});
   const collector = createLookalikeCollector({ resolver: fake.resolver, dnstwist: null });
@@ -377,14 +487,26 @@ test('collector: a registration with neither address nor MX is medium', async ()
   );
 });
 
+const NOW_S = Math.floor(Date.parse('2026-10-11T00:00:00Z') / 1000);
+const DAY = 86_400;
+const info = (overrides: Partial<LookalikeSnapshot['registered'][string]> = {}) => ({
+  mx: false,
+  addr: true,
+  fuzzer: 'omission',
+  since: null,
+  ...overrides,
+});
+
 test('diff: unknown keeps the previous state; unregistered drops it; nothing is invented', () => {
   const previous: LookalikeSnapshot = {
     v: 1,
     registered: {
-      'flaky.com': { mx: false, addr: true, fuzzer: 'omission' },
-      'gone.com': { mx: false, addr: true, fuzzer: 'omission' },
-      'not-rechecked.com': { mx: true, addr: true, fuzzer: 'addition' },
+      'flaky.com': info(),
+      'gone.com': info(),
+      'not-rechecked.com': info({ mx: true, fuzzer: 'addition' }),
     },
+    unregistered: {},
+    dropped: {},
   };
   const diff = diffLookalikes(
     previous,
@@ -395,10 +517,144 @@ test('diff: unknown keeps the previous state; unregistered drops it; nothing is 
     new Map([
       ['flaky.com', { state: 'unknown', reason: 'ETIMEOUT' }],
       ['gone.com', { state: 'unregistered' }],
-    ])
+    ]),
+    { nowSeconds: NOW_S }
   );
   assert.deepEqual(Object.keys(diff.next.registered).sort(), ['flaky.com', 'not-rechecked.com']);
   assert.deepEqual([diff.unknown, diff.dropped, diff.newlyRegistered.length], [1, 1, 0]);
+  assert.deepEqual(diff.next.dropped, { 'gone.com': NOW_S });
+});
+
+test('diff: only a name confirmed unregistered before can be "newly registered"', () => {
+  const previous: LookalikeSnapshot = {
+    v: 1,
+    registered: {},
+    unregistered: { 'free-then-taken.com': NOW_S - 5 * DAY },
+    dropped: {},
+  };
+  const candidates: LookalikeCandidate[] = [
+    { domain: 'free-then-taken.com', fuzzer: 'omission' },
+    // Never answered before: unknown on the baseline run, a raised cap, dnstwist appearing.
+    { domain: 'first-answer.com', fuzzer: 'addition' },
+  ];
+  const registered = { state: 'registered', ns: true, addr: true, mx: false } as const;
+  const diff = diffLookalikes(
+    previous,
+    candidates,
+    new Map([
+      ['free-then-taken.com', registered],
+      ['first-answer.com', registered],
+    ]),
+    { nowSeconds: NOW_S }
+  );
+  assert.deepEqual(
+    diff.newlyRegistered.map((c) => c.domain),
+    ['free-then-taken.com']
+  );
+  assert.equal(diff.next.registered['free-then-taken.com'].since, NOW_S, 'remembered for CT');
+  assert.equal(diff.next.registered['first-answer.com'].since, null, 'recorded silently');
+  assert.deepEqual(diff.next.unregistered, {});
+});
+
+test('diff: a lookalike that goes NXDOMAIN and comes back soon is the same registration', () => {
+  const candidates: LookalikeCandidate[] = [{ domain: 'held.com', fuzzer: 'omission' }];
+  const nx = new Map([['held.com', { state: 'unregistered' } as const]]);
+  const back = new Map([
+    ['held.com', { state: 'registered', ns: true, addr: true, mx: false } as const],
+  ]);
+  const base: LookalikeSnapshot = {
+    v: 1,
+    registered: { 'held.com': info() },
+    unregistered: {},
+    dropped: {},
+  };
+  // A registry hold (or one flapping NXDOMAIN), lifted a week later: silent.
+  const held = diffLookalikes(base, candidates, nx, { nowSeconds: NOW_S });
+  assert.deepEqual(held.next.registered, {});
+  const lifted = diffLookalikes(held.next, candidates, back, { nowSeconds: NOW_S + 7 * DAY });
+  assert.deepEqual(lifted.newlyRegistered, []);
+  assert.ok(lifted.next.registered['held.com']);
+  // Gone for longer than the grace period: it can have been re-registered by
+  // someone else (a lapsed name caught on release), so it is reported.
+  const stillGone = diffLookalikes(held.next, candidates, nx, { nowSeconds: NOW_S + 20 * DAY });
+  assert.deepEqual(stillGone.next.dropped, { 'held.com': NOW_S }, 'the drop time is kept');
+  const reRegistered = diffLookalikes(stillGone.next, candidates, back, {
+    nowSeconds: NOW_S + 45 * DAY,
+  });
+  assert.deepEqual(
+    reRegistered.newlyRegistered.map((c) => c.domain),
+    ['held.com']
+  );
+});
+
+test('diff: a failed MX lookup is "unknown", never "no MX" — so it can’t fake an MX being added', () => {
+  const candidates: LookalikeCandidate[] = [{ domain: 'phish.com', fuzzer: 'homoglyph' }];
+  const withMx = (mx: boolean | null) =>
+    new Map([['phish.com', { state: 'registered', ns: true, addr: true, mx } as const]]);
+  const base: LookalikeSnapshot = {
+    v: 1,
+    registered: { 'phish.com': info({ mx: true }) },
+    unregistered: {},
+    dropped: {},
+  };
+  const mxTimedOut = diffLookalikes(base, candidates, withMx(null), { nowSeconds: NOW_S });
+  assert.equal(mxTimedOut.next.registered['phish.com'].mx, true, 'keeps what was known');
+  const again = diffLookalikes(mxTimedOut.next, candidates, withMx(true), { nowSeconds: NOW_S });
+  assert.deepEqual(again.mxAdded, []);
+
+  // Unknown since the baseline: an MX showing up is not "added" either; a definite
+  // "no MX" followed by an MX is.
+  const unknownAtFirst: LookalikeSnapshot = {
+    ...base,
+    registered: { 'phish.com': info({ mx: null }) },
+  };
+  assert.deepEqual(
+    diffLookalikes(unknownAtFirst, candidates, withMx(true), { nowSeconds: NOW_S }).mxAdded,
+    []
+  );
+  const noMx = diffLookalikes(unknownAtFirst, candidates, withMx(false), { nowSeconds: NOW_S });
+  assert.deepEqual(
+    diffLookalikes(noMx.next, candidates, withMx(true), { nowSeconds: NOW_S }).mxAdded.map(
+      (c) => c.domain
+    ),
+    ['phish.com']
+  );
+});
+
+test('diff: the organization’s own names never stay in the registered list', () => {
+  const previous: LookalikeSnapshot = {
+    v: 1,
+    registered: { 'example.net': info(), 'exmple.com': info() },
+    unregistered: {},
+    dropped: {},
+  };
+  // example.net is now watched too, so it is no longer a candidate and is excluded.
+  const diff = diffLookalikes(previous, [], new Map(), {
+    nowSeconds: NOW_S,
+    exclude: ownDomainNames(['example.com', 'shop.example.net']),
+  });
+  assert.deepEqual(Object.keys(diff.next.registered), ['exmple.com']);
+});
+
+test('state for CT: newly registered within the window, from the stored snapshot', () => {
+  const snapshot: LookalikeSnapshot = {
+    v: 1,
+    registered: {
+      'new.com': info({ since: NOW_S - DAY }),
+      'old-news.com': info({ since: NOW_S - (NEW_REGISTRATION_WINDOW_DAYS + 1) * DAY }),
+      'baseline.com': info(),
+    },
+    unregistered: {},
+    dropped: {},
+  };
+  assert.deepEqual(lookalikeStateFromSnapshot(snapshot, NOW_S), {
+    registered: ['baseline.com', 'new.com', 'old-news.com'],
+    newlyRegistered: ['new.com'],
+  });
+  assert.deepEqual(lookalikeStateFromSnapshot(null, NOW_S), {
+    registered: [],
+    newlyRegistered: [],
+  });
 });
 
 test('collector: every lookup failing is a transient error, not "nothing registered"', async () => {

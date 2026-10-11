@@ -2,18 +2,24 @@
  * Certificate Transparency collector, backed by crt.sh's JSON output.
  *
  * Query (checked against crt.sh's source, certwatch_db web_apis.fnc, Oct 2026):
- *   https://crt.sh/?q=<identity>&output=json&exclude=expired&deduplicate=Y&match=ILIKE
+ *   https://crt.sh/?q=<name>&output=json&exclude=expired&deduplicate=Y&match=ILIKE
  * `match=ILIKE` is explicit because crt.sh's auto-selected match mode switches
  * to a full-text mode for any value containing "-", which would change what a
- * hyphenated domain matches. "%.example.com" matches subdomains and wildcards
- * only, so the bare name is queried too: two requests per name, paced 3 s
- * apart process-wide. `deduplicate=Y` folds each precertificate into its final
- * certificate, and certificates are keyed on issuer + serial number anyway — the
- * identity a precertificate and its certificate share — so neither can alert twice.
+ * hyphenated domain matches. With ILIKE crt.sh matches NAME_VALUE ILIKE
+ * '%<name>%', so one request covers the name, its subdomains and wildcards
+ * (crt.sh rewrites "%.<name>" to "<name>", so asking for that too would only
+ * repeat the same query). Requests are paced 3 s apart process-wide.
+ * `deduplicate=Y` folds each precertificate into its final certificate, and
+ * certificates are keyed on issuer + serial number anyway — the identity a
+ * precertificate and its certificate share — so neither can alert twice.
  *
  * crt.sh is a free community service that is often overloaded: timeouts, 5xx,
  * 429 and non-JSON answers are TRANSIENT (the collector fails, its baseline is
  * kept, and it is retried later); they never mean "no certificates".
+ * crt.sh also stops at 10,000 matching (certificate, name) rows, picked in no
+ * particular order, and says so only in its HTML output: an answer that
+ * reaches the limit (the rows' result_count values add up to it) is a random
+ * subset, so it is refused as too large to monitor rather than diffed.
  *
  * Snapshot (per name): the certificates seen (key -> notAfter, pruned a week
  * after expiry), the host names they covered and the issuers that issued them.
@@ -53,15 +59,18 @@ import {
 } from './types';
 import { HttpError, httpsGet, type HttpGet } from './http';
 import { isValidHostname, isWithinDomain, normalizeName } from './names';
-import { registeredFromSnapshot } from './lookalike';
+import { lookalikeStateFromSnapshot, ownDomainNames } from './lookalike';
 import type { FindingInput } from '../findingWriter';
 
 export const CRTSH_BASE = 'https://crt.sh/';
 const CRTSH_TIMEOUT_MS = 45_000;
 export const CRTSH_MAX_BYTES = 10 * 1024 * 1024;
 const CRTSH_MIN_GAP_MS = 3_000;
-/** More unexpired certificates than this for one name is too many to monitor. */
+/** crt.sh's c_resultLimit: matching (certificate, name) rows per identity search. */
+export const CRTSH_RESULT_LIMIT = 10_000;
+/** Bound on the certificates a snapshot remembers for one name. */
 export const MAX_CERTS_PER_NAME = 20_000;
+/** Names no current certificate covers any more are kept up to this many. */
 const MAX_SNAPSHOT_NAMES = 5_000;
 const MAX_SNAPSHOT_ISSUERS = 200;
 const MAX_NAMES_PER_CERT = 100;
@@ -163,13 +172,33 @@ function parseCrtshTime(value: unknown): string | null {
  * crt.sh's JSON (one row per certificate) -> certificates covering `domain`.
  * Rows are validated field by field; anything malformed is skipped, and a
  * certificate whose names are all outside `domain` (or not host names at all,
- * e.g. e-mail identities) is dropped.
+ * e.g. e-mail identities) is dropped. An answer cut off at crt.sh's result
+ * limit is refused (non-transient): it is a random subset, so diffing it would
+ * miss new certificates and report old ones as new.
  */
 export function parseCrtshResponse(body: unknown, domain: string): CtCertificate[] {
   if (!Array.isArray(body)) {
     throw new CollectorError(
       'crt.sh returned a response in an unexpected format; will retry',
       true
+    );
+  }
+  // Each row's result_count is how many matching names it stands for; their
+  // sum is how many rows crt.sh's limited query returned (a row without one
+  // counts once: a lower bound).
+  let matchedRows = 0;
+  for (const row of body) {
+    if (!isPlainObject(row)) continue;
+    const count = row.result_count;
+    matchedRows +=
+      typeof count === 'number' && Number.isSafeInteger(count) && count > 0 ? count : 1;
+  }
+  if (matchedRows >= CRTSH_RESULT_LIMIT) {
+    throw new CollectorError(
+      `crt.sh returned only part of the certificates for ${domain}: it stops at ` +
+        `${CRTSH_RESULT_LIMIT.toLocaleString('en-US')} matching names and picks them in no ` +
+        'particular order, so new certificates could be missed; too many to monitor reliably',
+      false
     );
   }
   const byKey = new Map<string, CtCertificate>();
@@ -220,23 +249,6 @@ export function parseCrtshResponse(body: unknown, domain: string): CtCertificate
       existing.crtshId = Math.min(existing.crtshId, id);
     } else {
       byKey.set(key, cert);
-    }
-  }
-  return [...byKey.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-}
-
-function mergeCertificates(lists: CtCertificate[][]): CtCertificate[] {
-  const byKey = new Map<string, CtCertificate>();
-  for (const cert of lists.flat()) {
-    const existing = byKey.get(cert.key);
-    if (existing) {
-      existing.names = sortedUnique([...existing.names, ...cert.names]).slice(
-        0,
-        MAX_NAMES_PER_CERT
-      );
-      existing.crtshId = Math.min(existing.crtshId, cert.crtshId);
-    } else {
-      byKey.set(cert.key, { ...cert, names: [...cert.names] });
     }
   }
   return [...byKey.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
@@ -309,17 +321,9 @@ export class CtClient implements CertificateSource {
     this.pacer = options.pacer ?? crtshPacer;
   }
 
+  /** One request: with match=ILIKE crt.sh matches the name, its subdomains and wildcards. */
   async certificatesFor(name: string): Promise<CtCertificate[]> {
-    const exact = await this.query(name, name);
-    const below = await this.query(`%.${name}`, name);
-    const merged = mergeCertificates([exact, below]);
-    if (merged.length > MAX_CERTS_PER_NAME) {
-      throw new CollectorError(
-        `${name} has more than ${MAX_CERTS_PER_NAME} unexpired certificates; too many to monitor`,
-        false
-      );
-    }
-    return merged;
+    return this.query(name, name);
   }
 
   private async query(identity: string, domain: string): Promise<CtCertificate[]> {
@@ -339,7 +343,10 @@ export class CtClient implements CertificateSource {
       }
       if (err instanceof HttpError && err.kind === 'timeout') {
         throw new CollectorError(
-          'crt.sh did not answer in time (it is often overloaded); will retry',
+          err.phase === 'connect'
+            ? `could not connect to crt.sh within ${Math.round(this.timeoutMs / 1000)} s ` +
+              '(is outbound HTTPS blocked?); will retry'
+            : 'crt.sh did not answer in time (it is often overloaded); will retry',
           true
         );
       }
@@ -388,6 +395,16 @@ export interface CtLookalikeSnapshot extends CtNameSnapshot {
   checked_at: number;
 }
 
+/** A lookalike whose last certificate check failed (cleared by the next good check). */
+export interface CtLookalikeFailure {
+  /** When it was last tried (epoch seconds). */
+  at: number;
+  /** Failures in a row. */
+  count: number;
+  /** false: retrying soon won't help (e.g. too many certificates); it backs off for days. */
+  transient: boolean;
+}
+
 export interface CtSnapshot {
   v: 1;
   /** The watched domain's own certificates (own scope). */
@@ -397,11 +414,10 @@ export interface CtSnapshot {
   /** Registered lookalikes whose certificates have been checked. */
   lookalikes?: Record<string, CtLookalikeSnapshot>;
   /**
-   * Lookalikes registered since a previous run whose certificates have not
-   * been checked yet (the per-run cap was reached): their first check still
-   * counts as "newly registered".
+   * Registered lookalikes whose last check failed, so the rotation moves on to
+   * others instead of retrying the same name first every run.
    */
-  pending_new?: string[];
+  lookalike_failures?: Record<string, CtLookalikeFailure>;
 }
 
 function parseNameSnapshot(value: unknown): CtNameSnapshot | null {
@@ -424,8 +440,23 @@ export function parseCtSnapshot(value: unknown): CtSnapshot | null {
   if (Array.isArray(value.expected_cas)) {
     out.expected_cas = value.expected_cas.filter((s): s is string => typeof s === 'string');
   }
-  if (Array.isArray(value.pending_new)) {
-    out.pending_new = value.pending_new.filter((s): s is string => typeof s === 'string');
+  if (isPlainObject(value.lookalike_failures)) {
+    out.lookalike_failures = {};
+    for (const [name, entry] of Object.entries(value.lookalike_failures)) {
+      if (
+        isPlainObject(entry) &&
+        typeof entry.at === 'number' &&
+        Number.isFinite(entry.at) &&
+        typeof entry.count === 'number' &&
+        Number.isFinite(entry.count)
+      ) {
+        out.lookalike_failures[name] = {
+          at: entry.at,
+          count: entry.count,
+          transient: entry.transient !== false,
+        };
+      }
+    }
   }
   if (isPlainObject(value.lookalikes)) {
     out.lookalikes = {};
@@ -461,14 +492,21 @@ export function diffCertificates(
   certs: readonly CtCertificate[],
   nowSeconds: number
 ): CertificateDiff {
-  const knownNames = new Set(previous?.names ?? []);
   const knownIssuers = new Set(previous?.issuers ?? []);
   const seen = previous?.certs ?? {};
+  const wasSeen = (cert: CtCertificate) => Object.prototype.hasOwnProperty.call(seen, cert.key);
+  // Known names: the snapshot's, plus every name a certificate seen before
+  // still covers, so a renewal is a renewal even when the snapshot's name list
+  // had to be cut short.
+  const knownNames = new Set(previous?.names ?? []);
+  for (const cert of certs) {
+    if (wasSeen(cert)) for (const name of cert.names) knownNames.add(name);
+  }
 
   const fresh: FreshCertificate[] = [];
   let renewals = 0;
   for (const cert of certs) {
-    if (Object.prototype.hasOwnProperty.call(seen, cert.key)) continue;
+    if (wasSeen(cert)) continue;
     const item = {
       cert,
       newNames: cert.names.filter((n) => !knownNames.has(n)),
@@ -496,13 +534,18 @@ export function diffCertificates(
       ? Object.fromEntries(entries.sort((a, b) => b[1] - a[1]).slice(0, MAX_CERTS_PER_NAME))
       : merged;
 
+  // Every name a current certificate covers is kept (crt.sh's result limit
+  // bounds them); names only expired certificates covered fill the rest.
+  const currentNames = sortedUnique(certs.flatMap((c) => c.names)).slice(0, MAX_CERTS_PER_NAME);
+  const current = new Set(currentNames);
+  const olderNames = [...knownNames]
+    .filter((n) => !current.has(n))
+    .sort()
+    .slice(0, Math.max(0, MAX_SNAPSHOT_NAMES - currentNames.length));
   return {
     next: {
       certs: bounded,
-      names: sortedUnique([...knownNames, ...certs.flatMap((c) => c.names)]).slice(
-        0,
-        MAX_SNAPSHOT_NAMES
-      ),
+      names: sortedUnique([...currentNames, ...olderNames]),
       issuers: sortedUnique([...knownIssuers, ...certs.map((c) => c.issuerKey)]).slice(
         0,
         MAX_SNAPSHOT_ISSUERS
@@ -582,7 +625,9 @@ function ownDomainFindings(
     const byIssuer = new Map<string, CtCertificate[]>();
     for (const cert of existing) {
       if (!isUnexpected(cert)) continue;
-      byIssuer.set(cert.issuerKey, [...(byIssuer.get(cert.issuerKey) ?? []), cert]);
+      const list = byIssuer.get(cert.issuerKey);
+      if (list) list.push(cert);
+      else byIssuer.set(cert.issuerKey, [cert]);
     }
     for (const [issuerKey, certs] of byIssuer) {
       const label = certs[0].issuerLabel;
@@ -773,26 +818,59 @@ function lookalikeFindings(
   );
 }
 
-/** The lookalikes CT should look at: this run's result, else the stored lookalike baseline. */
-function lookalikeState(ctx: CollectorContext): SharedLookalikeState | null {
+/**
+ * The lookalikes CT should look at: this run's result, else the stored
+ * lookalike baseline (which also remembers which ones were newly registered),
+ * never the organization's own watched domains.
+ */
+function lookalikeState(ctx: CollectorContext, nowSeconds: number): SharedLookalikeState | null {
   if (!ctx.domain.collectors.lookalike) return null;
-  const fromRun = ctx.earlier.lookalike?.lookalikes;
-  if (fromRun) return fromRun;
   const stored = ctx.baselines.lookalike;
-  if (stored === undefined || stored === null) return null;
-  return { registered: registeredFromSnapshot(stored), newlyRegistered: [] };
+  const state =
+    ctx.earlier.lookalike?.lookalikes ??
+    (stored === undefined || stored === null
+      ? null
+      : lookalikeStateFromSnapshot(stored, nowSeconds));
+  if (!state) return null;
+  const own = ownDomainNames(ctx.watchedDomains);
+  return {
+    registered: state.registered.filter((n) => !own.has(n)),
+    newlyRegistered: state.newlyRegistered.filter((n) => !own.has(n)),
+  };
 }
 
-/** Newly registered first, then never checked, then least recently checked. */
+/** A lookalike whose check failed for good (not transiently) is left alone this long. */
+const PERMANENT_FAILURE_BACKOFF_SECONDS = 7 * 86_400;
+
+/**
+ * The lookalikes to check this run, at most `max`: newly registered ones never
+ * tried yet first, then the rest by when they were last touched — checked or
+ * tried — oldest (or never) first. A name that just failed goes to the back of
+ * the rotation, so one crt.sh can't answer for never blocks the others; one
+ * that failed for good waits PERMANENT_FAILURE_BACKOFF_SECONDS.
+ */
 export function selectLookalikesForCt(
   state: SharedLookalikeState,
   checked: Record<string, { checked_at: number }>,
-  max: number
+  max: number,
+  failures: Record<string, CtLookalikeFailure> = {},
+  nowSeconds = Math.floor(Date.now() / 1000)
 ): string[] {
   const fresh = new Set(state.newlyRegistered);
-  const rank = (name: string): [number, number] =>
-    fresh.has(name) ? [0, 0] : checked[name] ? [2, checked[name].checked_at] : [1, 0];
+  const rank = (name: string): [number, number] => {
+    const failure = failures[name];
+    if (fresh.has(name) && !failure) return [0, 0];
+    return [1, Math.max(checked[name]?.checked_at ?? 0, failure?.at ?? 0)];
+  };
   return [...new Set(state.registered)]
+    .filter((name) => {
+      const failure = failures[name];
+      return (
+        !failure ||
+        failure.transient ||
+        failure.at <= nowSeconds - PERMANENT_FAILURE_BACKOFF_SECONDS
+      );
+    })
     .sort((a, b) => {
       const [ra, ta] = rank(a);
       const [rb, tb] = rank(b);
@@ -846,23 +924,26 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
     }
 
     // 2. Certificates for registered lookalikes (both scopes).
-    const state = lookalikeState(ctx);
+    const state = lookalikeState(ctx, nowSeconds);
     const storedLookalikes = previous?.lookalikes ?? {};
     if (state) {
       const registered = new Set(state.registered);
       next.lookalikes = Object.fromEntries(
         Object.entries(storedLookalikes).filter(([name]) => registered.has(name))
       );
-      // Newly registered now, or earlier but not checked yet (the cap was reached).
-      const pending = new Set(
-        [...(previous?.pending_new ?? []), ...state.newlyRegistered].filter((n) =>
-          registered.has(n)
-        )
+      const failures: Record<string, CtLookalikeFailure> = Object.fromEntries(
+        Object.entries(previous?.lookalike_failures ?? {}).filter(([name]) => registered.has(name))
       );
+      // Newly registered lookalikes whose certificates were never checked: their
+      // first check is judged as a site going up (also when an earlier run's CT
+      // failed, or the per-run cap was reached).
+      const pending = new Set(state.newlyRegistered.filter((n) => !storedLookalikes[n]));
       const selected = selectLookalikesForCt(
         { registered: state.registered, newlyRegistered: [...pending] },
         storedLookalikes,
-        ctx.config.lookalikeCtChecksPerRun
+        ctx.config.lookalikeCtChecksPerRun,
+        failures,
+        nowSeconds
       );
       let checkedOk = 0;
       let firstFailure: CollectorError | null = null;
@@ -872,23 +953,34 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
           const before = storedLookalikes[lookalike] ?? null;
           const diff = diffCertificates(before, certs, nowSeconds);
           next.lookalikes[lookalike] = { ...diff.next, checked_at: nowSeconds };
+          delete failures[lookalike];
           findings.push(
             ...lookalikeFindings(ctx, lookalike, diff, before === null, pending.has(lookalike))
           );
-          pending.delete(lookalike);
           checkedOk++;
         } catch (err) {
           warnings.push(`${lookalike}: ${errorMessage(err)}`);
-          if (err instanceof CollectorError && err.transient) {
-            firstFailure = firstFailure ?? err;
+          const transient = err instanceof CollectorError && err.transient;
+          // Remembered, so the next run moves on to other lookalikes first.
+          failures[lookalike] = {
+            at: nowSeconds,
+            count: (failures[lookalike]?.count ?? 0) + 1,
+            transient,
+          };
+          if (transient) {
+            firstFailure = firstFailure ?? (err as CollectorError);
             break; // crt.sh is struggling: don't keep asking it this run
           }
         }
       }
+      if (Object.keys(failures).length > 0) next.lookalike_failures = failures;
       if (ctx.domain.scope === 'brand' && selected.length > 0 && checkedOk === 0 && firstFailure) {
-        throw firstFailure; // nothing was checked: retry the whole collector later
+        // Nothing was checked: retry the collector later, keeping only the record
+        // of what was tried so the retry starts with other lookalikes.
+        throw new CollectorError(firstFailure.message, firstFailure.transient, {
+          progress: next,
+        });
       }
-      if (pending.size > 0) next.pending_new = [...pending].sort().slice(0, 500);
       details.lookalikes_registered = registered.size;
       details.lookalikes_checked = checkedOk;
       notes.push(
@@ -898,7 +990,7 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
       );
     } else {
       if (previous?.lookalikes) next.lookalikes = previous.lookalikes;
-      if (previous?.pending_new) next.pending_new = previous.pending_new;
+      if (previous?.lookalike_failures) next.lookalike_failures = previous.lookalike_failures;
       if (ctx.domain.scope === 'brand') {
         return {
           findings: [],

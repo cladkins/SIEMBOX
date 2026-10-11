@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CRTSH_BASE,
+  CRTSH_RESULT_LIMIT,
   CtClient,
   MAX_INDIVIDUAL_FINDINGS,
   createCtCollector,
@@ -129,27 +130,61 @@ const ok = (body: unknown): HttpGetResult => ({
 });
 const noPacing = createPacer(0, async () => undefined);
 
-test('client: constant host, the identity only in encoded query parameters, bare + subdomain queries', async () => {
+test('client: constant host, the identity only in encoded query parameters, one query per name', async () => {
   const urls: URL[] = [];
   const transport: HttpGet = async (url) => {
     urls.push(url);
     return ok([]);
   };
   await new CtClient({ transport, pacer: noPacing }).certificatesFor('my-company.example');
-  assert.equal(urls.length, 2);
-  for (const url of urls) {
-    assert.equal(url.origin, new URL(CRTSH_BASE).origin);
-    assert.equal(url.pathname, '/');
-    assert.equal(url.searchParams.get('output'), 'json');
-    assert.equal(url.searchParams.get('exclude'), 'expired');
-    assert.equal(url.searchParams.get('deduplicate'), 'Y');
-    assert.equal(url.searchParams.get('match'), 'ILIKE', 'explicit: hyphens change the auto mode');
-  }
-  assert.deepEqual(
-    urls.map((u) => u.searchParams.get('q')),
-    ['my-company.example', '%.my-company.example']
-  );
+  // With match=ILIKE crt.sh matches '%name%' (it rewrites "%.name" to "name"),
+  // so one request covers the name, its subdomains and wildcards.
+  assert.equal(urls.length, 1);
+  const [url] = urls;
+  assert.equal(url.origin, new URL(CRTSH_BASE).origin);
+  assert.equal(url.pathname, '/');
+  assert.equal(url.searchParams.get('q'), 'my-company.example');
+  assert.equal(url.searchParams.get('output'), 'json');
+  assert.equal(url.searchParams.get('exclude'), 'expired');
+  assert.equal(url.searchParams.get('deduplicate'), 'Y');
+  assert.equal(url.searchParams.get('match'), 'ILIKE', 'explicit: hyphens change the auto mode');
   assert.match(crtshQueryUrl('%.example.com').search, /q=%25\.example\.com/);
+});
+
+test('client: an answer cut off at crt.sh’s 10,000-row limit is refused, not diffed', async () => {
+  const row = (id: number, resultCount: number) => ({
+    issuer_ca_id: 1,
+    issuer_name: LE,
+    name_value: `host${id}.example.com`,
+    id,
+    serial_number: id.toString(16),
+    result_count: resultCount,
+  });
+  // The rows' result_count values add up to how many matching names crt.sh returned.
+  const under = [row(1, 9_000), row(2, 999)];
+  assert.equal(parseCrtshResponse(under, 'example.com').length, 2);
+  const truncated = [row(1, 9_000), row(2, 1_000)];
+  assert.equal(CRTSH_RESULT_LIMIT, 10_000);
+  assert.throws(
+    () => parseCrtshResponse(truncated, 'example.com'),
+    (err: unknown) =>
+      err instanceof CollectorError &&
+      !err.transient &&
+      /only part of the certificates/.test(err.message)
+  );
+  // Rows that don't match the domain still count: crt.sh's limit applies before our filter.
+  const foreign = Array.from({ length: CRTSH_RESULT_LIMIT }, (_v, i) => ({
+    id: i + 1,
+    issuer_name: LE,
+    name_value: `x${i}.unrelated.org`,
+  }));
+  assert.throws(() => parseCrtshResponse(foreign, 'example.com'), CollectorError);
+  await assert.rejects(
+    new CtClient({ transport: async () => ok(truncated), pacer: noPacing }).certificatesFor(
+      'example.com'
+    ),
+    (err: unknown) => err instanceof CollectorError && !err.transient
+  );
 });
 
 test('client: 5xx, 429, timeouts and non-JSON are transient — never "no certificates"', async () => {
@@ -177,6 +212,19 @@ test('client: 5xx, 429, timeouts and non-JSON are transient — never "no certif
       String(transport)
     );
   }
+  // A connection that never got made points at the network, not at crt.sh being busy.
+  await assert.rejects(
+    new CtClient({
+      transport: async () => {
+        throw new HttpError('timeout', 'could not connect within 45000 ms', 'connect');
+      },
+      pacer: noPacing,
+    }).certificatesFor('example.com'),
+    (err: unknown) =>
+      err instanceof CollectorError &&
+      err.transient &&
+      /could not connect to crt\.sh within 45 s \(is outbound HTTPS blocked\?\)/.test(err.message)
+  );
   // Too much data is not going to get better by retrying.
   await assert.rejects(
     new CtClient({
@@ -287,6 +335,36 @@ test('diff: certificates expired for over a week are pruned from the snapshot', 
   assert.deepEqual(next.next.names, ['example.com'], 'known names survive pruning');
 });
 
+test('diff: renewals stay quiet when the snapshot’s name list was cut short', () => {
+  // A snapshot that lost zzz.example.com from its (bounded) name list, while the
+  // certificate covering it was seen and is still current.
+  const previous = {
+    certs: { old: Math.floor(Date.parse('2026-12-31T00:00:00Z') / 1000) },
+    names: ['aaa.example.com'],
+    issuers: ['letsencrypt'],
+  };
+  const certs = [
+    cert('old', ['aaa.example.com', 'zzz.example.com']),
+    cert('renewal', ['zzz.example.com']), // same name, same issuer
+  ];
+  const diff = diffCertificates(previous, certs, NOW);
+  assert.deepEqual(
+    diff.fresh.map((f) => [f.cert.key, f.newNames]),
+    [['renewal', []]]
+  );
+  assert.equal(diff.renewals, 1);
+  assert.deepEqual(
+    diff.next.names,
+    ['aaa.example.com', 'zzz.example.com'],
+    'current names are kept'
+  );
+
+  // Names covered by current certificates are kept even beyond the cap for older names.
+  const many = Array.from({ length: 6_000 }, (_v, i) => cert(`m${i}`, [`h${i}.example.com`]));
+  const big = diffCertificates(null, many, NOW);
+  assert.equal(big.next.names.length, 6_000);
+});
+
 // ---- collector ---------------------------------------------------------------------------------------
 
 function source(
@@ -322,10 +400,11 @@ function ctx(
       secondaryResolver: null,
       lookalikeCtChecksPerRun: 3,
     },
-    now: new Date(NOW * 1000),
+    now: overrides.now ?? new Date(NOW * 1000),
     trigger: 'schedule',
     earlier: overrides.earlier ?? {},
     baselines: overrides.baselines ?? {},
+    ...(overrides.watchedDomains ? { watchedDomains: overrides.watchedDomains } : {}),
   };
 }
 
@@ -519,36 +598,160 @@ test('collector: a new lookalike that missed the per-run cap still counts as new
     withCap(ctx({ earlier: lookalikeRun([], []) }))
   );
   // Both registered since the last run, but only one can be checked per run.
+  const both = ['aaa-example.com', 'bbb-example.com'];
   const second = await createCtCollector({ source: certsFor })(
-    withCap(
-      ctx({
-        previous: first.snapshot,
-        earlier: lookalikeRun(
-          ['aaa-example.com', 'bbb-example.com'],
-          ['aaa-example.com', 'bbb-example.com']
-        ),
-      })
-    )
+    withCap(ctx({ previous: first.snapshot, earlier: lookalikeRun(both, both) }))
   );
   assert.deepEqual(
     second.findings.map((f) => f.detail.lookalike),
     ['aaa-example.com']
   );
-  assert.deepEqual(parseCtSnapshot(second.snapshot)?.pending_new, ['bbb-example.com']);
-  // Next run: the lookalike collector no longer calls it new, but CT still does.
+  // Next run: the lookalike snapshot still lists both as newly registered (for
+  // 30 days); the one CT has already checked is judged normally, the other
+  // still counts as new on its first check.
   const third = await createCtCollector({ source: certsFor })(
-    withCap(
-      ctx({
-        previous: second.snapshot,
-        earlier: lookalikeRun(['aaa-example.com', 'bbb-example.com'], []),
-      })
-    )
+    withCap(ctx({ previous: second.snapshot, earlier: lookalikeRun(both, both) }))
   );
   assert.deepEqual(
     third.findings.map((f) => f.detail.lookalike),
     ['bbb-example.com']
   );
-  assert.equal(parseCtSnapshot(third.snapshot)?.pending_new, undefined);
+  const fourth = await createCtCollector({ source: certsFor })(
+    withCap(ctx({ previous: third.snapshot, earlier: lookalikeRun(both, both) }))
+  );
+  assert.deepEqual(fourth.findings, [], 'each is "newly registered" once');
+});
+
+test('collector: the "newly registered" hand-off survives a run in which CT did not run or failed', async () => {
+  // CT runs without this run's lookalike output (a retry of CT alone, or CT
+  // failing on the day the lookalike collector found the registration): the
+  // stored lookalike snapshot still says which ones are new.
+  const lookalikeSnapshot = {
+    v: 1,
+    registered: {
+      'examp1e.com': { mx: false, addr: true, fuzzer: 'homoglyph', since: NOW - 3_600 },
+      'exmple.com': { mx: false, addr: true, fuzzer: 'omission', since: null }, // baseline
+      'exampel.com': { mx: false, addr: true, fuzzer: 'transposition', since: NOW - 40 * 86_400 },
+    },
+    unregistered: {},
+    dropped: {},
+  };
+  const certsFor = source({
+    'examp1e.com': [cert('p1', ['examp1e.com'])],
+    'exmple.com': [cert('x1', ['exmple.com'])],
+    'exampel.com': [cert('e1', ['exampel.com'])],
+  });
+  const out = await createCtCollector({ source: certsFor })(
+    ctx({ scope: 'brand', baselines: { lookalike: lookalikeSnapshot } })
+  );
+  assert.deepEqual(kinds(out), [
+    ['new_cert', 'medium', 'Newly registered lookalike examp1e.com already has 1 TLS certificate'],
+  ]);
+  assert.equal(certsFor.asked[0], 'examp1e.com', 'checked first');
+});
+
+test('collector: the organization’s own watched domains are never checked as lookalikes', async () => {
+  const certsFor = source({ 'example.net': [cert('own1', ['shop.example.net'])] });
+  const earlier: CollectorContext['earlier'] = {
+    lookalike: {
+      findings: [],
+      status: 'ok',
+      note: '',
+      // An old baseline that still lists example.net, which the org now watches too.
+      lookalikes: { registered: ['example.net', 'exmple.com'], newlyRegistered: ['example.net'] },
+    },
+  };
+  const out = await createCtCollector({ source: certsFor })(
+    ctx({ earlier, watchedDomains: ['example.com', 'shop.example.net'] })
+  );
+  assert.ok(!certsFor.asked.includes('example.net'));
+  assert.deepEqual(out.findings, []);
+  assert.equal(out.details?.lookalikes_registered, 1);
+});
+
+test('collector: a lookalike crt.sh can’t answer for moves to the back of the rotation', async () => {
+  const lookalikes = ['a.example.org', 'b.example.org', 'c.example.org', 'd.example.org'];
+  const earlier: CollectorContext['earlier'] = {
+    lookalike: {
+      findings: [],
+      status: 'ok',
+      note: '',
+      lookalikes: { registered: lookalikes, newlyRegistered: [] },
+    },
+  };
+  const timeout = new CollectorError('crt.sh did not answer in time; will retry', true);
+  const table = { 'a.example.org': timeout as CtCertificate[] | Error };
+  const at = (hours: number) => new Date((NOW + hours * 3_600) * 1000);
+
+  // Own scope: a.example.org fails (crt.sh struggling: stop asking this run), the run still succeeds.
+  const s1 = source(table);
+  const first = await createCtCollector({ source: s1 })(ctx({ earlier, now: at(0) }));
+  assert.deepEqual(s1.asked, ['example.com', 'a.example.org']);
+  assert.equal(parseCtSnapshot(first.snapshot)?.lookalike_failures?.['a.example.org']?.count, 1);
+  // Next run: the others first, the failed one last.
+  const s2 = source(table);
+  const second = await createCtCollector({ source: s2 })(
+    ctx({ earlier, previous: first.snapshot, now: at(24) })
+  );
+  assert.deepEqual(s2.asked, ['example.com', 'b.example.org', 'c.example.org', 'd.example.org']);
+  // And then it comes round again; a good answer clears its failure record.
+  const s3 = source({});
+  const third = await createCtCollector({ source: s3 })(
+    ctx({ earlier, previous: second.snapshot, now: at(48) })
+  );
+  assert.equal(s3.asked[1], 'a.example.org');
+  assert.equal(parseCtSnapshot(third.snapshot)?.lookalike_failures, undefined);
+
+  // Brand scope: nothing checked is an error (retried), but what was tried is kept,
+  // so the retry starts with the other lookalikes instead of failing the same way forever.
+  const b1 = source(table);
+  let progress: unknown;
+  await assert.rejects(
+    createCtCollector({ source: b1 })(ctx({ scope: 'brand', earlier, now: at(0) })),
+    (err: unknown) => {
+      assert.ok(err instanceof CollectorError && err.transient);
+      progress = err.progress;
+      return true;
+    }
+  );
+  assert.equal(parseCtSnapshot(progress)?.lookalike_failures?.['a.example.org']?.transient, true);
+  const b2 = source(table);
+  const retried = await createCtCollector({ source: b2 })(
+    ctx({ scope: 'brand', earlier, previous: progress, now: at(1) })
+  );
+  assert.deepEqual(b2.asked, ['b.example.org', 'c.example.org', 'd.example.org']);
+  assert.equal(retried.details?.lookalikes_checked, 3);
+});
+
+test('collector: a lookalike that fails for good is skipped for a week, without stopping the run', async () => {
+  const lookalikes = ['a.example.org', 'b.example.org'];
+  const earlier: CollectorContext['earlier'] = {
+    lookalike: {
+      findings: [],
+      status: 'ok',
+      note: '',
+      lookalikes: { registered: lookalikes, newlyRegistered: [] },
+    },
+  };
+  const tooBig = new CollectorError('crt.sh returned only part of the certificates', false);
+  const table = { 'a.example.org': tooBig as CtCertificate[] | Error };
+  const at = (days: number) => new Date((NOW + days * 86_400) * 1000);
+
+  const s1 = source(table);
+  const first = await createCtCollector({ source: s1 })(ctx({ earlier, now: at(0) }));
+  assert.deepEqual(
+    s1.asked,
+    ['example.com', 'a.example.org', 'b.example.org'],
+    'not a reason to stop'
+  );
+  const s2 = source(table);
+  const second = await createCtCollector({ source: s2 })(
+    ctx({ earlier, previous: first.snapshot, now: at(1) })
+  );
+  assert.deepEqual(s2.asked, ['example.com', 'b.example.org'], 'backing off');
+  const s3 = source(table);
+  await createCtCollector({ source: s3 })(ctx({ earlier, previous: second.snapshot, now: at(8) }));
+  assert.ok(s3.asked.includes('a.example.org'), 'tried again after a week');
 });
 
 test('collector: brand domains check lookalikes only; crt.sh trouble stops further requests', async () => {
@@ -570,7 +773,7 @@ test('collector: brand domains check lookalikes only; crt.sh trouble stops furth
   // Nothing could be checked: the collector fails (and will be retried) instead of baselining nothing.
   await assert.rejects(
     createCtCollector({ source: flaky })(ctx({ scope: 'brand', earlier })),
-    (err: unknown) => err instanceof CollectorError && err.transient
+    (err: unknown) => err instanceof CollectorError && err.transient && err.progress !== undefined
   );
   assert.deepEqual(
     flaky.asked,

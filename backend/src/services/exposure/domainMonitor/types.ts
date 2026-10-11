@@ -49,7 +49,12 @@ export type MonitoredDomain = Pick<
 export interface SharedLookalikeState {
   /** Every lookalike currently believed registered (the collector's baseline). */
   registered: string[];
-  /** Lookalikes that became registered in this run (empty on the first run). */
+  /**
+   * Registered lookalikes reported as newly registered recently (see
+   * lookalike.ts NEW_REGISTRATION_WINDOW_DAYS). It is derived from the stored
+   * snapshot, so the hand-off to CT survives a run in which CT did not run or
+   * failed.
+   */
   newlyRegistered: string[];
 }
 
@@ -94,14 +99,21 @@ export type Collector = (ctx: CollectorContext) => Promise<CollectorOutput>;
  * rate limits) are retried sooner than the domain's interval; others wait for
  * the next scheduled run. Either way the baseline is left untouched, so a
  * failed lookup is never mistaken for "nothing changed" or "everything removed".
+ *
+ * `progress` is the one exception: bookkeeping-only state the service still
+ * stores (e.g. which lookalikes CT tried and failed on, so the next attempt
+ * moves on to other names instead of repeating the same failing one). A
+ * collector must never put a changed baseline in it.
  */
 export class CollectorError extends Error {
   readonly transient: boolean;
+  readonly progress?: unknown;
 
-  constructor(message: string, transient: boolean) {
+  constructor(message: string, transient: boolean, options: { progress?: unknown } = {}) {
     super(message);
     this.name = 'CollectorError';
     this.transient = transient;
+    if (options.progress !== undefined) this.progress = options.progress;
   }
 }
 

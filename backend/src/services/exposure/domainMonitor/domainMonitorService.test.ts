@@ -12,6 +12,7 @@ import {
   DOMAIN_MONITOR_ALREADY_RUNNING,
   DOMAIN_MONITOR_DISABLED,
   describeDomainMonitorRun,
+  domainMonitorCycleFailure,
   getDomainMonitorSkipReason,
   retryDelayMinutes,
   runDomainChecks,
@@ -366,6 +367,7 @@ test('retry: the early run repeats only the failed collectors, backing off', asy
     ])
   ) as Record<CollectorName, Collector>;
 
+  const firstRun = clock.now;
   await runDomainChecks({ store, collectors, now: () => clock.now });
   assert.deepEqual(ran, ['dns', 'rdap', 'lookalike', 'ct']);
 
@@ -391,13 +393,148 @@ test('retry: the early run repeats only the failed collectors, backing off', asy
   assert.equal(domains[0].last_status, 'ok');
   assert.equal(
     Date.parse(domains[0].next_run_at as string),
-    clock.now + 1440 * 60_000,
-    'back on its interval'
+    firstRun + 1440 * 60_000,
+    'back on its regular schedule: the last full run + the interval'
   );
+
+  ran.length = 0;
+  clock.now = firstRun + 1440 * 60_000;
+  await runDomainChecks({ store, collectors, now: () => clock.now });
+  assert.deepEqual(ran, ['dns', 'rdap', 'lookalike', 'ct'], 'the full run, on time');
 
   assert.equal(retryDelayMinutes(1440, 1), 60);
   assert.equal(retryDelayMinutes(1440, 3), 240);
   assert.equal(retryDelayMinutes(90, 5), 90, 'never later than the interval');
+});
+
+test('retry: a collector that keeps failing never holds back the others’ regular runs', async () => {
+  for (const interval of [1440, 10_080]) {
+    const clock = { now: Date.parse('2026-10-11T00:00:00Z') };
+    const start = clock.now;
+    const domains = [domainRow(1, 'example.com', { interval_minutes: interval })];
+    const { store } = memoryStore(domains, clock);
+    const fullRuns: number[] = [];
+    const collectors = Object.fromEntries(
+      (['dns', 'rdap', 'lookalike', 'ct'] as const).map((name) => [
+        name,
+        (async () => {
+          if (name === 'dns') fullRuns.push(clock.now);
+          if (name === 'ct') throw new CollectorError('crt.sh timed out; will retry', true);
+          return { snapshot: { v: 1 }, findings: [], status: 'ok', note: '' };
+        }) as Collector,
+      ])
+    ) as Record<CollectorName, Collector>;
+
+    // Three intervals of wall time, waking whenever the domain is due (like the job's tick).
+    while (clock.now < start + 3 * interval * 60_000) {
+      await runDomainChecks({ store, collectors, now: () => clock.now });
+      clock.now = Math.max(clock.now + 60_000, Date.parse(domains[0].next_run_at as string));
+    }
+    assert.deepEqual(
+      fullRuns.map((at) => (at - start) / 60_000),
+      [0, interval, 2 * interval],
+      `interval ${interval}: the other collectors still run every interval`
+    );
+    const summary = domains[0].last_summary as { full_run_at: string; retry: string[] };
+    assert.deepEqual(summary.retry, ['ct']);
+    assert.equal(Date.parse(summary.full_run_at), start + 2 * interval * 60_000);
+  }
+});
+
+test('a failed collector’s progress (bookkeeping only) is stored, and it is still retried', async () => {
+  const clock = { now: Date.parse('2026-10-11T00:00:00Z') };
+  const domains = [domainRow(1, 'brand.com', { scope: 'brand' })];
+  const { store, baselines } = memoryStore(domains, clock);
+  const fine: Collector = async () => ({
+    snapshot: { v: 1 },
+    findings: [],
+    status: 'ok',
+    note: '',
+  });
+  await runDomainChecks({
+    store,
+    collectors: {
+      dns: fine,
+      rdap: fine,
+      lookalike: fine,
+      ct: async () => {
+        throw new CollectorError('crt.sh timed out; will retry', true, {
+          progress: {
+            v: 1,
+            lookalike_failures: { 'exmple.com': { at: 1, count: 1, transient: true } },
+          },
+        });
+      },
+    },
+    now: () => clock.now,
+  });
+  assert.deepEqual(baselines.get('1:ct')?.snapshot, {
+    v: 1,
+    lookalike_failures: { 'exmple.com': { at: 1, count: 1, transient: true } },
+  });
+  assert.deepEqual((domains[0].last_summary as { retry: string[] }).retry, ['ct']);
+  assert.equal(domains[0].last_status, 'error');
+});
+
+test('end to end: a new lookalike’s certificates are still judged when CT fails that day', async () => {
+  const clock = { now: Date.parse('2026-10-11T00:00:00Z') };
+  const domains = [domainRow(1, 'example.com')];
+  const { store, log } = memoryStore(domains, clock);
+  const w = world();
+  let crtshUp = true;
+  const ct = createCtCollector({
+    source: {
+      certificatesFor: async (name) => {
+        if (!crtshUp) {
+          throw new CollectorError(
+            'crt.sh is temporarily unavailable (HTTP 502); will retry',
+            true
+          );
+        }
+        return w.certs[name] ?? [];
+      },
+    },
+  });
+  const collectors = { ...w.collectors, ct };
+  await runDomainChecks({ store, collectors, now: () => clock.now }); // baselines
+
+  // Next day a lookalike goes up, with a certificate, and crt.sh is down.
+  clock.now += 1440 * 60_000;
+  w.zone['examp1e.com'] = { ns: ['ns1.bad-host.net'], a: ['203.0.113.66'] };
+  w.certs['examp1e.com'] = [cert('p1', ['examp1e.com', 'login.examp1e.com'])];
+  crtshUp = false;
+  await runDomainChecks({ store, collectors, now: () => clock.now });
+  assert.deepEqual(
+    log.alerts.map((f) => f.eventType),
+    ['lookalike_registered']
+  );
+
+  // The early retry re-runs CT alone; the hand-off comes from the stored lookalike baseline.
+  crtshUp = true;
+  clock.now = Date.parse(domains[0].next_run_at as string);
+  await runDomainChecks({ store, collectors, now: () => clock.now });
+  assert.deepEqual(
+    log.alerts.map((f) => [f.eventType, f.title]),
+    [
+      ['lookalike_registered', 'Lookalike domain registered: examp1e.com (looks like example.com)'],
+      ['new_cert', 'Newly registered lookalike examp1e.com already has 1 TLS certificate'],
+    ]
+  );
+});
+
+test('the job counts a cycle as failed only when every domain it checked had errors', () => {
+  const cycle = (checked: number, failed: number) => ({
+    checked,
+    failed,
+    newFindings: 0,
+    remaining: 0,
+    skipped: false,
+  });
+  assert.match(domainMonitorCycleFailure(cycle(2, 2)) ?? '', /every domain checked had errors/);
+  assert.equal(domainMonitorCycleFailure(cycle(3, 1)), null);
+  assert.equal(domainMonitorCycleFailure(cycle(0, 0)), null);
+  assert.notEqual(domainMonitorCycleFailure(cycle(0, 1)), null, 'the bookkeeping itself failed');
+  assert.equal(domainMonitorCycleFailure({ ...cycle(0, 0), skipped: true, reason: 'x' }), null);
 });
 
 test('scope and switches: brand domains run lookalike + ct; switched-off collectors never run', async () => {

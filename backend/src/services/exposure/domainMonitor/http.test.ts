@@ -105,9 +105,24 @@ test('the deadline covers a server that starts answering and then stalls', async
   const started = Date.now();
   await assert.rejects(
     httpsGet(new URL('https://registry.test-host.net/stall'), { ...base, timeoutMs: 150 }),
-    (err: unknown) => err instanceof HttpError && err.kind === 'timeout'
+    (err: unknown) => err instanceof HttpError && err.kind === 'timeout' && err.phase === 'response'
   );
   assert.ok(Date.now() - started < 2_000);
+});
+
+test('a timeout before any connection was made says so (often a firewall dropping traffic)', async () => {
+  await assert.rejects(
+    httpsGet(new URL('https://unreachable.test-host.net/json'), {
+      ...base,
+      timeoutMs: 150,
+      resolve: () => new Promise(() => undefined), // never connects
+    }),
+    (err: unknown) =>
+      err instanceof HttpError &&
+      err.kind === 'timeout' &&
+      err.phase === 'connect' &&
+      /could not connect/.test(err.message)
+  );
 });
 
 test('non-HTTPS URLs are refused before any connection', async () => {

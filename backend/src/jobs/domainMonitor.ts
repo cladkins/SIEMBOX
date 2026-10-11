@@ -19,6 +19,7 @@ import {
 import {
   DOMAIN_MONITOR_JOB_KEY,
   describeDomainMonitorRun,
+  domainMonitorCycleFailure,
   getDomainMonitorSkipReason,
   runDomainChecks,
 } from '../services/exposure/domainMonitor/domainMonitorService';
@@ -36,7 +37,13 @@ async function tick(): Promise<void> {
       return;
     }
 
-    const summary = await trackJobRun(DOMAIN_MONITOR_JOB_KEY, () => runDomainChecks());
+    const summary = await trackJobRun(DOMAIN_MONITOR_JOB_KEY, async () => {
+      const result = await runDomainChecks();
+      // Every domain failing (e.g. outbound HTTPS blocked) is a failed cycle, not an "ok" one.
+      const failure = domainMonitorCycleFailure(result);
+      if (failure) throw new Error(failure);
+      return result;
+    });
     if (summary.skipped) {
       // e.g. the previous cycle is still running.
       markJobSkipped(DOMAIN_MONITOR_JOB_KEY, summary.reason ?? 'skipped');

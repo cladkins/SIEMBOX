@@ -294,18 +294,23 @@ test('expiry: warns inside the window (medium; high once expired), once per expi
   assert.deepEqual(expiryState('2026-10-01T00:00:00Z', now, 30), { daysLeft: -10, expired: true });
   assert.equal(expiryState(null, now, 30), null);
 
-  const fp = expiryFingerprint('example.com', '2026-10-23T00:00:00.000Z');
+  const fp = expiryFingerprint('example.com', '2026-10-23T00:00:00.000Z', false);
   assert.equal(
-    expiryFingerprint('example.com', '2026-10-23T04:00:00Z'),
+    expiryFingerprint('example.com', '2026-10-23T04:00:00Z', false),
     fp,
     'same date, same fingerprint'
   );
   assert.notEqual(
-    expiryFingerprint('example.com', '2027-10-23T00:00:00Z'),
+    expiryFingerprint('example.com', '2027-10-23T00:00:00Z', false),
     fp,
     'a renewal is a new term'
   );
-  assert.notEqual(expiryFingerprint('example.org', '2026-10-23T00:00:00Z'), fp);
+  assert.notEqual(expiryFingerprint('example.org', '2026-10-23T00:00:00Z', false), fp);
+  assert.notEqual(
+    expiryFingerprint('example.com', '2026-10-23T00:00:00Z', true),
+    fp,
+    'expiring and expired are two findings'
+  );
 });
 
 // ---- collector ---------------------------------------------------------------------------------------
@@ -361,6 +366,23 @@ test('collector: the first run is a silent baseline, but an expiring domain warn
     ctx(expiring.snapshot, '2027-08-02T00:00:00Z')
   );
   assert.equal(again.findings[0].fingerprint, expiring.findings[0].fingerprint);
+});
+
+test('collector: a domain that actually lapses raises a second, high, expiry finding', async () => {
+  // A registry that keeps the old expiration date once it has passed.
+  const source = fixed(baseInfo());
+  const expiring = await createRdapCollector({ source })(ctx(null, '2027-08-01T00:00:00Z'));
+  const lapsed = await createRdapCollector({ source })(
+    ctx(expiring.snapshot, '2027-08-20T00:00:00Z')
+  );
+  assert.deepEqual(
+    [...expiring.findings, ...lapsed.findings].map((f) => [f.severity, f.title]),
+    [
+      ['medium', 'example.com registration expires in 12 days (2027-08-13)'],
+      ['high', 'example.com registration expired on 2027-08-13'],
+    ]
+  );
+  assert.notEqual(lapsed.findings[0].fingerprint, expiring.findings[0].fingerprint);
 });
 
 test('collector: a hijack-shaped change becomes rdap_change findings', async () => {

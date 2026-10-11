@@ -1357,9 +1357,17 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   changes alert (expiry warnings and certificates from a CA outside
   `expected_cas` are the exceptions).
 - `ct: crt.sh is temporarily unavailable (HTTP 502)` / `did not answer in time`:
-  crt.sh is a free, often overloaded service. These are transient — the domain
-  is retried after 60 minutes (backing off) and nothing is lost. Persistent
-  failures from every domain usually mean outbound HTTPS is blocked.
+  crt.sh is a free, often overloaded service. These are transient — the failed
+  collectors are retried after 60 minutes (backing off), the others keep their
+  regular schedule, and nothing is lost.
+- `ct: could not connect to crt.sh within 45 s (is outbound HTTPS blocked?)` (or
+  the same for an RDAP server) — no connection was ever made: an egress
+  firewall or proxy is dropping outbound HTTPS from the backend. When every
+  domain fails, the `domain-monitor` job itself shows `failed`.
+- `ct: crt.sh returned only part of the certificates for <name> ... too many to
+  monitor reliably` — crt.sh stops at 10,000 matching names per query, picked in
+  no particular order, so CT can't be monitored for that name. Turn the `ct`
+  collector off for the domain, or watch a narrower name (e.g. a subdomain).
 - `rdap: unsupported` — the TLD publishes no RDAP service, or only a plain-HTTP
   one (refused on purpose); registration changes can't be monitored there.
 - `rdap: refused to contact ...` — the RDAP server named by IANA's bootstrap
@@ -1369,6 +1377,13 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   filtering or broken resolver; NS changes can't be judged until it answers
   NS queries (the old baseline is kept, nothing is reported as removed).
   Optionally set `exposure_dns_secondary_resolver` to a resolver you trust.
+- `dns: every DNS lookup for <name> failed (NS: <name> does not resolve
+  (NXDOMAIN); ...)` — the watched name doesn't exist right now: a registry or
+  registrar hold (check the `rdap` status), a lapsed registration, or a
+  resolver that blocks it. Nothing is reported as removed meanwhile.
+- `dns` warning `<type>: <resolver> failed (...); the system resolver's answer
+  was used alone` — the second resolver didn't answer, so that record set was
+  not cross-checked; findings say so in `detail.resolvers`.
 - `lookalike: DNS lookups failed for every lookalike candidate` — DNS from the
   backend is down or blocked; retried automatically.
 

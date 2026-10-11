@@ -24,11 +24,18 @@ export type HttpErrorKind = 'timeout' | 'network' | 'too_large' | 'blocked';
 
 export class HttpError extends Error {
   readonly kind: HttpErrorKind;
+  /**
+   * For timeouts: 'connect' when no connection was ever made (often outbound
+   * traffic being dropped by a firewall), 'response' when the server was
+   * reached but did not finish answering.
+   */
+  readonly phase?: 'connect' | 'response';
 
-  constructor(kind: HttpErrorKind, message: string) {
+  constructor(kind: HttpErrorKind, message: string, phase?: 'connect' | 'response') {
     super(message);
     this.name = 'HttpError';
     this.kind = kind;
+    if (phase) this.phase = phase;
   }
 }
 
@@ -165,7 +172,15 @@ function exchange(
     // The deadline covers the whole exchange (connect, headers and body), not just idleness.
     armDeadline(
       setTimeout(() => {
-        const err = new HttpError('timeout', `no complete response within ${options.timeoutMs} ms`);
+        // Still connecting (or still resolving the host) means no connection was ever made.
+        const connected = Boolean(req.socket) && !req.socket?.connecting;
+        const err = connected
+          ? new HttpError(
+              'timeout',
+              `no complete response within ${options.timeoutMs} ms`,
+              'response'
+            )
+          : new HttpError('timeout', `could not connect within ${options.timeoutMs} ms`, 'connect');
         finish(err);
         req.destroy(err);
       }, options.timeoutMs)

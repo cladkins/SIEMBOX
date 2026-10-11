@@ -5,14 +5,19 @@
  * Resolution uses the system resolver. An optional second resolver
  * (exposure_dns_secondary_resolver, an IP address) is OFF by default so the
  * feature never sends DNS traffic anywhere the operator didn't choose; when
- * set, both must agree on a record set before it is trusted.
+ * set and both answer, they must agree on a record set before it is trusted.
+ * When only one of them answers, its answer is used alone — with a warning,
+ * and findings name the resolver it came from.
  *
  * A lookup that FAILS (timeout, SERVFAIL, NXDOMAIN for the watched name,
  * resolvers disagreeing, or NODATA for NS at a delegated domain — which every
  * real resolver answers) yields a failure sentinel. A sentinel is never
  * compared: it is neither "unchanged" nor "removed", and the baseline keeps
  * the last good value for that type. NODATA (the name exists, no records of
- * that type) is a real, empty answer.
+ * that type) is a real, empty answer. So is NXDOMAIN for _dmarc.<name>, but
+ * only when <name> itself answered: if it does not resolve, the empty DMARC
+ * answer is a sentinel too (otherwise a zone pulled by a registry hold would
+ * read as "DMARC policy removed").
  *
  * Values are normalised and sorted so the comparison is order-insensitive.
  * NS, MX, TXT and DMARC compare as exact sets. A/AAAA are judged against the
@@ -136,7 +141,7 @@ export async function lookupRecordSet(
   return { ok: false, error: outcome.code };
 }
 
-/** With a second resolver, a record set is only trusted when both agree. */
+/** With a second resolver, a record set answered by both is only trusted when they agree. */
 export function combineRecordSets(primary: RecordSet, secondary: RecordSet | null): RecordSet {
   if (!secondary) return primary;
   if (primary.ok && secondary.ok) {
@@ -147,6 +152,19 @@ export function combineRecordSets(primary: RecordSet, secondary: RecordSet | nul
   if (primary.ok) return primary; // the second resolver failed: fall back to the first alone
   if (secondary.ok) return secondary;
   return primary;
+}
+
+/**
+ * An empty DMARC answer (no _dmarc.<name>) means "no DMARC record" only if
+ * <name> itself answered for some other type; otherwise it is a sentinel.
+ */
+export function guardDmarc(sets: Record<DnsRecordType, RecordSet>, name: string): RecordSet {
+  const dmarc = sets.DMARC;
+  if (!dmarc.ok || dmarc.values.length > 0) return dmarc;
+  const nameAnswered = DNS_RECORD_TYPES.some((type) => type !== 'DMARC' && sets[type].ok);
+  return nameAnswered
+    ? dmarc
+    : { ok: false, error: `${name} itself did not resolve, so an empty answer proves nothing` };
 }
 
 // ---- Snapshot & diff --------------------------------------------------------------------------
@@ -351,20 +369,35 @@ export function createDnsCollector(deps: DnsCollectorDeps = {}): Collector {
         : ctx.config.secondaryResolver
           ? createResolver({ servers: [ctx.config.secondaryResolver] })
           : null;
+    const secondName = ctx.config.secondaryResolver ?? 'the second resolver';
     const resolvers = secondary
       ? `system + ${ctx.config.secondaryResolver ?? 'second resolver'}`
       : 'system';
 
+    // Which resolver(s) each record set came from, and why when it is only one.
+    const sources = {} as Record<DnsRecordType, string>;
+    const oneResolverOnly = {} as Partial<Record<DnsRecordType, string>>;
     const sets = Object.fromEntries(
       await Promise.all(
         DNS_RECORD_TYPES.map(async (type) => {
           const options = { apex, timeoutMs: deps.queryTimeoutMs };
           const first = await lookupRecordSet(primary, name, type, options);
           const second = secondary ? await lookupRecordSet(secondary, name, type, options) : null;
+          sources[type] = resolvers;
+          if (second && first.ok && !second.ok) {
+            sources[type] = `system only (${secondName} failed)`;
+            oneResolverOnly[type] =
+              `${type}: ${secondName} failed (${second.error}); the system resolver's answer was used alone`;
+          } else if (second && !first.ok && second.ok) {
+            sources[type] = `${secondName} only (the system resolver failed)`;
+            oneResolverOnly[type] =
+              `${type}: the system resolver failed (${first.error}); ${secondName}'s answer was used alone`;
+          }
           return [type, combineRecordSets(first, second)] as const;
         })
       )
     ) as Record<DnsRecordType, RecordSet>;
+    sets.DMARC = guardDmarc(sets, name);
 
     const failed = DNS_RECORD_TYPES.filter((type) => !sets[type].ok);
     const describeFailure = (type: DnsRecordType) => {
@@ -390,13 +423,20 @@ export function createDnsCollector(deps: DnsCollectorDeps = {}): Collector {
       const set = sets[type];
       return `${type} ${set.ok ? set.values.length : 'failed'}`;
     }).join(', ');
+    const warnings = [
+      ...failed.map(describeFailure),
+      ...DNS_RECORD_TYPES.flatMap((type) => {
+        const note = oneResolverOnly[type];
+        return note && sets[type].ok ? [note] : [];
+      }),
+    ];
     return {
       snapshot: next,
-      findings: changes.map((change) => driftFinding(ctx, change, resolvers)),
+      findings: changes.map((change) => driftFinding(ctx, change, sources[change.type])),
       status: previous ? 'ok' : 'baseline',
       note: previous ? `${summary}; ${changes.length} change(s)` : `baseline recorded: ${summary}`,
       details: { records: counts, resolvers },
-      ...(failed.length ? { warnings: failed.map(describeFailure) } : {}),
+      ...(warnings.length ? { warnings } : {}),
     };
   };
 }

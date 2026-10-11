@@ -16,18 +16,28 @@
  * Registration check (checkRegistrations): node's resolver, at most 10
  * candidates in flight, a hard deadline per query and per run. NS first: NXDOMAIN
  * means unregistered (one query for most candidates); a delegation means
- * registered, and A/AAAA/MX are then asked to judge how ready it is. Lookups
- * that fail (timeouts, SERVFAIL) leave a candidate "unknown": it keeps whatever
- * state it had, so a flaky resolver never looks like a registration or a drop.
- * One random, certainly-unregistered name per suffix is probed first: where it
- * resolves (a wildcard TLD, or a resolver rewriting NXDOMAIN to an ad server),
+ * registered, and A/AAAA/MX are then asked to judge how ready it is (each of
+ * those is true, false, or null when its lookup failed). Lookups that fail
+ * (timeouts, SERVFAIL) leave a candidate "unknown": it keeps whatever state it
+ * had, so a flaky resolver never looks like a registration or a drop. One
+ * random, certainly-unregistered name per suffix is probed first: only a
+ * definite NXDOMAIN for it clears the suffix; where it resolves (a wildcard
+ * TLD, or a resolver rewriting NXDOMAIN to an ad server) or the probe fails,
  * only an NS delegation counts as a registration.
  *
- * Snapshot: the registered lookalikes (with whether they had an address / MX).
- * Findings (never on the first run, which records the baseline silently):
- *   lookalike_registered — newly registered: high with an A/AAAA or MX record
- *   (a site or a mailbox can go live), medium otherwise; and high when a
- *   registered lookalike gains an MX record (mail-based phishing being prepared).
+ * Snapshot: the registered lookalikes (whether they had an address / MX, and
+ * when they were reported as newly registered), the candidates confirmed
+ * unregistered, and registered ones that recently stopped resolving.
+ * Findings:
+ *   lookalike_registered — a registration of a name that was confirmed
+ *   unregistered before: high with an A/AAAA or MX record (a site or a mailbox
+ *   can go live), medium otherwise; and high when a registered lookalike that
+ *   had no MX record gains one (mail-based phishing being prepared).
+ * A name seen registered on its first definite answer — the first run, a
+ * raised candidate cap, dnstwist appearing, a lookup that failed until now —
+ * is recorded silently: nobody knows when it was registered. So is one that
+ * comes back within REAPPEAR_GRACE_DAYS of going NXDOMAIN (a registry hold
+ * lifted, or a flapping answer): it is the same registration.
  */
 import { execFile } from 'child_process';
 import crypto from 'crypto';
@@ -54,6 +64,7 @@ import {
   type Collector,
   type CollectorContext,
   type CollectorOutput,
+  type SharedLookalikeState,
 } from './types';
 import type { FindingInput } from '../findingWriter';
 
@@ -287,8 +298,9 @@ export function detectDnstwist(now = Date.now()): DnstwistRunner | null {
 
 // ---- Registration check -----------------------------------------------------------------
 
+/** `addr` / `mx`: true, false, or null when the lookups that would tell failed. */
 export type RegistrationState =
-  | { state: 'registered'; ns: boolean; addr: boolean; mx: boolean }
+  | { state: 'registered'; ns: boolean; addr: boolean | null; mx: boolean | null }
   | { state: 'unregistered' }
   | { state: 'unknown'; reason: string };
 
@@ -310,6 +322,9 @@ const DEFAULT_REGISTRATION_BUDGET_MS = 3 * 60 * 1000;
 const hasRecords = (outcome: QueryOutcome<unknown[]>) => outcome.ok && outcome.value.length > 0;
 const isCode = (outcome: QueryOutcome<unknown>, code: string) =>
   !outcome.ok && outcome.code === code;
+/** An answer that settles the question: records, NODATA or NXDOMAIN (not a timeout or SERVFAIL). */
+const isDefinite = (outcome: QueryOutcome<unknown>) =>
+  outcome.ok || isCode(outcome, NODATA) || isCode(outcome, NXDOMAIN);
 
 /**
  * Registration state of one candidate (1 query when unregistered, 4 when
@@ -330,11 +345,18 @@ export async function checkRegistration(
     timedQuery(() => resolver.resolve6(name), queryTimeoutMs),
     timedQuery(() => resolver.resolveMx(name), queryTimeoutMs),
   ]);
+  // A failed A/AAAA/MX lookup is "don't know", never "none": storing it as
+  // "no MX" would make the next good answer look like an MX record being added.
   const registered = (nsFound: boolean): RegistrationState => ({
     state: 'registered',
     ns: nsFound,
-    addr: hasRecords(a) || hasRecords(aaaa),
-    mx: mx.ok && mx.value.some((r) => r.exchange !== ''), // a null MX ("0 .") refuses mail
+    addr:
+      hasRecords(a) || hasRecords(aaaa) ? true : isDefinite(a) && isDefinite(aaaa) ? false : null,
+    mx: mx.ok
+      ? mx.value.some((r) => r.exchange !== '') // a null MX ("0 .") refuses mail
+      : isDefinite(mx)
+        ? false
+        : null,
   });
   if (hasRecords(ns)) return registered(true);
   if (wildcardSuffix) {
@@ -356,8 +378,12 @@ export async function checkRegistration(
 const suffixOf = (name: string) => name.slice(name.indexOf('.') + 1);
 
 /**
- * Suffixes under which a random, certainly-unregistered name still resolves:
- * one A query per distinct suffix per run.
+ * Suffixes under which only an NS delegation proves a registration: one A
+ * query per distinct suffix per run for a random, certainly-unregistered name.
+ * Only a definite NXDOMAIN clears a suffix. An answer (a wildcard TLD, or a
+ * resolver rewriting NXDOMAIN to an ad server) or a failed probe (a timeout,
+ * SERVFAIL) does not: one lost probe must not turn every candidate under the
+ * suffix into a registration.
  */
 export async function findWildcardSuffixes(
   names: readonly string[],
@@ -369,7 +395,7 @@ export async function findWildcardSuffixes(
   const answers = await mapWithConcurrency(suffixes, 5, (suffix) =>
     timedQuery(() => resolver.resolve4(`${probeLabel}.${suffix}`), queryTimeoutMs)
   );
-  return new Set(suffixes.filter((_suffix, i) => hasRecords(answers[i])));
+  return new Set(suffixes.filter((_suffix, i) => !isCode(answers[i], NXDOMAIN)));
 }
 
 export async function checkRegistrations(
@@ -407,19 +433,54 @@ export async function checkRegistrations(
 
 // ---- Snapshot & diff ---------------------------------------------------------------------
 
+const DAY_SECONDS = 86_400;
+/**
+ * A registered lookalike that goes NXDOMAIN and is back within this many days
+ * is the same registration (a registry hold lifted, or one flapping answer).
+ * A lapsed gTLD name stays NXDOMAIN for longer than this (30 days of
+ * redemption plus 5 of pending delete) before anyone else can register it.
+ */
+export const REAPPEAR_GRACE_DAYS = 30;
+/** How long a reported registration counts as "newly registered" for the CT collector. */
+export const NEW_REGISTRATION_WINDOW_DAYS = 30;
+
 interface RegisteredInfo {
-  mx: boolean;
-  addr: boolean;
+  /** null: the lookup failed every time so far (unknown, never "none"). */
+  mx: boolean | null;
+  addr: boolean | null;
   fuzzer: string;
+  /** When it was reported as newly registered (epoch seconds); null when recorded silently. */
+  since: number | null;
 }
 
 export interface LookalikeSnapshot {
   v: 1;
   /** Registered lookalike -> what it had when last resolved. */
   registered: Record<string, RegisteredInfo>;
+  /**
+   * Candidates with a definite "not registered" (NXDOMAIN) answer -> since
+   * when (epoch seconds). Only a name confirmed unregistered can later be
+   * reported as newly registered.
+   */
+  unregistered: Record<string, number>;
+  /** Registered lookalikes that went NXDOMAIN -> when (epoch seconds). */
+  dropped: Record<string, number>;
 }
 
 const MAX_SNAPSHOT_REGISTERED = 2 * MAX_CANDIDATES_CEILING;
+
+const optionalBoolean = (value: unknown): boolean | null =>
+  typeof value === 'boolean' ? value : null;
+
+function epochMap(value: unknown): Record<string, number> {
+  if (!isPlainObject(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, number] =>
+        typeof entry[1] === 'number' && Number.isFinite(entry[1])
+    )
+  );
+}
 
 export function parseLookalikeSnapshot(value: unknown): LookalikeSnapshot | null {
   if (!isPlainObject(value) || value.v !== 1 || !isPlainObject(value.registered)) return null;
@@ -427,17 +488,50 @@ export function parseLookalikeSnapshot(value: unknown): LookalikeSnapshot | null
   for (const [name, info] of Object.entries(value.registered)) {
     if (!isPlainObject(info)) continue;
     registered[name] = {
-      mx: info.mx === true,
-      addr: info.addr === true,
+      mx: optionalBoolean(info.mx),
+      addr: optionalBoolean(info.addr),
       fuzzer: typeof info.fuzzer === 'string' ? info.fuzzer : 'unknown',
+      since: typeof info.since === 'number' && Number.isFinite(info.since) ? info.since : null,
     };
   }
-  return { v: 1, registered };
+  return {
+    v: 1,
+    registered,
+    unregistered: epochMap(value.unregistered),
+    dropped: epochMap(value.dropped),
+  };
 }
 
-/** The registered lookalikes in a stored snapshot (for the CT collector). */
+/** The registered lookalikes in a stored snapshot. */
 export function registeredFromSnapshot(value: unknown): string[] {
   return Object.keys(parseLookalikeSnapshot(value)?.registered ?? {}).sort();
+}
+
+/**
+ * What the CT collector needs from a lookalike snapshot: every registered
+ * lookalike, and those reported as newly registered in the last
+ * NEW_REGISTRATION_WINDOW_DAYS. Read from the stored snapshot, the hand-off
+ * survives a run in which CT failed or did not run.
+ */
+export function lookalikeStateFromSnapshot(
+  value: unknown,
+  nowSeconds: number
+): SharedLookalikeState {
+  const registered = parseLookalikeSnapshot(value)?.registered ?? {};
+  const names = Object.keys(registered).sort();
+  const recent = nowSeconds - NEW_REGISTRATION_WINDOW_DAYS * DAY_SECONDS;
+  return {
+    registered: names,
+    newlyRegistered: names.filter((name) => {
+      const since = registered[name].since;
+      return since !== null && since >= recent;
+    }),
+  };
+}
+
+/** The organization's own names (every watched domain and its registered name): never lookalikes. */
+export function ownDomainNames(watchedDomains: readonly string[] | undefined): Set<string> {
+  return new Set((watchedDomains ?? []).flatMap((d) => [d, splitRegistrable(d).registrable]));
 }
 
 export interface LookalikeChange {
@@ -448,7 +542,7 @@ export interface LookalikeChange {
 
 export interface LookalikeDiff {
   next: LookalikeSnapshot;
-  /** Registered now, not before (always empty without a previous snapshot). */
+  /** Registered now, and confirmed unregistered (or long gone) before. */
   newlyRegistered: LookalikeChange[];
   /** Were registered without an MX record, now have one. */
   mxAdded: LookalikeChange[];
@@ -456,54 +550,116 @@ export interface LookalikeDiff {
   dropped: number;
 }
 
+export interface LookalikeDiffOptions {
+  /** This run's time, epoch seconds. */
+  nowSeconds: number;
+  /** Names that are never lookalikes (the organization's own, see ownDomainNames). */
+  exclude?: ReadonlySet<string>;
+}
+
 export function diffLookalikes(
   previous: LookalikeSnapshot | null,
   candidates: readonly LookalikeCandidate[],
-  states: ReadonlyMap<string, RegistrationState>
+  states: ReadonlyMap<string, RegistrationState>,
+  options: LookalikeDiffOptions
 ): LookalikeDiff {
-  // Lookalikes that were not re-checked this run (e.g. the cap was lowered) keep their state.
-  const registered: Record<string, RegisteredInfo> = { ...(previous?.registered ?? {}) };
+  const { nowSeconds } = options;
+  const exclude = options.exclude ?? new Set<string>();
+  // Lookalikes that were not re-checked this run (e.g. the cap was lowered)
+  // keep their state; the organization's own names never stay in the list.
+  const registered: Record<string, RegisteredInfo> = {};
+  for (const [name, info] of Object.entries(previous?.registered ?? {})) {
+    if (!exclude.has(name)) registered[name] = info;
+  }
+  // Rebuilt from this run's candidates, so both stay bounded by the candidate cap.
+  const unregistered: Record<string, number> = {};
+  const dropped: Record<string, number> = {};
   const newlyRegistered: LookalikeChange[] = [];
   const mxAdded: LookalikeChange[] = [];
   let unknown = 0;
-  let dropped = 0;
+  let droppedNow = 0;
 
   for (const { domain, fuzzer } of candidates) {
     const state = states.get(domain);
+    const unregisteredSince = previous?.unregistered[domain];
+    const droppedAt = previous?.dropped[domain];
     if (!state || state.state === 'unknown') {
+      // Not answered this run: whatever was known stays known.
       unknown++;
+      if (unregisteredSince !== undefined) unregistered[domain] = unregisteredSince;
+      if (droppedAt !== undefined) dropped[domain] = droppedAt;
       continue;
     }
     if (state.state === 'unregistered') {
-      if (registered[domain]) dropped++;
-      delete registered[domain];
+      if (registered[domain]) {
+        droppedNow++;
+        delete registered[domain];
+        dropped[domain] = nowSeconds;
+      } else if (droppedAt !== undefined) {
+        dropped[domain] = droppedAt;
+      } else {
+        unregistered[domain] = unregisteredSince ?? nowSeconds;
+      }
       continue;
     }
-    const before = previous?.registered[domain];
+
+    const before = registered[domain];
     const info: RegisteredInfo = {
-      mx: state.mx,
-      addr: state.addr,
+      // A lookup that failed this time keeps what was known.
+      mx: state.mx ?? before?.mx ?? null,
+      addr: state.addr ?? before?.addr ?? null,
       fuzzer: before?.fuzzer ?? fuzzer,
+      since: before?.since ?? null,
     };
+    if (before) {
+      if (before.mx === false && info.mx === true) {
+        mxAdded.push({ domain, fuzzer: info.fuzzer, info });
+      }
+    } else if (
+      droppedAt !== undefined &&
+      nowSeconds - droppedAt <= REAPPEAR_GRACE_DAYS * DAY_SECONDS
+    ) {
+      // The same registration back from a hold (or one flapping answer): restored silently.
+    } else if (unregisteredSince !== undefined || droppedAt !== undefined) {
+      info.since = nowSeconds;
+      newlyRegistered.push({ domain, fuzzer: info.fuzzer, info });
+    }
+    // Otherwise this is the first definite answer for the name (the first run,
+    // a raised cap, dnstwist appearing, a lookup failing until now): nobody
+    // knows when it was registered, so it is recorded silently.
     registered[domain] = info;
-    if (!previous) continue; // first run: everything is baseline
-    if (!before) newlyRegistered.push({ domain, fuzzer: info.fuzzer, info });
-    else if (!before.mx && info.mx) mxAdded.push({ domain, fuzzer: info.fuzzer, info });
   }
 
   const names = Object.keys(registered).sort().slice(0, MAX_SNAPSHOT_REGISTERED);
   return {
-    next: { v: 1, registered: Object.fromEntries(names.map((n) => [n, registered[n]])) },
+    next: {
+      v: 1,
+      registered: Object.fromEntries(names.map((n) => [n, registered[n]])),
+      unregistered,
+      dropped,
+    },
     newlyRegistered,
     mxAdded,
     unknown,
-    dropped,
+    dropped: droppedNow,
   };
 }
 
 function readiness(info: RegisteredInfo): string {
-  const parts = [info.addr ? 'it resolves to an address' : 'no address yet'];
-  parts.push(info.mx ? 'it can receive mail (MX)' : 'no MX record');
+  const parts = [
+    info.addr === null
+      ? 'its address lookup failed'
+      : info.addr
+        ? 'it resolves to an address'
+        : 'no address yet',
+  ];
+  parts.push(
+    info.mx === null
+      ? 'its MX lookup failed'
+      : info.mx
+        ? 'it can receive mail (MX)'
+        : 'no MX record'
+  );
   return parts.join('; ');
 }
 
@@ -570,7 +726,8 @@ export function createLookalikeCollector(deps: LookalikeCollectorDeps = {}): Col
       }
     }
     // The organization's own watched domains (and their registered names) are not lookalikes.
-    const own = (ctx.watchedDomains ?? []).flatMap((d) => [d, splitRegistrable(d).registrable]);
+    const own = ownDomainNames(ctx.watchedDomains);
+    const nowSeconds = Math.floor(ctx.now.getTime() / 1000);
     const candidates = generateLookalikes(registrable, {
       max: ctx.config.lookalikeMaxCandidates,
       extra,
@@ -585,7 +742,7 @@ export function createLookalikeCollector(deps: LookalikeCollectorDeps = {}): Col
         budgetMs: deps.budgetMs,
       }
     );
-    const diff = diffLookalikes(previous, candidates, states);
+    const diff = diffLookalikes(previous, candidates, states, { nowSeconds, exclude: own });
     if (candidates.length > 0 && diff.unknown === candidates.length) {
       const reasons = sortedUnique(
         [...states.values()].flatMap((s) => (s.state === 'unknown' ? [s.reason] : []))
@@ -620,10 +777,7 @@ export function createLookalikeCollector(deps: LookalikeCollectorDeps = {}): Col
         dnstwist: dnstwist !== null,
       },
       ...(warnings.length ? { warnings } : {}),
-      lookalikes: {
-        registered: registeredNames,
-        newlyRegistered: diff.newlyRegistered.map((c) => c.domain),
-      },
+      lookalikes: lookalikeStateFromSnapshot(diff.next, nowSeconds),
     };
   };
 }

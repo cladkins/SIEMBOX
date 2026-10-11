@@ -13,6 +13,7 @@ import {
   createDnsCollector,
   diffDns,
   dmarcPolicy,
+  guardDmarc,
   lookupRecordSet,
   parseDnsSnapshot,
   type DnsRecordType,
@@ -333,6 +334,78 @@ test('collector: every lookup failing is a transient error; some failing is a wa
     'a.iana-servers.net',
     'b.iana-servers.net',
   ]);
+});
+
+test('collector: the watched name going NXDOMAIN is a failure, not "DMARC policy removed"', async () => {
+  const collector = (zone: Zone) =>
+    createDnsCollector({ resolver: zoneResolver(zone), secondary: null });
+  const base = await collector(ZONE)(ctx(null));
+  // A registry hold pulls example.com from the zone: every name under it is NXDOMAIN,
+  // _dmarc.example.com included.
+  const pulled: Zone = {};
+  await assert.rejects(collector(pulled)(ctx(base.snapshot)), (err: unknown) => {
+    assert.ok(err instanceof CollectorError && err.transient);
+    assert.match(err.message, /DMARC: example\.com itself did not resolve/);
+    return true;
+  });
+  // Back again: compared with the baseline from before the outage, nothing changed.
+  const back = await collector(ZONE)(ctx(base.snapshot));
+  assert.deepEqual(back.findings, []);
+
+  // When the name does answer, no _dmarc name still means "no DMARC record".
+  const noDmarc: Zone = { 'example.com': ZONE['example.com'] };
+  const removed = await collector(noDmarc)(ctx(base.snapshot));
+  assert.deepEqual(
+    removed.findings.map((f) => f.title),
+    ['DMARC policy changed for example.com: reject -> none set']
+  );
+  assert.deepEqual(
+    guardDmarc(
+      { NS: failed, MX: failed, TXT: failed, A: failed, AAAA: failed, DMARC: okSet() },
+      'example.com'
+    ).ok,
+    false
+  );
+});
+
+test('collector: a second resolver that fails is reported, and findings say which resolver answered', async () => {
+  const first = await createDnsCollector({
+    resolver: zoneResolver(ZONE),
+    secondary: zoneResolver(ZONE),
+  })(ctx(null));
+  const dead: DnsResolverLike = {
+    resolve4: async () => {
+      throw Object.assign(new Error('x'), { code: 'ETIMEOUT' });
+    },
+    resolve6: async () => {
+      throw Object.assign(new Error('x'), { code: 'ETIMEOUT' });
+    },
+    resolveMx: async () => {
+      throw Object.assign(new Error('x'), { code: 'ETIMEOUT' });
+    },
+    resolveNs: async () => {
+      throw Object.assign(new Error('x'), { code: 'ETIMEOUT' });
+    },
+    resolveTxt: async () => {
+      throw Object.assign(new Error('x'), { code: 'ETIMEOUT' });
+    },
+  };
+  const hijacked = {
+    ...ZONE,
+    'example.com': { ...ZONE['example.com'], ns: ['ns1.attacker.example'] },
+  };
+  const out = await createDnsCollector({ resolver: zoneResolver(hijacked), secondary: dead })({
+    ...ctx(first.snapshot),
+    config: { ...ctx(null).config, secondaryResolver: '9.9.9.9' },
+  });
+  assert.match(
+    (out.warnings ?? []).join(' | '),
+    /NS: 9\.9\.9\.9 failed \(ETIMEOUT\); the system resolver's answer was used alone/
+  );
+  assert.deepEqual(
+    out.findings.map((f) => [f.detail.record_type, f.detail.resolvers]),
+    [['NS', 'system only (9.9.9.9 failed)']]
+  );
 });
 
 test('collector: with a second resolver, a disagreement is not reported as drift', async () => {

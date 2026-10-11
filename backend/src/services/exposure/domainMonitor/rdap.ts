@@ -26,9 +26,10 @@
  * change. Changes (never on the first run): nameservers or registrar ->
  * critical (the classic hijack), status or DNSSEC -> high, anything else ->
  * medium. Expiry within exposure_domain_expiry_warning_days -> expiry_warning
- * (medium; high once expired), fingerprinted per expiry date: it alerts once
- * per registration term, including on the first run — a lapsing domain is
- * actionable whatever the history.
+ * (medium; high once expired), fingerprinted per expiry date and phase: it
+ * alerts once per registration term as the date nears and once more if it
+ * passes, including on the first run — a lapsing domain is actionable
+ * whatever the history.
  */
 import { HttpError, httpsGet, type HttpGet } from './http';
 import { registrableDomain, isValidHostname, normalizeName } from './names';
@@ -449,9 +450,23 @@ export function expiryState(
   return { daysLeft, expired: at <= now.getTime() };
 }
 
-/** One per registration term: the expiry date is part of the fingerprint. */
-export function expiryFingerprint(registrable: string, expiresAt: string): string {
-  return fingerprint('rdap', 'expiry_warning', registrable, expiresAt.slice(0, 10));
+/**
+ * One per registration term and phase: the expiry date is part of the
+ * fingerprint, and so is whether it already passed, so a domain that lapses
+ * (its registry keeps the old date) raises one more, high, finding.
+ */
+export function expiryFingerprint(
+  registrable: string,
+  expiresAt: string,
+  expired: boolean
+): string {
+  return fingerprint(
+    'rdap',
+    'expiry_warning',
+    registrable,
+    expiresAt.slice(0, 10),
+    expired ? 'expired' : 'expiring'
+  );
 }
 
 export function rdapChangeFingerprint(registrable: string, change: RdapChange): string {
@@ -522,7 +537,7 @@ function expiryFinding(
   return domainFinding({
     domainId: ctx.domain.id,
     eventType: 'expiry_warning',
-    fingerprint: expiryFingerprint(registrable, expiresAt),
+    fingerprint: expiryFingerprint(registrable, expiresAt, state.expired),
     severity: state.expired ? 'high' : 'medium',
     title: `${registrable} registration ${when}`,
     description:
@@ -564,7 +579,12 @@ function httpFailure(what: string, err: unknown): CollectorError {
     return new CollectorError(`${what} sent an oversized response (${err.message})`, false);
   }
   if (err instanceof HttpError && err.kind === 'timeout') {
-    return new CollectorError(`${what} did not answer in time; will retry`, true);
+    return new CollectorError(
+      err.phase === 'connect'
+        ? `could not connect to ${what} (is outbound HTTPS blocked?); will retry`
+        : `${what} did not answer in time; will retry`,
+      true
+    );
   }
   return new CollectorError(
     `${what} could not be reached (${errorMessage(err)}); will retry`,

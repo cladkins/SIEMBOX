@@ -3823,12 +3823,12 @@ check) are open to any authenticated user; **all writes require the admin role**
 
 | Collector | Source | Finding (`event_type`) | Severity |
 |---|---|---|---|
-| `ct` | crt.sh (`output=json`, unexpired, de-duplicated) — the bare name and `%.name` | `unexpected_ca`: a certificate for the domain from a CA not in `expected_cas` (only when that list is set) | high |
+| `ct` | crt.sh (`output=json`, unexpired, de-duplicated) — one query per name (`match=ILIKE` covers the name, its subdomains and wildcards) | `unexpected_ca`: a certificate for the domain from a CA not in `expected_cas` (only when that list is set) | high |
 | | | `new_cert`: a certificate covering a host name never seen before, or from an issuer never seen before. Plain renewals are not findings | low |
 | | | `new_cert`: a certificate for a registered lookalike (up to 3 lookalikes per run, rotating; 2 for run-now) | medium |
-| `lookalike` | Built-in permutation engine (homoglyph, TLD swap, omission, transposition, repetition, QWERTY-adjacent replacement, hyphenation, vowel swap, addition, bitsquatting; plus `dnstwist` if installed), at most `exposure_lookalike_max_candidates` (default 300) candidates, checked with DNS | `lookalike_registered`: newly registered — high with an A/AAAA or MX record, else medium; a registered lookalike gaining an MX record — high | high / medium |
+| `lookalike` | Built-in permutation engine (homoglyph, TLD swap, omission, transposition, repetition, QWERTY-adjacent replacement, hyphenation, vowel swap, addition, bitsquatting; plus `dnstwist` if installed), at most `exposure_lookalike_max_candidates` (default 300) candidates, checked with DNS | `lookalike_registered`: a candidate that was confirmed unregistered on an earlier run is now registered — high with an A/AAAA or MX record, else medium; a registered lookalike with no MX record gaining one — high | high / medium |
 | `rdap` | IANA RDAP bootstrap → the registry's RDAP server (for the registered name) | `rdap_change`: nameservers or registrar — critical; status (e.g. a transfer lock removed) or DNSSEC — high | critical / high |
-| | | `expiry_warning`: expires within `exposure_domain_expiry_warning_days` (default 30) — medium; already expired — high | medium / high |
+| | | `expiry_warning`: expires within `exposure_domain_expiry_warning_days` (default 30) — medium; already expired — high (one more finding if the date passes) | medium / high |
 | `dns` | The system resolver: NS, MX, TXT, DMARC (`_dmarc.<domain>` TXT), A, AAAA | `dns_drift`: NS or MX changed — critical; TXT (titles call out SPF/DKIM) or DMARC policy — high; A/AAAA — medium | critical / high / medium |
 
 - **The first run of each collector records a baseline silently** — the
@@ -3837,19 +3837,40 @@ check) are open to any authenticated user; **all writes require the admin role**
   warning, and unexpired certificates from a CA outside `expected_cas` (one
   finding per offending CA; the same check re-runs whenever `expected_cas`
   changes).
+- **Lookalikes are only "newly registered" when that was observed.** A
+  candidate seen registered on its first definite DNS answer — the first run, a
+  raised `exposure_lookalike_max_candidates`, `dnstwist` appearing, a lookup
+  that kept failing until now — is recorded silently, because nobody knows when
+  it was registered. So is one that comes back within 30 days of going
+  NXDOMAIN (a registry hold lifted): it is the same registration. A failed
+  A/AAAA/MX lookup counts as unknown, never as "no MX", and your other watched
+  domains are never lookalikes (also when you start watching one that an older
+  baseline listed). A newly registered lookalike's first certificate check is
+  judged as a site going up even if crt.sh was down the day it was found.
 - **Deduplication.** Every finding has a stable fingerprint (per certificate,
-  per lookalike, per before→after change, per expiry date), so re-runs only
-  update `last_seen` and never raise a second alert. More than 10 certificate
-  findings of one kind in one run are grouped into one. New findings from one
-  domain run go out as one grouped notification (opt-in, like leaked
-  credentials).
+  per lookalike, per before→after change, per expiry date and phase), so re-runs
+  only update `last_seen` and never raise a second alert. More than 10
+  certificate findings of one kind in one run are grouped into one. New
+  findings from one domain run go out as one grouped notification (opt-in, like
+  leaked credentials).
 - **Failures never look like changes.** A collector that fails keeps its
-  baseline untouched; a failed DNS lookup is neither "unchanged" nor "removed".
-  crt.sh 5xx/429/timeouts, DNS timeouts, registry outages and unexpected errors
-  (e.g. a database blip) are *transient*: the domain comes back after 60 minutes
-  (doubling per consecutive failure, never later than its interval) and that
-  early run repeats only the failed collectors. Each collector's outcome is in
-  the domain's `last_summary`.
+  baseline untouched; a failed DNS lookup is neither "unchanged" nor "removed",
+  and a watched name that does not resolve at all (NXDOMAIN, e.g. a registry
+  hold) fails the `dns` collector instead of reading as every record — DMARC
+  included — removed. crt.sh 5xx/429/timeouts, DNS timeouts, registry outages
+  and unexpected errors (e.g. a database blip) are *transient*: the domain comes
+  back after 60 minutes (doubling per consecutive failure) and that early run
+  repeats only the failed collectors. Early runs never move the regular
+  schedule: the next full run is due `interval_minutes` after the last one
+  started (`last_summary.full_run_at`), so a collector that keeps failing never
+  holds the others back. A lookalike crt.sh can't answer for goes to the back
+  of the rotation (one whose answer is too large to monitor is left alone for a
+  week). Each collector's outcome is in the domain's `last_summary`.
+- **crt.sh's result limit.** crt.sh returns at most 10,000 matching
+  (certificate, name) rows per query, picked in no particular order, and says so
+  only in its HTML pages. A JSON answer that reaches the limit is refused (`ct`
+  error, not retried early: "too many to monitor reliably") rather than diffed,
+  since new certificates could be missing from it.
 - **A/AAAA rotation** among addresses seen in the last 90 days (CDNs) is not
   drift; a never-seen address, or every address vanishing, is. Fields an RDAP
   server leaves out of a response are "not reported", never "removed"; grace
@@ -3863,7 +3884,10 @@ check) are open to any authenticated user; **all writes require the admin role**
   registered one), at most 10 candidates in flight.
 - **Optional second resolver** (`exposure_dns_secondary_resolver`, an IP
   address; off by default so no DNS traffic goes anywhere you didn't choose):
-  when set, a DNS record set is only trusted when both resolvers agree.
+  when set and both resolvers answer, a DNS record set is only trusted when they
+  agree. If one of them fails, the other's answer is used alone, with a warning
+  in `last_summary`, and the finding's `detail.resolvers` says which one it came
+  from (e.g. `"system only (9.9.9.9 failed)"`).
 
 **Outbound-request guarantees.** Every request is a single HTTPS GET with a
 descriptive User-Agent, a hard deadline and a response-size cap (crt.sh 10 MB,
@@ -3977,7 +4001,9 @@ Feature flags, provider state (never the key), counts and the last run.
 `paused_until`/`pause_reason` are set while HIBP has asked us to back off or has
 rejected the key. `domain_monitor.last_run` is the last scheduled cycle (a
 manual `run-now` returns its own result instead); `job.status` is `skipped`
-with the reason in `last_result` when monitoring is off or no domain is due.
+with the reason in `last_result` when monitoring is off or no domain is due, and
+`failed` (with `last_error`) when every domain a cycle checked had errors — e.g.
+outbound HTTPS blocked; each domain's own `last_error` says what failed.
 
 ---
 
@@ -4180,9 +4206,11 @@ existing alert instead of raising a new one).
 Run the domain's collectors now instead of waiting for the job — every
 collector its scope and `collectors` allow, whatever its schedule (also for a
 domain that is switched off). Findings, baselines, `last_summary` and
-`next_run_at` are updated exactly as for a scheduled run. At most 2 registered
-lookalikes get a certificate check per manual run. crt.sh can take 30-60 s per
-query, so allow a client timeout of a few minutes.
+`next_run_at` are updated exactly as for a scheduled run (a manual run is a full
+run: `full_run_at` restarts the regular schedule). At most 2 registered
+lookalikes get a certificate check per manual run (one crt.sh query each, plus
+one for the domain). crt.sh can take 30-60 s per query, so allow a client
+timeout of a few minutes.
 
 **Authentication:** Required (Admin)
 
@@ -4199,6 +4227,7 @@ query, so allow a client timeout of a few minutes.
   "new_findings": 0,
   "retry": [],
   "retry_attempt": 0,
+  "full_run_at": "2026-10-11T02:29:22.000Z",
   "next_run_in_minutes": 1440,
   "collectors": {
     "dns": {

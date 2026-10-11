@@ -16,7 +16,8 @@
  * Guarantees
  *  - Isolation: a collector that throws is recorded as an error for that
  *    collector only; the others still run, and one domain's failure never stops
- *    the cycle. A failed collector's baseline is untouched.
+ *    the cycle. A failed collector's baseline is untouched (bookkeeping it hands
+ *    back as CollectorError.progress is stored — see types.ts).
  *  - No alert floods: a collector's first run records its baseline silently
  *    (except expiry warnings and unexpected-CA certificates, which are
  *    actionable whatever the history — see rdap.ts / ct.ts), and every
@@ -25,12 +26,16 @@
  *    between, the next run re-detects the same changes and the fingerprints
  *    dedupe them — nothing is lost, nothing doubles.
  *  - Scheduling follows scheduledScans: a domain is due when next_run_at has
- *    passed; afterwards next_run_at = now + interval_minutes. Transient
- *    collector failures (crt.sh 502s, timeouts — and unexpected errors such as
- *    a database blip) bring the domain back sooner — 60 min, doubling per
- *    consecutive failure, never later than its interval — and that early run
- *    only repeats the collectors that failed. Permanent ones (an unsupported
- *    response, too many certificates) wait for the next regular run.
+ *    passed. A full run (every applicable collector) is due interval_minutes
+ *    after the previous full run started (`full_run_at` in last_summary).
+ *    Transient collector failures (crt.sh 502s, timeouts — and unexpected
+ *    errors such as a database blip) bring the domain back sooner — 60 min,
+ *    doubling per consecutive failure — and that early run only repeats the
+ *    collectors that failed. Early runs never move the regular schedule: the
+ *    next full run is never later than the last full run + its interval, so a
+ *    collector that keeps failing can't hold the others back. Permanent
+ *    failures (an unsupported response, too many certificates) wait for the
+ *    next full run.
  *  - One notification per domain run (grouped), through notifyExposure's
  *    opt-in and minimum-severity gates.
  */
@@ -84,7 +89,7 @@ export const SCOPE_COLLECTORS: Record<DomainScope, readonly CollectorName[]> = {
 const SCHEDULED_BUDGET_MS = 10 * 60 * 1000;
 const MAX_DOMAINS_PER_CYCLE = 25;
 const RETRY_BASE_MINUTES = 60;
-/** Registered lookalikes whose certificates are fetched per run (each costs two crt.sh queries). */
+/** Registered lookalikes whose certificates are fetched per run (one crt.sh query each). */
 const LOOKALIKE_CT_CHECKS: Record<'schedule' | 'manual', number> = { schedule: 3, manual: 2 };
 const RETRY_SLACK_MS = 60_000;
 
@@ -123,6 +128,11 @@ export interface DomainRunSummary {
   /** Collectors that failed transiently and will be retried early. */
   retry: CollectorName[];
   retry_attempt: number;
+  /**
+   * When the last full run (every applicable collector) started: the anchor of
+   * the regular schedule. An early retry run carries it over unchanged.
+   */
+  full_run_at: string;
   next_run_in_minutes: number;
   collectors: Partial<Record<CollectorName, CollectorRunSummary>>;
 }
@@ -221,13 +231,22 @@ function previousSummary(domain: WatchedDomain): DomainRunSummary | null {
     : null;
 }
 
-/** Due before its regular time = an early retry of the collectors that failed transiently. */
-function isRetryRun(domain: WatchedDomain, nowMs: number): boolean {
-  if (!domain.last_checked_at) return false;
+/**
+ * When the last full run started, in epoch ms (null before the first run).
+ * Early retry runs don't move it, so they can never push the regular run back.
+ * Falls back to last_checked_at for a summary without the anchor.
+ */
+function lastFullRunMs(domain: WatchedDomain, before: DomainRunSummary | null): number | null {
   // node-postgres hands TIMESTAMPTZ back as a Date; the API types it as a string.
-  const lastChecked = new Date(domain.last_checked_at).getTime();
-  const regular = lastChecked + domain.interval_minutes * 60_000;
-  return Number.isFinite(regular) && nowMs < regular - RETRY_SLACK_MS;
+  const raw = before?.full_run_at ?? domain.last_checked_at;
+  if (!raw) return null;
+  const ms = new Date(raw).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** Due before its regular time = an early retry of the collectors that failed transiently. */
+function isRetryRun(fullRunMs: number | null, intervalMinutes: number, nowMs: number): boolean {
+  return fullRunMs !== null && nowMs < fullRunMs + intervalMinutes * 60_000 - RETRY_SLACK_MS;
 }
 
 export function retryDelayMinutes(intervalMinutes: number, attempt: number): number {
@@ -253,10 +272,13 @@ async function checkDomain(domain: WatchedDomain, deps: CheckDeps): Promise<Doma
     if (row) baselines[name] = row.snapshot;
   }
   const before = previousSummary(domain);
+  const previousFullRun = lastFullRunMs(domain, before);
   const retryOnly =
-    deps.trigger === 'schedule' && isRetryRun(domain, startedMs)
+    deps.trigger === 'schedule' && isRetryRun(previousFullRun, domain.interval_minutes, startedMs)
       ? new Set(before?.retry ?? [])
       : null;
+  // A retry-only run keeps the regular schedule's anchor; any other run is a full run.
+  const fullRunMs = retryOnly && previousFullRun !== null ? previousFullRun : startedMs;
   const switches = enabledCollectors(domain.collectors);
   const applicable = SCOPE_COLLECTORS[domain.scope] ?? [];
 
@@ -271,6 +293,7 @@ async function checkDomain(domain: WatchedDomain, deps: CheckDeps): Promise<Doma
     new_findings: 0,
     retry: [],
     retry_attempt: 0,
+    full_run_at: new Date(fullRunMs).toISOString(),
     next_run_in_minutes: domain.interval_minutes,
     collectors: {},
   };
@@ -330,6 +353,16 @@ async function checkDomain(domain: WatchedDomain, deps: CheckDeps): Promise<Doma
       // early too, with the same backoff, so a hiccup doesn't cost a whole interval.
       const transient = err instanceof CollectorError ? err.transient : true;
       const message = errorMessage(err).slice(0, 300);
+      if (err instanceof CollectorError && err.progress !== undefined) {
+        // Bookkeeping only (see CollectorError.progress), never a changed baseline.
+        try {
+          await deps.store.saveBaseline(domain.id, name, err.progress);
+        } catch (saveErr) {
+          logger.warn(
+            `[DomainMonitor] could not store ${name} progress for ${domain.domain} (#${domain.id}): ${errorMessage(saveErr)}`
+          );
+        }
+      }
       summary.collectors[name] = {
         status: 'error',
         error: message,
@@ -359,10 +392,21 @@ async function checkDomain(domain: WatchedDomain, deps: CheckDeps): Promise<Doma
   });
   summary.status = errors.length ? 'error' : 'ok';
   summary.retry_attempt = summary.retry.length ? (before?.retry_attempt ?? 0) + 1 : 0;
-  summary.next_run_in_minutes = summary.retry.length
-    ? retryDelayMinutes(domain.interval_minutes, summary.retry_attempt)
-    : domain.interval_minutes;
-  summary.duration_ms = deps.now() - startedMs;
+  const endedMs = deps.now();
+  // The next full run is due one interval after the last one started, whatever
+  // happened in between; an early retry may come sooner, never later.
+  const untilRegular = (fullRunMs + domain.interval_minutes * 60_000 - endedMs) / 60_000;
+  summary.next_run_in_minutes = Math.max(
+    1,
+    Math.round(
+      summary.retry.length
+        ? Math.min(retryDelayMinutes(domain.interval_minutes, summary.retry_attempt), untilRegular)
+        : retryOnly
+          ? untilRegular
+          : domain.interval_minutes
+    )
+  );
+  summary.duration_ms = endedMs - startedMs;
 
   await deps.store.markRun(domain.id, {
     status: summary.status,
@@ -409,6 +453,16 @@ export async function getDomainMonitorSkipReason(
   if (!(await store.isEnabled())) return DOMAIN_MONITOR_DISABLED;
   if ((await store.countDue()) === 0) return 'no watched domains are due';
   return null;
+}
+
+/**
+ * Why a scheduled cycle counts as failed for the job registry — every domain
+ * it checked had errors (e.g. outbound HTTPS or DNS blocked) — or null.
+ * Per-domain errors stay in each domain's last_error.
+ */
+export function domainMonitorCycleFailure(s: DomainMonitorRunSummary): string | null {
+  if (s.skipped || s.failed === 0 || s.failed < s.checked) return null;
+  return `every domain checked had errors (${describeDomainMonitorRun(s)}); see each domain's last_error`;
 }
 
 /** One-line outcome for the job registry and logs. */

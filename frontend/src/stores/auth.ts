@@ -9,6 +9,9 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<any>(userJson ? JSON.parse(userJson) : null);
 
   const isAuthenticated = computed(() => !!token.value);
+  // Admin-only UI (the Settings hub's admin areas and the links that point at
+  // them) shares this one role check.
+  const isAdmin = computed(() => user.value?.role === 'admin');
 
   const login = async (username: string, password: string, code?: string) => {
     const response = await api.login(username, password, code);
@@ -31,6 +34,7 @@ export const useAuthStore = defineStore('auth', () => {
     token,
     user,
     isAuthenticated,
+    isAdmin,
     login,
     logout,
   };

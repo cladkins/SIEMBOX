@@ -9,7 +9,8 @@
       title="AI Triage is not configured"
     >
       An admin can enable automatic alert analysis in
-      <router-link to="/settings">Settings → AI Triage</router-link>. Once enabled, new
+      <router-link v-if="authStore.isAdmin" to="/settings/ai">Settings → AI Triage</router-link>
+      <template v-else>Settings → AI Triage</template>. Once enabled, new
       {{ triageStore.minSeverity }}+ severity alerts are analyzed automatically and appear here.
     </el-alert>
 
@@ -138,10 +139,12 @@ import { Loading } from '@element-plus/icons-vue';
 import { api } from '@/services/api';
 import { useAlertsStore, type Alert } from '@/stores/alerts';
 import { useTriageStore } from '@/stores/triage';
+import { useAuthStore } from '@/stores/auth';
 import AlertDetailDialog from '@/components/AlertDetailDialog.vue';
 
 const alertsStore = useAlertsStore();
 const triageStore = useTriageStore();
+const authStore = useAuthStore();
 
 const rows = ref<Alert[]>([]);
 const total = ref(0);

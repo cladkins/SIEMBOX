@@ -29,7 +29,7 @@ The two biggest adoption unlocks.
   with live install status + setup hints.
 - ✅ **Sigma import / convert** *(M–L)* — **Detection Rules → Import Sigma**: convert community Sigma rules to
   portable detections (honest about OR/NOT it can't represent).
-- ✅ **MFA (TOTP)** *(M)* — opt-in two-factor for local accounts (**Settings → Security**); also unblocked the wizard.
+- ✅ **MFA (TOTP)** *(M)* — opt-in two-factor for local accounts (**Settings → Account**); also unblocked the wizard.
 - ✅ **Onboarding wizard** *(M)* — guided first run (**Getting Started**): secure account + MFA → log ingestion →
   install packs → API keys → notifications, with live status per step.
 

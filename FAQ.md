@@ -180,7 +180,7 @@ Set `DEFAULT_ADMIN_PASSWORD` in `.env` before first startup.
 ### How do I configure log retention?
 
 1. Log in as admin
-2. Go to **Settings**
+2. Go to **Settings → Data Retention**
 3. Configure retention periods:
    - Raw logs retention (days)
    - Parsed logs retention (days)

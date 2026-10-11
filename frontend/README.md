@@ -39,7 +39,7 @@ frontend/
 │   │   ├── Rules.vue        # Detection rules
 │   │   ├── Alerts.vue       # Alert management
 │   │   ├── Shippers.vue     # Log shipper management
-│   │   ├── Settings.vue     # System settings
+│   │   ├── settings/        # Settings hub: SettingsLayout + one page per area (areas.ts)
 │   │   ├── Users.vue        # User management
 │   │   ├── Assets.vue       # Asset inventory
 │   │   └── ...

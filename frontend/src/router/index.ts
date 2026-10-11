@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
+import { settingsAreas, settingsRouteName } from '@/views/settings/areas';
 
 const routes: RouteRecordRaw[] = [
   {
@@ -77,9 +78,21 @@ const routes: RouteRecordRaw[] = [
         meta: { requiresAdmin: true },
       },
       {
+        // Settings hub: one child page per functional area, generated from
+        // settingsAreas (the list that also drives the hub's nav). Admin-only
+        // areas carry meta.requiresAdmin, so the guard below treats them like
+        // the other admin pages. A bare /settings lands on Account, which
+        // every role can open.
         path: 'settings',
         name: 'Settings',
-        component: () => import('@/views/Settings.vue'),
+        component: () => import('@/views/settings/SettingsLayout.vue'),
+        redirect: '/settings/account',
+        children: settingsAreas.map((area) => ({
+          path: area.path,
+          name: settingsRouteName(area),
+          component: area.component,
+          meta: area.adminOnly ? { requiresAdmin: true } : {},
+        })),
       },
       {
         path: 'users',

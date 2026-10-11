@@ -46,8 +46,8 @@
                   </el-button>
                 </el-form-item>
               </el-form>
-              <el-button size="small" @click="go('/settings')">
-                {{ mfaEnabled ? 'MFA enabled — manage in Settings' : 'Enable MFA in Settings → Security' }} →
+              <el-button size="small" @click="go('/settings/account')">
+                {{ mfaEnabled ? 'MFA enabled — manage in Settings' : 'Enable MFA in Settings → Account' }} →
               </el-button>
             </div>
           </template>
@@ -94,7 +94,8 @@
           <template #description>
             <div class="step-body">
               <p>Add an AI provider key to unlock <em>Generate with AI</em> and the AI Security Analyst. Optional.</p>
-              <el-button size="small" @click="go('/settings')">Settings → AI Builder →</el-button>
+              <el-button v-if="authStore.isAdmin" size="small" @click="go('/settings/ai')">Settings → AI Builder →</el-button>
+              <el-text v-else size="small" type="info">An administrator can add a key in Settings → AI Builder.</el-text>
             </div>
           </template>
         </el-step>
@@ -108,7 +109,8 @@
           <template #description>
             <div class="step-body">
               <p>Add an Email / Slack / ntfy channel so alerts reach you, then send a test alert to confirm.</p>
-              <el-button size="small" @click="go('/settings')">Settings → Notifications →</el-button>
+              <el-button v-if="authStore.isAdmin" size="small" @click="go('/settings/notifications')">Settings → Notifications →</el-button>
+              <el-text v-else size="small" type="info">An administrator can set up channels in Settings → Notifications.</el-text>
             </div>
           </template>
         </el-step>
@@ -130,8 +132,10 @@ import { useRouter } from 'vue-router';
 import { api } from '@/services/api';
 import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
+import { useAuthStore } from '@/stores/auth';
 
 const router = useRouter();
+const authStore = useAuthStore();
 const loading = ref(false);
 
 const mfaEnabled = ref(false);

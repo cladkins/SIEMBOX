@@ -17,6 +17,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Alerts](#alerts-endpoints)
   - [Users](#users-endpoints)
   - [Settings](#settings-endpoints)
+  - [Notifications](#notifications-endpoints)
   - [Log Shippers](#log-shippers-endpoints)
   - [Assets](#assets-endpoints)
   - [Log Discovery](#log-discovery-endpoints)
@@ -1610,6 +1611,25 @@ Get syslog server status and health information (admin only).
 - `error` - Port mismatch with no logs
 
 **Note:** Used by the Settings UI to display syslog receiver health and activity.
+
+---
+
+## Notifications Endpoints
+
+Notification channels (where alerts are delivered: Slack, Email, NTFY) and the per-event preferences (which events fire, and at what minimum severity). All routes require authentication. Anything that changes delivery or sends a message is **admin-only**, because a lower role able to disable channels, raise the severity floor, or redirect a channel could silence alerting or capture alert contents.
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/notifications/channels` | Any authenticated user | Only admins get each channel's `config` (Slack `webhook_url`, NTFY `token`, SMTP credentials). Other roles get the same list with `config: {}`. |
+| POST | `/api/notifications/channels` | Admin | Body: `{ name, channel_type: "slack"\|"email"\|"ntfy", enabled?, config }` |
+| PUT | `/api/notifications/channels/:id` | Admin | Partial update with the same fields |
+| DELETE | `/api/notifications/channels/:id` | Admin | |
+| POST | `/api/notifications/channels/:id/test` | Admin | Sends a test message through that channel |
+| POST | `/api/notifications/test-alert` | Admin | Sends a sample new-alert message to every enabled channel and reports the result for each |
+| GET | `/api/notifications/settings` | Any authenticated user | The non-secret preference flags (`notify_alerts_enabled`, `notify_alerts_min_severity`, `notify_vuln_*`, `notify_ingestion_*`) |
+| PUT | `/api/notifications/settings` | Admin | Updates any of those preference keys |
+
+Non-admin requests to admin-only routes get `403 Access denied. Required role: admin`.
 
 ---
 

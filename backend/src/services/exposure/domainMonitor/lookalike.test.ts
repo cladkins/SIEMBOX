@@ -34,8 +34,9 @@ test('generator: deterministic, de-duplicated, and never the domain itself', () 
   const b = generateLookalikes('example.com');
   assert.deepEqual(a, b, 'same input, same list, same order');
   const names = a.map((c) => c.domain);
-  assert.equal(new Set(names).size, names.length, 'no duplicates');
-  assert.ok(!names.includes('example.com'));
+  const nameSet = new Set(names);
+  assert.equal(nameSet.size, names.length, 'no duplicates');
+  assert.ok(!nameSet.has('example.com'));
   assert.ok(names.every(isValidHostname), 'every candidate is a valid host name');
   // Fuzzers appear in priority order (most likely first).
   const firstIndex = FUZZER_ORDER.map((f) => a.findIndex((c) => c.fuzzer === f)).filter(
@@ -112,13 +113,15 @@ test('generator: excluded names (the org’s other domains) are skipped before t
     exclude: [all[0], 'example.net'],
   }).map((c) => c.domain);
   assert.equal(excluded.length, 5, 'the cap still yields a full list');
-  assert.ok(!excluded.includes(all[0]) && !excluded.includes('example.net'));
+  const left = new Set(excluded);
+  assert.ok(!left.has(all[0]) && !left.has('example.net'));
 });
 
 test('generator: registrable part, multi-label suffixes and punycode', () => {
   const uk = generateLookalikes('mail.example.co.uk').map((c) => c.domain);
-  assert.ok(uk.includes('exmple.co.uk'), 'permutes the registrable label, not "mail"');
-  assert.ok(uk.includes('example.uk') && uk.includes('example.com'), 'suffix swaps');
+  const ukSet = new Set(uk);
+  assert.ok(ukSet.has('exmple.co.uk'), 'permutes the registrable label, not "mail"');
+  assert.ok(ukSet.has('example.uk') && ukSet.has('example.com'), 'suffix swaps');
   assert.ok(!uk.some((n) => n.startsWith('mail.')));
 
   const idn = generateLookalikes('xn--bcher-kva.de');
@@ -433,7 +436,7 @@ test('dnstwist: its permutations join under the same cap; its absence is fine', 
     config: { ...config, lookalikeMaxCandidates: 1000 },
   });
   assert.equal(out.details?.dnstwist, true);
-  assert.ok((out.details?.registered_lookalikes as string[]).includes('example-login.com'));
+  assert.ok(new Set(out.details?.registered_lookalikes as string[]).has('example-login.com'));
 
   const failing = createLookalikeCollector({
     resolver: fakeResolver({}).resolver,

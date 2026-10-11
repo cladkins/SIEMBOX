@@ -503,9 +503,8 @@ test('run now: every applicable collector runs whatever the schedule, and the re
     'rdap',
   ]);
   assert.equal(result.summary.collectors.lookalike?.status, 'baseline');
-  assert.ok(
-    (result.summary.collectors.lookalike?.details?.registered_lookalikes as string[]).includes(
-      'example.net'
-    )
+  const registered = new Set(
+    result.summary.collectors.lookalike?.details?.registered_lookalikes as string[]
   );
+  assert.ok(registered.has('example.net'));
 });

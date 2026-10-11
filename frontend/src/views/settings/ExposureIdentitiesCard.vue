@@ -142,7 +142,14 @@ import {
   normalizeIdentityValue,
 } from '@/utils/exposure';
 
-const emit = defineEmits<{ (e: 'changed'): void }>();
+const emit = defineEmits<{
+  /** A write succeeded. */
+  (e: 'changed'): void;
+  /** An identity was deleted, and its findings with it. */
+  (e: 'deleted'): void;
+  /** The list was (re)fetched; the status banner counts the failing rows. */
+  (e: 'loaded', identities: MonitoredIdentity[]): void;
+}>();
 
 const identities = ref<MonitoredIdentity[]>([]);
 const loading = ref(false);
@@ -163,6 +170,7 @@ async function reload(showLoading = false) {
   if (showLoading) loading.value = true;
   try {
     identities.value = await exposureService.listIdentities();
+    emit('loaded', identities.value);
   } catch (error) {
     ElMessage.error(apiErrorMessage(error, 'Failed to load monitored identities'));
   } finally {
@@ -235,6 +243,7 @@ async function remove(row: MonitoredIdentity) {
     ElMessage.success(`Stopped monitoring ${row.value}`);
     await reload();
     emit('changed');
+    emit('deleted');
   } catch (error) {
     ElMessage.error(apiErrorMessage(error, `Failed to delete ${row.value}`));
   } finally {

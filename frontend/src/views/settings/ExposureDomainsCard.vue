@@ -119,6 +119,7 @@ import {
   apiErrorMessage,
   apiErrorStatus,
   checkStatusTag,
+  domainAddedMessage,
   formatRelative,
   formatWhen,
   intervalLabel,
@@ -134,7 +135,12 @@ const props = defineProps<{
   domainMonitorAvailable: boolean;
 }>();
 
-const emit = defineEmits<{ (e: 'changed'): void }>();
+const emit = defineEmits<{
+  /** A write succeeded. */
+  (e: 'changed'): void;
+  /** A domain was deleted, and its findings with it. */
+  (e: 'deleted'): void;
+}>();
 
 const COPY: Record<DomainScope, { title: string; intro: string; help: string; placeholder: string; empty: string }> = {
   own: {
@@ -197,7 +203,7 @@ async function add() {
       interval_minutes: newInterval.value,
     });
     newDomain.value = '';
-    ElMessage.success(`Now watching ${checked.value}`);
+    ElMessage.success(domainAddedMessage(checked.value, props.domainMonitorAvailable));
     await reload();
     emit('changed');
   } catch (error) {
@@ -247,6 +253,7 @@ async function remove(row: WatchedDomain) {
     ElMessage.success(`Stopped watching ${row.domain}`);
     await reload();
     emit('changed');
+    emit('deleted');
   } catch (error) {
     ElMessage.error(apiErrorMessage(error, `Failed to delete ${row.domain}`));
   } finally {

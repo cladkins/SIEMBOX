@@ -11,7 +11,7 @@
     </template>
 
     <div class="filters">
-      <el-switch v-model="openOnly" active-text="Open only" @change="reloadFromStart" />
+      <el-switch v-model="openOnly" active-text="Open only" aria-label="Show open findings only" @change="reloadFromStart" />
       <el-select v-model="severity" clearable placeholder="Any severity" aria-label="Filter by severity" style="width: 150px" @change="reloadFromStart">
         <el-option v-for="s in EXPOSURE_SEVERITIES" :key="s" :label="capitalize(s)" :value="s" />
       </el-select>
@@ -123,7 +123,7 @@ import exposureService, {
   type ExposureFindingSource,
   type ExposureSeverity,
 } from '@/services/exposureService';
-import { apiErrorMessage, formatWhen, identityKindLabel } from '@/utils/exposure';
+import { apiErrorMessage, apiErrorStatus, formatWhen, identityKindLabel } from '@/utils/exposure';
 
 const emit = defineEmits<{ (e: 'changed'): void }>();
 
@@ -238,7 +238,14 @@ async function resolve(row: ExposureFinding) {
     await load();
     emit('changed');
   } catch (error) {
-    ElMessage.error(apiErrorMessage(error, 'Failed to resolve the finding'));
+    if (apiErrorStatus(error) === 404) {
+      // Gone meanwhile (deleted with its identity or domain): drop the stale row.
+      ElMessage.error('That finding no longer exists; the list was refreshed');
+      await load();
+      emit('changed');
+    } else {
+      ElMessage.error(apiErrorMessage(error, 'Failed to resolve the finding'));
+    }
   } finally {
     resolvingId.value = null;
   }

@@ -21,13 +21,25 @@
       </el-alert>
     </div>
 
-    <ExposureDomainsCard scope="own" :domain-monitor-available="domainMonitorAvailable" @changed="refreshStatus" />
-    <ExposureIdentitiesCard ref="identitiesCard" class="section" @changed="refreshStatus" />
+    <ExposureDomainsCard
+      scope="own"
+      :domain-monitor-available="domainMonitorAvailable"
+      @changed="refreshStatus"
+      @deleted="reloadFindings"
+    />
+    <ExposureIdentitiesCard
+      ref="identitiesCard"
+      class="section"
+      @changed="refreshStatus"
+      @deleted="reloadFindings"
+      @loaded="identityRows = $event"
+    />
     <ExposureDomainsCard
       scope="brand"
       class="section"
       :domain-monitor-available="domainMonitorAvailable"
       @changed="refreshStatus"
+      @deleted="reloadFindings"
     />
     <ExposureProviderCard
       class="section"
@@ -43,7 +55,11 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import exposureService, { EXPOSURE_SEVERITIES, type ExposureStatus } from '@/services/exposureService';
+import exposureService, {
+  EXPOSURE_SEVERITIES,
+  type ExposureStatus,
+  type MonitoredIdentity,
+} from '@/services/exposureService';
 import { apiErrorMessage, describeExposureStatus, pluralize } from '@/utils/exposure';
 import ExposureChecksCard from './ExposureChecksCard.vue';
 import ExposureDomainsCard from './ExposureDomainsCard.vue';
@@ -53,8 +69,9 @@ import ExposureProviderCard from './ExposureProviderCard.vue';
 import PasswordCheckCard from './PasswordCheckCard.vue';
 
 // Each card loads and writes its own slice of /api/exposure (through the same
-// client the onboarding checklist uses) and emits `changed` after a write, so
-// the page only owns the status banner.
+// client the onboarding checklist uses) and emits `changed` after a write. The
+// page owns the status banner, and reloads the findings when a domain or an
+// identity is deleted (its findings go with it).
 const status = ref<ExposureStatus | null>(null);
 const statusLoading = ref(false);
 const statusError = ref<string | null>(null);
@@ -64,8 +81,21 @@ const encryptionError = ref<string | null>(null);
 
 const identitiesCard = ref<InstanceType<typeof ExposureIdentitiesCard> | null>(null);
 const findingsCard = ref<InstanceType<typeof ExposureFindingsCard> | null>(null);
+// The identities card's list as last loaded. A failed check is recorded on the
+// identity (last_status), which outlives the latest run's summary in /status
+// (kept in memory, so it resets when the backend restarts).
+const identityRows = ref<MonitoredIdentity[] | null>(null);
 
-const banner = computed(() => (status.value ? describeExposureStatus(status.value, encryptionError.value) : null));
+const banner = computed(() =>
+  status.value
+    ? describeExposureStatus(status.value, {
+        encryptionKeyError: encryptionError.value,
+        failingIdentities: identityRows.value?.filter((i) => i.enabled && i.last_status === 'error').length,
+        // Not reactive, but every provider write is followed by a status refresh.
+        providerChangedAt: exposureService.providerChangedAt,
+      })
+    : null
+);
 const domainMonitorAvailable = computed(() => status.value?.features.domain_monitor_available ?? false);
 
 const countsLine = computed(() => {
@@ -103,7 +133,12 @@ async function refreshStatus() {
 function onCheckRan() {
   void refreshStatus();
   void identitiesCard.value?.reload();
-  void findingsCard.value?.reload();
+  void reloadFindings();
+}
+
+// Deleting an identity or a domain also deletes its findings (ON DELETE CASCADE).
+function reloadFindings() {
+  return findingsCard.value?.reload();
 }
 
 onMounted(refreshStatus);

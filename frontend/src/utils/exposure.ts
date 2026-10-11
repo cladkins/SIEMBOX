@@ -93,9 +93,15 @@ export function normalizeIdentityValue(kind: IdentityKind, input: string): Valid
   return kind === 'email' ? normalizeEmail(input) : normalizeDomain(input);
 }
 
-/** Onboarding takes one field for both kinds: an address has an "@", a domain doesn't. */
-export function guessIdentityKind(input: string): IdentityKind {
-  return input.includes('@') ? 'email' : 'email_domain';
+/**
+ * Onboarding takes one field for both kinds: an address has an "@", a domain
+ * doesn't, and "@example.com" is read as the email domain example.com.
+ */
+export function parseIdentityInput(input: string): { kind: IdentityKind; checked: ValidationResult } {
+  const value = input.trim();
+  if (/^@[^@]*$/.test(value)) return { kind: 'email_domain', checked: normalizeDomain(value.slice(1)) };
+  const kind: IdentityKind = value.includes('@') ? 'email' : 'email_domain';
+  return { kind, checked: normalizeIdentityValue(kind, value) };
 }
 
 export function normalizeHibpKey(input: string): ValidationResult {
@@ -209,6 +215,13 @@ export function pluralize(count: number, singular: string, plural = `${singular}
   return `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
 }
 
+/** Toast after adding a domain: until the domain collectors ship, a domain is only saved. */
+export function domainAddedMessage(domain: string, domainMonitorAvailable: boolean): string {
+  return domainMonitorAvailable
+    ? `Now watching ${domain}`
+    : `Saved ${domain}; it will be watched once domain monitoring ships`;
+}
+
 // ---- Status banner ------------------------------------------------------------
 
 export interface StatusBanner {
@@ -223,28 +236,42 @@ function sentence(text: string): string {
   return trimmed ? `${trimmed}.` : '';
 }
 
+export interface ExposureStatusContext {
+  /**
+   * The 400 message from saving the HIBP key: the API has no read-only way to
+   * report a missing CREDENTIAL_ENCRYPTION_KEY, so that state appears once a
+   * save has hit it.
+   */
+  encryptionKeyError?: string | null;
+  /**
+   * Enabled identities whose last check failed (last_status 'error' in GET
+   * /identities). Omit it when the list isn't loaded; the last run's `failed`
+   * count stands in for it.
+   */
+  failingIdentities?: number | null;
+  /** When this browser last changed the HIBP provider (exposureService.providerChangedAt). */
+  providerChangedAt?: number;
+}
+
+// The job's skip reason when isConfigured() is false (leakedCredentialService.ts).
+const NO_USABLE_PROVIDER_RE = /no breach-data provider is configured/i;
+
 /**
  * The one state the feature is in, most urgent first: the server can't store
  * keys → checks switched off → no HIBP key → HIBP disabled → paused (rate
- * limit or rejected key) → last run failed → healthy.
- *
- * `encryptionKeyError` is the 400 message from saving the HIBP key: the API
- * has no read-only way to report a missing CREDENTIAL_ENCRYPTION_KEY, so this
- * state appears once a save has hit it.
+ * limit or rejected key) → saved key unusable → last run failed → nothing to
+ * check → identities failing → healthy.
  */
-export function describeExposureStatus(
-  status: ExposureStatus,
-  encryptionKeyError: string | null
-): StatusBanner {
+export function describeExposureStatus(status: ExposureStatus, context: ExposureStatusContext = {}): StatusBanner {
   const provider = status.providers.find((p) => p.name === 'hibp') ?? null;
   const run = status.leaked_creds;
   const counts = status.counts;
 
-  if (encryptionKeyError) {
+  if (context.encryptionKeyError) {
     return {
       type: 'error',
       title: 'API keys can’t be stored: CREDENTIAL_ENCRYPTION_KEY is missing or invalid',
-      detail: `${sentence(encryptionKeyError)} Add it to the backend's environment, restart the backend, then save the HIBP key again.`,
+      detail: `${sentence(context.encryptionKeyError)} Add it to the backend's environment, restart the backend, then save the HIBP key again.`,
     };
   }
   if (!status.features.leaked_creds_enabled) {
@@ -290,6 +317,28 @@ export function describeExposureStatus(
   // also catches a run that crashed before writing `last_run`. Trust the newer.
   const lastRunAt = run.last_run ? Date.parse(run.last_run.at) : 0;
   const jobRunAt = run.job?.last_run_at ? Date.parse(run.job.last_run_at) : 0;
+
+  // A key is saved and enabled, yet the scheduled job found no usable
+  // provider: the backend can't decrypt the key. Skips never write
+  // `last_run`, so the job is the only place this shows. A skip older than the
+  // last real run, or than this browser's last provider change, is stale.
+  if (
+    run.job?.status === 'skipped' &&
+    NO_USABLE_PROVIDER_RE.test(run.job.last_result ?? '') &&
+    jobRunAt > lastRunAt &&
+    jobRunAt > (context.providerChangedAt ?? 0)
+  ) {
+    const next = run.job.next_run_at ? ` (${formatRelative(run.job.next_run_at)})` : '';
+    return {
+      type: 'warning',
+      title: 'The saved HIBP key can’t be used',
+      detail:
+        `The last scheduled check, ${formatRelative(run.job.last_run_at)}, was skipped because the backend has no usable key. ` +
+        "It can't decrypt the saved one, usually because CREDENTIAL_ENCRYPTION_KEY is missing or has changed since the key was saved: " +
+        `restore it and restart the backend, or save the HIBP key again. If the key was saved or the provider enabled after that check, the next one${next} will use it.`,
+    };
+  }
+
   const jobFailedSince = run.job?.status === 'failed' && jobRunAt >= lastRunAt;
   const lastError = jobFailedSince ? run.job?.last_error : run.last_run?.summary.error;
   if (lastError) {
@@ -314,6 +363,24 @@ export function describeExposureStatus(
       type: 'info',
       title: 'Every monitored identity is disabled',
       detail: 'Have I Been Pwned is set up, but nothing is checked until an identity is enabled.',
+    };
+  }
+
+  // Per-identity failures (an unverified email domain, HIBP unreachable for a
+  // single check) don't fail the run, so they never reach `error` or the job.
+  const failing = Math.min(
+    context.failingIdentities ?? run.last_run?.summary.failed ?? 0,
+    counts.identities_enabled
+  );
+  if (failing > 0) {
+    const of = pluralize(counts.identities_enabled, 'monitored identity', 'monitored identities');
+    return {
+      type: 'warning',
+      title: `${failing} of ${of} failed ${failing === 1 ? 'its' : 'their'} last check`,
+      detail:
+        'See the Status column under Breach-monitored identities for the error. An email domain must first be ' +
+        'verified in your HIBP domain dashboard; other errors (HIBP unreachable, outbound network access blocked) ' +
+        'are retried on the next check.',
     };
   }
 

@@ -238,6 +238,13 @@ function dropRequestBody(holder: unknown): void {
 }
 
 class ExposureServiceClient {
+  /**
+   * When this browser last changed the HIBP provider (key saved or removed,
+   * provider switched on or off), in ms since the epoch; 0 if it hasn't. The
+   * status banner treats a "no usable key" skip from before then as stale.
+   */
+  providerChangedAt = 0;
+
   // ---- Status & settings ----------------------------------------------------
 
   async getStatus(): Promise<ExposureStatus> {
@@ -278,6 +285,7 @@ class ExposureServiceClient {
     try {
       const response = await apiClient.put('/exposure/providers/hibp', body);
       dropRequestBody(response);
+      this.providerChangedAt = Date.now();
       return response.data;
     } catch (error) {
       dropRequestBody(error);
@@ -288,12 +296,14 @@ class ExposureServiceClient {
   /** Turn the provider on or off without touching the stored key. Admin only. */
   async setHibpEnabled(enabled: boolean): Promise<ExposureProvider> {
     const response = await apiClient.put('/exposure/providers/hibp', { enabled });
+    this.providerChangedAt = Date.now();
     return response.data;
   }
 
   /** Delete the stored HIBP key (the only call that clears it). Admin only. */
   async removeHibpKey(): Promise<ExposureProvider> {
     const response = await apiClient.put('/exposure/providers/hibp', { api_key: null });
+    this.providerChangedAt = Date.now();
     return response.data;
   }
 

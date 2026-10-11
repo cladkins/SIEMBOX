@@ -29,7 +29,7 @@ SIEMBox is configured with environment variables (a `.env` file next to your com
 |----------|----------|-------|
 | `JWT_SECRET` | ✅ | Signs session tokens; use a long random string (32+ chars). Tokens are valid 24h. |
 | `DEFAULT_ADMIN_PASSWORD` | ✅ | Initial password for the `admin` user. |
-| `CREDENTIAL_ENCRYPTION_KEY` | ✅ | **64-char hex** key (AES-256-GCM) used to encrypt scanner credentials, the AI builder API key, *and* per-user MFA secrets at rest. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. **If you lose/rotate this, stored encrypted credentials can't be decrypted.** |
+| `CREDENTIAL_ENCRYPTION_KEY` | ✅ | **64-char hex** key (AES-256-GCM) used to encrypt scanner credentials, the AI builder and Have I Been Pwned API keys, *and* per-user MFA secrets at rest. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. **If you lose/rotate this, stored encrypted credentials can't be decrypted.** |
 
 ### Two-factor authentication (MFA)
 
@@ -61,6 +61,18 @@ The **[AI Security Analyst](AI-Security-Analyst)** has its own model configurati
 - **Provider / Model / Base URL / API key** — a third independent model selection. Leave the provider blank to **inherit** the AI Analyst (chat) config above (which itself may inherit the AI builder config), or point triage at its own model.
 
 Applying a manual "Analyze now" / "Re-run" from the UI bypasses the severity gate (but not the daily cap or concurrency limit) and works even while automatic triage is disabled.
+
+## Digital Risk (optional)
+
+Watches for your organization's exposure outside your network. Admins configure it under **Settings → Digital Risk** (or the optional *Digital Risk* step of the Getting Started checklist, which saves to the same place):
+
+- **Owned domains** and **brand / lookalike domains** — bare hostnames such as `example.com` (no scheme, port, path, wildcard or IP). They are saved now; the domain-monitoring collectors (certificate transparency, lookalikes, RDAP, DNS) ship in a later release.
+- **Breach-monitored identities** — email addresses, or whole email domains, checked against [Have I Been Pwned](https://haveibeenpwned.com) (HIBP) in the background. Each breach becomes a finding and, the first time, an alert (`source = leaked-creds`). An **email domain** is only searchable once you've verified it in your [HIBP domain dashboard](https://haveibeenpwned.com/DomainSearch); until then it shows an error.
+- **HIBP API key** — bring your own ([get one](https://haveibeenpwned.com/API/Key)). It's stored encrypted with `CREDENTIAL_ENCRYPTION_KEY` and never shown again, so the field is always empty; *Remove key* is the only way to clear it, and saving fails with a clear message if `CREDENTIAL_ENCRYPTION_KEY` isn't set. *Test key* validates it (HIBP's public test key always fails that test by design).
+- **Notifications and checks** — exposure notifications are off until you switch them on (minimum severity *medium*); *Run check now* runs the check immediately.
+- **Password check** — an on-demand Pwned Passwords lookup using k-anonymity: only the first 5 characters of the password's SHA-1 hash leave the server, and nothing is stored or logged.
+
+A status banner at the top of the page says what's missing (no key, provider disabled, checks paused by HIBP, encryption key missing) or that everything is healthy. Breach data is from Have I Been Pwned, licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Everything on the page is also available through the API: [`/api/exposure`](https://github.com/cladkins/SIEMBOX/blob/main/docs/reference/API.md#exposure-monitoring-digital-risk).
 
 ## Parser / detection catalog
 
@@ -106,3 +118,4 @@ Some configuration lives in **Settings** rather than env vars:
 - **Threat Feeds & Reputation** — enable/disable feeds, add AbuseIPDB/AlienVault OTX keys (admin-gated). See [Threat Intel](Threat-Intel).
 - **Notifications** — Email / Slack / NTFY alert delivery.
 - **Retention** — log retention window and automated cleanup.
+- **Digital Risk** — breach-monitored email addresses and domains, watched domains, the HIBP key, and the password check (admin). See [Digital Risk](#digital-risk-optional).

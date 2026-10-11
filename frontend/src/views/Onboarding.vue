@@ -114,6 +114,28 @@
             </div>
           </template>
         </el-step>
+
+        <!-- 6. Digital Risk (optional) -->
+        <el-step :status="steps.digitalRisk ? 'success' : 'wait'">
+          <template #title>
+            Digital Risk monitoring (optional)
+            <el-tag v-if="steps.digitalRisk" type="success" size="small" effect="light">
+              {{ watchedDomainCount }} domain(s) · {{ monitoredIdentityCount }} identit{{ monitoredIdentityCount === 1 ? 'y' : 'ies' }}
+            </el-tag>
+          </template>
+          <template #description>
+            <div class="step-body">
+              <p>
+                Get alerted when your organization's email accounts turn up in a data breach (via Have I Been
+                Pwned), and list the domains and brand names to watch. Optional.
+              </p>
+              <DigitalRiskQuickSetup v-if="authStore.isAdmin" @changed="refreshDigitalRisk" />
+              <el-text v-else size="small" type="info">
+                An administrator can set up Digital Risk monitoring in Settings → Digital Risk.
+              </el-text>
+            </div>
+          </template>
+        </el-step>
       </el-steps>
 
       <div class="finish-row">
@@ -130,9 +152,11 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '@/services/api';
+import exposureService, { type ExposureStatus } from '@/services/exposureService';
 import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth';
+import DigitalRiskQuickSetup from '@/components/DigitalRiskQuickSetup.vue';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -144,6 +168,8 @@ const parserCount = ref(0);
 const ruleCount = ref(0);
 const channelCount = ref(0);
 const aiConfigured = ref(false);
+const watchedDomainCount = ref(0);
+const monitoredIdentityCount = ref(0);
 
 const pw = reactive({ current: '', next: '' });
 const pwSaving = ref(false);
@@ -156,9 +182,11 @@ const steps = computed(() => ({
   content: parserCount.value > 0 || ruleCount.value > 0,
   ai: aiConfigured.value,
   notifications: channelCount.value > 0,
+  // Done once anything is watched (GET /exposure/status counts, readable by every role).
+  digitalRisk: watchedDomainCount.value + monitoredIdentityCount.value > 0,
 }));
 
-// AI is optional, so it doesn't count against the required percentage.
+// AI and Digital Risk are optional, so they don't count against the required percentage.
 const percent = computed(() => {
   const required = ['account', 'ingestion', 'content', 'notifications'] as const;
   const done = required.filter((k) => steps.value[k]).length;
@@ -169,28 +197,46 @@ function go(path: string) {
   router.push(path);
 }
 
+function applyExposureCounts(status: ExposureStatus) {
+  watchedDomainCount.value = status.counts.domains;
+  monitoredIdentityCount.value = status.counts.identities;
+}
+
 async function refresh() {
   loading.value = true;
   try {
-    const [profile, shippers, parsers, rules, channels, ai] = await Promise.allSettled([
+    // Admin-only endpoints are only requested for admins: anyone else gets a
+    // 403, which the API client turns into a "no permission" popup.
+    const [profile, shippers, parsers, rules, channels, ai, exposure] = await Promise.allSettled([
       api.getProfile(),
       api.getShippers(),
       api.getParsers(),
       api.getRules(),
       api.getNotificationChannels(),
-      api.getAiSettings(),
+      authStore.isAdmin ? api.getAiSettings() : Promise.resolve(null),
+      exposureService.getStatus(),
     ]);
     if (profile.status === 'fulfilled') mfaEnabled.value = !!profile.value.data.mfa_enabled;
     if (shippers.status === 'fulfilled') shipperCount.value = (shippers.value.data || []).length;
     if (parsers.status === 'fulfilled') parserCount.value = (parsers.value.data || []).length;
     if (rules.status === 'fulfilled') ruleCount.value = (rules.value.data || []).length;
     if (channels.status === 'fulfilled') channelCount.value = (channels.value.data || []).length;
-    if (ai.status === 'fulfilled') {
+    if (ai.status === 'fulfilled' && ai.value) {
       const d = ai.value.data || {};
       aiConfigured.value = !!(d.configured || d.api_key_set || d.apiKeySet || d.has_key);
     }
+    if (exposure.status === 'fulfilled') applyExposureCounts(exposure.value);
   } finally {
     loading.value = false;
+  }
+}
+
+// After the inline Digital Risk setup adds something: just re-read the counts.
+async function refreshDigitalRisk() {
+  try {
+    applyExposureCounts(await exposureService.getStatus());
+  } catch {
+    // The API client already showed the error; the step keeps its last state.
   }
 }
 

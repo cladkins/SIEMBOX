@@ -72,6 +72,10 @@ Authorization: Bearer YOUR_JWT_TOKEN
 | 409 | Conflict | Resource already exists |
 | 500 | Internal Server Error | Server error |
 
+A request body that isn't valid JSON is rejected with `400` (`"Malformed request
+body: expected valid JSON"`), and an oversized one with `413`, before any route
+runs. These rejections are never logged with the body's contents.
+
 ---
 
 ## Rate Limiting

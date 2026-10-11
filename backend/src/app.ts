@@ -2,7 +2,7 @@ import 'express-async-errors'; // Must be imported before routes
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
-import { errorHandler, notFoundHandler } from './middleware/errorHandler';
+import { bodyParserErrorHandler, errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requestTimeoutLogger } from './middleware/requestTimeoutLogger';
 import { authenticate } from './middleware/auth';
 import { query } from './config/database';
@@ -128,6 +128,9 @@ app.use('/api/log-discovery', authenticate, logDiscoveryRoutes); // Log source d
 
 // Error handlers (must be last)
 app.use(notFoundHandler);
+// Malformed/oversized bodies: answer 4xx without logging the parse error, which
+// quotes the raw body (and so could carry a password or API key).
+app.use(bodyParserErrorHandler);
 app.use(errorHandler);
 
 export default app;

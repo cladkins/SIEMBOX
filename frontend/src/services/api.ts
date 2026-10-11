@@ -13,26 +13,11 @@ const apiClient: AxiosInstance = axios.create({
 // Request interceptor
 apiClient.interceptors.request.use(
   (config) => {
-    // Public endpoints that don't require authentication (GET only)
-    const publicGetEndpoints = [
-      '/assets/scans',
-      '/assets/scans/active',
-      '/assets/scans/statistics'
-    ];
-
-    // Check if this is a public GET endpoint
-    const isPublicEndpoint = config.method?.toUpperCase() === 'GET' && publicGetEndpoints.some(endpoint =>
-      config.url === endpoint ||
-      config.url?.startsWith(endpoint + '/') ||
-      config.url?.startsWith(endpoint + '?')
-    );
-
-    // Only add auth token if not a public endpoint
-    if (!isPublicEndpoint) {
-      const authStore = useAuthStore();
-      if (authStore.token) {
-        config.headers.Authorization = `Bearer ${authStore.token}`;
-      }
+    // Every API route the UI calls requires a login (including /assets/scans*,
+    // which used to be sent without the token), so always attach it.
+    const authStore = useAuthStore();
+    if (authStore.token) {
+      config.headers.Authorization = `Bearer ${authStore.token}`;
     }
 
     return config;

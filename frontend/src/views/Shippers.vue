@@ -26,13 +26,17 @@
             <div class="card-header">
               <span>Log Shippers</span>
               <div>
-                <el-button type="primary" @click="showCreateShipper" :icon="Plus">
+                <el-button v-if="canManageShippers" type="primary" @click="showCreateShipper" :icon="Plus">
                   Add Shipper
                 </el-button>
                 <el-button @click="fetchShippers" :icon="Refresh" circle />
               </div>
             </div>
           </template>
+
+          <el-text v-if="!canManageShippers" size="small" type="info" style="display: block; margin-bottom: 12px">
+            {{ readOnlyHint }}
+          </el-text>
 
           <el-table :data="shippers" v-loading="loading" stripe>
             <el-table-column prop="name" label="Name" min-width="150" />
@@ -62,7 +66,7 @@
                 <el-button size="small" @click="viewShipper(row)" :icon="View">
                   View
                 </el-button>
-                <el-button size="small" type="danger" @click="deleteShipperConfirm(row)" :icon="Delete">
+                <el-button v-if="canManageShippers" size="small" type="danger" @click="deleteShipperConfirm(row)" :icon="Delete">
                   Delete
                 </el-button>
               </template>
@@ -232,6 +236,7 @@
       width="900px"
     >
       <div v-if="currentShipper">
+        <el-alert v-if="!canManageShippers" type="info" :closable="false" :title="readOnlyHint" style="margin-bottom: 12px" />
         <el-descriptions :column="2" border>
           <el-descriptions-item label="Name">{{ currentShipper.name }}</el-descriptions-item>
           <el-descriptions-item label="Status">
@@ -243,24 +248,32 @@
             {{ currentShipper.description || 'N/A' }}
           </el-descriptions-item>
           <el-descriptions-item label="API Key" :span="2">
-            <el-input v-model="currentShipper.api_key" readonly>
-              <template #append>
-                <el-button :icon="CopyDocument" @click="copyToClipboard(currentShipper.api_key)">
-                  Copy
-                </el-button>
-                <el-button
-                  type="warning"
-                  :icon="Refresh"
-                  @click="regenerateApiKey(currentShipper)"
-                  :loading="saving"
-                >
-                  Regenerate
-                </el-button>
-              </template>
-            </el-input>
-            <el-text size="small" type="warning" style="margin-top: 5px; display: block;">
-              Warning: Regenerating the key will immediately invalidate the old key.
-            </el-text>
+            <!-- The API returns api_key only to admins and operators. -->
+            <template v-if="canManageShippers">
+              <el-input v-model="currentShipper.api_key" readonly>
+                <template #append>
+                  <el-button :icon="CopyDocument" @click="copyToClipboard(currentShipper.api_key)">
+                    Copy
+                  </el-button>
+                  <el-button
+                    v-if="isAdmin"
+                    type="warning"
+                    :icon="Refresh"
+                    @click="regenerateApiKey(currentShipper)"
+                    :loading="saving"
+                  >
+                    Regenerate
+                  </el-button>
+                </template>
+              </el-input>
+              <el-text v-if="isAdmin" size="small" type="warning" style="margin-top: 5px; display: block;">
+                Warning: Regenerating the key will immediately invalidate the old key.
+              </el-text>
+              <el-text v-else size="small" type="info" style="margin-top: 5px; display: block;">
+                Only admins can regenerate the key.
+              </el-text>
+            </template>
+            <el-text v-else size="small" type="info">Visible to admins and operators only.</el-text>
           </el-descriptions-item>
           <el-descriptions-item label="Hostname">
             {{ currentShipper.hostname || 'N/A' }}
@@ -280,7 +293,7 @@
                 Created {{ currentShipper.http_push_key_created_at ? formatDate(currentShipper.http_push_key_created_at) : 'N/A' }}
                 &middot; Last used {{ currentShipper.http_push_last_seen ? formatDate(currentShipper.http_push_last_seen) : 'Never' }}
               </el-text>
-              <div style="margin-top: 8px">
+              <div v-if="isAdmin" style="margin-top: 8px">
                 <el-button size="small" type="warning" :icon="Refresh" @click="generatePushKey(currentShipper)" :loading="saving">
                   Rotate Key
                 </el-button>
@@ -293,12 +306,15 @@
               <el-text size="small" type="info">
                 Not configured — lets tools that can't send syslog POST logs here over HTTP instead.
               </el-text>
-              <div style="margin-top: 8px">
+              <div v-if="isAdmin" style="margin-top: 8px">
                 <el-button size="small" type="primary" :icon="Plus" @click="generatePushKey(currentShipper)" :loading="saving">
                   Generate Key
                 </el-button>
               </div>
             </template>
+            <el-text v-if="!isAdmin" size="small" type="info" style="margin-top: 8px; display: block;">
+              Only admins can manage the HTTP push key.
+            </el-text>
           </el-descriptions-item>
         </el-descriptions>
 
@@ -307,7 +323,7 @@
         <!-- Log Sources Section -->
         <div class="section-header">
           <h3>Log Sources</h3>
-          <div>
+          <div v-if="canManageShippers">
             <el-button size="small" @click="addSystemLogFiles" :icon="Plus">
               Add System Log Files
             </el-button>
@@ -339,7 +355,7 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="Actions" width="180" align="center">
+          <el-table-column v-if="canManageShippers" label="Actions" width="180" align="center">
             <template #default="{ row }">
               <el-button
                 size="small"
@@ -363,7 +379,7 @@
         <!-- Volume Mounts Section -->
         <div class="section-header">
           <h3>Volume Mounts</h3>
-          <el-button size="small" type="primary" @click="showAddVolume" :icon="Plus">
+          <el-button v-if="canManageShippers" size="small" type="primary" @click="showAddVolume" :icon="Plus">
             Add Volume
           </el-button>
         </div>
@@ -378,7 +394,7 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="Actions" width="100" align="center">
+          <el-table-column v-if="canManageShippers" label="Actions" width="100" align="center">
             <template #default="{ row }">
               <el-button
                 size="small"
@@ -605,9 +621,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive } from 'vue';
+import { ref, onMounted, reactive, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '@/services/api';
+import { useAuthStore } from '@/stores/auth';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Plus,
@@ -621,6 +638,14 @@ import { format } from 'date-fns';
 import logDiscoveryService, { type RankedSource, type FingerprintEntry } from '@/services/logDiscoveryService';
 
 const router = useRouter();
+const authStore = useAuthStore();
+
+// Mirrors the API (backend/src/routes/shippers.ts): any role can read; admins and
+// operators manage shippers, sources and volumes and see the syslog API key;
+// regenerating that key and the HTTP push key are admin-only.
+const canManageShippers = computed(() => ['admin', 'operator'].includes(authStore.user?.role));
+const isAdmin = computed(() => authStore.isAdmin);
+const readOnlyHint = 'Read-only: adding, changing or deleting shippers needs the admin or operator role.';
 
 const loading = ref(false);
 const saving = ref(false);

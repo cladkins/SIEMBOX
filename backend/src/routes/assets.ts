@@ -3,6 +3,10 @@
  *
  * RESTful endpoints for asset discovery and management.
  * Includes CRUD operations, scanning, and statistics.
+ *
+ * Access: app.ts mounts this router behind `authenticate`, so every route
+ * requires a login. The per-route `authenticate` on the write routes is
+ * redundant but harmless; POST /scan additionally checks the role.
  */
 
 import express, { Request, Response } from 'express';
@@ -20,7 +24,7 @@ const router = express.Router();
 /**
  * GET /api/assets
  * Get all assets with filtering and pagination
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
@@ -54,7 +58,7 @@ router.get('/', async (req: Request, res: Response) => {
 /**
  * GET /api/assets/statistics
  * Get asset discovery statistics
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/statistics', async (_req: Request, res: Response) => {
   try {
@@ -73,7 +77,7 @@ router.get('/statistics', async (_req: Request, res: Response) => {
  * GET /api/assets/scans/active
  * Get active asset discovery scans (queued or running)
  * Excludes vulnerability scans - those are shown on the Vulnerability Scanning page
- * No authentication required - read-only operation for system visibility
+ * Any logged-in role (read-only).
  */
 router.get('/scans/active', async (_req: Request, res: Response) => {
   try {
@@ -92,7 +96,7 @@ router.get('/scans/active', async (_req: Request, res: Response) => {
 /**
  * GET /api/assets/scans/statistics
  * Get scan statistics
- * No authentication required - read-only operation for system visibility
+ * Any logged-in role (read-only).
  */
 router.get('/scans/statistics', async (_req: Request, res: Response) => {
   try {
@@ -113,7 +117,7 @@ router.get('/scans/statistics', async (_req: Request, res: Response) => {
  * Excludes vulnerability scans by default - those are shown on the Vulnerability Scanning page
  * IMPORTANT: Must come BEFORE /scans/:scanId to prevent route conflicts
  * Query parameters should not be interpreted as path parameters
- * No authentication required - read-only operation for system visibility
+ * Any logged-in role (read-only).
  */
 router.get('/scans', async (req: Request, res: Response) => {
   try {
@@ -150,7 +154,7 @@ router.get('/scans', async (req: Request, res: Response) => {
  * Get scan status and results
  * IMPORTANT: Must come AFTER /scans and /scans/active and /scans/statistics
  * More specific routes must be defined first to avoid catching them as parameters
- * No authentication required - read-only operation for system visibility
+ * Any logged-in role (read-only).
  */
 router.get('/scans/:scanId', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -184,7 +188,7 @@ router.get('/scans/:scanId', async (req: Request, res: Response): Promise<void> 
  * GET /api/assets/:id
  * Get asset by ID with services
  * IMPORTANT: Must come AFTER all /scans routes to prevent catching "scans" as an asset ID
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -220,7 +224,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
  *   - geo            GeoIP country for the asset's IP (null for private IPs)
  *   - vulnerabilities the asset's open/closed findings (nested vuln shape)
  *   - alerts         alerts linked by asset_id OR whose source_ip matches the IP
- * No authentication required - read-only, consistent with the sibling GET /:id.
+ * Any logged-in role (read-only), like the sibling GET /:id.
  */
 router.get('/:id/related', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -341,7 +345,7 @@ router.delete('/:id', authenticate, async (req: Request, res: Response): Promise
 /**
  * GET /api/assets/:id/services
  * Get services for an asset
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/:id/services', async (req: Request, res: Response): Promise<void> => {
   try {

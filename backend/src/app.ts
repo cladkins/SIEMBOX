@@ -113,9 +113,12 @@ app.use('/api/parsers', authenticate, parsersRoutes);
 app.use('/api/rules', authenticate, rulesRoutes);
 app.use('/api/alerts', authenticate, alertsRoutes);
 app.use('/api/settings', authenticate, settingsRoutes);
-app.use('/api/shippers', shippersRoutes); // Some endpoints public for shipper registration
-app.use('/api/assets', assetsRoutes); // Asset discovery and management
-app.use('/api/vulnerabilities', vulnerabilitiesRoutes); // Vulnerability scanning and management
+// Not gated here: the shipper agent's own endpoints (register, config, scan-jobs,
+// results, HTTP log push) authenticate with the shipper's key instead of a login.
+// Every management route in routes/shippers.ts requires `authenticate` itself.
+app.use('/api/shippers', shippersRoutes);
+app.use('/api/assets', authenticate, assetsRoutes); // Asset discovery and management
+app.use('/api/vulnerabilities', authenticate, vulnerabilitiesRoutes); // Vulnerability scanning and management
 app.use('/api/admin', adminRoutes); // Admin dashboard (requires admin role)
 app.use('/api/scheduled-scans', authenticate, scheduledScansRoutes); // Recurring scheduled scans
 app.use('/api/notifications', authenticate, notificationsRoutes);

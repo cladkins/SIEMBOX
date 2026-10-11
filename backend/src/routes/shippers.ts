@@ -1,12 +1,20 @@
 import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
-import { LogShipperModel, ShipperSourceModel, ShipperVolumeModel, ShipperActivityModel, withHttpPushStatus } from '../models/LogShipper';
+import {
+  LogShipperModel,
+  ShipperSourceModel,
+  ShipperVolumeModel,
+  ShipperActivityModel,
+  withHttpPushStatus,
+  type LogShipper,
+  type ShipperSource,
+} from '../models/LogShipper';
 import { ApiError } from '../middleware/errorHandler';
 import { query } from '../config/database';
 import crypto from 'crypto';
 import { groupContainers, DockerContainer } from '../services/scanner/dockerDiscovery';
 import { ShipperContainerModel } from '../models/ShipperContainer';
-import { authenticate, authorize } from '../middleware/auth';
+import { authenticate, authorize, requireAdmin, requireOperator } from '../middleware/auth';
 import { authenticateShipperPush } from '../middleware/shipperPushAuth';
 import { sha256hex } from '../models/EdrAgent';
 import { ingestPushedLogs, MAX_LOG_PUSH_BATCH_SIZE } from '../services/shippers/logPushService';
@@ -21,7 +29,69 @@ import {
 } from '../services/logDiscovery/discoveryScanService';
 import { DiscoveryScanModel } from '../models/DiscoveryScan';
 
+// Access model. app.ts mounts this router WITHOUT `authenticate`, because the
+// shipper agent's own endpoints (the PUBLIC ENDPOINTS section at the bottom)
+// authenticate with the shipper's key, not a login. Every management route
+// therefore gates itself:
+// - Reads (list, detail, sources, volumes, activity, unknown and direct-syslog
+//   sources): any logged-in role.
+// - Writes (create/update/delete a shipper, its sources and volumes): admin or
+//   operator, the roles that already run ingestion and scanning in the UI
+//   (Log Discovery and the scan pages). Rotating a shipper's syslog api_key is
+//   admin-only, as documented in docs/reference/API.md, like the HTTP push key.
+// - The syslog `api_key` is returned only to roles that can manage shippers;
+//   analysts and viewers get the same rows without it (see shipperForRole).
 const router = Router();
+
+/** Roles that may create, change or delete shippers, and so may see their syslog api_key. */
+export const SHIPPER_MANAGER_ROLES: readonly string[] = ['admin', 'operator'];
+
+export function canManageShippers(role: string | undefined): boolean {
+  return role !== undefined && SHIPPER_MANAGER_ROLES.includes(role);
+}
+
+/**
+ * A shipper row as the caller may see it: never the HTTP push-key hash, and the
+ * syslog api_key only for roles that can manage shippers. Does not mutate `shipper`.
+ */
+export function shipperForRole<T extends { http_push_key_hash?: string | null }>(
+  shipper: T,
+  role: string | undefined
+): Record<string, unknown> {
+  const view: Record<string, unknown> = { ...withHttpPushStatus(shipper) };
+  if (!canManageShippers(role)) delete view.api_key;
+  return view;
+}
+
+/** Fields a caller may set through PUT /:id; the rest are server-managed or shipper-reported. */
+export const SHIPPER_EDITABLE_FIELDS: readonly (keyof LogShipper)[] = ['name', 'description', 'hostname', 'config'];
+
+/** Fields a caller may set through PUT /sources/:sourceId. */
+export const SOURCE_EDITABLE_FIELDS: readonly (keyof ShipperSource)[] = [
+  'source_type',
+  'enabled',
+  'file_path',
+  'container_name',
+  'journal_unit',
+  'tag',
+  'facility',
+];
+
+/**
+ * Copy only the `allowed` fields from a request body. The update models build
+ * SQL column names from the keys they are given, so request bodies must never
+ * reach them unfiltered.
+ */
+export function pickFields<T>(body: unknown, allowed: readonly (keyof T & string)[]): Partial<T> {
+  const picked: Partial<T> = {};
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return picked;
+  for (const field of allowed) {
+    if (Object.prototype.hasOwnProperty.call(body, field)) {
+      picked[field] = (body as Partial<T>)[field];
+    }
+  }
+  return picked;
+}
 
 // Generate API key for new shipper
 function generateApiKey(): string {
@@ -73,13 +143,13 @@ function calculateStatus(lastSeen: Date | null, currentStatus: string): 'pending
 }
 
 // Get all shippers
-router.get('/', async (_req: Request, res: Response) => {
+router.get('/', authenticate, async (req: Request, res: Response) => {
   try {
     const shippers = await LogShipperModel.findAll();
 
     // Calculate dynamic status based on last_seen
     const shippersWithStatus = shippers.map((shipper: any) => ({
-      ...withHttpPushStatus(shipper),
+      ...shipperForRole(shipper, req.user?.role),
       status: calculateStatus(shipper.last_seen, shipper.status)
     }));
 
@@ -94,7 +164,7 @@ router.get('/', async (_req: Request, res: Response) => {
 // cache and failure cooldown -- lives in services/shippers/unknownSources.ts; the
 // old inline query scanned the whole raw_logs table per request and routinely
 // outran the browser's 10 s timeout while Postgres kept grinding on it.
-router.get('/unknown-sources', async (_req: Request, res: Response) => {
+router.get('/unknown-sources', authenticate, async (_req: Request, res: Response) => {
   try {
     res.json(await unknownSources.get());
   } catch (error) {
@@ -123,7 +193,7 @@ router.get('/direct-syslog-sources', authenticate, async (_req: Request, res: Re
 });
 
 // Get single shipper with full config
-router.get('/:id', async (req: Request, res: Response) => {
+router.get('/:id', authenticate, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const shipper = await LogShipperModel.getFullConfig(id);
@@ -135,7 +205,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     // Calculate dynamic status
     shipper.status = calculateStatus(shipper.last_seen, shipper.status);
 
-    res.json(withHttpPushStatus(shipper));
+    res.json(shipperForRole(shipper, req.user?.role));
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch shipper');
@@ -143,7 +213,7 @@ router.get('/:id', async (req: Request, res: Response) => {
 });
 
 // Create new shipper
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
     const { name, description, hostname } = req.body;
 
@@ -163,7 +233,7 @@ router.post('/', async (req: Request, res: Response) => {
     await ShipperActivityModel.log(shipper.id, 'created', 'Shipper created');
     unknownSources.invalidate(); // a newly registered shipper may be an adopted unknown source
 
-    res.status(201).json(shipper);
+    res.status(201).json(shipperForRole(shipper, req.user?.role));
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to create shipper');
@@ -171,13 +241,16 @@ router.post('/', async (req: Request, res: Response) => {
 });
 
 // Update shipper
-router.put('/:id', async (req: Request, res: Response) => {
+router.put('/:id', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
-    const updates = req.body;
+    // Only the editable fields: api_key changes go through regenerate-key, the
+    // push key through its own routes, and status/version/etc. come from the shipper.
+    const updates = pickFields<LogShipper>(req.body, SHIPPER_EDITABLE_FIELDS);
 
-    // Don't allow updating api_key directly
-    delete updates.api_key;
+    if (Object.keys(updates).length === 0) {
+      throw new ApiError(400, `Nothing to update; editable fields are ${SHIPPER_EDITABLE_FIELDS.join(', ')}`);
+    }
 
     const shipper = await LogShipperModel.update(id, updates);
 
@@ -188,7 +261,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     await ShipperActivityModel.log(id, 'config_updated', 'Shipper configuration updated');
     unknownSources.invalidate();
 
-    res.json(shipper);
+    res.json(shipperForRole(shipper, req.user?.role));
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to update shipper');
@@ -196,7 +269,7 @@ router.put('/:id', async (req: Request, res: Response) => {
 });
 
 // Delete shipper
-router.delete('/:id', async (req: Request, res: Response) => {
+router.delete('/:id', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const deleted = await LogShipperModel.delete(id);
@@ -214,7 +287,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
 });
 
 // Get shipper sources
-router.get('/:id/sources', async (req: Request, res: Response) => {
+router.get('/:id/sources', authenticate, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const sources = await ShipperSourceModel.findByShipperId(id);
@@ -225,7 +298,7 @@ router.get('/:id/sources', async (req: Request, res: Response) => {
 });
 
 // Add source to shipper
-router.post('/:id/sources', async (req: Request, res: Response) => {
+router.post('/:id/sources', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
     const shipper_id = parseInt(req.params.id);
     const { source_type, enabled, file_path, container_name, journal_unit, tag, facility } = req.body;
@@ -255,10 +328,15 @@ router.post('/:id/sources', async (req: Request, res: Response) => {
 });
 
 // Update source
-router.put('/sources/:sourceId', async (req: Request, res: Response) => {
+router.put('/sources/:sourceId', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
     const sourceId = parseInt(req.params.sourceId);
-    const updates = req.body;
+    // The UI sends the whole form (including `id`); keep only the editable fields.
+    const updates = pickFields<ShipperSource>(req.body, SOURCE_EDITABLE_FIELDS);
+
+    if (Object.keys(updates).length === 0) {
+      throw new ApiError(400, `Nothing to update; editable fields are ${SOURCE_EDITABLE_FIELDS.join(', ')}`);
+    }
 
     const source = await ShipperSourceModel.update(sourceId, updates);
 
@@ -276,7 +354,7 @@ router.put('/sources/:sourceId', async (req: Request, res: Response) => {
 });
 
 // Delete source
-router.delete('/sources/:sourceId', async (req: Request, res: Response) => {
+router.delete('/sources/:sourceId', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
     const sourceId = parseInt(req.params.sourceId);
     const deleted = await ShipperSourceModel.delete(sourceId);
@@ -293,7 +371,7 @@ router.delete('/sources/:sourceId', async (req: Request, res: Response) => {
 });
 
 // Get shipper volumes
-router.get('/:id/volumes', async (req: Request, res: Response) => {
+router.get('/:id/volumes', authenticate, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const volumes = await ShipperVolumeModel.findByShipperId(id);
@@ -304,7 +382,7 @@ router.get('/:id/volumes', async (req: Request, res: Response) => {
 });
 
 // Add volume to shipper
-router.post('/:id/volumes', async (req: Request, res: Response) => {
+router.post('/:id/volumes', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
     const shipper_id = parseInt(req.params.id);
     const { host_path, container_path, read_only } = req.body;
@@ -339,7 +417,7 @@ router.post('/:id/volumes', async (req: Request, res: Response) => {
 });
 
 // Delete volume
-router.delete('/volumes/:volumeId', async (req: Request, res: Response) => {
+router.delete('/volumes/:volumeId', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
     const volumeId = parseInt(req.params.volumeId);
     const deleted = await ShipperVolumeModel.delete(volumeId);
@@ -356,7 +434,7 @@ router.delete('/volumes/:volumeId', async (req: Request, res: Response) => {
 });
 
 // Get shipper activity log
-router.get('/:id/activity', async (req: Request, res: Response) => {
+router.get('/:id/activity', authenticate, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const limit = parseInt(req.query.limit as string) || 50;
@@ -367,8 +445,8 @@ router.get('/:id/activity', async (req: Request, res: Response) => {
   }
 });
 
-// Regenerate API key
-router.post('/:id/regenerate-key', async (req: Request, res: Response) => {
+// Regenerate API key (admin-only, like the HTTP push key; see the access model above)
+router.post('/:id/regenerate-key', authenticate, requireAdmin, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const newApiKey = generateApiKey();
@@ -391,9 +469,9 @@ router.post('/:id/regenerate-key', async (req: Request, res: Response) => {
 
 // ============================================================================
 // HTTP LOG-PUSH KEY MANAGEMENT (admin only — a key SEPARATE from the syslog
-// api_key above, used only to authenticate POST /shippers/logs. The router as
-// a whole isn't gated by app.ts, so these two routes gate themselves rather
-// than inheriting the "no auth" posture the rest of this file has today.)
+// api_key above, used only to authenticate POST /shippers/logs. Like every
+// management route in this file, these gate themselves; see the access model
+// at the top.)
 // ============================================================================
 
 // Generate (or rotate) the HTTP push key. Returned once — never retrievable

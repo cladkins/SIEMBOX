@@ -1202,6 +1202,28 @@ sudo systemctl start ntp
 
 ---
 
+### Issue: Script Gets 401 or 403 from Shipper, Asset or Vulnerability Endpoints
+
+**Symptoms:**
+- A script or integration that reads `/api/assets`, `/api/vulnerabilities` or manages `/api/shippers` now gets `401 Authentication required`
+- An analyst or viewer gets `403` when changing a shipper, its sources or volumes, or regenerating its key
+
+**Cause:** these routes require a login, and changing shippers requires the admin or operator role (regenerating a shipper's key requires admin). Earlier versions answered them without a login. The shipper agent's own endpoints (`/register`, `/config/:api_key`, `/scan-jobs/:api_key` and the rest) are unaffected: they still authenticate with the shipper's key.
+
+**Solution:**
+```bash
+# Log in once and send the token on each request
+TOKEN=$(curl -s -X POST http://localhost:8421/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "..."}' | jq -r '.token')
+
+curl http://localhost:8421/api/assets -H "Authorization: Bearer $TOKEN"
+```
+
+For a `403`, use an account with the admin or operator role. Analysts and viewers can still list shippers, but the list omits each shipper's `api_key`.
+
+---
+
 ## Performance Issues
 
 ### Issue: Slow Query Response

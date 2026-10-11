@@ -3,6 +3,10 @@
  *
  * RESTful endpoints for vulnerability scanning and management.
  * Includes scan triggering, vulnerability tracking, and status management.
+ *
+ * Access: app.ts mounts this router behind `authenticate`, so every route
+ * requires a login. The per-route `authenticate` on the write routes is
+ * redundant but harmless.
  */
 
 import express, { Request, Response } from 'express';
@@ -20,7 +24,7 @@ const router = express.Router();
 /**
  * GET /api/vulnerabilities/summary
  * Get dashboard summary of vulnerabilities
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/summary', async (_req: Request, res: Response) => {
   try {
@@ -38,7 +42,7 @@ router.get('/summary', async (_req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/templates
  * Get available Nuclei templates overview
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/templates', async (_req: Request, res: Response) => {
   try {
@@ -71,7 +75,7 @@ router.get('/templates', async (_req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/templates/categories
  * Get template categories
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/templates/categories', async (_req: Request, res: Response) => {
   try {
@@ -89,7 +93,7 @@ router.get('/templates/categories', async (_req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/templates/tags
  * Get available template tags
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/templates/tags', async (_req: Request, res: Response) => {
   try {
@@ -107,7 +111,7 @@ router.get('/templates/tags', async (_req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/templates/search
  * Search templates by query
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/templates/search', async (req: Request, res: Response) => {
   try {
@@ -137,7 +141,7 @@ router.get('/templates/search', async (req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/templates/category/:categoryId
  * Get templates by category
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/templates/category/:categoryId', async (req: Request, res: Response) => {
   try {
@@ -173,7 +177,7 @@ router.get('/templates/category/:categoryId', async (req: Request, res: Response
 /**
  * GET /api/vulnerabilities/templates/tag/:tag
  * Get templates by tag
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/templates/tag/:tag', async (req: Request, res: Response) => {
   try {
@@ -198,7 +202,7 @@ router.get('/templates/tag/:tag', async (req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/templates/severity/:severity
  * Get templates by severity — proper server-side filter (not a text search).
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/templates/severity/:severity', async (req: Request, res: Response) => {
   try {
@@ -282,7 +286,7 @@ router.post('/templates/download', authenticate, async (_req: Request, res: Resp
 /**
  * GET /api/vulnerabilities/scans/active
  * Get active vulnerability scans (queued or running)
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/scans/active', async (_req: Request, res: Response) => {
   try {
@@ -305,7 +309,7 @@ router.get('/scans/active', async (_req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/scans
  * Get all vulnerability scans with filtering and pagination
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/scans', async (req: Request, res: Response) => {
   try {
@@ -334,7 +338,7 @@ router.get('/scans', async (req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/scans/:scanId
  * Get vulnerability scan by ID with results
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/scans/:scanId', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -367,7 +371,7 @@ router.get('/scans/:scanId', async (req: Request, res: Response): Promise<void> 
 /**
  * GET /api/vulnerabilities/scans/:scanId/status
  * Get vulnerability scan status (for polling)
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/scans/:scanId/status', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -610,7 +614,7 @@ router.post('/scans/:scanId/cancel', authenticate, async (req: Request, res: Res
 /**
  * GET /api/vulnerabilities
  * Get all vulnerabilities with filtering and pagination
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
@@ -749,7 +753,7 @@ router.get('/', async (req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/:id
  * Get vulnerability by ID with affected assets
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -776,7 +780,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 /**
  * GET /api/vulnerabilities/asset/:assetId
  * Get vulnerabilities for a specific asset
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/asset/:assetId', async (req: Request, res: Response): Promise<void> => {
   try {

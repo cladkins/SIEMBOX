@@ -200,7 +200,7 @@ Check the SIEMBox UI to confirm the test message appears in the log viewer.
 - **8420:** Frontend web interface (HTTP)
 - **8421:** Backend API (HTTP)
 - **514:** Syslog listener (UDP and TCP)
-- **5432:** PostgreSQL database (internal only unless exposed)
+- **5432:** PostgreSQL database (bound to `127.0.0.1` on the Docker host in both compose files, so it is not reachable from the LAN)
 
 **Solution:**
 1. Verify no other services are using these ports
@@ -565,7 +565,7 @@ SIEMBox requires these ports:
 - **8421**: Backend API
 - **514/UDP**: Syslog ingestion (UDP)
 - **514/TCP**: Syslog ingestion (TCP)
-- **5432**: PostgreSQL (only needed if accessing externally)
+- **5432**: PostgreSQL. Both compose files publish it on `127.0.0.1` only. To query it from another machine, open an SSH tunnel to the Docker host (`ssh -L 5432:127.0.0.1:5432 user@docker-host`) instead of publishing it on the LAN.
 
 If you've enabled the optional host networking mode (see "Log Discovery and
 Network Visibility" above), the backend's ports bind directly to the host

@@ -35,6 +35,7 @@ System architecture, design decisions, and implementation specifications.
 - **[HOMELAB-THREAT-MODEL.md](architecture/HOMELAB-THREAT-MODEL.md)** - Security threat model and attack scenarios
 - **[PARSER-RULE-IMPLEMENTATION-SPEC.md](architecture/PARSER-RULE-IMPLEMENTATION-SPEC.md)** - Parser and rule implementation design
 - **[VAULTWARDEN-PARSER-IMPLEMENTATION.md](architecture/VAULTWARDEN-PARSER-IMPLEMENTATION.md)** - Vaultwarden parser design decisions
+- **[DIGITAL-RISK-AND-SETTINGS.md](architecture/DIGITAL-RISK-AND-SETTINGS.md)** - Digital Risk monitoring (leaked credentials and domains), the per-area settings hub, and onboarding
 
 ### Feature guides
 Deep-dives for specific shipped features (see also the friendlier **[GitHub Wiki](https://github.com/cladkins/SIEMBOX/wiki)**, which has pages for **AI Security Analyst** and **SIEMBOX Endpoint**).

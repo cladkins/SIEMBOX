@@ -1,6 +1,7 @@
 /**
  * Exposure monitoring ("Digital Risk") persistence: watched domains, monitored
- * identities and the findings raised against them (migration 034).
+ * identities and the findings raised against them (migration 034), and the
+ * domain collectors' baselines (migration 035).
  *
  * Values are validated and lowercased before they get here (see
  * services/exposure/validation.ts); the tables' CHECK constraints are the
@@ -29,7 +30,23 @@ export interface WatchedDomain {
   next_run_at: string | null;
   last_status: string | null;
   last_error: string | null;
+  /** Per-collector outcome of the last run (migration 035); null before the first. */
+  last_summary: Record<string, unknown> | null;
   created_at: string;
+  updated_at: string;
+}
+
+/** Bookkeeping written after each domain-monitor run. */
+export interface DomainRunRecord {
+  status: 'ok' | 'error';
+  error: string | null;
+  /** Minutes until the domain is due again (its interval, or a shorter retry delay). */
+  nextRunMinutes: number;
+  summary: Record<string, unknown>;
+}
+
+export interface DomainBaseline {
+  snapshot: unknown;
   updated_at: string;
 }
 
@@ -150,6 +167,14 @@ export const WatchedDomainModel = {
       params
     );
     if (sets.length === 0) return WatchedDomainModel.findById(id);
+    if (fields.interval_minutes !== undefined) {
+      // A new interval takes effect from the last check, not after the old one runs out.
+      params.push(fields.interval_minutes);
+      sets.push(
+        `next_run_at = CASE WHEN last_checked_at IS NULL THEN next_run_at
+                            ELSE last_checked_at + $${params.length} * INTERVAL '1 minute' END`
+      );
+    }
     params.push(id);
     const r = await query(
       `UPDATE watched_domains SET ${sets.join(', ')}, updated_at = NOW()
@@ -162,6 +187,78 @@ export const WatchedDomainModel = {
   async delete(id: number): Promise<boolean> {
     const r = await query(`DELETE FROM watched_domains WHERE id = $1`, [id]);
     return (r.rowCount ?? 0) > 0;
+  },
+
+  /**
+   * Domains due for the domain monitor: enabled, and never scheduled or
+   * scheduled for now or earlier (the scheduledScans pattern, on next_run_at).
+   */
+  async findDue(limit: number): Promise<WatchedDomain[]> {
+    const r = await query(
+      `SELECT * FROM watched_domains
+        WHERE enabled AND (next_run_at IS NULL OR next_run_at <= NOW())
+        ORDER BY next_run_at NULLS FIRST, id
+        LIMIT $1`,
+      [limit]
+    );
+    return r.rows;
+  },
+
+  async countDue(): Promise<number> {
+    const r = await query(
+      `SELECT COUNT(*)::int AS n FROM watched_domains
+        WHERE enabled AND (next_run_at IS NULL OR next_run_at <= NOW())`
+    );
+    return r.rows[0]?.n ?? 0;
+  },
+
+  /** Every watched domain name (enabled or not): the organization's own names. */
+  async listNames(): Promise<string[]> {
+    const r = await query(`SELECT domain FROM watched_domains ORDER BY domain`);
+    return r.rows.map((row) => row.domain);
+  },
+
+  /** Record a run's outcome and when the domain is due next. */
+  async markRun(id: number, run: DomainRunRecord): Promise<void> {
+    await query(
+      `UPDATE watched_domains
+          SET last_checked_at = NOW(),
+              next_run_at = NOW() + $2 * INTERVAL '1 minute',
+              last_status = $3,
+              last_error = $4,
+              last_summary = $5
+        WHERE id = $1`,
+      [
+        id,
+        Math.max(1, Math.round(run.nextRunMinutes)),
+        run.status,
+        run.error === null ? null : run.error.slice(0, MAX_ERROR_LENGTH),
+        JSON.stringify(run.summary),
+      ]
+    );
+  },
+};
+
+/** One stored snapshot per (domain, collector); deleting the domain cascades. */
+export const DomainBaselineModel = {
+  async findByDomain(domainId: number): Promise<Map<string, DomainBaseline>> {
+    const r = await query(
+      `SELECT collector, snapshot, updated_at FROM domain_baselines WHERE domain_id = $1`,
+      [domainId]
+    );
+    return new Map(
+      r.rows.map((row) => [row.collector, { snapshot: row.snapshot, updated_at: row.updated_at }])
+    );
+  },
+
+  async upsert(domainId: number, collector: string, snapshot: unknown): Promise<void> {
+    await query(
+      `INSERT INTO domain_baselines (domain_id, collector, snapshot, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (domain_id, collector)
+       DO UPDATE SET snapshot = EXCLUDED.snapshot, updated_at = NOW()`,
+      [domainId, collector, JSON.stringify(snapshot)]
+    );
   },
 };
 
@@ -329,13 +426,14 @@ export interface ExposureCounts {
   identities_due: number;
   domains: number;
   domains_enabled: number;
+  domains_due: number;
   findings_total: number;
   findings_open: number;
   findings_open_by_severity: Record<string, number>;
 }
 
 export async function getExposureCounts(): Promise<ExposureCounts> {
-  const [totals, bySeverity, due] = await Promise.all([
+  const [totals, bySeverity, due, domainsDue] = await Promise.all([
     query(
       `SELECT
          (SELECT COUNT(*) FROM monitored_identities)::int AS identities,
@@ -350,8 +448,14 @@ export async function getExposureCounts(): Promise<ExposureCounts> {
         WHERE resolved_at IS NULL GROUP BY severity`
     ),
     MonitoredIdentityModel.countDue(),
+    WatchedDomainModel.countDue(),
   ]);
   const findings_open_by_severity: Record<string, number> = {};
   for (const row of bySeverity.rows) findings_open_by_severity[row.severity] = row.n;
-  return { ...totals.rows[0], identities_due: due, findings_open_by_severity };
+  return {
+    ...totals.rows[0],
+    identities_due: due,
+    domains_due: domainsDue,
+    findings_open_by_severity,
+  };
 }

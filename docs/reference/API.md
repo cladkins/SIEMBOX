@@ -3758,11 +3758,13 @@ Watches for your organization's exposure **outside** your network:
   `rule_id = null`) in the normal alert queue.
 - **Password check** — a stateless, k-anonymous check of one password against
   HIBP's Pwned Passwords corpus.
-- **Watched domains** — your own domains and brand names to protect. The
-  collectors that will watch them (certificate transparency, lookalike
-  domains, RDAP, DNS) ship in a later release; these endpoints already let the
-  UI and onboarding collect them, and `GET /status` reports
-  `domain_monitor_available: false` until then.
+- **Domain monitoring** — your own domains and brand names to protect are
+  watched for new or mis-issued TLS certificates (Certificate Transparency),
+  newly registered lookalike domains, registration (RDAP) changes and expiry,
+  and DNS drift. Each change becomes a finding and alert with
+  `source = "domain-monitor"`; see
+  [How domain monitoring works](#how-domain-monitoring-works). No API key is
+  needed.
 
 HIBP is **bring-your-own-key** (an HIBP subscription; see
 [HIBP API keys](https://haveibeenpwned.com/API/Key)). Nothing is checked until a
@@ -3805,6 +3807,78 @@ check) are open to any authenticated user; **all writes require the admin role**
   message per identity per check (so a large email domain can't flood a channel).
   AI auto-triage is not run on these alerts.
 
+### How domain monitoring works
+
+- A background job (`domain-monitor` in [`GET /api/admin/jobs`](#get-apiadminjobs))
+  wakes every 15 minutes (first run 2 minutes after startup) and checks the
+  watched domains that are **due** — enabled, and `next_run_at` unset or passed —
+  one at a time, at most 25 per cycle and within a 10-minute budget. After a
+  run, `next_run_at` = now + the domain's `interval_minutes` (daily by default).
+  The job is skipped, with the reason shown, when
+  `exposure_domain_monitor_enabled` is `false` or nothing is due.
+- **Collectors by scope.** `own` domains run all four; `brand` domains (names to
+  protect from lookalikes, which you may not operate) run only `lookalike` and
+  `ct` (certificates for the registered lookalikes, not for the brand domain
+  itself). The domain's `collectors` object switches each one off individually.
+
+| Collector | Source | Finding (`event_type`) | Severity |
+|---|---|---|---|
+| `ct` | crt.sh (`output=json`, unexpired, de-duplicated) — the bare name and `%.name` | `unexpected_ca`: a certificate for the domain from a CA not in `expected_cas` (only when that list is set) | high |
+| | | `new_cert`: a certificate covering a host name never seen before, or from an issuer never seen before. Plain renewals are not findings | low |
+| | | `new_cert`: a certificate for a registered lookalike (up to 3 lookalikes per run, rotating; 2 for run-now) | medium |
+| `lookalike` | Built-in permutation engine (homoglyph, TLD swap, omission, transposition, repetition, QWERTY-adjacent replacement, hyphenation, vowel swap, addition, bitsquatting; plus `dnstwist` if installed), at most `exposure_lookalike_max_candidates` (default 300) candidates, checked with DNS | `lookalike_registered`: newly registered — high with an A/AAAA or MX record, else medium; a registered lookalike gaining an MX record — high | high / medium |
+| `rdap` | IANA RDAP bootstrap → the registry's RDAP server (for the registered name) | `rdap_change`: nameservers or registrar — critical; status (e.g. a transfer lock removed) or DNSSEC — high | critical / high |
+| | | `expiry_warning`: expires within `exposure_domain_expiry_warning_days` (default 30) — medium; already expired — high | medium / high |
+| `dns` | The system resolver: NS, MX, TXT, DMARC (`_dmarc.<domain>` TXT), A, AAAA | `dns_drift`: NS or MX changed — critical; TXT (titles call out SPF/DKIM) or DMARC policy — high; A/AAAA — medium | critical / high / medium |
+
+- **The first run of each collector records a baseline silently** — the
+  domain's existing certificates, lookalikes, registration and DNS are the
+  starting point, not news. Two things are actionable at once: an expiry
+  warning, and unexpired certificates from a CA outside `expected_cas` (one
+  finding per offending CA; the same check re-runs whenever `expected_cas`
+  changes).
+- **Deduplication.** Every finding has a stable fingerprint (per certificate,
+  per lookalike, per before→after change, per expiry date), so re-runs only
+  update `last_seen` and never raise a second alert. More than 10 certificate
+  findings of one kind in one run are grouped into one. New findings from one
+  domain run go out as one grouped notification (opt-in, like leaked
+  credentials).
+- **Failures never look like changes.** A collector that fails keeps its
+  baseline untouched; a failed DNS lookup is neither "unchanged" nor "removed".
+  crt.sh 5xx/429/timeouts, DNS timeouts, registry outages and unexpected errors
+  (e.g. a database blip) are *transient*: the domain comes back after 60 minutes
+  (doubling per consecutive failure, never later than its interval) and that
+  early run repeats only the failed collectors. Each collector's outcome is in
+  the domain's `last_summary`.
+- **A/AAAA rotation** among addresses seen in the last 90 days (CDNs) is not
+  drift; a never-seen address, or every address vanishing, is. Fields an RDAP
+  server leaves out of a response are "not reported", never "removed"; grace
+  states such as `auto renew period` are ignored.
+- **TLDs without RDAP** (or with only a plain-HTTP RDAP server, e.g. `.kg`)
+  report `unsupported` for `rdap`, with the reason, and raise nothing.
+- **Network access.** The backend needs outbound HTTPS to `crt.sh`,
+  `data.iana.org` and the registries' RDAP servers, and DNS. Without it the
+  collectors fail (see `last_summary`) rather than report "no findings".
+  Lookalike checks cost about one DNS query per candidate (four for a
+  registered one), at most 10 candidates in flight.
+- **Optional second resolver** (`exposure_dns_secondary_resolver`, an IP
+  address; off by default so no DNS traffic goes anywhere you didn't choose):
+  when set, a DNS record set is only trusted when both resolvers agree.
+
+**Outbound-request guarantees.** Every request is a single HTTPS GET with a
+descriptive User-Agent, a hard deadline and a response-size cap (crt.sh 10 MB,
+RDAP 1 MB, the bootstrap file 2 MB), and **redirects are never followed**.
+crt.sh and IANA are constant hosts; your domain only ever appears in an
+encoded query parameter (crt.sh) or one encoded path segment (RDAP), never in a
+host name. The RDAP server's URL comes from IANA's bootstrap file, so it is
+validated before use — `https` only, no credentials or explicit port, no
+IP-literal host, no internal-only names (`localhost`, `.local`, `.internal`,
+`.lan`, `.home.arpa`, …) — and its host must resolve only to public addresses
+(no private, loopback, link-local, CGNAT, ULA, multicast or reserved ranges).
+The connection is pinned to the addresses vetted at connect time, so DNS
+rebinding can't redirect it. crt.sh requests are spaced at least 3 seconds
+apart.
+
 ### Privacy guarantees
 
 - **The HIBP API key is write-only.** It is stored encrypted (AES-256-GCM via
@@ -3838,7 +3912,8 @@ Feature flags, provider state (never the key), counts and the last run.
   "features": {
     "leaked_creds_enabled": true,
     "password_check_available": true,
-    "domain_monitor_available": false
+    "domain_monitor_available": true,
+    "domain_monitor_enabled": true
   },
   "notifications": { "enabled": false, "min_severity": "medium" },
   "providers": [
@@ -3858,6 +3933,7 @@ Feature flags, provider state (never the key), counts and the last run.
     "identities_due": 0,
     "domains": 1,
     "domains_enabled": 1,
+    "domains_due": 0,
     "findings_total": 5,
     "findings_open": 4,
     "findings_open_by_severity": { "high": 3, "medium": 1 }
@@ -3878,12 +3954,30 @@ Feature flags, provider state (never the key), counts and the last run.
       "last_error": null,
       "next_run_at": "2026-10-10T09:30:00Z"
     }
+  },
+  "domain_monitor": {
+    "running": false,
+    "domains_in_progress": 0,
+    "last_run": {
+      "at": "2026-10-10T09:17:41Z",
+      "trigger": "schedule",
+      "summary": { "checked": 1, "newFindings": 0, "failed": 0, "remaining": 0, "skipped": false }
+    },
+    "job": {
+      "status": "ok",
+      "last_run_at": "2026-10-10T09:17:00Z",
+      "last_result": "checked 1 domain, 0 new findings",
+      "last_error": null,
+      "next_run_at": "2026-10-10T09:32:00Z"
+    }
   }
 }
 ```
 `last_run` and `job` describe this backend process only (they reset on restart);
 `paused_until`/`pause_reason` are set while HIBP has asked us to back off or has
-rejected the key.
+rejected the key. `domain_monitor.last_run` is the last scheduled cycle (a
+manual `run-now` returns its own result instead); `job.status` is `skipped`
+with the reason in `last_result` when monitoring is off or no domain is due.
 
 ---
 
@@ -3896,7 +3990,11 @@ rejected the key.
 {
   "notify_exposure_enabled": false,
   "notify_exposure_min_severity": "medium",
-  "exposure_leaked_creds_enabled": true
+  "exposure_leaked_creds_enabled": true,
+  "exposure_domain_monitor_enabled": true,
+  "exposure_domain_expiry_warning_days": 30,
+  "exposure_lookalike_max_candidates": 300,
+  "exposure_dns_secondary_resolver": ""
 }
 ```
 
@@ -3910,12 +4008,20 @@ Update any subset of the settings above.
 ```json
 { "notify_exposure_enabled": true, "notify_exposure_min_severity": "high" }
 ```
-- `notify_exposure_enabled`, `exposure_leaked_creds_enabled` — JSON booleans
+- `notify_exposure_enabled`, `exposure_leaked_creds_enabled`,
+  `exposure_domain_monitor_enabled` — JSON booleans
 - `notify_exposure_min_severity` — `low` | `medium` | `high` | `critical`
+- `exposure_domain_expiry_warning_days` — whole days, `1`-`365` (default `30`)
+- `exposure_lookalike_max_candidates` — the hard cap on lookalike candidates
+  generated and resolved per domain, `1`-`1000` (default `300`)
+- `exposure_dns_secondary_resolver` — `""` (off, the default) or an IPv4/IPv6
+  address (never a host name) of a second resolver that must agree with the
+  system resolver before DNS drift is reported
 
 **Response (200):** the full settings object.
 
-**Errors:** `400` - a value of the wrong type or an unknown severity
+**Errors:** `400` - a value of the wrong type or out of range, an unknown
+severity, or a resolver that is not an IP address
 
 ---
 
@@ -3998,15 +4104,23 @@ All watched domains, alphabetically.
     "interval_minutes": 1440,
     "collectors": { "ct": true, "lookalike": true, "rdap": true, "dns": true },
     "expected_cas": ["Let's Encrypt"],
-    "last_checked_at": null,
-    "next_run_at": null,
-    "last_status": null,
+    "last_checked_at": "2026-10-10T09:17:41Z",
+    "next_run_at": "2026-10-11T09:17:41Z",
+    "last_status": "ok",
     "last_error": null,
+    "last_summary": { "trigger": "schedule", "status": "ok", "new_findings": 0, "collectors": { "...": "..." } },
     "created_at": "2026-10-10T09:00:00Z",
     "updated_at": "2026-10-10T09:00:00Z"
   }
 ]
 ```
+- `next_run_at` — when the domain monitor checks the domain next (`null`: never
+  checked, due now).
+- `last_status` — `ok`, or `error` with `last_error` listing the failed
+  collectors (`"ct: crt.sh is temporarily unavailable (HTTP 502); will retry"`).
+- `last_summary` — the last run's outcome per collector, the same object
+  [`POST /domains/:id/run-now`](#post-apiexposuredomainsidrun-now) returns
+  (`null` before the first run).
 
 ### POST /api/exposure/domains
 
@@ -4026,7 +4140,10 @@ All watched domains, alphabetically.
 - `interval_minutes` (optional) - whole minutes, `60`-`43200`, default `1440`
 - `collectors` (optional) - any of `ct`, `lookalike`, `rdap`, `dns` → boolean;
   unspecified collectors stay on
-- `expected_cas` (optional) - up to 50 CA names expected to issue for the domain
+- `expected_cas` (optional) - up to 50 CA names expected to issue for the domain.
+  An entry matches a certificate when, ignoring case and punctuation, it is part
+  of the issuer's O, OU or CN (`"Let's Encrypt"`, `"DigiCert"`, `"Sectigo"`).
+  Empty (the default) turns the unexpected-CA check off.
 
 **Response (201):** the created domain.
 
@@ -4038,7 +4155,8 @@ All watched domains, alphabetically.
 
 Update `scope`, `enabled`, `interval_minutes`, `collectors` (merged over the
 current values) and/or `expected_cas` (replaced). The domain itself can't be
-changed — delete it and add the new one.
+changed — delete it and add the new one. A new `interval_minutes` takes effect
+from the last check (`next_run_at` = `last_checked_at` + the new interval).
 
 **Authentication:** Required (Admin)
 
@@ -4049,11 +4167,79 @@ changed — delete it and add the new one.
 
 ### DELETE /api/exposure/domains/:id
 
-Deletes the domain and its findings (their alerts stay in the alert queue).
+Deletes the domain, its findings and its collector baselines (their alerts stay
+in the alert queue; if the domain is added back, a re-found change re-links its
+existing alert instead of raising a new one).
 
 **Authentication:** Required (Admin)
 
 **Response (200):** `{ "message": "Watched domain deleted" }` · **Errors:** `404` - not found
+
+### POST /api/exposure/domains/:id/run-now
+
+Run the domain's collectors now instead of waiting for the job — every
+collector its scope and `collectors` allow, whatever its schedule (also for a
+domain that is switched off). Findings, baselines, `last_summary` and
+`next_run_at` are updated exactly as for a scheduled run. At most 2 registered
+lookalikes get a certificate check per manual run. crt.sh can take 30-60 s per
+query, so allow a client timeout of a few minutes.
+
+**Authentication:** Required (Admin)
+
+**Response (200):**
+```json
+{
+  "domain_id": 1,
+  "domain": "example.com",
+  "scope": "own",
+  "trigger": "manual",
+  "started_at": "2026-10-11T02:29:22.000Z",
+  "duration_ms": 39602,
+  "status": "ok",
+  "new_findings": 0,
+  "retry": [],
+  "retry_attempt": 0,
+  "next_run_in_minutes": 1440,
+  "collectors": {
+    "dns": {
+      "status": "baseline",
+      "note": "baseline recorded: NS 2, MX 1, TXT 2, DMARC 1, A 2, AAAA 2",
+      "new_findings": 0,
+      "at": "2026-10-11T02:29:22.000Z",
+      "details": { "records": { "NS": 2, "MX": 1, "TXT": 2, "DMARC": 1, "A": 2, "AAAA": 2 }, "resolvers": "system" }
+    },
+    "rdap": {
+      "status": "baseline",
+      "note": "registrar RESERVED-Internet Assigned Numbers Authority (IANA 376); 2 nameservers; expires 2027-08-13 (306 days); baseline recorded",
+      "new_findings": 0,
+      "details": { "server": "rdap.verisign.com", "expires_at": "2027-08-13T04:00:00.000Z", "days_left": 306, "...": "..." }
+    },
+    "lookalike": {
+      "status": "baseline",
+      "note": "138 candidates checked, 18 registered (baseline recorded)",
+      "new_findings": 0,
+      "details": { "candidates": 138, "registered": 18, "registered_lookalikes": ["example.net", "exmple.com", "..."], "unresolved": 0, "dnstwist": false }
+    },
+    "ct": {
+      "status": "baseline",
+      "note": "baseline recorded: 12 unexpired certificates; 2 of 18 registered lookalikes checked this run",
+      "new_findings": 0,
+      "details": { "certificates": 12, "lookalikes_registered": 18, "lookalikes_checked": 2 }
+    }
+  }
+}
+```
+Per-collector `status`: `baseline` (first run, recorded silently), `ok`,
+`unsupported` (nothing to monitor, e.g. a TLD without RDAP — `note` says why),
+`error` (with `error` and `transient`; transient ones are retried early and
+listed in `retry`), `disabled` (switched off in `collectors`) or
+`not_applicable` (not run for this scope). `warnings` lists partial failures
+that did not stop a collector (e.g. one DNS record type timing out).
+
+**Errors:**
+- `404` - domain not found
+- `409` - this domain is already being checked, or domain monitoring is
+  disabled (`exposure_domain_monitor_enabled: false`)
 
 ---
 
@@ -4185,6 +4371,44 @@ Findings, newest first.
 ```
 Findings from an `email_domain` identity also carry `detail.alias` (the local part
 that was found).
+
+Domain-monitor findings have `source: "domain-monitor"`, `domain_id` set, an
+`event_type` of `new_cert`, `unexpected_ca`, `lookalike_registered`,
+`rdap_change`, `dns_drift` or `expiry_warning`, and a `detail` naming the
+`collector` plus the change itself — e.g. a DNS drift:
+```json
+{
+  "id": 31,
+  "source": "domain-monitor",
+  "identity_id": null,
+  "domain_id": 1,
+  "event_type": "dns_drift",
+  "title": "Nameserver (NS) records changed for example.com",
+  "severity": "critical",
+  "detail": {
+    "collector": "dns",
+    "domain": "example.com",
+    "record_type": "NS",
+    "before": ["a.iana-servers.net", "b.iana-servers.net"],
+    "after": ["ns1.attacker.example"],
+    "added": ["ns1.attacker.example"],
+    "removed": ["a.iana-servers.net", "b.iana-servers.net"],
+    "resolvers": "system"
+  },
+  "alert_id": 4790,
+  "first_seen": "2026-10-11T09:17:41Z",
+  "last_seen": "2026-10-11T09:17:41Z",
+  "resolved_at": null,
+  "identity_kind": null,
+  "identity_value": null,
+  "domain": "example.com"
+}
+```
+Certificate findings carry `crtsh_id` / `crtsh_url`, `issuer`, `issuer_org`,
+`serial`, `names`, `not_before` / `not_after` (and `new_names` for a new host);
+lookalike findings carry `lookalike`, `fuzzer`, `has_address` and `has_mx`; RDAP
+changes carry `field`, `before`, `after`, `added` and `removed`; expiry warnings
+carry `expires_at` and `days_left`.
 
 **Errors:** `400` - unknown `source`/`severity`, or a malformed id/limit/offset
 

@@ -1,7 +1,8 @@
 import net from 'net';
 import { Router, Request, Response } from 'express';
 import { ApiError } from '../middleware/errorHandler';
-import { authorize } from '../middleware/auth';
+import { authorize, requireOperator } from '../middleware/auth';
+import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { DiscoveryScanModel } from '../models/DiscoveryScan';
 import { DiscoverySourceModel, DiscoverySourceManualInput } from '../models/DiscoverySource';
 import { LogShipperModel } from '../models/LogShipper';
@@ -19,7 +20,14 @@ import { loadFingerprintLibrary, getFingerprintById } from '../services/logDisco
 import { listPollableFingerprintIds } from '../services/logDiscovery/apiPoll/registry';
 import { pollOneSource } from '../services/logDiscovery/apiPoll/poller';
 
+// Access: app.ts mounts this router behind `authenticate`; the UI's Log
+// Discovery page is limited to admins and operators. Reads are open to any role.
+// Starting or cancelling a scan (which may dispatch it to a shipper) and
+// triaging a discovered source (confirm, ignore, mark onboarded) require admin or
+// operator; scan denials are written to audit_logs. Changing the scan scope,
+// manual sources and poll credentials stays admin-only (authorize('admin')).
 const router = Router();
+const requireDiscoveryScan = requireScanPermission(UserRole.Operator, 'discovery_scan');
 
 function parseSourceId(req: Request): number {
   const id = parseInt(req.params.id, 10);
@@ -144,7 +152,7 @@ router.get('/fingerprints', (_req: Request, res: Response) => {
 });
 
 // POST /scans - trigger a scan (mode: passive | active | full). Runs asynchronously; returns the job id.
-router.post('/scans', async (req: Request, res: Response) => {
+router.post('/scans', requireDiscoveryScan, async (req: Request, res: Response) => {
   const { mode = 'full', manual_cidrs } = req.body || {};
   if (!['passive', 'active', 'full'].includes(mode)) {
     throw new ApiError(400, "mode must be 'passive', 'active', or 'full'");
@@ -198,7 +206,7 @@ router.get('/scans/:id', async (req: Request, res: Response) => {
 // worker), and a shipper-dispatched scan stuck 'queued' because its shipper
 // never came back to claim it. In every case the status flips to failed; there
 // may just be nothing to interrupt.
-router.post('/scans/:id/cancel', async (req: Request, res: Response) => {
+router.post('/scans/:id/cancel', requireDiscoveryScan, async (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id)) throw new ApiError(400, 'Invalid scan id');
   const scan = await DiscoveryScanModel.findById(id);
@@ -256,7 +264,7 @@ router.delete('/sources/:id', authorize('admin'), async (req: Request, res: Resp
 });
 
 // POST /sources/:id/confirm - user confirms a candidate is what the matcher thinks it is
-router.post('/sources/:id/confirm', async (req: Request, res: Response) => {
+router.post('/sources/:id/confirm', requireOperator, async (req: Request, res: Response) => {
   const id = parseSourceId(req);
   const updated = await DiscoverySourceModel.setStatus(id, 'confirmed');
   if (!updated) throw new ApiError(404, 'Discovery source not found');
@@ -264,7 +272,7 @@ router.post('/sources/:id/confirm', async (req: Request, res: Response) => {
 });
 
 // POST /sources/:id/ignore - dismiss a candidate; it will not resurface in the ranked list
-router.post('/sources/:id/ignore', async (req: Request, res: Response) => {
+router.post('/sources/:id/ignore', requireOperator, async (req: Request, res: Response) => {
   const id = parseSourceId(req);
   const updated = await DiscoverySourceModel.setStatus(id, 'ignored');
   if (!updated) throw new ApiError(404, 'Discovery source not found');
@@ -285,7 +293,7 @@ router.post('/sources/:id/onboard/preview', async (req: Request, res: Response) 
 
 // POST /sources/:id/onboard/confirm - manual mode only: record the chosen log_access method and
 // mark the source onboarded. Requires an explicit confirm:true -- never onboard without it.
-router.post('/sources/:id/onboard/confirm', async (req: Request, res: Response) => {
+router.post('/sources/:id/onboard/confirm', requireOperator, async (req: Request, res: Response) => {
   const id = parseSourceId(req);
   if (req.body?.confirm !== true) {
     throw new ApiError(400, 'Set confirm:true to acknowledge you have applied the onboarding instructions');

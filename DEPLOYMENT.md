@@ -665,7 +665,7 @@ This key is separate from the syslog `api_key` above and revokes cleanly: unlike
 
 When rotating shipper API keys:
 
-1. Generate new API key in SIEMBox UI
+1. Generate new API key in SIEMBox UI (**Shippers** → **View** → **Regenerate**; admin role). An operator can delete the shipper and add it again instead, then re-add its sources and volumes. Admins and operators can view a shipper's current key in its details at any time.
 2. Update the shipper's API key environment variable
 3. Restart the shipper container
 

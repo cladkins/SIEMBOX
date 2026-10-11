@@ -39,6 +39,26 @@ Authorization: Bearer YOUR_JWT_TOKEN
 
 The only routes that take no login are `POST /api/auth/login`, the `/health` checks, the shipper-facing `/api/shippers` endpoints (authenticated by the shipper's API key or HTTP push key, see [Log Shippers](#log-shippers-endpoints)), and the EDR agent endpoints (enrollment token or per-agent key).
 
+### Roles for scan and asset writes
+
+Reads under `/api/assets`, `/api/vulnerabilities`, `/api/scheduled-scans`, `/api/log-discovery` and `/api/containers` are open to every logged-in role. Each write requires the roles that can open the UI page that makes the call; any other role gets `403`.
+
+| Route | Admin | Operator | Analyst | Viewer |
+|---|---|---|---|---|
+| `POST /api/assets`, `PUT /api/assets/:id`, `DELETE /api/assets/:id` | yes | yes | yes | no |
+| `POST /api/assets/scan`, `POST /api/assets/discover` | yes | yes | yes | no |
+| `POST /api/vulnerabilities/templates/refresh` | yes | yes | yes | no |
+| `POST /api/vulnerabilities/templates/download` | yes | yes | no | no |
+| `POST /api/vulnerabilities/scans`, `POST /api/vulnerabilities/scans/:scanId/cancel` | yes | yes | no | no |
+| `PATCH /api/vulnerabilities/:assetId/:vulnId` | yes | yes | no | no |
+| `POST /api/scheduled-scans`, `PUT` / `DELETE /api/scheduled-scans/:id`, `POST /api/scheduled-scans/:id/run` | yes | yes | no | no |
+| `POST /api/log-discovery/scans`, `POST /api/log-discovery/scans/:id/cancel` | yes | yes | no | no |
+| `POST /api/log-discovery/sources/:id/confirm`, `/ignore`, `/onboard/confirm` | yes | yes | no | no |
+| `PUT /api/log-discovery/scope/cidrs`, `POST /api/log-discovery/sources/manual`, `DELETE /api/log-discovery/sources/:id`, the `/sources/:id/poller` writes | yes | no | no | no |
+| `POST /api/containers/scan` | yes | yes | no | no |
+
+A refused scan or asset write is also recorded in `audit_logs` (`action` `access.denied`, with the required and actual role); the admin-only log-discovery routes and the log-discovery source actions answer `403` without that audit entry. Shipper management has its own table under [Log Shippers](#log-shippers-endpoints). (Earlier versions let any logged-in role, viewers included, make these calls.)
+
 ---
 
 ## Response Format
@@ -1829,7 +1849,7 @@ Update shipper details.
 }
 ```
 
-**Note:** Only `name`, `description`, `hostname` and `config` can be changed; any other field in the body is ignored. Use the regenerate endpoint for `api_key` and the http-push-key endpoints for the push key; status, version and last-seen come from the shipper itself.
+**Note:** Only `name`, `description` and `hostname` can be changed; any other field in the body is ignored. Use the regenerate endpoint for `api_key` and the http-push-key endpoints for the push key; status, version and last-seen come from the shipper itself. The free-form `config` is not editable here: the shipper applies it (`siem_host`, `siem_port`, `sources`) when it registers, so changing it would redirect the shipper's logs. Manage sources with the source endpoints below.
 
 **Errors:**
 - `400` - The body contains none of the editable fields
@@ -1862,7 +1882,7 @@ Delete log shipper.
 
 Regenerate API key for log shipper (admin only).
 
-**Authentication:** Required (Admin)
+**Authentication:** Required (Admin). An operator who needs a new key can delete the shipper and create it again (its sources and volumes then have to be added again). Admins and operators can read the current key at any time from `GET /api/shippers/:id`.
 
 **Response (200):**
 ```json
@@ -2154,7 +2174,7 @@ Get activity log for shipper.
 
 Regenerate shipper API key (invalidates old key).
 
-**Authentication:** Required (Admin)
+**Authentication:** Required (Admin; see the operator alternative above)
 
 **Response (200):**
 ```json
@@ -2495,9 +2515,11 @@ Every `/api/assets` route requires a login (`Authorization: Bearer <token>`); wi
 |---|---|---|
 | GET | `/api/assets`, `/api/assets/statistics`, `/api/assets/:id`, `/api/assets/:id/related`, `/api/assets/:id/services` | Any role |
 | GET | `/api/assets/scans`, `/api/assets/scans/active`, `/api/assets/scans/statistics`, `/api/assets/scans/:scanId` | Any role |
-| POST / PUT / DELETE | `/api/assets`, `/api/assets/:id` | Any role |
-| POST | `/api/assets/discover` | Any role |
+| POST / PUT / DELETE | `/api/assets`, `/api/assets/:id` | Admin, analyst or operator |
+| POST | `/api/assets/discover` | Admin, analyst or operator |
 | POST | `/api/assets/scan` | Admin, analyst or operator |
+
+The writes take the roles that can open the Asset Inventory page; a viewer gets `403` (see [Roles for scan and asset writes](#roles-for-scan-and-asset-writes)).
 
 ### GET /api/assets/scans
 
@@ -2744,6 +2766,8 @@ below are the alternative to the manual copy-paste recipe: save a token and
 SIEMBOX pulls that source's events on a schedule instead. See
 `backend/src/services/logDiscovery/apiPoll/`.
 
+**Access:** every route requires a login. Reads (and the read-only `onboard/preview`) are open to any role. Starting or cancelling a scan and the source actions `confirm`, `ignore` and `onboard/confirm` require admin or operator, the roles that can open the Log Discovery page. Changing the scan scope, manual sources and poll credentials requires admin. See [Roles for scan and asset writes](#roles-for-scan-and-asset-writes).
+
 ### GET /api/log-discovery/scope
 
 Preview the scan scope: the single-VLAN warning (SIEMBOX only sees its own
@@ -2835,7 +2859,7 @@ The loaded fingerprint library (read-only), so the UI can explain what each matc
 
 Trigger a scan. Runs asynchronously; returns immediately with the job id.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator; other roles get `403`)
 
 **Request Body:**
 ```json
@@ -2904,7 +2928,7 @@ this process) and on a shipper-dispatched scan still `queued` — clearing one w
 shipper never came back to claim it. Also the remedy for a row orphaned `running`
 by a previous process. Any other status is left untouched.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator; other roles get `403`)
 
 **Response (200):**
 ```json
@@ -3016,7 +3040,7 @@ re-scanning or ignoring it, never deleted here.
 
 Confirm a candidate is what the matcher thinks it is.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 ---
 
@@ -3024,7 +3048,7 @@ Confirm a candidate is what the matcher thinks it is.
 
 Dismiss a source; it will not resurface in the ranked list.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 ---
 
@@ -3033,7 +3057,7 @@ Dismiss a source; it will not resurface in the ranked list.
 Render the copy-paste onboarding block for a confirmed source's matched
 fingerprint. Read-only -- does not change the source's status.
 
-**Authentication:** Required
+**Authentication:** Required (any role)
 
 **Request Body:**
 ```json
@@ -3057,7 +3081,7 @@ Manual-mode onboarding, finalized: records the chosen `log_access` method and
 marks the source `onboarded`. Requires an explicit `confirm: true` -- discovery
 never onboards without user confirmation.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **Request Body:**
 ```json
@@ -3175,6 +3199,16 @@ Poll immediately instead of waiting for the next scheduled cycle -- for UI feedb
 ## Vulnerabilities Endpoints
 
 Every route here requires a login (`Authorization: Bearer <token>`); without one the API answers `401`. The read routes are open to any role. (Earlier versions answered the read routes without a login; scripts that relied on that must now send a token.)
+
+| Method | Path | Access |
+|---|---|---|
+| GET | every read route below | Any role |
+| POST | `/api/vulnerabilities/templates/refresh` | Admin, analyst or operator |
+| POST | `/api/vulnerabilities/templates/download` | Admin or operator |
+| POST | `/api/vulnerabilities/scans`, `/api/vulnerabilities/scans/:scanId/cancel` | Admin or operator |
+| PATCH | `/api/vulnerabilities/:assetId/:vulnId` | Admin or operator |
+
+Each write takes the roles of the UI page that makes the call (Templates and Vulnerability Scanning for refresh; Vulnerability Scanning for download, scans and cancel; Vulnerability Management for status changes); other roles get `403`.
 
 ### GET /api/vulnerabilities/summary
 
@@ -3381,7 +3415,7 @@ Get templates by tag.
 
 Refresh the template cache.
 
-**Authentication:** Required
+**Authentication:** Required (admin, analyst or operator)
 
 **Response (200):**
 ```json
@@ -3401,6 +3435,16 @@ Refresh the template cache.
   }
 }
 ```
+
+---
+
+### POST /api/vulnerabilities/templates/download
+
+Download the Nuclei templates (first run) or update them with `nuclei -update-templates`. Custom templates are kept.
+
+**Authentication:** Required (admin or operator)
+
+**Response (200):** `{ "message", "stats", "output" }`, with `stats` as for refresh. A failed download answers `500` with `{ "error", "details" }`.
 
 ---
 
@@ -3545,7 +3589,7 @@ Get vulnerability scan status (for polling).
 
 Trigger a new vulnerability scan using Nuclei.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **Request Body:**
 ```json
@@ -3591,6 +3635,7 @@ Trigger a new vulnerability scan using Nuclei.
 
 **Errors:**
 - `400` - Missing target
+- `403` - Analyst or viewer role
 
 ---
 
@@ -3598,7 +3643,7 @@ Trigger a new vulnerability scan using Nuclei.
 
 Cancel a running vulnerability scan.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **URL Parameters:**
 - `scanId` - Scan ID
@@ -3612,6 +3657,7 @@ Cancel a running vulnerability scan.
 ```
 
 **Errors:**
+- `403` - Analyst or viewer role
 - `404` - Scan not found or not running
 
 ---
@@ -3747,7 +3793,7 @@ Get vulnerabilities for a specific asset.
 
 Update vulnerability status for an asset.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **URL Parameters:**
 - `assetId` - Asset ID
@@ -3780,6 +3826,7 @@ Update vulnerability status for an asset.
 
 **Errors:**
 - `400` - Invalid asset ID, vulnerability ID, or status
+- `403` - Analyst or viewer role
 - `404` - Asset-vulnerability mapping not found
 
 ---

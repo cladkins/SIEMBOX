@@ -3,8 +3,14 @@ import { ScheduledScanModel, ScheduledScanType } from '../models/ScheduledScan';
 import { ApiError } from '../middleware/errorHandler';
 import { triggerScheduledScan } from '../jobs/scheduledScans';
 import { LogShipperModel } from '../models/LogShipper';
+import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
 
+// app.ts mounts this router behind `authenticate`. Listing is open to any role;
+// creating, changing, deleting or running a schedule (which dispatches a scan,
+// possibly to a shipper) requires admin or operator, the roles that can open the
+// Scheduled Scans page. Denials are written to audit_logs.
 const router = Router();
+const requireScheduleWrite = requireScanPermission(UserRole.Operator, 'scheduled_scan');
 
 function validateScanOptions(scanType: ScheduledScanType, opts: any): void {
   if (!opts || typeof opts !== 'object' || Array.isArray(opts)) {
@@ -58,7 +64,7 @@ router.get('/', async (_req: Request, res: Response) => {
 });
 
 // POST / - create a schedule
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', requireScheduleWrite, async (req: Request, res: Response) => {
   const { name, scan_type, scan_options, interval_minutes, enabled } = req.body;
 
   if (!name || typeof name !== 'string') {
@@ -83,7 +89,7 @@ router.post('/', async (req: Request, res: Response) => {
 });
 
 // PUT /:id - update a schedule
-router.put('/:id', async (req: Request, res: Response) => {
+router.put('/:id', requireScheduleWrite, async (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) {
     throw new ApiError(400, 'Invalid id');
@@ -119,7 +125,7 @@ router.put('/:id', async (req: Request, res: Response) => {
 });
 
 // DELETE /:id - remove a schedule
-router.delete('/:id', async (req: Request, res: Response) => {
+router.delete('/:id', requireScheduleWrite, async (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) {
     throw new ApiError(400, 'Invalid id');
@@ -132,7 +138,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
 });
 
 // POST /:id/run - trigger a schedule immediately
-router.post('/:id/run', async (req: Request, res: Response) => {
+router.post('/:id/run', requireScheduleWrite, async (req: Request, res: Response) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) {
     throw new ApiError(400, 'Invalid id');

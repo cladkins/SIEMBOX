@@ -3,8 +3,10 @@
  * on an ephemeral port, a real Postgres, one user per role holding a session
  * token (as login would issue), and a throwaway shipper with a test key. When
  * Postgres (or the shipper schema) isn't reachable these tests skip themselves
- * so `npm test` stays green on a machine without a database. Every row created
- * here is removed again. Run with `npm test` (tsx --test).
+ * so `npm test` stays green on a machine without a database. The 403 probes
+ * target only rows this test created (its own shipper, source and volume). Every
+ * row created here is removed again, along with authz-* shippers an earlier,
+ * interrupted run left behind. Run with `npm test` (tsx --test).
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,11 +18,13 @@ import app from '../app';
 import pool, { closePools } from '../config/database';
 import { UserModel } from '../models/User';
 import { SessionModel } from '../models/Session';
-import { LogShipperModel } from '../models/LogShipper';
+import { LogShipperModel, ShipperSourceModel, ShipperVolumeModel } from '../models/LogShipper';
 
 const ROLES = ['admin', 'operator', 'analyst', 'viewer'] as const;
 type Role = (typeof ROLES)[number];
 const SKIP = 'Postgres with the shipper schema is not reachable';
+/** Names this test gives shippers (authz-<tag>, authz-op-<tag>, authz-denied-<tag>), any tag. */
+const TEST_SHIPPER_NAME = '^authz-(op-|denied-)?[0-9a-f]{12}$';
 
 let dbReady = false;
 let server: Server | undefined;
@@ -31,6 +35,10 @@ const userIds: number[] = [];
 const shipperIds: number[] = [];
 let shipperId = 0;
 let shipperKey = '';
+let sourceId = 0;
+let volumeId = 0;
+/** 403 responses so far; each one is logged to application_errors (see after()). */
+let denials = 0;
 
 before(async () => {
   try {
@@ -54,6 +62,23 @@ before(async () => {
   const shipper = await LogShipperModel.create({ name: `authz-${tag}`, description: 'route auth test', api_key: shipperKey });
   shipperId = shipper.id;
   shipperIds.push(shipper.id);
+  // A source and a volume of the test's own, for the 403 probes to aim at.
+  const source = await ShipperSourceModel.create({
+    shipper_id: shipperId,
+    source_type: 'file',
+    enabled: true,
+    file_path: '/var/log/authz-test.log',
+    tag: `authz-${tag}`,
+    facility: 'local0',
+  });
+  sourceId = source.id;
+  const volume = await ShipperVolumeModel.create({
+    shipper_id: shipperId,
+    host_path: '/var/log',
+    container_path: '/host/var/log',
+    mode: 'ro',
+  });
+  volumeId = volume.id;
 
   server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -63,19 +88,26 @@ before(async () => {
 after(async () => {
   if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
   if (dbReady) {
-    await pool.query('DELETE FROM log_shippers WHERE id = ANY($1)', [shipperIds]);
-    // 403s are logged to application_errors with the caller's user id
-    // (fire-and-forget, so one may land late) and that FK doesn't cascade.
-    for (let attempt = 0; ; attempt++) {
-      await pool.query('DELETE FROM application_errors WHERE user_id = ANY($1)', [userIds]);
-      try {
-        await pool.query('DELETE FROM users WHERE id = ANY($1)', [userIds]);
-        break;
-      } catch (err) {
-        if (attempt >= 20) throw err;
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
+    // This run's shippers, plus authz-* shippers an interrupted earlier run left
+    // behind. Only leftovers older than 10 minutes: a run going on in parallel
+    // against the same database keeps its own. Sources, volumes and activity
+    // rows cascade.
+    await pool.query(
+      `DELETE FROM log_shippers
+        WHERE id = ANY($1) OR (name ~ $2 AND created_at < NOW() - INTERVAL '10 minutes')`,
+      [shipperIds, TEST_SHIPPER_NAME]
+    );
+    // Each 403 is logged to application_errors with the caller's user id,
+    // fire-and-forget. Wait until those rows have landed, then delete them
+    // before the users: deleting a user only nulls user_id (ON DELETE SET NULL),
+    // which would leave orphan rows behind.
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const logged = await pool.query('SELECT count(*)::int AS n FROM application_errors WHERE user_id = ANY($1)', [userIds]);
+      if (logged.rows[0].n >= denials) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    await pool.query('DELETE FROM application_errors WHERE user_id = ANY($1)', [userIds]);
+    await pool.query('DELETE FROM users WHERE id = ANY($1)', [userIds]);
   }
   await closePools();
 });
@@ -89,6 +121,7 @@ async function call(role: Role | null, method: string, path: string, body?: unkn
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  if (res.status === 403) denials++;
   return { status: res.status, json: (await res.json().catch(() => null)) as any };
 }
 
@@ -98,6 +131,23 @@ async function dbShipper(id: number) {
     [id]
   );
   return r.rows[0];
+}
+
+/** The test shipper with its source and volume, as stored. */
+async function dbShipperTree() {
+  const [source, volume, sources, volumes] = await Promise.all([
+    pool.query('SELECT * FROM shipper_sources WHERE id = $1', [sourceId]),
+    pool.query('SELECT * FROM shipper_volumes WHERE id = $1', [volumeId]),
+    pool.query('SELECT id FROM shipper_sources WHERE shipper_id = $1 ORDER BY id', [shipperId]),
+    pool.query('SELECT id FROM shipper_volumes WHERE shipper_id = $1 ORDER BY id', [shipperId]),
+  ]);
+  return {
+    shipper: await dbShipper(shipperId),
+    source: source.rows[0],
+    volume: volume.rows[0],
+    sourceIds: sources.rows.map((r) => r.id),
+    volumeIds: volumes.rows.map((r) => r.id),
+  };
 }
 
 test('every role can list shippers; only admin and operator get api_key', async (t) => {
@@ -129,16 +179,17 @@ test('shipper detail carries api_key only for admin and operator', async (t) => 
 
 test('analyst and viewer get 403 on every shipper write, and nothing changes', async (t) => {
   if (!dbReady) return t.skip(SKIP);
-  const before = await dbShipper(shipperId);
+  const before = await dbShipperTree();
+  assert.ok(before.source && before.volume, 'the test source and volume exist');
   const writes: Array<[string, string, unknown?]> = [
     ['POST', '/api/shippers', { name: `authz-denied-${tag}` }],
     ['PUT', `/api/shippers/${shipperId}`, { description: 'changed' }],
     ['DELETE', `/api/shippers/${shipperId}`],
     ['POST', `/api/shippers/${shipperId}/sources`, { source_type: 'file', file_path: '/x.log', tag: 'x' }],
-    ['PUT', '/api/shippers/sources/1', { enabled: false }],
-    ['DELETE', '/api/shippers/sources/1'],
+    ['PUT', `/api/shippers/sources/${sourceId}`, { enabled: false, tag: 'changed' }],
+    ['DELETE', `/api/shippers/sources/${sourceId}`],
     ['POST', `/api/shippers/${shipperId}/volumes`, { host_path: '/a', container_path: '/b' }],
-    ['DELETE', '/api/shippers/volumes/1'],
+    ['DELETE', `/api/shippers/volumes/${volumeId}`],
     ['POST', `/api/shippers/${shipperId}/regenerate-key`],
   ];
   for (const role of ['analyst', 'viewer'] as const) {
@@ -146,7 +197,7 @@ test('analyst and viewer get 403 on every shipper write, and nothing changes', a
       assert.equal((await call(role, method, path, body)).status, 403, `${role} ${method} ${path}`);
     }
   }
-  assert.deepEqual(await dbShipper(shipperId), before);
+  assert.deepEqual(await dbShipperTree(), before, 'shipper, source and volume are unchanged; nothing was added');
   const created = await pool.query('SELECT 1 FROM log_shippers WHERE name = $1', [`authz-denied-${tag}`]);
   assert.equal(created.rowCount, 0);
 });

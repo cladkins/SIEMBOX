@@ -10,10 +10,14 @@
  *   "ghost" shippers with a revoked key, must keep working; see CLAUDE.md);
  * - api_key is returned only to admin and operator, the push-key hash never;
  * - PUT bodies are cut down to editable fields before they can reach SQL.
- * No database needed. Run with `npm test` (tsx --test).
+ * Hermetic: the database pool is mocked to fail, so if a gate or the column
+ * allow-list ever regresses, the query fails here instead of writing (with the
+ * real-looking ids below) to whatever database the environment points at.
+ * Run with `npm test` (tsx --test).
  */
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import pool from '../config/database';
 import router, {
   canManageShippers,
   pickFields,
@@ -24,6 +28,14 @@ import router, {
 import { authenticate, optionalAuthenticate, requireAdmin, requireOperator } from '../middleware/auth';
 import { LogShipperModel, ShipperSourceModel, type LogShipper, type ShipperSource } from '../models/LogShipper';
 import { ApiError } from '../middleware/errorHandler';
+
+const SQL_MUST_NOT_RUN = 'SQL must not run in shippers.test.ts';
+const poolQuery = mock.method(pool, 'query', async () => {
+  throw new Error(SQL_MUST_NOT_RUN);
+});
+const poolConnect = mock.method(pool, 'connect', async () => {
+  throw new Error(SQL_MUST_NOT_RUN);
+});
 
 type Route = [method: string, path: string];
 
@@ -190,13 +202,20 @@ test('PUT /:id keeps only editable shipper fields', () => {
     api_key: 'attacker-chosen',
     http_push_key_hash: 'attacker-chosen',
     status: 'online',
+    config: { siem_host: 'attacker.example' },
     id: 99,
     'name = name, api_key': 'x',
   };
   assert.deepEqual(pickFields<LogShipper>(body, SHIPPER_EDITABLE_FIELDS), { name: 'renamed', description: 'd' });
-  for (const forbidden of ['api_key', 'http_push_key_hash', 'status', 'id', 'last_seen']) {
+  for (const forbidden of ['api_key', 'http_push_key_hash', 'status', 'config', 'id', 'last_seen']) {
     assert.ok(!(SHIPPER_EDITABLE_FIELDS as readonly string[]).includes(forbidden), forbidden);
   }
+});
+
+test('PUT /:id cannot set config, which the shipper applies on register (log destination and sources)', async () => {
+  const redirect = { config: { siem_host: 'attacker.example', siem_port: 514, sources: [{ source_type: 'file', file_path: '/etc/shadow' }] } };
+  assert.deepEqual(pickFields<LogShipper>({ name: 'n', ...redirect }, SHIPPER_EDITABLE_FIELDS), { name: 'n' });
+  await assert.rejects(LogShipperModel.update(1, redirect as Partial<LogShipper>), /"config" is not an updatable column/);
 });
 
 test('PUT /sources/:sourceId keeps only editable source fields (the UI also sends id)', () => {
@@ -227,4 +246,10 @@ test('the update models refuse unknown column names before any SQL runs', async 
     ShipperSourceModel.update(1, { shipper_id: 2 } as Partial<ShipperSource>),
     /not an updatable column/
   );
+});
+
+// Keep last: proves the file stayed hermetic.
+test('nothing in this file reached the database', () => {
+  assert.equal(poolQuery.mock.callCount(), 0, 'no query may run');
+  assert.equal(poolConnect.mock.callCount(), 0, 'no connection may be opened');
 });

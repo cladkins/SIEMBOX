@@ -63,8 +63,13 @@ export function shipperForRole<T extends { http_push_key_hash?: string | null }>
   return view;
 }
 
-/** Fields a caller may set through PUT /:id; the rest are server-managed or shipper-reported. */
-export const SHIPPER_EDITABLE_FIELDS: readonly (keyof LogShipper)[] = ['name', 'description', 'hostname', 'config'];
+/**
+ * Fields a caller may set through PUT /:id; the rest are server-managed or
+ * shipper-reported. Not `config`: the shipper applies that free-form JSON
+ * (siem_host, siem_port, sources) when it registers, so writing it would let a
+ * caller redirect the shipper's logs. The UI never sends it.
+ */
+export const SHIPPER_EDITABLE_FIELDS: readonly (keyof LogShipper)[] = ['name', 'description', 'hostname'];
 
 /** Fields a caller may set through PUT /sources/:sourceId. */
 export const SOURCE_EDITABLE_FIELDS: readonly (keyof ShipperSource)[] = [

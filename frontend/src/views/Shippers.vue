@@ -1134,7 +1134,7 @@ async function deleteVolume(volume: any) {
       }
     );
 
-    await api.deleteShipperVolume(currentShipper.value.id, volume.id);
+    await api.deleteShipperVolume(volume.id);
     ElMessage.success('Volume deleted successfully');
 
     // Refresh shipper details

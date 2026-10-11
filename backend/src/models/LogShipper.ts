@@ -36,14 +36,15 @@ export function withHttpPushStatus<T extends { http_push_key_hash?: string | nul
 
 /**
  * Columns LogShipperModel.update may set: the caller-editable fields
- * (name/description/hostname/config), api_key (regenerate-key), and what the
- * shipper reports on register. The HTTP push-key columns have their own setters.
+ * (name/description/hostname), api_key (regenerate-key), and what the shipper
+ * reports on register. The HTTP push-key columns have their own setters. Not
+ * `config`: nothing server-side writes it, and the shipper applies it
+ * (siem_host, siem_port, sources) when it registers.
  */
 const SHIPPER_UPDATE_COLUMNS = new Set([
   'name',
   'description',
   'hostname',
-  'config',
   'api_key',
   'status',
   'version',

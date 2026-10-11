@@ -14,6 +14,7 @@ import { startDiscoveryApiPollerJob, stopDiscoveryApiPollerJob } from './jobs/di
 import { startGeoipUpdateJob, stopGeoipUpdateJob } from './jobs/geoipUpdate';
 import { startYaraRulesJob, stopYaraRulesJob } from './jobs/yaraRules';
 import { startTriageReconcilerJob, stopTriageReconcilerJob } from './jobs/triageReconciler';
+import { startLeakedCredsJob, stopLeakedCredsJob } from './jobs/leakedCreds';
 import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
 import { TemplateService } from './services/scanner/templateService';
 import { CredentialEncryption } from './services/credentials/credentialEncryption';
@@ -138,6 +139,10 @@ const startServer = async () => {
     // disabled in settings.
     startTriageReconcilerJob();
 
+    // Start the leaked-credential checker (exposure monitoring). No-ops on each
+    // tick until an HIBP key is saved and identities are added.
+    startLeakedCredsJob();
+
     // Warm the Nuclei template cache in the background so the first request to
     // the (heavy) template endpoints hits a populated cache instead of parsing
     // ~10k files inline and tripping the client timeout. Fire-and-forget.
@@ -189,6 +194,7 @@ const shutdown = async (signal: string) => {
   stopGeoipUpdateJob();
   stopYaraRulesJob();
   stopTriageReconcilerJob();
+  stopLeakedCredsJob();
   await closePools();
   logger.info('Database pools closed');
   process.exit(0);

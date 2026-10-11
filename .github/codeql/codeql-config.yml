@@ -33,6 +33,11 @@ name: "SIEMBox CodeQL config"
 # sha256hex() (see that function's doc comment) did not clear the alert, so
 # this repo-wide exclusion was used instead, matching the pattern above.
 #
+# backend/src/services/exposure/pwnedPasswords.ts also relies on this: it
+# SHA-1-hashes a password because the Pwned Passwords k-anonymity range API
+# requires SHA-1, sending only the first 5 hex chars. The digest is an
+# in-memory lookup key for one comparison, never a stored password hash.
+#
 # Tradeoff: same as above -- this also stops the query from catching a real
 # weak-password-hash mistake anywhere else in the repo (e.g. in
 # routes/auth.ts or routes/users.ts, which handle actual user passwords).

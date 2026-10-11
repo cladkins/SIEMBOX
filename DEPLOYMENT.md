@@ -345,7 +345,8 @@ By default the backend container only sees whatever subnet its own Docker
 bridge network is on (`siembox-network` in `compose.prod.yaml`), so a passive
 scan (ARP table read, mDNS, SSDP) only discovers hosts on that one subnet. If
 your homelab spans more than one VLAN, the Log Discovery page surfaces this as
-a warning and lets you add the other CIDRs manually. An `active`/`full` scan
+a warning and lets an admin add the other CIDRs manually (operators can run
+scans and see the scope, but changing it needs an admin). An `active`/`full` scan
 already sweeps those manually-added CIDRs for real LAN hosts from the default
 bridge network -- Docker's outbound NAT rewrites the container's source IP
 before packets reach your LAN, so active/vulnerability scanning isn't actually

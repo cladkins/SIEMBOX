@@ -5,8 +5,8 @@
  * Postgres (or the shipper schema) isn't reachable these tests skip themselves
  * so `npm test` stays green on a machine without a database. The 403 probes
  * target only rows this test created (its own shipper, source and volume). Every
- * row created here is removed again, along with authz-* shippers an earlier,
- * interrupted run left behind. Run with `npm test` (tsx --test).
+ * row created here is removed again, along with the authz-* shippers and users
+ * an earlier, interrupted run left behind. Run with `npm test` (tsx --test).
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,6 +25,8 @@ type Role = (typeof ROLES)[number];
 const SKIP = 'Postgres with the shipper schema is not reachable';
 /** Names this test gives shippers (authz-<tag>, authz-op-<tag>, authz-denied-<tag>), any tag. */
 const TEST_SHIPPER_NAME = '^authz-(op-|denied-)?[0-9a-f]{12}$';
+/** Usernames this test gives its users (authz-<role>-<tag>), any tag. */
+const TEST_USER_NAME = '^authz-(admin|operator|analyst|viewer)-[0-9a-f]{12}$';
 
 let dbReady = false;
 let server: Server | undefined;
@@ -88,26 +90,33 @@ before(async () => {
 after(async () => {
   if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
   if (dbReady) {
-    // This run's shippers, plus authz-* shippers an interrupted earlier run left
-    // behind. Only leftovers older than 10 minutes: a run going on in parallel
-    // against the same database keeps its own. Sources, volumes and activity
-    // rows cascade.
+    // This run's shippers, by id and by name (the 403 probe's authz-denied-<tag>
+    // has no id here; it exists only if that gate let it through), plus authz-*
+    // shippers and users an interrupted earlier run left behind. Only leftovers
+    // older than 10 minutes: a run going on in parallel against the same
+    // database keeps its own. Sources, volumes, activity rows and sessions cascade.
+    const stale = `created_at < NOW() - INTERVAL '10 minutes'`;
     await pool.query(
-      `DELETE FROM log_shippers
-        WHERE id = ANY($1) OR (name ~ $2 AND created_at < NOW() - INTERVAL '10 minutes')`,
-      [shipperIds, TEST_SHIPPER_NAME]
+      `DELETE FROM log_shippers WHERE id = ANY($1) OR name = ANY($2) OR (name ~ $3 AND ${stale})`,
+      [shipperIds, [`authz-${tag}`, `authz-op-${tag}`, `authz-denied-${tag}`], TEST_SHIPPER_NAME]
     );
     // Each 403 is logged to application_errors with the caller's user id,
     // fire-and-forget. Wait until those rows have landed, then delete them
-    // before the users: deleting a user only nulls user_id (ON DELETE SET NULL),
-    // which would leave orphan rows behind.
+    // (and any audit rows) before the users: deleting a user only nulls user_id
+    // (ON DELETE SET NULL), which would leave orphan rows behind.
     for (let attempt = 0; attempt < 50; attempt++) {
       const logged = await pool.query('SELECT count(*)::int AS n FROM application_errors WHERE user_id = ANY($1)', [userIds]);
       if (logged.rows[0].n >= denials) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    await pool.query('DELETE FROM application_errors WHERE user_id = ANY($1)', [userIds]);
-    await pool.query('DELETE FROM users WHERE id = ANY($1)', [userIds]);
+    const leftover = await pool.query(
+      `SELECT id FROM users WHERE username ~ $1 AND email LIKE '%@siembox.invalid' AND ${stale}`,
+      [TEST_USER_NAME]
+    );
+    const doomed = [...userIds, ...leftover.rows.map((row) => row.id as number)];
+    await pool.query('DELETE FROM application_errors WHERE user_id = ANY($1)', [doomed]);
+    await pool.query('DELETE FROM audit_logs WHERE user_id = ANY($1)', [doomed]);
+    await pool.query('DELETE FROM users WHERE id = ANY($1)', [doomed]);
   }
   await closePools();
 });

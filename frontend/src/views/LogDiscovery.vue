@@ -28,7 +28,7 @@
               <el-icon><Search /></el-icon>
               Scan (passive + active)
             </el-button>
-            <el-button type="success" @click="openManualSourceDialog">
+            <el-button v-if="isAdmin" type="success" @click="openManualSourceDialog">
               <el-icon><Plus /></el-icon>
               Add API pull source
             </el-button>
@@ -49,24 +49,28 @@
         :title="scope.vlan_warning"
       />
 
+      <!-- The scan scope, manual API pull sources and poll credentials are admin-only in the
+           API (PUT /scope/cidrs, /sources/manual, DELETE /sources/:id, the /poller writes), so
+           operators, who can open this page and run scans, see them read-only. -->
       <div class="scope-line">
         <span class="scope-label">Scan scope:</span>
         <el-tag
           v-for="cidr in manualCidrs"
           :key="cidr"
           size="small"
-          closable
+          :closable="isAdmin"
           style="margin-right: 6px"
           @close="removeCidr(cidr)"
         >{{ cidr }}</el-tag>
         <span v-if="!manualCidrs.length" class="scope-empty">No subnets added yet — passive discovery still works without one.</span>
-        <el-button link size="small" @click="openManualCidrDialog">Add a subnet</el-button>
+        <el-button v-if="isAdmin" link size="small" @click="openManualCidrDialog">Add a subnet</el-button>
+        <span v-else class="scope-empty">Only an admin can change the scan scope.</span>
       </div>
 
       <div v-if="showDetectedCidrSuggestion" class="scope-line">
         <span class="scope-label">Detected LAN:</span>
         <el-tag type="success" size="small" style="margin-right: 6px">{{ scope?.detected_lan_cidr }}</el-tag>
-        <el-button link size="small" type="primary" @click="addDetectedCidr">Add to scan scope</el-button>
+        <el-button v-if="isAdmin" link size="small" type="primary" @click="addDetectedCidr">Add to scan scope</el-button>
       </div>
 
       <div v-if="selectedShipperId" class="scope-line">
@@ -142,6 +146,7 @@
         <discovery-sources-table
           :sources="top"
           :fingerprints="fingerprints"
+          :can-delete="isAdmin"
           @confirm="confirmSource"
           @ignore="ignoreSource"
           @onboard="openOnboard"
@@ -154,6 +159,7 @@
           <discovery-sources-table
             :sources="advanced"
             :fingerprints="fingerprints"
+            :can-delete="isAdmin"
             @confirm="confirmSource"
             @ignore="ignoreSource"
             @onboard="openOnboard"
@@ -267,7 +273,7 @@
             style="margin: 8px 0"
           />
 
-          <div class="poller-form">
+          <div v-if="isAdmin" class="poller-form">
             <el-input
               v-if="onboardMethod?.auth === 'basic'"
               v-model="pollerUsername"
@@ -287,13 +293,21 @@
             </el-button>
             <el-button v-if="pollerStatus?.configured" type="danger" plain @click="revokePollerCredential">Revoke</el-button>
           </div>
+          <el-text v-else size="small" type="info" class="poller-admin-hint">
+            Only an admin can save a token or change polling for this source.
+          </el-text>
 
           <div v-if="pollerStatus?.configured" class="poller-controls">
-            <el-switch v-model="pollerEnabled" active-text="Polling on" inactive-text="Polling off" @change="togglePolling" />
-            <span class="poller-interval-label">every</span>
-            <el-input-number v-model="pollerInterval" :min="1" :max="1440" size="small" @change="updatePollerInterval" />
-            <span class="poller-interval-label">min</span>
-            <el-button link size="small" :loading="runningNow" @click="runPollNow">Poll now</el-button>
+            <template v-if="isAdmin">
+              <el-switch v-model="pollerEnabled" active-text="Polling on" inactive-text="Polling off" @change="togglePolling" />
+              <span class="poller-interval-label">every</span>
+              <el-input-number v-model="pollerInterval" :min="1" :max="1440" size="small" @change="updatePollerInterval" />
+              <span class="poller-interval-label">min</span>
+              <el-button link size="small" :loading="runningNow" @click="runPollNow">Poll now</el-button>
+            </template>
+            <span v-else class="poller-interval-label">
+              Polling {{ pollerEnabled ? 'on' : 'off' }}, every {{ pollerInterval }} min
+            </span>
             <span v-if="pollerStatus.last_polled_at" class="poller-last-polled">
               last polled {{ formatDate(pollerStatus.last_polled_at) }}
               <template v-if="pollerStatus.last_status === 'ok'">— {{ pollerStatus.last_event_count ?? 0 }} event(s)</template>
@@ -325,6 +339,12 @@ import logDiscoveryService, {
   type ShipperSummary,
 } from '@/services/logDiscoveryService';
 import DiscoverySourcesTable from '@/components/DiscoverySourcesTable.vue';
+import { useAuthStore } from '@/stores/auth';
+
+const authStore = useAuthStore();
+// Operators can open this page, scan and triage sources; the scope, manual
+// sources and poll credentials are admin-only in the API (see the template).
+const isAdmin = computed(() => authStore.isAdmin);
 
 const loading = ref(false);
 const scanning = ref(false);
@@ -870,6 +890,10 @@ onMounted(async () => {
 .poller-interval-label {
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+.poller-admin-hint {
+  display: block;
+  margin-top: 10px;
 }
 .poller-last-polled {
   color: var(--el-text-color-secondary);

@@ -302,6 +302,15 @@ CREATE TABLE audit_logs (
 );
 ```
 
+`ip_address` is the client address as the API sees it. The API trusts one
+`X-Forwarded-For` hop (`trust proxy` is `1`): behind the web UI's nginx proxy
+that is the real client, but a caller that talks to the API port (8421)
+directly can put any value there. A value that is not an IP address is
+replaced by the TCP peer address (or NULL), so the row is always written
+instead of being rejected by the `INET` column. The scan permission checks
+also keep the TCP peer in `details.peerAddress` whenever it differs from
+`ip_address`, so a forged header still shows where the request came from.
+
 ### Logged Actions
 
 All security-sensitive operations are logged:

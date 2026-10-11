@@ -57,7 +57,7 @@ Reads under `/api/assets`, `/api/vulnerabilities`, `/api/scheduled-scans`, `/api
 | `PUT /api/log-discovery/scope/cidrs`, `POST /api/log-discovery/sources/manual`, `DELETE /api/log-discovery/sources/:id`, the `/sources/:id/poller` writes | yes | no | no | no |
 | `POST /api/containers/scan` | yes | yes | no | no |
 
-A refused scan or asset write is also recorded in `audit_logs` (`action` `access.denied`, with the required and actual role); the admin-only log-discovery routes and the log-discovery source actions answer `403` without that audit entry. Shipper management has its own table under [Log Shippers](#log-shippers-endpoints). (Earlier versions let any logged-in role, viewers included, make these calls.)
+A refused scan or asset write is also recorded in `audit_logs` (`action` `access.denied`, with the required and actual role); the admin-only log-discovery routes and the log-discovery source actions answer `403` without that audit entry. The entry's `ip_address` is the client address the API derives from one `X-Forwarded-For` hop, which is the real client behind the web UI's proxy but whatever the caller sends on a direct call to port 8421. When that value is not an IP address, the TCP peer address is stored instead, so the entry is always written; when the TCP peer differs from `ip_address`, it is kept in `details.peerAddress`. Shipper management has its own table under [Log Shippers](#log-shippers-endpoints). (Earlier versions let any logged-in role, viewers included, make these calls.)
 
 ---
 

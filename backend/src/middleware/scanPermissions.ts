@@ -1,6 +1,21 @@
 import { Request, Response, NextFunction } from 'express';
 import { ApiError } from './errorHandler';
-import { AuditService } from '../services/audit/auditService';
+import { AuditService, toInet } from '../services/audit/auditService';
+
+/**
+ * Where a request came from, for an audit row. req.ip follows one
+ * X-Forwarded-For hop (app.ts: trust proxy 1). Behind the nginx frontend that is
+ * the real client; on a direct call to the API port it is whatever the caller
+ * put in the header. A value that is not an address falls back to the TCP peer,
+ * so the row is still written (ip_address is INET). When the peer differs from
+ * ipAddress (the proxy, or a forged header) it comes back as peerAddress, for
+ * the row's details.
+ */
+export function auditSource(req: Request): { ipAddress: string | null; peerAddress?: string } {
+  const peer = toInet(req.socket?.remoteAddress);
+  const ipAddress = toInet(req.ip) ?? peer;
+  return peer && peer !== ipAddress ? { ipAddress, peerAddress: peer } : { ipAddress };
+}
 
 /**
  * Role hierarchy for scanning permissions
@@ -53,11 +68,12 @@ export const requireScanPermission = (requiredRole: UserRole, resourceType?: str
       // Check role hierarchy
       if (!hasRequiredRole(req.user.role, requiredRole)) {
         // Log unauthorized access attempt
+        const source = auditSource(req);
         await AuditService.log({
           userId: req.user.id,
           action: 'access.denied',
           resourceType: resourceType || 'scan',
-          ipAddress: req.ip || req.socket.remoteAddress || 'unknown',
+          ipAddress: source.ipAddress,
           userAgent: req.headers['user-agent'] || 'unknown',
           responseStatus: 403,
           details: {
@@ -65,6 +81,7 @@ export const requireScanPermission = (requiredRole: UserRole, resourceType?: str
             userRole: req.user.role,
             path: req.path,
             method: req.method,
+            ...(source.peerAddress ? { peerAddress: source.peerAddress } : {}),
           },
         });
 
@@ -156,11 +173,12 @@ export const logScanOperation = async (req: Request, _res: Response, next: NextF
       // Log the operation attempt (will log result after response)
       req.on('finish', async () => {
         try {
+          const source = auditSource(req);
           await AuditService.log({
             userId: req.user!.id,
             action,
             resourceType: extractResourceType(path),
-            ipAddress: req.ip || req.socket.remoteAddress || 'unknown',
+            ipAddress: source.ipAddress,
             userAgent: req.headers['user-agent'] || 'unknown',
             requestBody: redactSensitiveFields(req.body),
             responseStatus: _res.statusCode,
@@ -168,6 +186,7 @@ export const logScanOperation = async (req: Request, _res: Response, next: NextF
               method: req.method,
               path: req.path,
               query: req.query,
+              ...(source.peerAddress ? { peerAddress: source.peerAddress } : {}),
             },
           });
         } catch (error) {

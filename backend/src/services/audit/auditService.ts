@@ -1,3 +1,4 @@
+import net from 'net';
 import { query } from '../../config/database';
 import { batchedDelete } from '../../utils/batchDelete';
 
@@ -9,7 +10,8 @@ export interface AuditLogEntry {
   action: string;
   resourceType?: string;
   resourceId?: number;
-  ipAddress: string;
+  /** Client address. Anything that is not an IP address is stored as NULL (see toInet). */
+  ipAddress: string | null;
   userAgent: string;
   requestBody?: any;
   responseStatus: number;
@@ -40,6 +42,25 @@ export interface AuditLogWithUser extends AuditLogEntry {
 }
 
 /**
+ * `value` in a form audit_logs.ip_address (INET) accepts, or null when it is not
+ * an IP address. Callers pass client-influenced values (req.ip follows
+ * X-Forwarded-For), and Postgres rejecting one would fail the INSERT, which
+ * log() only reports, so the audit row would be lost. Node accepts IPv6 zone ids
+ * ('fe80::1%eth0') that INET does not, so the zone is cut off.
+ */
+export function toInet(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  switch (net.isIP(value)) {
+    case 4:
+      return value;
+    case 6:
+      return value.split('%')[0];
+    default:
+      return null;
+  }
+}
+
+/**
  * Audit Service for logging security-sensitive operations
  *
  * Logs all scanning operations, credential access, and administrative actions
@@ -65,7 +86,7 @@ export class AuditService {
           entry.action,
           entry.resourceType || null,
           entry.resourceId || null,
-          entry.ipAddress,
+          toInet(entry.ipAddress),
           entry.userAgent,
           sanitizedBody ? JSON.stringify(sanitizedBody) : null,
           entry.responseStatus,

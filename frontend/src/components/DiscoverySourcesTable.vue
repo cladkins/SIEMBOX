@@ -44,9 +44,10 @@
         </el-button>
         <el-button v-if="row.status !== 'ignored'" link size="small" @click="$emit('ignore', row)">Ignore</el-button>
         <!-- Only manually added sources are deletable here; a scan-discovered source is removed by
-             re-scanning or ignoring, never by this button (the server also 403s a non-manual delete). -->
+             re-scanning or ignoring, never by this button (the server also 403s a non-manual delete).
+             Deleting is admin-only in the API, so the parent passes can-delete for admins only. -->
         <el-button
-          v-if="row.evidence?.manual === true"
+          v-if="canDelete && row.evidence?.manual === true"
           link
           size="small"
           type="danger"
@@ -67,6 +68,8 @@ import type { RankedSource, FingerprintEntry } from '@/services/logDiscoveryServ
 const props = defineProps<{
   sources: RankedSource[];
   fingerprints: FingerprintEntry[];
+  /** Show Delete on manually added sources (admin-only in the API). Off unless passed. */
+  canDelete?: boolean;
 }>();
 
 defineEmits<{

@@ -22,6 +22,7 @@
     </div>
 
     <ExposureDomainsCard
+      ref="ownDomainsCard"
       scope="own"
       :domain-monitor="domainMonitor"
       @changed="refreshStatus"
@@ -36,6 +37,7 @@
       @loaded="identityRows = $event"
     />
     <ExposureDomainsCard
+      ref="brandDomainsCard"
       scope="brand"
       class="section"
       :domain-monitor="domainMonitor"
@@ -43,6 +45,7 @@
       @deleted="reloadFindings"
     />
     <ExposureProviderCard
+      ref="providerCard"
       class="section"
       :encryption-error="encryptionError"
       @changed="refreshStatus"
@@ -81,6 +84,9 @@ const statusError = ref<string | null>(null);
 const encryptionError = ref<string | null>(null);
 
 const identitiesCard = ref<InstanceType<typeof ExposureIdentitiesCard> | null>(null);
+const ownDomainsCard = ref<InstanceType<typeof ExposureDomainsCard> | null>(null);
+const brandDomainsCard = ref<InstanceType<typeof ExposureDomainsCard> | null>(null);
+const providerCard = ref<InstanceType<typeof ExposureProviderCard> | null>(null);
 const findingsCard = ref<InstanceType<typeof ExposureFindingsCard> | null>(null);
 // The identities card's list as last loaded. A failed check is recorded on the
 // identity (last_status), which outlives the latest run's summary in /status
@@ -129,10 +135,19 @@ async function refreshStatus() {
   }
 }
 
-// The banner also counts failing identities from the identities list, which a
-// scheduled check may have changed since the page loaded.
+// Refresh re-reads what can change without an edit on this page: the status,
+// the identities' and domains' last checks (the background jobs), whether the
+// saved key is usable (CREDENTIAL_ENCRYPTION_KEY fixed or broken), and the
+// findings. The settings form is left alone, so unsaved edits survive.
 async function refreshBanner() {
-  await Promise.all([refreshStatus(), identitiesCard.value?.reload()]);
+  await Promise.all([
+    refreshStatus(),
+    identitiesCard.value?.reload(),
+    ownDomainsCard.value?.reload(),
+    brandDomainsCard.value?.reload(),
+    providerCard.value?.reload(),
+    reloadFindings(),
+  ]);
 }
 
 // A manual run changes identities' last-check state and may add findings.

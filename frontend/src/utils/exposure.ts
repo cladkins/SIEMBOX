@@ -193,19 +193,31 @@ export function formatRelative(value: string | null | undefined): string {
   return Number.isNaN(date.getTime()) ? '' : formatDistanceToNow(date, { addSuffix: true });
 }
 
-/** "Oct 23, 2026", or '' for a missing/unparseable date. */
-export function formatDay(value: unknown): string {
-  if (typeof value !== 'string' || !value) return '';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '' : format(date, 'MMM dd, yyyy');
+/** A timestamp in ms, reading one without an offset as UTC (as the backend reads crt.sh's); NaN if unparseable. */
+function utcMillis(value: unknown): number {
+  if (typeof value !== 'string' || !value) return NaN;
+  return Date.parse(/T[\d:.]+$/.test(value) ? `${value}Z` : value);
 }
 
 /**
- * When a watched domain is checked next: "Due now" once that time has passed
- * (it waits for the job's next tick), '' when it isn't scheduled.
+ * "Oct 23, 2026": the UTC calendar date, as registries and CT logs give it and
+ * the backend's finding titles print it; '' for a missing/unparseable date.
+ */
+export function formatDay(value: unknown): string {
+  const ms = utcMillis(value);
+  if (Number.isNaN(ms)) return '';
+  const date = new Date(ms);
+  // date-fns formats in local time, so hand it the UTC date as a local one.
+  return format(new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()), 'MMM dd, yyyy');
+}
+
+/**
+ * When a watched domain is checked next: "Due now" when it was never
+ * scheduled (a new domain: the job takes it on its next tick) or that time has
+ * passed, '' for an unparseable time.
  */
 export function nextCheckLabel(nextRunAt: string | null | undefined, now = Date.now()): string {
-  if (!nextRunAt) return '';
+  if (!nextRunAt) return 'Due now';
   const at = Date.parse(nextRunAt);
   if (Number.isNaN(at)) return '';
   return at <= now ? 'Due now' : `Next ${formatRelative(nextRunAt)}`;
@@ -449,6 +461,7 @@ export interface DetailLine {
   list?: Array<{ text: string; href?: string }>;
 }
 
+const DAY_MS = 86_400_000;
 const textOf = (v: unknown): string =>
   typeof v === 'string' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : '';
 const textsOf = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
@@ -508,7 +521,10 @@ function certificateEntry(cert: unknown): { text: string; href?: string } {
  * type (the shapes the domain collectors write), or null for one this UI
  * doesn't know, which is then shown as raw JSON.
  */
-export function domainFindingDetail(finding: Pick<ExposureFinding, 'source' | 'event_type' | 'detail'>): DetailLine[] | null {
+export function domainFindingDetail(
+  finding: Pick<ExposureFinding, 'source' | 'event_type' | 'detail'>,
+  now = Date.now()
+): DetailLine[] | null {
   if (finding.source !== 'domain-monitor') return null;
   const d = objectOf(finding.detail);
   const lines: DetailLine[] = [];
@@ -534,11 +550,15 @@ export function domainFindingDetail(finding: Pick<ExposureFinding, 'source' | 'e
       return lines;
     }
     case 'expiry_warning': {
+      // The stored days_left is from the first sighting (a re-check only moves
+      // last_seen), so count from expires_at instead.
       const day = formatDay(d.expires_at);
-      const left = typeof d.days_left === 'number' ? d.days_left : null;
-      if (d.expired === true) add('Expired', day || 'yes');
-      else if (left === null) add('Expires', day);
-      else add('Expires', `${day || 'soon'} (${left <= 0 ? 'today' : `${pluralize(left, 'day')} left`})`);
+      const at = utcMillis(d.expires_at);
+      if (d.expired === true || at <= now) add('Expired', day || 'yes');
+      else if (!Number.isNaN(at)) {
+        const left = Math.floor((at - now) / DAY_MS);
+        add('Expires', `${day} (${left < 1 ? 'less than a day left' : `${pluralize(left, 'day')} left`})`);
+      }
       return lines;
     }
     case 'lookalike_registered': {

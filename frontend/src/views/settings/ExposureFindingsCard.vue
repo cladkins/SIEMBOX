@@ -380,6 +380,17 @@ defineExpose({ reload: load });
   word-break: break-word;
 }
 
+/* el-tag is a fixed-height nowrap pill: let a long value (an SPF or DMARC
+   record) wrap inside its tag instead of widening the table. */
+.detail-line .el-tag {
+  height: auto;
+  min-height: 20px;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
 .detail-line a {
   color: var(--el-color-primary);
 }

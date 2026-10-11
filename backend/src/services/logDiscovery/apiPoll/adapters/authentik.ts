@@ -16,11 +16,16 @@ const MAX_PAGES_PER_TICK = 5;
 const PAGE_SIZE = 100;
 const FIRST_POLL_LOOKBACK_MS = 60 * 60 * 1000; // 1h — bounds the very first pull instead of fetching all history
 
-function buildBaseUrl(target: PollTarget): string {
-  // authentik.yaml signals 9443 (HTTPS, primary) and 9000 (HTTP, secondary).
-  return target.openPorts.includes(9443) || !target.openPorts.includes(9000)
-    ? `https://${target.ip}:9443`
-    : `http://${target.ip}:9000`;
+export function buildBaseUrl(target: PollTarget): string {
+  // Default (scan-discovered source, no target.port/target.tls): authentik.yaml
+  // signals 9443 (HTTPS, primary) and 9000 (HTTP, secondary).
+  const defaultHttps = target.openPorts.includes(9443) || !target.openPorts.includes(9000);
+  // A manual source may override the scheme and/or port; each falls back to the
+  // discovered-source derivation independently, so an absent evidence case is
+  // byte-for-byte the previous https://ip:9443 / http://ip:9000.
+  const https = target.tls != null ? target.tls : defaultHttps;
+  const port = target.port ?? (defaultHttps ? 9443 : 9000);
+  return `${https ? 'https' : 'http'}://${target.ip}:${port}`;
 }
 
 export function isFailure(action: string | undefined | null): boolean {

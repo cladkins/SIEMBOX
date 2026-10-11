@@ -30,7 +30,7 @@
         </el-tag>
       </template>
     </el-table-column>
-    <el-table-column label="Actions" width="260">
+    <el-table-column label="Actions" width="300">
       <template #default="{ row }">
         <el-button v-if="row.status === 'candidate'" link size="small" @click="$emit('confirm', row)">Confirm</el-button>
         <el-button
@@ -43,12 +43,25 @@
           Onboard
         </el-button>
         <el-button v-if="row.status !== 'ignored'" link size="small" @click="$emit('ignore', row)">Ignore</el-button>
+        <!-- Only manually added sources are deletable here; a scan-discovered source is removed by
+             re-scanning or ignoring, never by this button (the server also 403s a non-manual delete). -->
+        <el-button
+          v-if="row.evidence?.manual === true"
+          link
+          size="small"
+          type="danger"
+          :icon="Delete"
+          @click="$emit('delete', row)"
+        >
+          Delete
+        </el-button>
       </template>
     </el-table-column>
   </el-table>
 </template>
 
 <script setup lang="ts">
+import { Delete } from '@element-plus/icons-vue';
 import type { RankedSource, FingerprintEntry } from '@/services/logDiscoveryService';
 
 const props = defineProps<{
@@ -60,6 +73,7 @@ defineEmits<{
   confirm: [source: RankedSource];
   ignore: [source: RankedSource];
   onboard: [source: RankedSource];
+  delete: [source: RankedSource];
 }>();
 
 function fingerprintName(id: string | null): string {

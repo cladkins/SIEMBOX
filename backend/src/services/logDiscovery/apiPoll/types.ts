@@ -16,6 +16,15 @@ export interface PollTarget {
   openPorts: number[];
   /** discovery_sources.evidence — scan-captured signals (http_responses, etc.), currently unused by any adapter but available for smarter base-URL selection later. */
   evidence: Record<string, unknown>;
+  /**
+   * Explicit base-URL overrides for a MANUALLY added source (from
+   * discovery_sources.evidence.target_port / .tls). Both are undefined for every
+   * scan-discovered source — each adapter's buildBaseUrl falls back to its existing
+   * default-port/scheme derivation when these are absent, so a discovered source's
+   * URL is byte-for-byte unchanged.
+   */
+  port?: number;
+  tls?: boolean;
   logAccess: LogAccessMethod;
 }
 

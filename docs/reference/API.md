@@ -2914,6 +2914,69 @@ into `top` and `advanced` (the long tail), each with a plain-language `reason`.
 
 ---
 
+### POST /api/log-discovery/sources/manual
+
+Manually add an **api_pull** source for a device you already know about, without
+waiting for a scan to discover and fingerprint it. Creates a scan-less
+`discovery_sources` row (`confidence: 100`, `is_guess: false`, `status: confirmed`,
+`last_scan_id: null`) and returns it. It is otherwise an **ordinary pollable
+source**: save its credential and start polling through the existing
+`POST /sources/:id/poller/credential` + `PATCH /sources/:id/poller` routes, using
+the `id` returned here. The chosen port and scheme are stored in the source's
+`evidence` (`{ "manual": true, "target_port": <port>, "tls": <bool> }`) and
+`open_ports` is set to `[target_port]`; the poll adapter reads them to build its
+base URL (overriding the default port/scheme it would otherwise derive for a
+scan-discovered source). Re-posting the same `ip_address` upserts the existing
+row (refreshing fingerprint/port/scheme and un-ignoring a previously dismissed
+host) rather than creating a duplicate.
+
+**Authentication:** Required (**admin**)
+
+**Request Body:**
+```json
+{
+  "ip_address": "192.168.1.50",
+  "hostname": "authentik-box",
+  "fingerprint_id": "authentik",
+  "port": 9443,
+  "tls": true
+}
+```
+- `ip_address` (required) - a **literal** IPv4/IPv6 address (a DNS name is rejected with `400`; the column is `INET`)
+- `fingerprint_id` (required) - a pollable device type: one of the ids from `GET /poller/supported-fingerprints` (currently `authentik`, `home-assistant`, `pihole`, `adguard-home`), and it must declare an `api_pull` log-access method
+- `port` (optional) - integer `1`–`65535`; defaults to the fingerprint's `api_pull` `target_port`
+- `tls` (optional) - boolean; defaults to `true` for `authentik`, `false` otherwise
+- `hostname` (optional) - a display hostname
+
+**Response (201):** the created/updated `discovery_sources` row (includes `id`).
+
+**Error Responses:**
+- `400` - invalid IP, non-pollable/unknown `fingerprint_id`, or out-of-range port
+- `403` - caller is not an admin
+
+---
+
+### DELETE /api/log-discovery/sources/:id
+
+Delete a **manually added** source (`evidence.manual === true`). Its poller row
+cascades away via the `discovery_source_pollers` FK (`ON DELETE CASCADE`), and any
+already-ingested `raw_logs` have their `discovery_source_id` set to `NULL`.
+Scoped to manual rows on purpose: a scan-discovered source is removed by
+re-scanning or ignoring it, never deleted here.
+
+**Authentication:** Required (**admin**)
+
+**Response (200):**
+```json
+{ "deleted": true }
+```
+
+**Error Responses:**
+- `403` - the source is not a manual row (scan-discovered sources cannot be deleted here)
+- `404` - no source with that id
+
+---
+
 ### POST /api/log-discovery/sources/:id/confirm
 
 Confirm a candidate is what the matcher thinks it is.

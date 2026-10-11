@@ -1335,6 +1335,43 @@ sudo systemctl status nginx
 sudo tail -f /var/log/nginx/error.log
 ```
 
+### Issue: Digital Risk domain monitoring shows errors (or never finds anything)
+
+The domain monitor (`domain-monitor` job) needs outbound HTTPS to `crt.sh`,
+`data.iana.org` and the registries' RDAP servers, plus working DNS. Each
+watched domain records the outcome of its last run per collector:
+
+```bash
+# Per-collector status, notes and errors of every watched domain
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8421/api/exposure/domains \
+  | jq '.[] | {domain, last_status, last_error, collectors: .last_summary.collectors}'
+
+# Run one domain now and read the result directly (allow a few minutes)
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8421/api/exposure/domains/1/run-now | jq .
+```
+
+**What the statuses mean:**
+- `baseline` on the first run is normal: existing certificates, lookalikes,
+  registration data and DNS records are recorded silently, and only later
+  changes alert (expiry warnings and certificates from a CA outside
+  `expected_cas` are the exceptions).
+- `ct: crt.sh is temporarily unavailable (HTTP 502)` / `did not answer in time`:
+  crt.sh is a free, often overloaded service. These are transient — the domain
+  is retried after 60 minutes (backing off) and nothing is lost. Persistent
+  failures from every domain usually mean outbound HTTPS is blocked.
+- `rdap: unsupported` — the TLD publishes no RDAP service, or only a plain-HTTP
+  one (refused on purpose); registration changes can't be monitored there.
+- `rdap: refused to contact ...` — the RDAP server named by IANA's bootstrap
+  resolved to a private or otherwise non-public address, which is refused as
+  an SSRF guard. Check the backend's DNS for split-horizon or filtering setups.
+- `dns` warning `the resolver returned no NS records for a delegated domain` — a
+  filtering or broken resolver; NS changes can't be judged until it answers
+  NS queries (the old baseline is kept, nothing is reported as removed).
+  Optionally set `exposure_dns_secondary_resolver` to a resolver you trust.
+- `lookalike: DNS lookups failed for every lookalike candidate` — DNS from the
+  backend is down or blocked; retried automatically.
+
 ---
 
 ## Frontend Issues

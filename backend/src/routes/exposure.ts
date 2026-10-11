@@ -26,15 +26,23 @@ import {
   type ExposureSeverity,
 } from '../models/Exposure';
 import {
+  EXPIRY_WARNING_DAYS_RANGE,
   HIBP_API_KEY_RE,
+  LOOKALIKE_CANDIDATES_RANGE,
   getExposureSettings,
   getHibpApiKey,
   getHibpProviderPublic,
   isExposureSeverity,
+  isValidResolverSetting,
   saveHibpProvider,
   updateExposureSettings,
   type ExposureSettings,
 } from '../services/exposure/settings';
+import {
+  DOMAIN_MONITOR_JOB_KEY,
+  getDomainMonitorRunState,
+  runDomainNow,
+} from '../services/exposure/domainMonitor/domainMonitorService';
 import {
   isIdentityKind,
   normalizeDomain,
@@ -96,6 +104,27 @@ function optionalBoolean(body: Record<string, unknown>, field: string): boolean 
   const value = body[field];
   if (value === undefined) return undefined;
   if (typeof value !== 'boolean') throw new ApiError(400, `${field} must be true or false`);
+  return value;
+}
+
+function optionalIntInRange(
+  body: Record<string, unknown>,
+  field: string,
+  range: { min: number; max: number }
+): number | undefined {
+  const value = body[field];
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < range.min ||
+    value > range.max
+  ) {
+    throw new ApiError(
+      400,
+      `${field} must be a whole number between ${range.min} and ${range.max}`
+    );
+  }
   return value;
 }
 
@@ -164,18 +193,33 @@ function isUniqueViolation(err: unknown): boolean {
 
 // ---- Status & settings ---------------------------------------------------------
 
+type RecurringJobView = ReturnType<typeof listRecurringJobs>[number];
+
+function jobView(job: RecurringJobView | undefined) {
+  return job
+    ? {
+        status: job.status,
+        last_run_at: job.lastRunAt,
+        last_result: job.lastResult,
+        last_error: job.lastError,
+        next_run_at: job.nextRunAt,
+      }
+    : null;
+}
+
 router.get('/status', async (_req: Request, res: Response) => {
   const [settings, hibp, counts] = await Promise.all([
     getExposureSettings(),
     getHibpProviderPublic(),
     getExposureCounts(),
   ]);
-  const job = listRecurringJobs().find((j) => j.key === LEAKED_CREDS_JOB_KEY);
+  const jobs = listRecurringJobs();
   res.json({
     features: {
       leaked_creds_enabled: settings.exposure_leaked_creds_enabled,
       password_check_available: true,
-      domain_monitor_available: false, // the domain collectors ship in a later release
+      domain_monitor_available: true,
+      domain_monitor_enabled: settings.exposure_domain_monitor_enabled,
     },
     notifications: {
       enabled: settings.notify_exposure_enabled,
@@ -185,15 +229,11 @@ router.get('/status', async (_req: Request, res: Response) => {
     counts,
     leaked_creds: {
       ...getLeakedCredentialRunState(),
-      job: job
-        ? {
-            status: job.status,
-            last_run_at: job.lastRunAt,
-            last_result: job.lastResult,
-            last_error: job.lastError,
-            next_run_at: job.nextRunAt,
-          }
-        : null,
+      job: jobView(jobs.find((j) => j.key === LEAKED_CREDS_JOB_KEY)),
+    },
+    domain_monitor: {
+      ...getDomainMonitorRunState(),
+      job: jobView(jobs.find((j) => j.key === DOMAIN_MONITOR_JOB_KEY)),
     },
   });
 });
@@ -207,7 +247,31 @@ router.put('/settings', adminOnly, async (req: Request, res: Response) => {
   const update: Partial<ExposureSettings> = {
     notify_exposure_enabled: optionalBoolean(body, 'notify_exposure_enabled'),
     exposure_leaked_creds_enabled: optionalBoolean(body, 'exposure_leaked_creds_enabled'),
+    exposure_domain_monitor_enabled: optionalBoolean(body, 'exposure_domain_monitor_enabled'),
+    exposure_domain_expiry_warning_days: optionalIntInRange(
+      body,
+      'exposure_domain_expiry_warning_days',
+      EXPIRY_WARNING_DAYS_RANGE
+    ),
+    exposure_lookalike_max_candidates: optionalIntInRange(
+      body,
+      'exposure_lookalike_max_candidates',
+      LOOKALIKE_CANDIDATES_RANGE
+    ),
   };
+  if (body.exposure_dns_secondary_resolver !== undefined) {
+    const resolver =
+      typeof body.exposure_dns_secondary_resolver === 'string'
+        ? body.exposure_dns_secondary_resolver.trim()
+        : null;
+    if (resolver === null || !isValidResolverSetting(resolver)) {
+      throw new ApiError(
+        400,
+        'exposure_dns_secondary_resolver must be "" (off) or an IPv4/IPv6 address such as 9.9.9.9'
+      );
+    }
+    update.exposure_dns_secondary_resolver = resolver;
+  }
   if (body.notify_exposure_min_severity !== undefined) {
     if (!isExposureSeverity(body.notify_exposure_min_severity)) {
       throw new ApiError(
@@ -355,6 +419,24 @@ router.delete('/domains/:id', adminOnly, async (req: Request, res: Response) => 
   const id = parseId(req.params.id, 'domain');
   if (!(await WatchedDomainModel.delete(id))) throw new ApiError(404, 'Watched domain not found');
   res.json({ message: 'Watched domain deleted' });
+});
+
+// Run this domain's collectors now, whatever its schedule (also when the domain
+// is switched off). Each collector has its own timeouts; allow a few minutes.
+router.post('/domains/:id/run-now', adminOnly, async (req: Request, res: Response) => {
+  const id = parseId(req.params.id, 'domain');
+  const result = await runDomainNow(id);
+  if (result.kind === 'not_found') throw new ApiError(404, 'Watched domain not found');
+  if (result.kind === 'busy') {
+    throw new ApiError(409, 'This domain is already being checked; try again shortly');
+  }
+  if (result.kind === 'disabled') {
+    throw new ApiError(
+      409,
+      'Domain monitoring is disabled in settings; enable exposure_domain_monitor_enabled to run checks'
+    );
+  }
+  res.json(result.summary);
 });
 
 // ---- Monitored identities ----------------------------------------------------------

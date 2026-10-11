@@ -30,7 +30,7 @@
  * Snapshot: the registered lookalikes (whether they had an address / MX, when
  * they were last seen registered and when they were reported as newly
  * registered), the candidates confirmed unregistered, and registered ones that
- * recently stopped resolving.
+ * recently stopped resolving (with what was known about them when they did).
  * Findings:
  *   lookalike_registered — a registration of a name that was confirmed
  *   unregistered before: high with an A/AAAA or MX record (a site or a mailbox
@@ -40,9 +40,11 @@
  * raised candidate cap, dnstwist appearing, a lookup that failed until now —
  * is recorded silently: nobody knows when it was registered. So is one that
  * comes back within REAPPEAR_GRACE_DAYS of when it was last seen registered (a
- * registry hold lifted, or a flapping answer): it is the same registration.
- * One that comes back later may have a new owner: it is reported, and its
- * findings are fingerprinted apart from the earlier registration's.
+ * registry hold lifted, or a flapping answer): it is the same registration, and
+ * carries on from what was known when it dropped (an MX record added meanwhile
+ * is reported; its fingerprints stay its own). One that comes back later may
+ * have a new owner: it is reported, and its findings are fingerprinted apart
+ * from the earlier registration's.
  */
 import { execFile } from 'child_process';
 import crypto from 'crypto';
@@ -483,6 +485,11 @@ export const REAPPEAR_GRACE_DAYS = 30;
 /** How long a reported registration counts as "newly registered" for the CT collector. */
 export const NEW_REGISTRATION_WINDOW_DAYS = 30;
 
+/** A lookalike last seen registered at `droppedAt` that is back by `nowSeconds` is the same registration. */
+export function withinReappearGrace(droppedAt: number, nowSeconds: number): boolean {
+  return nowSeconds - droppedAt <= REAPPEAR_GRACE_DAYS * DAY_SECONDS;
+}
+
 export interface RegisteredInfo {
   /** null: the lookup failed every time so far (unknown, never "none"). */
   mx: boolean | null;
@@ -515,6 +522,13 @@ export interface LookalikeSnapshot {
    * registered (epoch seconds; the first NXDOMAIN answer in older snapshots).
    */
   dropped: Record<string, number>;
+  /**
+   * Dropped lookalikes -> the registration as it was when it dropped, so one
+   * back within REAPPEAR_GRACE_DAYS carries on as the same registration (its
+   * prior_drop marker, its since for the CT hand-off, its MX/address state).
+   * Only names in `dropped` have one; absent when empty and in older snapshots.
+   */
+  dropped_info?: Record<string, RegisteredInfo>;
 }
 
 const MAX_SNAPSHOT_REGISTERED = 2 * MAX_CANDIDATES_CEILING;
@@ -534,25 +548,38 @@ function epochMap(value: unknown): Record<string, number> {
   );
 }
 
+function parseRegisteredInfo(info: Record<string, unknown>): RegisteredInfo {
+  return {
+    mx: optionalBoolean(info.mx),
+    addr: optionalBoolean(info.addr),
+    fuzzer: typeof info.fuzzer === 'string' ? info.fuzzer : 'unknown',
+    since: optionalEpoch(info.since),
+    seen_at: optionalEpoch(info.seen_at),
+    prior_drop: optionalEpoch(info.prior_drop),
+  };
+}
+
 export function parseLookalikeSnapshot(value: unknown): LookalikeSnapshot | null {
   if (!isPlainObject(value) || value.v !== 1 || !isPlainObject(value.registered)) return null;
   const registered: Record<string, RegisteredInfo> = {};
   for (const [name, info] of Object.entries(value.registered)) {
-    if (!isPlainObject(info)) continue;
-    registered[name] = {
-      mx: optionalBoolean(info.mx),
-      addr: optionalBoolean(info.addr),
-      fuzzer: typeof info.fuzzer === 'string' ? info.fuzzer : 'unknown',
-      since: optionalEpoch(info.since),
-      seen_at: optionalEpoch(info.seen_at),
-      prior_drop: optionalEpoch(info.prior_drop),
-    };
+    if (isPlainObject(info)) registered[name] = parseRegisteredInfo(info);
+  }
+  const dropped = epochMap(value.dropped);
+  const droppedInfo: Record<string, RegisteredInfo> = {};
+  if (isPlainObject(value.dropped_info)) {
+    for (const [name, info] of Object.entries(value.dropped_info)) {
+      if (isPlainObject(info) && Object.prototype.hasOwnProperty.call(dropped, name)) {
+        droppedInfo[name] = parseRegisteredInfo(info);
+      }
+    }
   }
   return {
     v: 1,
     registered,
     unregistered: epochMap(value.unregistered),
-    dropped: epochMap(value.dropped),
+    dropped,
+    ...(Object.keys(droppedInfo).length ? { dropped_info: droppedInfo } : {}),
   };
 }
 
@@ -563,15 +590,17 @@ export function registeredFromSnapshot(value: unknown): string[] {
 
 /**
  * What the CT collector needs from a lookalike snapshot: every registered
- * lookalike, and those reported as newly registered in the last
- * NEW_REGISTRATION_WINDOW_DAYS. Read from the stored snapshot, the hand-off
- * survives a run in which CT failed or did not run.
+ * lookalike, those reported as newly registered in the last
+ * NEW_REGISTRATION_WINDOW_DAYS, and those on hold (dropped, but still within
+ * the comeback grace). Read from the stored snapshot, the hand-off survives a
+ * run in which CT failed or did not run.
  */
 export function lookalikeStateFromSnapshot(
   value: unknown,
   nowSeconds: number
 ): SharedLookalikeState {
-  const registered = parseLookalikeSnapshot(value)?.registered ?? {};
+  const snapshot = parseLookalikeSnapshot(value);
+  const registered = snapshot?.registered ?? {};
   const names = Object.keys(registered).sort();
   const recent = nowSeconds - NEW_REGISTRATION_WINDOW_DAYS * DAY_SECONDS;
   const priorDrops: Record<string, number> = {};
@@ -579,6 +608,10 @@ export function lookalikeStateFromSnapshot(
     const priorDrop = registered[name].prior_drop;
     if (priorDrop !== null) priorDrops[name] = priorDrop;
   }
+  const held = Object.entries(snapshot?.dropped ?? {})
+    .filter(([name, at]) => !registered[name] && withinReappearGrace(at, nowSeconds))
+    .map(([name]) => name)
+    .sort();
   return {
     registered: names,
     newlyRegistered: names.filter((name) => {
@@ -586,6 +619,7 @@ export function lookalikeStateFromSnapshot(
       return since !== null && since >= recent;
     }),
     ...(Object.keys(priorDrops).length ? { priorDrops } : {}),
+    ...(held.length ? { held } : {}),
   };
 }
 
@@ -646,6 +680,13 @@ export function diffLookalikes(
   // cap; an incomplete list keeps the previous entries for the names it lacks.
   const unregistered: Record<string, number> = {};
   const dropped: Record<string, number> = {};
+  const droppedInfo: Record<string, RegisteredInfo> = {};
+  /** A drop the previous snapshot knew about, with the registration it ended. */
+  const keepDropped = (name: string, at: number) => {
+    dropped[name] = at;
+    const info = previous?.dropped_info?.[name];
+    if (info) droppedInfo[name] = info;
+  };
   if (options.keepUnlisted && previous) {
     const listed = new Set(candidates.map((c) => c.domain));
     const unlisted = (name: string) => !listed.has(name) && !exclude.has(name);
@@ -653,7 +694,7 @@ export function diffLookalikes(
       if (unlisted(name)) unregistered[name] = at;
     }
     for (const [name, at] of Object.entries(previous.dropped)) {
-      if (unlisted(name)) dropped[name] = at;
+      if (unlisted(name)) keepDropped(name, at);
     }
   }
   const newlyRegistered: LookalikeChange[] = [];
@@ -672,7 +713,7 @@ export function diffLookalikes(
       // Not answered this run: whatever was known stays known.
       unknown++;
       if (unregisteredSince !== undefined) unregistered[domain] = unregisteredSince;
-      if (droppedAt !== undefined) dropped[domain] = droppedAt;
+      if (droppedAt !== undefined) keepDropped(domain, droppedAt);
       continue;
     }
     if (state.state === 'unregistered' || state.state === 'undelegated') {
@@ -681,16 +722,23 @@ export function diffLookalikes(
         // The grace before a comeback counts as a new registration runs from
         // when it was last seen registered, not from when the drop was noticed.
         dropped[domain] = registered[domain].seen_at ?? nowSeconds;
+        droppedInfo[domain] = registered[domain];
         delete registered[domain];
       } else if (droppedAt !== undefined) {
-        dropped[domain] = droppedAt;
+        keepDropped(domain, droppedAt);
       } else {
         unregistered[domain] = unregisteredSince ?? nowSeconds;
       }
       continue;
     }
 
-    const before = registered[domain];
+    // Back within the grace: the same registration (a hold lifted, or one
+    // flapping answer), so it carries on from what was known when it dropped —
+    // its prior_drop marker, its since, and its MX state to compare against.
+    const sameRegistration =
+      !registered[domain] && droppedAt !== undefined && withinReappearGrace(droppedAt, nowSeconds);
+    const before =
+      registered[domain] ?? (sameRegistration ? previous?.dropped_info?.[domain] : undefined);
     const info: RegisteredInfo = {
       // A lookup that failed this time keeps what was known.
       mx: state.mx ?? before?.mx ?? null,
@@ -704,11 +752,8 @@ export function diffLookalikes(
       if (before.mx === false && info.mx === true) {
         mxAdded.push({ domain, fuzzer: info.fuzzer, info });
       }
-    } else if (
-      droppedAt !== undefined &&
-      nowSeconds - droppedAt <= REAPPEAR_GRACE_DAYS * DAY_SECONDS
-    ) {
-      // The same registration back from a hold (or one flapping answer): restored silently.
+    } else if (sameRegistration) {
+      // Back from a hold, from a snapshot that didn't keep what it had: restored silently.
     } else if (unregisteredSince !== undefined || droppedAt !== undefined) {
       info.since = nowSeconds;
       // Back after a drop: possibly a new owner, so its findings get their own
@@ -730,6 +775,7 @@ export function diffLookalikes(
       registered: Object.fromEntries(names.map((n) => [n, registered[n]])),
       unregistered,
       dropped,
+      ...(Object.keys(droppedInfo).length ? { dropped_info: droppedInfo } : {}),
     },
     newlyRegistered,
     mxAdded,

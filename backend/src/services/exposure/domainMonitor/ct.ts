@@ -20,8 +20,10 @@
  * particular order, and says so only in its HTML output: an answer that
  * reaches the limit (the rows' result_count values add up to it) is a random
  * subset, so it is refused as too large to monitor rather than diffed. For the
- * domain's own certificates that refusal is a warning: the lookalike checks
- * still run.
+ * domain's own certificates that refusal (CtTooLargeError, also raised for an
+ * answer over the size cap) is a warning: the lookalike checks still run. Any
+ * other refusal, e.g. HTTP 403 from a proxy blocking crt.sh, fails the
+ * collector.
  *
  * Snapshot (per name): the certificates seen (key -> notAfter, pruned a week
  * after expiry), the host names they covered and the issuers that issued them.
@@ -79,6 +81,19 @@ const MAX_NAMES_PER_CERT = 100;
 const EXPIRED_GRACE_SECONDS = 7 * 86_400;
 const UNKNOWN_EXPIRY_TTL_SECONDS = 400 * 86_400;
 export const MAX_INDIVIDUAL_FINDINGS = 10;
+
+/**
+ * crt.sh's answer for a name is too large to monitor: it reached crt.sh's
+ * result limit (a random subset) or the response-size cap. Retrying won't help
+ * (non-transient), and unlike any other refusal it says nothing about crt.sh
+ * being usable: it only rules out this one name.
+ */
+export class CtTooLargeError extends CollectorError {
+  constructor(message: string) {
+    super(message, false);
+    this.name = 'CtTooLargeError';
+  }
+}
 
 // ---- Certificates ------------------------------------------------------------------
 
@@ -175,8 +190,8 @@ function parseCrtshTime(value: unknown): string | null {
  * Rows are validated field by field; anything malformed is skipped, and a
  * certificate whose names are all outside `domain` (or not host names at all,
  * e.g. e-mail identities) is dropped. An answer cut off at crt.sh's result
- * limit is refused (non-transient): it is a random subset, so diffing it would
- * miss new certificates and report old ones as new.
+ * limit is refused (CtTooLargeError): it is a random subset, so diffing it
+ * would miss new certificates and report old ones as new.
  */
 export function parseCrtshResponse(body: unknown, domain: string): CtCertificate[] {
   if (!Array.isArray(body)) {
@@ -196,11 +211,10 @@ export function parseCrtshResponse(body: unknown, domain: string): CtCertificate
       typeof count === 'number' && Number.isSafeInteger(count) && count > 0 ? count : 1;
   }
   if (matchedRows >= CRTSH_RESULT_LIMIT) {
-    throw new CollectorError(
+    throw new CtTooLargeError(
       `crt.sh returned only part of the certificates for ${domain}: it stops at ` +
         `${CRTSH_RESULT_LIMIT.toLocaleString('en-US')} matching names and picks them in no ` +
-        'particular order, so new certificates could be missed; too many to monitor reliably',
-      false
+        'particular order, so new certificates could be missed; too many to monitor reliably'
     );
   }
   const byKey = new Map<string, CtCertificate>();
@@ -338,9 +352,8 @@ export class CtClient implements CertificateSource {
       });
     } catch (err) {
       if (err instanceof HttpError && err.kind === 'too_large') {
-        throw new CollectorError(
-          `crt.sh returned more than ${Math.round(this.maxBytes / 1048576)} MB for ${identity}; too many certificates to monitor`,
-          false
+        throw new CtTooLargeError(
+          `crt.sh returned more than ${Math.round(this.maxBytes / 1048576)} MB for ${identity}; too many certificates to monitor`
         );
       }
       if (err instanceof HttpError && err.kind === 'timeout') {
@@ -855,6 +868,7 @@ function lookalikeState(ctx: CollectorContext, nowSeconds: number): SharedLookal
     registered: state.registered.filter((n) => !own.has(n)),
     newlyRegistered: state.newlyRegistered.filter((n) => !own.has(n)),
     ...(state.priorDrops ? { priorDrops: state.priorDrops } : {}),
+    ...(state.held ? { held: state.held.filter((n) => !own.has(n)) } : {}),
   };
 }
 
@@ -863,14 +877,19 @@ const PERMANENT_FAILURE_BACKOFF_SECONDS = 7 * 86_400;
 /** A newly registered lookalike stays ahead of the rotation for this many failed checks in a row. */
 export const MAX_PENDING_ATTEMPTS = 3;
 
+/** For a newly registered lookalike: its check failed before, and it is retried ahead of the rotation. */
+const retriedAhead = (failure: CtLookalikeFailure | undefined): boolean =>
+  failure !== undefined && failure.transient && failure.count < MAX_PENDING_ATTEMPTS;
+
 /**
  * The lookalikes to check this run, at most `max`: newly registered ones never
  * tried yet first, then newly registered ones whose check failed transiently
  * (fewer than MAX_PENDING_ATTEMPTS times in a row; least recently tried
  * first), then the rest by when they were last touched — checked or tried —
  * oldest (or never) first. Any other name that just failed goes to the back of
- * the rotation, so one crt.sh can't answer for never blocks the others; one
- * that failed for good waits PERMANENT_FAILURE_BACKOFF_SECONDS.
+ * the rotation, so one crt.sh can't answer for never blocks the others (a
+ * retried new one failing again doesn't end the run either: see the check
+ * loop); one that failed for good waits PERMANENT_FAILURE_BACKOFF_SECONDS.
  */
 export function selectLookalikesForCt(
   state: SharedLookalikeState,
@@ -884,7 +903,7 @@ export function selectLookalikesForCt(
     const failure = failures[name];
     if (fresh.has(name)) {
       if (!failure) return [0, 0];
-      if (failure.transient && failure.count < MAX_PENDING_ATTEMPTS) return [1, failure.at];
+      if (retriedAhead(failure)) return [1, failure.at];
     }
     return [2, Math.max(checked[name]?.checked_at ?? 0, failure?.at ?? 0)];
   };
@@ -928,11 +947,12 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
       try {
         ownCerts = await source.certificatesFor(ctx.domain.domain);
       } catch (err) {
-        // crt.sh struggling (transient) fails the collector, so it is retried
-        // soon. An answer retrying won't fix (too many certificates to monitor)
-        // must not stop the lookalike checks below: it is a warning, and the
-        // domain's own baseline stays as it was.
-        if (!(err instanceof CollectorError) || err.transient) throw err;
+        // Only an answer too large to monitor is a warning: retrying won't fix
+        // it, and it must not stop the lookalike checks below (the domain's own
+        // baseline stays as it was). Anything else fails the collector — crt.sh
+        // struggling (transient: retried soon) or refusing us (e.g. HTTP 403
+        // from a proxy), which would make every lookalike check fail too.
+        if (!(err instanceof CtTooLargeError)) throw err;
         const message = errorMessage(err);
         warnings.push(`${ctx.domain.domain}: ${message}`);
         details.own_domain_error = message;
@@ -971,20 +991,25 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
     const storedLookalikes = previous?.lookalikes ?? {};
     if (state) {
       const registered = new Set(state.registered);
+      // What CT knows about a lookalike is kept while it is registered, and
+      // while it is on hold (NXDOMAIN for now): one back within the lookalike
+      // collector's grace is the same registration, so its comeback is judged
+      // against what was known — including a first check still pending.
+      const known = new Set([...state.registered, ...(state.held ?? [])]);
       next.lookalikes = Object.fromEntries(
-        Object.entries(storedLookalikes).filter(([name]) => registered.has(name))
+        Object.entries(storedLookalikes).filter(([name]) => known.has(name))
       );
       const failures: Record<string, CtLookalikeFailure> = Object.fromEntries(
-        Object.entries(previous?.lookalike_failures ?? {}).filter(([name]) => registered.has(name))
+        Object.entries(previous?.lookalike_failures ?? {}).filter(([name]) => known.has(name))
       );
       // Newly registered lookalikes whose certificates were never checked: their
       // first good check is judged as a site going up, however many runs that
-      // takes (CT failing, crt.sh not answering for them, the per-run cap). They
-      // are kept here because the lookalike snapshot lists them as new only for
-      // NEW_REGISTRATION_WINDOW_DAYS.
+      // takes (CT failing, crt.sh not answering for them, the per-run cap, a
+      // hold). They are kept here because the lookalike snapshot lists them as
+      // new only for NEW_REGISTRATION_WINDOW_DAYS.
       const pending = new Set(
         [...(previous?.pending_new ?? []), ...state.newlyRegistered].filter(
-          (n) => registered.has(n) && !storedLookalikes[n]
+          (n) => known.has(n) && !storedLookalikes[n]
         )
       );
       const selected = selectLookalikesForCt(
@@ -997,6 +1022,7 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
       let checkedOk = 0;
       let firstFailure: CollectorError | null = null;
       for (const lookalike of selected) {
+        const retry = pending.has(lookalike) && retriedAhead(failures[lookalike]);
         try {
           const certs = await source.certificatesFor(lookalike);
           const before = storedLookalikes[lookalike] ?? null;
@@ -1025,8 +1051,14 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
             transient,
           };
           if (transient) {
+            // crt.sh is struggling: don't keep asking it this run. Except, once
+            // per run, for a retried new lookalike: failing again says more
+            // about that name than about crt.sh, and it is tried first, so
+            // stopping would leave every other lookalike unchecked for as long
+            // as it stays ahead of the rotation.
+            const spared = retry && firstFailure === null;
             firstFailure = firstFailure ?? (err as CollectorError);
-            break; // crt.sh is struggling: don't keep asking it this run
+            if (!spared) break;
           }
         }
       }

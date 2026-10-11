@@ -3843,20 +3843,23 @@ check) are open to any authenticated user; **all writes require the admin role**
   raised `exposure_lookalike_max_candidates`, `dnstwist` appearing, a lookup
   that kept failing until now — is recorded silently, because nobody knows when
   it was registered. So is one that comes back within 30 days of when it was
-  last seen registered (a registry hold lifted): it is the same registration.
-  One that comes back later may have a new owner: it is reported as newly
-  registered again, with its own fingerprints, so it is not deduplicated
-  against the earlier owner's findings. Under a TLD that answers for every name
-  (a wildcard TLD such as `.ws`) only an NS delegation counts as a
-  registration, and a candidate without one counts as confirmed unregistered —
-  unless the resolver hides NS records altogether. A run in which `dnstwist`
+  last seen registered (a registry hold lifted): it is the same registration,
+  and carries on from what was known about it — an MX record added during the
+  hold alerts, and a re-registration keeps its own fingerprints and its pending
+  certificate check. One that comes back later may have a new owner: it is
+  reported as newly registered again, with its own fingerprints, so it is not
+  deduplicated against the earlier owner's findings. Under a TLD that answers
+  for every name (a wildcard TLD such as `.ws`) only an NS delegation counts as
+  a registration, and a candidate without one counts as confirmed unregistered
+  — unless the resolver hides NS records altogether. A run in which `dnstwist`
   fails keeps what was known about its candidates. A failed A/AAAA/MX lookup
   counts as unknown, never as "no MX", and your other watched domains are
   never lookalikes (also when you start watching one that an older baseline
   listed). A newly registered lookalike's first certificate check is judged as
   a site going up however long crt.sh takes to answer for it: it stays pending
   until it has been checked, and is tried before the rotation (after 3 failed
-  tries in a row it takes its turn with the others instead).
+  tries in a row it takes its turn with the others instead). A retry of it that
+  fails again doesn't stop that run's other certificate checks.
 - **Deduplication.** Every finding has a stable fingerprint (per certificate,
   per lookalike, per before→after change, per expiry date and phase), so re-runs
   only update `last_seen` and never raise a second alert. More than 10
@@ -3877,16 +3880,18 @@ check) are open to any authenticated user; **all writes require the admin role**
   regular schedule: the next full run is due `interval_minutes` after the last
   one started (`last_summary.full_run_at`), so a collector that keeps failing
   never holds the others back. A lookalike crt.sh can't answer for goes to the
-  back of the rotation, except a newly registered one (see above); one whose
-  answer is too large to monitor is left alone for a week. Each collector's
-  outcome is in the domain's `last_summary`.
+  back of the rotation, except a newly registered one (see above); one it
+  won't answer for (too large to monitor, or refused, e.g. HTTP 403) is left
+  alone for a week. Each collector's outcome is in the domain's `last_summary`.
 - **crt.sh's result limit.** crt.sh returns at most 10,000 matching
   (certificate, name) rows per query, picked in no particular order, and says so
   only in its HTML pages. A JSON answer that reaches the limit is refused ("too
   many to monitor reliably") rather than diffed, since new certificates could be
   missing from it. For the domain's own certificates that is a `ct` warning
-  (also in `details.own_domain_error`; its baseline is kept): the certificate
-  checks of its registered lookalikes still run.
+  (also in `details.own_domain_error`; its baseline is kept), as is an answer
+  over the 10 MB size cap: the certificate checks of its registered lookalikes
+  still run. Any other refusal of the domain's own query (e.g. HTTP 403 from a
+  proxy blocking crt.sh) fails `ct`, so it shows in `last_error`.
 - **A/AAAA rotation** among addresses seen in the last 90 days (CDNs) is not
   drift; a never-seen address, or every address vanishing, is. Fields an RDAP
   server leaves out of a response are "not reported", never "removed"; grace
@@ -4018,7 +4023,8 @@ Feature flags, provider state (never the key), counts and the last run.
 rejected the key. `domain_monitor.last_run` is the last scheduled cycle (a
 manual `run-now` returns its own result instead): `failed` counts the domains
 checked with at least one collector error, `down` those on which no collector
-worked, and `crashed` those whose run could not complete (they stay due).
+worked (`unsupported` doesn't count as working: it needs no network), and
+`crashed` those whose run could not complete (they stay due).
 `job.status` is `skipped` with the reason in `last_result` when monitoring is
 off or no domain is due, and `failed` (with `last_error`) only when nothing
 worked — no collector worked for any domain checked (e.g. no network or DNS),

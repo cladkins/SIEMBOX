@@ -533,6 +533,48 @@ test('collector: a lookalike registered again after a drop alerts again, with it
   assert.equal(fp(mxA).length, 1);
 });
 
+test('collector: a re-registered lookalike that goes NXDOMAIN for a run keeps its own fingerprints', async () => {
+  const table: Record<string, Entry> = {};
+  const collector = createLookalikeCollector({
+    resolver: fakeResolver(table).resolver,
+    dnstwist: null,
+  });
+  const fp = (out: { findings: Array<{ fingerprint: string }> }) =>
+    out.findings.map((f) => f.fingerprint);
+  let snap = (await collector(onDay(null, 0))).snapshot;
+  table['exmple.com'] = { ns: ['ns1.squatter-a.example'], a: ['203.0.113.1'] };
+  snap = (await collector(onDay(snap, 10))).snapshot;
+  table['exmple.com'] = { ...table['exmple.com'], mx: ['mx.exmple.com'] };
+  const mxA = await collector(onDay(snap, 20));
+  delete table['exmple.com']; // it lapses
+  snap = (await collector(onDay(mxA.snapshot, 100))).snapshot;
+  const ownerBZone: Entry = { ns: ['ns1.dropcatcher-b.example'], a: ['198.51.100.7'] };
+  table['exmple.com'] = ownerBZone;
+  const ownerB = await collector(onDay(snap, 450));
+  const ownerBInfo = parseLookalikeSnapshot(ownerB.snapshot)?.registered['exmple.com'];
+  assert.ok(ownerBInfo?.prior_drop && ownerBInfo.since);
+
+  // A registrar hold (unverified registrant contact) for one run, then back.
+  delete table['exmple.com'];
+  const held = await collector(onDay(ownerB.snapshot, 451));
+  assert.deepEqual(registeredFromSnapshot(held.snapshot), []);
+  table['exmple.com'] = ownerBZone;
+  const back = await collector(onDay(held.snapshot, 452));
+  assert.deepEqual(back.findings, [], 'the same registration: silent');
+  const restored = parseLookalikeSnapshot(back.snapshot)?.registered['exmple.com'];
+  assert.equal(restored?.prior_drop, ownerBInfo.prior_drop, 'still the new owner’s registration');
+  assert.equal(restored?.since, ownerBInfo.since, 'still newly registered for CT');
+  assert.deepEqual(back.lookalikes?.newlyRegistered, ['exmple.com']);
+
+  table['exmple.com'] = { ...ownerBZone, mx: ['mx.exmple.com'] };
+  const mxB = await collector(onDay(back.snapshot, 460));
+  assert.deepEqual(
+    mxB.findings.map((f) => f.detail.change),
+    ['mx_added']
+  );
+  assert.notDeepEqual(fp(mxB), fp(mxA), 'not deduplicated against the first owner’s MX finding');
+});
+
 test('collector: one failed dnstwist run keeps what was known about its candidates', async () => {
   const table: Record<string, Entry> = {};
   let dnstwistUp = true;
@@ -754,6 +796,47 @@ test('diff: the comeback grace runs from when the name was last seen registered'
   );
 });
 
+test('diff: back from a hold, a lookalike carries on from what was known when it dropped', () => {
+  const candidates: LookalikeCandidate[] = [{ domain: 'held.com', fuzzer: 'addition' }];
+  const nx = new Map([['held.com', { state: 'unregistered' } as const]]);
+  const back = (mx: boolean | null) =>
+    new Map([['held.com', { state: 'registered', ns: true, addr: true, mx } as const]]);
+  const base: LookalikeSnapshot = {
+    v: 1,
+    registered: {
+      'held.com': info({ fuzzer: 'omission', since: NOW_S - DAY, prior_drop: NOW_S - 400 * DAY }),
+    },
+    unregistered: {},
+    dropped: {},
+  };
+  const dropped = diffLookalikes(base, candidates, nx, { nowSeconds: NOW_S }).next;
+  assert.deepEqual(dropped.dropped_info?.['held.com'], base.registered['held.com']);
+  // A JSON round trip (JSONB), and one run in which the name could not be resolved.
+  const stored = parseLookalikeSnapshot(JSON.parse(JSON.stringify(dropped))) as LookalikeSnapshot;
+  const unresolved = new Map([['held.com', { state: 'unknown', reason: 'ETIMEOUT' } as const]]);
+  const still = diffLookalikes(stored, candidates, unresolved, { nowSeconds: NOW_S + DAY }).next;
+  assert.deepEqual(still.dropped_info, dropped.dropped_info, 'kept while it is gone');
+
+  // It gained an MX record during the hold: that is reported like any other.
+  const lifted = diffLookalikes(still, candidates, back(true), { nowSeconds: NOW_S + 7 * DAY });
+  assert.deepEqual(lifted.newlyRegistered, []);
+  assert.deepEqual(
+    lifted.mxAdded.map((c) => [c.domain, c.info.prior_drop]),
+    [['held.com', NOW_S - 400 * DAY]]
+  );
+  assert.deepEqual(lifted.next.registered['held.com'], {
+    ...base.registered['held.com'],
+    mx: true,
+    seen_at: NOW_S + 7 * DAY,
+  });
+  assert.equal(lifted.next.dropped_info, undefined, 'only dropped names keep one');
+  // An MX lookup failing on the way back keeps what was known: nothing "added".
+  assert.deepEqual(
+    diffLookalikes(still, candidates, back(null), { nowSeconds: NOW_S + 7 * DAY }).mxAdded,
+    []
+  );
+});
+
 test('diff: a failed MX lookup is "unknown", never "no MX" — so it can’t fake an MX being added', () => {
   const candidates: LookalikeCandidate[] = [{ domain: 'phish.com', fuzzer: 'homoglyph' }];
   const withMx = (mx: boolean | null) =>
@@ -812,11 +895,13 @@ test('state for CT: newly registered within the window, from the stored snapshot
       'baseline.com': info(),
     },
     unregistered: {},
-    dropped: {},
+    // On hold (last seen registered within the comeback grace), and gone for good.
+    dropped: { 'on-hold.com': NOW_S - 5 * DAY, 'long-gone.com': NOW_S - 31 * DAY },
   };
   assert.deepEqual(lookalikeStateFromSnapshot(snapshot, NOW_S), {
     registered: ['baseline.com', 'new.com', 'old-news.com'],
     newlyRegistered: ['new.com'],
+    held: ['on-hold.com'],
   });
   assert.deepEqual(lookalikeStateFromSnapshot(null, NOW_S), {
     registered: [],

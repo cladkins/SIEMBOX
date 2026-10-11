@@ -63,6 +63,14 @@ export interface SharedLookalikeState {
    * earlier owner's findings. Absent when there are none.
    */
   priorDrops?: Record<string, number>;
+  /**
+   * Registered lookalikes that went NXDOMAIN within lookalike.ts
+   * REAPPEAR_GRACE_DAYS of when they were last seen registered (a registry
+   * hold, or one flapping answer). Back within that time, they are the same
+   * registration, so CT keeps what it knows about them meanwhile. Absent when
+   * there are none.
+   */
+  held?: string[];
 }
 
 export interface CollectorContext {

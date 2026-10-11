@@ -1369,12 +1369,17 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   DNS at all); otherwise the failing collectors show in each domain's
   `last_error`.
 - `ct` warning `<name>: crt.sh returned only part of the certificates for
-  <name> ... too many to monitor reliably` (also `details.own_domain_error`) —
-  crt.sh stops at 10,000 matching names per query, picked in no particular
-  order, so the domain's own certificates can't be monitored; the certificates
-  of its registered lookalikes still are. To monitor your own certificates,
-  watch a narrower name (e.g. a subdomain). Turning `ct` off for the domain
-  would stop the lookalike certificate checks too.
+  <name> ... too many to monitor reliably` (or `returned more than 10 MB`; also
+  `details.own_domain_error`) — crt.sh stops at 10,000 matching names per
+  query, picked in no particular order, so the domain's own certificates can't
+  be monitored; the certificates of its registered lookalikes still are. To
+  monitor your own certificates, watch a narrower name (e.g. a subdomain).
+  Turning `ct` off for the domain would stop the lookalike certificate checks
+  too.
+- `ct: crt.sh answered HTTP 403` (or another 4xx) — crt.sh, or more often an
+  egress proxy or TLS-inspecting filter in between, refused the request. It is
+  not retried early; allow outbound HTTPS to `crt.sh` and the next regular run
+  picks it up.
 - `rdap: unsupported` — the TLD publishes no RDAP service, or only a plain-HTTP
   one (refused on purpose); registration changes can't be monitored there.
 - `rdap: refused to contact ...` — the RDAP server named by IANA's bootstrap

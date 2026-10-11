@@ -572,6 +572,53 @@ test('end to end: crt.sh failing on a new lookalike (not on the domain) gets it 
   );
 });
 
+test('end to end: a new lookalike crt.sh failed on that goes NXDOMAIN for a run is still judged as new', async () => {
+  const clock = { now: Date.parse('2026-10-11T00:00:00Z') };
+  const start = clock.now;
+  const domains = [domainRow(1, 'example.com')];
+  const { store, log } = memoryStore(domains, clock);
+  const w = world();
+  const failing = new Set<string>();
+  const ct = createCtCollector({
+    source: {
+      certificatesFor: async (name) => {
+        if (failing.has(name)) {
+          throw new CollectorError('crt.sh did not answer in time; will retry', true);
+        }
+        return w.certs[name] ?? [];
+      },
+    },
+  });
+  const collectors = { ...w.collectors, ct };
+  const runOnDay = async (day: number) => {
+    clock.now = start + day * 86_400_000;
+    await runDomainChecks({ store, collectors, now: () => clock.now });
+  };
+  await runOnDay(0); // baselines: exmple.com is confirmed unregistered
+
+  // exmple.com goes up with a certificate, but crt.sh times out on it — for over
+  // a month, so the lookalike collector no longer lists it as newly registered.
+  const squatter = { ns: ['ns1.bad-host.net'], a: ['203.0.113.66'] };
+  w.zone['exmple.com'] = squatter;
+  w.certs['exmple.com'] = [cert('p1', ['exmple.com'])];
+  failing.add('exmple.com');
+  await runOnDay(10);
+  await runOnDay(45);
+  // One NXDOMAIN answer (a registrar hold), and then it is back: the same registration.
+  failing.clear();
+  delete w.zone['exmple.com'];
+  await runOnDay(46);
+  w.zone['exmple.com'] = squatter;
+  await runOnDay(47);
+  assert.deepEqual(
+    log.alerts.map((f) => [f.eventType, f.title]),
+    [
+      ['lookalike_registered', 'Lookalike domain registered: exmple.com (looks like example.com)'],
+      ['new_cert', 'Newly registered lookalike exmple.com already has 1 TLS certificate'],
+    ]
+  );
+});
+
 test('the job fails a cycle only when nothing worked for any domain', async (t) => {
   t.mock.method(ErrorLogService, 'logBackgroundError', () => undefined);
   const clock = { now: Date.parse('2026-10-11T00:00:00Z') };
@@ -630,6 +677,20 @@ test('the job fails a cycle only when nothing worked for any domain', async (t) 
   const nothing = await run(everything, allDown);
   assert.deepEqual([nothing.checked, nothing.failed, nothing.down], [2, 2, 2]);
   assert.match(domainMonitorCycleFailure(nothing) ?? '', /nothing worked for any domain/);
+  // "unsupported" needs no network (RDAP's bootstrap file is cached for days), so
+  // a domain under a TLD without RDAP doesn't hide the outage.
+  const unsupported: Collector = async () => ({
+    findings: [],
+    status: 'unsupported',
+    note: 'no RDAP service is published for .kg',
+  });
+  const noRdap = memoryStore(
+    [domainRow(1, 'example.kg'), domainRow(2, 'example.com')],
+    clock
+  ).store;
+  const offline = await run(noRdap, { ...allDown, rdap: unsupported });
+  assert.deepEqual([offline.checked, offline.failed, offline.down], [2, 2, 2]);
+  assert.match(domainMonitorCycleFailure(offline) ?? '', /nothing worked for any domain/);
   const dead = crashing(memoryStore([domainRow(1, 'example.com')], clock).store, [1]);
   const crashed = await run(dead, ctDown);
   assert.deepEqual([crashed.checked, crashed.crashed], [0, 1]);

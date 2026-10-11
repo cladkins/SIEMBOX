@@ -143,7 +143,10 @@ export interface DomainMonitorRunSummary {
   newFindings: number;
   /** Checked domains with at least one failed collector. */
   failed: number;
-  /** Checked domains on which no collector worked (each one that applies failed). */
+  /**
+   * Checked domains on which no collector worked: each one that applies failed
+   * (or was `unsupported`, which needs no network to say so).
+   */
   down: number;
   /** Domains whose run could not complete (e.g. the database failed); they stay due. */
   crashed: number;
@@ -451,7 +454,12 @@ const skippedCycle = (reason: string): DomainMonitorRunSummary => ({
   reason,
 });
 
-const WORKING: ReadonlySet<CollectorRunStatus> = new Set(['ok', 'baseline', 'unsupported']);
+/**
+ * Outcomes that needed an answer from upstream. `unsupported` is not one: it
+ * can come from a cached answer (RDAP's bootstrap file is kept for days) or
+ * from the configuration alone, so it says nothing about the network.
+ */
+const WORKING: ReadonlySet<CollectorRunStatus> = new Set(['ok', 'baseline']);
 
 /**
  * Did any collector work for the domain — in this run, or in an earlier run

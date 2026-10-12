@@ -21,9 +21,12 @@
  *   typescript-eslint `recommended` set was only in that package's separate
  *   `/recommended` entry, which this project did not extend.
  *
- * Rules mirror the backend's .eslintrc.json house style where they apply:
- * `any` is a warning, explicit return types are not required, and unused vars
- * error unless prefixed with `_`.
+ * Rules mirror the backend's house style (backend/eslint.config.mjs) where
+ * they apply: `any` is a warning, explicit return types are not required, and
+ * unused vars error unless prefixed with `_`. One deliberate divergence: this
+ * config pins `caughtErrors: 'none'`, so unused `catch (e)` bindings stay
+ * allowed as they always were here (src has many), while the backend takes
+ * typescript-eslint 8's default of 'all'.
  */
 import js from '@eslint/js';
 import { vueTsConfigs, withVueTs } from '@vue/eslint-config-typescript';

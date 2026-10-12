@@ -128,13 +128,18 @@ function memoryStore(
 
 // ---- scripted network ------------------------------------------------------------------------
 
-type Zone = Record<string, { a?: string[]; ns?: string[]; mx?: string[]; txt?: string[] }>;
+/** `servfail`: the name exists, but every lookup for it fails (e.g. a lame delegation). */
+type Zone = Record<
+  string,
+  { a?: string[]; ns?: string[]; mx?: string[]; txt?: string[]; servfail?: boolean }
+>;
 
 function zoneResolver(zone: Zone): DnsResolverLike {
   const fail = (code: string) => Object.assign(new Error(code), { code });
   const get = (name: string, type: 'a' | 'ns' | 'mx' | 'txt') => {
     const entry = zone[name];
     if (!entry) throw fail('ENOTFOUND');
+    if (entry.servfail) throw fail('ESERVFAIL');
     const value = entry[type];
     if (!value) throw fail('ENODATA');
     return value;
@@ -143,6 +148,7 @@ function zoneResolver(zone: Zone): DnsResolverLike {
     resolve4: async (n) => get(n, 'a'),
     resolve6: async (n) => {
       if (!zone[n]) throw fail('ENOTFOUND');
+      if (zone[n].servfail) throw fail('ESERVFAIL');
       throw fail('ENODATA');
     },
     resolveNs: async (n) => get(n, 'ns'),
@@ -617,6 +623,85 @@ test('end to end: a new lookalike crt.sh failed on that goes NXDOMAIN for a run 
       ['new_cert', 'Newly registered lookalike exmple.com already has 1 TLS certificate'],
     ]
   );
+});
+
+test('end to end: a lookalike registered again after the grace (a possible new owner) gets its own certificate alerts, also when CT last saw it on hold', async () => {
+  // Fortnightly checks. Owner A's exmple.com lapses: NXDOMAIN on two runs, both
+  // within 30 days of when it was last seen registered (on hold, for all anyone
+  // can tell), so CT keeps what it knows about it. The next run finds it
+  // registered again, past that grace: owner B, a drop-catcher, whose
+  // certificate for the same names from the same CA is not a renewal of A's.
+  type World = ReturnType<typeof world>;
+  const run = async (script: Record<number, (w: World) => void>) => {
+    const clock = { now: Date.parse('2026-10-11T00:00:00Z') };
+    const start = clock.now;
+    const domains = [domainRow(1, 'example.com', { interval_minutes: 14 * 1440 })];
+    const { store, log } = memoryStore(domains, clock);
+    const w = world();
+    for (const [day, change] of Object.entries(script)) {
+      change(w);
+      clock.now = start + Number(day) * 86_400_000;
+      await runDomainChecks({ store, collectors: w.collectors, now: () => clock.now });
+      assert.equal(domains[0].last_status, 'ok', `day ${day}`);
+    }
+    return log.alerts.map((f) => [f.eventType, f.severity, f.title]);
+  };
+  const names = ['exmple.com', 'www.exmple.com'];
+  const same = () => undefined;
+  const ownerA = (w: World) => {
+    w.zone['exmple.com'] = { ns: ['ns1.owner-a.example'], a: ['203.0.113.66'] };
+    w.certs['exmple.com'] = [cert('a1', names)];
+  };
+  const lapse = (w: World) => {
+    delete w.zone['exmple.com'];
+    w.certs['exmple.com'] = []; // A's certificate has expired by now
+  };
+  const ownerB = (w: World) => {
+    w.zone['exmple.com'] = { ns: ['ns1.owner-b.example'], a: ['198.51.100.7'] };
+    w.certs['exmple.com'] = [cert('b1', names)];
+  };
+  const registered = (severity: string) => [
+    'lookalike_registered',
+    severity,
+    'Lookalike domain registered: exmple.com (looks like example.com)',
+  ];
+  const goingUp = [
+    'new_cert',
+    'medium',
+    'Newly registered lookalike exmple.com already has 1 TLS certificate',
+  ];
+
+  // B's site is up, with its certificate, when the registration is found.
+  assert.deepEqual(await run({ 0: same, 14: ownerA, 28: same, 42: lapse, 56: same, 70: ownerB }), [
+    registered('high'),
+    goingUp,
+    registered('high'),
+    goingUp,
+  ]);
+  // B parks the name first (no address yet) and gets its certificate a run later.
+  const parked = (w: World) => {
+    w.zone['exmple.com'] = { ns: ['ns1.owner-b.example'] };
+  };
+  assert.deepEqual(
+    await run({ 0: same, 14: ownerA, 28: same, 42: lapse, 56: same, 70: parked, 84: ownerB }),
+    [
+      registered('high'),
+      goingUp,
+      registered('medium'),
+      ['new_cert', 'medium', "TLS certificate issued for lookalike exmple.com (Let's Encrypt)"],
+    ]
+  );
+  // A's DNS failed for a run before the lapse, so A stayed registered and CT
+  // checked it after A was last seen registered.
+  const failing = (w: World) => {
+    w.zone['exmple.com'].servfail = true;
+  };
+  assert.deepEqual(await run({ 0: same, 14: ownerA, 28: failing, 42: lapse, 56: ownerB }), [
+    registered('high'),
+    goingUp,
+    registered('high'),
+    goingUp,
+  ]);
 });
 
 test('the job fails a cycle only when nothing worked for any domain', async (t) => {

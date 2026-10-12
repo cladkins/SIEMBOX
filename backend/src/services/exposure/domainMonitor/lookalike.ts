@@ -591,9 +591,10 @@ export function registeredFromSnapshot(value: unknown): string[] {
 /**
  * What the CT collector needs from a lookalike snapshot: every registered
  * lookalike, those reported as newly registered in the last
- * NEW_REGISTRATION_WINDOW_DAYS, and those on hold (dropped, but still within
- * the comeback grace). Read from the stored snapshot, the hand-off survives a
- * run in which CT failed or did not run.
+ * NEW_REGISTRATION_WINDOW_DAYS, those registered again after a drop (the
+ * drop, and when that registration was reported), and those on hold (dropped,
+ * but still within the comeback grace). Read from the stored snapshot, the
+ * hand-off survives a run in which CT failed or did not run.
  */
 export function lookalikeStateFromSnapshot(
   value: unknown,
@@ -604,9 +605,12 @@ export function lookalikeStateFromSnapshot(
   const names = Object.keys(registered).sort();
   const recent = nowSeconds - NEW_REGISTRATION_WINDOW_DAYS * DAY_SECONDS;
   const priorDrops: Record<string, number> = {};
+  const reregisteredAt: Record<string, number> = {};
   for (const name of names) {
-    const priorDrop = registered[name].prior_drop;
-    if (priorDrop !== null) priorDrops[name] = priorDrop;
+    const { prior_drop: priorDrop, since } = registered[name];
+    if (priorDrop === null) continue;
+    priorDrops[name] = priorDrop;
+    if (since !== null) reregisteredAt[name] = since;
   }
   const held = Object.entries(snapshot?.dropped ?? {})
     .filter(([name, at]) => !registered[name] && withinReappearGrace(at, nowSeconds))
@@ -619,6 +623,7 @@ export function lookalikeStateFromSnapshot(
       return since !== null && since >= recent;
     }),
     ...(Object.keys(priorDrops).length ? { priorDrops } : {}),
+    ...(Object.keys(reregisteredAt).length ? { reregisteredAt } : {}),
     ...(held.length ? { held } : {}),
   };
 }

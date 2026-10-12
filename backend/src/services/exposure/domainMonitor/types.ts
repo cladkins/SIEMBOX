@@ -64,6 +64,13 @@ export interface SharedLookalikeState {
    */
   priorDrops?: Record<string, number>;
   /**
+   * The same lookalikes -> when that registration was reported (lookalike.ts
+   * RegisteredInfo.since). What CT recorded about the name before then belongs
+   * to an earlier registration — possibly another owner's certificates — so CT
+   * forgets it. Absent when there are none.
+   */
+  reregisteredAt?: Record<string, number>;
+  /**
    * Registered lookalikes that went NXDOMAIN within lookalike.ts
    * REAPPEAR_GRACE_DAYS of when they were last seen registered (a registry
    * hold, or one flapping answer). Back within that time, they are the same

@@ -3848,7 +3848,9 @@ check) are open to any authenticated user; **all writes require the admin role**
   hold alerts, and a re-registration keeps its own fingerprints and its pending
   certificate check. One that comes back later may have a new owner: it is
   reported as newly registered again, with its own fingerprints, so it is not
-  deduplicated against the earlier owner's findings. Under a TLD that answers
+  deduplicated against the earlier owner's findings, and `ct` forgets what it
+  recorded before then: its first certificate check is judged as a site going
+  up, never the new owner's certificates as renewals. Under a TLD that answers
   for every name (a wildcard TLD such as `.ws`) only an NS delegation counts as
   a registration, and a candidate without one counts as confirmed unregistered
   — unless the resolver hides NS records altogether. A run in which `dnstwist`
@@ -3880,9 +3882,9 @@ check) are open to any authenticated user; **all writes require the admin role**
   regular schedule: the next full run is due `interval_minutes` after the last
   one started (`last_summary.full_run_at`), so a collector that keeps failing
   never holds the others back. A lookalike crt.sh can't answer for goes to the
-  back of the rotation, except a newly registered one (see above); one it
-  won't answer for (too large to monitor, or refused, e.g. HTTP 403) is left
-  alone for a week. Each collector's outcome is in the domain's `last_summary`.
+  back of the rotation, except a newly registered one (see above); one whose
+  answer is too large to monitor is left alone for a week. Each collector's
+  outcome is in the domain's `last_summary`.
 - **crt.sh's result limit.** crt.sh returns at most 10,000 matching
   (certificate, name) rows per query, picked in no particular order, and says so
   only in its HTML pages. A JSON answer that reaches the limit is refused ("too
@@ -3890,8 +3892,11 @@ check) are open to any authenticated user; **all writes require the admin role**
   missing from it. For the domain's own certificates that is a `ct` warning
   (also in `details.own_domain_error`; its baseline is kept), as is an answer
   over the 10 MB size cap: the certificate checks of its registered lookalikes
-  still run. Any other refusal of the domain's own query (e.g. HTTP 403 from a
-  proxy blocking crt.sh) fails `ct`, so it shows in `last_error`.
+  still run (when crt.sh then times out or fails transiently on those too,
+  nothing at all was checked, so `ct` fails and is retried early). Any other
+  refusal, of the domain's own query or of a lookalike's (e.g. HTTP 403 from a
+  proxy blocking crt.sh), fails `ct`, so it shows in `last_error`; no
+  lookalike is left alone because of it.
 - **A/AAAA rotation** among addresses seen in the last 90 days (CDNs) is not
   drift; a never-seen address, or every address vanishing, is. Fields an RDAP
   server leaves out of a response are "not reported", never "removed"; grace

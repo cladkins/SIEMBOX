@@ -19,11 +19,12 @@
  * crt.sh also stops at 10,000 matching (certificate, name) rows, picked in no
  * particular order, and says so only in its HTML output: an answer that
  * reaches the limit (the rows' result_count values add up to it) is a random
- * subset, so it is refused as too large to monitor rather than diffed. For the
- * domain's own certificates that refusal (CtTooLargeError, also raised for an
- * answer over the size cap) is a warning: the lookalike checks still run. Any
- * other refusal, e.g. HTTP 403 from a proxy blocking crt.sh, fails the
- * collector.
+ * subset, so it is refused as too large to monitor rather than diffed. That
+ * refusal (CtTooLargeError, also raised for an answer over the size cap) only
+ * rules out one name: for the domain's own certificates it is a warning (the
+ * lookalike checks still run), and a lookalike it happens to is left alone for
+ * a week. Any other refusal, e.g. HTTP 403 from a proxy blocking crt.sh, fails
+ * the collector, whichever name it was for.
  *
  * Snapshot (per name): the certificates seen (key -> notAfter, pruned a week
  * after expiry), the host names they covered and the issuers that issued them.
@@ -868,11 +869,12 @@ function lookalikeState(ctx: CollectorContext, nowSeconds: number): SharedLookal
     registered: state.registered.filter((n) => !own.has(n)),
     newlyRegistered: state.newlyRegistered.filter((n) => !own.has(n)),
     ...(state.priorDrops ? { priorDrops: state.priorDrops } : {}),
+    ...(state.reregisteredAt ? { reregisteredAt: state.reregisteredAt } : {}),
     ...(state.held ? { held: state.held.filter((n) => !own.has(n)) } : {}),
   };
 }
 
-/** A lookalike whose check failed for good (not transiently) is left alone this long. */
+/** A lookalike whose check failed for good (an answer too large to monitor) is left alone this long. */
 const PERMANENT_FAILURE_BACKOFF_SECONDS = 7 * 86_400;
 /** A newly registered lookalike stays ahead of the rotation for this many failed checks in a row. */
 export const MAX_PENDING_ATTEMPTS = 3;
@@ -988,19 +990,31 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
 
     // 2. Certificates for registered lookalikes (both scopes).
     const state = lookalikeState(ctx, nowSeconds);
-    const storedLookalikes = previous?.lookalikes ?? {};
     if (state) {
       const registered = new Set(state.registered);
       // What CT knows about a lookalike is kept while it is registered, and
       // while it is on hold (NXDOMAIN for now): one back within the lookalike
       // collector's grace is the same registration, so its comeback is judged
-      // against what was known — including a first check still pending.
+      // against what was known — including a first check still pending. One
+      // registered again later may have a new owner: what CT recorded before
+      // that registration was reported (the earlier owner's certificates,
+      // checks and failures) is forgotten, so its first check is judged as a
+      // site going up instead of the new owner's certificates as renewals.
       const known = new Set([...state.registered, ...(state.held ?? [])]);
-      next.lookalikes = Object.fromEntries(
-        Object.entries(storedLookalikes).filter(([name]) => known.has(name))
+      const current = (name: string, recordedAt: number) => {
+        const since = state.reregisteredAt?.[name];
+        return known.has(name) && (since === undefined || recordedAt >= since);
+      };
+      const storedLookalikes: Record<string, CtLookalikeSnapshot> = Object.fromEntries(
+        Object.entries(previous?.lookalikes ?? {}).filter(([name, entry]) =>
+          current(name, entry.checked_at)
+        )
       );
+      next.lookalikes = { ...storedLookalikes };
       const failures: Record<string, CtLookalikeFailure> = Object.fromEntries(
-        Object.entries(previous?.lookalike_failures ?? {}).filter(([name]) => known.has(name))
+        Object.entries(previous?.lookalike_failures ?? {}).filter(([name, failure]) =>
+          current(name, failure.at)
+        )
       );
       // Newly registered lookalikes whose certificates were never checked: their
       // first good check is judged as a site going up, however many runs that
@@ -1042,6 +1056,17 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
           pending.delete(lookalike);
           checkedOk++;
         } catch (err) {
+          // As for the domain's own query, only an answer too large to monitor
+          // rules out just this name. Any other refusal (e.g. HTTP 403 from a
+          // proxy blocking crt.sh) is crt.sh refusing us: it fails the collector
+          // (in last_error), and no lookalike is backed off because of it.
+          if (
+            err instanceof CollectorError &&
+            !err.transient &&
+            !(err instanceof CtTooLargeError)
+          ) {
+            throw err;
+          }
           warnings.push(`${lookalike}: ${errorMessage(err)}`);
           const transient = err instanceof CollectorError && err.transient;
           // Remembered, so the next run moves on to other lookalikes first.
@@ -1064,10 +1089,12 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
       }
       if (Object.keys(failures).length > 0) next.lookalike_failures = failures;
       if (pending.size > 0) next.pending_new = [...pending].sort();
-      if (ctx.domain.scope === 'brand' && selected.length > 0 && checkedOk === 0 && firstFailure) {
-        // Nothing was checked: retry the collector later, keeping only the
-        // bookkeeping (what was tried, what still awaits its first check) that
-        // decides which lookalikes the retry asks for.
+      if (ownCerts === null && selected.length > 0 && checkedOk === 0 && firstFailure) {
+        // Nothing at all was checked (a brand domain, or an own domain whose
+        // own answer was too large to monitor): retry the collector later,
+        // keeping only the bookkeeping (what was tried, what still awaits its
+        // first check) that decides which lookalikes the retry asks for. The
+        // own baseline in it is the previous one, unchanged.
         throw new CollectorError(firstFailure.message, firstFailure.transient, {
           progress: next,
         });

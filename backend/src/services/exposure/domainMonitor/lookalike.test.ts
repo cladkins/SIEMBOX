@@ -893,14 +893,18 @@ test('state for CT: newly registered within the window, from the stored snapshot
       'new.com': info({ since: NOW_S - DAY }),
       'old-news.com': info({ since: NOW_S - (NEW_REGISTRATION_WINDOW_DAYS + 1) * DAY }),
       'baseline.com': info(),
+      // Registered again (reported 2 days ago) after it dropped, last seen registered 50 days ago.
+      'again.com': info({ since: NOW_S - 2 * DAY, prior_drop: NOW_S - 50 * DAY }),
     },
     unregistered: {},
     // On hold (last seen registered within the comeback grace), and gone for good.
     dropped: { 'on-hold.com': NOW_S - 5 * DAY, 'long-gone.com': NOW_S - 31 * DAY },
   };
   assert.deepEqual(lookalikeStateFromSnapshot(snapshot, NOW_S), {
-    registered: ['baseline.com', 'new.com', 'old-news.com'],
-    newlyRegistered: ['new.com'],
+    registered: ['again.com', 'baseline.com', 'new.com', 'old-news.com'],
+    newlyRegistered: ['again.com', 'new.com'],
+    priorDrops: { 'again.com': NOW_S - 50 * DAY },
+    reregisteredAt: { 'again.com': NOW_S - 2 * DAY },
     held: ['on-hold.com'],
   });
   assert.deepEqual(lookalikeStateFromSnapshot(null, NOW_S), {

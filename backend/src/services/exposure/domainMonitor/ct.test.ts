@@ -885,27 +885,28 @@ test('collector: a lookalike on hold (NXDOMAIN for a run) keeps what CT knows ab
   ]);
 });
 
+/** crt.sh's answer for example.com, cut off at its result limit (too large to monitor). */
+const atResultLimit = [
+  {
+    issuer_name: LE,
+    name_value: 'a.example.com',
+    id: 1,
+    serial_number: '01',
+    result_count: 6_000,
+  },
+  {
+    issuer_name: LE,
+    name_value: 'b.example.com',
+    id: 2,
+    serial_number: '02',
+    result_count: 4_000,
+  },
+];
+/** crt.sh's answer for examp1e.com: one certificate. */
+const lookalikeRows = [{ issuer_name: LE, name_value: 'examp1e.com', id: 3, serial_number: '03' }];
+
 test('collector: an own-domain answer too large to monitor is a warning; lookalike checks still run', async () => {
-  const atResultLimit = [
-    {
-      issuer_name: LE,
-      name_value: 'a.example.com',
-      id: 1,
-      serial_number: '01',
-      result_count: 6_000,
-    },
-    {
-      issuer_name: LE,
-      name_value: 'b.example.com',
-      id: 2,
-      serial_number: '02',
-      result_count: 4_000,
-    },
-  ];
   const overSizeCap = new HttpError('too_large', 'the response is larger than 10485760 bytes');
-  const lookalikeRows = [
-    { issuer_name: LE, name_value: 'examp1e.com', id: 3, serial_number: '03' },
-  ];
   const baselines = { lookalike: lookalikeBaseline([], { 'examp1e.com': NOW - 3_600 }) };
   for (const ownAnswer of [atResultLimit, overSizeCap]) {
     const crt = crtsh({ 'example.com': ownAnswer, 'examp1e.com': lookalikeRows });
@@ -930,6 +931,35 @@ test('collector: an own-domain answer too large to monitor is a warning; lookali
   );
 });
 
+test('collector: an own domain on which nothing could be checked (own answer too large, crt.sh failing on the lookalikes) is retried early', async () => {
+  const baselines = {
+    lookalike: lookalikeBaseline(['exmple.com'], { 'examp1e.com': NOW - 3_600 }),
+  };
+  const crt = crtsh({ 'example.com': atResultLimit, 'examp1e.com': 502, 'exmple.com': 502 });
+  let progress: unknown;
+  await assert.rejects(
+    createCtCollector({ source: crt.client })(ctx({ previous: ownBaseline, baselines })),
+    (err: unknown) => {
+      assert.ok(err instanceof CollectorError && err.transient, 'transient: retried soon');
+      progress = err.progress;
+      return true;
+    }
+  );
+  assert.deepEqual(crt.asked, ['example.com', 'examp1e.com']);
+  const kept = parseCtSnapshot(progress);
+  assert.deepEqual(kept?.domain, ownBaseline.domain, 'the own baseline is unchanged');
+  assert.deepEqual(kept?.expected_cas, ownBaseline.expected_cas);
+  assert.deepEqual(kept?.pending_new, ['examp1e.com']);
+
+  // The early retry asks for the new lookalike first, and judges it as new.
+  const retry = crtsh({ 'example.com': atResultLimit, 'examp1e.com': lookalikeRows });
+  const out = await createCtCollector({ source: retry.client })(
+    ctx({ previous: progress, baselines, now: new Date((NOW + 3_600) * 1000) })
+  );
+  assert.deepEqual(retry.asked.slice(0, 2), ['example.com', 'examp1e.com']);
+  assert.deepEqual(kinds(out), [['new_cert', 'medium', goingUp]]);
+});
+
 test('collector: any other refusal of the own query (HTTP 403) fails the collector; no lookalike is tried or backed off', async () => {
   // E.g. a TLS-inspecting egress filter blocking crt.sh: every query gets the same answer,
   // so it is an error (in last_error), not an "ok" run that checked nothing.
@@ -947,6 +977,49 @@ test('collector: any other refusal of the own query (HTTP 403) fails the collect
     }
   );
   assert.deepEqual(crt.asked, ['example.com'], 'no lookalike was tried');
+});
+
+test('collector: a refusal of a lookalike’s query (HTTP 403) fails the collector too; nothing is backed off', async () => {
+  // A brand domain has no query of its own: its first lookalike query is the one
+  // that meets the egress filter blocking crt.sh.
+  const others = [
+    'a.example.org',
+    'b.example.org',
+    'c.example.org',
+    'd.example.org',
+    'e.example.org',
+  ];
+  const baselines = { lookalike: lookalikeBaseline(others, { 'examp1e.com': NOW - 3_600 }) };
+  const blocked = crtsh(Object.fromEntries([...others, 'examp1e.com'].map((n) => [n, 403])));
+  const refused = (err: unknown) => {
+    assert.ok(err instanceof CollectorError && !err.transient);
+    assert.equal(err.message, 'crt.sh answered HTTP 403');
+    assert.equal(err.progress, undefined, 'nothing stored: no lookalike is backed off');
+    return true;
+  };
+  await assert.rejects(
+    createCtCollector({ source: blocked.client })(ctx({ scope: 'brand', baselines })),
+    refused
+  );
+  assert.deepEqual(blocked.asked, ['examp1e.com'], 'one refusal is enough');
+
+  // Once crt.sh is allowed again, the next run checks the new lookalike first, as new.
+  const open = crtsh({ 'examp1e.com': lookalikeRows });
+  const out = await createCtCollector({ source: open.client })(
+    ctx({ scope: 'brand', baselines, now: new Date((NOW + DAY) * 1000) })
+  );
+  assert.equal(open.asked[0], 'examp1e.com');
+  assert.deepEqual(kinds(out), [['new_cert', 'medium', goingUp]]);
+  assert.equal(parseCtSnapshot(out.snapshot)?.lookalike_failures, undefined);
+
+  // The same for an own domain, whatever crt.sh answered for the domain itself:
+  // only an answer too large to monitor rules out just one name.
+  await assert.rejects(
+    createCtCollector({
+      source: crtsh({ 'example.com': atResultLimit, 'examp1e.com': 403 }).client,
+    })(ctx({ previous: ownBaseline, baselines })),
+    refused
+  );
 });
 
 test('collector: a retried new lookalike that fails again does not use up the run for the others', async () => {
@@ -1005,6 +1078,61 @@ test('collector: a lookalike registered again after a drop is a new "site going 
   );
   assert.deepEqual(kinds(newOwner), [['new_cert', 'medium', goingUp]]);
   assert.notEqual(newOwner.findings[0].fingerprint, firstOwner.findings[0].fingerprint);
+});
+
+test('collector: a lookalike registered again after a drop starts afresh: what CT recorded before is forgotten', async () => {
+  // Owner A's examp1e.com was last seen registered 50 days ago and then dropped.
+  // CT still has what it recorded under A, kept while the name was on hold: its
+  // certificates (last checked 45 days ago, while A's DNS was failing) and a
+  // failure from then. Owner B's registration was reported today.
+  const lastSeen = NOW - 50 * DAY;
+  const underA = NOW - 45 * DAY;
+  const previous = {
+    v: 1,
+    lookalikes: {
+      'examp1e.com': {
+        certs: { a1: NOW + 30 * DAY },
+        names: ['examp1e.com', 'www.examp1e.com'],
+        issuers: ['letsencrypt'],
+        checked_at: underA,
+      },
+    },
+    lookalike_failures: {
+      'examp1e.com': { at: underA, count: MAX_PENDING_ATTEMPTS, transient: true },
+    },
+  };
+  const baselines = { lookalike: lookalikeBaseline([], { 'examp1e.com': NOW }, lastSeen) };
+  const table: Record<string, CtCertificate[] | Error> = { 'examp1e.com': crtsh502() };
+  const on = (snapshot: unknown, day: number) =>
+    createCtCollector({ source: source(table) })(
+      ctx({ previous: snapshot, baselines, now: new Date((NOW + day * DAY) * 1000) })
+    );
+
+  // crt.sh fails on it today: a first try for B, not A's fourth.
+  const day0 = await on(previous, 0);
+  const afterFailure = parseCtSnapshot(day0.snapshot);
+  assert.deepEqual(afterFailure?.pending_new, ['examp1e.com'], 'B’s first check is pending');
+  assert.equal(afterFailure?.lookalike_failures?.['examp1e.com']?.count, 1);
+  assert.deepEqual(afterFailure?.lookalikes, {});
+
+  // B's certificate covers the same names, from the same CA: a site going up, not a renewal.
+  table['examp1e.com'] = [cert('b1', ['examp1e.com', 'www.examp1e.com'])];
+  const day1 = await on(day0.snapshot, 1);
+  assert.deepEqual(kinds(day1), [['new_cert', 'medium', goingUp]]);
+
+  // What CT records about B from then on is kept: a certificate for a new host is the news.
+  table['examp1e.com'] = [
+    cert('b1', ['examp1e.com', 'www.examp1e.com']),
+    cert('b2', ['login.examp1e.com']),
+  ];
+  const day2 = await on(day1.snapshot, 2);
+  assert.deepEqual(kinds(day2), [
+    [
+      'new_cert',
+      'medium',
+      "TLS certificate issued for lookalike login.examp1e.com (Let's Encrypt)",
+    ],
+  ]);
 });
 
 test('collector: the organization’s own watched domains are never checked as lookalikes', async () => {
@@ -1080,7 +1208,7 @@ test('collector: a lookalike crt.sh can’t answer for moves to the back of the 
   assert.equal(retried.details?.lookalikes_checked, 3);
 });
 
-test('collector: a lookalike that fails for good is skipped for a week, without stopping the run', async () => {
+test('collector: a lookalike whose answer is too large to monitor is skipped for a week, without stopping the run', async () => {
   const lookalikes = ['a.example.org', 'b.example.org'];
   const earlier: CollectorContext['earlier'] = {
     lookalike: {
@@ -1090,7 +1218,7 @@ test('collector: a lookalike that fails for good is skipped for a week, without 
       lookalikes: { registered: lookalikes, newlyRegistered: [] },
     },
   };
-  const tooBig = new CollectorError('crt.sh returned only part of the certificates', false);
+  const tooBig = new CtTooLargeError('crt.sh returned only part of the certificates');
   const table = { 'a.example.org': tooBig as CtCertificate[] | Error };
   const at = (days: number) => new Date((NOW + days * 86_400) * 1000);
 

@@ -1377,8 +1377,10 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   Turning `ct` off for the domain would stop the lookalike certificate checks
   too.
 - `ct: crt.sh answered HTTP 403` (or another 4xx) — crt.sh, or more often an
-  egress proxy or TLS-inspecting filter in between, refused the request. It is
-  not retried early; allow outbound HTTPS to `crt.sh` and the next regular run
+  egress proxy or TLS-inspecting filter in between, refused the request (for
+  the domain itself or for one of its lookalikes; brand domains query only
+  lookalikes). It is not retried early, and no lookalike check is put off
+  because of it: allow outbound HTTPS to `crt.sh` and the next regular run
   picks it up.
 - `rdap: unsupported` — the TLD publishes no RDAP service, or only a plain-HTTP
   one (refused on purpose); registration changes can't be monitored there.

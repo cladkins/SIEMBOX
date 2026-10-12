@@ -2,12 +2,15 @@
  * The interim sign-in limit against a real Postgres: successful sign-ins, and
  * the "MFA code required" step that only follows a correct password, are not
  * counted; wrong passwords are, and the eleventh attempt is refused even with
- * the right password. The limit itself (and its JSON 429) is covered
- * hermetically in loginStopgap.http.test.ts.
+ * the right password. The limit is per account: another user signing in from
+ * the same address is not affected. A 500 (here: a password that isn't a
+ * string, which bcrypt rejects before checking anything) is not counted. The
+ * limits themselves (and their JSON 429s) are covered hermetically in
+ * loginStopgap.http.test.ts.
  *
- * Skips itself when Postgres isn't reachable. The two users it creates
- * (stopgap-<tag>, stopgap-<tag>-mfa) and their sessions are removed again,
- * along with what an interrupted earlier run left behind.
+ * Skips itself when Postgres isn't reachable. The users it creates
+ * (stopgap-<tag>, stopgap-<tag>-mfa, stopgap-<tag>-b) and their sessions are
+ * removed again, along with what an interrupted earlier run left behind.
  * Run with `npm test` (tsx --test).
  */
 import { test, before, after } from 'node:test';
@@ -22,9 +25,10 @@ import { UserModel } from '../models/User';
 import { createApiServer } from '../net/apiListeners';
 
 const SKIP = 'Postgres with the users table is not reachable';
-const TEST_USER_NAME = '^stopgap-[0-9a-f]{12}(-mfa)?$';
+const TEST_USER_NAME = '^stopgap-[0-9a-f]{12}(-mfa|-b)?$';
 const tag = crypto.randomBytes(6).toString('hex');
 const username = `stopgap-${tag}`;
+const otherUsername = `${username}-b`;
 const password = crypto.randomBytes(12).toString('hex');
 const userIds: number[] = [];
 let dbReady = false;
@@ -39,7 +43,7 @@ before(async () => {
   } catch {
     return;
   }
-  for (const name of [username, `${username}-mfa`]) {
+  for (const name of [username, `${username}-mfa`, otherUsername]) {
     const user = await UserModel.create({ username: name, email: `${name}@siembox.invalid`, password, role: 'viewer' });
     userIds.push(user.id);
   }
@@ -67,7 +71,7 @@ after(async () => {
   await closePools();
 });
 
-async function login(name: string, secret: string) {
+async function login(name: string, secret: unknown) {
   const res = await fetch(`${base}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -92,4 +96,15 @@ test('successful sign-ins and "MFA code required" are not counted; wrong passwor
   const refused = await login(username, password);
   assert.equal(refused.status, 429, 'the eleventh attempt is refused, even with the right password');
   assert.equal(refused.json.code, 'RATE_LIMITED');
+
+  // Same address, another account: not locked out by the failures above.
+  assert.equal((await login(otherUsername, password)).status, 200, 'another user still signs in');
+});
+
+test('a 500 is not counted as a failed sign-in', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  for (let i = 0; i < 11; i++) {
+    assert.equal((await login(otherUsername, 12345)).status, 500, `attempt ${i + 1} is answered, not refused`);
+  }
+  assert.equal((await login(otherUsername, password)).status, 200);
 });

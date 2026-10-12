@@ -1445,8 +1445,11 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   every user.
 - Users who aren't doing much get `429 Too Many Requests` together: they all
   share one budget of `API_RATE_LIMIT_MAX` (default 1000) requests per 15
-  minutes, and one budget of 10 failed sign-ins.
-- The backend log has `Ignored X-Forwarded-For from <address> ...` warnings.
+  minutes, and one budget of 100 failed sign-ins (each account still has its
+  own 10).
+- The backend log has hourly `Ignored X-Forwarded-For from <address> ...`
+  warnings: a proxy in front of the web UI, or a caller of port 8421, whose
+  `X-Forwarded-For` has been ignored for more than 45 s.
 
 **Diagnosis:** as an admin, open `GET /api/admin/client-address` through the
 web UI's address and read `you` and `warnings`:
@@ -1472,7 +1475,14 @@ has the full table):
 - **A `TRUSTED_PROXIES` entry doesn't take effect:** `warnings` says why (a
   rejected value such as `*` or `uniquelocal`, a name that doesn't resolve on
   the backend's network, a name in host networking mode, where only IP
-  addresses work).
+  addresses work). A name whose answers are listed under `ignoredAnswers` got
+  them from a DNS server other than Docker's (a LAN DNS server, typical on a
+  macvlan or ipvlan network): list the proxy's IP address instead.
+- **With host networking, the frontend's `172.x` address shows up in
+  `ignoredForwardedFor.peers` right after a backend restart:** expected. nginx
+  uses its TCP fallback for up to 30 s after the socket failed (a restart, or a
+  request that timed out), and that address can't be trusted by name here.
+  Only if it goes on for more than 45 s is it reported in `warnings`.
 
 ### Issue: Frontend log shows `connect() to unix:/run/siembox/api.sock failed`
 
@@ -1493,17 +1503,24 @@ connect, retrying the socket every 30 s. The socket is missing when:
   TCP fallback for up to 30 s after the backend is back, then returns to the
   socket).
 
+A request on the socket that times out (`upstream timed out`) also makes that
+nginx worker use the fallback for 30 s, followed by the same
+`upstream server temporarily disabled` line.
+
 **Solution:** pull the current compose file (it mounts `api-socket` at
 `/run/siembox` on the backend and read-only on the frontend) and redeploy with
 `docker compose up -d`. Then check `GET /api/admin/client-address`:
 `proxySocket.state` should be `listening` and `you.via` `proxy-socket`.
 
-### Issue: `429 Too Many Requests` or "Too many failed sign-in attempts from your address"
+### Issue: `429 Too Many Requests` or "Too many failed sign-in attempts ..."
 
 **Cause:** a rate limit (DEPLOYMENT.md and API.md, "Rate Limiting"): more than
 `API_RATE_LIMIT_MAX` (default 1000) API requests in 15 minutes from one
-address, or 10 failed sign-ins in 15 minutes. The message says how long to
-wait; the counters are kept in memory.
+address; 10 failed sign-ins in 15 minutes for one account from one address
+("... for this account from your address"); or, after 100 failed sign-ins
+from one address, another try for an account that already failed from it
+("... from your address"). The message says how long to wait; the counters
+are kept in memory.
 
 **Solution:**
 - Wait for the time in the message, or restart the backend to clear every

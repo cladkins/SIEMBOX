@@ -253,18 +253,36 @@ To update SIEMBox to the latest version:
 
 Note: Do not run docker-compose commands directly. Your deployment environment will handle container updates.
 
-**Updating to the release with the proxy socket:** pull the new compose file
-too, not only the images. It adds the `api-socket` volume (backend
-`/run/siembox`, frontend `/run/siembox:ro`) and the `TRUSTED_PROXIES` and
-`API_RATE_LIMIT_MAX` settings. An older compose file keeps working: nginx falls
-back to TCP and logs `connect() to unix:/run/siembox/api.sock failed` about
-every 30 s. But with host networking every web UI user then shares one
-address. Other changes in that release:
+**Updating to the release with the proxy socket:** update the compose file
+too, not only the images. The new one adds the `api-socket` volume (backend
+`/run/siembox`, frontend `/run/siembox:ro`) and passes `TRUSTED_PROXIES`,
+`API_RATE_LIMIT_MAX`, `EDR_AGENT_RATE_MAX`, `SHIPPER_LOG_PUSH_MAX` and
+`SIEMBOX_PROXY_SOCKET` from your `.env`. An older compose file keeps working:
+nginx falls back to TCP and logs `connect() to unix:/run/siembox/api.sock
+failed` about every 30 s. But with host networking every web UI user then
+shares one address.
+
+> ⚠️ **Running with host networking?** The shipped compose files have
+> `network_mode: host` commented out. If you replace your file with the new
+> one, make your [host-networking edits](#optional-host-networking-linux-only)
+> again before you deploy it: with `DB_HOST=localhost` still in your `.env`, a
+> bridge-mode backend dials its own container instead of Postgres and restarts
+> in a loop. Alternatively keep your file and add only the new lines: the
+> `api-socket:/run/siembox` volume on the backend, `api-socket:/run/siembox:ro`
+> on the frontend, the top-level `api-socket` volume, and the environment
+> entries above.
+
+Other changes in that release:
 - `X-Forwarded-For` from direct callers on port 8421 is ignored. A reverse
   proxy in front of SIEMBox needs `TRUSTED_PROXIES` (see [Client addresses and
-  reverse proxies](#client-addresses-and-reverse-proxies)).
-- A `429` from the general limit is JSON with `Retry-After`, and failed
-  sign-ins are limited to 10 per 15 minutes per address.
+  reverse proxies](#client-addresses-and-reverse-proxies)); until then the
+  backend logs which proxy it is ignoring.
+- A `429` from the general limit is JSON with `Retry-After`.
+- Failed sign-ins are limited: 10 per account per address, and 100 per address
+  across all accounts, per 15 minutes. People who share an address (behind an
+  office NAT, or a reverse proxy SIEMBox doesn't trust) don't lock each other
+  out: past the 100, only accounts that already failed from that address are
+  refused.
 - EDR agent enrollment counts toward the general limit, even with an
   `X-Agent-ID` header.
 
@@ -628,15 +646,20 @@ client's address. It works that address out like this:
   when you add one: `TRUSTED_PROXIES=frontend,192.168.1.20`. `none` trusts only
   the socket.
   - Names are looked up in Docker's own DNS only (never in host networking
-    mode), and only answers on the backend's Docker networks count, so a LAN
-    DNS server can't make some other host trusted.
+    mode), and an answer only counts when it is on one of the backend's
+    networks and Docker confirms it as a container there (its reverse lookup
+    names `<container>.<network>`). Docker passes names it doesn't know on to
+    your LAN's DNS server, so this is what keeps a LAN host that calls itself
+    `frontend` from being trusted when the backend sits on the LAN itself
+    (a macvlan or ipvlan network). In such setups listing IP addresses, or
+    `none`, is clearest.
   - Values that would trust everyone (`*`, `true`, `0.0.0.0/0`, `::/0`),
     Express's `loopback`/`linklocal`/`uniquelocal` presets, hop counts and
     malformed entries are rejected with an error in the backend log. Ranges
     wider than /24 (IPv4) or /64 (IPv6) work, with a warning.
   - Docker's network gateway address is never trusted through a range: Docker
     presents IPv6 and loopback clients of published ports with that address.
-- **`SIEMBOX_PROXY_SOCKET`** sets the socket path (default
+- **`SIEMBOX_PROXY_SOCKET`** (in `.env`) sets the socket path (default
   `/run/siembox/api.sock`; `off` disables it). The backend only listens when
   the directory already exists, i.e. when the volume is mounted.
 
@@ -652,14 +675,17 @@ client's address. It works that address out like this:
 | Proxy container (Nginx Proxy Manager, Traefik, Caddy, cloudflared) | Attach it to `siembox-network` and point it at `http://frontend:80` | — | `TRUSTED_PROXIES=frontend,<its service name>`; with host networking, give it a fixed `ipv4_address` and list that |
 | Proxy installed on the Docker host | Proxy to `http://<host LAN IP>:8420`, not `127.0.0.1` (Docker rewrites loopback clients of published ports to the gateway address) | — | `TRUSTED_PROXIES=frontend,<host LAN IP>` |
 | Host-networking backend, host proxy pointed straight at 8421 | — | The proxy is `127.0.0.1` | `TRUSTED_PROXIES=frontend,127.0.0.1` (only safe with host networking) |
-| IPv6 or loopback clients of published ports, Docker Desktop, rootless Docker's default port driver | These clients share the gateway address, which is never trusted | — | Reach SIEMBox over IPv4 on the host's LAN address, enable IPv6 on `siembox-network`, or switch rootless Docker to `slirp4netns` |
-| Kubernetes, Unraid and other templates | Every user shares one address until configured | — | Share the socket's directory between the two containers (an `emptyDir`), or list the frontend's address (`127.0.0.1` inside one pod) |
+| IPv6 or loopback clients of published ports, Docker Desktop, rootless Docker's default port driver | These clients share the gateway address, which is never trusted | — | Reach SIEMBox over IPv4 on the host's LAN address, or switch rootless Docker to `slirp4netns`. (Enabling IPv6 on `siembox-network` doesn't help: the bundled nginx only listens on IPv4, so IPv6 browsers would be refused.) |
+| Kubernetes, Unraid and other templates | Every user shares one address until configured | — | Share the socket's directory between the two containers (an `emptyDir`), or list the frontend's address (`127.0.0.1` inside one pod). On a macvlan or ipvlan network, list addresses rather than names |
 | Development (`npm run dev`) | The Vite dev server connects from `127.0.0.1` | — | Nothing |
 
 Without any configuration a reverse proxy in front of SIEMBox makes every user
 look like the proxy, as before: one shared address that can't be forged. It
 shares the general limit of `API_RATE_LIMIT_MAX` (default 1000) requests per 15
-minutes, so set `TRUSTED_PROXIES` (or raise the limit).
+minutes and the sign-in limit's 100 failures per address, so set
+`TRUSTED_PROXIES` (or raise the general limit). Until you do, the backend logs
+an hourly `Ignored X-Forwarded-For from <proxy>` warning and
+`GET /api/admin/client-address` lists it under `warnings`.
 
 ### Check what SIEMBox sees
 
@@ -674,9 +700,10 @@ minutes, so set `TRUSTED_PROXIES` (or raise the limit).
    `you.address` should be your machine's address and `you.via`
    `proxy-socket`. `warnings` lists anything to fix: a missing volume, a
    `TRUSTED_PROXIES` name that doesn't resolve, a proxy whose `X-Forwarded-For`
-   is being ignored. Right after the backend restarts, nginx stays on its TCP
-   fallback for up to 30 s before it tries the socket again, so check again
-   after that if `via` is not `proxy-socket` yet.
+   is being ignored (yours, if your request came through one). Right after the
+   backend restarts, nginx stays on its TCP fallback for up to 30 s before it
+   tries the socket again, so check again after that if `via` is not
+   `proxy-socket` yet.
 2. Confirm a direct caller can't choose its address:
 
    ```bash
@@ -685,12 +712,17 @@ minutes, so set `TRUSTED_PROXIES` (or raise the limit).
    ```
 
    `you.address` is still your real address, `you.via` is `direct`, and a
-   warning says the header was ignored.
+   warning says the header was ignored. This check is not counted as a proxy
+   whose header was ignored, so it leaves no warning behind. Never add your own
+   machine to `TRUSTED_PROXIES` because of it: only proxies belong there.
 3. The backend's startup log sums it up in one line, e.g. `Client addresses:
    proxy socket /run/siembox/api.sock (listening); X-Forwarded-For trusted from
    frontend -> 172.18.0.3; direct callers on :8421 use their TCP address.`
-   A local proxy whose header is ignored also shows up as an hourly
-   `Ignored X-Forwarded-For from ...` warning.
+   A local address whose `X-Forwarded-For` keeps being ignored for more than
+   45 s (a proxy in front of the web UI, or a caller of port 8421) also shows
+   up as an hourly `Ignored X-Forwarded-For from ...` warning. Shorter bursts
+   are expected with host networking for up to 30 s after a backend restart,
+   while nginx uses its TCP fallback, and are not reported.
 
 ## Monitoring
 

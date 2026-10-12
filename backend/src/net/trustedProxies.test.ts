@@ -1,15 +1,18 @@
 /**
  * TRUSTED_PROXIES parsing, the Express trust function, Docker gateway
- * handling, name lookups through an injected resolver, and the counter for
- * ignored X-Forwarded-For headers. Hermetic: interfaces, /proc/net/route and
- * DNS are fixtures. Run with `npm test` (tsx --test).
+ * handling, name lookups through an injected resolver (answers only count when
+ * Docker's DNS confirms them as containers on the backend's networks), and the
+ * counter for ignored X-Forwarded-For headers. Hermetic: interfaces,
+ * /proc/net/route and DNS are fixtures. Run with `npm test` (tsx --test).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Request } from 'express';
 import { PROXY_SOCKET_PEER } from './clientAddress';
 import {
+  IGNORED_HEADER_GRACE_MS,
   IGNORED_HEADER_WARN_MS,
+  IGNORED_PEER_TTL_MS,
   ipv6RouteGateways,
   MAX_TRACKED_PEERS,
   parseTrustedProxies,
@@ -57,10 +60,17 @@ function dnsError(code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`query ${code}`), { code });
 }
 
-/** A resolver answering from `table` (name -> v4/v6 answers or an error code); unknown names are NXDOMAIN. */
+/**
+ * A resolver answering from `table` (name -> v4/v6 answers or an error code);
+ * unknown names are NXDOMAIN. Reverse lookups answer from `ptr` (address ->
+ * names or an error code); otherwise, like Docker's DNS for the containers on
+ * the bridge-network fixture, every 172.18.x.x address is
+ * `c-<address>.siembox_net`, and anything else is NXDOMAIN.
+ */
 function fakeResolver() {
   const calls: string[] = [];
   const table: Record<string, { v4?: string[] | string; v6?: string[] | string }> = {};
+  const ptr: Record<string, string[] | string> = {};
   const answer = (value: string[] | string | undefined, missing: string) => {
     if (value === undefined) return Promise.reject(dnsError(missing));
     return typeof value === 'string' ? Promise.reject(dnsError(value)) : Promise.resolve(value);
@@ -74,8 +84,14 @@ function fakeResolver() {
       calls.push(`AAAA ${name}`);
       return name in table ? answer(table[name].v6, 'ENODATA') : answer(undefined, 'ENOTFOUND');
     },
+    reverse: (ip) => {
+      calls.push(`PTR ${ip}`);
+      if (ip in ptr) return answer(ptr[ip], 'ENOTFOUND');
+      if (ip.startsWith('172.18.')) return Promise.resolve([`c-${ip.replace(/\./g, '-')}.siembox_net`]);
+      return answer(undefined, 'ENOTFOUND');
+    },
   };
-  return { resolver, table, calls };
+  return { resolver, table, ptr, calls };
 }
 
 function captureLog() {
@@ -108,8 +124,11 @@ function proxies(spec: string | undefined, options: Partial<TrustedProxiesOption
   return { instance, log, dns };
 }
 
-function directRequest(peer: string, forwardedFor?: string): Request {
+function directRequest(peer: string, forwardedFor?: string, method = 'GET', url = '/api/alerts'): Request {
   return {
+    method,
+    originalUrl: url,
+    url,
     headers: forwardedFor === undefined ? {} : { 'x-forwarded-for': forwardedFor },
     socket: { remoteAddress: peer },
   } as unknown as Request;
@@ -233,13 +252,99 @@ test('names: only answers on the container\'s own networks count, never the gate
   const [entry] = instance.describe().entries;
   assert.deepEqual(entry.addresses, ['172.18.0.3']);
   assert.deepEqual(entry.ignoredAnswers, ['192.168.1.50', '172.18.0.1']);
-  assert.deepEqual(dns.calls, ['A frontend', 'AAAA frontend']);
+  assert.deepEqual(
+    dns.calls.filter((call) => !call.startsWith('PTR')),
+    ['A frontend', 'AAAA frontend']
+  );
+  assert.ok(dns.calls.includes('PTR 172.18.0.2'), "the backend's own address names its Docker network");
+  assert.ok(dns.calls.includes('PTR 172.18.0.3'), 'the answer is confirmed with Docker');
   assert.ok(log.of('info').includes('TRUSTED_PROXIES: frontend -> 172.18.0.3'));
   assert.equal(log.of('warn').filter((m) => m.includes('ignored the answer')).length, 2);
 
   // The same ignored answers are not reported again on the next refresh.
   await instance.refresh();
   assert.equal(log.of('warn').filter((m) => m.includes('ignored the answer')).length, 2);
+});
+
+/** A container on a macvlan or ipvlan network: an address on the LAN itself, routed through the LAN's router. */
+const lanInterfaces = (): InterfaceTable => ({
+  lo: [{ address: '127.0.0.1', family: 'IPv4', internal: true, cidr: '127.0.0.1/8' }],
+  eth0: [{ address: '192.168.1.50', family: 'IPv4', internal: false, cidr: '192.168.1.50/24' }],
+});
+const LAN_ROUTE_TABLE = 'Iface\tDestination\tGateway\neth0\t00000000\t0101A8C0\n'; // default via 192.168.1.1
+
+test('names: an answer from another DNS server is not trusted, even on the backend\'s own (LAN) network', async () => {
+  const { instance, dns, log } = proxies(undefined, {
+    interfaces: lanInterfaces,
+    readFile: (path) => (path === '/proc/net/route' ? LAN_ROUTE_TABLE : ''),
+  });
+  // No container is called frontend, so Docker's DNS passes the name on to the
+  // LAN's DNS server, which answers with a DHCP client that calls itself
+  // frontend. Its reverse lookup goes the same way and names the LAN, not one
+  // of Docker's networks.
+  dns.table.frontend = { v4: ['192.168.1.66'] };
+  dns.ptr['192.168.1.50'] = ['siembox-backend.br0'];
+  dns.ptr['192.168.1.66'] = ['frontend.lan'];
+  await instance.start();
+  instance.stop();
+  assert.equal(instance.trust('192.168.1.66', 0), false);
+  assert.equal(instance.trust('192.168.1.66', 2), false);
+  const [entry] = instance.describe().entries;
+  assert.deepEqual(entry.addresses, []);
+  assert.deepEqual(entry.ignoredAnswers, ['192.168.1.66']);
+  assert.ok(log.of('warn').some((m) => m.includes("ignored the answer 192.168.1.66 for frontend: Docker's DNS does not know it")));
+  assert.ok(!log.of('info').some((m) => m.includes('frontend -> 192.168.1.66')));
+
+  // No reverse name at all (NXDOMAIN): not trusted either.
+  delete dns.ptr['192.168.1.66'];
+  await instance.refresh();
+  assert.equal(instance.trust('192.168.1.66', 0), false);
+
+  // A container on that network that is called frontend is Docker's own answer: trusted.
+  dns.table.frontend = { v4: ['192.168.1.67'] };
+  dns.ptr['192.168.1.67'] = ['siembox-frontend.br0.'];
+  await instance.refresh();
+  assert.equal(instance.trust('192.168.1.67', 0), true);
+  assert.ok(log.of('info').includes('TRUSTED_PROXIES: frontend -> 192.168.1.67'));
+});
+
+test('names: when Docker\'s DNS cannot be asked about an answer, only an answer it confirmed before is kept', async () => {
+  const { instance, dns } = proxies('frontend');
+  dns.table.frontend = { v4: ['172.18.0.3'] };
+  await instance.start();
+  instance.stop();
+  assert.equal(instance.trust('172.18.0.3', 0), true);
+
+  for (const ip of ['172.18.0.2', '172.18.0.3', '172.18.0.4']) dns.ptr[ip] = 'ETIMEOUT';
+  dns.table.frontend = { v4: ['172.18.0.3', '172.18.0.4'] };
+  await instance.refresh();
+  assert.equal(instance.trust('172.18.0.3', 0), true, 'confirmed before: kept');
+  assert.equal(instance.trust('172.18.0.4', 0), false, 'never confirmed: not trusted');
+
+  // Before any confirmation, an answer that can't be checked is not trusted.
+  const fresh = proxies('frontend');
+  fresh.dns.table.frontend = { v4: ['172.18.0.3'] };
+  fresh.dns.ptr['172.18.0.2'] = 'ETIMEOUT';
+  await fresh.instance.start();
+  fresh.instance.stop();
+  assert.equal(fresh.instance.trust('172.18.0.3', 0), false);
+});
+
+test('IPv6 entries never match an IPv4 address, even ranges that contain ::ffff:0:0/96, and the reverse', () => {
+  const { instance } = proxies('frontend,::1/64,::/80,2001:db8::/64');
+  for (const hop of [0, 2]) {
+    for (const ipv4 of ['198.51.100.7', '::ffff:198.51.100.7', '10.0.0.1', '0.0.0.1']) {
+      assert.equal(instance.trust(ipv4, hop), false, `${ipv4} at hop ${hop}`);
+    }
+  }
+  assert.equal(instance.trust('::1', 0), true);
+  assert.equal(instance.trust('::abcd', 1), true, 'in ::/80');
+  assert.equal(instance.trust('2001:db8::5', 0), true);
+
+  const ipv4 = proxies('10.0.0.0/8,192.0.2.10');
+  assert.equal(ipv4.instance.trust('10.1.2.3', 0), true);
+  assert.equal(ipv4.instance.trust('::a01:203', 0), false, 'an IPv4-compatible IPv6 address is not 10.1.2.3');
+  assert.equal(ipv4.instance.trust('64:ff9b::c000:20a', 0), false, 'nor is a NAT64 one');
 });
 
 test('names: NXDOMAIN clears the addresses, a timeout keeps the last good answer', async () => {
@@ -287,7 +392,11 @@ test('names are not looked up in the host namespace or outside a container', asy
 
 test('start: waits at most about a second for a hanging lookup, and logs rejected entries and warnings', async () => {
   const { instance, log } = proxies('frontend,*,10.0.0.0/16', {
-    resolver: { resolve4: () => new Promise<string[]>(() => {}), resolve6: () => new Promise<string[]>(() => {}) },
+    resolver: {
+      resolve4: () => new Promise<string[]>(() => {}),
+      resolve6: () => new Promise<string[]>(() => {}),
+      reverse: () => new Promise<string[]>(() => {}),
+    },
   });
   const started = Date.now();
   await instance.start();
@@ -298,39 +407,140 @@ test('start: waits at most about a second for a hanging lookup, and logs rejecte
   assert.equal(log.of('warn').filter((m) => m.includes('wide range')).length, 1);
 });
 
-test('ignored X-Forwarded-For: counted per untrusted TCP peer; local peers warn at most hourly', () => {
+const SECOND = 1000;
+
+test('ignored X-Forwarded-For: counted per untrusted TCP peer; a local peer warns once it has gone on for 45 s, then hourly', () => {
   let now = 1_000_000;
   const { instance, log } = proxies('192.0.2.10', { now: () => now });
   const warnings = () => log.of('warn').filter((m) => m.startsWith('Ignored X-Forwarded-For'));
+  const peer = (address: string) => instance.describe().ignoredForwardedFor.peers.find((p) => p.address === address);
 
   instance.noteRequest(directRequest('::ffff:172.18.0.4', '203.0.113.5'));
+  now += 30 * SECOND;
   instance.noteRequest(directRequest('172.18.0.4', '203.0.113.6'));
-  assert.equal(warnings().length, 1);
-  assert.match(warnings()[0], /from 172\.18\.0\.4 .*api-socket volume.*TRUSTED_PROXIES/);
+  assert.equal(warnings().length, 0, "within nginx's 30 s fallback window: not reported yet");
+  assert.deepEqual(
+    { ...peer('172.18.0.4'), firstSeen: undefined, lastSeen: undefined },
+    { address: '172.18.0.4', kind: 'direct', requests: 2, local: true, sustained: false, firstSeen: undefined, lastSeen: undefined }
+  );
 
-  now += IGNORED_HEADER_WARN_MS;
+  now += IGNORED_HEADER_GRACE_MS - 30 * SECOND + 1;
   instance.noteRequest(directRequest('172.18.0.4', '203.0.113.7'));
-  assert.equal(warnings().length, 2, 'warned again an hour later');
+  assert.equal(warnings().length, 1);
+  assert.match(warnings()[0], /^Ignored X-Forwarded-For from 172\.18\.0\.4 \(3 requests in 45 s\): it calls the API directly .*api-socket volume.*TRUSTED_PROXIES/);
+  assert.equal(peer('172.18.0.4')?.sustained, true);
 
-  instance.noteRequest(directRequest('203.0.113.9', '1.2.3.4')); // remote: counted, no warning
+  // Still going: warned again an hour after the last warning, not before.
+  const step = 10 * 60 * SECOND;
+  for (let waited = step; waited <= IGNORED_HEADER_WARN_MS; waited += step) {
+    now += step;
+    instance.noteRequest(directRequest('172.18.0.4', '203.0.113.8'));
+    assert.equal(warnings().length, waited < IGNORED_HEADER_WARN_MS ? 1 : 2, `after ${waited / step * 10} minutes`);
+  }
+
+  instance.noteRequest(directRequest('203.0.113.9', '1.2.3.4')); // remote: counted, never warned about
+  now += 60 * SECOND;
+  instance.noteRequest(directRequest('203.0.113.9', '1.2.3.4'));
   instance.noteRequest(directRequest('192.0.2.10', '1.2.3.4')); // trusted: its header is used
   instance.noteRequest(directRequest('172.18.0.5')); // no header
-  instance.noteRequest(directRequest(PROXY_SOCKET_PEER, '1.2.3.4')); // the bundled nginx
+  instance.noteRequest(directRequest(PROXY_SOCKET_PEER, '1.2.3.4')); // the bundled nginx, one entry
   assert.equal(warnings().length, 2);
   const { peers, untracked } = instance.describe().ignoredForwardedFor;
   assert.deepEqual(
-    peers.map((p) => [p.address, p.requests, p.local]).sort(),
+    peers.map((p) => [p.address, p.kind, p.requests, p.local, p.sustained]).sort(),
     [
-      ['172.18.0.4', 3, true],
-      ['203.0.113.9', 1, false],
+      ['172.18.0.4', 'direct', 9, true, true],
+      ['203.0.113.9', 'direct', 2, false, true],
     ]
   );
   assert.equal(untracked, 0);
 });
 
+test('ignored X-Forwarded-For: the fallback window after a backend restart is not reported, and a peer is forgotten after an hour', () => {
+  let now = 5_000_000;
+  // Host networking: the frontend container's TCP fallback can't be trusted by name.
+  const { instance, log } = proxies(undefined, { now: () => now, hostNetworking: true });
+  for (let i = 0; i <= 30; i++) {
+    instance.noteRequest(directRequest('172.18.0.3', '192.168.1.50'));
+    now += SECOND;
+  }
+  assert.equal(log.of('warn').filter((m) => m.startsWith('Ignored X-Forwarded-For')).length, 0);
+  assert.equal(instance.describe().ignoredForwardedFor.peers[0].sustained, false);
+
+  // A request that times out on the socket starts another fallback window, more than an hour later.
+  now += IGNORED_PEER_TTL_MS;
+  assert.deepEqual(instance.describe().ignoredForwardedFor.peers, [], 'forgotten after an hour');
+  for (let i = 0; i <= 30; i++) {
+    instance.noteRequest(directRequest('172.18.0.3', '192.168.1.50'));
+    now += SECOND;
+  }
+  const [episode] = instance.describe().ignoredForwardedFor.peers;
+  assert.equal(episode.requests, 31, 'counted afresh');
+  assert.equal(episode.sustained, false);
+  assert.equal(log.of('warn').filter((m) => m.startsWith('Ignored X-Forwarded-For')).length, 0);
+});
+
+test('ignored X-Forwarded-For: requests to GET /api/admin/client-address are not counted', () => {
+  let now = 1_000_000;
+  const { instance, log } = proxies('none', { now: () => now });
+  for (const url of ['/api/admin/client-address', '/API/Admin/Client-Address/', '/api/admin/client-address?x=1']) {
+    for (const method of ['GET', 'HEAD']) {
+      instance.noteRequest(directRequest('192.168.1.50', '1.2.3.4', method, url));
+      now += 60 * SECOND;
+    }
+  }
+  assert.deepEqual(instance.describe().ignoredForwardedFor.peers, []);
+  assert.equal(log.of('warn').length, 0);
+  // Any other request from there still is.
+  instance.noteRequest(directRequest('192.168.1.50', '1.2.3.4', 'POST', '/api/admin/client-address'));
+  instance.noteRequest(directRequest('192.168.1.50', '1.2.3.4', 'GET', '/api/admin/jobs'));
+  assert.equal(instance.describe().ignoredForwardedFor.peers[0].requests, 2);
+});
+
+test('ignored X-Forwarded-For: an untrusted proxy in front of the bundled nginx (or a trusted proxy) is counted as forwarded', () => {
+  let now = 1_000_000;
+  const { instance, log } = proxies('frontend,192.0.2.10', { now: () => now });
+  const warnings = () => log.of('warn').filter((m) => m.startsWith('Ignored X-Forwarded-For'));
+
+  // A reverse proxy at 192.168.1.20 in front of port 8420: nginx appends it to
+  // the client it passed on.
+  instance.noteRequest(directRequest(PROXY_SOCKET_PEER, '203.0.113.5, 192.168.1.20'));
+  now += 50 * SECOND;
+  instance.noteRequest(directRequest(PROXY_SOCKET_PEER, '203.0.113.6, 192.168.1.20'));
+  assert.equal(warnings().length, 1);
+  assert.match(warnings()[0], /^Ignored X-Forwarded-For from 192\.168\.1\.20 \(2 requests in 50 s\): it passes requests on to SIEMBox but is not a trusted proxy.*add it to TRUSTED_PROXIES/);
+
+  // Behind a trusted proxy (192.0.2.10) as well, over the socket or straight over TCP.
+  instance.noteRequest(directRequest(PROXY_SOCKET_PEER, '198.51.100.1, 10.9.9.9, 192.0.2.10'));
+  instance.noteRequest(directRequest('192.0.2.10', '198.51.100.1, 10.9.9.9'));
+  // Not counted: one entry (nginx's own client), a trusted chain down to the
+  // client, and junk in place of the address.
+  instance.noteRequest(directRequest(PROXY_SOCKET_PEER, '192.168.1.21'));
+  instance.noteRequest(directRequest(PROXY_SOCKET_PEER, '203.0.113.7, 192.0.2.10'));
+  instance.noteRequest(directRequest(PROXY_SOCKET_PEER, '203.0.113.7, not-an-ip'));
+  const peers = instance.describe().ignoredForwardedFor.peers;
+  assert.deepEqual(
+    peers.map((p) => [p.address, p.kind, p.requests]).sort(),
+    [
+      ['10.9.9.9', 'forwarded', 2],
+      ['192.168.1.20', 'forwarded', 2],
+    ]
+  );
+  assert.equal(instance.untrustedForwarder('203.0.113.5, 192.168.1.20'), '192.168.1.20');
+  assert.equal(instance.untrustedForwarder('203.0.113.5'), null);
+  assert.equal(instance.untrustedForwarder(undefined), null);
+
+  // The Docker gateway (a proxy on the Docker host pointed at 127.0.0.1) gets different advice.
+  now += 60 * SECOND;
+  instance.noteRequest(directRequest(PROXY_SOCKET_PEER, '203.0.113.5, 172.18.0.1'));
+  now += 60 * SECOND;
+  instance.noteRequest(directRequest(PROXY_SOCKET_PEER, '203.0.113.5, 172.18.0.1'));
+  assert.match(warnings().at(-1)!, /from 172\.18\.0\.1 .*Docker network gateway.*port 8420 instead of 127\.0\.0\.1/);
+});
+
 test('ignored X-Forwarded-For: at most 100 peers, and a local peer displaces a remote one', () => {
   let now = 0;
-  const { instance, log } = proxies('none', { now: () => ++now });
+  const { instance } = proxies('none', { now: () => ++now });
   for (let i = 0; i < MAX_TRACKED_PEERS; i++) {
     instance.noteRequest(directRequest(`203.0.${Math.floor(i / 250)}.${(i % 250) + 1}`, '1.1.1.1'));
   }
@@ -344,5 +554,10 @@ test('ignored X-Forwarded-For: at most 100 peers, and a local peer displaces a r
   assert.equal(report.peers.length, MAX_TRACKED_PEERS);
   assert.ok(report.peers.some((p) => p.address === '10.0.0.7'));
   assert.ok(!report.peers.some((p) => p.address === '203.0.0.1'), 'the least recently seen remote peer went');
-  assert.equal(log.of('warn').filter((m) => m.includes('from 10.0.0.7')).length, 1);
+
+  // A forgotten peer (not seen for an hour) makes room for anyone.
+  now += IGNORED_PEER_TTL_MS + 1;
+  instance.noteRequest(directRequest('198.51.100.2', '1.1.1.1'));
+  report = instance.describe().ignoredForwardedFor;
+  assert.deepEqual(report.peers.map((p) => p.address), ['198.51.100.2']);
 });

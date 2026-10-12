@@ -19,11 +19,13 @@ Rate limits, audit rows and shipper records use each client's address. The web U
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `TRUSTED_PROXIES` | `frontend` | Comma-separated IPs, CIDRs or Compose service names whose `X-Forwarded-For` is believed (any hop). Names are looked up in Docker's DNS only, and only answers on the backend's own networks count. The value **replaces** the default, so keep `frontend` when adding a reverse proxy: `frontend,192.168.1.20`. `none` trusts only the socket. `*`, `true`, `/0` ranges, Express presets (`loopback`, …), hop counts and malformed entries are rejected (logged as errors); ranges wider than /24 (IPv4) or /64 (IPv6) log a warning. The Docker gateway is never trusted through a range. |
+| `TRUSTED_PROXIES` | `frontend` | Comma-separated IPs, CIDRs or Compose service names whose `X-Forwarded-For` is believed (any hop). Names are looked up in Docker's DNS only, and an answer only counts when it is on the backend's own networks and Docker confirms it as a container there (so a LAN DNS server answering for the name doesn't count; on a macvlan or ipvlan network, list addresses instead). The value **replaces** the default, so keep `frontend` when adding a reverse proxy: `frontend,192.168.1.20`. `none` trusts only the socket. `*`, `true`, `/0` ranges, Express presets (`loopback`, …), hop counts and malformed entries are rejected (logged as errors); ranges wider than /24 (IPv4) or /64 (IPv6) log a warning. IPv6 entries never match IPv4 addresses. The Docker gateway is never trusted through a range. |
 | `API_RATE_LIMIT_MAX` | `1000` | Requests per 15 minutes per client address across `/api`. A `429` is JSON with `Retry-After`. |
-| `SIEMBOX_PROXY_SOCKET` | `/run/siembox/api.sock` | Where the backend listens for the frontend's nginx. It only listens when the directory exists (the volume is mounted); `off` disables it. Not set in the compose files. |
+| `EDR_AGENT_RATE_MAX` | `30000` | Requests per 15 minutes per address on the EDR agent routes, which skip the general limit. |
+| `SHIPPER_LOG_PUSH_MAX` | `6000` | Requests per 15 minutes per address on `POST /api/shippers/logs`, which skips the general limit. |
+| `SIEMBOX_PROXY_SOCKET` | `/run/siembox/api.sock` | Where the backend listens for the frontend's nginx. It only listens when the directory exists (the volume is mounted); `off` disables it. |
 
-POST `/api/auth/login` also allows at most **10 failed sign-ins per 15 minutes per address** (IPv6: per /64); successful sign-ins don't count. Counters are in memory and reset when the backend restarts.
+POST `/api/auth/login` also allows at most **10 failed sign-ins per account per 15 minutes per address** (IPv6: per /64), and 100 per address across all accounts; past those, only accounts that already failed from that address are refused, so users who share an address don't lock each other out. Successful sign-ins don't count. Counters are in memory and reset when the backend restarts.
 
 ## Database
 

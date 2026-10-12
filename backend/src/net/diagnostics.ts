@@ -19,7 +19,8 @@ function nameState(entry: NameReport, report: TrustedProxiesReport): string {
   if (!report.nameLookup.enabled) return `not looked up: ${report.nameLookup.reason}`;
   if (entry.status === 'error') return `lookup failed: ${entry.error ?? 'unknown error'}`;
   if (entry.status === 'pending') return 'not looked up yet';
-  return 'no address on this network';
+  if (entry.ignoredAnswers?.length) return `no container on this network (not trusted: ${entry.ignoredAnswers.join(', ')})`;
+  return 'no container on this network';
 }
 
 function socketSummary(socket: ProxySocketState): string {
@@ -98,24 +99,36 @@ export function clientAddressReport(
       warnings.push(`TRUSTED_PROXIES entry ${entry.entry} is not used (${report.nameLookup.reason}).`);
     } else if (entry.status === 'not-found' || entry.status === 'error') {
       warnings.push(
-        `TRUSTED_PROXIES entry ${entry.entry} does not resolve to an address on this container's networks` +
+        `TRUSTED_PROXIES entry ${entry.entry} does not resolve to a container on this container's networks` +
+          (entry.ignoredAnswers?.length
+            ? ` (answers not trusted: ${entry.ignoredAnswers.join(', ')}; Docker's DNS did not confirm them as ` +
+              'containers on these networks, list the proxy by address instead)'
+            : '') +
           (entry.error ? ` (${entry.error})` : '') +
           '.'
       );
     }
   }
   warnings.push(...report.warnings);
+  // Local peers only, and only once it has gone on for more than 45 s: nginx's
+  // TCP fallback after a backend restart is expected to be ignored briefly.
   for (const ignored of report.ignoredForwardedFor.peers) {
-    if (!ignored.local) continue;
+    if (!ignored.local || !ignored.sustained) continue;
     warnings.push(
-      `X-Forwarded-For from ${ignored.address} has been ignored on ${ignored.requests} request(s): it is not a ` +
-        'trusted proxy, so every client behind it shares that address. If it is the SIEMBox frontend, update your ' +
-        'compose file (api-socket volume); if it is your own reverse proxy, add it to TRUSTED_PROXIES.'
+      `X-Forwarded-For from ${ignored.address} has been ignored on ${ignored.requests} requests since ` +
+        `${ignored.firstSeen}: ${proxies.ignoredPeerAdvice(ignored)}`
     );
   }
   if (via === 'direct' && forwardedFor !== null) {
     warnings.push(
       `This request carried X-Forwarded-For but came straight from ${peer}, which is not a trusted proxy, so the header was ignored.`
+    );
+  }
+  const forwarder = via === 'direct' ? null : proxies.untrustedForwarder(header);
+  if (forwarder) {
+    warnings.push(
+      `This request reached SIEMBox through ${forwarder}, which sent X-Forwarded-For of its own but is not a trusted ` +
+        `proxy, so ${forwarder} is taken for the client: ${proxies.ignoredPeerAdvice({ address: forwarder, kind: 'forwarded' })}`
     );
   }
   if (address && proxies.isGateway(address)) {

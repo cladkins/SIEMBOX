@@ -13,21 +13,31 @@
  *   client addresses of its web UI users. `none` trusts only the socket.
  *
  * Names are looked up only in Docker's embedded DNS (127.0.0.11), only inside
- * a container on a bridge network (never with host networking), and only
- * answers on the backend's own networks count, so a LAN DNS server that answers
- * for `frontend` can never make some LAN host trusted. Lookups repeat every
- * 30 s: a name that no longer exists stops being trusted, a lookup that times
- * out keeps the last answer.
+ * a container on its own network namespace (never with host networking), and
+ * an answer only counts when it is on one of the backend's own networks and
+ * Docker's DNS confirms it as a container there: the reverse lookup of the
+ * address must name `<container>.<network>` for a network the backend is on,
+ * which Docker answers from its own records. Docker passes names it doesn't
+ * know on to the host's DNS servers, so without that check a LAN DNS server
+ * answering for `frontend` (a DHCP client calling itself that) could make a LAN
+ * host trusted whenever the backend's network is the LAN itself (macvlan,
+ * ipvlan). Lookups repeat every 30 s: a name that no longer exists stops being
+ * trusted, a lookup that times out keeps the last answer.
  *
  * Docker gateway addresses are never trusted through a range: Docker's
  * userland proxy presents IPv6 and loopback clients of published ports as the
  * gateway, so trusting it would let those clients pick their address. Listing a
  * gateway as an exact address still works, with a warning.
  *
- * The same module counts direct requests whose X-Forwarded-For was ignored, so
- * a proxy that should be trusted but is not (an outdated compose file, a reverse
- * proxy missing from TRUSTED_PROXIES) shows up in the log and in
- * GET /api/admin/client-address.
+ * Addresses are only ever matched against entries of their own family: Node's
+ * BlockList matches an IPv4 address against IPv6 ranges through its
+ * IPv4-mapped form, which would make an entry like `::1/64` cover every IPv4
+ * client.
+ *
+ * The same module counts requests whose X-Forwarded-For was ignored, so a proxy
+ * that should be trusted but is not (an outdated compose file, a reverse proxy
+ * missing from TRUSTED_PROXIES, in front of the web UI or of port 8421) shows
+ * up in the log and in GET /api/admin/client-address.
  */
 import dns from 'node:dns';
 import fs from 'node:fs';
@@ -46,7 +56,23 @@ export const NAME_REFRESH_MS = 30_000;
 const BOOT_WAIT_MS = 1000;
 /** Peers whose ignored X-Forwarded-For is counted. */
 export const MAX_TRACKED_PEERS = 100;
+/**
+ * How long a peer's X-Forwarded-For must keep being ignored before it is
+ * reported. nginx goes back to the socket 30 s (its fail_timeout) after the
+ * socket failed (a backend restart, a timed-out request) and uses its TCP
+ * fallback until then, which with host networking is an untrusted peer.
+ */
+export const IGNORED_HEADER_GRACE_MS = 45_000;
+/** A peer whose X-Forwarded-For hasn't been ignored for this long is forgotten. */
+export const IGNORED_PEER_TTL_MS = 60 * 60 * 1000;
+/** How often the log warns about the same peer. */
 export const IGNORED_HEADER_WARN_MS = 60 * 60 * 1000;
+/**
+ * GET /api/admin/client-address explains its own X-Forwarded-For, so its
+ * requests are not counted: an admin following DEPLOYMENT.md's check from a
+ * workstation must not be told to trust that workstation.
+ */
+const DIAGNOSTICS_PATH = '/api/admin/client-address';
 
 type Family = 'ipv4' | 'ipv6';
 
@@ -54,9 +80,31 @@ function familyOf(ip: string): Family {
   return net.isIP(ip) === 6 ? 'ipv6' : 'ipv4';
 }
 
+/** Addresses and subnets, matched only against addresses of the same family. */
+class AddressList {
+  private readonly lists: Record<Family, net.BlockList> = { ipv4: new net.BlockList(), ipv6: new net.BlockList() };
+
+  addAddress(ip: string): void {
+    const family = familyOf(ip);
+    this.lists[family].addAddress(ip, family);
+  }
+
+  addSubnet(ip: string, prefix: number): void {
+    const family = familyOf(ip);
+    this.lists[family].addSubnet(ip, prefix, family);
+  }
+
+  check(ip: string): boolean {
+    const family = familyOf(ip);
+    return this.lists[family].check(ip, family);
+  }
+}
+
 export interface NameResolver {
   resolve4(name: string): Promise<string[]>;
   resolve6(name: string): Promise<string[]>;
+  /** The names of an address (PTR records). */
+  reverse(ip: string): Promise<string[]>;
 }
 
 /** The part of an os.networkInterfaces() entry this module reads. */
@@ -109,7 +157,7 @@ interface NameEntry {
   ipv4: string[];
   ipv6: string[];
   status: NameStatus;
-  /** Answers that were not on the backend's own networks (or were a gateway). */
+  /** Answers that were not trusted: off the backend's networks, a gateway, or not confirmed by Docker. */
   ignoredAnswers: string[];
   error?: string;
   resolvedAt?: number;
@@ -266,22 +314,24 @@ function isLinkLocal(ip: string): boolean {
   return ip.startsWith('fe80:') || ip.startsWith('169.254.');
 }
 
-/** The backend's own networks: every non-loopback, non-link-local interface subnet. */
-function ownNetworks(table: InterfaceTable): { list: net.BlockList; cidrs: string[] } {
-  const list = new net.BlockList();
+/** The backend's own networks and addresses: every non-loopback, non-link-local interface address. */
+function ownNetworks(table: InterfaceTable): { list: AddressList; cidrs: string[]; addresses: string[] } {
+  const list = new AddressList();
   const cidrs: string[] = [];
-  for (const addresses of Object.values(table)) {
-    for (const entry of addresses ?? []) {
+  const addresses: string[] = [];
+  for (const entries of Object.values(table)) {
+    for (const entry of entries ?? []) {
       if (entry.internal || !entry.cidr) continue;
       const [address, prefixText] = entry.cidr.split('/');
       const ip = normalizeIp(address);
       const prefix = Number(prefixText);
       if (!ip || isLinkLocal(ip) || !Number.isInteger(prefix)) continue;
-      list.addSubnet(ip, prefix, familyOf(ip));
+      list.addSubnet(ip, prefix);
       cidrs.push(`${ip}/${prefix}`);
+      addresses.push(ip);
     }
   }
-  return { list, cidrs };
+  return { list, cidrs, addresses };
 }
 
 function readFileOrNull(path: string): string | null {
@@ -298,6 +348,7 @@ function dockerDnsResolver(): NameResolver {
   return {
     resolve4: (name) => resolver.resolve4(name),
     resolve6: (name) => resolver.resolve6(name),
+    reverse: (ip) => resolver.reverse(ip),
   };
 }
 
@@ -314,8 +365,18 @@ async function lookup(resolve: (name: string) => Promise<string[]>, name: string
   }
 }
 
+/**
+ * The network in a name Docker's DNS gives a container's address,
+ * `<container>.<network>`: everything after the first label, lower-cased.
+ */
+function networkOfReverseName(name: string): string | null {
+  const host = name.trim().toLowerCase().replace(/\.$/, '');
+  const dot = host.indexOf('.');
+  return dot > 0 && dot < host.length - 1 ? host.slice(dot + 1) : null;
+}
+
 /** Private, carrier-grade NAT, loopback, link-local and unique-local ranges. */
-const LOCAL_RANGES = new net.BlockList();
+const LOCAL_RANGES = new AddressList();
 for (const [address, prefix] of [
   ['10.0.0.0', 8],
   ['172.16.0.0', 12],
@@ -323,23 +384,64 @@ for (const [address, prefix] of [
   ['100.64.0.0', 10],
   ['127.0.0.0', 8],
   ['169.254.0.0', 16],
-] as const) {
-  LOCAL_RANGES.addSubnet(address, prefix, 'ipv4');
-}
-for (const [address, prefix] of [
   ['fc00::', 7],
   ['fe80::', 10],
   ['::1', 128],
 ] as const) {
-  LOCAL_RANGES.addSubnet(address, prefix, 'ipv6');
+  LOCAL_RANGES.addSubnet(address, prefix);
 }
 
+/**
+ * How an ignored X-Forwarded-For arrived:
+ * - 'direct': from a TCP peer on port 8421 that isn't trusted;
+ * - 'forwarded': from an address in X-Forwarded-For itself, passed on by the
+ *   bundled nginx (or a trusted proxy): an untrusted proxy in front of it,
+ *   such as a reverse proxy in front of the web UI that TRUSTED_PROXIES doesn't
+ *   list. Express takes that proxy for the client.
+ */
+export type IgnoredHeaderKind = 'direct' | 'forwarded';
+
 interface IgnoredPeer {
+  address: string;
+  kind: IgnoredHeaderKind;
   requests: number;
   firstSeen: number;
   lastSeen: number;
   lastWarned: number | null;
   local: boolean;
+}
+
+/** Ignored for longer than nginx's fallback window after a socket failure. */
+function isSustained(peer: Pick<IgnoredPeer, 'firstSeen' | 'lastSeen'>): boolean {
+  return peer.lastSeen - peer.firstSeen > IGNORED_HEADER_GRACE_MS;
+}
+
+/** The entries of an X-Forwarded-For header, left to right, as Express reads them. */
+function forwardedEntries(header: string | string[] | undefined): string[] {
+  if (header === undefined) return [];
+  const text = Array.isArray(header) ? header.join(',') : header;
+  return text
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+/** Whether a request is for the diagnostics endpoint (which Express matches case-insensitively, trailing slash or not). */
+function isDiagnosticsRequest(req: Request): boolean {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  const path = (req.originalUrl || req.url || '').split('?')[0].replace(/\/+$/, '').toLowerCase();
+  return path === DIAGNOSTICS_PATH;
+}
+
+export interface IgnoredPeerReport {
+  address: string;
+  kind: IgnoredHeaderKind;
+  requests: number;
+  firstSeen: string;
+  lastSeen: string;
+  local: boolean;
+  /** Ignored for more than 45 s: reported in warnings (for a local address) and logged. */
+  sustained: boolean;
 }
 
 export interface TrustedProxiesReport {
@@ -359,7 +461,7 @@ export interface TrustedProxiesReport {
   gateways: string[];
   ownNetworks: string[];
   ignoredForwardedFor: {
-    peers: Array<{ address: string; requests: number; firstSeen: string; lastSeen: string; local: boolean }>;
+    peers: IgnoredPeerReport[];
     untracked: number;
   };
   warnings: string[];
@@ -379,12 +481,14 @@ export class TrustedProxies {
   private readonly log: Log;
   private readonly now: () => number;
   private resolver: NameResolver | undefined;
-  private exact = new net.BlockList();
-  private ranges = new net.BlockList();
-  private resolved = new net.BlockList();
-  private gatewayList = new net.BlockList();
+  private exact = new AddressList();
+  private ranges = new AddressList();
+  private resolved = new AddressList();
+  private gatewayList = new AddressList();
   private gateways: string[] = [];
   private ownCidrs: string[] = [];
+  /** Docker network names of the backend's own addresses, from the last lookup that got answers. */
+  private dockerNetworks: Set<string> | null = null;
   private readonly peers = new Map<string, IgnoredPeer>();
   private untracked = 0;
   private timer: NodeJS.Timeout | null = null;
@@ -409,22 +513,21 @@ export class TrustedProxies {
     this.detectNetworks(table);
 
     for (const entry of this.entries) {
-      if (entry.kind === 'address') this.exact.addAddress(entry.address, familyOf(entry.address));
-      if (entry.kind === 'range') this.ranges.addSubnet(entry.address, entry.prefix, entry.family);
+      if (entry.kind === 'address') this.exact.addAddress(entry.address);
+      if (entry.kind === 'range') this.ranges.addSubnet(entry.address, entry.prefix);
     }
     for (const gateway of this.gateways) {
-      const family = familyOf(gateway);
-      if (this.exact.check(gateway, family)) {
+      if (this.exact.check(gateway)) {
         this.configWarnings.push(
           `TRUSTED_PROXIES lists the Docker gateway ${gateway}. Docker presents IPv6 and loopback clients of ` +
             'published ports as that address, so those clients can now set their own client address.'
         );
       } else {
         const range = this.entries.find((e): e is RangeEntry => {
-          if (e.kind !== 'range' || e.family !== family) return false;
-          const one = new net.BlockList();
-          one.addSubnet(e.address, e.prefix, e.family);
-          return one.check(gateway, family);
+          if (e.kind !== 'range') return false;
+          const one = new AddressList();
+          one.addSubnet(e.address, e.prefix);
+          return one.check(gateway);
         });
         if (range) {
           this.configWarnings.push(
@@ -457,14 +560,13 @@ export class TrustedProxies {
 
   /** Whether a normalized address is a trusted proxy (the proxy socket aside). */
   isTrusted(ip: string): boolean {
-    const family = familyOf(ip);
-    if (this.exact.check(ip, family) || this.resolved.check(ip, family)) return true;
-    return this.ranges.check(ip, family) && !this.gatewayList.check(ip, family);
+    if (this.exact.check(ip) || this.resolved.check(ip)) return true;
+    return this.ranges.check(ip) && !this.gatewayList.check(ip);
   }
 
   /** Whether `ip` is a detected Docker gateway address. */
   isGateway(ip: string): boolean {
-    return this.gatewayList.check(ip, familyOf(ip));
+    return this.gatewayList.check(ip);
   }
 
   /**
@@ -535,119 +637,227 @@ export class TrustedProxies {
         ...ipv6RouteGateways(this.readFile('/proc/net/ipv6_route')),
       ];
     }
-    const list = new net.BlockList();
-    for (const gateway of gateways) list.addAddress(gateway, familyOf(gateway));
+    const list = new AddressList();
+    for (const gateway of gateways) list.addAddress(gateway);
     this.gateways = [...new Set(gateways)];
     this.gatewayList = list;
     this.ownCidrs = ownNetworks(table).cidrs;
   }
 
+  /**
+   * The Docker networks the backend is on, as Docker's DNS names them in the
+   * reverse lookups of its own addresses. Null when no lookup was answered
+   * (Docker's DNS is not reachable right now): then the previous set stands.
+   */
+  private async lookUpDockerNetworks(resolver: NameResolver, addresses: string[]): Promise<Set<string> | null> {
+    const results = await Promise.all(addresses.map((ip) => lookup((a) => resolver.reverse(a), ip)));
+    if (results.length > 0 && results.every((result) => result.status === 'error')) return this.dockerNetworks;
+    const networks = new Set<string>();
+    for (const result of results) {
+      if (result.status !== 'ok') continue;
+      for (const name of result.addresses) {
+        const network = networkOfReverseName(name);
+        if (network) networks.add(network);
+      }
+    }
+    this.dockerNetworks = networks;
+    return networks;
+  }
+
+  /**
+   * Whether Docker's DNS names `ip` as a container on one of the backend's
+   * networks; 'unknown' when it could not be asked.
+   */
+  private async dockerConfirms(
+    resolver: NameResolver,
+    ip: string,
+    networks: Set<string> | null
+  ): Promise<'yes' | 'no' | 'unknown'> {
+    if (networks === null) return 'unknown';
+    const result = await lookup((a) => resolver.reverse(a), ip);
+    if (result.status === 'error') return 'unknown';
+    if (result.status === 'not-found') return 'no';
+    return result.addresses.some((name) => {
+      const network = networkOfReverseName(name);
+      return network !== null && networks.has(network);
+    })
+      ? 'yes'
+      : 'no';
+  }
+
   private async lookUpNames(): Promise<void> {
     const table = this.interfaceTable();
     this.detectNetworks(table);
-    const own = ownNetworks(table).list;
+    const own = ownNetworks(table);
     this.resolver ??= dockerDnsResolver();
     const resolver = this.resolver;
-    await Promise.all(
-      this.names.map(async (name) => {
-        const [ipv4, ipv6] = await Promise.all([
-          lookup((n) => resolver.resolve4(n), name.entry),
-          lookup((n) => resolver.resolve6(n), name.entry),
-        ]);
-        const before = [...name.ipv4, ...name.ipv6].join(', ');
-        const ignoredBefore = new Set(name.ignoredAnswers);
-        const ignored: string[] = [];
-        const accept = (result: Lookup, previous: string[]): string[] => {
-          if (result.status === 'error') return previous;
-          if (result.status === 'not-found') return [];
-          const accepted: string[] = [];
-          for (const answer of result.addresses) {
-            const ip = normalizeIp(answer);
-            if (!ip) continue;
-            const family = familyOf(ip);
-            if (own.check(ip, family) && !this.gatewayList.check(ip, family)) accepted.push(ip);
-            else ignored.push(ip);
-          }
-          return accepted;
-        };
-        name.ipv4 = accept(ipv4, name.ipv4);
-        name.ipv6 = accept(ipv6, name.ipv6);
-        name.ignoredAnswers = ignored;
-        const failed = [ipv4, ipv6].filter((r): r is Extract<Lookup, { status: 'error' }> => r.status === 'error');
-        name.error = failed.length > 0 ? failed.map((r) => r.error).join(', ') : undefined;
-        const addresses = [...name.ipv4, ...name.ipv6];
-        name.status = failed.length === 2 ? 'error' : addresses.length > 0 ? 'resolved' : 'not-found';
-        name.resolvedAt = this.now();
-        const after = addresses.join(', ');
-        if (after !== before) {
-          this.log.info(
-            after
-              ? `TRUSTED_PROXIES: ${name.entry} -> ${after}`
-              : `TRUSTED_PROXIES: ${name.entry} no longer resolves to an address on this container's networks`
-          );
-        }
-        for (const ip of ignored) {
-          if (!ignoredBefore.has(ip)) {
-            this.log.warn(
-              `TRUSTED_PROXIES: ignored the answer ${ip} for ${name.entry}: it is not on this container's networks ` +
-                '(or it is the Docker gateway), so it is not trusted.'
-            );
-          }
-        }
-      })
-    );
-    const list = new net.BlockList();
+    const networks = await this.lookUpDockerNetworks(resolver, own.addresses);
+    await Promise.all(this.names.map((name) => this.lookUpName(name, resolver, own.list, networks)));
+    const list = new AddressList();
     for (const name of this.names) {
-      for (const ip of [...name.ipv4, ...name.ipv6]) list.addAddress(ip, familyOf(ip));
+      for (const ip of [...name.ipv4, ...name.ipv6]) list.addAddress(ip);
     }
     this.resolved = list;
   }
 
+  private async lookUpName(
+    name: NameEntry,
+    resolver: NameResolver,
+    own: AddressList,
+    networks: Set<string> | null
+  ): Promise<void> {
+    const [ipv4, ipv6] = await Promise.all([
+      lookup((n) => resolver.resolve4(n), name.entry),
+      lookup((n) => resolver.resolve6(n), name.entry),
+    ]);
+    const before = [...name.ipv4, ...name.ipv6].join(', ');
+    const ignoredBefore = new Set(name.ignoredAnswers);
+    const ignored: Array<{ ip: string; reason: string }> = [];
+    const accept = async (result: Lookup, previous: string[]): Promise<string[]> => {
+      if (result.status === 'error') return previous;
+      if (result.status === 'not-found') return [];
+      const accepted: string[] = [];
+      for (const answer of result.addresses) {
+        const ip = normalizeIp(answer);
+        if (!ip) continue;
+        if (!own.check(ip)) {
+          ignored.push({ ip, reason: "it is not on this container's networks" });
+          continue;
+        }
+        if (this.gatewayList.check(ip)) {
+          ignored.push({ ip, reason: 'it is the Docker gateway' });
+          continue;
+        }
+        const confirmed = await this.dockerConfirms(resolver, ip, networks);
+        if (confirmed === 'yes' || (confirmed === 'unknown' && previous.includes(ip))) {
+          accepted.push(ip);
+        } else {
+          ignored.push({
+            ip,
+            reason:
+              confirmed === 'unknown'
+                ? "Docker's DNS could not be asked whether it is a container on this container's networks"
+                : "Docker's DNS does not know it as a container on this container's networks (the answer came " +
+                  'from another DNS server)',
+          });
+        }
+      }
+      return accepted;
+    };
+    name.ipv4 = await accept(ipv4, name.ipv4);
+    name.ipv6 = await accept(ipv6, name.ipv6);
+    name.ignoredAnswers = ignored.map(({ ip }) => ip);
+    const failed = [ipv4, ipv6].filter((r): r is Extract<Lookup, { status: 'error' }> => r.status === 'error');
+    name.error = failed.length > 0 ? failed.map((r) => r.error).join(', ') : undefined;
+    const addresses = [...name.ipv4, ...name.ipv6];
+    name.status = failed.length === 2 ? 'error' : addresses.length > 0 ? 'resolved' : 'not-found';
+    name.resolvedAt = this.now();
+    const after = addresses.join(', ');
+    if (after !== before) {
+      this.log.info(
+        after
+          ? `TRUSTED_PROXIES: ${name.entry} -> ${after}`
+          : `TRUSTED_PROXIES: ${name.entry} no longer resolves to a container on this container's networks`
+      );
+    }
+    for (const { ip, reason } of ignored) {
+      if (!ignoredBefore.has(ip)) {
+        this.log.warn(`TRUSTED_PROXIES: ignored the answer ${ip} for ${name.entry}: ${reason}, so it is not trusted.`);
+      }
+    }
+  }
+
+  /**
+   * The X-Forwarded-For entry Express takes for the client (the first from the
+   * right that isn't trusted), when there are entries left of it: that address
+   * passed on an X-Forwarded-For of its own, so it is a proxy that isn't
+   * trusted. Null otherwise. Only meaningful for a request whose TCP peer is
+   * trusted (the proxy socket, or a TRUSTED_PROXIES entry).
+   */
+  untrustedForwarder(header: string | string[] | undefined): string | null {
+    const entries = forwardedEntries(header);
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const ip = normalizeIp(entries[i]);
+      if (ip !== null && this.isTrusted(ip)) continue;
+      return ip !== null && i > 0 ? ip : null;
+    }
+    return null;
+  }
+
   /**
    * Counts a request whose X-Forwarded-For is ignored: one that came over TCP
-   * from a peer that is not trusted. Local peers (private, loopback, ULA,
-   * link-local) are most likely a proxy that should be trusted, so they get a
-   * warning, at most once an hour each.
+   * from a peer that is not trusted ('direct'), or one whose header was passed
+   * on by an untrusted proxy in front of a trusted one ('forwarded'). Local
+   * peers (private, loopback, ULA, link-local) are most likely a proxy that
+   * should be trusted, so once that has gone on for more than 45 s they get a
+   * warning, at most once an hour each. Requests to GET
+   * /api/admin/client-address are not counted.
    */
   noteRequest(req: Request): void {
-    if (req.headers['x-forwarded-for'] === undefined) return;
+    const header = req.headers['x-forwarded-for'];
+    if (header === undefined || isDiagnosticsRequest(req)) return;
     const peer = req.socket?.remoteAddress;
-    if (!peer || peer === PROXY_SOCKET_PEER) return;
-    const ip = normalizeIp(peer);
-    if (!ip || this.isTrusted(ip)) return;
+    if (!peer) return;
+    if (peer !== PROXY_SOCKET_PEER) {
+      const ip = normalizeIp(peer);
+      if (!ip) return;
+      if (!this.isTrusted(ip)) {
+        this.record(ip, 'direct');
+        return;
+      }
+    }
+    const forwarder = this.untrustedForwarder(header);
+    if (forwarder) this.record(forwarder, 'forwarded');
+  }
+
+  private record(ip: string, kind: IgnoredHeaderKind): void {
     const now = this.now();
-    let record = this.peers.get(ip);
+    const key = `${kind} ${ip}`;
+    let record = this.peers.get(key);
+    if (record && now - record.lastSeen > IGNORED_PEER_TTL_MS) {
+      this.peers.delete(key); // forgotten: this is a new episode
+      record = undefined;
+    }
     if (!record) {
-      const local = LOCAL_RANGES.check(ip, familyOf(ip));
-      if (this.peers.size >= MAX_TRACKED_PEERS && !(local && this.evictRemotePeer())) {
+      const local = LOCAL_RANGES.check(ip);
+      if (this.peers.size >= MAX_TRACKED_PEERS && !this.makeRoom(local, now)) {
         this.untracked++;
         return;
       }
-      record = { requests: 0, firstSeen: now, lastSeen: now, lastWarned: null, local };
-      this.peers.set(ip, record);
+      record = { address: ip, kind, requests: 0, firstSeen: now, lastSeen: now, lastWarned: null, local };
+      this.peers.set(key, record);
     }
     record.requests++;
     record.lastSeen = now;
-    if (record.local && (record.lastWarned === null || now - record.lastWarned >= IGNORED_HEADER_WARN_MS)) {
+    if (
+      record.local &&
+      isSustained(record) &&
+      (record.lastWarned === null || now - record.lastWarned >= IGNORED_HEADER_WARN_MS)
+    ) {
       record.lastWarned = now;
       this.log.warn(
-        `Ignored X-Forwarded-For from ${ip} (${record.requests} request${record.requests === 1 ? '' : 's'} so far): ` +
-          `it is not a trusted proxy, so every client behind it shares the address ${ip}. ` +
-          'If it is the SIEMBox frontend, update your compose file so the backend and frontend share the api-socket volume; ' +
-          'if it is your own reverse proxy, add it to TRUSTED_PROXIES (keep "frontend" in the list). ' +
-          'See DEPLOYMENT.md, "Client addresses and reverse proxies".'
+        `Ignored X-Forwarded-For from ${ip} (${record.requests} requests in ${Math.round(
+          (record.lastSeen - record.firstSeen) / 1000
+        )} s): ${this.ignoredPeerAdvice(record)} See DEPLOYMENT.md, "Client addresses and reverse proxies".`
       );
     }
   }
 
-  /** Makes room for a local peer by dropping the least recently seen remote one. */
-  private evictRemotePeer(): boolean {
+  /** Makes room: drops a forgotten peer, or for a local peer the least recently seen remote one. */
+  private makeRoom(local: boolean, now: number): boolean {
+    for (const [key, record] of this.peers) {
+      if (now - record.lastSeen > IGNORED_PEER_TTL_MS) {
+        this.peers.delete(key);
+        return true;
+      }
+    }
+    if (!local) return false;
     let victim: string | null = null;
     let oldest = Infinity;
-    for (const [ip, record] of this.peers) {
+    for (const [key, record] of this.peers) {
       if (!record.local && record.lastSeen < oldest) {
         oldest = record.lastSeen;
-        victim = ip;
+        victim = key;
       }
     }
     if (victim === null) return false;
@@ -656,8 +866,36 @@ export class TrustedProxies {
     return true;
   }
 
+  /**
+   * What an ignored peer means and what to do about it, as a clause that
+   * starts with "it" (the log line and the admin report put it after the
+   * address).
+   */
+  ignoredPeerAdvice(peer: { address: string; kind: IgnoredHeaderKind }): string {
+    const { address } = peer;
+    const shared =
+      peer.kind === 'forwarded'
+        ? `it passes requests on to SIEMBox but is not a trusted proxy, so every client behind it shares the address ${address}.`
+        : `it calls the API directly and is not a trusted proxy, so every client behind it shares the address ${address}.`;
+    if (this.isGateway(address)) {
+      return (
+        `${shared} It is the Docker network gateway, which is never trusted through a range (Docker presents ` +
+        "loopback and IPv6 clients of published ports this way): point your proxy at the host's LAN address and " +
+        'port 8420 instead of 127.0.0.1, then add that address to TRUSTED_PROXIES (keep "frontend" in the list).'
+      );
+    }
+    if (peer.kind === 'forwarded') {
+      return `${shared} If it is your reverse proxy, add it to TRUSTED_PROXIES (keep "frontend" in the list).`;
+    }
+    return (
+      `${shared} If it is the SIEMBox frontend, update your compose file so the backend and frontend share the ` +
+      'api-socket volume; if it is your own reverse proxy, add it to TRUSTED_PROXIES (keep "frontend" in the list).'
+    );
+  }
+
   describe(): TrustedProxiesReport {
     const iso = (ms: number) => new Date(ms).toISOString();
+    const now = this.now();
     return {
       configured: this.configured,
       entries: this.entries.map((entry) => {
@@ -681,14 +919,17 @@ export class TrustedProxies {
       gateways: this.gateways,
       ownNetworks: this.ownCidrs,
       ignoredForwardedFor: {
-        peers: [...this.peers.entries()]
-          .sort((a, b) => b[1].lastSeen - a[1].lastSeen)
-          .map(([address, r]) => ({
-            address,
-            requests: r.requests,
-            firstSeen: iso(r.firstSeen),
-            lastSeen: iso(r.lastSeen),
-            local: r.local,
+        peers: [...this.peers.values()]
+          .filter((record) => now - record.lastSeen <= IGNORED_PEER_TTL_MS)
+          .sort((a, b) => b.lastSeen - a.lastSeen)
+          .map((record) => ({
+            address: record.address,
+            kind: record.kind,
+            requests: record.requests,
+            firstSeen: iso(record.firstSeen),
+            lastSeen: iso(record.lastSeen),
+            local: record.local,
+            sustained: isSustained(record),
           })),
         untracked: this.untracked,
       },

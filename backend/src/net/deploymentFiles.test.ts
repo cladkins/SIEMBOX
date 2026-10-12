@@ -5,7 +5,9 @@
  * - Both compose files share the `api-socket` volume: read-write at
  *   /run/siembox on the backend, which listens there, read-only on the
  *   frontend, whose nginx connects. The backend gets TRUSTED_PROXIES (default
- *   `frontend`) and API_RATE_LIMIT_MAX; BACKEND_UPSTREAM keeps its default.
+ *   `frontend`), and API_RATE_LIMIT_MAX, EDR_AGENT_RATE_MAX,
+ *   SHIPPER_LOG_PUSH_MAX and SIEMBOX_PROXY_SOCKET from .env (empty: the code
+ *   default); BACKEND_UPSTREAM keeps its default.
  * - The nginx template proxies /api to the socket, with BACKEND_UPSTREAM as a
  *   backup that is only used when connecting fails and is never marked down,
  *   and sets X-Forwarded-For with $proxy_add_x_forwarded_for: the backend takes
@@ -42,8 +44,10 @@ for (const file of ['compose.yaml', 'compose.prod.yaml']) {
     assert.ok(frontend.volumes?.includes(`api-socket:${SOCKET_DIR}:ro`), 'the frontend mounts it read-only');
     assert.deepEqual(compose.volumes?.['api-socket'], { driver: 'local' });
     assert.equal(backend.environment?.TRUSTED_PROXIES, `\${TRUSTED_PROXIES:-${DEFAULT_TRUSTED_PROXIES}}`);
-    assert.equal(backend.environment?.API_RATE_LIMIT_MAX, '${API_RATE_LIMIT_MAX:-}');
-    assert.equal(backend.environment?.SIEMBOX_PROXY_SOCKET, undefined, 'the code default applies');
+    // Passed through from .env; empty means the code default.
+    for (const name of ['API_RATE_LIMIT_MAX', 'EDR_AGENT_RATE_MAX', 'SHIPPER_LOG_PUSH_MAX', 'SIEMBOX_PROXY_SOCKET']) {
+      assert.equal(backend.environment?.[name], `\${${name}:-}`, name);
+    }
     assert.equal(frontend.environment?.BACKEND_UPSTREAM, '${BACKEND_UPSTREAM:-backend:8421}');
   });
 }

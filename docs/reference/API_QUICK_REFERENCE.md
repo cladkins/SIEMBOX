@@ -341,8 +341,8 @@ address; its `X-Forwarded-For` is ignored (see [API.md](API.md#rate-limiting)).
 | Endpoint | Limit |
 |----------|-------|
 | General API (`/api/*`) | 1000 requests (`API_RATE_LIMIT_MAX`) |
-| `POST /api/auth/login` | 10 failed sign-ins (successful ones don't count) |
-| EDR agent routes with `X-Agent-ID` (not enrollment) | 30000 requests (`EDR_AGENT_RATE_MAX`) |
+| `POST /api/auth/login` | 10 failed sign-ins per account; 100 per address across accounts, after which only accounts that already failed are refused (successful ones don't count) |
+| EDR agent routes with `X-Agent-ID`, with the route's own method (not enrollment) | 30000 requests (`EDR_AGENT_RATE_MAX`) |
 | `POST /api/shippers/logs` with `X-Shipper-ID` | 6000 requests (`SHIPPER_LOG_PUSH_MAX`) |
 | `POST /api/exposure/password-check` | 30 requests |
 

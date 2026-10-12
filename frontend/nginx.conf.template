@@ -7,7 +7,8 @@
 #
 # BACKEND_UPSTREAM is the fallback: nginx uses it when the socket is missing or
 # refuses (a compose file without the volume, an older backend image, a backend
-# restart) and tries the socket again 30 s later. It is substituted at container
+# restart), or after a request on the socket timed out, and tries the socket
+# again 30 s later (each worker on its own). It is substituted at container
 # start (see frontend/Dockerfile): the Compose default is the backend's
 # Docker-DNS name `backend:8421`, and `host.docker.internal:8421` when the
 # backend runs with network_mode: host (see DEPLOYMENT.md's "Log Discovery and
@@ -63,9 +64,12 @@ server {
     # Proxy API requests to the backend (the siembox_api upstream above).
     location /api {
         proxy_pass http://siembox_api;
-        # Move to the fallback only when the socket can't be reached. Without
-        # "timeout", a slow request (the AI builder can take minutes) is never
-        # sent a second time, and a POST is only retried if nothing was sent.
+        # Send a request again, to the fallback, only when connecting to the
+        # socket failed: without "timeout", a slow request (the AI builder can
+        # take minutes) is never sent a second time, and a POST is only retried
+        # if nothing was sent. nginx still counts a timeout (or an invalid
+        # response header) against the socket whatever this lists, so after one
+        # the worker also uses the fallback for 30 s.
         proxy_next_upstream error;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;

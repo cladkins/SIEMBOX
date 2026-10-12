@@ -41,8 +41,9 @@ const app: Application = express();
 // net/trustedProxies.ts. Never a hop count: a hop count trusts whoever connects.
 app.set('trust proxy', trustedProxies.trust);
 
-// First: count direct requests whose X-Forwarded-For is ignored, so a proxy
-// that ought to be trusted shows up in the log and in /api/admin/client-address.
+// First: count requests whose X-Forwarded-For is ignored (from a direct caller,
+// or from a proxy in front of nginx that isn't trusted), so a proxy that ought
+// to be trusted shows up in the log and in /api/admin/client-address.
 app.use(ignoredForwardedForTracker());
 
 app.use(cors({
@@ -53,10 +54,17 @@ app.use(cors({
 // Agent and log-push routes that sit behind their own limiter (edrAgentLimiter
 // in routes/edr.ts, logPushLimiter in routes/shippers.ts) and identify the
 // caller with a header. Many agents or shippers can share one NAT address, so
-// these skip the general limit. Enrollment is not among them: it is counted
-// here whatever headers it carries.
-const AGENT_ROUTE = /^\/api\/edr\/(?:agents\/[^/]+\/(?:heartbeat|config|yara)|inventory|events|vulnerabilities)\/?$/i;
-const LOG_PUSH_ROUTE = /^\/api\/shippers\/logs\/?$/i;
+// these skip the general limit, but only with the method each route answers:
+// any other method reaches no limiter of its own (a 404, which is logged to the
+// database, or a shipper management route). HEAD goes with GET, as in Express's
+// router. Enrollment is not among them: it is counted here whatever headers it
+// carries.
+const LIMITER_EXEMPT_ROUTES: ReadonlyArray<{ methods: readonly string[]; path: RegExp; header: string }> = [
+  { methods: ['POST'], path: /^\/api\/edr\/agents\/[^/]+\/heartbeat\/?$/i, header: 'x-agent-id' },
+  { methods: ['GET', 'HEAD'], path: /^\/api\/edr\/agents\/[^/]+\/(?:config|yara)\/?$/i, header: 'x-agent-id' },
+  { methods: ['POST'], path: /^\/api\/edr\/(?:inventory|events|vulnerabilities)\/?$/i, header: 'x-agent-id' },
+  { methods: ['POST'], path: /^\/api\/shippers\/logs\/?$/i, header: 'x-shipper-id' },
+];
 
 /**
  * The general limit for /api: API_RATE_LIMIT_MAX requests (default 1000) per
@@ -72,11 +80,10 @@ export const apiRateLimiter = rateLimit({
   keyGenerator: requestLimitKey,
   handler: rateLimitedHandler('Too many requests from your address.'),
   skip: (req: Request) => {
-    const url = req.originalUrl || req.url || '';
-    const path = url.split('?')[0];
-    if (req.headers['x-agent-id'] && AGENT_ROUTE.test(path)) return true;
-    if (req.headers['x-shipper-id'] && LOG_PUSH_ROUTE.test(path)) return true;
-    return false;
+    const path = (req.originalUrl || req.url || '').split('?')[0];
+    return LIMITER_EXEMPT_ROUTES.some(
+      (route) => Boolean(req.headers[route.header]) && route.methods.includes(req.method) && route.path.test(path)
+    );
   },
 });
 

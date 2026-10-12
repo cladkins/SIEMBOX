@@ -867,12 +867,18 @@ backend restarts):
 - General: `API_RATE_LIMIT_MAX` (default 1000) requests per 15 minutes per
   address across `/api`. A `429` is JSON (`code: "RATE_LIMITED"`) with
   `Retry-After`.
-- Sign-in: 10 failed `POST /api/auth/login` attempts per 15 minutes per
-  address (an IPv6 client's /64); successful sign-ins don't count.
+- Sign-in: 10 failed `POST /api/auth/login` attempts per account per 15
+  minutes per address (an IPv6 client's /64), and 100 per address across all
+  accounts; past those 100, only accounts that already failed from that
+  address are refused. So someone sharing your address (an office NAT, a
+  reverse proxy SIEMBox doesn't trust) can't lock every user out, but can
+  still pause one account they know the name of, from that address, for up
+  to 15 minutes. Successful sign-ins and `5xx` answers don't count.
 - EDR agent routes (30000, `EDR_AGENT_RATE_MAX`) and HTTP log pushes (6000,
   `SHIPPER_LOG_PUSH_MAX`) have their own limits and skip the general one when
-  they carry `X-Agent-ID` / `X-Shipper-ID`. Agent enrollment counts toward the
-  general limit. The Pwned Passwords check allows 30 per 15 minutes.
+  they carry `X-Agent-ID` / `X-Shipper-ID` with the route's own method. Agent
+  enrollment counts toward the general limit. The Pwned Passwords check allows
+  30 per 15 minutes.
 - Bodies sent to `/api/auth/*` are capped at 16 kB (`413` above that).
 
 The address can't be forged: the web UI's nginx reaches the backend over a

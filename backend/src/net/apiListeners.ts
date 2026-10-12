@@ -93,8 +93,8 @@ export async function listenProxySocket(
     const message =
       `Proxy socket not started: ${directory} does not exist, so the api-socket volume is not mounted. ` +
       'The web UI still works (its nginx falls back to TCP), but update your compose file: with the volume, ' +
-      'UI requests keep their real client addresses in every network mode. ' +
-      'Set SIEMBOX_PROXY_SOCKET=off to silence this.';
+      'UI requests keep their real client addresses in every network mode. To run without the socket ' +
+      "instead, set SIEMBOX_PROXY_SOCKET=off in the backend's environment.";
     if (inContainer) log.warn(message);
     else log.info(message);
     return done({ state: 'no-volume', path: configured, directory });

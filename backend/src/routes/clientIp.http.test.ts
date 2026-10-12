@@ -11,7 +11,10 @@
  * - A TRUSTED_PROXIES entry in front of nginx (192.0.2.10 here) passes on its
  *   own client.
  * - A 429 is JSON with Retry-After; enrollment is counted even with X-Agent-ID,
- *   real agent and log-push routes keep their own limiters.
+ *   real agent and log-push routes keep their own limiters, and only with the
+ *   method they answer: any other method is counted by the general limit.
+ * - An untrusted proxy in front of nginx is counted as a proxy whose header was
+ *   ignored; requests to the diagnostics endpoint never are.
  *
  * Hermetic like routeAuth.http.test.ts: the database points at a closed port,
  * and every request here is answered before any query. The environment is read
@@ -191,6 +194,31 @@ test('proxy socket: a client forging the trusted proxy\'s address gains nothing'
   assertRateLimited(await me('socket', { 'X-Forwarded-For': '203.0.113.60' }));
 });
 
+test('ignored headers: a proxy in front of nginx is counted as forwarded; the diagnostics endpoint is never counted', async () => {
+  const { trustedProxies } = await import('../net/trustedProxies');
+  const peers = () => trustedProxies.describe().ignoredForwardedFor.peers;
+  const directRequests = () => peers().find((p) => p.kind === 'direct' && p.address === '127.0.0.1')?.requests ?? 0;
+
+  // A reverse proxy at 10.20.30.40, not in TRUSTED_PROXIES, in front of the web UI.
+  assert.equal((await me('socket', { 'X-Forwarded-For': '198.51.100.70, 10.20.30.40' })).status, 401);
+  assert.deepEqual(
+    peers()
+      .filter((p) => p.address === '10.20.30.40')
+      .map((p) => [p.kind, p.requests, p.local]),
+    [['forwarded', 1, true]]
+  );
+
+  // DEPLOYMENT.md's check from a workstation, straight to the API with a forged
+  // header: answered (401 here, no session), but the workstation is not
+  // counted as a proxy whose header was ignored. Any other request is.
+  const before = directRequests();
+  const check = await send('tcp', 'GET', '/api/admin/client-address', { 'X-Forwarded-For': '1.2.3.4' });
+  assert.equal(check.status, 401);
+  assert.equal(directRequests(), before);
+  await me('tcp', { 'X-Forwarded-For': '1.2.3.4' });
+  assert.equal(directRequests(), before + 1);
+});
+
 test('enrollment is counted by the general limit, even with an X-Agent-ID header', async () => {
   const reply = await send('tcp', 'POST', '/api/edr/agents/enroll', { 'X-Agent-ID': 'anything' }, {});
   assert.equal(reply.status, 401, 'no enrollment token');
@@ -218,4 +246,37 @@ test('agent and log-push routes with their header skip the general limit but kee
   assert.equal(anonymous.headers['x-ratelimit-limit'], '3');
   const other = await send('tcp', 'GET', '/api/edr/not-a-route', { 'X-Agent-ID': 'agent-1' });
   assert.equal(other.headers['x-ratelimit-limit'], '3');
+
+  // HEAD reaches the GET-only agent routes (and their limiter), so it is exempt too.
+  resetKey('127.0.0.1');
+  const head = await send('tcp', 'HEAD', '/api/edr/agents/agent-1/config', { 'X-Agent-ID': 'agent-1' });
+  assert.equal(head.headers['x-ratelimit-limit'], undefined);
+  assert.equal(head.headers['ratelimit-limit'], '30000');
+});
+
+test('the wrong method on an agent or log-push path is counted by the general limit, header or not', async () => {
+  // None of these reaches an agent or push route (heartbeat and the pushes are
+  // POST-only, config and yara GET-only), so no limiter of their own runs: a
+  // 404 that is logged to the database, or a management route's session check.
+  const wrongMethods: Array<[string, string, Record<string, string>]> = [
+    ['POST', '/api/edr/agents/x1/config', { 'X-Agent-ID': 'agent-1' }],
+    ['PUT', '/api/edr/agents/x2/yara', { 'X-Agent-ID': 'agent-1' }],
+    ['GET', '/api/edr/agents/x3/heartbeat', { 'X-Agent-ID': 'agent-1' }],
+    ['GET', '/api/edr/events', { 'X-Agent-ID': 'agent-1' }],
+    ['GET', '/api/shippers/logs', { 'X-Shipper-ID': '1' }],
+    ['PUT', '/api/shippers/logs', { 'X-Shipper-ID': '1' }],
+    ['DELETE', '/api/shippers/logs/', { 'X-Shipper-ID': '1' }],
+  ];
+  for (const [method, urlPath, headers] of wrongMethods) {
+    resetKey('127.0.0.1');
+    const reply = await send('tcp', method, urlPath, headers);
+    assert.equal(reply.headers['x-ratelimit-limit'], '3', `${method} ${urlPath} is counted`);
+    assert.equal(reply.headers['x-ratelimit-remaining'], '2', `${method} ${urlPath} is counted`);
+  }
+  resetKey('127.0.0.1');
+  const statuses: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    statuses.push((await send('tcp', 'POST', `/api/edr/agents/random-${i}/config`, { 'X-Agent-ID': 'agent-1' })).status);
+  }
+  assert.deepEqual(statuses, [404, 404, 404, 429]);
 });

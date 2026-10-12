@@ -253,7 +253,11 @@ export const ADDRESS_NEEDS_TOKEN_MESSAGE =
   "Changing the address of a source with a saved token needs the token again: send credential.secret with the new ip_address (a saved token is never sent to a new address)";
 
 const MAX_SECRET_LENGTH = 4096;
-const MAX_USERNAME_LENGTH = 256;
+/** discovery_source_pollers.credential_username is VARCHAR(255) (migration 030). */
+export const MAX_USERNAME_LENGTH = 255;
+
+export const SOURCE_CHANGED_MESSAGE =
+  'This source changed while it was being edited (its address or saved token): nothing was saved. Reload it and try again.';
 
 export type ReplacementCredentialInput = { secret: string; username: string | null };
 
@@ -455,8 +459,12 @@ router.delete('/sources/:id', authorize('admin'), async (req: Request, res: Resp
 // where POST /sources/manual stored it (address + evidence); a scan-discovered
 // source's goes to poll_overrides, which re-scans never touch, and its address
 // never changes. A new endpoint or address clears the poll cursor (the next poll
-// starts fresh); port/scheme changes keep it. The saved credential, schedule and
-// status are never touched, and the response never includes the credential.
+// starts fresh); port/scheme changes keep it. The schedule and status are never
+// touched, the saved credential only by a move that brings a new one (below),
+// and the response never includes the credential. A manual source's update only
+// applies if its address (and, for a move without a token, its having no saved
+// token) is still what was checked here: an edit that overlaps another is
+// refused with 409 instead of mixing the two.
 router.patch('/sources/:id', authorize('admin'), async (req: Request, res: Response) => {
   const id = parseSourceId(req);
   const source = await DiscoverySourceModel.findById(id);
@@ -527,8 +535,12 @@ router.patch('/sources/:id', authorize('admin'), async (req: Request, res: Respo
           endpoint,
         },
         resetCursor,
-        replacement
+        replacement,
+        // What was checked above. Another edit that commits in between (a move,
+        // a token saved) makes this a no-op: the 409 below.
+        { ip_address: source.ip_address, noSavedToken: addressChanged && !replacement }
       );
+      if (!updated && (await DiscoverySourceModel.findById(id))) throw new ApiError(409, SOURCE_CHANGED_MESSAGE);
     } else {
       const next: Record<string, unknown> = {};
       const port = change.port === undefined ? current.port : change.port ?? undefined;
@@ -628,6 +640,9 @@ router.post('/sources/:id/poller/credential', authorize('admin'), async (req: Re
   if (typeof secret !== 'string' || secret.trim().length === 0) {
     throw new ApiError(400, 'secret is required');
   }
+  if (typeof username === 'string' && username.length > MAX_USERNAME_LENGTH) {
+    throw new ApiError(400, `username must be at most ${MAX_USERNAME_LENGTH} characters`);
+  }
 
   const source = await DiscoverySourceModel.findById(id);
   if (!source) throw new ApiError(404, 'Discovery source not found');
@@ -688,11 +703,11 @@ router.patch('/sources/:id/poller', authorize('admin'), async (req: Request, res
 
 // POST /sources/:id/poller/run-now - poll immediately instead of waiting for
 // the next scheduled cycle, for UI feedback right after saving a credential.
+// pollOneSource reads the credential and the address together itself.
 router.post('/sources/:id/poller/run-now', authorize('admin'), async (req: Request, res: Response) => {
   const id = parseSourceId(req);
-  const row = await DiscoverySourcePollerModel.findById(id);
-  if (!row) throw new ApiError(404, 'No poller configured for this source — save a credential first');
-  const result = await pollOneSource(row);
+  const result = await pollOneSource(id);
+  if (!result) throw new ApiError(404, 'No poller configured for this source — save a credential first');
   res.json(result);
 });
 

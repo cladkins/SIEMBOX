@@ -1,5 +1,6 @@
 import { query } from '../config/database';
 import { CredentialEncryption } from '../services/credentials/credentialEncryption';
+import type { DiscoverySource } from './DiscoverySource';
 
 export type PollerStatus = 'ok' | 'error';
 
@@ -48,6 +49,26 @@ export interface RecordResultInput {
   error?: string;
   /** Only overwritten when explicitly provided — a failed fetch must not lose the last-good cursor. */
   cursor?: string | null;
+  /**
+   * The `version` of the PollSnapshot the poll started from. With it, the cursor
+   * is only written when the poller row is unchanged since then (status is
+   * always recorded): a cursor reset or a new token for a new address that
+   * commits while the poll runs is not undone by the old target's cursor.
+   */
+  startedFrom?: string | null;
+}
+
+/**
+ * What one poll needs, read in one statement (findPollSnapshot): the poller row
+ * (credential, cursor, schedule) and its source's poll target. An address
+ * change commits the new address and its new token together, so a snapshot has
+ * both old or both new, never the old token with the new address.
+ */
+export interface PollSnapshot {
+  poller: DiscoverySourcePoller;
+  source: Pick<DiscoverySource, 'id' | 'ip_address' | 'hostname' | 'open_ports' | 'evidence' | 'poll_overrides'>;
+  /** The poller row's updated_at at full precision, for RecordResultInput.startedFrom. */
+  version: string | null;
 }
 
 const MIN_INTERVAL_MINUTES = 1;
@@ -63,16 +84,45 @@ export const DiscoverySourcePollerModel = {
     return r.rows[0] || null;
   },
 
-  /** Same due-query shape as FeedService.refreshAllEnabled, scoped to this table. */
-  async findDue(): Promise<DiscoverySourcePoller[]> {
+  /**
+   * The ids of the sources due a poll (same due-query shape as
+   * FeedService.refreshAllEnabled). Ids only, on purpose: a cycle polls them one
+   * after another, and each poll reads its source's credential and target when
+   * its turn comes (findPollSnapshot), never from a row read at cycle start.
+   */
+  async findDueIds(): Promise<number[]> {
     const r = await query(
-      `SELECT * FROM discovery_source_pollers
+      `SELECT discovery_source_id FROM discovery_source_pollers
         WHERE enabled = true
           AND (last_polled_at IS NULL
                OR last_polled_at < NOW() - (poll_interval_minutes || ' minutes')::interval)
         ORDER BY discovery_source_id`
     );
-    return r.rows;
+    return r.rows.map((row) => row.discovery_source_id);
+  },
+
+  /**
+   * The poller row and its source's poll target in one statement, so both come
+   * from the same committed state (see PollSnapshot). Null when the source has
+   * no poller. The only way a poll reads its credential.
+   */
+  async findPollSnapshot(sourceId: number): Promise<PollSnapshot | null> {
+    const r = await query(
+      `SELECT dsp.*, dsp.updated_at::text AS poller_version,
+              ds.ip_address, ds.hostname, ds.open_ports, ds.evidence, ds.poll_overrides
+         FROM discovery_source_pollers dsp
+         JOIN discovery_sources ds ON ds.id = dsp.discovery_source_id
+        WHERE dsp.discovery_source_id = $1`,
+      [sourceId]
+    );
+    const row = r.rows[0];
+    if (!row) return null;
+    const { poller_version, ip_address, hostname, open_ports, evidence, poll_overrides, ...poller } = row;
+    return {
+      poller: poller as DiscoverySourcePoller,
+      source: { id: sourceId, ip_address, hostname, open_ports, evidence, poll_overrides },
+      version: poller_version,
+    };
   },
 
   /**
@@ -128,16 +178,32 @@ export const DiscoverySourcePollerModel = {
    * Always sets last_polled_at=NOW() (success or failure) so "due" re-evaluates
    * from the most recent attempt, not most recent success — same convention as
    * threat_feeds. poll_cursor is only touched when the caller actually has a
-   * new one; a failed fetch keeps the last-good position.
+   * new one; a failed fetch keeps the last-good position. With startedFrom, the
+   * new cursor is only written if nothing else wrote the row while the poll ran
+   * (an edit that reset the cursor, a new token, another poll's result); the
+   * row's own value is kept otherwise.
    */
   async recordResult(sourceId: number, result: RecordResultInput): Promise<void> {
     const status: PollerStatus = result.ok ? 'ok' : 'error';
     if (result.cursor !== undefined) {
       await query(
         `UPDATE discovery_source_pollers
-            SET last_polled_at = NOW(), last_status = $2, last_error = $3, last_event_count = $4, poll_cursor = $5, updated_at = NOW()
+            SET last_polled_at = NOW(), last_status = $2, last_error = $3, last_event_count = $4,
+                poll_cursor = CASE
+                  WHEN NOT $6::boolean OR updated_at IS NOT DISTINCT FROM $7::timestamptz THEN $5
+                  ELSE poll_cursor
+                END,
+                updated_at = NOW()
           WHERE discovery_source_id = $1`,
-        [sourceId, status, result.error ?? null, result.count, result.cursor]
+        [
+          sourceId,
+          status,
+          result.error ?? null,
+          result.count,
+          result.cursor,
+          result.startedFrom !== undefined,
+          result.startedFrom ?? null,
+        ]
       );
     } else {
       await query(

@@ -97,6 +97,18 @@ export interface ReplacementCredential {
   username: string | null;
 }
 
+/**
+ * What the edit route checked a manual source's change against. The update only
+ * applies while it still holds, so two edits that overlap can't combine into a
+ * state neither checked (e.g. one edit's stale address with the other's new token).
+ */
+export interface ManualTargetExpectation {
+  /** The address the route read: the update applies only while the source still has it. */
+  ip_address: string;
+  /** Set for an address change without a new token, which is only allowed while no token is saved: the update applies only while there is still none. */
+  noSavedToken: boolean;
+}
+
 /** Postgres unique_violation, e.g. a manual source moved to an address another source already has. */
 export const UNIQUE_VIOLATION = '23505';
 
@@ -223,15 +235,18 @@ export const DiscoverySourceModel = {
    * port/scheme/endpoint in evidence, exactly where upsertManual keeps them
    * (open_ports follows the port, as there). Other evidence keys are kept.
    * With resetCursor, the poller's cursor is cleared in the same statement, so
-   * the next poll starts fresh against the new target; the stored credential,
-   * schedule and status are untouched. A new address that another source
-   * already has fails with UNIQUE_VIOLATION. Null when the row doesn't exist.
+   * the next poll starts fresh against the new target; the stored credential
+   * (unless replaced), schedule and status are untouched. A new address that
+   * another source already has fails with UNIQUE_VIOLATION. Null when the row
+   * doesn't exist, or no longer matches `expected` (it changed since the route
+   * read it): nothing is changed then.
    */
   async updateManualTarget(
     id: number,
     target: ManualTargetUpdate,
     resetCursor: boolean,
-    credential: ReplacementCredential | null = null
+    credential: ReplacementCredential | null,
+    expected: ManualTargetExpectation
   ): Promise<DiscoverySource | null> {
     // One UPDATE of the poller row: Postgres applies only one of two
     // data-modifying CTEs that touch the same row, so the cursor reset and the
@@ -246,6 +261,9 @@ export const DiscoverySourceModel = {
                 poll_overrides = NULL,
                 updated_at = NOW()
           WHERE id = $1
+            AND ip_address = $12::inet
+            AND (NOT $13::boolean
+                 OR NOT EXISTS (SELECT 1 FROM discovery_source_pollers WHERE discovery_source_id = $1))
           RETURNING *
        ), poller_update AS (
          UPDATE discovery_source_pollers
@@ -270,6 +288,8 @@ export const DiscoverySourceModel = {
         credential?.iv ?? null,
         credential?.authTag ?? null,
         credential?.username ?? null,
+        expected.ip_address,
+        expected.noSavedToken,
       ]
     );
     return result.rows[0] || null;

@@ -14,8 +14,14 @@
  *   /api/error_log falls back to the Supervisor endpoint, the choice is
  *   remembered, raw_logs get Home Assistant's native lines, and a refused
  *   connection is reported with the URL.
+ * - A token is only ever sent to the address it was entered for, also when an
+ *   edit lands while polls run: the scheduled cycle reads each source's token
+ *   and address together when its turn comes, a poll still running when its
+ *   source moves does not undo the move's cursor reset, and two overlapping
+ *   edits are refused (409) rather than combined.
  *
- * Only that one test polls, and only its own local server. The other sources use
+ * Only the polling tests poll, and only their own local servers (127.0.0.1, or
+ * other 127/8 addresses where the host has them). The other sources use
  * TEST-NET-3 addresses (203.0.113.0/24) no other row has. Skips itself when
  * Postgres isn't reachable; removes every row it created (polled lines, sources
  * and their pollers, the scan, users and their sessions, audit and error-log rows).
@@ -36,6 +42,7 @@ import { SessionModel } from '../models/Session';
 import { DiscoveryScanModel } from '../models/DiscoveryScan';
 import { DiscoverySourceModel } from '../models/DiscoverySource';
 import { DiscoverySourcePollerModel } from '../models/DiscoverySourcePoller';
+import { pollDueSources } from '../services/logDiscovery/apiPoll/poller';
 
 // The poller's credential is encrypted with this key; only set when the
 // environment has none, so a developer's own key is never replaced.
@@ -289,22 +296,34 @@ test('the credential field: only with an address change, only for a source with 
     [{ ip_address: await freeAddress(), credential: { secret: '   ' } }, /non-empty string/],
     [{ ip_address: await freeAddress(), credential: { secret: 'x'.repeat(4097) } }, /at most 4096/],
     [{ ip_address: await freeAddress(), credential: { secret: 'x', username: 42 } }, /username must be a string/],
+    // The column is VARCHAR(255): one more is a 400, not a database error.
+    [{ ip_address: await freeAddress(), credential: { secret: 'x', username: 'u'.repeat(256) } }, /username must be at most 255/],
   ];
   for (const [body, message] of cases) {
     r = await call('admin', 'PATCH', path(saved.id), body);
     assert.equal(r.status, 400, JSON.stringify(body));
     assert.match(r.json.message, message);
   }
+  // The credential route has the same limit.
+  r = await call('admin', 'POST', `${path(saved.id)}/poller/credential`, { secret: 'x', username: 'u'.repeat(256) });
+  assert.equal(r.status, 400, r.text);
+  assert.match(r.json.message, /username must be at most 255/);
   assert.deepEqual(await sourceRow(saved.id), before.source, 'nothing was saved');
   assert.deepEqual(await pollerRow(saved.id), before.poller, 'the credential was not touched');
 
-  // Basic auth: the username travels with the secret.
+  // Basic auth: the username travels with the secret, up to the column's 255 characters.
   r = await call('admin', 'PATCH', path(saved.id), {
     ip_address: await freeAddress(),
     credential: { secret: 'basic-pass', username: 'siembox' },
   });
   assert.equal(r.status, 200, r.text);
   assert.equal((await pollerRow(saved.id)).credential_username, 'siembox');
+  r = await call('admin', 'PATCH', path(saved.id), {
+    ip_address: await freeAddress(),
+    credential: { secret: 'basic-pass', username: 'u'.repeat(255) },
+  });
+  assert.equal(r.status, 200, r.text);
+  assert.equal((await pollerRow(saved.id)).credential_username, 'u'.repeat(255));
 });
 
 test("a discovered source's overrides go to poll_overrides, survive a re-scan, reset cleanly, and its address can't change", async (t) => {
@@ -511,7 +530,7 @@ test('run-now on a Home Assistant OS source: Supervisor fallback, remembered, na
     lines.push('2026-10-12 14:05:00.250 INFO (MainThread) [homeassistant.components.automation.porch] Porch light: Running automation actions');
     assert.deepEqual(await runNow(), { ok: true, count: 1 }, 'only the new line');
     assert.deepEqual(seen, [
-      '/api/error_log -',
+      '/api/error_log bytes=-5242880',
       '/api/hassio/core/logs?no_colors entries=:-499:500',
       '/api/hassio/core/logs?no_colors entries=:-499:500',
     ], 'one 404, then straight to the remembered Supervisor endpoint');
@@ -532,4 +551,218 @@ test('run-now on a Home Assistant OS source: Supervisor fallback, remembered, na
   assert.equal((await pollerRow(row.id)).poll_cursor !== null, true, 'a failed poll keeps the last good cursor');
   const listed = await call('admin', 'GET', `/api/log-discovery/sources/${row.id}/poller`);
   assert.equal(listed.json.last_error, refused.error);
+});
+
+// ---------------------------------------------------------------------------
+// Edits that land while a poll runs, or while another edit is in flight
+// ---------------------------------------------------------------------------
+
+/** `n` loopback addresses (127.x.y.z, not 127.0.0.1) that no discovery source has. */
+async function freeLoopbacks(n: number): Promise<string[]> {
+  const found: string[] = [];
+  while (found.length < n) {
+    const ip = `127.${crypto.randomInt(1, 255)}.${crypto.randomInt(0, 256)}.${crypto.randomInt(1, 255)}`;
+    if (found.includes(ip)) continue;
+    const taken = await pool.query('SELECT 1 FROM discovery_sources WHERE ip_address = $1::inet', [ip]);
+    if (taken.rowCount === 0) found.push(ip);
+  }
+  return found;
+}
+
+const NO_LOOPBACK_ALIASES = 'this host has no loopback addresses besides 127.0.0.1';
+
+interface FakeHomeAssistant {
+  port: number;
+  /** The Authorization header of every request it got. */
+  auth: string[];
+  /** Resolves when its first request arrives. */
+  arrived: Promise<void>;
+  /** Lets held requests answer. */
+  release: () => void;
+  close: () => Promise<void>;
+}
+
+/**
+ * A fake Home Assistant whose /api/error_log answers `lines` (plain INFO lines,
+ * so no detection rule fires); with hold, only after release(). Null when the
+ * host can't listen on `ip` (only 127.0.0.1 exists on some systems).
+ */
+async function startFakeHomeAssistant(ip: string, opts: { hold?: boolean; lines?: string[] } = {}): Promise<FakeHomeAssistant | null> {
+  const lines = opts.lines ?? ['2026-10-12 14:02:57.913 INFO (MainThread) [homeassistant.bootstrap] Home Assistant initialized in 12.31s'];
+  const auth: string[] = [];
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let arrive!: () => void;
+  const arrived = new Promise<void>((resolve) => (arrive = resolve));
+  const server = http.createServer(async (req, res) => {
+    auth.push(String(req.headers.authorization ?? ''));
+    arrive();
+    if (opts.hold) await released;
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(lines.join('\n'));
+  });
+  try {
+    server.listen(0, ip);
+    await once(server, 'listening');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EADDRNOTAVAIL') return null;
+    throw err;
+  }
+  return {
+    port: (server.address() as AddressInfo).port,
+    auth,
+    arrived,
+    release,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+async function manualSourceAt(ip: string, port: number) {
+  const row = await DiscoverySourceModel.upsertManual({
+    ip_address: ip,
+    hostname: `ldedit-${tag}-polled`,
+    fingerprint_id: 'home-assistant',
+    target_port: port,
+    tls: false,
+    security_value: 6,
+  });
+  sourceIds.add(row.id);
+  return row;
+}
+
+async function saveToken(id: number, secret: string) {
+  await DiscoverySourcePollerModel.upsertCredential(id, { fingerprintId: 'home-assistant', method: 'api_pull', secret });
+}
+
+test("the scheduled cycle reads each source's token with its address when its turn comes: a move during the cycle never sends the old token to the new address", async (t) => {
+  if (!ready(t)) return;
+  const [slowIp, oldIp, newIp] = await freeLoopbacks(3);
+  const slow = await startFakeHomeAssistant(slowIp, { hold: true });
+  const oldHost = slow && (await startFakeHomeAssistant(oldIp));
+  const newHost = oldHost && (await startFakeHomeAssistant(newIp));
+  try {
+    if (!slow || !oldHost || !newHost) return t.skip(NO_LOOPBACK_ALIASES);
+    // A is created first, so the cycle (in id order) polls it first, and takes its time.
+    const a = await manualSourceAt(slowIp, slow.port);
+    const b = await manualSourceAt(oldIp, oldHost.port);
+    await saveToken(a.id, 'TOKEN-A');
+    await saveToken(b.id, 'OLD-TOKEN-B');
+    // Only these two: sources of other test files may be due as well.
+    const findDueIds = DiscoverySourcePollerModel.findDueIds.bind(DiscoverySourcePollerModel);
+    t.mock.method(DiscoverySourcePollerModel, 'findDueIds', async () =>
+      (await findDueIds()).filter((id) => id === a.id || id === b.id)
+    );
+
+    const cycle = pollDueSources();
+    await slow.arrived; // the cycle is in A's poll; B's turn comes next
+    const moved = await call('admin', 'PATCH', `/api/log-discovery/sources/${b.id}`, {
+      ip_address: newIp,
+      port: newHost.port,
+      credential: { secret: 'NEW-TOKEN-B' },
+    });
+    assert.equal(moved.status, 200, moved.text);
+    slow.release();
+    assert.deepEqual(await cycle, { polled: 2 });
+
+    assert.deepEqual(slow.auth, ['Bearer TOKEN-A']);
+    assert.deepEqual(oldHost.auth, [], 'B was moved before its turn');
+    assert.deepEqual(newHost.auth, ['Bearer NEW-TOKEN-B'], 'the new address only gets the token entered for it');
+  } finally {
+    slow?.release();
+    await Promise.all([slow?.close(), oldHost?.close(), newHost?.close()]);
+  }
+});
+
+test("a poll still running when its source moves does not undo the move's cursor reset", async (t) => {
+  if (!ready(t)) return;
+  const [oldIp] = await freeLoopbacks(1);
+  const oldLines = [1, 2, 3].map((n) => `2026-10-12 14:0${n}:00.000 INFO (MainThread) [homeassistant.core] Line ${n} of the old host`);
+  const oldHost = await startFakeHomeAssistant(oldIp, { hold: true, lines: oldLines });
+  try {
+    if (!oldHost) return t.skip(NO_LOOPBACK_ALIASES);
+    const source = await manualSourceAt(oldIp, oldHost.port);
+    await saveToken(source.id, 'OLD-TOKEN');
+
+    const run = call('admin', 'POST', `/api/log-discovery/sources/${source.id}/poller/run-now`);
+    await oldHost.arrived; // the poll is waiting for the old host's answer
+    const moved = await call('admin', 'PATCH', `/api/log-discovery/sources/${source.id}`, {
+      ip_address: await freeAddress(),
+      credential: { secret: 'NEW-TOKEN' },
+    });
+    assert.equal(moved.status, 200, moved.text);
+    assert.equal((await pollerRow(source.id)).poll_cursor, null, 'the move reset the cursor');
+
+    oldHost.release();
+    assert.deepEqual((await run).json, { ok: true, count: 3 }, "the old host's lines are still stored");
+    const after = (
+      await pool.query('SELECT poll_cursor, last_status, last_event_count FROM discovery_source_pollers WHERE discovery_source_id = $1', [
+        source.id,
+      ])
+    ).rows[0];
+    assert.equal(after.poll_cursor, null, "but its cursor doesn't replace the reset: the new address starts fresh");
+    assert.equal(after.last_status, 'ok', 'the poll itself is still recorded');
+    assert.equal(after.last_event_count, 3);
+  } finally {
+    oldHost?.release();
+    await oldHost?.close();
+  }
+});
+
+/** Holds the first DiscoverySourceModel.updateManualTarget call -- after the edit route's checks, before its write -- until release(). */
+function holdFirstManualUpdate(t: TestContext) {
+  const update = DiscoverySourceModel.updateManualTarget.bind(DiscoverySourceModel);
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let arrive!: () => void;
+  const arrived = new Promise<void>((resolve) => (arrive = resolve));
+  let first = true;
+  t.mock.method(DiscoverySourceModel, 'updateManualTarget', async (...args: Parameters<typeof update>) => {
+    if (first) {
+      first = false;
+      arrive();
+      await released;
+    }
+    return update(...args);
+  });
+  return { arrived, release };
+}
+
+test('an edit checked before another edit moved the source is refused (409): its stale address is never written back under the new token', async (t) => {
+  if (!ready(t)) return;
+  const { id } = await manualSource();
+  await withPoller(id);
+  const path = `/api/log-discovery/sources/${id}`;
+
+  const held = holdFirstManualUpdate(t);
+  const stale = call('admin', 'PATCH', path, { port: 8124 }); // checked against the current address, then held
+  await held.arrived;
+  const newIp = await freeAddress();
+  const moved = await call('admin', 'PATCH', path, { ip_address: newIp, credential: { secret: 'NEW-TOKEN' } });
+  assert.equal(moved.status, 200, moved.text);
+  held.release();
+
+  const r = await stale;
+  assert.equal(r.status, 409, r.text);
+  assert.match(r.json.message, /changed while it was being edited.*nothing was saved/);
+  const row = await sourceRow(id);
+  assert.equal(row.ip, newIp, 'the move stands');
+  assert.equal(row.evidence.target_port, 8123, 'the refused edit changed nothing');
+  const poller = (await pool.query('SELECT * FROM discovery_source_pollers WHERE discovery_source_id = $1', [id])).rows[0];
+  assert.equal(DiscoverySourcePollerModel.decryptCredential(poller).secret, 'NEW-TOKEN', 'the token entered for the new address');
+});
+
+test('a move without a token is refused (409) when a token was saved after its check: a saved token never follows a move', async (t) => {
+  if (!ready(t)) return;
+  const { id, ip } = await manualSource(); // no saved token yet, so a move needs none
+  const held = holdFirstManualUpdate(t);
+  const move = call('admin', 'PATCH', `/api/log-discovery/sources/${id}`, { ip_address: await freeAddress() });
+  await held.arrived;
+  const saved = await call('admin', 'POST', `/api/log-discovery/sources/${id}/poller/credential`, { secret: SECRET });
+  assert.equal(saved.status, 200, saved.text);
+  held.release();
+
+  const r = await move;
+  assert.equal(r.status, 409, r.text);
+  assert.equal((await sourceRow(id)).ip, ip, 'the source stays at the address its token was saved for');
+  assert.ok(await pollerRow(id), 'the token is saved');
 });

@@ -2783,6 +2783,16 @@ Assistant's own format (colour codes removed), as the catalog parser expects. Bo
 endpoints are admin-only: the token must be a long-lived access token created by
 a Home Assistant administrator.
 
+Only the end of the log is read. The file is requested with
+`Range: bytes=-5242880` (its last 5 MB; a server that ignores the range sends the
+whole file and its last 5 MB are kept), so a log that has grown past 5 MB keeps
+being collected. When the previous poll's last lines are no longer among the
+latest 500 journal entries, the Supervisor is asked again with
+`Range: entries=:-4999:5000`; if they aren't among those either, all 5000 lines
+are collected and a warning is logged to the error log. A poll resumes after
+the last record it saw (from that record's timestamped first line), so a
+traceback that repeats is not collected again.
+
 **Access:** every route requires a login. Reads (and the read-only `onboard/preview`) are open to any role. Starting or cancelling a scan and the source actions `confirm`, `ignore` and `onboard/confirm` require admin or operator, the roles that can open the Log Discovery page. Changing the scan scope, manual sources, a source's poll target and poll credentials requires admin. See [Roles for scan and asset writes](#roles-for-scan-and-asset-writes).
 
 ### GET /api/log-discovery/scope
@@ -3089,9 +3099,16 @@ Sources.
   change keeps the cursor.
 - A saved token is never sent to a new address. Changing a manual source's
   address while it has a saved token requires the token again in `credential`;
-  the move and the token swap are applied in one database update, so no poll can
-  pair the old token with the new address. Without `credential` the request is a
+  the move and the token swap are applied in one database update, and each poll
+  reads the token and the address together when it starts, so no poll can pair
+  the old token with the new address. Without `credential` the request is a
   `400` and nothing changes. A source with no saved token can move freely.
+- A manual source's change is only applied if, when it is written, the source
+  still has the address it was checked against (and, for a move without a token,
+  still has no saved token). If another edit or a token save landed in between,
+  the request is a `409` and nothing changes; reload the source and try again. A
+  poll that was already running when the source moved does not overwrite the
+  cleared cursor.
 - Otherwise the saved credential, the schedule and the poll status are not
   changed, and no credential is ever returned.
 
@@ -3105,7 +3122,7 @@ Sources.
 - `tls` - boolean, or `null` for the default (a manual source: `true` for `authentik`, `false` otherwise)
 - `endpoint` - a path on the source itself, e.g. `/api/hassio/core/logs`, or `/ha/api/error_log` behind a reverse proxy. It must start with a single `/` (no scheme or host) and may not contain a query string or fragment, `.` or `..` segments, control characters, whitespace, backslashes or `%`-encoding; at most 256 characters. An endpoint that is set is the only one requested (Home Assistant's automatic fallback is off). `""` or `null` restores the fingerprint's endpoint.
 - `ip_address` - manual sources only: a literal IPv4/IPv6 address, validated exactly like `POST /sources/manual`. Sending a discovered source's current address back is accepted and changes nothing; a different one is refused with `403`.
-- `credential` - `{ "secret": "...", "username": "..." }`, required together with a changed `ip_address` when the source has a saved token, and accepted only then (otherwise `400`; to replace a token without moving the source use `POST /sources/:id/poller/credential`). `secret` is a non-blank string of at most 4096 characters; `username` (HTTP Basic sources such as AdGuard Home) at most 256. It is encrypted like any saved token and never returned.
+- `credential` - `{ "secret": "...", "username": "..." }`, required together with a changed `ip_address` when the source has a saved token, and accepted only then (otherwise `400`; to replace a token without moving the source use `POST /sources/:id/poller/credential`). `secret` is a non-blank string of at most 4096 characters; `username` (HTTP Basic sources such as AdGuard Home) at most 255. It is encrypted like any saved token and never returned.
 
 **Response (200):**
 ```json
@@ -3132,7 +3149,7 @@ shape as `GET .../poller` (`{ "configured": false }` before a credential is save
 - `400` - an invalid field (the message names it and the rule), an empty body, or a source whose device type has no API pull method
 - `403` - caller is not an admin, or a new `ip_address` for a scan-discovered source
 - `404` - no source with that id
-- `409` - the new address already belongs to another source
+- `409` - the new address already belongs to another source, or the source changed while this request was being checked (another edit or a token save); nothing was changed
 
 ---
 
@@ -3258,12 +3275,12 @@ Save (or replace) the token for this source's `api_pull` method and start pollin
 { "username": null, "secret": "the-api-token-or-password" }
 ```
 - `secret` (required) - the token/password. Encrypted at rest (AES-256-GCM); never returned again after this call.
-- `username` (optional) - only used by HTTP Basic auth sources (AdGuard Home today)
+- `username` (optional) - only used by HTTP Basic auth sources (AdGuard Home today); at most 255 characters
 
 **Response (200):** Same shape as `GET .../poller` above.
 
 **Errors:**
-- `400` - missing/empty `secret`, source has no matched fingerprint, or the fingerprint has no `api_pull` log-access method
+- `400` - missing/empty `secret`, a `username` over 255 characters, source has no matched fingerprint, or the fingerprint has no `api_pull` log-access method
 - `404` - source or fingerprint not found
 
 ---

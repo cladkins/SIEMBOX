@@ -700,6 +700,8 @@ Home Assistant registers `/api/error_log` only while it writes a log file. Home 
 
 **What SIEMBox does about it:** it asks `/api/error_log` first and, on a 404, reads `/api/hassio/core/logs?no_colors` (the latest 500 journal entries; lines are stored in Home Assistant's own format, so the catalog parser still matches). It remembers which endpoint works for each source, so a Home Assistant OS install doesn't get a doomed request every poll, and tries `/api/error_log` again every 6 hours and whenever the remembered endpoint fails. The source's URL then ends in `/api/hassio/core/logs`. A standard install on port 8123 needs nothing configured.
 
+**How much of the log is read:** only its end. From `/api/error_log` SIEMBox asks for the last 5 MB of the file (`Range: bytes=-5242880`), so a `home-assistant.log` that has grown past 5 MB since Home Assistant last started keeps being collected. From the Supervisor it asks for the latest 500 journal entries, and when more lines than that arrived since the last poll (a login brute force can do it), for the latest 5000. If even those don't reach back to the last poll, every line in them is collected and a warning, "Some Home Assistant log lines were not collected", is written to the error log on the dashboard: shorten that source's poll interval.
+
 **Change the port, HTTPS, endpoint or address** (admin): Log Discovery → **Edit** on the source, or Log Shippers → API-Polled Sources → **Edit**, then **Save and poll now** to see the result straight away. Leave **Endpoint** empty for the automatic choice above. Set it to use only that path, for example behind a reverse proxy that serves Home Assistant under a prefix (`/homeassistant/api/error_log`). The same through the API:
 
 ```bash
@@ -711,7 +713,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   http://localhost:8421/api/log-discovery/sources/94/poller/run-now | jq .
 ```
 
-Only a manually added source's address can be changed; a scan-discovered source is polled where the scan found it (add the other address as a manual source instead). A new endpoint or address makes the next poll start again from the source's recent lines, so up to 200 Home Assistant lines that were already stored can be stored a second time. The saved token is kept unless you paste a new one; after an address change it is sent to the new address.
+Only a manually added source's address can be changed; a scan-discovered source is polled where the scan found it (add the other address as a manual source instead). A new endpoint or address makes the next poll start again from the source's recent lines, so up to 200 Home Assistant lines that were already stored can be stored a second time. Changing a manual source's address while it has a saved token needs the token again (the Edit dialog asks for it, or send `credential` with the PATCH); a saved token is never sent to a new address. Port, HTTPS and endpoint changes keep the saved token. If the source was changed by someone else while you were editing it, saving answers `409` and changes nothing: reload it and try again.
 
 **The token must belong to an administrator.** Both log endpoints are admin-only. In Home Assistant, sign in as an administrator, open your profile → **Security** → **Long-lived access tokens** → **Create token**, and paste the token in the source's **Edit** dialog. A token of a user who is not an administrator gets 401 from both endpoints.
 

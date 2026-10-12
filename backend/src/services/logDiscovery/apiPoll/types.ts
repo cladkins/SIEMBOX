@@ -48,6 +48,12 @@ export interface PollFetchResult {
   events: PolledEvent[];
   /** Opaque; only this adapter interprets it. Null resets to "never polled" — an adapter should not normally return null once it has successfully polled at least once. */
   nextCursor: string | null;
+  /**
+   * Set when the poll worked but could not collect everything (e.g. more new
+   * lines arrived than one answer holds). The poller logs it as a warning; the
+   * poll still counts as ok.
+   */
+  warning?: string;
 }
 
 export interface ApiPollAdapter {

@@ -24,10 +24,12 @@
 // fails. An endpoint the admin set in the source's settings is used alone.
 //
 // Neither endpoint filters by time, so new lines are found with a tail-window
-// text cursor (selectNewLines). Lines reach the pipeline in Home Assistant's
-// native format, which catalog/parsers/home-assistant.parser.json expects:
-// /api/error_log verbatim, the Supervisor's lines without colour codes or a
-// journal prefix (normalizeSupervisorLine).
+// text cursor (selectNewLines). Only the end of a log is read: the last
+// LOG_MAX_BYTES of the file (a byte Range request) and the Supervisor's latest
+// journal entries. Lines reach the pipeline in Home Assistant's native format,
+// which catalog/parsers/home-assistant.parser.json expects: /api/error_log
+// verbatim, the Supervisor's lines without colour codes or a journal prefix
+// (normalizeSupervisorLine).
 import { ApiPollAdapter, PollCredential, PollFetchResult, PollTarget, PolledEvent } from '../types';
 import { httpFetch, HttpFetchOptions, HttpFetchResult } from '../httpFetch';
 import { urlHost } from '../urls';
@@ -36,12 +38,28 @@ import { stripAnsi } from '../../../syslog/syslogParser';
 
 export const ERROR_LOG_ENDPOINT = '/api/error_log';
 export const SUPERVISOR_LOG_ENDPOINT = '/api/hassio/core/logs';
-/** Journal entries asked of the Supervisor per poll. More new lines than this between two polls leaves a gap. */
+/** Journal entries asked of the Supervisor per poll. */
 export const SUPERVISOR_LOG_ENTRIES = 500;
+/**
+ * Asked for instead when the previous poll's last lines are no longer among the
+ * latest SUPERVISOR_LOG_ENTRIES (more new lines than that since; a login brute
+ * force can do it): about 1 MB. More new lines than this between two polls
+ * leaves a gap, which the poll reports as a warning.
+ */
+export const SUPERVISOR_LOG_ENTRIES_WIDE = 5000;
+/**
+ * At most this much of a log is read per request: the END of the log file
+ * (Range: bytes=-LOG_MAX_BYTES), and the newest part of any longer answer.
+ * home-assistant.log only rotates when Home Assistant starts, so it can grow far
+ * past this between restarts, and its newest lines are the ones wanted.
+ */
+export const LOG_MAX_BYTES = 5 * 1024 * 1024;
 /** While on the Supervisor fallback, try /api/error_log again this often. */
 export const ERROR_LOG_REPROBE_MS = 6 * 60 * 60 * 1000;
 
 const TAIL_WINDOW_LINES = 3;
+/** The tail window never grows past this many lines, even for a longer last record (see tailWindow). */
+export const MAX_TAIL_WINDOW_LINES = 100;
 const FIRST_POLL_FALLBACK_LINES = 200;
 const LINE_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?)/;
 
@@ -52,39 +70,77 @@ export function parseLineTimestamp(line: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function tailWindow(lines: string[]): string | null {
-  if (lines.length === 0) return null;
-  return lines.slice(-TAIL_WINDOW_LINES).join('\n');
+/** A log's lines, without empty ones. */
+function splitLines(text: string): string[] {
+  return text.split(/\r?\n/).filter((l) => l.length > 0);
 }
 
 /**
- * The tail window is the literal text of the last few lines already seen (not a
- * hash — a plain substring search is simpler to reason about and to inspect
- * in the DB while debugging, and does the same job). Finding that window in
- * the new response tells us where to resume. If it's not found (HA restarted
- * and truncated/rotated the buffer, or more lines arrived than the Supervisor
- * endpoint returns) or this is the first poll, fall back to a bounded tail so
- * one poll never floods the pipeline with the whole buffer. A small
- * duplicate/gap window across an HA restart is an accepted platform limitation
- * of this best-effort approach, not a bug to chase further — neither endpoint
- * gives us anything more precise to key off. Both endpoints carry the same
- * lines, so a window found on one is found on the other after a switch.
+ * The tail window: the last lines already seen, from the start of the last
+ * record (its timestamped header line) to the end; at least TAIL_WINDOW_LINES
+ * lines, at most MAX_TAIL_WINDOW_LINES. The header's millisecond timestamp is
+ * what makes the window unique. A traceback that an integration logs again and
+ * again repeats its last lines in every copy, so a window of bare trailing
+ * lines would match the OLDEST copy in the next answer, and everything after it
+ * would be taken as new on every poll.
  */
-export function selectNewLines(fullText: string, cursor: string | null): { newLines: string[]; nextCursor: string | null } {
-  const lines = fullText.split(/\r?\n/).filter((l) => l.length > 0);
-  if (lines.length === 0) return { newLines: [], nextCursor: cursor };
-
-  if (cursor) {
-    const idx = fullText.indexOf(cursor);
-    if (idx !== -1) {
-      const afterText = fullText.slice(idx + cursor.length);
-      const newLines = afterText.split(/\r?\n/).filter((l) => l.length > 0);
-      return { newLines, nextCursor: tailWindow(lines) };
+function tailWindow(lines: string[]): string[] {
+  const floor = Math.max(0, lines.length - MAX_TAIL_WINDOW_LINES);
+  let start = floor; // no header within reach: as many lines as allowed
+  for (let i = lines.length - 1; i >= floor; i--) {
+    if (LINE_TIMESTAMP_RE.test(lines[i])) {
+      start = i;
+      break;
     }
   }
+  return lines.slice(Math.min(start, Math.max(0, lines.length - TAIL_WINDOW_LINES)));
+}
 
-  const bounded = lines.slice(-FIRST_POLL_FALLBACK_LINES);
-  return { newLines: bounded, nextCursor: tailWindow(lines) };
+/** The index just after the first place `window` appears in `lines` as consecutive whole lines, or -1. */
+function indexAfterWindow(lines: string[], window: string[]): number {
+  if (window.length === 0) return -1;
+  for (let i = 0; i + window.length <= lines.length; i++) {
+    let j = 0;
+    while (j < window.length && lines[i + j] === window[j]) j++;
+    if (j === window.length) return i + window.length;
+  }
+  return -1;
+}
+
+export interface NewLines {
+  newLines: string[];
+  nextCursor: string | null;
+  /** True when a previous tail window was given but is not in this text: lines in between may be missing. */
+  gap: boolean;
+}
+
+/**
+ * The tail window is the literal text of the last lines already seen (not a
+ * hash -- a plain comparison is simpler to reason about and to inspect in the
+ * DB while debugging, and does the same job), matched as whole lines. Finding
+ * it in the new response tells us where to resume. If it's not found (HA
+ * restarted and started a new log file, or more lines arrived than one answer
+ * holds) or this is the first poll, fall back to a bounded tail so one poll
+ * never floods the pipeline with the whole buffer -- except that with onMiss
+ * 'all' a window that is not found takes the whole answer: in the Supervisor's
+ * journal, which survives restarts, a missing window means every line in the
+ * answer is new. A small duplicate/gap window across an HA restart is an
+ * accepted platform limitation of this best-effort approach, not a bug to chase
+ * further -- neither endpoint gives us anything more precise to key off. Both
+ * endpoints carry the same lines, so a window found on one is found on the
+ * other after a switch.
+ */
+export function selectNewLines(fullText: string, cursor: string | null, onMiss: 'bounded' | 'all' = 'bounded'): NewLines {
+  const lines = splitLines(fullText);
+  if (lines.length === 0) return { newLines: [], nextCursor: cursor, gap: false };
+  const nextCursor = tailWindow(lines).join('\n');
+
+  if (cursor) {
+    const after = indexAfterWindow(lines, splitLines(cursor));
+    if (after !== -1) return { newLines: lines.slice(after), nextCursor, gap: false };
+    return { newLines: onMiss === 'all' ? lines : lines.slice(-FIRST_POLL_FALLBACK_LINES), nextCursor, gap: true };
+  }
+  return { newLines: lines.slice(-FIRST_POLL_FALLBACK_LINES), nextCursor, gap: false };
 }
 
 export function buildBaseUrl(target: PollTarget): string {
@@ -201,6 +257,33 @@ function isOk(r: LogResponse): boolean {
   return r.res.status >= 200 && r.res.status < 300;
 }
 
+/** A web page instead of a log: the port or path reaches something else (see toResult). */
+function isWebPage(r: LogResponse): boolean {
+  return /^\s*text\/html/i.test(String(r.res.headers['content-type'] || ''));
+}
+
+/**
+ * True when the answer starts part-way through a line: the server sent a byte
+ * range from past the start of the file (206, Content-Range "bytes N-.../..."
+ * with N > 0), or a longer answer was cut to its last LOG_MAX_BYTES.
+ */
+function startsMidLine(r: LogResponse): boolean {
+  if (r.res.truncated) return true;
+  if (r.supervisor || r.res.status !== 206) return false;
+  const range = /^bytes\s+(\d+)-/i.exec(String(r.res.headers['content-range'] || '').trim());
+  return !range || Number(range[1]) > 0;
+}
+
+/** An answer's log text: whole lines only, and a Supervisor answer as Home Assistant's native lines. */
+function logText(r: LogResponse): string {
+  let body = r.res.body;
+  if (startsMidLine(r)) {
+    const newline = body.indexOf('\n');
+    body = newline === -1 ? '' : body.slice(newline + 1);
+  }
+  return r.supervisor ? normalizeSupervisorLog(body) : body;
+}
+
 const FIX_IN_SETTINGS = "this source's settings (Log Discovery, Edit)";
 
 function responseError(r: LogResponse, base: string, ctx: { configured?: boolean; fileMissingAt?: string } = {}): PollError {
@@ -278,7 +361,7 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
   const fetch = deps.fetch ?? httpFetch;
   const now = deps.now ?? Date.now;
 
-  async function get(base: string, path: string, secret: string): Promise<LogResponse> {
+  async function get(base: string, path: string, secret: string, entries = SUPERVISOR_LOG_ENTRIES): Promise<LogResponse> {
     const supervisor = isSupervisorLogPath(path);
     const headers: Record<string, string> = { Authorization: `Bearer ${secret}` };
     let url = `${base}${path}`;
@@ -287,16 +370,47 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
       // cursor), back N-1 entries, N entries: the latest N, in the same form the
       // Supervisor uses for its own default. .../logs/latest ignores Range and
       // takes ?lines instead.
-      headers.Range = `entries=:-${SUPERVISOR_LOG_ENTRIES - 1}:${SUPERVISOR_LOG_ENTRIES}`;
-      url += path.endsWith('/latest') ? `?no_colors&lines=${SUPERVISOR_LOG_ENTRIES}` : '?no_colors';
+      headers.Range = `entries=:-${entries - 1}:${entries}`;
+      url += path.endsWith('/latest') ? `?no_colors&lines=${entries}` : '?no_colors';
+    } else {
+      // The end of the log file. /api/error_log is aiohttp's FileResponse, which
+      // answers 206 with just the last LOG_MAX_BYTES (no compression without an
+      // Accept-Encoding). A server that ignores Range sends the whole file, and
+      // httpFetch then keeps its end (keep: 'tail').
+      headers.Range = `bytes=-${LOG_MAX_BYTES}`;
     }
-    return { path, supervisor, res: await fetch(url, { headers }) };
+    const opts: HttpFetchOptions = { headers, maxBytes: LOG_MAX_BYTES, keep: 'tail' };
+    let res = await fetch(url, opts);
+    if (!supervisor && res.status === 416) {
+      // An empty file has no last bytes to send (aiohttp answers 416): ask for all of it.
+      res = await fetch(url, { ...opts, headers: { Authorization: headers.Authorization } });
+    }
+    return { path, supervisor, res };
+  }
+
+  /**
+   * get(), and for the Supervisor's journal: when the previous poll's tail is
+   * not among the latest SUPERVISOR_LOG_ENTRIES entries (more new lines than
+   * that since), ask again for SUPERVISOR_LOG_ENTRIES_WIDE before the lines in
+   * between are given up. If that wider request fails, the first answer is used.
+   */
+  async function read(base: string, path: string, secret: string, prevTail: string | null): Promise<LogResponse> {
+    const r = await get(base, path, secret);
+    if (!r.supervisor || !prevTail || !isOk(r) || isWebPage(r)) return r;
+    if (!selectNewLines(logText(r), prevTail).gap) return r;
+    try {
+      const wide = await get(base, path, secret, SUPERVISOR_LOG_ENTRIES_WIDE);
+      if (isOk(wide) && !isWebPage(wide)) return wide;
+    } catch {
+      // Keep the first answer; its gap is reported by toResult.
+    }
+    return r;
   }
 
   function toResult(r: LogResponse, base: string, prevTail: string | null, errorLogCheckedAt: number | null): PollFetchResult {
     // A web page instead of a log means the port or path reaches something else
     // (a reverse proxy's or another app's UI); its lines must not be ingested.
-    if (/^\s*text\/html/i.test(String(r.res.headers['content-type'] || ''))) {
+    if (isWebPage(r)) {
       throw new PollError(
         `${base}${r.path} returned a web page, not Home Assistant's log: the port or endpoint points at something else (another app or a reverse proxy page). Check them in ${FIX_IN_SETTINGS}.`,
         {
@@ -306,31 +420,39 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
         }
       );
     }
-    const text = r.supervisor ? normalizeSupervisorLog(r.res.body) : r.res.body;
-    const { newLines, nextCursor: tail } = selectNewLines(text, prevTail);
+    // In the Supervisor's journal, which survives restarts, a previous tail that
+    // is missing scrolled out: every line of the answer is new, and some lines
+    // before it were not collected. In the log file it means a restart started a
+    // new file: the bounded tail of selectNewLines.
+    const { newLines, nextCursor: tail, gap } = selectNewLines(logText(r), prevTail, r.supervisor ? 'all' : 'bounded');
     const events: PolledEvent[] = newLines.map((line) => ({
       message: line,
       timestamp: parseLineTimestamp(line),
       eventId: null, // the cursor is the sole dedup mechanism -- see selectNewLines' doc comment
     }));
-    return { events, nextCursor: serializeCursor({ tail, errorLogCheckedAt }) };
+    const result: PollFetchResult = { events, nextCursor: serializeCursor({ tail, errorLogCheckedAt }) };
+    if (gap && r.supervisor) {
+      result.warning = `Home Assistant logged more lines since the last poll than its Supervisor returns at once (the ${events.length} collected now are the latest): the lines before them were not collected.`;
+    }
+    return result;
   }
 
   async function fetchEvents(target: PollTarget, credential: PollCredential, cursor: string | null): Promise<PollFetchResult> {
     const base = buildBaseUrl(target);
     const state = parseCursor(cursor);
     const secret = credential.secret;
+    const readLog = (path: string) => read(base, path, secret, state.tail);
 
     // An endpoint the admin set is used alone, never second-guessed.
     if (target.endpoint) {
-      const r = await get(base, target.endpoint, secret);
+      const r = await readLog(target.endpoint);
       if (!isOk(r)) throw responseError(r, base, { configured: true });
       return toResult(r, base, state.tail, null);
     }
 
     const primary = target.logAccess.endpoint || ERROR_LOG_ENDPOINT;
     if (isSupervisorLogPath(primary)) {
-      const r = await get(base, primary, secret);
+      const r = await readLog(primary);
       if (!isOk(r)) throw responseError(r, base);
       return toResult(r, base, state.tail, null);
     }
@@ -343,17 +465,17 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
     if (state.errorLogCheckedAt !== null) {
       const age = now() - state.errorLogCheckedAt;
       if (age >= 0 && age < ERROR_LOG_REPROBE_MS) {
-        const r = await get(base, SUPERVISOR_LOG_ENDPOINT, secret);
+        const r = await readLog(SUPERVISOR_LOG_ENDPOINT);
         if (isOk(r)) return toResult(r, base, state.tail, state.errorLogCheckedAt);
         rememberedFailure = r;
       }
     }
 
-    const file = await get(base, primary, secret);
+    const file = await readLog(primary);
     if (isOk(file)) return toResult(file, base, state.tail, null); // (back) on the log file
     if (file.res.status !== 404) throw responseError(file, base);
 
-    const supervisor = rememberedFailure ?? (await get(base, SUPERVISOR_LOG_ENDPOINT, secret));
+    const supervisor = rememberedFailure ?? (await readLog(SUPERVISOR_LOG_ENDPOINT));
     if (isOk(supervisor)) return toResult(supervisor, base, state.tail, now());
     throw responseError(supervisor, base, { fileMissingAt: primary });
   }

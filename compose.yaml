@@ -19,7 +19,12 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      # Loopback-only: reachable from this host, never the LAN (the password
+      # defaults to "changeme"). Needed so a backend running with the optional
+      # network_mode: host below (which drops it off siembox-network entirely)
+      # can still reach Postgres via DB_HOST=localhost. To reach the database
+      # from another machine, use an SSH tunnel rather than widening this.
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-siembox}"]
       interval: 10s

@@ -1,15 +1,34 @@
 import { Router, Request, Response } from 'express';
+import rateLimit from 'express-rate-limit';
 import { UserModel } from '../models/User';
 import { SessionModel } from '../models/Session';
 import { ApiError } from '../middleware/errorHandler';
 import { authenticate } from '../middleware/auth';
 import { logger } from '../utils/logger';
 import * as MfaService from '../services/auth/mfaService';
+import { rateLimitedHandler, signInLimitKey } from '../net/requestLimits';
 
 const router = Router();
 
+/**
+ * Stopgap until per-account sign-in protection lands: at most 10 failed
+ * sign-ins per 15 minutes from one address (an IPv6 client's /64). Successful
+ * sign-ins are not counted, nor is the "MFA code required" answer, which only
+ * follows a correct password. Kept in memory, so a restart clears it.
+ */
+const loginFailureLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  skipSuccessfulRequests: true,
+  requestWasSuccessful: (_req: Request, res: Response) => res.statusCode < 400 || res.locals.mfaCodeRequested === true,
+  keyGenerator: signInLimitKey,
+  standardHeaders: 'draft-6',
+  legacyHeaders: false,
+  handler: rateLimitedHandler('Too many failed sign-in attempts from your address.'),
+});
+
 // Login
-router.post('/login', async (req: Request, res: Response) => {
+router.post('/login', loginFailureLimiter, async (req: Request, res: Response) => {
   try {
     const { username, password } = req.body;
 
@@ -39,6 +58,7 @@ router.post('/login', async (req: Request, res: Response) => {
     if (user.mfa_enabled) {
       const code = (req.body?.code ?? '').toString().trim();
       if (!code) {
+        res.locals.mfaCodeRequested = true; // not a failed sign-in (loginFailureLimiter)
         res.status(401).json({ message: 'MFA code required', mfaRequired: true });
         return;
       }

@@ -1,10 +1,13 @@
 /**
  * requireScanPermission writes every denial to audit_logs. The client address
- * comes from req.ip, which follows one X-Forwarded-For hop (app.ts trusts one
- * proxy), so on a direct call to the API port it is whatever the caller sent.
- * A value that is not an address falls back to the TCP peer, so the row can
- * still be written, and a forged one keeps the peer in details.peerAddress.
- * Hermetic: AuditService.log is mocked. Run with `npm test` (tsx --test).
+ * comes from req.ip (net/clientAddress.ts): the TCP peer on a direct call, or
+ * what a trusted proxy forwarded. A value that is not an address (which only a
+ * trusted proxy can supply) falls back to the TCP peer, so the row can still be
+ * written, and an address forwarded by a proxy keeps the proxy in
+ * details.peerAddress. That the API itself ignores a direct caller's
+ * X-Forwarded-For is covered by routes/scanRouteGates.db.test.ts and
+ * routes/clientIp.http.test.ts. Hermetic: AuditService.log is mocked. Run with
+ * `npm test` (tsx --test).
  */
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,8 +31,10 @@ function viewerRequest(ip: string | undefined, peer: string | undefined): Reques
 
 test('auditSource: the client address, plus the TCP peer when the two differ', () => {
   assert.deepEqual(auditSource(viewerRequest('127.0.0.1', '127.0.0.1')), { ipAddress: '127.0.0.1' });
-  // Behind the nginx frontend, or a direct call with a forged X-Forwarded-For.
+  // Forwarded by a trusted proxy that connects over TCP (TRUSTED_PROXIES).
   assert.deepEqual(auditSource(viewerRequest('10.9.9.9', '172.18.0.5')), { ipAddress: '10.9.9.9', peerAddress: '172.18.0.5' });
+  // Through the proxy socket: its peer is not an address, so there is none to add.
+  assert.deepEqual(auditSource(viewerRequest('10.9.9.9', 'unix:proxy-socket')), { ipAddress: '10.9.9.9' });
   // Not an address: the peer stands in.
   assert.deepEqual(auditSource(viewerRequest('not-an-ip', '127.0.0.1')), { ipAddress: '127.0.0.1' });
   assert.deepEqual(auditSource(viewerRequest(undefined, 'fe80::1%eth0')), { ipAddress: 'fe80::1' });
@@ -37,7 +42,7 @@ test('auditSource: the client address, plus the TCP peer when the two differ', (
   assert.deepEqual(auditSource(viewerRequest('not-an-ip', undefined)), { ipAddress: null });
 });
 
-test('a denial behind a bogus or forged X-Forwarded-For is audited with a valid address and the real peer', async () => {
+test('a denial whose forwarded address is junk or comes from a proxy is audited with a valid address and the peer', async () => {
   const gate = requireScanPermission(UserRole.Operator, 'container_scan');
   const cases: Array<[forwarded: string, ipAddress: string, peerAddress: string | undefined]> = [
     ['not-an-ip', '127.0.0.1', undefined],

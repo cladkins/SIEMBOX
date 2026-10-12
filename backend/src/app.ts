@@ -6,6 +6,9 @@ import { bodyParserErrorHandler, errorHandler, notFoundHandler } from './middlew
 import { requestTimeoutLogger } from './middleware/requestTimeoutLogger';
 import { authenticate } from './middleware/auth';
 import { query } from './config/database';
+import { ignoredForwardedForTracker, trustedProxies } from './net/trustedProxies';
+import { rateLimitedHandler, requestLimitKey } from './net/requestLimits';
+import { envInt } from './utils/envInt';
 
 // Import routes
 import authRoutes from './routes/auth';
@@ -32,15 +35,57 @@ import exposureRoutes from './routes/exposure';
 
 const app: Application = express();
 
-// Trust proxy - needed when behind nginx/reverse proxy
-app.set('trust proxy', 1);
+// Client addresses (req.ip): only the bundled nginx, on the proxy socket, and
+// the TRUSTED_PROXIES entries may set them through X-Forwarded-For; every other
+// caller is its TCP peer address. See net/clientAddress.ts and
+// net/trustedProxies.ts. Never a hop count: a hop count trusts whoever connects.
+app.set('trust proxy', trustedProxies.trust);
 
-// Middleware
+// First: count direct requests whose X-Forwarded-For is ignored, so a proxy
+// that ought to be trusted shows up in the log and in /api/admin/client-address.
+app.use(ignoredForwardedForTracker());
+
 app.use(cors({
   origin: process.env.CORS_ORIGIN || '*',
   credentials: true,
 }));
 
+// Agent and log-push routes that sit behind their own limiter (edrAgentLimiter
+// in routes/edr.ts, logPushLimiter in routes/shippers.ts) and identify the
+// caller with a header. Many agents or shippers can share one NAT address, so
+// these skip the general limit. Enrollment is not among them: it is counted
+// here whatever headers it carries.
+const AGENT_ROUTE = /^\/api\/edr\/(?:agents\/[^/]+\/(?:heartbeat|config|yara)|inventory|events|vulnerabilities)\/?$/i;
+const LOG_PUSH_ROUTE = /^\/api\/shippers\/logs\/?$/i;
+
+/**
+ * The general limit for /api: API_RATE_LIMIT_MAX requests (default 1000) per
+ * 15 minutes per client address, generous enough for the UI's polling. Mounted
+ * before the body parsers, so oversized or malformed bodies count too. A 429 is
+ * JSON (code RATE_LIMITED) with Retry-After; the X-RateLimit-* headers stay.
+ */
+export const apiRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: envInt('API_RATE_LIMIT_MAX', 1000, 1),
+  legacyHeaders: true,
+  standardHeaders: false,
+  keyGenerator: requestLimitKey,
+  handler: rateLimitedHandler('Too many requests from your address.'),
+  skip: (req: Request) => {
+    const url = req.originalUrl || req.url || '';
+    const path = url.split('?')[0];
+    if (req.headers['x-agent-id'] && AGENT_ROUTE.test(path)) return true;
+    if (req.headers['x-shipper-id'] && LOG_PUSH_ROUTE.test(path)) return true;
+    return false;
+  },
+});
+
+app.use('/api/', apiRateLimiter);
+
+// Sign-in and account requests carry a few short fields: cap their bodies at
+// 16 kB (larger ones get 413) before the general 10 MB parsers, which then
+// skip the already-parsed body.
+app.use('/api/auth', express.json({ limit: '16kb' }), express.urlencoded({ extended: true, limit: '16kb' }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -49,27 +94,6 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // these, so they were otherwise invisible. Registered before routes so it wraps
 // every API request's lifecycle.
 app.use(requestTimeoutLogger());
-
-// Rate limiting - generous global limit for normal API usage
-// Specific rate limiters are applied to scan endpoints in their routes
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 1000, // Limit each IP to 1000 requests per windowMs (generous for UI polling)
-  message: 'Too many requests from this IP, please try again later.',
-  skip: (req: Request) => {
-    // Skip rate limiting for authenticated admin users.
-    if ((req as any).user?.role === 'admin') return true;
-    // EDR agents authenticate per-request and may be numerous behind one NAT IP;
-    // exempt authenticated agent traffic (enroll, which has no X-Agent-ID, stays limited).
-    const url = req.originalUrl || req.url || '';
-    if (url.startsWith('/api/edr/') && req.headers['x-agent-id']) return true;
-    // Same reasoning for HTTP log-push shippers (X-Shipper-ID identifies the caller).
-    if (url.startsWith('/api/shippers/logs') && req.headers['x-shipper-id']) return true;
-    return false;
-  },
-});
-
-app.use('/api/', limiter);
 
 // Health check endpoint
 app.get('/health', (_req, res) => {

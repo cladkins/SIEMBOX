@@ -14,7 +14,7 @@ router.get('/', requireAdmin, async (_req: Request, res: Response) => {
   try {
     const users = await UserModel.findAll();
     res.json(users);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch users');
   }
 });

@@ -44,7 +44,7 @@ function getChecker(): ((src: string, flags: string) => any) | null {
     try {
       // Lazy CJS require: keeps recheck off the startup path and lets the server
       // run without it (the CLI opts into strict "required" mode instead).
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy, optional load (see above)
       const mod = require('recheck');
       checker = typeof mod.checkSync === 'function' ? mod.checkSync : null;
     } catch {

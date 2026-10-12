@@ -155,6 +155,7 @@ export class UserModel {
   static removeSensitiveData(user: User): UserSafe {
     // Strip the password hash AND the MFA secret/recovery hashes; keep the
     // mfa_enabled flag so the UI can show MFA state.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- destructured only to omit them from safeUser
     const { password_hash, mfa_secret, mfa_recovery_codes, ...safeUser } = user;
     return safeUser as UserSafe;
   }

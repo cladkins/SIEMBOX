@@ -72,7 +72,7 @@ router.get('/', async (req: Request, res: Response) => {
       offset,
       grouped: groupByEvent,
     });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch alerts');
   }
 });
@@ -137,7 +137,7 @@ router.get('/export', async (req: Request, res: Response) => {
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="siembox-alerts-${stamp}.csv"`);
     res.send(lines.join('\r\n'));
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to export alerts');
   }
 });
@@ -147,7 +147,7 @@ router.get('/statistics', async (_req: Request, res: Response) => {
   try {
     const stats = await AlertModel.getStatistics();
     res.json(stats);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch alert statistics');
   }
 });
@@ -159,7 +159,7 @@ router.get('/by-country', async (req: Request, res: Response) => {
     const limit = Math.min(Math.max(parseInt(String(req.query.limit)) || 50, 1), 250);
     const rows = await AlertModel.getCountByCountry(days, limit);
     res.json(rows);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch alerts by country');
   }
 });
@@ -171,7 +171,7 @@ router.get('/triage-risk-summary', async (_req: Request, res: Response) => {
   try {
     const summary = await AlertTriageModel.getRiskRatingSummary();
     res.json(summary);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch triage risk summary');
   }
 });

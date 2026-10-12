@@ -36,7 +36,7 @@ router.get('/parse-coverage', async (_req: Request, res: Response) => {
       unparsed,
       parsed_pct: total > 0 ? Math.round((parsed / total) * 1000) / 10 : null,
     });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to compute parse coverage');
   }
 });
@@ -72,7 +72,7 @@ router.get('/raw', async (req: Request, res: Response) => {
       limit,
       offset,
     });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch raw logs');
   }
 });
@@ -117,7 +117,7 @@ router.get('/parsed', async (req: Request, res: Response) => {
       limit,
       offset,
     });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch parsed logs');
   }
 });

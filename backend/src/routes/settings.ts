@@ -27,7 +27,7 @@ const router = Router();
 router.get('/ai', authorize('admin'), async (_req: Request, res: Response) => {
   try {
     res.json(await getAiPublicConfig());
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch AI settings');
   }
 });
@@ -55,7 +55,7 @@ router.put('/ai', authorize('admin'), async (req: Request, res: Response) => {
 router.get('/ai-chat', authorize('admin'), async (_req: Request, res: Response) => {
   try {
     res.json(await getChatAiPublicConfig());
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch AI analyst settings');
   }
 });
@@ -85,7 +85,7 @@ router.put('/ai-chat', authorize('admin'), async (req: Request, res: Response) =
 router.get('/ai-triage', authorize('admin'), async (_req: Request, res: Response) => {
   try {
     res.json(await getTriagePublicConfig());
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch AI triage settings');
   }
 });
@@ -164,7 +164,7 @@ router.get('/', async (_req: Request, res: Response) => {
       `SELECT key AS setting_key, value AS setting_value FROM system_settings ORDER BY key`
     );
     res.json(result.rows);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch settings');
   }
 });
@@ -196,7 +196,7 @@ router.get('/retention', authorize('admin'), async (_req: Request, res: Response
     });
 
     res.json(settings);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch retention settings');
   }
 });
@@ -229,7 +229,7 @@ router.put('/retention', authorize('admin'), async (req: Request, res: Response)
     }
 
     res.json({ message: 'Retention settings updated successfully' });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to update retention settings');
   }
 });
@@ -328,7 +328,7 @@ router.get('/retention/stats', authorize('admin'), async (_req: Request, res: Re
     row.parsed_logs_bloat_pct = bloat(row.total_parsed_logs, row.parsed_logs_dead);
 
     res.json(row);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch statistics');
   }
 });
@@ -350,7 +350,7 @@ router.get('/syslog', async (_req: Request, res: Response) => {
     });
 
     res.json(settings);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch syslog settings');
   }
 });
@@ -446,7 +446,7 @@ router.get('/syslog/status', authorize('admin'), async (_req: Request, res: Resp
       status,
       status_message: statusMessage,
     });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch syslog status');
   }
 });
@@ -465,7 +465,7 @@ router.get('/ip-whitelist', authorize('admin'), async (_req: Request, res: Respo
     );
 
     res.json(result.rows);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch IP whitelist');
   }
 });
@@ -619,7 +619,7 @@ router.get('/auto-discovery', authorize('admin'), async (_req: Request, res: Res
       interval_minutes: parseInt(settings.auto_discovery_interval_minutes),
       stale_threshold_days: parseInt(settings.stale_asset_threshold_days),
     });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch auto-discovery settings');
   }
 });
@@ -713,7 +713,7 @@ router.get('/auto-discovery/stats', authorize('admin'), async (_req: Request, re
     `);
 
     res.json(stats.rows[0]);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch auto-discovery statistics');
   }
 });

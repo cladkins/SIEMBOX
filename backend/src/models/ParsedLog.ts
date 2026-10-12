@@ -96,7 +96,7 @@ export function buildParsedLogFilters(options?: ParsedLogFilters): {
   }
 
   if (options?.endTime) {
-    conditions.push(`pl.timestamp <= $${paramIndex++}`);
+    conditions.push(`pl.timestamp <= $${paramIndex}`);
     params.push(options.endTime);
   }
 
@@ -156,7 +156,7 @@ export class ParsedLogModel {
        LEFT JOIN parsers p ON pl.parser_id = p.id
        ${whereClause}
        ORDER BY pl.created_at DESC
-       LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
+       LIMIT $${paramIndex++} OFFSET $${paramIndex}`,
       params
     );
 

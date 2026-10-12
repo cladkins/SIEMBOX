@@ -125,7 +125,7 @@ export class CredentialEncryption {
       };
     } catch (error) {
       console.error('Encryption failed:', error);
-      throw new Error('Failed to encrypt credential');
+      throw new Error('Failed to encrypt credential', { cause: error });
     }
   }
 
@@ -203,7 +203,7 @@ export class CredentialEncryption {
       return this.encrypt(plaintext);
     } catch (error) {
       console.error('Re-encryption failed:', error);
-      throw new Error('Failed to re-encrypt credential');
+      throw new Error('Failed to re-encrypt credential', { cause: error });
     }
   }
 

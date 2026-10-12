@@ -187,7 +187,7 @@ export async function installPack(id: string): Promise<PackInstallResult> {
   try {
     const { entries } = await fetchDetectionCatalog(false);
     matchedNames = (entries as any[]).filter((e) => detectionMatchesPack(e, pack)).map((e) => e.name);
-  } catch (e) {
+  } catch {
     result.detections.failed.push({ name: '(catalog)', reason: 'detection catalog unavailable' });
   }
 

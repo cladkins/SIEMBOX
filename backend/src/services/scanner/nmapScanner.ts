@@ -5,7 +5,8 @@
  * Stores discovered assets and services in the database.
  */
 
-// @ts-ignore - node-nmap doesn't have TypeScript definitions
+import { execSync } from 'child_process';
+// @ts-expect-error - node-nmap doesn't have TypeScript definitions
 import nmap from 'node-nmap';
 import { AssetRepository } from '../assets/assetRepository';
 import { AuditService } from '../audit/auditService';
@@ -235,13 +236,14 @@ export class NmapScanner {
 
       // Check if nmap is available
       console.log(`[NMAP] Checking nmap availability...`);
-      const { execSync } = require('child_process');
       try {
         const nmapVersion = execSync('which nmap && nmap --version', { encoding: 'utf-8' });
         console.log(`[NMAP] Found nmap:`, nmapVersion);
       } catch (nmapCheckError: any) {
         console.error(`[NMAP] NMAP not found or not executable:`, nmapCheckError.message);
-        throw new Error(`NMAP is not installed or not accessible: ${nmapCheckError.message}`);
+        throw new Error(`NMAP is not installed or not accessible: ${nmapCheckError.message}`, {
+          cause: nmapCheckError,
+        });
       }
 
       // Create NMAP scan instance

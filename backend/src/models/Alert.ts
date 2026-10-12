@@ -183,7 +183,7 @@ export class AlertModel {
       `SELECT a.*, t.status AS triage_status, t.verdict AS triage_verdict, t.risk_score AS triage_risk_score
        ${this.FROM_CLAUSE} ${whereClause}
        ${orderClause}
-       LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
+       LIMIT $${paramIndex++} OFFSET $${paramIndex}`,
       params
     );
 
@@ -266,7 +266,7 @@ export class AlertModel {
        FROM representative r
        JOIN grouped g ON g.group_key = r.group_key
        ORDER BY g.group_created_at DESC, r.id DESC
-       LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
+       LIMIT $${paramIndex++} OFFSET $${paramIndex}`,
       listParams
     );
 

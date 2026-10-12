@@ -12,7 +12,7 @@ This guide will help you set up your development environment and start contribut
 Before you begin, ensure you have the following installed:
 
 - **Git** - Version control
-- **Node.js 18+** - JavaScript runtime
+- **Node.js 20.19+, 22.13+ or 24+** - JavaScript runtime (required by the frontend's ESLint 10)
 - **npm** or **yarn** - Package manager
 - **Docker & Docker Compose** - Container platform (recommended)
 - **PostgreSQL 15+** - Database (if not using Docker)

@@ -7,8 +7,10 @@
  *
  * Every gate in front of each route's handler runs as every role against the
  * real route stack. Hermetic: the database pool is mocked to throw, so nothing
- * here can reach Postgres. This pins the routes that exist today; a route added
- * to routes/settings.ts should get a line here. Run with `npm test` (tsx --test).
+ * here can reach Postgres. A route added to routes/settings.ts fails the
+ * "every route is classified" test until it gets a line in ROUTES with the
+ * roles it should allow, so a new read can't come in ungated the way GET / did.
+ * Run with `npm test` (tsx --test).
  */
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
@@ -121,6 +123,18 @@ test('/api/settings: no router-level middleware (each route gates itself)', () =
     [],
     'a router.use() here would apply to every route'
   );
+});
+
+test('/api/settings: every route is classified, so a new route cannot slip in ungated', () => {
+  const known = new Set(ROUTES.map(([method, path]) => `${method} ${path}`));
+  for (const layer of stackOf(settingsRouter)) {
+    for (const method of Object.keys(layer.route?.methods ?? {})) {
+      assert.ok(
+        known.has(`${method} ${layer.route!.path}`),
+        `unclassified route ${method.toUpperCase()} /api/settings${layer.route!.path}: add it to ROUTES with the roles it should allow`
+      );
+    }
+  }
 });
 
 for (const [method, path, allowed] of ROUTES) {

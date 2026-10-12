@@ -8,6 +8,7 @@
  * ever decrypts it; every public view reports configured/enabled booleans and
  * never the key.
  */
+import { isIP } from 'net';
 import { query } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { CredentialEncryption } from '../credentials/credentialEncryption';
@@ -20,7 +21,26 @@ export const EXPOSURE_SETTING_DEFAULTS = {
   exposure_leaked_creds_enabled: 'true',
   exposure_hibp_enabled: 'false',
   exposure_hibp_key: '',
+  // Domain monitoring (migration 035).
+  exposure_domain_monitor_enabled: 'true',
+  exposure_domain_expiry_warning_days: '30',
+  exposure_lookalike_max_candidates: '300',
+  exposure_dns_secondary_resolver: '', // '' = off: only the system resolver is used
 } as const;
+
+/** Bounds for the numeric domain-monitor settings (the route rejects anything outside). */
+export const EXPIRY_WARNING_DAYS_RANGE = { min: 1, max: 365 } as const;
+export const LOOKALIKE_CANDIDATES_RANGE = { min: 1, max: 1000 } as const;
+
+function intSetting(raw: string, fallback: number, range: { min: number; max: number }): number {
+  const n = /^\d{1,7}$/.test(raw.trim()) ? Number(raw.trim()) : NaN;
+  return Number.isInteger(n) && n >= range.min && n <= range.max ? n : fallback;
+}
+
+/** '' (off) or a bare IPv4/IPv6 address — never a host name, so it can't be steered by DNS. */
+export function isValidResolverSetting(value: string): boolean {
+  return value === '' || isIP(value) !== 0;
+}
 
 export type ExposureSettingKey = keyof typeof EXPOSURE_SETTING_DEFAULTS;
 
@@ -62,18 +82,48 @@ export interface ExposureSettings {
   notify_exposure_enabled: boolean;
   notify_exposure_min_severity: ExposureSeverity;
   exposure_leaked_creds_enabled: boolean;
+  exposure_domain_monitor_enabled: boolean;
+  exposure_domain_expiry_warning_days: number;
+  exposure_lookalike_max_candidates: number;
+  exposure_dns_secondary_resolver: string;
 }
 
 export async function getExposureSettings(): Promise<ExposureSettings> {
-  const [notifyEnabled, minSeverity, leakedCredsEnabled] = await Promise.all([
+  const [
+    notifyEnabled,
+    minSeverity,
+    leakedCredsEnabled,
+    domainMonitorEnabled,
+    expiryWarningDays,
+    lookalikeMaxCandidates,
+    secondaryResolver,
+  ] = await Promise.all([
     getExposureSetting('notify_exposure_enabled'),
     getExposureSetting('notify_exposure_min_severity'),
     getExposureSetting('exposure_leaked_creds_enabled'),
+    getExposureSetting('exposure_domain_monitor_enabled'),
+    getExposureSetting('exposure_domain_expiry_warning_days'),
+    getExposureSetting('exposure_lookalike_max_candidates'),
+    getExposureSetting('exposure_dns_secondary_resolver'),
   ]);
+  const resolver = secondaryResolver.trim();
   return {
     notify_exposure_enabled: notifyEnabled === 'true',
     notify_exposure_min_severity: isExposureSeverity(minSeverity) ? minSeverity : 'medium',
     exposure_leaked_creds_enabled: leakedCredsEnabled === 'true',
+    exposure_domain_monitor_enabled: domainMonitorEnabled === 'true',
+    exposure_domain_expiry_warning_days: intSetting(
+      expiryWarningDays,
+      30,
+      EXPIRY_WARNING_DAYS_RANGE
+    ),
+    exposure_lookalike_max_candidates: intSetting(
+      lookalikeMaxCandidates,
+      300,
+      LOOKALIKE_CANDIDATES_RANGE
+    ),
+    // A hand-edited, invalid value reads as "off" rather than reaching the resolver.
+    exposure_dns_secondary_resolver: isValidResolverSetting(resolver) ? resolver : '',
   };
 }
 
@@ -90,6 +140,30 @@ export async function updateExposureSettings(
     await setExposureSetting(
       'exposure_leaked_creds_enabled',
       String(input.exposure_leaked_creds_enabled)
+    );
+  }
+  if (input.exposure_domain_monitor_enabled !== undefined) {
+    await setExposureSetting(
+      'exposure_domain_monitor_enabled',
+      String(input.exposure_domain_monitor_enabled)
+    );
+  }
+  if (input.exposure_domain_expiry_warning_days !== undefined) {
+    await setExposureSetting(
+      'exposure_domain_expiry_warning_days',
+      String(input.exposure_domain_expiry_warning_days)
+    );
+  }
+  if (input.exposure_lookalike_max_candidates !== undefined) {
+    await setExposureSetting(
+      'exposure_lookalike_max_candidates',
+      String(input.exposure_lookalike_max_candidates)
+    );
+  }
+  if (input.exposure_dns_secondary_resolver !== undefined) {
+    await setExposureSetting(
+      'exposure_dns_secondary_resolver',
+      input.exposure_dns_secondary_resolver
     );
   }
   return getExposureSettings();

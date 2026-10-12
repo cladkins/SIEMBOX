@@ -1367,6 +1367,76 @@ sudo systemctl status nginx
 sudo tail -f /var/log/nginx/error.log
 ```
 
+### Issue: Digital Risk domain monitoring shows errors (or never finds anything)
+
+The domain monitor (`domain-monitor` job) needs outbound HTTPS to `crt.sh`,
+`data.iana.org` and the registries' RDAP servers, plus working DNS. Each
+watched domain records the outcome of its last run per collector:
+
+```bash
+# Per-collector status, notes and errors of every watched domain
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8421/api/exposure/domains \
+  | jq '.[] | {domain, last_status, last_error, collectors: .last_summary.collectors}'
+
+# Run one domain now and read the result directly (allow a few minutes)
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8421/api/exposure/domains/1/run-now | jq .
+```
+
+**What the statuses mean:**
+- `baseline` on the first run is normal: existing certificates, lookalikes,
+  registration data and DNS records are recorded silently, and only later
+  changes alert (expiry warnings and certificates from a CA outside
+  `expected_cas` are the exceptions).
+- `ct: crt.sh is temporarily unavailable (HTTP 502)` / `did not answer in time`:
+  crt.sh is a free, often overloaded service. These are transient — the failed
+  collectors are retried after 60 minutes (backing off), the others keep their
+  regular schedule, and nothing is lost: a newly registered lookalike crt.sh
+  failed on is checked first next time, and still counts as new.
+- `ct: could not connect to crt.sh within 45 s (is outbound HTTPS blocked?)` (or
+  the same for an RDAP server) — no connection was ever made (TCP or the TLS
+  handshake never completed): an egress firewall, proxy or SNI filter is
+  dropping outbound HTTPS from the backend. The `domain-monitor` job itself
+  shows `failed` only when nothing worked for any domain (e.g. no network or
+  DNS at all); otherwise the failing collectors show in each domain's
+  `last_error`.
+- `ct` warning `<name>: crt.sh returned only part of the certificates for
+  <name> ... too many to monitor reliably` (or `returned more than 10 MB`; also
+  `details.own_domain_error`) — crt.sh stops at 10,000 matching names per
+  query, picked in no particular order, so the domain's own certificates can't
+  be monitored; the certificates of its registered lookalikes still are. To
+  monitor your own certificates, watch a narrower name (e.g. a subdomain).
+  Turning `ct` off for the domain would stop the lookalike certificate checks
+  too.
+- `ct: crt.sh answered HTTP 403` (or another 4xx) — crt.sh, or more often an
+  egress proxy or TLS-inspecting filter in between, refused the request (for
+  the domain itself or for one of its lookalikes; brand domains query only
+  lookalikes). It is not retried early, and no lookalike check is put off
+  because of it: allow outbound HTTPS to `crt.sh` and the next regular run
+  picks it up.
+- `rdap: unsupported` — the TLD publishes no RDAP service, or only a plain-HTTP
+  one (refused on purpose); registration changes can't be monitored there.
+- `rdap: refused to contact ...` — the RDAP server named by IANA's bootstrap
+  resolved to a private or otherwise non-public address, which is refused as
+  an SSRF guard. Check the backend's DNS for split-horizon or filtering setups.
+- `dns` warning `the resolver returned no NS records for a delegated domain` — a
+  filtering or broken resolver; NS changes can't be judged until it answers
+  NS queries (the old baseline is kept, nothing is reported as removed). Its
+  other empty answers in that run are not trusted either (warnings `<type>: no
+  records, from a resolver that also returned no NS records; not trusted`), so
+  it can't record or report MX, TXT or DMARC records as removed — or as added
+  once it is fixed. Optionally set `exposure_dns_secondary_resolver` to a
+  resolver you trust.
+- `dns: every DNS lookup for <name> failed (NS: <name> does not resolve
+  (NXDOMAIN); ...)` — the watched name doesn't exist right now: a registry or
+  registrar hold (check the `rdap` status), a lapsed registration, or a
+  resolver that blocks it. Nothing is reported as removed meanwhile.
+- `dns` warning `<type>: <resolver> failed (...); the system resolver's answer
+  was used alone` — the second resolver didn't answer, so that record set was
+  not cross-checked; findings say so in `detail.resolvers`.
+- `lookalike: DNS lookups failed for every lookalike candidate` — DNS from the
+  backend is down or blocked; retried automatically.
+
 ---
 
 ## Frontend Issues

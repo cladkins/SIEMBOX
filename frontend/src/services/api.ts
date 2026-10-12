@@ -13,26 +13,11 @@ const apiClient: AxiosInstance = axios.create({
 // Request interceptor
 apiClient.interceptors.request.use(
   (config) => {
-    // Public endpoints that don't require authentication (GET only)
-    const publicGetEndpoints = [
-      '/assets/scans',
-      '/assets/scans/active',
-      '/assets/scans/statistics'
-    ];
-
-    // Check if this is a public GET endpoint
-    const isPublicEndpoint = config.method?.toUpperCase() === 'GET' && publicGetEndpoints.some(endpoint =>
-      config.url === endpoint ||
-      config.url?.startsWith(endpoint + '/') ||
-      config.url?.startsWith(endpoint + '?')
-    );
-
-    // Only add auth token if not a public endpoint
-    if (!isPublicEndpoint) {
-      const authStore = useAuthStore();
-      if (authStore.token) {
-        config.headers.Authorization = `Bearer ${authStore.token}`;
-      }
+    // Every API route the UI calls requires a login (including /assets/scans*,
+    // which used to be sent without the token), so always attach it.
+    const authStore = useAuthStore();
+    if (authStore.token) {
+      config.headers.Authorization = `Bearer ${authStore.token}`;
     }
 
     return config;
@@ -258,7 +243,8 @@ export const api = {
   // Shipper Volumes
   getShipperVolumes: (shipperId: number) => apiClient.get(`/shippers/${shipperId}/volumes`),
   createShipperVolume: (shipperId: number, data: any) => apiClient.post(`/shippers/${shipperId}/volumes`, data),
-  deleteShipperVolume: (shipperId: number, volumeId: number) => apiClient.delete(`/shippers/${shipperId}/volumes/${volumeId}`),
+  // The backend route is DELETE /shippers/volumes/:volumeId (no shipper id), like sources.
+  deleteShipperVolume: (volumeId: number) => apiClient.delete(`/shippers/volumes/${volumeId}`),
 
   // Shipper API Key Management
   regenerateShipperKey: (id: number) => apiClient.post(`/shippers/${id}/regenerate-key`),

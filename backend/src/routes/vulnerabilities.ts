@@ -3,10 +3,27 @@
  *
  * RESTful endpoints for vulnerability scanning and management.
  * Includes scan triggering, vulnerability tracking, and status management.
+ *
+ * Access: app.ts mounts this router behind `authenticate`, so every route
+ * requires a login (the per-route `authenticate` on the write routes is
+ * redundant but harmless). Reads are open to any role. Each write requires the
+ * roles of the UI page(s) that make that call (frontend/src/router/index.ts):
+ * - POST /templates/refresh: admin, analyst or operator (Templates page, and
+ *   Vulnerability Scanning);
+ * - POST /templates/download, POST /scans, POST /scans/:scanId/cancel: admin
+ *   or operator (Vulnerability Scanning);
+ * - PATCH /:assetId/:vulnId: admin or operator (Vulnerability Management).
+ * Denials are written to audit_logs (middleware/scanPermissions.ts).
  */
 
 import express, { Request, Response } from 'express';
 import { authenticate } from '../middleware/auth';
+import {
+  requireRemediationPermission,
+  requireScanPermission,
+  requireVulnScanPermission,
+  UserRole,
+} from '../middleware/scanPermissions';
 import { NucleiScanner, validateNucleiTarget } from '../services/scanner/nucleiScanner';
 import { VulnerabilityProcessor } from '../services/scanner/vulnerabilityProcessor';
 import { TemplateService } from '../services/scanner/templateService';
@@ -14,13 +31,19 @@ import { LogShipperModel } from '../models/LogShipper';
 
 const router = express.Router();
 
+// Refresh only clears the template cache (the directory is re-read on demand).
+const requireTemplateRefresh = requireScanPermission(UserRole.Analyst, 'nuclei_templates');
+// Download fetches or updates the templates from the internet (the tarball, or
+// `nuclei -update-templates`), changing what every later scan runs.
+const requireTemplateDownload = requireScanPermission(UserRole.Operator, 'nuclei_templates');
+
 // VulnerabilityRepository will be imported once created by the agents
 // import { VulnerabilityRepository } from '../services/vulnerabilities/vulnerabilityRepository';
 
 /**
  * GET /api/vulnerabilities/summary
  * Get dashboard summary of vulnerabilities
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/summary', async (_req: Request, res: Response) => {
   try {
@@ -38,7 +61,7 @@ router.get('/summary', async (_req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/templates
  * Get available Nuclei templates overview
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/templates', async (_req: Request, res: Response) => {
   try {
@@ -71,7 +94,7 @@ router.get('/templates', async (_req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/templates/categories
  * Get template categories
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/templates/categories', async (_req: Request, res: Response) => {
   try {
@@ -89,7 +112,7 @@ router.get('/templates/categories', async (_req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/templates/tags
  * Get available template tags
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/templates/tags', async (_req: Request, res: Response) => {
   try {
@@ -107,7 +130,7 @@ router.get('/templates/tags', async (_req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/templates/search
  * Search templates by query
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/templates/search', async (req: Request, res: Response) => {
   try {
@@ -137,7 +160,7 @@ router.get('/templates/search', async (req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/templates/category/:categoryId
  * Get templates by category
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/templates/category/:categoryId', async (req: Request, res: Response) => {
   try {
@@ -173,7 +196,7 @@ router.get('/templates/category/:categoryId', async (req: Request, res: Response
 /**
  * GET /api/vulnerabilities/templates/tag/:tag
  * Get templates by tag
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/templates/tag/:tag', async (req: Request, res: Response) => {
   try {
@@ -198,7 +221,7 @@ router.get('/templates/tag/:tag', async (req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/templates/severity/:severity
  * Get templates by severity — proper server-side filter (not a text search).
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/templates/severity/:severity', async (req: Request, res: Response) => {
   try {
@@ -223,9 +246,9 @@ router.get('/templates/severity/:severity', async (req: Request, res: Response) 
 /**
  * POST /api/vulnerabilities/templates/refresh
  * Refresh template cache
- * Authentication required
+ * Admin, analyst or operator.
  */
-router.post('/templates/refresh', authenticate, async (_req: Request, res: Response) => {
+router.post('/templates/refresh', authenticate, requireTemplateRefresh, async (_req: Request, res: Response) => {
   try {
     TemplateService.clearCache();
     const stats = await TemplateService.getStats();
@@ -247,9 +270,9 @@ router.post('/templates/refresh', authenticate, async (_req: Request, res: Respo
  * POST /api/vulnerabilities/templates/download
  * Download/update Nuclei templates from official repository
  * Only downloads new or updated templates, preserves custom templates
- * Authentication required
+ * Admin or operator.
  */
-router.post('/templates/download', authenticate, async (_req: Request, res: Response) => {
+router.post('/templates/download', authenticate, requireTemplateDownload, async (_req: Request, res: Response) => {
   try {
     console.log('[VULN] Starting template download...');
 
@@ -282,7 +305,7 @@ router.post('/templates/download', authenticate, async (_req: Request, res: Resp
 /**
  * GET /api/vulnerabilities/scans/active
  * Get active vulnerability scans (queued or running)
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/scans/active', async (_req: Request, res: Response) => {
   try {
@@ -305,7 +328,7 @@ router.get('/scans/active', async (_req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/scans
  * Get all vulnerability scans with filtering and pagination
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/scans', async (req: Request, res: Response) => {
   try {
@@ -334,7 +357,7 @@ router.get('/scans', async (req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/scans/:scanId
  * Get vulnerability scan by ID with results
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/scans/:scanId', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -367,7 +390,7 @@ router.get('/scans/:scanId', async (req: Request, res: Response): Promise<void> 
 /**
  * GET /api/vulnerabilities/scans/:scanId/status
  * Get vulnerability scan status (for polling)
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/scans/:scanId/status', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -419,9 +442,9 @@ router.get('/scans/:scanId/status', async (req: Request, res: Response): Promise
 /**
  * POST /api/vulnerabilities/scans
  * Trigger a new vulnerability scan
- * Authentication required
+ * Admin or operator.
  */
-router.post('/scans', authenticate, async (req: Request, res: Response) => {
+router.post('/scans', authenticate, requireVulnScanPermission, async (req: Request, res: Response) => {
   try {
     const { target, templates, tags, severity, description, timeout, rateLimit } = req.body;
 
@@ -527,9 +550,9 @@ router.post('/scans', authenticate, async (req: Request, res: Response) => {
 /**
  * POST /api/vulnerabilities/scans/:scanId/cancel
  * Cancel a running vulnerability scan
- * Authentication required
+ * Admin or operator.
  */
-router.post('/scans/:scanId/cancel', authenticate, async (req: Request, res: Response): Promise<void> => {
+router.post('/scans/:scanId/cancel', authenticate, requireVulnScanPermission, async (req: Request, res: Response): Promise<void> => {
   try {
     const scanId = parseInt(req.params.scanId);
 
@@ -610,7 +633,7 @@ router.post('/scans/:scanId/cancel', authenticate, async (req: Request, res: Res
 /**
  * GET /api/vulnerabilities
  * Get all vulnerabilities with filtering and pagination
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
@@ -749,7 +772,7 @@ router.get('/', async (req: Request, res: Response) => {
 /**
  * GET /api/vulnerabilities/:id
  * Get vulnerability by ID with affected assets
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -776,7 +799,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 /**
  * GET /api/vulnerabilities/asset/:assetId
  * Get vulnerabilities for a specific asset
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/asset/:assetId', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -813,9 +836,9 @@ router.get('/asset/:assetId', async (req: Request, res: Response): Promise<void>
 /**
  * PATCH /api/vulnerabilities/:assetId/:vulnId
  * Update vulnerability status for an asset
- * Authentication required
+ * Admin or operator.
  */
-router.patch('/:assetId/:vulnId', authenticate, async (req: Request, res: Response): Promise<void> => {
+router.patch('/:assetId/:vulnId', authenticate, requireRemediationPermission, async (req: Request, res: Response): Promise<void> => {
   try {
     const assetId = parseInt(req.params.assetId);
     const vulnId = parseInt(req.params.vulnId);

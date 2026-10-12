@@ -554,7 +554,7 @@ Look at what is slow rather than the symptom: a long `siembox-backend` query poi
    - Check routing between networks
 
 **Update Shipper API Key:**
-1. In SIEMBox UI, generate new API key for shipper
+1. In SIEMBox UI, open the shipper's details and copy its current API key (admins and operators can see it), or click **Regenerate** for a new one (admin only; an operator can delete the shipper and add it again instead)
 2. Update shipper's SHIPPER_API_KEY environment variable
 3. Restart shipper container
 4. Wait 30-60 seconds for re-registration
@@ -1199,6 +1199,38 @@ sudo apt install ntp
 sudo systemctl enable ntp
 sudo systemctl start ntp
 ```
+
+---
+
+### Issue: 401 or 403 from Shipper, Asset, Vulnerability or Scan Endpoints After Upgrading
+
+**Symptoms:**
+- A script or integration that reads `/api/assets`, `/api/vulnerabilities` or manages `/api/shippers` now gets `401 Authentication required`
+- An analyst or viewer gets `403` when changing a shipper, its sources or volumes
+- An operator gets `403` when regenerating a shipper's key, or generating or revoking its HTTP push key
+- A viewer gets `403` when adding, editing or deleting an asset or starting an asset scan; an analyst or viewer gets `403` when starting or cancelling a vulnerability, log-discovery or container scan, changing or running a scheduled scan, changing a vulnerability's status or downloading Nuclei templates
+- Straight after the upgrade, Asset Inventory shows "Session expired. Please login again." and logs you out, and it happens again after you log back in
+
+**Cause:** these routes now require a login, and each write requires a role. Earlier versions answered them without a login, or let any logged-in role make the call.
+- Shippers: regenerating a shipper's key (`POST /api/shippers/:id/regenerate-key`) and the HTTP push-key routes (`POST` and `DELETE /api/shippers/:id/http-push-key`) need an admin. Every other change to a shipper, its sources or its volumes needs an admin or operator.
+- Scans and assets: a write needs the roles that can open the page that makes it. That is admin, analyst or operator for Asset Inventory and Templates, and admin or operator for Vulnerability Scanning, Vulnerability Management, Scheduled Scans, Log Discovery and Container Scanning. See [Roles for scan and asset writes](../reference/API.md#roles-for-scan-and-asset-writes).
+- The shipper agent's own endpoints (`/register`, `/config/:api_key`, `/scan-jobs/:api_key` and the rest) are unaffected: they still authenticate with the shipper's key.
+
+The "Session expired" loop comes from a browser tab that was open during the upgrade. That tab still runs the previous UI, which requested `/assets/scans*` without the session token. The API now answers those requests with `401`, and the UI treats any `401` as an expired session. Logging in again in the same tab does not help, because the tab keeps the old UI loaded.
+
+**Solution:**
+```bash
+# Log in once and send the token on each request
+TOKEN=$(curl -s -X POST http://localhost:8421/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "..."}' | jq -r '.token')
+
+curl http://localhost:8421/api/assets -H "Authorization: Bearer $TOKEN"
+```
+
+For the "Session expired" loop, reload the page (Ctrl+Shift+R, or Cmd+Shift+R on macOS) so the tab loads the new UI, then log in if asked. Other open tabs need the same reload.
+
+For a `403`, use an account with the role listed under **Cause**: an admin to regenerate a shipper's key or manage its HTTP push key, an admin or operator for other shipper, source and volume changes. An operator who needs a new shipper key can delete the shipper and add it again; its sources and volumes then have to be added again. Analysts and viewers can still list shippers, but the list omits each shipper's `api_key`.
 
 ---
 

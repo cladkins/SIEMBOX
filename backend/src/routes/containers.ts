@@ -3,8 +3,13 @@ import { ApiError } from '../middleware/errorHandler';
 import { TrivyScanner } from '../services/scanner/trivyScanner';
 import { DockerDiscovery } from '../services/scanner/dockerDiscovery';
 import { ShipperContainerModel } from '../models/ShipperContainer';
+import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
 
+// app.ts mounts this router behind `authenticate`. Reads are open to any role;
+// starting a scan requires admin or operator, the roles that can open the
+// Container Scanning page. Denials are written to audit_logs.
 const router = Router();
+const requireContainerScan = requireScanPermission(UserRole.Operator, 'container_scan');
 
 // Enumerate images already present on the Docker host (if the socket is mounted)
 // so the operator can scan one without typing the reference. Always 200: when the
@@ -35,7 +40,7 @@ router.get('/inventory', async (_req: Request, res: Response) => {
 });
 
 // Start a container image scan (Trivy). Body: { image_ref: "nginx:latest" }.
-router.post('/scan', async (req: Request, res: Response) => {
+router.post('/scan', requireContainerScan, async (req: Request, res: Response) => {
   try {
     const imageRef = (req.body?.image_ref ?? req.body?.imageRef ?? '').toString().trim();
     if (!imageRef) {

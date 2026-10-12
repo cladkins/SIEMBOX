@@ -1,0 +1,194 @@
+/**
+ * HTTP-level check against the real Express app (app.ts with every router and
+ * middleware) on an ephemeral port. Without a login, shipper management, asset,
+ * vulnerability and scan routes answer 401, and the shipper agent's
+ * key-authenticated endpoints still do not ask for one.
+ *
+ * Hermetic: before app.ts (and so config/database.ts) is loaded, DB_HOST and
+ * DB_PORT are pointed at a local port nothing listens on, and before() checks
+ * that the pool really uses it. `authenticate` rejects a request that has no
+ * Bearer token before any query, and the shipper-facing probes fail validation
+ * first; if a gate ever regresses, the request cannot reach Postgres, so the test
+ * fails instead of writing to the developer's database.
+ * Run with `npm test` (tsx --test).
+ */
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import net from 'node:net';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import type { Application } from 'express';
+
+// Anything that loads config/database.ts is imported in before(), once the
+// environment points at the closed port: a static import here would build the
+// pool from the real settings first.
+let app: Application;
+let authenticateName = '';
+let closePools: (() => Promise<void>) | undefined;
+let server: Server | undefined;
+let base = '';
+
+/** A local TCP port that nothing listens on (bound, then released). */
+async function closedPort(): Promise<number> {
+  const probe = net.createServer().listen(0, '127.0.0.1');
+  await once(probe, 'listening');
+  const { port } = probe.address() as AddressInfo;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return port;
+}
+
+before(async () => {
+  const port = await closedPort();
+  process.env.DB_HOST = '127.0.0.1';
+  process.env.DB_PORT = String(port);
+  const db = await import('../config/database');
+  closePools = db.closePools;
+  const { host, port: poolPort } = (db.default as unknown as { options: { host?: string; port?: number } }).options;
+  assert.deepEqual({ host, port: poolPort }, { host: '127.0.0.1', port }, 'the pool must point at the closed port');
+  authenticateName = (await import('../middleware/auth')).authenticate.name;
+  app = (await import('../app')).default;
+  server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+});
+
+after(async () => {
+  if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
+  await closePools?.();
+});
+
+async function call(method: string, path: string, body?: unknown) {
+  const res = await fetch(base + path, {
+    method,
+    headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  // API errors are { status: 'error', statusCode, message } (middleware/errorHandler.ts).
+  const json = (await res.json().catch(() => null)) as { message?: string } | null;
+  return { status: res.status, message: json?.message };
+}
+
+const LOGIN_REQUIRED: Array<[string, string, unknown?]> = [
+  // Shipper management (every route)
+  ['GET', '/api/shippers'],
+  ['GET', '/api/shippers/unknown-sources'],
+  ['GET', '/api/shippers/direct-syslog-sources'],
+  ['GET', '/api/shippers/1'],
+  ['POST', '/api/shippers', { name: 'x' }],
+  ['PUT', '/api/shippers/1', { name: 'x' }],
+  ['DELETE', '/api/shippers/1'],
+  ['GET', '/api/shippers/1/sources'],
+  ['POST', '/api/shippers/1/sources', { source_type: 'file', tag: 't' }],
+  ['PUT', '/api/shippers/sources/1', { enabled: false }],
+  ['DELETE', '/api/shippers/sources/1'],
+  ['GET', '/api/shippers/1/volumes'],
+  ['POST', '/api/shippers/1/volumes', { host_path: '/a', container_path: '/b' }],
+  ['DELETE', '/api/shippers/volumes/1'],
+  ['GET', '/api/shippers/1/activity'],
+  ['POST', '/api/shippers/1/regenerate-key'],
+  ['POST', '/api/shippers/1/http-push-key'],
+  ['DELETE', '/api/shippers/1/http-push-key'],
+  // Assets (every route; writes also check the role)
+  ['GET', '/api/assets'],
+  ['GET', '/api/assets/statistics'],
+  ['GET', '/api/assets/scans/active'],
+  ['GET', '/api/assets/scans/statistics'],
+  ['GET', '/api/assets/scans'],
+  ['GET', '/api/assets/scans/1'],
+  ['GET', '/api/assets/1'],
+  ['GET', '/api/assets/1/related'],
+  ['GET', '/api/assets/1/services'],
+  ['POST', '/api/assets/scan', { targets: ['192.0.2.1'] }],
+  ['POST', '/api/assets', { ip_address: '192.0.2.1' }],
+  ['PUT', '/api/assets/1', { hostname: 'x' }],
+  ['DELETE', '/api/assets/1'],
+  ['POST', '/api/assets/discover'],
+  // Vulnerabilities (every route; writes also check the role)
+  ['GET', '/api/vulnerabilities/summary'],
+  ['GET', '/api/vulnerabilities/templates'],
+  ['GET', '/api/vulnerabilities/templates/categories'],
+  ['GET', '/api/vulnerabilities/templates/tags'],
+  ['GET', '/api/vulnerabilities/templates/search?q=ssh'],
+  ['GET', '/api/vulnerabilities/templates/category/cves'],
+  ['GET', '/api/vulnerabilities/templates/tag/cve'],
+  ['GET', '/api/vulnerabilities/templates/severity/high'],
+  ['GET', '/api/vulnerabilities/scans/active'],
+  ['GET', '/api/vulnerabilities/scans'],
+  ['GET', '/api/vulnerabilities/scans/1'],
+  ['GET', '/api/vulnerabilities/scans/1/status'],
+  ['GET', '/api/vulnerabilities'],
+  ['GET', '/api/vulnerabilities/1'],
+  ['GET', '/api/vulnerabilities/asset/1'],
+  ['PATCH', '/api/vulnerabilities/1/1', { status: 'resolved' }],
+  ['POST', '/api/vulnerabilities/templates/refresh'],
+  ['POST', '/api/vulnerabilities/templates/download'],
+  ['POST', '/api/vulnerabilities/scans', { target: '192.0.2.1' }],
+  ['POST', '/api/vulnerabilities/scans/1/cancel'],
+  // Scan routers mounted behind authenticate (writes also check the role)
+  ['GET', '/api/scheduled-scans'],
+  ['POST', '/api/scheduled-scans', { name: 'x', scan_type: 'asset', scan_options: { targets: ['192.0.2.1'] }, interval_minutes: 60 }],
+  ['PUT', '/api/scheduled-scans/1', { enabled: false }],
+  ['DELETE', '/api/scheduled-scans/1'],
+  ['POST', '/api/scheduled-scans/1/run'],
+  ['POST', '/api/log-discovery/scans', { mode: 'passive' }],
+  ['POST', '/api/log-discovery/scans/1/cancel'],
+  ['POST', '/api/log-discovery/sources/1/confirm'],
+  ['POST', '/api/log-discovery/sources/1/ignore'],
+  ['POST', '/api/log-discovery/sources/1/onboard/confirm', { confirm: true }],
+  ['POST', '/api/containers/scan', { image_ref: 'nginx:latest' }],
+];
+
+for (const [method, path, body] of LOGIN_REQUIRED) {
+  test(`${method} ${path} without a login is 401`, async () => {
+    const r = await call(method, path, body);
+    assert.equal(r.status, 401);
+    assert.equal(r.message, 'Authentication required');
+  });
+}
+
+// Shipper-facing endpoints: an empty body fails key validation (400) before any
+// lookup. The point is that no login is demanded first.
+for (const path of ['/api/shippers/register', '/api/shippers/containers', '/api/shippers/scan-results', '/api/shippers/discovery-results']) {
+  test(`POST ${path} does not require a login (key-authenticated)`, async () => {
+    const r = await call('POST', path, {});
+    assert.equal(r.status, 400);
+    assert.equal(r.message, 'API key is required');
+  });
+}
+
+test('POST /api/shippers/logs asks for the HTTP push key, not a login', async () => {
+  const r = await call('POST', '/api/shippers/logs', { message: 'x' });
+  assert.equal(r.status, 401);
+  assert.match(r.message ?? '', /X-Shipper-ID \+ Bearer key/);
+});
+
+test('login and the health check stay reachable without a login', async () => {
+  assert.equal((await call('GET', '/health')).status, 200);
+  const login = await call('POST', '/api/auth/login', {});
+  assert.equal(login.status, 400, 'missing credentials is a validation error, not an auth wall');
+  assert.equal(login.message, 'Username and password are required');
+});
+
+/**
+ * Names of the middleware app.ts mounts for `path` (path-less global middleware
+ * excluded). Compared by name because express-async-errors, which app.ts loads,
+ * wraps every layer's handle, so the function objects differ.
+ */
+function mountNames(path: string): string[] {
+  return (app as any)._router.stack
+    .filter((l: any) => !l.regexp.fast_slash && l.regexp.test(path))
+    .map((l: any) => l.name);
+}
+
+// The per-route role gates in these routers rely on the mount-level authenticate
+// having set req.user.
+for (const mount of ['/api/assets', '/api/vulnerabilities', '/api/scheduled-scans', '/api/log-discovery', '/api/containers']) {
+  test(`app.ts mounts ${mount} behind authenticate`, () => {
+    assert.ok(mountNames(mount).includes(authenticateName));
+  });
+}
+
+test('app.ts does not mount /api/shippers behind authenticate (shippers use their key)', () => {
+  assert.ok(!mountNames('/api/shippers').includes(authenticateName));
+});

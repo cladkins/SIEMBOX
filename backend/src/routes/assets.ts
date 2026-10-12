@@ -3,10 +3,18 @@
  *
  * RESTful endpoints for asset discovery and management.
  * Includes CRUD operations, scanning, and statistics.
+ *
+ * Access: app.ts mounts this router behind `authenticate`, so every route
+ * requires a login (the per-route `authenticate` on the write routes is
+ * redundant but harmless). Reads are open to any role. Every write (create,
+ * edit or delete an asset, POST /scan, POST /discover) requires admin, analyst
+ * or operator: the roles that can open the Asset Inventory page
+ * (frontend/src/router/index.ts), which is where the UI makes these calls.
  */
 
 import express, { Request, Response } from 'express';
-import { authenticate, authorize } from '../middleware/auth';
+import { authenticate } from '../middleware/auth';
+import { requireAssetScanPermission, requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { AssetRepository } from '../services/assets/assetRepository';
 import { NmapScanner, validateScanTargets } from '../services/scanner/nmapScanner';
 import { AutoDiscoveryService } from '../services/assets/autoDiscoveryService';
@@ -17,10 +25,15 @@ import { getAssetContext } from '../services/assets/assetContext';
 
 const router = express.Router();
 
+// Asset inventory writes: analyst or higher (admin, analyst, operator), with
+// denials written to audit_logs. POST /scan and POST /discover use the same
+// level through requireAssetScanPermission.
+const requireAssetWrite = requireScanPermission(UserRole.Analyst, 'asset');
+
 /**
  * GET /api/assets
  * Get all assets with filtering and pagination
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
@@ -54,7 +67,7 @@ router.get('/', async (req: Request, res: Response) => {
 /**
  * GET /api/assets/statistics
  * Get asset discovery statistics
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/statistics', async (_req: Request, res: Response) => {
   try {
@@ -73,7 +86,7 @@ router.get('/statistics', async (_req: Request, res: Response) => {
  * GET /api/assets/scans/active
  * Get active asset discovery scans (queued or running)
  * Excludes vulnerability scans - those are shown on the Vulnerability Scanning page
- * No authentication required - read-only operation for system visibility
+ * Any logged-in role (read-only).
  */
 router.get('/scans/active', async (_req: Request, res: Response) => {
   try {
@@ -92,7 +105,7 @@ router.get('/scans/active', async (_req: Request, res: Response) => {
 /**
  * GET /api/assets/scans/statistics
  * Get scan statistics
- * No authentication required - read-only operation for system visibility
+ * Any logged-in role (read-only).
  */
 router.get('/scans/statistics', async (_req: Request, res: Response) => {
   try {
@@ -113,7 +126,7 @@ router.get('/scans/statistics', async (_req: Request, res: Response) => {
  * Excludes vulnerability scans by default - those are shown on the Vulnerability Scanning page
  * IMPORTANT: Must come BEFORE /scans/:scanId to prevent route conflicts
  * Query parameters should not be interpreted as path parameters
- * No authentication required - read-only operation for system visibility
+ * Any logged-in role (read-only).
  */
 router.get('/scans', async (req: Request, res: Response) => {
   try {
@@ -150,7 +163,7 @@ router.get('/scans', async (req: Request, res: Response) => {
  * Get scan status and results
  * IMPORTANT: Must come AFTER /scans and /scans/active and /scans/statistics
  * More specific routes must be defined first to avoid catching them as parameters
- * No authentication required - read-only operation for system visibility
+ * Any logged-in role (read-only).
  */
 router.get('/scans/:scanId', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -184,7 +197,7 @@ router.get('/scans/:scanId', async (req: Request, res: Response): Promise<void> 
  * GET /api/assets/:id
  * Get asset by ID with services
  * IMPORTANT: Must come AFTER all /scans routes to prevent catching "scans" as an asset ID
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -220,7 +233,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
  *   - geo            GeoIP country for the asset's IP (null for private IPs)
  *   - vulnerabilities the asset's open/closed findings (nested vuln shape)
  *   - alerts         alerts linked by asset_id OR whose source_ip matches the IP
- * No authentication required - read-only, consistent with the sibling GET /:id.
+ * Any logged-in role (read-only), like the sibling GET /:id.
  */
 router.get('/:id/related', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -250,8 +263,9 @@ router.get('/:id/related', async (req: Request, res: Response): Promise<void> =>
 /**
  * POST /api/assets
  * Create or update asset manually
+ * Admin, analyst or operator.
  */
-router.post('/', authenticate, async (req: Request, res: Response): Promise<void> => {
+router.post('/', authenticate, requireAssetWrite, async (req: Request, res: Response): Promise<void> => {
   try {
     // Validate required fields
     if (!req.body.ip_address) {
@@ -277,8 +291,9 @@ router.post('/', authenticate, async (req: Request, res: Response): Promise<void
 /**
  * PUT /api/assets/:id
  * Update existing asset
+ * Admin, analyst or operator.
  */
-router.put('/:id', authenticate, async (req: Request, res: Response): Promise<void> => {
+router.put('/:id', authenticate, requireAssetWrite, async (req: Request, res: Response): Promise<void> => {
   try {
     const assetId = parseInt(req.params.id);
 
@@ -309,8 +324,9 @@ router.put('/:id', authenticate, async (req: Request, res: Response): Promise<vo
 /**
  * DELETE /api/assets/:id
  * Delete asset
+ * Admin, analyst or operator (Asset Inventory's Delete button).
  */
-router.delete('/:id', authenticate, async (req: Request, res: Response): Promise<void> => {
+router.delete('/:id', authenticate, requireAssetWrite, async (req: Request, res: Response): Promise<void> => {
   try {
     const assetId = parseInt(req.params.id);
 
@@ -341,7 +357,7 @@ router.delete('/:id', authenticate, async (req: Request, res: Response): Promise
 /**
  * GET /api/assets/:id/services
  * Get services for an asset
- * No authentication required - read-only operation
+ * Any logged-in role (read-only).
  */
 router.get('/:id/services', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -370,8 +386,9 @@ router.get('/:id/services', async (req: Request, res: Response): Promise<void> =
  *
  * Requires authentication plus the admin/analyst/operator roles the frontend
  * already restricts the "Trigger Scan" button to (see `canTriggerScans` in
- * frontend/src/views/Assets.vue) -- this route used to have no auth check at
- * all. `targets` is validated against validateScanTargets() before it goes
+ * frontend/src/views/Assets.vue; requireAssetScanPermission is analyst or
+ * higher) -- this route used to have no auth check at all. `targets` is
+ * validated against validateScanTargets() before it goes
  * anywhere near nmap: node-nmap builds its argv by splitting the joined
  * target string on whitespace before spawning the real `nmap` binary, so an
  * unvalidated target containing a space could carry extra nmap flags through
@@ -381,7 +398,7 @@ router.get('/:id/services', async (req: Request, res: Response): Promise<void> =
 router.post(
   '/scan',
   authenticate,
-  authorize('admin', 'analyst', 'operator'),
+  requireAssetScanPermission,
   async (req: Request, res: Response): Promise<void> => {
     try {
       const { targets, scanType, description } = req.body;
@@ -445,12 +462,12 @@ router.post(
  * POST /api/assets/discover
  * Trigger auto-discovery from logs
  *
- * Requires authentication. This duplicates on demand what the scheduled
- * auto-discovery job (jobs/autoDiscovery.ts) already runs on its own --
- * it has no frontend caller -- but as a mutating endpoint it shouldn't be
- * triggerable by anyone who can merely reach the API.
+ * Admin, analyst or operator, like the other asset writes. This duplicates on
+ * demand what the scheduled auto-discovery job (jobs/autoDiscovery.ts) already
+ * runs on its own -- it has no frontend caller -- but as a mutating endpoint it
+ * shouldn't be triggerable by anyone who can merely reach the API.
  */
-router.post('/discover', authenticate, async (_req: Request, res: Response) => {
+router.post('/discover', authenticate, requireAssetScanPermission, async (_req: Request, res: Response) => {
   try {
     const result = await AutoDiscoveryService.runFullDiscovery();
 

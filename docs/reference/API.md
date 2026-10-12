@@ -37,6 +37,28 @@ Authorization: Bearer YOUR_JWT_TOKEN
 
 **Session Duration:** Tokens are valid for 24 hours from login.
 
+The only routes that take no login are `POST /api/auth/login`, the `/health` checks, the shipper-facing `/api/shippers` endpoints (authenticated by the shipper's API key or HTTP push key, see [Log Shippers](#log-shippers-endpoints)), and the EDR agent endpoints (enrollment token or per-agent key).
+
+### Roles for scan and asset writes
+
+Reads under `/api/assets`, `/api/vulnerabilities`, `/api/scheduled-scans`, `/api/log-discovery` and `/api/containers` are open to every logged-in role. Each write requires the roles that can open the UI page that makes the call; any other role gets `403`.
+
+| Route | Admin | Operator | Analyst | Viewer |
+|---|---|---|---|---|
+| `POST /api/assets`, `PUT /api/assets/:id`, `DELETE /api/assets/:id` | yes | yes | yes | no |
+| `POST /api/assets/scan`, `POST /api/assets/discover` | yes | yes | yes | no |
+| `POST /api/vulnerabilities/templates/refresh` | yes | yes | yes | no |
+| `POST /api/vulnerabilities/templates/download` | yes | yes | no | no |
+| `POST /api/vulnerabilities/scans`, `POST /api/vulnerabilities/scans/:scanId/cancel` | yes | yes | no | no |
+| `PATCH /api/vulnerabilities/:assetId/:vulnId` | yes | yes | no | no |
+| `POST /api/scheduled-scans`, `PUT` / `DELETE /api/scheduled-scans/:id`, `POST /api/scheduled-scans/:id/run` | yes | yes | no | no |
+| `POST /api/log-discovery/scans`, `POST /api/log-discovery/scans/:id/cancel` | yes | yes | no | no |
+| `POST /api/log-discovery/sources/:id/confirm`, `/ignore`, `/onboard/confirm` | yes | yes | no | no |
+| `PUT /api/log-discovery/scope/cidrs`, `POST /api/log-discovery/sources/manual`, `DELETE /api/log-discovery/sources/:id`, the `/sources/:id/poller` writes | yes | no | no | no |
+| `POST /api/containers/scan` | yes | yes | no | no |
+
+A refused scan or asset write is also recorded in `audit_logs` (`action` `access.denied`, with the required and actual role); the admin-only log-discovery routes and the log-discovery source actions answer `403` without that audit entry. The entry's `ip_address` is the client address the API derives from one `X-Forwarded-For` hop, which is the real client behind the web UI's proxy but whatever the caller sends on a direct call to port 8421. When that value is not an IP address, the TCP peer address is stored instead, so the entry is always written; when the TCP peer differs from `ip_address`, it is kept in `details.peerAddress`. Shipper management has its own table under [Log Shippers](#log-shippers-endpoints). (Earlier versions let any logged-in role, viewers included, make these calls.)
+
 ---
 
 ## Response Format
@@ -1641,11 +1663,26 @@ Non-admin requests to admin-only routes get `403 Access denied. Required role: a
 
 ## Log Shippers Endpoints
 
+Two kinds of route live under `/api/shippers`:
+
+- **Management routes** (the UI and API users) require a login (`Authorization: Bearer <token>`); without one the API answers `401`, and a role that may not use a route gets `403`. (Earlier versions answered these without a login; scripts that relied on that must now send a token.)
+- **Shipper-facing routes** (`/register`, `/containers`, `/config/:api_key`, `/scan-jobs/:api_key`, `/scan-results`, `/discovery-results`, `/logs`) take no login. The shipper authenticates with its syslog `api_key` (or, for `/logs`, the HTTP push key), so these work exactly as before.
+
+| Method | Path | Access |
+|---|---|---|
+| GET | `/api/shippers`, `/api/shippers/:id`, `/:id/sources`, `/:id/volumes`, `/:id/activity`, `/unknown-sources`, `/direct-syslog-sources` | Any role |
+| POST / PUT / DELETE | `/api/shippers`, `/api/shippers/:id` | Admin or operator |
+| POST / PUT / DELETE | `/:id/sources`, `/sources/:sourceId`, `/:id/volumes`, `/volumes/:volumeId` | Admin or operator |
+| POST | `/:id/regenerate-key` | Admin |
+| POST / DELETE | `/:id/http-push-key` | Admin |
+
+**`api_key` redaction:** a shipper's syslog `api_key` is returned only to roles that can manage shippers (admin and operator), in every response that carries a shipper row (list, detail, create, update). Analysts and viewers get the same rows without the `api_key` field. The HTTP push key's hash is never returned to anyone (`http_push_enabled` says whether one is set).
+
 ### GET /api/shippers
 
 Get all log shippers.
 
-**Authentication:** Required
+**Authentication:** Required (any role). Includes `api_key` for admin and operator only.
 
 **Response (200):**
 ```json
@@ -1680,7 +1717,7 @@ Rows counted: `raw_logs` with `shipper_id IS NULL AND discovery_source_id IS NUL
 
 Served from a 30 s single-flight cache with the same statement-timeout / stale-on-busy behaviour as the unknown-sources list, so a page load can neither stack scans nor outrun the request.
 
-**Authentication:** Required (it is effectively a list of devices on the network).
+**Authentication:** Required (any role; it is effectively a list of devices on the network).
 
 **Response (200):**
 ```json
@@ -1709,7 +1746,7 @@ Served from a 30 s single-flight cache with the same statement-timeout / stale-o
 
 Get single shipper with full configuration.
 
-**Authentication:** Required
+**Authentication:** Required (any role). Includes `api_key` for admin and operator only.
 
 **Response (200):**
 ```json
@@ -1759,7 +1796,7 @@ Get single shipper with full configuration.
 
 Create new log shipper.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **Request Body:**
 ```json
@@ -1781,10 +1818,11 @@ Create new log shipper.
 }
 ```
 
-**IMPORTANT:** Save the `api_key` - it's only shown once on creation!
+The response carries the new shipper's `api_key`; admins and operators can read it again later from `GET /api/shippers/:id`.
 
 **Errors:**
 - `400` - Missing shipper name
+- `403` - Analyst or viewer role
 
 ---
 
@@ -1792,7 +1830,7 @@ Create new log shipper.
 
 Update shipper details.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **Request Body:** (all fields optional)
 ```json
@@ -1811,9 +1849,11 @@ Update shipper details.
 }
 ```
 
-**Note:** Cannot update `api_key` directly - use regenerate endpoint.
+**Note:** Only `name`, `description` and `hostname` can be changed; any other field in the body is ignored. Use the regenerate endpoint for `api_key` and the http-push-key endpoints for the push key; status, version and last-seen come from the shipper itself. The free-form `config` is not editable here: the shipper applies it (`siem_host`, `siem_port`, `sources`) when it registers, so changing it would redirect the shipper's logs. Manage sources with the source endpoints below.
 
 **Errors:**
+- `400` - The body contains none of the editable fields
+- `403` - Analyst or viewer role
 - `404` - Shipper not found
 
 ---
@@ -1822,7 +1862,7 @@ Update shipper details.
 
 Delete log shipper.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **Response (200):**
 ```json
@@ -1842,7 +1882,7 @@ Delete log shipper.
 
 Regenerate API key for log shipper (admin only).
 
-**Authentication:** Required (Admin)
+**Authentication:** Required (Admin). An operator who needs a new key can delete the shipper and create it again (its sources and volumes then have to be added again). Admins and operators can read the current key at any time from `GET /api/shippers/:id`.
 
 **Response (200):**
 ```json
@@ -1877,7 +1917,7 @@ Regenerate API key for log shipper (admin only).
 
 Get all log sources for shipper.
 
-**Authentication:** Required
+**Authentication:** Required (any role)
 
 **Response (200):**
 ```json
@@ -1908,7 +1948,7 @@ Get all log sources for shipper.
 
 Add log source to shipper.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **Request Body (File Source):**
 ```json
@@ -1967,7 +2007,7 @@ Add log source to shipper.
 
 Update log source.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **Request Body:** (all fields optional)
 ```json
@@ -1987,7 +2027,11 @@ Update log source.
 }
 ```
 
+**Note:** Editable fields are `source_type`, `enabled`, `file_path`, `container_name`, `journal_unit`, `tag` and `facility`; anything else in the body (such as `id` or `shipper_id`) is ignored.
+
 **Errors:**
+- `400` - The body contains none of the editable fields
+- `403` - Analyst or viewer role
 - `404` - Source not found
 
 ---
@@ -1996,7 +2040,7 @@ Update log source.
 
 Delete log source.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **Response (200):**
 ```json
@@ -2014,7 +2058,7 @@ Delete log source.
 
 Get volume mounts for shipper.
 
-**Authentication:** Required
+**Authentication:** Required (any role)
 
 **Response (200):**
 ```json
@@ -2040,7 +2084,7 @@ Get volume mounts for shipper.
 
 Add volume mount to shipper.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **Request Body:**
 ```json
@@ -2071,7 +2115,7 @@ Add volume mount to shipper.
 
 Delete volume mount.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **Response (200):**
 ```json
@@ -2089,7 +2133,7 @@ Delete volume mount.
 
 Get activity log for shipper.
 
-**Authentication:** Required
+**Authentication:** Required (any role)
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
@@ -2130,7 +2174,7 @@ Get activity log for shipper.
 
 Regenerate shipper API key (invalidates old key).
 
-**Authentication:** Required
+**Authentication:** Required (Admin; see the operator alternative above)
 
 **Response (200):**
 ```json
@@ -2145,6 +2189,7 @@ Regenerate shipper API key (invalidates old key).
 - Shipper will go offline until reconfigured
 
 **Errors:**
+- `403` - Insufficient permissions (requires admin role)
 - `404` - Shipper not found
 
 ---
@@ -2464,11 +2509,23 @@ The args/targets (or, for discovery, the probe plan) are **built and validated b
 
 ## Assets Endpoints
 
+Every `/api/assets` route requires a login (`Authorization: Bearer <token>`); without one the API answers `401`. (Earlier versions answered the read routes without a login; scripts that relied on that must now send a token.)
+
+| Method | Path | Access |
+|---|---|---|
+| GET | `/api/assets`, `/api/assets/statistics`, `/api/assets/:id`, `/api/assets/:id/related`, `/api/assets/:id/services` | Any role |
+| GET | `/api/assets/scans`, `/api/assets/scans/active`, `/api/assets/scans/statistics`, `/api/assets/scans/:scanId` | Any role |
+| POST / PUT / DELETE | `/api/assets`, `/api/assets/:id` | Admin, analyst or operator |
+| POST | `/api/assets/discover` | Admin, analyst or operator |
+| POST | `/api/assets/scan` | Admin, analyst or operator |
+
+The writes take the roles that can open the Asset Inventory page; a viewer gets `403` (see [Roles for scan and asset writes](#roles-for-scan-and-asset-writes)).
+
 ### GET /api/assets/scans
 
 Get all vulnerability scans with filtering and pagination.
 
-**Authentication:** Required
+**Authentication:** Required (any role)
 
 **Query Parameters:**
 - `status` (optional) - Filter by scan status: `queued`, `running`, `completed`, `failed`
@@ -2515,7 +2572,7 @@ Get all vulnerability scans with filtering and pagination.
 
 Get detailed information about a specific scan.
 
-**Authentication:** Required
+**Authentication:** Required (any role)
 
 **URL Parameters:**
 - `scanId` - Scan ID
@@ -2554,7 +2611,7 @@ Get detailed information about a specific scan.
 
 Get all active scans (queued or running).
 
-**Authentication:** Required
+**Authentication:** Required (any role)
 
 **Response (200):**
 ```json
@@ -2589,7 +2646,7 @@ Get all active scans (queued or running).
 
 Get scan statistics and metrics.
 
-**Authentication:** Required
+**Authentication:** Required (any role)
 
 **Response (200):**
 ```json
@@ -2709,6 +2766,8 @@ below are the alternative to the manual copy-paste recipe: save a token and
 SIEMBOX pulls that source's events on a schedule instead. See
 `backend/src/services/logDiscovery/apiPoll/`.
 
+**Access:** every route requires a login. Reads (and the read-only `onboard/preview`) are open to any role. Starting or cancelling a scan and the source actions `confirm`, `ignore` and `onboard/confirm` require admin or operator, the roles that can open the Log Discovery page. Changing the scan scope, manual sources and poll credentials requires admin. See [Roles for scan and asset writes](#roles-for-scan-and-asset-writes).
+
 ### GET /api/log-discovery/scope
 
 Preview the scan scope: the single-VLAN warning (SIEMBOX only sees its own
@@ -2800,7 +2859,7 @@ The loaded fingerprint library (read-only), so the UI can explain what each matc
 
 Trigger a scan. Runs asynchronously; returns immediately with the job id.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator; other roles get `403`)
 
 **Request Body:**
 ```json
@@ -2869,7 +2928,7 @@ this process) and on a shipper-dispatched scan still `queued` — clearing one w
 shipper never came back to claim it. Also the remedy for a row orphaned `running`
 by a previous process. Any other status is left untouched.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator; other roles get `403`)
 
 **Response (200):**
 ```json
@@ -2981,7 +3040,7 @@ re-scanning or ignoring it, never deleted here.
 
 Confirm a candidate is what the matcher thinks it is.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 ---
 
@@ -2989,7 +3048,7 @@ Confirm a candidate is what the matcher thinks it is.
 
 Dismiss a source; it will not resurface in the ranked list.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 ---
 
@@ -2998,7 +3057,7 @@ Dismiss a source; it will not resurface in the ranked list.
 Render the copy-paste onboarding block for a confirmed source's matched
 fingerprint. Read-only -- does not change the source's status.
 
-**Authentication:** Required
+**Authentication:** Required (any role)
 
 **Request Body:**
 ```json
@@ -3022,7 +3081,7 @@ Manual-mode onboarding, finalized: records the chosen `log_access` method and
 marks the source `onboarded`. Requires an explicit `confirm: true` -- discovery
 never onboards without user confirmation.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **Request Body:**
 ```json
@@ -3139,11 +3198,23 @@ Poll immediately instead of waiting for the next scheduled cycle -- for UI feedb
 
 ## Vulnerabilities Endpoints
 
+Every route here requires a login (`Authorization: Bearer <token>`); without one the API answers `401`. The read routes are open to any role. (Earlier versions answered the read routes without a login; scripts that relied on that must now send a token.)
+
+| Method | Path | Access |
+|---|---|---|
+| GET | every read route below | Any role |
+| POST | `/api/vulnerabilities/templates/refresh` | Admin, analyst or operator |
+| POST | `/api/vulnerabilities/templates/download` | Admin or operator |
+| POST | `/api/vulnerabilities/scans`, `/api/vulnerabilities/scans/:scanId/cancel` | Admin or operator |
+| PATCH | `/api/vulnerabilities/:assetId/:vulnId` | Admin or operator |
+
+Each write takes the roles of the UI page that makes the call (Templates and Vulnerability Scanning for refresh; Vulnerability Scanning for download, scans and cancel; Vulnerability Management for status changes); other roles get `403`.
+
 ### GET /api/vulnerabilities/summary
 
 Get dashboard summary of vulnerabilities.
 
-**Authentication:** Not required (read-only operation)
+**Authentication:** Required (any role)
 
 **Response (200):**
 ```json
@@ -3164,7 +3235,7 @@ Get dashboard summary of vulnerabilities.
 
 Get overview of available Nuclei vulnerability templates including categories and statistics.
 
-**Authentication:** Not required (read-only operation)
+**Authentication:** Required (any role)
 
 **Response (200):**
 ```json
@@ -3200,7 +3271,7 @@ Get overview of available Nuclei vulnerability templates including categories an
 
 Get template categories.
 
-**Authentication:** Not required (read-only operation)
+**Authentication:** Required (any role)
 
 **Response (200):**
 ```json
@@ -3218,7 +3289,7 @@ Get template categories.
 
 Get available template tags with counts.
 
-**Authentication:** Not required (read-only operation)
+**Authentication:** Required (any role)
 
 **Response (200):**
 ```json
@@ -3239,7 +3310,7 @@ Get available template tags with counts.
 
 Search templates by name, CVE, or description.
 
-**Authentication:** Not required (read-only operation)
+**Authentication:** Required (any role)
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
@@ -3274,7 +3345,7 @@ Search templates by name, CVE, or description.
 
 Get templates by category.
 
-**Authentication:** Not required (read-only operation)
+**Authentication:** Required (any role)
 
 **Path Parameters:**
 | Parameter | Type | Description |
@@ -3309,7 +3380,7 @@ Get templates by category.
 
 Get templates by tag.
 
-**Authentication:** Not required (read-only operation)
+**Authentication:** Required (any role)
 
 **Path Parameters:**
 | Parameter | Type | Description |
@@ -3344,7 +3415,7 @@ Get templates by tag.
 
 Refresh the template cache.
 
-**Authentication:** Required
+**Authentication:** Required (admin, analyst or operator)
 
 **Response (200):**
 ```json
@@ -3367,11 +3438,21 @@ Refresh the template cache.
 
 ---
 
+### POST /api/vulnerabilities/templates/download
+
+Download the Nuclei templates (first run) or update them with `nuclei -update-templates`. Custom templates are kept.
+
+**Authentication:** Required (admin or operator)
+
+**Response (200):** `{ "message", "stats", "output" }`, with `stats` as for refresh. A failed download answers `500` with `{ "error", "details" }`.
+
+---
+
 ### GET /api/vulnerabilities/scans
 
 Get all vulnerability scans with filtering and pagination.
 
-**Authentication:** Not required (read-only operation)
+**Authentication:** Required (any role)
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
@@ -3409,7 +3490,7 @@ Get all vulnerability scans with filtering and pagination.
 
 Get active vulnerability scans (queued or running).
 
-**Authentication:** Not required (read-only operation)
+**Authentication:** Required (any role)
 
 **Response (200):**
 ```json
@@ -3435,7 +3516,7 @@ Get active vulnerability scans (queued or running).
 
 Get detailed information about a specific vulnerability scan.
 
-**Authentication:** Not required (read-only operation)
+**Authentication:** Required (any role)
 
 **URL Parameters:**
 - `scanId` - Scan ID
@@ -3476,7 +3557,7 @@ Get detailed information about a specific vulnerability scan.
 
 Get vulnerability scan status (for polling).
 
-**Authentication:** Not required (read-only operation)
+**Authentication:** Required (any role)
 
 **URL Parameters:**
 - `scanId` - Scan ID
@@ -3508,7 +3589,7 @@ Get vulnerability scan status (for polling).
 
 Trigger a new vulnerability scan using Nuclei.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **Request Body:**
 ```json
@@ -3554,6 +3635,7 @@ Trigger a new vulnerability scan using Nuclei.
 
 **Errors:**
 - `400` - Missing target
+- `403` - Analyst or viewer role
 
 ---
 
@@ -3561,7 +3643,7 @@ Trigger a new vulnerability scan using Nuclei.
 
 Cancel a running vulnerability scan.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **URL Parameters:**
 - `scanId` - Scan ID
@@ -3575,6 +3657,7 @@ Cancel a running vulnerability scan.
 ```
 
 **Errors:**
+- `403` - Analyst or viewer role
 - `404` - Scan not found or not running
 
 ---
@@ -3583,7 +3666,7 @@ Cancel a running vulnerability scan.
 
 Get all vulnerabilities with filtering and pagination.
 
-**Authentication:** Not required (read-only operation)
+**Authentication:** Required (any role)
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
@@ -3626,7 +3709,7 @@ Get all vulnerabilities with filtering and pagination.
 
 Get vulnerability by ID with affected assets.
 
-**Authentication:** Not required (read-only operation)
+**Authentication:** Required (any role)
 
 **URL Parameters:**
 - `id` - Vulnerability ID
@@ -3666,7 +3749,7 @@ Get vulnerability by ID with affected assets.
 
 Get vulnerabilities for a specific asset.
 
-**Authentication:** Not required (read-only operation)
+**Authentication:** Required (any role)
 
 **URL Parameters:**
 - `assetId` - Asset ID
@@ -3710,7 +3793,7 @@ Get vulnerabilities for a specific asset.
 
 Update vulnerability status for an asset.
 
-**Authentication:** Required
+**Authentication:** Required (admin or operator)
 
 **URL Parameters:**
 - `assetId` - Asset ID
@@ -3743,6 +3826,7 @@ Update vulnerability status for an asset.
 
 **Errors:**
 - `400` - Invalid asset ID, vulnerability ID, or status
+- `403` - Analyst or viewer role
 - `404` - Asset-vulnerability mapping not found
 
 ---

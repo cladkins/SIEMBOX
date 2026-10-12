@@ -271,7 +271,7 @@ A log shipper with an invalid or expired API key that continues sending logs usi
 **To fix:**
 1. Go to Shippers page in UI
 2. Check "Unknown Sources" section
-3. Regenerate API key or delete old shipper
+3. Regenerate the shipper's API key (admin role), or delete the old shipper and add it again (admin or operator)
 4. Update shipper configuration with new key
 
 ---
@@ -531,15 +531,15 @@ Database logs are stored in PostgreSQL without encryption by default. To enable 
 
 ### How do I rotate API keys?
 
-**Log shipper API keys:**
+**Log shipper API keys** (regenerating a key requires the **admin** role):
 1. Go to **Shippers** page in UI
-2. Click on shipper
-3. Click **Regenerate Key**
-4. Copy new key (shown only once)
+2. Click **View** on the shipper
+3. Click **Regenerate** next to the API key
+4. Copy the new key. Admins and operators can view it again later in the shipper's details.
 5. Update shipper environment variable: `SHIPPER_API_KEY=new-key`
 6. Restart shipper
 
-Old key is immediately invalidated.
+Old key is immediately invalidated. An operator, who cannot regenerate keys, can delete the shipper and add it again to get a new key; its sources and volumes then have to be added again.
 
 ---
 

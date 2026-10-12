@@ -34,6 +34,36 @@ export function withHttpPushStatus<T extends { http_push_key_hash?: string | nul
   return { ...safe, http_push_enabled: !!http_push_key_hash };
 }
 
+/**
+ * Columns LogShipperModel.update may set: the caller-editable fields
+ * (name/description/hostname), api_key (regenerate-key), and what the shipper
+ * reports on register. The HTTP push-key columns have their own setters. Not
+ * `config`: nothing server-side writes it, and the shipper applies it
+ * (siem_host, siem_port, sources) when it registers.
+ */
+const SHIPPER_UPDATE_COLUMNS = new Set([
+  'name',
+  'description',
+  'hostname',
+  'api_key',
+  'status',
+  'version',
+  'last_seen',
+  'ip_address',
+  'metadata',
+]);
+
+/** Columns ShipperSourceModel.update may set. */
+const SOURCE_UPDATE_COLUMNS = new Set([
+  'source_type',
+  'enabled',
+  'file_path',
+  'container_name',
+  'journal_unit',
+  'tag',
+  'facility',
+]);
+
 export interface ShipperSource {
   id: number;
   shipper_id: number;
@@ -112,18 +142,21 @@ export class LogShipperModel {
     return result.rows[0] || null;
   }
 
-  // Update shipper
+  // Update shipper. Keys become SQL column names, so only known columns are
+  // accepted; route handlers pick the caller-editable subset before this.
   static async update(id: number, updates: Partial<LogShipper>): Promise<LogShipper | null> {
     const fields = [];
     const values = [];
     let paramCount = 1;
 
     for (const [key, value] of Object.entries(updates)) {
-      if (key !== 'id' && key !== 'created_at') {
-        fields.push(`${key} = $${paramCount}`);
-        values.push(value);
-        paramCount++;
+      if (key === 'id' || key === 'created_at') continue;
+      if (!SHIPPER_UPDATE_COLUMNS.has(key)) {
+        throw new Error(`LogShipperModel.update: ${JSON.stringify(key)} is not an updatable column`);
       }
+      fields.push(`${key} = $${paramCount}`);
+      values.push(value);
+      paramCount++;
     }
 
     if (fields.length === 0) return null;
@@ -257,18 +290,21 @@ export class ShipperSourceModel {
     return result.rows;
   }
 
-  // Update source
+  // Update source. Same rule as LogShipperModel.update: keys become SQL column
+  // names, so only known columns are accepted.
   static async update(id: number, updates: Partial<ShipperSource>): Promise<ShipperSource | null> {
     const fields = [];
     const values = [];
     let paramCount = 1;
 
     for (const [key, value] of Object.entries(updates)) {
-      if (key !== 'id' && key !== 'created_at') {
-        fields.push(`${key} = $${paramCount}`);
-        values.push(value);
-        paramCount++;
+      if (key === 'id' || key === 'created_at') continue;
+      if (!SOURCE_UPDATE_COLUMNS.has(key)) {
+        throw new Error(`ShipperSourceModel.update: ${JSON.stringify(key)} is not an updatable column`);
       }
+      fields.push(`${key} = $${paramCount}`);
+      values.push(value);
+      paramCount++;
     }
 
     if (fields.length === 0) return null;

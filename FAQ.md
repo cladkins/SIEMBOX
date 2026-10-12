@@ -615,7 +615,7 @@ See [docs/operations/TROUBLESHOOTING.md](./docs/operations/TROUBLESHOOTING.md) f
 3. Make changes and test
 4. Commit: `git commit -m "feat: add my feature"`
 5. Push: `git push origin feature/my-feature`
-6. Create Pull Request targeting `develop` branch
+6. Create Pull Request targeting the `main` branch
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) and [docs/guides/GETTING_STARTED_DEVELOPMENT.md](./docs/guides/GETTING_STARTED_DEVELOPMENT.md).
 

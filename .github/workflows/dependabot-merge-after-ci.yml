@@ -1,0 +1,49 @@
+# Merge a Dependabot PR labelled `dependabot-automerge` (see
+# dependabot-auto-merge.yml) once the CI workflow has succeeded on its current
+# head commit. Major npm updates are never labelled, so they always wait for a
+# human.
+#
+# Runs on workflow_run, so it executes this file from main with a write token.
+# It never checks out or runs PR code. Values that come from the PR (branch
+# name, SHA) are passed through env, not interpolated into the script.
+#
+# A merge made with GITHUB_TOKEN does not trigger other workflows, so these
+# merges do not publish new container images by themselves; the next human
+# merge to main does.
+name: Dependabot merge after CI
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge the PR if it is still labelled and unchanged
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          pr=$(gh pr list --repo "$REPO" --state open --base main --head "$HEAD_BRANCH" \
+            --json number,headRefOid,labels \
+            --jq "map(select(.headRefOid == env.HEAD_SHA and any(.labels[]; .name == \"dependabot-automerge\"))) | .[0].number // empty")
+          if [ -z "$pr" ]; then
+            echo "No open, labelled PR at $HEAD_SHA on $HEAD_BRANCH; nothing to merge."
+            exit 0
+          fi
+          echo "CI passed on #$pr at $HEAD_SHA; merging."
+          gh pr merge "$pr" --repo "$REPO" --squash --match-head-commit "$HEAD_SHA"

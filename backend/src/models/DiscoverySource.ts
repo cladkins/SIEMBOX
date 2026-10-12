@@ -16,6 +16,12 @@ export interface DiscoverySource {
   status: DiscoverySourceStatus;
   selected_log_access: LogAccessMethod | null;
   evidence: Record<string, unknown>;
+  /**
+   * An admin's poll-target overrides for a scan-discovered source
+   * ({port?, tls?, endpoint?}; migration 036). Scans never write it. A manual
+   * source keeps its target in evidence instead, and has NULL here.
+   */
+  poll_overrides: Record<string, unknown> | null;
   last_scan_id: number | null;
   first_seen: string;
   last_seen: string;
@@ -61,7 +67,25 @@ export interface DiscoverySourceWithPoller extends DiscoverySource {
   poller_last_status: string | null;
   poller_last_polled_at: string | null;
   poller_last_error: string | null;
+  /** Internal, for working out the polled URL; never sent to the client as is. */
+  poller_fingerprint_id: string | null;
+  poller_cursor: string | null;
 }
+
+/**
+ * A manual source's poll target, as the edit route writes it: the row's own
+ * address, plus port/scheme/endpoint in evidence (where upsertManual puts them).
+ */
+export interface ManualTargetUpdate {
+  ip_address: string;
+  target_port: number;
+  tls: boolean;
+  /** null removes the endpoint override (the fingerprint's endpoint applies). */
+  endpoint: string | null;
+}
+
+/** Postgres unique_violation, e.g. a manual source moved to an address another source already has. */
+export const UNIQUE_VIOLATION = '23505';
 
 export const DiscoverySourceModel = {
   /** LEFT JOINs discovery_source_pollers so the sources list can show polling status without N+1 requests. */
@@ -72,7 +96,9 @@ export const DiscoverySourceModel = {
               dsp.enabled AS poller_enabled,
               dsp.last_status AS poller_last_status,
               dsp.last_polled_at AS poller_last_polled_at,
-              dsp.last_error AS poller_last_error
+              dsp.last_error AS poller_last_error,
+              dsp.fingerprint_id AS poller_fingerprint_id,
+              dsp.poll_cursor AS poller_cursor
          FROM discovery_sources ds
          LEFT JOIN discovery_source_pollers dsp ON dsp.discovery_source_id = ds.id
         ORDER BY ds.security_value DESC NULLS LAST, ds.confidence DESC`
@@ -89,7 +115,11 @@ export const DiscoverySourceModel = {
    * Upsert on ip_address so re-scanning the same host refreshes it in place
    * instead of duplicating. A user's own status decision (confirmed/onboarded/
    * ignored) and selected_log_access are intentionally left untouched here --
-   * only re-observed signal/confidence data is refreshed by a scan.
+   * only re-observed signal/confidence data is refreshed by a scan. So are an
+   * admin's poll settings: poll_overrides is never written here, and when the
+   * host is a manually added source, the scan's fresh evidence keeps the
+   * manual entry's keys (manual, target_port, tls, endpoint) -- without them a
+   * re-scan would quietly re-point its poller at the fingerprint defaults.
    */
   async upsert(input: DiscoverySourceUpsertInput): Promise<DiscoverySource> {
     const result = await query(
@@ -104,7 +134,15 @@ export const DiscoverySourceModel = {
          confidence = EXCLUDED.confidence,
          is_guess = EXCLUDED.is_guess,
          security_value = EXCLUDED.security_value,
-         evidence = EXCLUDED.evidence,
+         evidence = CASE
+           WHEN discovery_sources.evidence->'manual' = 'true'::jsonb THEN
+             EXCLUDED.evidence || jsonb_strip_nulls(jsonb_build_object(
+               'manual', true,
+               'target_port', discovery_sources.evidence->'target_port',
+               'tls', discovery_sources.evidence->'tls',
+               'endpoint', discovery_sources.evidence->'endpoint'))
+           ELSE EXCLUDED.evidence
+         END,
          last_scan_id = EXCLUDED.last_scan_id,
          last_seen = NOW(),
          updated_at = NOW()
@@ -134,7 +172,9 @@ export const DiscoverySourceModel = {
    * base-URL port/scheme live in evidence ({manual:true, target_port, tls}) — no DDL
    * (last_scan_id is nullable, evidence is JSONB). ON CONFLICT refreshes the
    * fingerprint/port/evidence in place and un-ignores a previously dismissed host,
-   * but otherwise leaves the user's own status decision untouched.
+   * but otherwise leaves the user's own status decision untouched. Re-adding a
+   * host also drops any poll_overrides it had as a discovered source: from now on
+   * its evidence is its poll target.
    */
   async upsertManual(input: DiscoverySourceManualInput): Promise<DiscoverySource> {
     const evidence = { manual: true, target_port: input.target_port, tls: input.tls };
@@ -146,6 +186,7 @@ export const DiscoverySourceModel = {
          matched_fingerprint_id = EXCLUDED.matched_fingerprint_id,
          open_ports = EXCLUDED.open_ports,
          evidence = EXCLUDED.evidence,
+         poll_overrides = NULL,
          hostname = COALESCE(EXCLUDED.hostname, discovery_sources.hostname),
          confidence = 100,
          is_guess = false,
@@ -162,6 +203,65 @@ export const DiscoverySourceModel = {
       ]
     );
     return result.rows[0];
+  },
+
+  /**
+   * Change a MANUALLY added source's poll target in place: its address, and the
+   * port/scheme/endpoint in evidence, exactly where upsertManual keeps them
+   * (open_ports follows the port, as there). Other evidence keys are kept.
+   * With resetCursor, the poller's cursor is cleared in the same statement, so
+   * the next poll starts fresh against the new target; the stored credential,
+   * schedule and status are untouched. A new address that another source
+   * already has fails with UNIQUE_VIOLATION. Null when the row doesn't exist.
+   */
+  async updateManualTarget(id: number, target: ManualTargetUpdate, resetCursor: boolean): Promise<DiscoverySource | null> {
+    const result = await query(
+      `WITH updated AS (
+         UPDATE discovery_sources
+            SET ip_address = $2,
+                open_ports = ARRAY[$3::int],
+                evidence = (evidence - 'endpoint') || jsonb_strip_nulls(jsonb_build_object(
+                  'manual', true, 'target_port', $3::int, 'tls', $4::boolean, 'endpoint', $5::text)),
+                poll_overrides = NULL,
+                updated_at = NOW()
+          WHERE id = $1
+          RETURNING *
+       ), cursor_reset AS (
+         UPDATE discovery_source_pollers
+            SET poll_cursor = NULL, updated_at = NOW()
+          WHERE discovery_source_id = $1 AND $6::boolean AND EXISTS (SELECT 1 FROM updated)
+       )
+       SELECT * FROM updated`,
+      [id, target.ip_address, target.target_port, target.tls, target.endpoint, resetCursor]
+    );
+    return result.rows[0] || null;
+  },
+
+  /**
+   * Set a scan-discovered source's poll overrides ({port?, tls?, endpoint?}), or
+   * clear them all with null. Never touches the address or the scan-owned
+   * evidence. resetCursor as in updateManualTarget.
+   */
+  async setPollOverrides(
+    id: number,
+    overrides: Record<string, unknown> | null,
+    resetCursor: boolean
+  ): Promise<DiscoverySource | null> {
+    const result = await query(
+      `WITH updated AS (
+         UPDATE discovery_sources
+            SET poll_overrides = $2::jsonb, updated_at = NOW()
+          WHERE id = $1
+          RETURNING *
+       ), cursor_reset AS (
+         UPDATE discovery_source_pollers
+            SET poll_cursor = NULL, updated_at = NOW()
+          WHERE discovery_source_id = $1 AND $3::boolean AND EXISTS (SELECT 1 FROM updated)
+       )
+       SELECT * FROM updated`,
+      [id, overrides === null ? null : JSON.stringify(overrides), resetCursor]
+    );
+    return result.rows[0] || null;
   },
 
   /**

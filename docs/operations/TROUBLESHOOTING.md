@@ -8,6 +8,7 @@ Comprehensive troubleshooting guide for diagnosing and resolving common issues i
 - [Deployment Issues](#deployment-issues)
 - [Syslog & Log Ingestion](#syslog--log-ingestion)
 - [Log Shipper Issues](#log-shipper-issues)
+- [Log Discovery & API-Polled Sources](#log-discovery--api-polled-sources)
 - [Parser Problems](#parser-problems)
 - [Detection Rules](#detection-rules)
 - [Database Issues](#database-issues)
@@ -55,6 +56,7 @@ curl http://localhost:8421/api/health
 | `ECONNREFUSED` | Service not running | `docker-compose restart <service>` |
 | `Error: connect ECONNREFUSED 127.0.0.1:5432` | `DB_HOST` is a loopback address, so the backend is dialing its own container (Postgres can be perfectly healthy) | Set `DB_HOST=postgres` and **redeploy** the stack — see [below](#issue-backend-cant-reach-postgres-on-127001) |
 | `timeout exceeded when trying to connect` | The backend ran out of free database connections (a heavy query or scan was holding them) | See [Logs are dropped or ingestion is slow](#issue-logs-are-dropped-or-ingestion-is-slow) |
+| `[DiscoveryApiPoller] source N (home-assistant) poll failed: ...` | An API-polled source can't be read: wrong port/endpoint, a non-admin token, or (before the Supervisor fallback) Home Assistant OS answering 404 for `/api/error_log` | See [An API-polled source keeps failing](#issue-an-api-polled-source-keeps-failing-home-assistant-http-404-from-error_log) |
 | `401 Unauthorized` | Invalid/expired token | Login again |
 | `Port 514: Permission denied` | Insufficient privileges | Run backend as root or use authbind |
 | `FATAL: password authentication failed` | Wrong database password | Check .env DB_PASSWORD |
@@ -668,6 +670,62 @@ curl -X PUT http://localhost:8421/api/shippers/sources/<source-id> \
   -H "Content-Type: application/json" \
   -d '{"enabled": true}'
 ```
+
+---
+
+## Log Discovery & API-Polled Sources
+
+### Issue: An API-polled source keeps failing (Home Assistant: HTTP 404 from error_log)
+
+**Symptoms:**
+- Backend log: `[DiscoveryApiPoller] source 94 (home-assistant) poll failed: ...`. Before Home Assistant's Supervisor fallback existed the message was `HTTP 404 from Home Assistant error_log`, and there was no way to change the port, endpoint or address of a polled source.
+- No events arrive from the source; its row shows an error.
+
+**Where to look:** every API-polled source shows the URL being polled (never the token) and its last error, in Log Discovery and under Log Shippers → API-Polled Sources. The same from the API:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8421/api/log-discovery/sources/94/poller \
+  | jq '{last_status, last_error, url: .target.effective_url}'
+```
+
+**Why Home Assistant answers 404:** where Home Assistant serves its log depends on how it is installed.
+
+| Install type | `/api/error_log` | `/api/hassio/core/logs` |
+|--------------|------------------|-------------------------|
+| Container or Core | the log file (`home-assistant.log`) | does not exist (404) |
+| Container or Core with `HA_DISABLE_LOG_FILE=true` | 404 (no log file) | does not exist (404) |
+| Home Assistant OS or Supervised | 404: no log file, unless `HA_DUPLICATE_LOG_FILE` is set | the Core log, from the Supervisor's journal |
+
+Home Assistant registers `/api/error_log` only while it writes a log file. Home Assistant OS and Supervised installs log to the systemd journal and skip the file, so there the route doesn't exist and the answer is 404; the same log is available through the Supervisor at `/api/hassio/core/logs`.
+
+**What SIEMBox does about it:** it asks `/api/error_log` first and, on a 404, reads `/api/hassio/core/logs?no_colors` (the latest 500 journal entries; lines are stored in Home Assistant's own format, so the catalog parser still matches). It remembers which endpoint works for each source, so a Home Assistant OS install doesn't get a doomed request every poll, and tries `/api/error_log` again every 6 hours and whenever the remembered endpoint fails. The source's URL then ends in `/api/hassio/core/logs`. A standard install on port 8123 needs nothing configured.
+
+**Change the port, HTTPS, endpoint or address** (admin): Log Discovery → **Edit** on the source, or Log Shippers → API-Polled Sources → **Edit**, then **Save and poll now** to see the result straight away. Leave **Endpoint** empty for the automatic choice above. Set it to use only that path, for example behind a reverse proxy that serves Home Assistant under a prefix (`/homeassistant/api/error_log`). The same through the API:
+
+```bash
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  http://localhost:8421/api/log-discovery/sources/94 \
+  -d '{"port": 8123, "tls": false, "endpoint": "/api/hassio/core/logs"}'
+
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8421/api/log-discovery/sources/94/poller/run-now | jq .
+```
+
+Only a manually added source's address can be changed; a scan-discovered source is polled where the scan found it (add the other address as a manual source instead). A new endpoint or address makes the next poll start again from the source's recent lines, so up to 200 Home Assistant lines that were already stored can be stored a second time. The saved token is kept unless you paste a new one; after an address change it is sent to the new address.
+
+**The token must belong to an administrator.** Both log endpoints are admin-only. In Home Assistant, sign in as an administrator, open your profile → **Security** → **Long-lived access tokens** → **Create token**, and paste the token in the source's **Edit** dialog. A token of a user who is not an administrator gets 401 from both endpoints.
+
+**What the errors mean:**
+
+| `last_error` starts with | Cause | Fix |
+|--------------------------|-------|-----|
+| `Home Assistant rejected the token (HTTP 401 ...)` | The token is invalid or revoked, or its user is not an administrator | Create a long-lived token as an administrator and paste it in **Edit** |
+| `Home Assistant refused the request (HTTP 403 ...)` | Home Assistant banned SIEMBox's address after failed logins (`ip_ban_enabled`), or a reverse proxy refuses it | Remove the address from `ip_bans.yaml` in Home Assistant's config folder, restart Home Assistant, check the token |
+| `Home Assistant at http://... answered 404 for both log endpoints` | Neither endpoint exists there: `HA_DISABLE_LOG_FILE=true` on a Container/Core install, the wrong port (something else answers), or a reverse-proxy path | Check the port (8123 by default) and HTTPS; behind a reverse proxy set the endpoint with its prefix; on Container/Core, remove `HA_DISABLE_LOG_FILE` |
+| `Home Assistant answered 404 for the configured endpoint ...` | The endpoint set in **Edit** doesn't exist on this install | Correct it, or clear it for the automatic choice |
+| `Home Assistant could not get its log from the Supervisor (HTTP 502 ...)` | The Supervisor or its journal service isn't answering | Check Settings → System → Repairs and the Supervisor log on the Home Assistant host; the next poll retries |
+| `... returned a web page, not Home Assistant's log` | The port or endpoint reaches another app or a proxy's page | Correct the port or endpoint |
+| `Couldn't connect to http://...: connection refused` (or `TLS handshake failed`, `connection reset`) | Wrong address or port, the device is down, or the HTTPS switch doesn't match the port | Fix the address, port or HTTPS in **Edit** |
 
 ---
 

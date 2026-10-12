@@ -17,7 +17,18 @@ attack_data_sources:
   - authentication logs
   - application logs
 log_access:
-  - {method: api_pull, endpoint: /api/error_log, auth: bearer_token, target_port: 8123}
+  # /api/error_log is the log file, which Home Assistant OS and Supervised
+  # installs don't write; SIEMBox's poller falls back to the Supervisor's
+  # /api/hassio/core/logs there on its own (apiPoll/adapters/homeAssistant.ts).
+  - method: api_pull
+    endpoint: /api/error_log
+    auth: bearer_token
+    target_port: 8123
+    note: >-
+      On Home Assistant OS and Supervised installs /api/error_log answers 404 (they
+      write no log file); use /api/hassio/core/logs?no_colors there instead. Both
+      endpoints need a long-lived access token created by an administrator
+      (Profile, Security tab).
   - {method: file, path: /config/home-assistant.log}
 onboard_template: templates/api_poller.j2
 credentials:

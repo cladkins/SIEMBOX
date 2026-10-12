@@ -4,9 +4,9 @@ import { ApiError } from '../middleware/errorHandler';
 import { authorize, requireOperator } from '../middleware/auth';
 import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { DiscoveryScanModel } from '../models/DiscoveryScan';
-import { DiscoverySourceModel, DiscoverySourceManualInput } from '../models/DiscoverySource';
+import { DiscoverySource, DiscoverySourceModel, DiscoverySourceManualInput, UNIQUE_VIOLATION } from '../models/DiscoverySource';
 import { LogShipperModel } from '../models/LogShipper';
-import { DiscoverySourcePollerModel } from '../models/DiscoverySourcePoller';
+import { DiscoverySourcePoller, DiscoverySourcePollerModel } from '../models/DiscoverySourcePoller';
 import { resolveScope, detectLocalInterfaces, isValidCidr, isSweepableCidr } from '../services/logDiscovery/scope';
 import {
   runScan,
@@ -17,15 +17,24 @@ import {
   savePersistedScopeCidrs,
 } from '../services/logDiscovery/discoveryScanService';
 import { loadFingerprintLibrary, getFingerprintById } from '../services/logDiscovery/fingerprintLoader';
+import { LogAccessMethod } from '../services/logDiscovery/types';
 import { listPollableFingerprintIds } from '../services/logDiscovery/apiPoll/registry';
 import { pollOneSource } from '../services/logDiscovery/apiPoll/poller';
+import {
+  describePollTarget,
+  isManualSource,
+  readTargetOverrides,
+  resolveApiPull,
+  validateEndpointPath,
+} from '../services/logDiscovery/apiPoll/pollTarget';
 
 // Access: app.ts mounts this router behind `authenticate`; the UI's Log
 // Discovery page is limited to admins and operators. Reads are open to any role.
 // Starting or cancelling a scan (which may dispatch it to a shipper) and
 // triaging a discovered source (confirm, ignore, mark onboarded) require admin or
 // operator; scan denials are written to audit_logs. Changing the scan scope,
-// manual sources and poll credentials stays admin-only (authorize('admin')).
+// manual sources, poll targets and poll credentials stays admin-only
+// (authorize('admin')).
 const router = Router();
 const requireDiscoveryScan = requireScanPermission(UserRole.Operator, 'discovery_scan');
 
@@ -35,23 +44,64 @@ function parseSourceId(req: Request): number {
   return id;
 }
 
+const IP_ADDRESS_MESSAGE = 'ip_address must be a literal IPv4 or IPv6 address (not a DNS name)';
+
+/**
+ * A manual source's address, shared by POST /sources/manual and PATCH
+ * /sources/:id so both validate it the same way: a literal IPv4/IPv6 address,
+ * trimmed. A DNS name is rejected up front — INET is NOT NULL and casting a
+ * hostname would surface as a 500, not a clean 400 — and so is an IPv6 zone
+ * index ("fe80::1%eth0"), which net.isIP accepts but INET does not. Null when
+ * invalid.
+ */
+function parseLiteralIp(raw: unknown): string | null {
+  const ip = typeof raw === 'string' ? raw.trim() : '';
+  if (!ip || net.isIP(ip) === 0 || ip.includes('%')) return null;
+  return ip;
+}
+
+/** Compare two literal addresses, ignoring how an IPv6 address is written. */
+function sameAddress(a: string, b: string): boolean {
+  const canonical = (ip: string) => {
+    if (!net.isIPv6(ip)) return ip;
+    try {
+      return new URL(`http://[${ip}]`).hostname.slice(1, -1);
+    } catch {
+      return ip.toLowerCase();
+    }
+  };
+  return canonical(a) === canonical(b);
+}
+
+function isPort(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 65535;
+}
+
+/**
+ * A manual source's port and scheme when none is given: the fingerprint's
+ * api_pull target_port (null when it declares none), and https for authentik
+ * (served on 9443/TLS) only.
+ */
+function manualSourceDefaults(fingerprintId: string, logAccess: LogAccessMethod): { port: number | null; tls: boolean } {
+  return { port: isPort(logAccess.target_port) ? logAccess.target_port : null, tls: fingerprintId === 'authentik' };
+}
+
 export type ManualSourceValidation =
   | { ok: true; value: DiscoverySourceManualInput }
   | { ok: false; status: number; message: string };
 
 /**
  * Validate + normalize the body of POST /sources/manual. Pure (no DB), so it's
- * unit-testable on its own. Rejects a DNS name for ip_address up front — INET is
- * NOT NULL and casting a hostname would surface as a 500, not a clean 400. The
- * fingerprint checks mirror POST /sources/:id/poller/credential exactly: the id
- * must have a real poll adapter AND an api_pull log_access entry.
+ * unit-testable on its own. The address must be a literal IP (parseLiteralIp).
+ * The fingerprint checks mirror POST /sources/:id/poller/credential exactly: the
+ * id must have a real poll adapter AND an api_pull log_access entry.
  */
 export function validateManualSourceInput(body: unknown): ManualSourceValidation {
   const b = (body ?? {}) as Record<string, unknown>;
 
-  const ipRaw = typeof b.ip_address === 'string' ? b.ip_address.trim() : '';
-  if (!ipRaw || net.isIP(ipRaw) === 0) {
-    return { ok: false, status: 400, message: 'ip_address must be a literal IPv4 or IPv6 address (not a DNS name)' };
+  const ipRaw = parseLiteralIp(b.ip_address);
+  if (!ipRaw) {
+    return { ok: false, status: 400, message: IP_ADDRESS_MESSAGE };
   }
 
   const pollable = listPollableFingerprintIds();
@@ -68,14 +118,16 @@ export function validateManualSourceInput(body: unknown): ManualSourceValidation
     return { ok: false, status: 400, message: `${fingerprint.name} has no api_pull log access method` };
   }
 
+  const defaults = manualSourceDefaults(fingerprintId, logAccess);
+
   // port: an explicit 1-65535 integer, else the fingerprint's api_pull target_port.
   let target_port: number;
   if (b.port === undefined || b.port === null) {
-    target_port = typeof logAccess.target_port === 'number' ? logAccess.target_port : NaN;
-    if (!Number.isInteger(target_port) || target_port < 1 || target_port > 65535) {
+    if (defaults.port === null) {
       return { ok: false, status: 400, message: 'port is required (this fingerprint declares no default api_pull target_port)' };
     }
-  } else if (typeof b.port === 'number' && Number.isInteger(b.port) && b.port >= 1 && b.port <= 65535) {
+    target_port = defaults.port;
+  } else if (isPort(b.port)) {
     target_port = b.port;
   } else {
     return { ok: false, status: 400, message: 'port must be an integer between 1 and 65535' };
@@ -84,7 +136,7 @@ export function validateManualSourceInput(body: unknown): ManualSourceValidation
   // tls: explicit boolean, else default true for authentik (https:9443) / false elsewhere.
   let tls: boolean;
   if (b.tls === undefined || b.tls === null) {
-    tls = fingerprintId === 'authentik';
+    tls = defaults.tls;
   } else if (typeof b.tls === 'boolean') {
     tls = b.tls;
   } else {
@@ -103,6 +155,99 @@ export function validateManualSourceInput(body: unknown): ManualSourceValidation
       tls,
       security_value: fingerprint.security_value ?? null,
     },
+  };
+}
+
+/**
+ * A validated PATCH /sources/:id body. Absent fields stay as they are; null
+ * returns a setting to its default (the fingerprint's endpoint, the adapter's
+ * port/scheme, or for a manual source the same defaults POST /sources/manual
+ * uses).
+ */
+export interface SourceTargetUpdate {
+  /** Only ever set for a manual source, and only when it differs from the current address. */
+  ip_address?: string;
+  port?: number | null;
+  tls?: boolean | null;
+  endpoint?: string | null;
+}
+
+export type SourceTargetValidation =
+  | { ok: true; value: SourceTargetUpdate }
+  | { ok: false; status: number; message: string };
+
+const TARGET_FIELDS = ['ip_address', 'port', 'tls', 'endpoint'] as const;
+
+/**
+ * Validate + normalize the body of PATCH /sources/:id. Pure (no DB). `manual`
+ * and `currentIp` describe the source being edited: only a manually added
+ * source's address can change (403 otherwise — a scan-discovered source is
+ * always polled at the address the scan found), and a new address is validated
+ * exactly like POST /sources/manual's. Sending the current address back is
+ * accepted for any source and changes nothing.
+ */
+export function validateSourceTargetUpdate(
+  body: unknown,
+  ctx: { manual: boolean; currentIp: string }
+): SourceTargetValidation {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, status: 400, message: 'Send a JSON object with ip_address, port, tls and/or endpoint' };
+  }
+  const b = body as Record<string, unknown>;
+  if (!TARGET_FIELDS.some((field) => b[field] !== undefined)) {
+    return {
+      ok: false,
+      status: 400,
+      message: 'Nothing to change: send port, tls, endpoint and/or (for a manually added source) ip_address',
+    };
+  }
+
+  const value: SourceTargetUpdate = {};
+
+  if (b.ip_address !== undefined) {
+    const ip = parseLiteralIp(b.ip_address);
+    if (!ip) return { ok: false, status: 400, message: IP_ADDRESS_MESSAGE };
+    if (!sameAddress(ip, ctx.currentIp)) {
+      if (!ctx.manual) {
+        return {
+          ok: false,
+          status: 403,
+          message: "A scan-discovered source's address can't be changed (it is polled where the scan found it); only a manually added source's address can be edited",
+        };
+      }
+      value.ip_address = ip;
+    }
+  }
+
+  if (b.port !== undefined) {
+    if (b.port !== null && !isPort(b.port)) {
+      return { ok: false, status: 400, message: 'port must be an integer between 1 and 65535, or null for the default' };
+    }
+    value.port = b.port;
+  }
+
+  if (b.tls !== undefined) {
+    if (b.tls !== null && typeof b.tls !== 'boolean') {
+      return { ok: false, status: 400, message: 'tls must be a boolean, or null for the default' };
+    }
+    value.tls = b.tls;
+  }
+
+  if (b.endpoint !== undefined) {
+    const endpoint = validateEndpointPath(b.endpoint);
+    if (!endpoint.ok) return { ok: false, status: 400, message: endpoint.message };
+    value.endpoint = endpoint.value;
+  }
+
+  return { ok: true, value };
+}
+
+/** The response of PATCH /sources/:id: the source row, its poller status and its poll target. Never a credential. */
+function sourceTargetResponse(source: DiscoverySource, poller: DiscoverySourcePoller | null, fingerprintId: string | null) {
+  return {
+    source,
+    poller: poller ? DiscoverySourcePollerModel.toPublic(poller) : { configured: false },
+    target: describePollTarget(source, fingerprintId, poller?.poll_cursor ?? null),
   };
 }
 
@@ -263,6 +408,75 @@ router.delete('/sources/:id', authorize('admin'), async (req: Request, res: Resp
   res.json({ deleted: true });
 });
 
+// PATCH /sources/:id - change how an API-polled source is reached: port, HTTPS
+// on/off, the endpoint path, and for a manually added source its address.
+// Admin-only, like the other poller writes. A manual source's target is updated
+// where POST /sources/manual stored it (address + evidence); a scan-discovered
+// source's goes to poll_overrides, which re-scans never touch, and its address
+// never changes. A new endpoint or address clears the poll cursor (the next poll
+// starts fresh); port/scheme changes keep it. The saved credential, schedule and
+// status are never touched, and the response never includes the credential.
+router.patch('/sources/:id', authorize('admin'), async (req: Request, res: Response) => {
+  const id = parseSourceId(req);
+  const source = await DiscoverySourceModel.findById(id);
+  if (!source) throw new ApiError(404, 'Discovery source not found');
+
+  // The fingerprint that is polled: the poller row's (what pollOneSource uses),
+  // else the matched one for a source with no credential saved yet.
+  const poller = await DiscoverySourcePollerModel.findById(id);
+  const fingerprintId = poller?.fingerprint_id ?? source.matched_fingerprint_id;
+  const apiPull = resolveApiPull(fingerprintId);
+  if (!fingerprintId || !apiPull) throw new ApiError(400, 'This source has no API pull method to configure');
+
+  const manual = isManualSource(source);
+  const parsed = validateSourceTargetUpdate(req.body, { manual, currentIp: source.ip_address });
+  if (!parsed.ok) throw new ApiError(parsed.status, parsed.message);
+  const change = parsed.value;
+
+  const current = readTargetOverrides(source);
+  const endpoint = change.endpoint !== undefined ? change.endpoint : current.endpoint ?? null;
+  const resetCursor = change.ip_address !== undefined || endpoint !== (current.endpoint ?? null);
+
+  let updated: DiscoverySource | null;
+  try {
+    if (manual) {
+      // A manual source always has a port and scheme; null means the same
+      // defaults POST /sources/manual applies.
+      const defaults = manualSourceDefaults(fingerprintId, apiPull.logAccess);
+      const port = change.port === undefined ? current.port ?? defaults.port : change.port ?? defaults.port;
+      if (port === null) {
+        throw new ApiError(400, 'port is required (this fingerprint declares no default api_pull target_port)');
+      }
+      updated = await DiscoverySourceModel.updateManualTarget(
+        id,
+        {
+          ip_address: change.ip_address ?? source.ip_address,
+          target_port: port,
+          tls: change.tls === undefined ? current.tls ?? defaults.tls : change.tls ?? defaults.tls,
+          endpoint,
+        },
+        resetCursor
+      );
+    } else {
+      const next: Record<string, unknown> = {};
+      const port = change.port === undefined ? current.port : change.port ?? undefined;
+      const tls = change.tls === undefined ? current.tls : change.tls ?? undefined;
+      if (port !== undefined) next.port = port;
+      if (tls !== undefined) next.tls = tls;
+      if (endpoint !== null) next.endpoint = endpoint;
+      updated = await DiscoverySourceModel.setPollOverrides(id, Object.keys(next).length > 0 ? next : null, resetCursor);
+    }
+  } catch (err) {
+    if ((err as { code?: unknown } | null)?.code === UNIQUE_VIOLATION) {
+      throw new ApiError(409, `Another discovery source already has the address ${change.ip_address}`);
+    }
+    throw err;
+  }
+  if (!updated) throw new ApiError(404, 'Discovery source not found');
+
+  res.json(sourceTargetResponse(updated, await DiscoverySourcePollerModel.findById(id), fingerprintId));
+});
+
 // POST /sources/:id/confirm - user confirms a candidate is what the matcher thinks it is
 router.post('/sources/:id/confirm', requireOperator, async (req: Request, res: Response) => {
   const id = parseSourceId(req);
@@ -319,11 +533,17 @@ router.get('/poller/supported-fingerprints', (_req: Request, res: Response) => {
 });
 
 // GET /sources/:id/poller - poller status for a source (never includes the
-// credential itself; { configured: false } when none has been saved).
+// credential itself; { configured: false } when none has been saved), plus its
+// poll target (address, port, scheme, endpoint, the URL being polled), or
+// target: null when the source has no API pull method.
 router.get('/sources/:id/poller', async (req: Request, res: Response) => {
   const id = parseSourceId(req);
   const row = await DiscoverySourcePollerModel.findById(id);
-  res.json(row ? DiscoverySourcePollerModel.toPublic(row) : { configured: false });
+  const source = await DiscoverySourceModel.findById(id);
+  const target = source
+    ? describePollTarget(source, row?.fingerprint_id ?? source.matched_fingerprint_id, row?.poll_cursor ?? null)
+    : null;
+  res.json({ ...(row ? DiscoverySourcePollerModel.toPublic(row) : { configured: false }), target });
 });
 
 // POST /sources/:id/poller/credential - save (or replace) the token/credential

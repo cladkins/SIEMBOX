@@ -5,16 +5,19 @@
 import crypto from 'crypto';
 import { ApiPollAdapter, PollCredential, PollFetchResult, PollTarget, PolledEvent } from '../types';
 import { httpFetch } from '../httpFetch';
+import { resolveEndpoint, urlHost } from '../urls';
 
 const FIRST_POLL_LOOKBACK_SECONDS = 60 * 60; // 1h — bounds the very first pull
+const DEFAULT_ENDPOINT = '/admin/api.php';
 
 export function buildBaseUrl(target: PollTarget): string {
   // Default (scan-discovered source): classic Pi-hole is served on the bare host
-  // (port 80, no explicit :port in the URL). A manual source may pin a custom port
+  // (port 80, no explicit :port in the URL). A manual source (or an admin's override) may pin a custom port
   // and/or switch to https; with neither this is byte-for-byte the previous
   // http://ip (no port appended, exactly as before).
   const scheme = (target.tls != null ? target.tls : false) ? 'https' : 'http';
-  return target.port != null ? `${scheme}://${target.ip}:${target.port}` : `${scheme}://${target.ip}`;
+  const host = urlHost(target.ip);
+  return target.port != null ? `${scheme}://${host}:${target.port}` : `${scheme}://${host}`;
 }
 
 function synthesizeEventId(row: unknown[]): string {
@@ -35,7 +38,7 @@ export function mapRow(row: unknown[]): PolledEvent | null {
 }
 
 async function fetchEvents(target: PollTarget, credential: PollCredential, cursor: string | null): Promise<PollFetchResult> {
-  const endpoint = target.logAccess.endpoint || '/admin/api.php';
+  const endpoint = resolveEndpoint(target, DEFAULT_ENDPOINT);
   const sinceUnix = cursor ? Math.floor(new Date(cursor).getTime() / 1000) : Math.floor(Date.now() / 1000) - FIRST_POLL_LOOKBACK_SECONDS;
   const url = `${buildBaseUrl(target)}${endpoint}?getAllQueries&from=${sinceUnix}&auth=${encodeURIComponent(credential.secret)}`;
 
@@ -72,4 +75,6 @@ async function fetchEvents(target: PollTarget, credential: PollCredential, curso
 export const piholeAdapter: ApiPollAdapter = {
   fingerprintId: 'pihole',
   fetchEvents,
+  // Without the query string: it carries the token (?auth=).
+  describeUrl: (target) => `${buildBaseUrl(target)}${resolveEndpoint(target, DEFAULT_ENDPOINT)}`,
 };

@@ -3,9 +3,10 @@
 // but generalized to an arbitrary URL/headers instead of a fixed probe.
 //
 // No hostname allowlist (unlike feedService's external-URL allowlist): the
-// target host is always discovery_sources.ip_address, populated only by the
-// scan pipeline, never free text from a request — there's no attacker-
-// controlled-host surface here even without one.
+// target host is always discovery_sources.ip_address — populated by the scan
+// pipeline, or by an admin adding or editing a manual source (a literal IP,
+// validated by the route) — never a DNS name or URL from a request. An admin's
+// endpoint override is validated as a plain path, so it can't change the host.
 import http from 'http';
 import https from 'https';
 import { URL } from 'url';
@@ -42,7 +43,9 @@ export function httpFetch(url: string, opts: HttpFetchOptions = {}): Promise<Htt
 
     const req = mod.request(
       {
-        hostname: parsed.hostname,
+        // URL keeps an IPv6 literal's brackets ("[fe80::1]"); http.request would
+        // try to resolve that as a DNS name, so pass the bare address.
+        hostname: parsed.hostname.replace(/^\[(.*)\]$/, '$1'),
         port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
         path: `${parsed.pathname}${parsed.search}`,
         method: 'GET',

@@ -77,3 +77,17 @@ test('adguard-home: explicit port + tls produce the custom URL', () => {
   assert.equal(adguardBaseUrl(target({ port: 8443, tls: true })), 'https://192.168.1.50:8443');
   assert.equal(adguardBaseUrl(target({ port: 3001, tls: false })), 'http://192.168.1.50:3001');
 });
+
+// ---------------------------------------------------------------------------
+// (c) An IPv6 literal (a manual source may have one) is bracketed, as a URL
+//     requires; IPv4 URLs above are unchanged.
+// ---------------------------------------------------------------------------
+
+test('every adapter brackets an IPv6 address', () => {
+  const v6 = { ip: 'fd00::50' };
+  assert.equal(authentikBaseUrl(target({ ...v6, openPorts: [9443] })), 'https://[fd00::50]:9443');
+  assert.equal(homeAssistantBaseUrl(target(v6)), 'http://[fd00::50]:8123');
+  assert.equal(piholeBaseUrl(target(v6)), 'http://[fd00::50]');
+  assert.equal(piholeBaseUrl(target({ ...v6, port: 8080 })), 'http://[fd00::50]:8080');
+  assert.equal(adguardBaseUrl(target(v6)), 'http://[fd00::50]:3000');
+});

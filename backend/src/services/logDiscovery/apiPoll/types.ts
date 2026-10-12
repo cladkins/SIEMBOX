@@ -17,14 +17,22 @@ export interface PollTarget {
   /** discovery_sources.evidence — scan-captured signals (http_responses, etc.), currently unused by any adapter but available for smarter base-URL selection later. */
   evidence: Record<string, unknown>;
   /**
-   * Explicit base-URL overrides for a MANUALLY added source (from
-   * discovery_sources.evidence.target_port / .tls). Both are undefined for every
-   * scan-discovered source — each adapter's buildBaseUrl falls back to its existing
-   * default-port/scheme derivation when these are absent, so a discovered source's
-   * URL is byte-for-byte unchanged.
+   * Explicit base-URL overrides: a MANUALLY added source's port/scheme (from
+   * discovery_sources.evidence.target_port / .tls), or the ones an admin set on a
+   * scan-discovered source (discovery_sources.poll_overrides). See
+   * pollTarget.ts#readTargetOverrides. Undefined when none is set — each adapter's
+   * buildBaseUrl then falls back to its existing default-port/scheme derivation,
+   * so a discovered source without overrides gets byte-for-byte the same URL.
    */
   port?: number;
   tls?: boolean;
+  /**
+   * The admin's endpoint path override (e.g. /api/hassio/core/logs), already
+   * validated as a plain path by pollTarget.ts#validateEndpointPath. Undefined
+   * unless an admin set one; adapters then use the fingerprint's api_pull endpoint
+   * (urls.ts#resolveEndpoint). When set, an adapter requests only this path.
+   */
+  endpoint?: string;
   logAccess: LogAccessMethod;
 }
 
@@ -46,4 +54,11 @@ export interface ApiPollAdapter {
   /** Matches a fingerprint's `id` (fingerprints/<id>.yaml), and discovery_source_pollers.fingerprint_id. */
   fingerprintId: string;
   fetchEvents(target: PollTarget, credential: PollCredential, cursor: string | null): Promise<PollFetchResult>;
+  /**
+   * The URL the next fetchEvents() call requests first, for display (the sources
+   * list, the edit dialog, connection errors): scheme, host, port and path only,
+   * never a credential or query string. `cursor` is the source's stored cursor —
+   * Home Assistant remembers there which of its two log endpoints works.
+   */
+  describeUrl(target: PollTarget, cursor: string | null): string;
 }

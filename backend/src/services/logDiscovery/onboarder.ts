@@ -68,6 +68,8 @@ export function buildTemplateVars(
     siembox_port: siembox.port,
     log_path: logAccess.path,
     api_endpoint: logAccess.endpoint,
+    // The method's caveat as its own paragraph, or nothing at all.
+    access_note: logAccess.note ? `\n${logAccess.note}\n` : '',
     port,
   };
 }

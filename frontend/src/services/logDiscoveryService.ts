@@ -38,6 +38,42 @@ export interface RankedSourcePollerStatus {
   last_status: 'ok' | 'error' | null;
   last_polled_at: string | null;
   last_error: string | null;
+  /** The URL being polled (scheme, host, port, path; never a credential or query string). */
+  effective_url?: string | null;
+}
+
+/**
+ * How SIEMBox reaches an API-polled source (GET .../poller `target`). Only a
+ * manually added source's address can change; port/tls/endpoint are editable
+ * for every source. Never includes a credential.
+ */
+export interface PollTargetView {
+  fingerprint_id: string;
+  manual: boolean;
+  ip_address: string;
+  /** What polling uses now: the stored setting where there is one, else the default. */
+  port: number;
+  tls: boolean;
+  effective_url: string;
+  /** The stored settings; for a scan-discovered source, null where the default applies. */
+  overrides: { port: number | null; tls: boolean | null; endpoint: string | null };
+  defaults: { port: number; tls: boolean; endpoint: string };
+}
+
+/** Body for PATCH /log-discovery/sources/:id. Absent = unchanged; null = back to the default. */
+export interface SourceTargetChanges {
+  /** Manually added sources only. */
+  ip_address?: string;
+  port?: number | null;
+  tls?: boolean | null;
+  /** A path such as /api/hassio/core/logs; null (or '') = the fingerprint's endpoint. */
+  endpoint?: string | null;
+}
+
+export interface SourceTargetUpdateResult {
+  source: { id: number; ip_address: string };
+  poller: PollerStatus;
+  target: PollTargetView | null;
 }
 
 export interface RankedSource {
@@ -106,6 +142,13 @@ export interface PollerStatus {
   last_status?: 'ok' | 'error' | null;
   last_error?: string | null;
   last_event_count?: number | null;
+  /** How the source is reached; null when it has no API pull method. Only from GET .../poller. */
+  target?: PollTargetView | null;
+}
+
+/** For calls whose caller shows the error itself (see api.ts's skipErrorToast). */
+export interface QuietOption {
+  quiet?: boolean;
 }
 
 export interface PollNowResult {
@@ -219,8 +262,12 @@ class LogDiscoveryServiceClient {
     return response.data;
   }
 
-  async savePollerCredential(id: number, secret: string, username?: string): Promise<PollerStatus> {
-    const response = await apiClient.post(`/log-discovery/sources/${id}/poller/credential`, { secret, username });
+  async savePollerCredential(id: number, secret: string, username?: string, opts: QuietOption = {}): Promise<PollerStatus> {
+    const response = await apiClient.post(
+      `/log-discovery/sources/${id}/poller/credential`,
+      { secret, username },
+      { skipErrorToast: opts.quiet }
+    );
     return response.data;
   }
 
@@ -234,8 +281,26 @@ class LogDiscoveryServiceClient {
     return response.data;
   }
 
-  async runPollNow(id: number): Promise<PollNowResult> {
-    const response = await apiClient.post(`/log-discovery/sources/${id}/poller/run-now`);
+  /**
+   * Poll once now. Can take a while: each request to the source may wait up to
+   * 15 s, and Home Assistant may try both of its log endpoints, so this allows
+   * more than the client's 10 s default before giving up.
+   */
+  async runPollNow(id: number, opts: QuietOption = {}): Promise<PollNowResult> {
+    const response = await apiClient.post(`/log-discovery/sources/${id}/poller/run-now`, undefined, {
+      timeout: 90_000,
+      skipErrorToast: opts.quiet,
+    });
+    return response.data;
+  }
+
+  /**
+   * Change how SIEMBox reaches an API-polled source (admin only): port, HTTPS,
+   * endpoint path, and for a manually added source its address. Leaves the saved
+   * token alone. The caller shows validation errors itself.
+   */
+  async updateSourceTarget(id: number, changes: SourceTargetChanges): Promise<SourceTargetUpdateResult> {
+    const response = await apiClient.patch(`/log-discovery/sources/${id}`, changes, { skipErrorToast: true });
     return response.data;
   }
 

@@ -147,10 +147,12 @@
           :sources="top"
           :fingerprints="fingerprints"
           :can-delete="isAdmin"
+          :can-edit="isAdmin"
           @confirm="confirmSource"
           @ignore="ignoreSource"
           @onboard="openOnboard"
           @delete="deleteSource"
+          @edit="openEditSource"
         />
       </div>
 
@@ -160,10 +162,12 @@
             :sources="advanced"
             :fingerprints="fingerprints"
             :can-delete="isAdmin"
+            :can-edit="isAdmin"
             @confirm="confirmSource"
             @ignore="ignoreSource"
             @onboard="openOnboard"
             @delete="deleteSource"
+            @edit="openEditSource"
           />
         </el-collapse-item>
       </el-collapse>
@@ -225,6 +229,7 @@
             clearable
             placeholder="Paste API token…"
           />
+          <span v-if="manualForm.fingerprint_id === 'home-assistant'" class="field-hint">{{ HOME_ASSISTANT_TOKEN_HINT }}</span>
         </el-form-item>
         <el-form-item label="Poll every (minutes)">
           <el-input-number v-model="manualForm.poll_interval_minutes" :min="1" :max="1440" controls-position="right" />
@@ -263,6 +268,17 @@
             SIEMBox will pull events on its own schedule instead of you running the recipe below.
             The token is encrypted at rest and never shown again after saving.
           </el-text>
+          <el-text v-if="onboardTarget.matched_fingerprint_id === 'home-assistant'" size="small" type="info" class="poller-admin-hint">
+            {{ HOME_ASSISTANT_TOKEN_HINT }}
+          </el-text>
+
+          <div v-if="pollerStatus?.target" class="poller-url">
+            {{ pollerStatus.configured ? 'Polling' : 'Will poll' }} <code>{{ pollerStatus.target.effective_url }}</code>
+            <!-- Address (manual sources), port, HTTPS and endpoint: admin-only in the API. -->
+            <el-button v-if="isAdmin" link size="small" type="primary" data-test="edit-connection" @click="openEditSource(onboardTarget)">
+              Edit connection…
+            </el-button>
+          </div>
 
           <el-alert
             v-if="pollerStatus?.last_status === 'error'"
@@ -322,6 +338,16 @@
         <el-button type="primary" @click="confirmOnboard">I've applied this — mark onboarded</el-button>
       </template>
     </el-dialog>
+
+    <!-- Edit an API-polled source's connection (admin only; opened from a source row or
+         the Onboard dialog's poller panel). -->
+    <poll-source-edit-dialog
+      v-if="isAdmin"
+      v-model="showEditSourceDialog"
+      :source="editSourceTarget"
+      :fingerprints="fingerprints"
+      @saved="onSourceEdited"
+    />
   </div>
 </template>
 
@@ -339,12 +365,20 @@ import logDiscoveryService, {
   type ShipperSummary,
 } from '@/services/logDiscoveryService';
 import DiscoverySourcesTable from '@/components/DiscoverySourcesTable.vue';
+import PollSourceEditDialog from '@/components/PollSourceEditDialog.vue';
 import { useAuthStore } from '@/stores/auth';
 
 const authStore = useAuthStore();
 // Operators can open this page, scan and triage sources; the scope, manual
 // sources and poll credentials are admin-only in the API (see the template).
 const isAdmin = computed(() => authStore.isAdmin);
+
+// Home Assistant serves its log at /api/error_log (Container/Core) or, on Home
+// Assistant OS and Supervised, /api/hassio/core/logs; the poller tries both, and
+// both are admin-only.
+const HOME_ASSISTANT_TOKEN_HINT =
+  'Home Assistant: use a long-lived access token created by an administrator (Profile, Security tab). ' +
+  'SIEMBox reads /api/error_log, or /api/hassio/core/logs on Home Assistant OS and Supervised; both are admin-only.';
 
 const loading = ref(false);
 const scanning = ref(false);
@@ -379,6 +413,10 @@ const pollerInterval = ref(5);
 const pollerEnabled = ref(true);
 const savingCredential = ref(false);
 const runningNow = ref(false);
+
+// "Edit" on an API-polled source: address (manual sources), port, HTTPS, endpoint, token.
+const showEditSourceDialog = ref(false);
+const editSourceTarget = ref<RankedSource | null>(null);
 
 // "Add API pull source" dialog: a manual, scan-less entry point. Reuses the same
 // poller machinery (credential/polling/run-now) as the discovered-source flow.
@@ -681,6 +719,21 @@ async function deleteSource(source: RankedSource) {
   }
 }
 
+function openEditSource(source: RankedSource | null) {
+  if (!source) return;
+  editSourceTarget.value = source;
+  showEditSourceDialog.value = true;
+}
+
+// The dialog saved or polled: refresh the list, and the Onboard dialog's poller
+// panel when it is open on the same source.
+async function onSourceEdited() {
+  loadSources();
+  if (showOnboardDialog.value && onboardTarget.value?.id === editSourceTarget.value?.id) {
+    await loadPollerStatus();
+  }
+}
+
 async function loadOnboardPreview() {
   if (!onboardTarget.value) return;
   const preview = await logDiscoveryService.previewOnboard(onboardTarget.value.id, onboardMethodIndex.value);
@@ -717,11 +770,15 @@ async function savePollerCredential() {
   if (!onboardTarget.value || !pollerSecret.value.trim()) return;
   savingCredential.value = true;
   try {
-    pollerStatus.value = await logDiscoveryService.savePollerCredential(
-      onboardTarget.value.id,
-      pollerSecret.value.trim(),
-      pollerUsername.value.trim() || undefined
-    );
+    // Merged: this response has no `target`, which GET .../poller supplied.
+    pollerStatus.value = {
+      ...pollerStatus.value,
+      ...(await logDiscoveryService.savePollerCredential(
+        onboardTarget.value.id,
+        pollerSecret.value.trim(),
+        pollerUsername.value.trim() || undefined
+      )),
+    };
     pollerSecret.value = '';
     pollerEnabled.value = pollerStatus.value.enabled ?? true;
     pollerInterval.value = pollerStatus.value.poll_interval_minutes ?? 5;
@@ -742,20 +799,23 @@ async function revokePollerCredential() {
     return; // user cancelled
   }
   await logDiscoveryService.revokePollerCredential(onboardTarget.value.id);
-  pollerStatus.value = { configured: false };
+  pollerStatus.value = { configured: false, target: pollerStatus.value?.target };
   ElMessage.success('Token revoked');
   loadSources();
 }
 
 async function togglePolling(enabled: boolean) {
   if (!onboardTarget.value) return;
-  pollerStatus.value = await logDiscoveryService.setPolling(onboardTarget.value.id, { enabled });
+  pollerStatus.value = { ...pollerStatus.value, ...(await logDiscoveryService.setPolling(onboardTarget.value.id, { enabled })) };
   loadSources();
 }
 
 async function updatePollerInterval(minutes: number | undefined) {
   if (!onboardTarget.value || !minutes) return;
-  pollerStatus.value = await logDiscoveryService.setPolling(onboardTarget.value.id, { poll_interval_minutes: minutes });
+  pollerStatus.value = {
+    ...pollerStatus.value,
+    ...(await logDiscoveryService.setPolling(onboardTarget.value.id, { poll_interval_minutes: minutes })),
+  };
 }
 
 async function runPollNow() {
@@ -894,6 +954,19 @@ onMounted(async () => {
 .poller-admin-hint {
   display: block;
   margin-top: 10px;
+}
+.poller-url {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+.poller-url code {
+  font-size: 12px;
+  word-break: break-all;
 }
 .poller-last-polled {
   color: var(--el-text-color-secondary);

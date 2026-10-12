@@ -17,7 +17,7 @@
       </template>
     </el-table-column>
     <el-table-column label="Why" min-width="220" prop="reason" />
-    <el-table-column label="Status" width="150">
+    <el-table-column label="Status" min-width="240">
       <template #default="{ row }">
         <el-tag size="small">{{ row.status }}</el-tag>
         <el-tag
@@ -28,11 +28,33 @@
         >
           polling
         </el-tag>
+        <el-tag v-else-if="row.poller?.configured" size="small" type="info" style="margin-left: 4px">paused</el-tag>
+        <!-- What is polled (no token or query string) and why the last poll failed. -->
+        <div v-if="row.poller?.configured && row.poller.effective_url" class="poll-url" :title="row.poller.effective_url">
+          {{ row.poller.effective_url }}
+        </div>
+        <div v-if="row.poller?.configured && row.poller.last_status === 'error' && row.poller.last_error" class="poll-error">
+          {{ row.poller.last_error }}
+        </div>
       </template>
     </el-table-column>
     <el-table-column label="Actions" width="300">
       <template #default="{ row }">
         <el-button v-if="row.status === 'candidate'" link size="small" @click="$emit('confirm', row)">Confirm</el-button>
+        <!-- Editing the poll target (address, port, HTTPS, endpoint) is admin-only in the API;
+             the parent passes can-edit for admins only. Offered for polled sources and for
+             manually added ones (which exist only to be polled). -->
+        <el-button
+          v-if="canEdit && (row.poller?.configured || row.evidence?.manual === true)"
+          link
+          size="small"
+          type="primary"
+          :icon="Edit"
+          data-test="edit-source"
+          @click="$emit('edit', row)"
+        >
+          Edit
+        </el-button>
         <el-button
           v-if="row.matched_fingerprint_id && row.status !== 'ignored'"
           link
@@ -62,7 +84,7 @@
 </template>
 
 <script setup lang="ts">
-import { Delete } from '@element-plus/icons-vue';
+import { Delete, Edit } from '@element-plus/icons-vue';
 import type { RankedSource, FingerprintEntry } from '@/services/logDiscoveryService';
 
 const props = defineProps<{
@@ -70,6 +92,8 @@ const props = defineProps<{
   fingerprints: FingerprintEntry[];
   /** Show Delete on manually added sources (admin-only in the API). Off unless passed. */
   canDelete?: boolean;
+  /** Show Edit on API-polled and manually added sources (admin-only in the API). Off unless passed. */
+  canEdit?: boolean;
 }>();
 
 defineEmits<{
@@ -77,6 +101,7 @@ defineEmits<{
   ignore: [source: RankedSource];
   onboard: [source: RankedSource];
   delete: [source: RankedSource];
+  edit: [source: RankedSource];
 }>();
 
 function fingerprintName(id: string | null): string {
@@ -89,5 +114,20 @@ function fingerprintName(id: string | null): string {
 .ip-sub {
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+.poll-url {
+  margin-top: 4px;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  word-break: break-all;
+}
+.poll-error {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-color-danger);
+  white-space: normal;
+  word-break: break-word;
 }
 </style>

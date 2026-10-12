@@ -4058,7 +4058,8 @@ Feature flags, provider state (never the key), counts and the last run.
       "signupUrl": "https://haveibeenpwned.com/API/Key",
       "attribution": "https://haveibeenpwned.com",
       "configured": true,
-      "enabled": true
+      "enabled": true,
+      "usable": true
     }
   ],
   "counts": {
@@ -4169,8 +4170,12 @@ severity, or a resolver that is not an IP address
 
 ### GET /api/exposure/providers
 
-The breach-data providers, without keys: `[{ "name": "hibp", ..., "configured": true, "enabled": true }]`
-(same objects as `providers` in `GET /status`).
+The breach-data providers, without keys: `[{ "name": "hibp", ..., "configured": true, "enabled": true, "usable": true }]`
+(same objects as `providers` in `GET /status`). `configured` means a key is
+saved; `usable` means this backend can also decrypt it. A saved key that isn't
+usable (`CREDENTIAL_ENCRYPTION_KEY` missing, or changed since the key was saved)
+makes every leaked-credential check skip: put the original
+`CREDENTIAL_ENCRYPTION_KEY` back and restart the backend, or save the key again.
 
 **Authentication:** Required
 
@@ -4189,7 +4194,7 @@ lifts any rate-limit or rejected-key pause.
   returned. `""` or `null` clears it.
 - `enabled` (optional) - boolean
 
-**Response (200):** the public provider object (`configured` / `enabled`, never the key).
+**Response (200):** the public provider object (`configured` / `enabled` / `usable`, never the key).
 
 **Errors:**
 - `400` - `api_key` is not a 32-character hex key, `enabled` is not a boolean, or

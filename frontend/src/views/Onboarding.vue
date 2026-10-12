@@ -114,6 +114,34 @@
             </div>
           </template>
         </el-step>
+
+        <!-- 6. Digital Risk (optional) -->
+        <el-step :status="steps.digitalRisk ? 'success' : 'wait'">
+          <template #title>
+            Digital Risk monitoring (optional)
+            <el-tag v-if="digitalRiskTag" :type="steps.digitalRisk ? 'success' : 'info'" size="small" effect="light">
+              {{ digitalRiskTag }}
+            </el-tag>
+          </template>
+          <template #description>
+            <div class="step-body">
+              <p>
+                Get alerted when your organization's email accounts turn up in a data breach (via Have I Been
+                Pwned), and list the domains and brand names to watch. Optional.
+              </p>
+              <!-- The settings page's banner, when breach checks can't run for what is watched. -->
+              <p v-if="digitalRiskProblem">
+                <el-text size="small" :type="authStore.isAdmin ? (digitalRiskProblem.type === 'error' ? 'danger' : 'warning') : 'info'">
+                  {{ digitalRiskProblem.title }}
+                </el-text>
+              </p>
+              <DigitalRiskQuickSetup v-if="authStore.isAdmin" :status="exposureStatus" @changed="refreshDigitalRisk" />
+              <el-text v-else size="small" type="info">
+                An administrator can set up Digital Risk monitoring in Settings → Digital Risk.
+              </el-text>
+            </div>
+          </template>
+        </el-step>
       </el-steps>
 
       <div class="finish-row">
@@ -130,9 +158,12 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '@/services/api';
+import exposureService, { type ExposureStatus, type MonitoredIdentity } from '@/services/exposureService';
+import { breachChecksReady, describeExposureStatus, domainMonitorState, pluralize } from '@/utils/exposure';
 import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth';
+import DigitalRiskQuickSetup from '@/components/DigitalRiskQuickSetup.vue';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -144,10 +175,28 @@ const parserCount = ref(0);
 const ruleCount = ref(0);
 const channelCount = ref(0);
 const aiConfigured = ref(false);
+// GET /exposure/status and GET /exposure/identities, both readable by every role.
+const exposureStatus = ref<ExposureStatus | null>(null);
+const identityRows = ref<MonitoredIdentity[] | null>(null);
 
 const pw = reactive({ current: '', next: '' });
 const pwSaving = ref(false);
 const passwordChanged = ref(false);
+
+// What Digital Risk actually watches: enabled identities while breach checks
+// can run, and enabled domains while domain monitoring is on. Anything else is
+// only saved.
+const digitalRiskCounts = computed(() => {
+  const s = exposureStatus.value;
+  const identities = s?.counts.identities_enabled ?? 0;
+  const domains = s?.counts.domains_enabled ?? 0;
+  return {
+    identities,
+    identitiesWatched: s && breachChecksReady(s) ? identities : 0,
+    domains,
+    domainsWatched: s && domainMonitorState(s) === 'on' ? domains : 0,
+  };
+});
 
 const steps = computed(() => ({
   // "account" is satisfied by enabling MFA or changing the password this session.
@@ -156,9 +205,30 @@ const steps = computed(() => ({
   content: parserCount.value > 0 || ruleCount.value > 0,
   ai: aiConfigured.value,
   notifications: channelCount.value > 0,
+  // Done once something is being watched.
+  digitalRisk: digitalRiskCounts.value.identitiesWatched + digitalRiskCounts.value.domainsWatched > 0,
 }));
 
-// AI is optional, so it doesn't count against the required percentage.
+const digitalRiskTag = computed(() => {
+  const { identities, identitiesWatched, domains, domainsWatched } = digitalRiskCounts.value;
+  const parts: string[] = [];
+  if (domains > 0) parts.push(`${pluralize(domains, 'domain')}${domainsWatched > 0 ? '' : ' saved'}`);
+  if (identities > 0) parts.push(`${pluralize(identities, 'identity', 'identities')}${identitiesWatched > 0 ? '' : ' saved'}`);
+  return parts.join(' · ');
+});
+
+// Identities are monitored, but the settings banner reports a problem: breach
+// checks can't run (no key, provider disabled, checks off, ...) or an identity's
+// last check failed (counted from the list, which outlives the last run).
+const digitalRiskProblem = computed(() => {
+  if (!exposureStatus.value || digitalRiskCounts.value.identities === 0) return null;
+  const banner = describeExposureStatus(exposureStatus.value, {
+    failingIdentities: identityRows.value?.filter((i) => i.enabled && i.last_status === 'error').length,
+  });
+  return banner.type === 'success' ? null : banner;
+});
+
+// AI and Digital Risk are optional, so they don't count against the required percentage.
 const percent = computed(() => {
   const required = ['account', 'ingestion', 'content', 'notifications'] as const;
   const done = required.filter((k) => steps.value[k]).length;
@@ -172,26 +242,43 @@ function go(path: string) {
 async function refresh() {
   loading.value = true;
   try {
-    const [profile, shippers, parsers, rules, channels, ai] = await Promise.allSettled([
+    // Admin-only endpoints are only requested for admins: anyone else gets a
+    // 403, which the API client turns into a "no permission" popup.
+    const [profile, shippers, parsers, rules, channels, ai, exposure, identities] = await Promise.allSettled([
       api.getProfile(),
       api.getShippers(),
       api.getParsers(),
       api.getRules(),
       api.getNotificationChannels(),
-      api.getAiSettings(),
+      authStore.isAdmin ? api.getAiSettings() : Promise.resolve(null),
+      exposureService.getStatus(),
+      exposureService.listIdentities(),
     ]);
     if (profile.status === 'fulfilled') mfaEnabled.value = !!profile.value.data.mfa_enabled;
     if (shippers.status === 'fulfilled') shipperCount.value = (shippers.value.data || []).length;
     if (parsers.status === 'fulfilled') parserCount.value = (parsers.value.data || []).length;
     if (rules.status === 'fulfilled') ruleCount.value = (rules.value.data || []).length;
     if (channels.status === 'fulfilled') channelCount.value = (channels.value.data || []).length;
-    if (ai.status === 'fulfilled') {
+    if (ai.status === 'fulfilled' && ai.value) {
       const d = ai.value.data || {};
       aiConfigured.value = !!(d.configured || d.api_key_set || d.apiKeySet || d.has_key);
     }
+    if (exposure.status === 'fulfilled') exposureStatus.value = exposure.value;
+    if (identities.status === 'fulfilled') identityRows.value = identities.value;
   } finally {
     loading.value = false;
   }
+}
+
+// After the inline Digital Risk setup adds something: re-read just its state.
+async function refreshDigitalRisk() {
+  // On failure the API client has shown the error and the step keeps its last state.
+  const [status, identities] = await Promise.allSettled([
+    exposureService.getStatus(),
+    exposureService.listIdentities(),
+  ]);
+  if (status.status === 'fulfilled') exposureStatus.value = status.value;
+  if (identities.status === 'fulfilled') identityRows.value = identities.value;
 }
 
 async function changePassword() {

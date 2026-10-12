@@ -1,0 +1,403 @@
+<template>
+  <el-card>
+    <template #header>
+      <div class="card-header">
+        <span>{{ copy.title }} <HelpTip :text="copy.help" /></span>
+        <el-tag size="small" type="info" effect="plain">{{ domains.length }}</el-tag>
+      </div>
+    </template>
+
+    <p class="card-intro">{{ copy.intro }}</p>
+    <p v-if="domainMonitor === 'unavailable'" class="card-note">
+      Domain monitoring collectors are coming in a later release. Domains you add now are saved and
+      will be watched as soon as they ship.
+    </p>
+    <p v-else-if="domainMonitor === 'off'" class="card-note">
+      Domain monitoring is switched off, so these domains are not checked. To turn it back on, set
+      <code>exposure_domain_monitor_enabled</code> to true with <code>PUT /api/exposure/settings</code>.
+    </p>
+
+    <el-form class="add-form" inline @submit.prevent="add">
+      <el-form-item :error="inputError">
+        <el-input
+          v-model="newDomain"
+          :placeholder="copy.placeholder"
+          :disabled="adding"
+          :aria-label="`${copy.title}: domain to add`"
+          clearable
+          style="width: 260px"
+          @input="inputError = ''"
+        />
+      </el-form-item>
+      <el-form-item>
+        <el-select v-model="newInterval" :disabled="adding" aria-label="Check interval" style="width: 150px">
+          <el-option v-for="opt in INTERVAL_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+        </el-select>
+      </el-form-item>
+      <el-form-item>
+        <el-button type="primary" native-type="submit" :icon="Plus" :loading="adding" :disabled="!newDomain.trim()">
+          Add domain
+        </el-button>
+      </el-form-item>
+    </el-form>
+
+    <el-table :data="domains" v-loading="loading" stripe row-key="id" :empty-text="copy.empty">
+      <!-- What each check found on the last run (last_summary). With the Domain
+           column's min-width it takes the same 180px the Domain column had, so
+           the table needs no more width than before. -->
+      <el-table-column type="expand" width="32">
+        <template #default="{ row }">
+          <div class="domain-checks">
+            <template v-if="row.checks.length">
+              <div v-for="check in row.checks" :key="check.name" class="check-line">
+                <span class="check-name">{{ check.label }}</span>
+                <el-tag :type="check.tag.type" size="small" effect="plain">{{ check.tag.label }}</el-tag>
+                <span v-if="check.text" class="check-text">{{ check.text }}</span>
+                <ul v-if="check.warnings.length" class="check-warnings">
+                  <li v-for="(warning, i) in check.warnings" :key="i">{{ warning }}</li>
+                </ul>
+              </div>
+              <p v-if="row.checks.some((c: DomainCheckLine) => c.state === 'off')" class="checks-hint">
+                Checks are switched on and off per domain through the API:
+                <code>PUT /api/exposure/domains/{{ row.id }}</code> with <code>collectors</code>.
+              </p>
+            </template>
+            <p v-else class="checks-hint">No check results for this domain yet.</p>
+          </div>
+        </template>
+      </el-table-column>
+
+      <el-table-column prop="domain" label="Domain" min-width="148" />
+
+      <el-table-column label="Enabled" width="80" align="center">
+        <template #default="{ row }">
+          <el-switch
+            :model-value="row.enabled"
+            :loading="isBusy(row, 'enabled')"
+            :disabled="busy !== null && !isBusy(row, 'enabled')"
+            :aria-label="`Watch ${row.domain}`"
+            @change="(value: string | number | boolean) => setEnabled(row, value === true)"
+          />
+        </template>
+      </el-table-column>
+
+      <el-table-column label="Interval" width="140">
+        <template #default="{ row }">
+          <el-select
+            :model-value="row.interval_minutes"
+            size="small"
+            :disabled="busy !== null"
+            :aria-label="`Check interval for ${row.domain}`"
+            @change="(value: number) => changeInterval(row, value)"
+          >
+            <el-option
+              v-for="opt in intervalOptionsFor(row.interval_minutes)"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="Last checked" min-width="150">
+        <template #default="{ row }">
+          <div>{{ formatWhen(row.last_checked_at) }}</div>
+          <!-- Only for a domain that will actually be checked. -->
+          <el-text v-if="row.enabled && domainMonitor === 'on' && nextCheckLabel(row.next_run_at)" size="small" type="info">
+            {{ nextCheckLabel(row.next_run_at) }}
+          </el-text>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="Status" min-width="180">
+        <template #default="{ row }">
+          <el-tag :type="row.statusTag.type" size="small">{{ row.statusTag.label }}</el-tag>
+          <div v-if="row.last_error" class="row-error">{{ row.last_error }}</div>
+          <div v-if="row.coverageNote" class="row-note">{{ row.coverageNote }}</div>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="Actions" width="100" align="center" fixed="right">
+        <template #default="{ row }">
+          <el-button
+            size="small"
+            type="danger"
+            :icon="Delete"
+            :loading="isBusy(row, 'delete')"
+            :disabled="busy !== null && !isBusy(row, 'delete')"
+            @click="remove(row)"
+          >
+            Delete
+          </el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+  </el-card>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { Delete, Plus } from '@element-plus/icons-vue';
+import HelpTip from '@/components/HelpTip.vue';
+import exposureService, {
+  type DomainScope,
+  type WatchedDomain,
+  type WatchedDomainUpdate,
+} from '@/services/exposureService';
+import {
+  DEFAULT_INTERVAL_MINUTES,
+  INTERVAL_OPTIONS,
+  apiErrorMessage,
+  apiErrorStatus,
+  domainAddedMessage,
+  domainCheckLines,
+  domainCoverageNote,
+  domainStatusTag,
+  formatWhen,
+  intervalLabel,
+  intervalOptionsFor,
+  nextCheckLabel,
+  normalizeDomain,
+  type DomainCheckLine,
+  type DomainMonitorState,
+  type TagType,
+} from '@/utils/exposure';
+
+// One card per watched-domain scope: 'own' (the organization's domains) and
+// 'brand' (names to protect from lookalikes). Both read the same list.
+const props = defineProps<{
+  scope: DomainScope;
+  /** Whether domains are checked at all (see domainMonitorState). */
+  domainMonitor: DomainMonitorState;
+}>();
+
+const emit = defineEmits<{
+  /** A write succeeded. */
+  (e: 'changed'): void;
+  /** A domain was deleted, and its findings with it. */
+  (e: 'deleted'): void;
+}>();
+
+const COPY: Record<DomainScope, { title: string; intro: string; help: string; placeholder: string; empty: string }> = {
+  own: {
+    title: 'Owned domains',
+    intro:
+      'Domains your organization owns. Domain monitoring watches their DNS records, their registration (RDAP changes and upcoming expiry) and new TLS certificates in Certificate Transparency logs, and looks for newly registered lookalikes.',
+    help: 'Enter bare hostnames such as example.com: no scheme, port, path, wildcard or IP address. Enter internationalized names in punycode (xn--…).',
+    placeholder: 'example.com',
+    empty: 'No owned domains yet',
+  },
+  brand: {
+    title: 'Brand / lookalike domains',
+    intro:
+      'Names to protect: newly registered lookalikes and typosquats of these domains (and certificates issued for them) are what phishing sites are built on.',
+    help: 'Usually your main brand domains, e.g. example.com to catch examp1e.com or example-login.com. Same format as owned domains: a bare hostname, no scheme, port, path, wildcard or IP.',
+    placeholder: 'example.com',
+    empty: 'No brand domains yet',
+  },
+};
+const copy = computed(() => COPY[props.scope]);
+
+// A row, plus what its last run says about each check: the status tag is only
+// "OK" when every check that applies ran cleanly (see domainStatusTag).
+type DomainRow = WatchedDomain & {
+  statusTag: { type: TagType; label: string };
+  coverageNote: string;
+  checks: DomainCheckLine[];
+};
+
+const allDomains = ref<WatchedDomain[]>([]);
+const domains = computed<DomainRow[]>(() =>
+  allDomains.value
+    .filter((d) => d.scope === props.scope)
+    .map((d) => ({
+      ...d,
+      statusTag: domainStatusTag(d),
+      coverageNote: domainCoverageNote(d),
+      checks: domainCheckLines(d),
+    }))
+);
+const loading = ref(false);
+
+const newDomain = ref('');
+const newInterval = ref(DEFAULT_INTERVAL_MINUTES);
+const inputError = ref('');
+const adding = ref(false);
+type RowAction = 'enabled' | 'interval' | 'delete';
+/** The row write in flight; every other row control waits for it. */
+const busy = ref<{ id: number; action: RowAction } | null>(null);
+const isBusy = (row: { id: number }, action: RowAction) =>
+  busy.value?.id === row.id && busy.value.action === action;
+
+/** Fetch the list; `showLoading` only for the first load, so writes don't flash the table. */
+async function reload(showLoading = false) {
+  if (showLoading) loading.value = true;
+  try {
+    allDomains.value = await exposureService.listDomains();
+  } catch (error) {
+    ElMessage.error(apiErrorMessage(error, 'Failed to load watched domains'));
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function add() {
+  // Pre-check only; the backend validates again and its message wins.
+  const checked = normalizeDomain(newDomain.value);
+  if (!checked.ok) {
+    inputError.value = checked.error;
+    return;
+  }
+  adding.value = true;
+  try {
+    await exposureService.addDomain({
+      domain: checked.value,
+      scope: props.scope,
+      interval_minutes: newInterval.value,
+    });
+    newDomain.value = '';
+    ElMessage.success(domainAddedMessage(checked.value, props.domainMonitor));
+    await reload();
+    emit('changed');
+  } catch (error) {
+    const message = apiErrorMessage(error, 'Failed to add the domain');
+    if (apiErrorStatus(error) === 400) inputError.value = message;
+    ElMessage.error(message);
+  } finally {
+    adding.value = false;
+  }
+}
+
+async function update(row: WatchedDomain, action: RowAction, changes: WatchedDomainUpdate, success: string) {
+  busy.value = { id: row.id, action };
+  try {
+    await exposureService.updateDomain(row.id, changes);
+    ElMessage.success(success);
+    await reload();
+    emit('changed');
+  } catch (error) {
+    ElMessage.error(apiErrorMessage(error, `Failed to update ${row.domain}`));
+  } finally {
+    busy.value = null;
+  }
+}
+
+function setEnabled(row: WatchedDomain, enabled: boolean) {
+  return update(row, 'enabled', { enabled }, `${row.domain} ${enabled ? 'enabled' : 'disabled'}`);
+}
+
+function changeInterval(row: WatchedDomain, minutes: number) {
+  return update(row, 'interval', { interval_minutes: minutes }, `${row.domain}: ${intervalLabel(minutes).toLowerCase()}`);
+}
+
+async function remove(row: WatchedDomain) {
+  try {
+    await ElMessageBox.confirm(
+      `Stop watching ${row.domain}? Its findings are deleted too (their alerts stay in the alert queue).`,
+      'Delete watched domain',
+      { confirmButtonText: 'Delete', cancelButtonText: 'Cancel', type: 'warning' }
+    );
+  } catch {
+    return; // cancelled
+  }
+  busy.value = { id: row.id, action: 'delete' };
+  try {
+    await exposureService.deleteDomain(row.id);
+    ElMessage.success(`Stopped watching ${row.domain}`);
+    await reload();
+    emit('changed');
+    emit('deleted');
+  } catch (error) {
+    ElMessage.error(apiErrorMessage(error, `Failed to delete ${row.domain}`));
+  } finally {
+    busy.value = null;
+  }
+}
+
+onMounted(() => reload(true));
+
+defineExpose({ reload });
+</script>
+
+<style scoped>
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-intro {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+.card-note {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.add-form {
+  margin-bottom: 4px;
+}
+
+.row-error {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-color-danger);
+  word-break: break-word;
+}
+
+.row-note {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-text-color-regular);
+  word-break: break-word;
+}
+
+.domain-checks {
+  padding: 4px 16px 4px 48px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+.check-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 0 0 8px;
+}
+
+.check-name {
+  flex: 0 0 140px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+
+.check-text {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.check-warnings {
+  flex: 1 0 100%;
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.checks-hint {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+</style>

@@ -1149,7 +1149,7 @@ test('collector: the organization’s own watched domains are never checked as l
   const out = await createCtCollector({ source: certsFor })(
     ctx({ earlier, watchedDomains: ['example.com', 'shop.example.net'] })
   );
-  assert.ok(!certsFor.asked.includes('example.net'));
+  assert.ok(!new Set(certsFor.asked).has('example.net'));
   assert.deepEqual(out.findings, []);
   assert.equal(out.details?.lookalikes_registered, 1);
 });
@@ -1236,7 +1236,7 @@ test('collector: a lookalike whose answer is too large to monitor is skipped for
   assert.deepEqual(s2.asked, ['example.com', 'b.example.org'], 'backing off');
   const s3 = source(table);
   await createCtCollector({ source: s3 })(ctx({ earlier, previous: second.snapshot, now: at(8) }));
-  assert.ok(s3.asked.includes('a.example.org'), 'tried again after a week');
+  assert.ok(new Set(s3.asked).has('a.example.org'), 'tried again after a week');
 });
 
 test('collector: brand domains check lookalikes only; crt.sh trouble stops further requests', async () => {

@@ -466,11 +466,11 @@ test('collector: a watched domain left over in an old baseline is dropped from i
   const fake = fakeResolver({ 'example.net': { ns: ['ns1.our-dns.net'], a: ['192.0.2.1'] } });
   const collector = createLookalikeCollector({ resolver: fake.resolver, dnstwist: null });
   const baseline = (await collector(ctx(null))).snapshot;
-  assert.ok(registeredFromSnapshot(baseline).includes('example.net'));
+  assert.ok(new Set(registeredFromSnapshot(baseline)).has('example.net'));
   // The organization now watches example.net as well.
   const out = await collector({ ...ctx(baseline), watchedDomains: ['example.com', 'example.net'] });
-  assert.ok(!registeredFromSnapshot(out.snapshot).includes('example.net'));
-  assert.ok(!out.lookalikes?.registered.includes('example.net'));
+  assert.ok(!new Set(registeredFromSnapshot(out.snapshot)).has('example.net'));
+  assert.ok(!new Set(out.lookalikes?.registered ?? []).has('example.net'));
   assert.deepEqual(parseLookalikeSnapshot(out.snapshot)?.unregistered['example.net'], undefined);
 });
 
@@ -646,7 +646,7 @@ test('collector: under a wildcard TLD, no delegation confirms a name free, so a 
   // A registered lookalike without a delegation is kept, never dropped on that alone.
   delegated.delete('brnad.ws');
   const after = await collector(onDay(out.snapshot, 2, 'brand.ws'));
-  assert.ok(registeredFromSnapshot(after.snapshot).includes('brnad.ws'));
+  assert.ok(new Set(registeredFromSnapshot(after.snapshot)).has('brnad.ws'));
 
   // A resolver that hides every NS record proves nothing there: the names stay
   // unknown, so long-standing delegations it hid are not "new" once it is replaced.
@@ -660,7 +660,7 @@ test('collector: under a wildcard TLD, no delegation confirms a name free, so a 
     dnstwist: null,
   })(onDay(hidden.snapshot, 1, 'brand.ws'));
   assert.deepEqual(replaced.findings, []);
-  assert.ok(registeredFromSnapshot(replaced.snapshot).includes('brnad.ws'));
+  assert.ok(new Set(registeredFromSnapshot(replaced.snapshot)).has('brnad.ws'));
 });
 
 const NOW_S = Math.floor(Date.parse('2026-10-11T00:00:00Z') / 1000);

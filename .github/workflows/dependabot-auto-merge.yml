@@ -1,21 +1,27 @@
-# Auto-merge low-risk Dependabot PRs once all required checks pass:
+# Mark low-risk Dependabot PRs for automatic merging:
 #   - any github-actions bump, and
 #   - npm minor/patch updates (the grouped backend/frontend-minor-patch PRs).
-# MAJOR npm bumps are NOT auto-merged — they arrive as individual PRs for review.
+# MAJOR npm bumps are NOT marked: they arrive as individual PRs for review.
 #
-# Requires repo setting: Settings → General → Pull Requests → "Allow auto-merge".
-# The job only reads Dependabot metadata and enables auto-merge; it never checks
-# out or runs PR code, so pull_request_target is safe here.
+# This job only labels the PR. dependabot-merge-after-ci.yml does the merge,
+# and only after the CI workflow has passed on the PR's current commit. main has
+# no required status checks, so `gh pr merge --auto` (used here before) would
+# have merged immediately, before any build or test ran, and every push to main
+# publishes new container images.
+#
+# The job only reads Dependabot metadata and edits labels; it never checks out
+# or runs PR code, so pull_request_target is safe here.
 name: Dependabot auto-merge
 
 on: pull_request_target
 
 permissions:
-  contents: write
+  contents: read
+  issues: write
   pull-requests: write
 
 jobs:
-  auto-merge:
+  label:
     if: ${{ github.actor == 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
@@ -23,12 +29,17 @@ jobs:
         id: meta
         uses: dependabot/fetch-metadata@v3
 
-      - name: Enable auto-merge for low-risk updates
+      - name: Label low-risk updates
         if: >-
           steps.meta.outputs.package-ecosystem == 'github_actions' ||
           steps.meta.outputs.update-type == 'version-update:semver-minor' ||
           steps.meta.outputs.update-type == 'version-update:semver-patch'
-        run: gh pr merge --auto --squash "$PR_URL"
+        run: |
+          gh label create dependabot-automerge --repo "$REPO" --force \
+            --color 0e8a16 \
+            --description "Low-risk Dependabot update; merged automatically once CI passes"
+          gh pr edit "$PR_URL" --add-label dependabot-automerge
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
+          REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

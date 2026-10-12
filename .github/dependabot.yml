@@ -1,16 +1,18 @@
 # Automated dependency-update PRs so security advisories get surfaced and fixed.
 #
-# PRs target `develop` so updates ride the normal develop→main test/promote flow
-# instead of landing straight on production `main`. Only MINOR and PATCH updates
-# are grouped — and those are auto-merged once CI passes (see
-# .github/workflows/dependabot-auto-merge.yml). MAJOR bumps are deliberately left
-# OUT of the groups so each breaking change arrives as its own PR to be reviewed
-# and tested on its own (e.g. express 4→5, pinia 2→3, vue-router 4→5).
+# PRs target `main`, where all development lands. Every PR runs the CI workflow
+# (.github/workflows/ci.yml: backend build, migrations and tests against Postgres;
+# frontend type-check, build and lint). Only MINOR and PATCH updates are grouped,
+# and those groups, plus GitHub Actions bumps, are merged automatically once CI
+# has passed on them (see .github/workflows/dependabot-auto-merge.yml and
+# dependabot-merge-after-ci.yml). MAJOR bumps are deliberately left OUT of the
+# groups so each breaking change arrives as its own PR to be reviewed and tested
+# on its own (e.g. express 4→5, pinia 2→3, vue-router 4→5).
 version: 2
 updates:
   - package-ecosystem: npm
     directory: "/backend"
-    target-branch: develop
+    target-branch: main
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
@@ -21,7 +23,7 @@ updates:
 
   - package-ecosystem: npm
     directory: "/frontend"
-    target-branch: develop
+    target-branch: main
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
@@ -32,7 +34,7 @@ updates:
 
   - package-ecosystem: github-actions
     directory: "/"
-    target-branch: develop
+    target-branch: main
     schedule:
       interval: weekly
     groups:

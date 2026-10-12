@@ -237,18 +237,19 @@ curl -H "Authorization: Bearer $TOKEN" \
 ### Settings
 
 ```bash
-# Get settings
+# List every system setting (admin only; stored API keys come back as "[redacted]")
 curl -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8421/api/settings"
 
-# Update retention settings (admin only)
-curl -X PUT http://localhost:8421/api/settings \
+# Update retention settings (admin only; send all four fields)
+curl -X PUT http://localhost:8421/api/settings/retention \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "raw_logs_retention_days": 30,
-    "parsed_logs_retention_days": 90,
-    "alerts_retention_days": 365
+    "raw_logs_days": 30,
+    "parsed_logs_days": 90,
+    "alerts_days": 365,
+    "auto_cleanup_enabled": true
   }'
 ```
 

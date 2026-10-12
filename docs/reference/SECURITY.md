@@ -110,6 +110,12 @@ CREDENTIAL_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(3
   must be re-entered.
 - As an alternative to storing the AI key encrypted, you can inject it at runtime
   via `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` and never persist it.
+- Provider keys stored from the UI are write-only. These are the AI builder,
+  AI Analyst and AI Triage keys, the AbuseIPDB and OTX keys, and the Have I Been
+  Pwned key. No API route returns them, not even to an admin: the settings pages
+  report a key as configured or not, and `GET /api/settings` (admin-only)
+  withholds them. An encrypted key together with `CREDENTIAL_ENCRYPTION_KEY`
+  gives back the plaintext, so protect database backups like the `.env` file.
 
 ### AI Builder & Catalog Trust (v2)
 
@@ -374,6 +380,10 @@ curl -X POST http://localhost:8421/api/users \
 | **admin** | Full system access: manage users, settings, parsers, rules, alerts, logs |
 | **analyst** | Manage alerts, view logs, create/edit parsers and rules (cannot manage users) |
 | **viewer** | Read-only access to alerts and logs (cannot create/edit anything) |
+
+Reading system settings is admin-only too: other roles get `403` from
+`/api/settings`, except `GET /api/settings/syslog` (the syslog host and port
+that shippers send to). No route returns a stored API key to anyone.
 
 **Best Practices:**
 - Use admin role only for initial setup and user management

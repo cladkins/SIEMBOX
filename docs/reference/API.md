@@ -1441,6 +1441,50 @@ Delete user (admin only).
 
 ## Settings Endpoints
 
+Every `/api/settings` route requires a login. The routes in this section and
+under [AI Settings](#ai-settings) also require the **admin** role, except
+`GET /api/settings/syslog` (the syslog host and port that shippers send to).
+Other roles get `403 Access denied. Required role: admin`.
+
+### GET /api/settings
+
+Every row of `system_settings`, for scripts and troubleshooting (admin only).
+The web UI doesn't call it: each settings page uses its own route below.
+
+**Authentication:** Required (Admin)
+
+Stored credentials are never returned, not even to an admin. These are the AI
+builder, AI Analyst and AI Triage API keys (`ai_api_key`, `ai_chat_api_key`,
+`ai_triage_api_key`), the AbuseIPDB and OTX keys (`ti_abuseipdb_key`,
+`ti_otx_key`) and the Have I Been Pwned key (`exposure_hibp_key`). A withheld
+row has `redacted: true`. Its `setting_value` is `"[redacted]"` when a value is
+stored and `""` when none is, and `configured` gives the same answer as a boolean.
+
+The rule fails closed. A value is returned only when all three of these hold:
+- The key is on the reviewed list of plain settings (`READABLE_SETTING_KEYS` in
+  `backend/src/services/settings/settingsRedaction.ts`). A key that isn't on
+  it, such as a setting added after this release, is withheld until it's added.
+- The key isn't named like a credential: none of its words is a word such as
+  `key`, `token`, `secret`, `password`, `hash` or `credential` (the full list is
+  `SECRET_KEY_WORDS` in the same file). That covers `*_key`, `*_api_key`,
+  `*_token`, `*_secret`, `*_password` and `*_hash`.
+- The value doesn't hold an encrypted credential (`{ "encrypted", "iv", "authTag" }`).
+
+**Response (200):**
+```json
+[
+  { "setting_key": "ai_api_key", "setting_value": "[redacted]", "redacted": true, "configured": true },
+  { "setting_key": "ai_model", "setting_value": "claude-sonnet-4-6", "redacted": false },
+  { "setting_key": "exposure_hibp_key", "setting_value": "", "redacted": true, "configured": false },
+  { "setting_key": "retention_raw_logs_days", "setting_value": "30", "redacted": false }
+]
+```
+
+(Earlier versions returned every row to any logged-in role, viewers included,
+along with each stored key's encrypted envelope.)
+
+---
+
 ### GET /api/settings/retention
 
 Get log retention settings (admin only).

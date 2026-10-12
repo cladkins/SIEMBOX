@@ -30,7 +30,7 @@ router.get('/', async (_req: Request, res: Response) => {
   try {
     const rules = await DetectionRuleModel.findAll();
     res.json(rules);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch rules');
   }
 });
@@ -447,7 +447,7 @@ router.post('/', async (req: Request, res: Response) => {
     let rule_logic;
     try {
       rule_logic = yaml.load(rule_yaml) as any;
-    } catch (error) {
+    } catch {
       throw new ApiError(400, 'Invalid YAML format');
     }
 
@@ -478,7 +478,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     if (updateData.rule_yaml) {
       try {
         updateData.rule_logic = yaml.load(updateData.rule_yaml) as any;
-      } catch (error) {
+      } catch {
         throw new ApiError(400, 'Invalid YAML format');
       }
     }

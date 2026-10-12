@@ -387,10 +387,12 @@ async function llmFetch(url: string, options: any): Promise<Response> {
   try {
     return await fetch(url, { ...options, signal: ctrl.signal });
   } catch (e: any) {
-    if (e?.name === 'AbortError') throw new Error(`Request to ${url} timed out after 120s`);
+    if (e?.name === 'AbortError')
+      throw new Error(`Request to ${url} timed out after 120s`, { cause: e });
     throw new Error(
       `Could not reach ${url} (${e?.message || e}). The Base URL must be reachable from the SIEMBox backend CONTAINER — ` +
-        `for a local Ollama, bind it to 0.0.0.0 (OLLAMA_HOST=0.0.0.0:11434) and use the host LAN IP or http://host.docker.internal:11434.`
+        `for a local Ollama, bind it to 0.0.0.0 (OLLAMA_HOST=0.0.0.0:11434) and use the host LAN IP or http://host.docker.internal:11434.`,
+      { cause: e }
     );
   } finally {
     clearTimeout(timer);
@@ -561,7 +563,8 @@ export function extractJson(text: string): any {
       throw new Error(
         'The AI response was cut off before it finished (the JSON is incomplete). ' +
           'This usually means the output hit the model token limit — try fewer or shorter ' +
-          'sample lines, or a hint that narrows the parser, then regenerate.'
+          'sample lines, or a hint that narrows the parser, then regenerate.',
+        { cause: e }
       );
     }
     throw e;

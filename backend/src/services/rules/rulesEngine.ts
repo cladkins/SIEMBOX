@@ -312,7 +312,7 @@ export class RulesEngine {
     const [, distinctField, operator, distinctThresholdStr] = distinctMatch;
     const distinctThreshold = parseInt(distinctThresholdStr, 10);
 
-    let met = false;
+    let met: boolean;
     switch (operator) {
       case '>=': met = distinct >= distinctThreshold; break;
       case '>': met = distinct > distinctThreshold; break;

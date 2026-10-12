@@ -21,8 +21,10 @@ export interface ParsedSyslog {
 export function stripAnsi(input: string): string {
   return input
     // CSI sequences incl. SGR colors: ESC '[' params intermediates final-byte.
+    // eslint-disable-next-line no-control-regex -- matching the ESC (0x1b) control byte is the point
     .replace(/\x1b\[[0-9;:?]*[ -/]*[@-~]/g, '')
     // Any remaining stray ESC bytes (OSC starts, lone escapes, etc.).
+    // eslint-disable-next-line no-control-regex -- matching the ESC (0x1b) control byte is the point
     .replace(/\x1b/g, '');
 }
 
@@ -164,9 +166,9 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
     );
 
     if (rfc5424Match) {
-      // RFC 5424 format
-      const [, _version, timestamp, hostname, appName, procId, _msgId, _structuredData, message] =
-        rfc5424Match;
+      // RFC 5424 format. Groups: VERSION, TIMESTAMP, HOSTNAME, APP-NAME, PROCID,
+      // MSGID, STRUCTURED-DATA, MSG; VERSION, MSGID and STRUCTURED-DATA are unused.
+      const [, , timestamp, hostname, appName, procId, , , message] = rfc5424Match;
 
       result.timestamp = parseTimestamp(timestamp) || new Date();
       result.hostname = hostname !== '-' ? hostname : null;

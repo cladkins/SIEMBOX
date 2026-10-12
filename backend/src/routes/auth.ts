@@ -85,7 +85,7 @@ router.post('/logout', authenticate, async (req: Request, res: Response) => {
     logger.info('User logged out', { userId: req.user?.id });
 
     res.json({ message: 'Logged out successfully' });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Logout failed');
   }
 });

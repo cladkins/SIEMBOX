@@ -9,7 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
 import * as https from 'https';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { logger } from '../../utils/logger';
 import { ErrorLogService } from '../errors/errorLogService';
 
@@ -170,7 +170,7 @@ export class TemplateService {
           count++;
         }
       }
-    } catch (error) {
+    } catch {
       // Directory might not exist or be inaccessible
     }
 
@@ -361,7 +361,7 @@ export class TemplateService {
           files.push({ path: fullPath, category });
         }
       }
-    } catch (error) {
+    } catch {
       // Directory might not exist or be inaccessible
     }
   }
@@ -393,7 +393,7 @@ export class TemplateService {
         filePath,
         category,
       };
-    } catch (error) {
+    } catch {
       // Skip files that can't be parsed
       return null;
     }
@@ -671,7 +671,6 @@ export class TemplateService {
     return new Promise((resolve, reject) => {
       console.log('[TemplateService] downloadFile: Starting download...');
       const file = fs.createWriteStream(destPath);
-      let downloadTimeout: NodeJS.Timeout;
       let bytesReceived = 0;
 
       file.on('error', (err) => {
@@ -732,7 +731,7 @@ export class TemplateService {
       };
 
       // 10 minute timeout for download
-      downloadTimeout = setTimeout(() => {
+      const downloadTimeout = setTimeout(() => {
         console.error('[TemplateService] downloadFile: Timeout after 10 minutes');
         file.close();
         fs.unlink(destPath, () => {});
@@ -768,8 +767,6 @@ export class TemplateService {
     output?: string;
     error?: string;
   }> {
-    const { spawn } = require('child_process');
-
     return new Promise((resolve) => {
       console.log('[TemplateService] Updating templates in:', TEMPLATES_DIR);
 

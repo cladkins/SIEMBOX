@@ -90,7 +90,7 @@ export function buildRawLogFilters(options?: RawLogFilters): {
   }
 
   if (options?.endTime) {
-    conditions.push(`timestamp <= $${paramIndex++}`);
+    conditions.push(`timestamp <= $${paramIndex}`);
     params.push(options.endTime);
   }
 
@@ -160,7 +160,7 @@ export class RawLogModel {
     const logsResult = await query(
       `SELECT * FROM raw_logs ${whereClause}
        ORDER BY created_at DESC
-       LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
+       LIMIT $${paramIndex++} OFFSET $${paramIndex}`,
       params
     );
 

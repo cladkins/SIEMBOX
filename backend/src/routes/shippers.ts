@@ -124,7 +124,7 @@ async function getSyslogSettings(): Promise<{ siem_host: string; siem_port: numb
     });
 
     return settings;
-  } catch (error) {
+  } catch {
     return { siem_host: '', siem_port: 514 };
   }
 }
@@ -159,7 +159,7 @@ router.get('/', authenticate, async (req: Request, res: Response) => {
     }));
 
     res.json(shippersWithStatus);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch shippers');
   }
 });
@@ -297,7 +297,7 @@ router.get('/:id/sources', authenticate, async (req: Request, res: Response) => 
     const id = parseInt(req.params.id);
     const sources = await ShipperSourceModel.findByShipperId(id);
     res.json(sources);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch sources');
   }
 });
@@ -381,7 +381,7 @@ router.get('/:id/volumes', authenticate, async (req: Request, res: Response) => 
     const id = parseInt(req.params.id);
     const volumes = await ShipperVolumeModel.findByShipperId(id);
     res.json(volumes);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch volumes');
   }
 });
@@ -445,7 +445,7 @@ router.get('/:id/activity', authenticate, async (req: Request, res: Response) =>
     const limit = parseInt(req.query.limit as string) || 50;
     const activity = await ShipperActivityModel.getRecentActivity(id, limit);
     res.json(activity);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch activity');
   }
 });

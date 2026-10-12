@@ -22,6 +22,7 @@ const router = Router();
 // ../../package.json) and is typed `any`, so it sidesteps tsc's rootDir check.
 const APP_VERSION: string = (() => {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- runtime path outside rootDir, see above
     return require('../../package.json').version || '0.1.0';
   } catch {
     return process.env.npm_package_version || '0.1.0';

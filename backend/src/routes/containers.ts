@@ -18,7 +18,7 @@ const requireContainerScan = requireScanPermission(UserRole.Operator, 'container
 router.get('/discovered', async (_req: Request, res: Response) => {
   try {
     res.json(await DockerDiscovery.discoverImages());
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to enumerate Docker images');
   }
 });
@@ -34,7 +34,7 @@ router.get('/inventory', async (_req: Request, res: Response) => {
       ShipperContainerModel.findGroupedByShipper(),
     ]);
     res.json({ local, shippers });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to load container inventory');
   }
 });
@@ -63,7 +63,7 @@ router.get('/scans', async (req: Request, res: Response) => {
   try {
     const limit = Math.min(Math.max(parseInt(String(req.query.limit)) || 20, 1), 100);
     res.json(await TrivyScanner.getRecentScans(limit));
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch container scans');
   }
 });

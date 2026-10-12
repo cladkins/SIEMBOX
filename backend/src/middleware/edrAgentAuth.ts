@@ -12,6 +12,7 @@ import { ApiError } from './errorHandler';
 import { EdrAgent, EdrAgentModel, sha256hex } from '../models/EdrAgent';
 
 declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace -- augmenting @types/express's global Express.Request requires namespace declaration merging
   namespace Express {
     interface Request {
       edrAgent?: EdrAgent;

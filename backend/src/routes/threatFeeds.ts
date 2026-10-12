@@ -41,7 +41,7 @@ router.get('/summary', async (_req: Request, res: Response) => {
       last_fetched_at: lastFetched,
       threat_feed_alerts_30d: consumed.rows[0]?.alerts_30d ?? 0,
     });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to load threat-intel summary');
   }
 });
@@ -55,7 +55,7 @@ router.get('/', async (_req: Request, res: Response) => {
       ReputationService.getProvidersPublic(),
     ]);
     res.json({ feeds, providers });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to load threat-intel configuration');
   }
 });
@@ -128,7 +128,7 @@ router.get('/lookup/:ip', async (req: Request, res: Response) => {
       ReputationService.lookupIp(ip),
     ]);
     res.json({ ip, feeds, reputation });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to look up IP reputation');
   }
 });

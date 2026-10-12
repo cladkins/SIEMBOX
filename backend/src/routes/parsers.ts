@@ -83,7 +83,7 @@ router.get('/', async (_req: Request, res: Response) => {
   try {
     const parsers = await ParserModel.findAll();
     res.json(parsers);
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to fetch parsers');
   }
 });
@@ -115,7 +115,7 @@ router.get('/match-stats', async (_req: Request, res: Response) => {
       if (since === null || row.since < since) since = row.since;
     }
     res.json({ window: '24h', since, by_parser: byParser, unparsed });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to compute parser match stats');
   }
 });
@@ -234,7 +234,7 @@ router.post('/validate', async (req: Request, res: Response) => {
       validation,
       self_test: selfTest,
     });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to validate parser');
   }
 });

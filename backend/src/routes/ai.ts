@@ -69,7 +69,7 @@ function titleFrom(message: string): string {
 router.get('/chat/health', async (_req: Request, res: Response) => {
   try {
     res.json(await getChatAiPublicConfig());
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to read AI analyst config');
   }
 });
@@ -81,7 +81,7 @@ router.get('/triage/health', async (_req: Request, res: Response) => {
   try {
     const cfg = await getTriagePublicConfig();
     res.json({ configured: cfg.configured, enabled: cfg.enabled, minSeverity: cfg.minSeverity });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to read AI triage config');
   }
 });
@@ -91,7 +91,7 @@ router.get('/chat/sessions', async (req: Request, res: Response) => {
   if (!req.user) throw new ApiError(401, 'Authentication required');
   try {
     res.json({ sessions: await ChatThreadModel.listSessions(req.user.id) });
-  } catch (error) {
+  } catch {
     throw new ApiError(500, 'Failed to list chat sessions');
   }
 });

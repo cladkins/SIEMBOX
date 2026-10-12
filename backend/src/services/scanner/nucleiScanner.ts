@@ -5,7 +5,7 @@
  * Stores discovered vulnerabilities in the database.
  */
 
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, execSync, ChildProcess } from 'child_process';
 import { isIP } from 'net';
 import { AuditService } from '../audit/auditService';
 import pool from '../../config/database';
@@ -295,7 +295,6 @@ export class NucleiScanner {
 
       // Check if Nuclei is available
       console.log(`[Nuclei] Checking Nuclei availability...`);
-      const { execSync } = require('child_process');
       try {
         const nucleiVersion = execSync('which nuclei && nuclei -version', { encoding: 'utf-8' });
         console.log(`[Nuclei] Found Nuclei:`, nucleiVersion.trim());
@@ -354,7 +353,7 @@ export class NucleiScanner {
             console.log(
               `[Nuclei] Found vulnerability: ${result.info.name} (${result.info.severity}) at ${result['matched-at']}`
             );
-          } catch (parseError) {
+          } catch {
             // Non-JSON output (progress/info messages)
             console.log(`[Nuclei] ${line}`);
           }

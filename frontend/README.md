@@ -59,7 +59,7 @@ frontend/
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 20.19+, 22.13+ or 24+ (required by ESLint 10, which `npm run lint` uses)
 - npm or yarn
 - Backend API running (see `/backend/README.md`)
 
@@ -443,7 +443,9 @@ VITE_API_URL=http://localhost:8421/api
 
 ### ESLint Configuration
 
-The project uses ESLint for code quality:
+The project uses ESLint for code quality. The config is `eslint.config.js`
+(flat config): Vue's essential rules, `@eslint/js` recommended and
+typescript-eslint, plus the house-style overrides explained in the file.
 
 ```bash
 # Check for issues

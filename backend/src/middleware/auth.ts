@@ -5,6 +5,7 @@ import { ApiError } from './errorHandler';
 
 // Extend Express Request to include user
 declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace -- augmenting @types/express's global Express.Request requires namespace declaration merging
   namespace Express {
     interface Request {
       user?: {
@@ -100,7 +101,7 @@ export const optionalAuthenticate = async (
     }
 
     next();
-  } catch (error) {
+  } catch {
     // On error, just continue without user
     next();
   }

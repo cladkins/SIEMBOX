@@ -1,12 +1,10 @@
 # Build and test every PR into main (and main itself).
 #
 # backend:  npm ci, build, run every migration against a fresh Postgres, npm test
-#           (the DB-backed suites run because Postgres is up).
+#           (the DB-backed suites run because Postgres is up), eslint (errors
+#           fail; warnings don't).
 # frontend: npm ci, vue-tsc type-check, production build, eslint (errors fail;
 #           warnings don't).
-#
-# Backend eslint is not run yet: main still has pre-existing lint errors.
-# Add `npm run lint` to the backend job once they are fixed.
 #
 # Dependabot PRs get a read-only token and no secrets here, which is all this
 # needs. dependabot-merge-after-ci.yml merges low-risk Dependabot updates only
@@ -70,6 +68,7 @@ jobs:
           npm run migrate
           npm run migrate
       - run: npm test
+      - run: npm run lint
 
   frontend:
     runs-on: ubuntu-latest

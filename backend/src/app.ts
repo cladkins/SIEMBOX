@@ -93,7 +93,7 @@ app.get('/health/database-status', async (_req: Request, res: Response) => {
       rules: ruleCount,
       ready: parserCount >= 18 && ruleCount >= 40
     });
-  } catch (error) {
+  } catch {
     res.status(500).json({
       error: 'Failed to check database status',
       parsers: 0,

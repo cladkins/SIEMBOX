@@ -128,7 +128,7 @@ backend/
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 22.13+ (what CI uses; ESLint 10 and `npm test` need it)
 - PostgreSQL 15+
 - npm or yarn
 - Docker (optional, for containerized development)

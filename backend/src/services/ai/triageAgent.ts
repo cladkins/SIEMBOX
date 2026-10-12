@@ -403,7 +403,7 @@ export async function runAlertTriage(
 
     const raw = await complete(cfg, convo, { json: true, maxTokens: INTERMEDIATE_MAX_TOKENS });
 
-    let obj: any = null;
+    let obj: any;
     try {
       obj = extractJson(raw);
     } catch {

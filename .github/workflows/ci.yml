@@ -56,9 +56,11 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
+      # Node 22, not the images' Node 20: `npm test` passes a quoted glob
+      # ("src/**/*.test.ts") to the test runner, and only Node >= 21 expands it.
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci

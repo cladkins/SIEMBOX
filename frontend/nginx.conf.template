@@ -1,3 +1,28 @@
+# The backend API. nginx reaches it over a unix socket on the `api-socket`
+# volume, which only the backend and frontend containers mount (compose.yaml,
+# compose.prod.yaml). Requests arriving on that socket are the only ones whose
+# X-Forwarded-For the backend believes without configuration (plus whatever its
+# TRUSTED_PROXIES lists), so the UI's users keep their real client addresses
+# while direct callers on :8421 can't pick one.
+#
+# BACKEND_UPSTREAM is the fallback: nginx uses it when the socket is missing or
+# refuses (a compose file without the volume, an older backend image, a backend
+# restart) and tries the socket again 30 s later. It is substituted at container
+# start (see frontend/Dockerfile): the Compose default is the backend's
+# Docker-DNS name `backend:8421`, and `host.docker.internal:8421` when the
+# backend runs with network_mode: host (see DEPLOYMENT.md's "Log Discovery and
+# Network Visibility" section) -- still required there, because nginx resolves
+# upstream names when it starts. Bare token deliberately, no ${VAR:-default}:
+# envsubst doesn't support that syntax, the default lives at the Compose layer.
+#
+# max_fails=0 keeps the fallback from ever being marked down. Otherwise, once
+# a backend restart had failed both servers, nginx would answer 502 ("no live
+# upstreams") for up to 10 s after the backend was back.
+upstream siembox_api {
+    server unix:/run/siembox/api.sock max_fails=1 fail_timeout=30s;
+    server ${BACKEND_UPSTREAM} backup max_fails=0;
+}
+
 server {
     listen 80;
     server_name localhost;
@@ -35,19 +60,22 @@ server {
         add_header X-XSS-Protection "1; mode=block" always;
     }
 
-    # Proxy API requests to backend. BACKEND_UPSTREAM is substituted at
-    # container start (see frontend/Dockerfile) — defaults to the Compose
-    # service name `backend:8421`; becomes `host.docker.internal:8421` when
-    # the backend's optional network_mode: host is enabled (see
-    # DEPLOYMENT.md's "Log Discovery and Network Visibility" section). Bare
-    # token deliberately, no ${VAR:-default} — envsubst doesn't support that
-    # syntax, the default lives at the Compose layer instead.
+    # Proxy API requests to the backend (the siembox_api upstream above).
     location /api {
-        proxy_pass http://${BACKEND_UPSTREAM};
+        proxy_pass http://siembox_api;
+        # Move to the fallback only when the socket can't be reached. Without
+        # "timeout", a slow request (the AI builder can take minutes) is never
+        # sent a second time, and a POST is only retried if nothing was sent.
+        proxy_next_upstream error;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
+        # Load-bearing: the backend takes the client address from the last
+        # X-Forwarded-For entry, which $proxy_add_x_forwarded_for sets to the
+        # address nginx saw ($remote_addr). Never pass the client's own
+        # X-Forwarded-For through unchanged, or every client could pick its
+        # address. X-Real-IP carries the same address for logs and tools.
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;

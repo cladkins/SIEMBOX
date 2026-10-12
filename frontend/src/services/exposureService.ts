@@ -28,6 +28,36 @@ export interface DomainCollectors {
   dns: boolean;
 }
 
+export type DomainCollectorName = keyof DomainCollectors;
+
+/**
+ * One collector's outcome in a domain's last run: `baseline` (its first run,
+ * recorded silently), `ok`, `unsupported` (nothing it can monitor here, e.g. a
+ * TLD without RDAP; `note` says why), `error` (with `error`), `disabled`
+ * (switched off in `collectors`) or `not_applicable` (not run for the scope).
+ */
+export interface DomainCollectorRun {
+  status: string;
+  note?: string;
+  error?: string;
+  /** For an error: retried before the domain's next regular run. */
+  transient?: boolean;
+  new_findings?: number;
+  /** Partial failures that didn't stop the collector (e.g. a DNS record type a resolver didn't answer). */
+  warnings?: string[];
+  details?: Record<string, unknown>;
+  at?: string;
+}
+
+/** A domain's last run, as `last_summary` holds it (the object POST /domains/:id/run-now returns). */
+export interface DomainRunSummary {
+  trigger?: string;
+  started_at?: string;
+  status?: string;
+  new_findings?: number;
+  collectors?: Partial<Record<DomainCollectorName, DomainCollectorRun>>;
+}
+
 export interface WatchedDomain {
   id: number;
   domain: string;
@@ -40,6 +70,8 @@ export interface WatchedDomain {
   next_run_at: string | null;
   last_status: string | null;
   last_error: string | null;
+  /** Each collector's outcome on the last run: null before the first run; absent from a backend without domain monitoring. */
+  last_summary?: DomainRunSummary | null;
   created_at: string;
   updated_at: string;
 }

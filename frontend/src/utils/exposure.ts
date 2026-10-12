@@ -7,7 +7,14 @@
  * there, and its 400 message is always shown as-is.
  */
 import { format, formatDistanceToNow } from 'date-fns';
-import type { ExposureFinding, ExposureStatus, IdentityKind } from '@/services/exposureService';
+import type {
+  DomainCollectorName,
+  DomainScope,
+  ExposureFinding,
+  ExposureStatus,
+  IdentityKind,
+  WatchedDomain,
+} from '@/services/exposureService';
 
 // ---- Validation (mirrors the backend) ----------------------------------------
 
@@ -225,7 +232,7 @@ export function nextCheckLabel(nextRunAt: string | null | undefined, now = Date.
 
 export type TagType = 'success' | 'info' | 'warning' | 'danger';
 
-/** Tag for a watched domain's or identity's last check. */
+/** Tag for an identity's last check (a watched domain's adds its per-check state: domainStatusTag). */
 export function checkStatusTag(row: {
   enabled: boolean;
   last_status: string | null;
@@ -551,13 +558,24 @@ export function domainFindingDetail(
     }
     case 'expiry_warning': {
       // The stored days_left is from the first sighting (a re-check only moves
-      // last_seen), so count from expires_at instead.
+      // last_seen), so count from expires_at instead. Only the backend says a
+      // registration expired: `expired` marks its separate, high-severity
+      // finding, raised while RDAP still reports the passed date. A warning
+      // whose date has merely passed stays open after a renewal too (RDAP then
+      // reports the new date and nothing new is raised), so it never reads as
+      // expired here.
       const day = formatDay(d.expires_at);
       const at = utcMillis(d.expires_at);
-      if (d.expired === true || at <= now) add('Expired', day || 'yes');
-      else if (!Number.isNaN(at)) {
+      if (d.expired === true) add('Expired', day || 'yes');
+      else if (at > now) {
         const left = Math.floor((at - now) / DAY_MS);
         add('Expires', `${day} (${left < 1 ? 'less than a day left' : `${pluralize(left, 'day')} left`})`);
+      } else if (!Number.isNaN(at)) {
+        add(
+          'Expiry date',
+          `${day} (that date has passed: if the domain was renewed, resolve this warning; ` +
+            'if the registration lapsed, a separate "expired" finding is raised)'
+        );
       }
       return lines;
     }
@@ -599,4 +617,113 @@ export function domainFindingDetail(
     default:
       return null;
   }
+}
+
+// ---- Watched-domain checks (each collector's outcome on the last run) -----------
+
+// The domain-monitor checks in run order, as the UI names them.
+const DOMAIN_CHECKS: ReadonlyArray<{ name: DomainCollectorName; label: string }> = [
+  { name: 'dns', label: 'DNS' },
+  { name: 'rdap', label: 'Registration (RDAP)' },
+  { name: 'lookalike', label: 'Lookalikes' },
+  { name: 'ct', label: 'Certificates (CT)' },
+];
+
+// The checks each scope runs (the backend's SCOPE_COLLECTORS): a brand name is
+// only watched for lookalikes and the certificates issued for them.
+const SCOPE_CHECKS: Record<DomainScope, readonly DomainCollectorName[]> = {
+  own: ['dns', 'rdap', 'lookalike', 'ct'],
+  brand: ['lookalike', 'ct'],
+};
+
+/** One check's outcome on a watched domain's last run. */
+export interface DomainCheckLine {
+  name: DomainCollectorName;
+  label: string;
+  /**
+   * ok / baseline (its first run) = it ran; off = switched off for this
+   * domain; unavailable = nothing it can monitor here (e.g. a TLD without
+   * RDAP); not_run = it doesn't apply to the domain's scope.
+   */
+  state: 'ok' | 'baseline' | 'error' | 'off' | 'unavailable' | 'not_run' | 'unknown';
+  tag: { type: TagType; label: string };
+  text: string;
+  /** Partial failures that didn't stop the check, e.g. DNS record types a resolver didn't answer. */
+  warnings: string[];
+}
+
+type DomainCheckFields = Pick<WatchedDomain, 'scope' | 'last_summary'>;
+
+/**
+ * Each check's outcome on the domain's last run (`last_summary.collectors`), in
+ * run order; [] before the first run, and on a backend without domain monitoring.
+ */
+export function domainCheckLines(domain: DomainCheckFields): DomainCheckLine[] {
+  const runs = objectOf(objectOf(domain.last_summary).collectors);
+  const applies = SCOPE_CHECKS[domain.scope] ?? SCOPE_CHECKS.own;
+  const lines: DomainCheckLine[] = [];
+  for (const { name, label } of DOMAIN_CHECKS) {
+    if (!(name in runs)) continue;
+    const run = objectOf(runs[name]);
+    const status = textOf(run.status);
+    const note = textOf(run.note);
+    const warnings = textsOf(run.warnings);
+    const push = (state: DomainCheckLine['state'], type: TagType, tag: string, text: string) =>
+      lines.push({ name, label, state, tag: { type, label: tag }, text, warnings });
+    if (!applies.includes(name) || status === 'not_applicable') {
+      // The backend reports a switched-off check as 'disabled' even where it doesn't apply.
+      push('not_run', 'info', 'Not run', note || `not run for ${domain.scope === 'brand' ? 'brand' : 'owned'} domains`);
+    } else if (status === 'disabled') {
+      push('off', 'warning', 'Off', 'switched off for this domain');
+    } else if (status === 'unsupported') {
+      push('unavailable', 'warning', 'Not available', note);
+    } else if (status === 'error') {
+      push('error', 'danger', 'Error', textOf(run.error) || note || 'failed');
+    } else if (status === 'ok' || status === 'baseline') {
+      const tag = warnings.length ? pluralize(warnings.length, 'warning') : status === 'ok' ? 'OK' : 'Baseline';
+      push(status, warnings.length ? 'warning' : 'success', tag, note);
+    } else {
+      push('unknown', 'info', status || 'unknown', note || textOf(run.error));
+    }
+  }
+  return lines;
+}
+
+/**
+ * A watched domain's status tag: checkStatusTag's, except that a check that
+ * passed is only "OK" when every check that applies to the domain ran without
+ * warnings. "Warnings": one ran with partial failures (e.g. record types a
+ * filtering resolver didn't answer, which then aren't watched for changes).
+ * "Partly monitored": one is switched off, or can't monitor the domain.
+ */
+export function domainStatusTag(
+  domain: DomainCheckFields & { enabled: boolean; last_status: string | null }
+): { type: TagType; label: string } {
+  const tag = checkStatusTag(domain);
+  if (!domain.enabled || domain.last_status !== 'ok') return tag;
+  const lines = domainCheckLines(domain);
+  if (lines.some((l) => l.warnings.length > 0)) return { type: 'warning', label: 'Warnings' };
+  if (lines.some((l) => l.state === 'off' || l.state === 'unavailable' || l.state === 'error')) {
+    return { type: 'warning', label: 'Partly monitored' };
+  }
+  return tag;
+}
+
+/**
+ * The line under a watched domain's status tag: the checks that ran with
+ * warnings, are switched off, or can't monitor it ('' when there are none, and
+ * for a disabled domain, which isn't checked at all).
+ */
+export function domainCoverageNote(domain: DomainCheckFields & { enabled: boolean }): string {
+  if (!domain.enabled) return '';
+  const lines = domainCheckLines(domain);
+  const labelsOf = (state: DomainCheckLine['state']) => lines.filter((l) => l.state === state).map((l) => l.label);
+  const parts = lines
+    .filter((l) => l.warnings.length > 0)
+    .map((l) => `${l.label}: ${pluralize(l.warnings.length, 'warning')}`);
+  const off = labelsOf('off');
+  if (off.length) parts.push(`Switched off: ${off.join(', ')}`);
+  const unavailable = labelsOf('unavailable');
+  if (unavailable.length) parts.push(`Not available: ${unavailable.join(', ')}`);
+  return parts.join(' · ');
 }

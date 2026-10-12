@@ -41,8 +41,33 @@
       </el-form-item>
     </el-form>
 
-    <el-table :data="domains" v-loading="loading" stripe :empty-text="copy.empty">
-      <el-table-column prop="domain" label="Domain" min-width="180" />
+    <el-table :data="domains" v-loading="loading" stripe row-key="id" :empty-text="copy.empty">
+      <!-- What each check found on the last run (last_summary). With the Domain
+           column's min-width it takes the same 180px the Domain column had, so
+           the table needs no more width than before. -->
+      <el-table-column type="expand" width="32">
+        <template #default="{ row }">
+          <div class="domain-checks">
+            <template v-if="row.checks.length">
+              <div v-for="check in row.checks" :key="check.name" class="check-line">
+                <span class="check-name">{{ check.label }}</span>
+                <el-tag :type="check.tag.type" size="small" effect="plain">{{ check.tag.label }}</el-tag>
+                <span v-if="check.text" class="check-text">{{ check.text }}</span>
+                <ul v-if="check.warnings.length" class="check-warnings">
+                  <li v-for="(warning, i) in check.warnings" :key="i">{{ warning }}</li>
+                </ul>
+              </div>
+              <p v-if="row.checks.some((c: DomainCheckLine) => c.state === 'off')" class="checks-hint">
+                Checks are switched on and off per domain through the API:
+                <code>PUT /api/exposure/domains/{{ row.id }}</code> with <code>collectors</code>.
+              </p>
+            </template>
+            <p v-else class="checks-hint">No check results for this domain yet.</p>
+          </div>
+        </template>
+      </el-table-column>
+
+      <el-table-column prop="domain" label="Domain" min-width="148" />
 
       <el-table-column label="Enabled" width="80" align="center">
         <template #default="{ row }">
@@ -87,8 +112,9 @@
 
       <el-table-column label="Status" min-width="180">
         <template #default="{ row }">
-          <el-tag :type="checkStatusTag(row).type" size="small">{{ checkStatusTag(row).label }}</el-tag>
+          <el-tag :type="row.statusTag.type" size="small">{{ row.statusTag.label }}</el-tag>
           <div v-if="row.last_error" class="row-error">{{ row.last_error }}</div>
+          <div v-if="row.coverageNote" class="row-note">{{ row.coverageNote }}</div>
         </template>
       </el-table-column>
 
@@ -125,14 +151,18 @@ import {
   INTERVAL_OPTIONS,
   apiErrorMessage,
   apiErrorStatus,
-  checkStatusTag,
   domainAddedMessage,
+  domainCheckLines,
+  domainCoverageNote,
+  domainStatusTag,
   formatWhen,
   intervalLabel,
   intervalOptionsFor,
   nextCheckLabel,
   normalizeDomain,
+  type DomainCheckLine,
   type DomainMonitorState,
+  type TagType,
 } from '@/utils/exposure';
 
 // One card per watched-domain scope: 'own' (the organization's domains) and
@@ -170,8 +200,25 @@ const COPY: Record<DomainScope, { title: string; intro: string; help: string; pl
 };
 const copy = computed(() => COPY[props.scope]);
 
+// A row, plus what its last run says about each check: the status tag is only
+// "OK" when every check that applies ran cleanly (see domainStatusTag).
+type DomainRow = WatchedDomain & {
+  statusTag: { type: TagType; label: string };
+  coverageNote: string;
+  checks: DomainCheckLine[];
+};
+
 const allDomains = ref<WatchedDomain[]>([]);
-const domains = computed(() => allDomains.value.filter((d) => d.scope === props.scope));
+const domains = computed<DomainRow[]>(() =>
+  allDomains.value
+    .filter((d) => d.scope === props.scope)
+    .map((d) => ({
+      ...d,
+      statusTag: domainStatusTag(d),
+      coverageNote: domainCoverageNote(d),
+      checks: domainCheckLines(d),
+    }))
+);
 const loading = ref(false);
 
 const newDomain = ref('');
@@ -303,5 +350,54 @@ defineExpose({ reload });
   line-height: 1.4;
   color: var(--el-color-danger);
   word-break: break-word;
+}
+
+.row-note {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-text-color-regular);
+  word-break: break-word;
+}
+
+.domain-checks {
+  padding: 4px 16px 4px 48px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+.check-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 0 0 8px;
+}
+
+.check-name {
+  flex: 0 0 140px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+
+.check-text {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.check-warnings {
+  flex: 1 0 100%;
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.checks-hint {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>

@@ -74,6 +74,12 @@ export interface SourceTargetChanges {
    * again and is swapped in the same update as the move.
    */
   credential?: { secret: string; username?: string };
+  /**
+   * The source's address as it was loaded: the change only applies while the
+   * source still has it (409 otherwise, e.g. when another admin moved it while
+   * the dialog was open).
+   */
+  expected_ip_address?: string;
 }
 
 export interface SourceTargetUpdateResult {
@@ -155,6 +161,15 @@ export interface PollerStatus {
 /** For calls whose caller shows the error itself (see api.ts's skipErrorToast). */
 export interface QuietOption {
   quiet?: boolean;
+}
+
+export interface SaveCredentialOptions extends QuietOption {
+  /**
+   * The source's address the token is entered for (as shown to the admin): the
+   * server only saves the token while the source still has it, and answers 409
+   * otherwise, so a token typed for one address never reaches another.
+   */
+  expectedIpAddress?: string;
 }
 
 export interface PollNowResult {
@@ -268,10 +283,10 @@ class LogDiscoveryServiceClient {
     return response.data;
   }
 
-  async savePollerCredential(id: number, secret: string, username?: string, opts: QuietOption = {}): Promise<PollerStatus> {
+  async savePollerCredential(id: number, secret: string, username?: string, opts: SaveCredentialOptions = {}): Promise<PollerStatus> {
     const response = await apiClient.post(
       `/log-discovery/sources/${id}/poller/credential`,
-      { secret, username },
+      { secret, username, expected_ip_address: opts.expectedIpAddress },
       { skipErrorToast: opts.quiet }
     );
     return response.data;
@@ -316,7 +331,7 @@ class LogDiscoveryServiceClient {
    * then reuse savePollerCredential/setPolling/runPollNow). port/tls are stored
    * server-side in the source's evidence.
    */
-  async createManualSource(payload: ManualSourcePayload): Promise<{ id: number }> {
+  async createManualSource(payload: ManualSourcePayload): Promise<{ id: number; ip_address: string }> {
     const response = await apiClient.post('/log-discovery/sources/manual', payload);
     return response.data;
   }

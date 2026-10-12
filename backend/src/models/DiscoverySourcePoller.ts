@@ -41,6 +41,12 @@ export interface UpsertCredentialInput {
   method: string;
   username?: string | null;
   secret: string;
+  /**
+   * The source's address the token was entered for. When set, the token is only
+   * saved while the source still has that address: a token typed while the
+   * source was shown at one address never reaches another one.
+   */
+  expectedIpAddress?: string | null;
 }
 
 export interface RecordResultInput {
@@ -131,13 +137,25 @@ export const DiscoverySourcePollerModel = {
    * (mirrors DiscoverySourceModel.upsert's exclusion of status/selected_log_access)
    * so rotating a token doesn't reset the poll interval or force a re-backfill.
    * The INSERT branch supplies first-ever defaults only.
+   *
+   * The statement locks the source row (FOR SHARE) before it writes, and a
+   * change of a manual source's address locks it FOR UPDATE
+   * (DiscoverySourceModel.updateManualTarget), so a save and a move never
+   * overlap: a save that waits behind a move re-checks the moved row. Null when
+   * the source doesn't exist, or no longer has input.expectedIpAddress; nothing
+   * is saved then.
    */
-  async upsertCredential(sourceId: number, input: UpsertCredentialInput): Promise<DiscoverySourcePoller> {
+  async upsertCredential(sourceId: number, input: UpsertCredentialInput): Promise<DiscoverySourcePoller | null> {
     const enc = CredentialEncryption.encrypt(input.secret); // throws if CREDENTIAL_ENCRYPTION_KEY unset/invalid
     const r = await query(
-      `INSERT INTO discovery_source_pollers
+      `WITH source AS (
+         SELECT id FROM discovery_sources
+          WHERE id = $1 AND ($8::inet IS NULL OR ip_address = $8::inet)
+          FOR SHARE
+       )
+       INSERT INTO discovery_source_pollers
          (discovery_source_id, fingerprint_id, log_access_method, encrypted_credential, encryption_iv, encryption_auth_tag, credential_username)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       SELECT id, $2::text, $3::text, $4::text, $5::text, $6::text, $7::text FROM source
        ON CONFLICT (discovery_source_id) DO UPDATE SET
          fingerprint_id = EXCLUDED.fingerprint_id,
          log_access_method = EXCLUDED.log_access_method,
@@ -147,9 +165,18 @@ export const DiscoverySourcePollerModel = {
          credential_username = EXCLUDED.credential_username,
          updated_at = NOW()
        RETURNING *`,
-      [sourceId, input.fingerprintId, input.method, enc.encrypted, enc.iv, enc.authTag, input.username ?? null]
+      [
+        sourceId,
+        input.fingerprintId,
+        input.method,
+        enc.encrypted,
+        enc.iv,
+        enc.authTag,
+        input.username ?? null,
+        input.expectedIpAddress ?? null,
+      ]
     );
-    return r.rows[0];
+    return r.rows[0] || null;
   },
 
   /** Full revoke: stops polling and forgets interval/cursor/history, not just the credential. */

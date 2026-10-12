@@ -316,9 +316,15 @@ async function save(pollNow: boolean) {
   saving.value = true;
   pollingNow.value = pollNow;
   try {
+    // The address this dialog showed. Both saves apply only while the source
+    // still has it (else 409), so nothing typed here reaches a source another
+    // admin moved in the meantime, and a token goes only to the address it was
+    // entered for.
+    let address = view.ip_address;
     if (changed) {
-      const updated = await logDiscoveryService.updateSourceTarget(id, changes);
+      const updated = await logDiscoveryService.updateSourceTarget(id, { ...changes, expected_ip_address: address });
       fillForm(updated.target);
+      address = updated.source.ip_address; // the address just saved, which a token typed with it is for
       emit('saved');
     }
     step = 'token';
@@ -328,6 +334,7 @@ async function save(pollNow: boolean) {
     } else if (secret) {
       await logDiscoveryService.savePollerCredential(id, secret, basicAuth.value ? form.username.trim() : undefined, {
         quiet: true,
+        expectedIpAddress: address,
       });
       form.secret = '';
       emit('saved');

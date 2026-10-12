@@ -1,4 +1,4 @@
-import { query } from '../config/database';
+import { query, getClient } from '../config/database';
 import { LogAccessMethod } from '../services/logDiscovery/types';
 
 export type DiscoverySourceStatus = 'candidate' | 'confirmed' | 'onboarded' | 'ignored';
@@ -100,10 +100,11 @@ export interface ReplacementCredential {
 /**
  * What the edit route checked a manual source's change against. The update only
  * applies while it still holds, so two edits that overlap can't combine into a
- * state neither checked (e.g. one edit's stale address with the other's new token).
+ * state neither checked (e.g. one edit's stale address with the other's new
+ * token), and a token save never lands on the far side of a move it overlapped.
  */
 export interface ManualTargetExpectation {
-  /** The address the route read: the update applies only while the source still has it. */
+  /** The address that was checked: the update applies only while the source still has it. */
   ip_address: string;
   /** Set for an address change without a new token, which is only allowed while no token is saved: the update applies only while there is still none. */
   noSavedToken: boolean;
@@ -240,6 +241,14 @@ export const DiscoverySourceModel = {
    * another source already has fails with UNIQUE_VIOLATION. Null when the row
    * doesn't exist, or no longer matches `expected` (it changed since the route
    * read it): nothing is changed then.
+   *
+   * One transaction: the source row is locked FOR UPDATE first (only while it
+   * still has expected.ip_address). That waits for a token save in progress on
+   * this source (DiscoverySourcePollerModel.upsertCredential holds the row FOR
+   * SHARE) and makes any later save wait for this one. For a move without a
+   * token, whether a token is saved is then read by a statement of its own: its
+   * snapshot, taken after the lock, includes a save that committed while this
+   * transaction waited, which a condition inside the UPDATE would not see.
    */
   async updateManualTarget(
     id: number,
@@ -248,51 +257,74 @@ export const DiscoverySourceModel = {
     credential: ReplacementCredential | null,
     expected: ManualTargetExpectation
   ): Promise<DiscoverySource | null> {
-    // One UPDATE of the poller row: Postgres applies only one of two
-    // data-modifying CTEs that touch the same row, so the cursor reset and the
-    // credential swap must share a statement-level UPDATE.
-    const result = await query(
-      `WITH updated AS (
-         UPDATE discovery_sources
-            SET ip_address = $2,
-                open_ports = ARRAY[$3::int],
-                evidence = (evidence - 'endpoint') || jsonb_strip_nulls(jsonb_build_object(
-                  'manual', true, 'target_port', $3::int, 'tls', $4::boolean, 'endpoint', $5::text)),
-                poll_overrides = NULL,
-                updated_at = NOW()
-          WHERE id = $1
-            AND ip_address = $12::inet
-            AND (NOT $13::boolean
-                 OR NOT EXISTS (SELECT 1 FROM discovery_source_pollers WHERE discovery_source_id = $1))
-          RETURNING *
-       ), poller_update AS (
-         UPDATE discovery_source_pollers
-            SET poll_cursor = CASE WHEN $6::boolean THEN NULL ELSE poll_cursor END,
-                encrypted_credential = CASE WHEN $7::boolean THEN $8::text ELSE encrypted_credential END,
-                encryption_iv = CASE WHEN $7::boolean THEN $9::text ELSE encryption_iv END,
-                encryption_auth_tag = CASE WHEN $7::boolean THEN $10::text ELSE encryption_auth_tag END,
-                credential_username = CASE WHEN $7::boolean THEN $11::text ELSE credential_username END,
-                updated_at = NOW()
-          WHERE discovery_source_id = $1 AND ($6::boolean OR $7::boolean) AND EXISTS (SELECT 1 FROM updated)
-       )
-       SELECT * FROM updated`,
-      [
+    const client = await getClient();
+    let connectionBroken = false;
+    try {
+      await client.query('BEGIN');
+      const locked = await client.query(`SELECT 1 FROM discovery_sources WHERE id = $1 AND ip_address = $2::inet FOR UPDATE`, [
         id,
-        target.ip_address,
-        target.target_port,
-        target.tls,
-        target.endpoint,
-        resetCursor,
-        credential !== null,
-        credential?.encrypted ?? null,
-        credential?.iv ?? null,
-        credential?.authTag ?? null,
-        credential?.username ?? null,
         expected.ip_address,
-        expected.noSavedToken,
-      ]
-    );
-    return result.rows[0] || null;
+      ]);
+      let unchanged = (locked.rowCount ?? 0) > 0;
+      if (unchanged && expected.noSavedToken) {
+        const saved = await client.query(`SELECT 1 FROM discovery_source_pollers WHERE discovery_source_id = $1`, [id]);
+        unchanged = (saved.rowCount ?? 0) === 0;
+      }
+      if (!unchanged) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      // One UPDATE of the poller row: Postgres applies only one of two
+      // data-modifying CTEs that touch the same row, so the cursor reset and the
+      // credential swap must share a statement-level UPDATE.
+      const result = await client.query(
+        `WITH updated AS (
+           UPDATE discovery_sources
+              SET ip_address = $2,
+                  open_ports = ARRAY[$3::int],
+                  evidence = (evidence - 'endpoint') || jsonb_strip_nulls(jsonb_build_object(
+                    'manual', true, 'target_port', $3::int, 'tls', $4::boolean, 'endpoint', $5::text)),
+                  poll_overrides = NULL,
+                  updated_at = NOW()
+            WHERE id = $1
+            RETURNING *
+         ), poller_update AS (
+           UPDATE discovery_source_pollers
+              SET poll_cursor = CASE WHEN $6::boolean THEN NULL ELSE poll_cursor END,
+                  encrypted_credential = CASE WHEN $7::boolean THEN $8::text ELSE encrypted_credential END,
+                  encryption_iv = CASE WHEN $7::boolean THEN $9::text ELSE encryption_iv END,
+                  encryption_auth_tag = CASE WHEN $7::boolean THEN $10::text ELSE encryption_auth_tag END,
+                  credential_username = CASE WHEN $7::boolean THEN $11::text ELSE credential_username END,
+                  updated_at = NOW()
+            WHERE discovery_source_id = $1 AND ($6::boolean OR $7::boolean) AND EXISTS (SELECT 1 FROM updated)
+         )
+         SELECT * FROM updated`,
+        [
+          id,
+          target.ip_address,
+          target.target_port,
+          target.tls,
+          target.endpoint,
+          resetCursor,
+          credential !== null,
+          credential?.encrypted ?? null,
+          credential?.iv ?? null,
+          credential?.authTag ?? null,
+          credential?.username ?? null,
+        ]
+      );
+      await client.query('COMMIT');
+      return result.rows[0] || null;
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        connectionBroken = true; // don't hand a dead connection back to the pool
+      }
+      throw err;
+    } finally {
+      client.release(connectionBroken || undefined);
+    }
   },
 
   /**

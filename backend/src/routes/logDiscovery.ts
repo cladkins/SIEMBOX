@@ -52,6 +52,14 @@ function parseSourceId(req: Request): number {
 }
 
 const IP_ADDRESS_MESSAGE = 'ip_address must be a literal IPv4 or IPv6 address (not a DNS name)';
+const EXPECTED_IP_ADDRESS_MESSAGE =
+  "expected_ip_address must be a literal IPv4 or IPv6 address: the source's address as you loaded it";
+
+export const SOURCE_CHANGED_MESSAGE =
+  'This source changed while it was being edited (its address or saved token): nothing was saved. Reload it and try again.';
+
+export const TOKEN_ADDRESS_CHANGED_MESSAGE =
+  'The source is no longer at the address this token was entered for (its address was changed in the meantime): the token was not saved. Reload the source, check its address and enter the token again.';
 
 /**
  * A manual source's address, shared by POST /sources/manual and PATCH
@@ -78,6 +86,16 @@ function sameAddress(a: string, b: string): boolean {
     }
   };
   return canonical(a) === canonical(b);
+}
+
+/**
+ * An optional expected_ip_address (the source's address as the client loaded
+ * it, so a change made from a stale view is refused): undefined when absent,
+ * null when malformed.
+ */
+function parseExpectedAddress(raw: unknown): string | null | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  return parseLiteralIp(raw);
 }
 
 function isPort(v: unknown): v is number {
@@ -191,7 +209,9 @@ const TARGET_FIELDS = ['ip_address', 'port', 'tls', 'endpoint'] as const;
  * source's address can change (403 otherwise — a scan-discovered source is
  * always polled at the address the scan found), and a new address is validated
  * exactly like POST /sources/manual's. Sending the current address back is
- * accepted for any source and changes nothing.
+ * accepted for any source and changes nothing. An expected_ip_address that is
+ * not the current address means the client edited a view of the source from
+ * before it moved: 409.
  */
 export function validateSourceTargetUpdate(
   body: unknown,
@@ -207,6 +227,12 @@ export function validateSourceTargetUpdate(
       status: 400,
       message: 'Nothing to change: send port, tls, endpoint and/or (for a manually added source) ip_address',
     };
+  }
+
+  const expected = parseExpectedAddress(b.expected_ip_address);
+  if (expected === null) return { ok: false, status: 400, message: EXPECTED_IP_ADDRESS_MESSAGE };
+  if (expected !== undefined && !sameAddress(expected, ctx.currentIp)) {
+    return { ok: false, status: 409, message: SOURCE_CHANGED_MESSAGE };
   }
 
   const value: SourceTargetUpdate = {};
@@ -255,9 +281,6 @@ export const ADDRESS_NEEDS_TOKEN_MESSAGE =
 const MAX_SECRET_LENGTH = 4096;
 /** discovery_source_pollers.credential_username is VARCHAR(255) (migration 030). */
 export const MAX_USERNAME_LENGTH = 255;
-
-export const SOURCE_CHANGED_MESSAGE =
-  'This source changed while it was being edited (its address or saved token): nothing was saved. Reload it and try again.';
 
 export type ReplacementCredentialInput = { secret: string; username: string | null };
 
@@ -461,10 +484,12 @@ router.delete('/sources/:id', authorize('admin'), async (req: Request, res: Resp
 // never changes. A new endpoint or address clears the poll cursor (the next poll
 // starts fresh); port/scheme changes keep it. The schedule and status are never
 // touched, the saved credential only by a move that brings a new one (below),
-// and the response never includes the credential. A manual source's update only
-// applies if its address (and, for a move without a token, its having no saved
-// token) is still what was checked here: an edit that overlaps another is
-// refused with 409 instead of mixing the two.
+// and the response never includes the credential. An expected_ip_address (the
+// address the client loaded; the Edit dialog always sends it) that the source no
+// longer has is a 409. A manual source's update only applies if its address
+// (and, for a move without a token, its having no saved token) is still what
+// was checked here: an edit that overlaps another, or a token save, is refused
+// with 409 instead of mixing the two.
 router.patch('/sources/:id', authorize('admin'), async (req: Request, res: Response) => {
   const id = parseSourceId(req);
   const source = await DiscoverySourceModel.findById(id);
@@ -634,18 +659,27 @@ router.get('/sources/:id/poller', async (req: Request, res: Response) => {
 // for this source's api_pull method and start polling it. Admin-gated, same as
 // shippers.ts's HTTP-push-key routes and threatFeeds.ts's reputation-provider
 // routes -- the two existing "user pastes a secret" precedents in this codebase.
+// With expected_ip_address (the address the token was entered for; the UI
+// always sends it), the token is only saved while the source still has that
+// address, else 409: a manual source's address can change, and a token typed
+// for one address must never reach another.
 router.post('/sources/:id/poller/credential', authorize('admin'), async (req: Request, res: Response) => {
   const id = parseSourceId(req);
-  const { username, secret } = req.body || {};
+  const { username, secret, expected_ip_address } = req.body || {};
   if (typeof secret !== 'string' || secret.trim().length === 0) {
     throw new ApiError(400, 'secret is required');
   }
   if (typeof username === 'string' && username.length > MAX_USERNAME_LENGTH) {
     throw new ApiError(400, `username must be at most ${MAX_USERNAME_LENGTH} characters`);
   }
+  const expectedIp = parseExpectedAddress(expected_ip_address);
+  if (expectedIp === null) throw new ApiError(400, EXPECTED_IP_ADDRESS_MESSAGE);
 
   const source = await DiscoverySourceModel.findById(id);
   if (!source) throw new ApiError(404, 'Discovery source not found');
+  if (expectedIp !== undefined && !sameAddress(expectedIp, source.ip_address)) {
+    throw new ApiError(409, TOKEN_ADDRESS_CHANGED_MESSAGE);
+  }
   if (!source.matched_fingerprint_id) throw new ApiError(400, 'This source has no matched fingerprint to poll');
 
   const fingerprint = getFingerprintById(source.matched_fingerprint_id);
@@ -656,12 +690,19 @@ router.post('/sources/:id/poller/credential', authorize('admin'), async (req: Re
   const logAccess = fingerprint.log_access.find((la) => la.method === 'api_pull');
   if (!logAccess) throw new ApiError(400, `${fingerprint.name} has no api_pull log access method`);
 
+  // The address is checked again where the token is written, while the source
+  // row is locked: a move that commits after the check above makes it a 409.
   const row = await DiscoverySourcePollerModel.upsertCredential(id, {
     fingerprintId: fingerprint.id,
     method: logAccess.method,
     username: typeof username === 'string' && username.length > 0 ? username : null,
     secret,
+    expectedIpAddress: expectedIp ?? null,
   });
+  if (!row) {
+    if (await DiscoverySourceModel.findById(id)) throw new ApiError(409, TOKEN_ADDRESS_CHANGED_MESSAGE);
+    throw new ApiError(404, 'Discovery source not found');
+  }
 
   // Matches the outcome of the manual onboard/confirm flow, so a source
   // doesn't sit in two different "half-done" states depending on which path

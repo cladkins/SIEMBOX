@@ -20,6 +20,10 @@ import {
   serializeCursor,
   ERROR_LOG_REPROBE_MS,
   MAX_TAIL_WINDOW_LINES,
+  MAX_RECORD_LINES,
+  MAX_RECORD_CHARS,
+  SUPERVISOR_LOG_ENTRIES_WIDE,
+  windowReach,
 } from './homeAssistant';
 import { HttpFetchOptions, HttpFetchResult } from '../httpFetch';
 import { PollTarget } from '../types';
@@ -105,6 +109,12 @@ const FILE = '/api/error_log';
 const SUPERVISOR = '/api/hassio/core/logs';
 /** The byte Range asked of the log file: its last 5 MB. */
 const FILE_RANGE = 'bytes=-5242880';
+/**
+ * A first poll of the Supervisor's journal (no tail window yet): 500 new
+ * entries plus MAX_RECORD_LINES (2000), so the window can start at the last
+ * record's header however long the record is.
+ */
+const FIRST_RANGE = 'entries=:-2499:2500';
 /** The cursor after HA_LINES: its last record, from that record's header line (the MQTT ERROR) to the end. */
 const HA_TAIL = HA_LINES.slice(-4).join('\n');
 
@@ -112,11 +122,24 @@ interface Call {
   url: string;
   headers: Record<string, string>;
 }
-type Reply = { status: number; body?: string; contentType?: string; headers?: Record<string, string>; truncated?: boolean };
+type Reply = {
+  status: number;
+  body?: string;
+  contentType?: string;
+  headers?: Record<string, string>;
+  truncated?: boolean;
+  /** Send the body exactly as given, even without a final newline (a record caught while it is being written). */
+  unterminated?: boolean;
+};
 /** A fixed reply, or one worked out from the request's headers. */
 type Route = Reply | ((headers: Record<string, string>) => Reply);
 
-/** A fake Home Assistant: answers per path (404 for anything unlisted) and records every request. */
+/**
+ * A fake Home Assistant: answers per path (404 for anything unlisted) and
+ * records every request. Like Home Assistant's log file and the Supervisor's
+ * journal lines, a body ends with a newline (one is added where a test's text
+ * has none), unless the reply is `unterminated`.
+ */
 function fakeHomeAssistant(routes: Record<string, Route>) {
   const calls: Call[] = [];
   const fetch = async (url: string, opts: HttpFetchOptions = {}): Promise<HttpFetchResult> => {
@@ -124,9 +147,10 @@ function fakeHomeAssistant(routes: Record<string, Route>) {
     calls.push({ url, headers });
     const route = routes[new URL(url).pathname];
     const reply = (typeof route === 'function' ? route(headers) : route) ?? { status: 404, body: '404: Not Found' };
+    const body = reply.body ?? '';
     return {
       status: reply.status,
-      body: reply.body ?? '',
+      body: reply.unterminated || body === '' || body.endsWith('\n') ? body : `${body}\n`,
       headers: { 'content-type': reply.contentType ?? 'text/plain; charset=utf-8', ...(reply.headers || {}) },
       truncated: reply.truncated,
     };
@@ -167,7 +191,7 @@ test('auto: /api/error_log answers -> one request, the exact URL as before, a by
   assert.equal(result.nextCursor, HA_TAIL, 'the cursor keeps its plain-text tail-window form');
 });
 
-test('auto: a 404 from /api/error_log falls back to the Supervisor endpoint (no_colors, Range for the latest 500)', async () => {
+test('auto: a 404 from /api/error_log falls back to the Supervisor endpoint (no_colors; a first poll asks for 500 entries plus the longest record)', async () => {
   const ha = fakeHomeAssistant({
     [FILE]: { status: 404, body: '404: Not Found' },
     [SUPERVISOR]: { status: 200, body: HA_LINES.map(colored).join('\n') },
@@ -176,7 +200,7 @@ test('auto: a 404 from /api/error_log falls back to the Supervisor endpoint (no_
 
   assert.deepEqual(ha.paths(), [FILE, SUPERVISOR]);
   assert.equal(ha.calls[1].url, 'http://192.168.1.50:8123/api/hassio/core/logs?no_colors');
-  assert.deepEqual(ha.calls[1].headers, { Authorization: 'Bearer llat-token', Range: 'entries=:-499:500' });
+  assert.deepEqual(ha.calls[1].headers, { Authorization: 'Bearer llat-token', Range: FIRST_RANGE });
   assert.deepEqual(messages(result), HA_LINES, 'native lines: colour codes removed, nothing else changed');
   assert.ok(result.events.every((e) => !e.message.includes(ESC)));
 
@@ -199,6 +223,7 @@ test('remembered fallback: the next poll asks only the Supervisor endpoint and r
   const result = await adapterAt(T0 + 60 * 60 * 1000, ha).fetchEvents(target(), CRED, nextCursor);
 
   assert.deepEqual(ha.paths(), [SUPERVISOR], 'no doomed /api/error_log request');
+  assert.equal(ha.calls[0].headers.Range, 'entries=:-503:504', '500 new entries plus the 4 lines of the tail window');
   assert.deepEqual(messages(result), LATER_LINES);
   const cursor = parseCursor(result.nextCursor);
   assert.equal(cursor.errorLogCheckedAt, T0, 'the re-probe clock is not reset by a normal poll');
@@ -282,7 +307,7 @@ test('an admin-set Supervisor endpoint is requested directly (no_colors + Range)
 
   assert.deepEqual(ha.paths(), [SUPERVISOR]);
   assert.equal(ha.calls[0].url, 'https://192.168.1.50:443/api/hassio/core/logs?no_colors');
-  assert.equal(ha.calls[0].headers.Range, 'entries=:-499:500');
+  assert.equal(ha.calls[0].headers.Range, FIRST_RANGE);
   assert.deepEqual(messages(result), HA_LINES);
   assert.equal(result.nextCursor, HA_TAIL);
 });
@@ -291,11 +316,11 @@ test('an admin-set path behind a reverse proxy keeps its prefix; .../logs/latest
   const proxied = fakeHomeAssistant({ '/ha/api/hassio/core/logs': { status: 200, body: HA_LINES[0] } });
   await adapterAt(T0, proxied).fetchEvents(target({ endpoint: '/ha/api/hassio/core/logs' }), CRED, null);
   assert.equal(proxied.calls[0].url, 'http://192.168.1.50:8123/ha/api/hassio/core/logs?no_colors');
-  assert.equal(proxied.calls[0].headers.Range, 'entries=:-499:500');
+  assert.equal(proxied.calls[0].headers.Range, FIRST_RANGE);
 
   const latest = fakeHomeAssistant({ '/api/hassio/core/logs/latest': { status: 200, body: HA_LINES[0] } });
   await adapterAt(T0, latest).fetchEvents(target({ endpoint: '/api/hassio/core/logs/latest' }), CRED, null);
-  assert.equal(latest.calls[0].url, 'http://192.168.1.50:8123/api/hassio/core/logs/latest?no_colors&lines=500');
+  assert.equal(latest.calls[0].url, 'http://192.168.1.50:8123/api/hassio/core/logs/latest?no_colors&lines=2500');
 
   const file = fakeHomeAssistant({ '/homeassistant/api/error_log': { status: 200, body: HA_LINES[0] } });
   await adapterAt(T0, file).fetchEvents(target({ endpoint: '/homeassistant/api/error_log' }), CRED, null);
@@ -423,11 +448,93 @@ test('selectNewLines matches the window as whole lines: blank lines and CRLF lin
   assert.equal(selectNewLines(`x${LINE1}\n${LINE2}\n${LINE3}\n${LINE4}`, cursor).gap, true);
 });
 
-test('selectNewLines: a last record longer than MAX_TAIL_WINDOW_LINES keeps a window of that many lines', () => {
-  const header = '2026-10-12 13:00:00.123 ERROR (MainThread) [homeassistant.components.foo] Error doing job';
-  const frames = Array.from({ length: MAX_TAIL_WINDOW_LINES + 50 }, (_, i) => `  File "/usr/src/x.py", line ${i}, in f${i}`);
-  const { nextCursor } = selectNewLines([LINE1, header, ...frames].join('\n'), null);
-  assert.deepEqual(nextCursor!.split('\n'), frames.slice(-MAX_TAIL_WINDOW_LINES));
+/**
+ * One copy of a long error (`lines` lines: its header, then the same traceback
+ * lines in every copy), like a chained exception with deep stacks.
+ */
+function longError(copy: number, lines: number): string[] {
+  const time = new Date(Date.UTC(2026, 9, 12, 13) + copy * 60_000 + 123).toISOString().replace('T', ' ').slice(0, 23);
+  const frames = Array.from({ length: lines - 1 }, (_, i) =>
+    i % 2 === 0
+      ? `  File "/usr/src/homeassistant/homeassistant/components/foo/coordinator.py", line ${100 + i}, in _async_refresh`
+      : `    data = await self._async_update_data()  # frame ${i}`
+  );
+  return [`${time} ERROR (MainThread) [homeassistant.components.foo] Error fetching foo data: Cannot connect`, ...frames];
+}
+
+test('the tail window is the whole last record however long (up to MAX_RECORD_LINES); past that, or past MAX_RECORD_CHARS, its last MAX_TAIL_WINDOW_LINES lines', () => {
+  const record = longError(0, 150);
+  assert.deepEqual(selectNewLines([LINE1, ...record].join('\n'), null).nextCursor!.split('\n'), record, 'a 150-line record: all of it, from its header');
+
+  const huge = longError(0, MAX_RECORD_LINES + 50);
+  assert.deepEqual(
+    selectNewLines([LINE1, ...huge].join('\n'), null).nextCursor!.split('\n'),
+    huge.slice(-MAX_TAIL_WINDOW_LINES),
+    'a header further back than MAX_RECORD_LINES: the last lines alone'
+  );
+
+  const wide = [huge[0], ...Array.from({ length: 300 }, (_, i) => `  data = ${String(i).padStart(4, '0')}${'x'.repeat(1020)}`)];
+  assert.ok(wide.join('\n').length > MAX_RECORD_CHARS);
+  assert.deepEqual(
+    selectNewLines([LINE1, ...wide].join('\n'), null).nextCursor!.split('\n'),
+    wide.slice(-MAX_TAIL_WINDOW_LINES),
+    'a record longer than MAX_RECORD_CHARS: the last lines alone'
+  );
+});
+
+test('a traceback of more than 100 lines logged again and again: both endpoints resume after the last copy, not the first', async () => {
+  const copies = (from: number, n: number) => Array.from({ length: n }, (_, c) => longError(from + c, 150)).flat();
+
+  // The log file: 40 copies (6000 lines), then one more, with an INFO line between.
+  const log = copies(0, 40);
+  const file = () => ({ status: 200, body: log.join('\n') });
+  const first = await adapterAt(T0, fakeHomeAssistant({ [FILE]: file })).fetchEvents(target(), CRED, null);
+  assert.equal(first.nextCursor, longError(39, 150).join('\n'), 'the window is the whole last copy, from its header');
+  const unchanged = await adapterAt(T0, fakeHomeAssistant({ [FILE]: file })).fetchEvents(target(), CRED, first.nextCursor);
+  assert.deepEqual(messages(unchanged), [], 'nothing new: nothing returned (not every copy since the first)');
+  log.push(LATER_INFO, ...longError(40, 150));
+  const grown = await adapterAt(T0, fakeHomeAssistant({ [FILE]: file })).fetchEvents(target(), CRED, unchanged.nextCursor);
+  assert.deepEqual(messages(grown), [LATER_INFO, ...longError(40, 150)]);
+
+  // The Supervisor journal: the same, with each request reaching back over the window.
+  const journal = copies(0, 30);
+  const first2 = await adapterAt(T0, fakeJournal(journal)).fetchEvents(target(), CRED, null);
+  const ha = fakeJournal(journal);
+  const unchanged2 = await adapterAt(T0 + 60_000, ha).fetchEvents(target(), CRED, first2.nextCursor);
+  assert.deepEqual(messages(unchanged2), []);
+  assert.deepEqual(
+    ha.calls.map((c) => c.headers.Range),
+    ['entries=:-649:650'],
+    '500 new entries plus the 150-line window'
+  );
+  journal.push(LATER_INFO, ...longError(30, 150));
+  const grown2 = await adapterAt(T0 + 120_000, fakeJournal(journal)).fetchEvents(target(), CRED, unchanged2.nextCursor);
+  assert.deepEqual(messages(grown2), [LATER_INFO, ...longError(30, 150)]);
+  assert.equal(grown2.warning, undefined);
+});
+
+test('a record longer than one Supervisor answer (700 lines) that repeats between other lines: every poll returns exactly the new lines', async () => {
+  // A login warning, then the long error; three more of each between polls.
+  let n = 0;
+  const round = () => [bruteForceLine(n++), ...longError(n, 700)];
+  const journal = round();
+  let cursor = (await adapterAt(T0, fakeJournal(journal)).fetchEvents(target(), CRED, null)).nextCursor;
+  assert.equal(parseCursor(cursor).tail, journal.slice(1).join('\n'), "the first poll reaches back to the last record's header");
+  for (let poll = 1; poll <= 3; poll++) {
+    const added = [...round(), ...round(), ...round()];
+    journal.push(...added);
+    const result = await adapterAt(T0 + poll * 60_000, fakeJournal(journal)).fetchEvents(target(), CRED, cursor);
+    assert.deepEqual(messages(result), added, `poll ${poll}: the ${added.length} new lines, the login warnings included`);
+    assert.equal(result.warning, undefined);
+    cursor = result.nextCursor;
+  }
+});
+
+test('windowReach: a window that starts at a header asks for its own lines; none, or one of bare lines, for MAX_RECORD_LINES', () => {
+  assert.equal(windowReach([LINE1, LINE2, LINE3].join('\n')), 3);
+  assert.equal(windowReach(longError(0, 150).join('\n')), 150);
+  assert.equal(windowReach(null), MAX_RECORD_LINES);
+  assert.equal(windowReach('  File "/usr/src/x.py", line 1, in f\n    raise FooError("boom")'), MAX_RECORD_LINES);
 });
 
 // ---------------------------------------------------------------------------
@@ -459,6 +566,36 @@ test('a 206 from past the start of the file: its first line, cut in two, is drop
   assert.deepEqual(messages(kept), HA_LINES);
 });
 
+test('a last record caught while Home Assistant writes it (no final newline) is left for the next poll, which reads it whole', async () => {
+  const lines = Array.from({ length: 300 }, (_, i) => bruteForceLine(i));
+  const record = bruteForceLine(300);
+  const later = Array.from({ length: 23 }, (_, i) => bruteForceLine(301 + i));
+  const cursor = lines.slice(-3).join('\n');
+
+  // The file ends 40 characters into the record: nothing of it is taken, the cursor stays before it.
+  const midWrite = await adapterAt(
+    T0,
+    fakeHomeAssistant({ [FILE]: { status: 200, body: `${lines.join('\n')}\n${record.slice(0, 40)}`, unterminated: true } })
+  ).fetchEvents(target(), CRED, cursor);
+  assert.deepEqual(messages(midWrite), []);
+  assert.equal(midWrite.nextCursor, cursor);
+
+  // The next poll gets the record whole, then the lines after it, and nothing already stored.
+  const next = await adapterAt(
+    T0,
+    fakeHomeAssistant({ [FILE]: { status: 200, body: [...lines, record, ...later].join('\n') } })
+  ).fetchEvents(target(), CRED, midWrite.nextCursor);
+  assert.deepEqual(messages(next), [record, ...later]);
+
+  // The same for a Supervisor answer cut short.
+  const journal = fakeHomeAssistant({
+    [SUPERVISOR]: { status: 200, body: `${lines.join('\n')}\n${record.slice(0, 40)}`, unterminated: true },
+  });
+  const cut = await adapterAt(T0, journal).fetchEvents(target({ endpoint: SUPERVISOR }), CRED, cursor);
+  assert.deepEqual(messages(cut), []);
+  assert.equal(cut.nextCursor, cursor);
+});
+
 test('an empty log file (416 to the byte Range) is asked for again without Range', async () => {
   const ha = fakeHomeAssistant({ [FILE]: (headers) => (headers.Range ? { status: 416, body: '' } : { status: 200, body: '' }) });
   const result = await adapterAt(T0, ha).fetchEvents(target(), CRED, 'previous tail');
@@ -482,13 +619,13 @@ function fakeJournal(journal: string[], opts: { wideFails?: boolean } = {}) {
   return fakeHomeAssistant({
     [SUPERVISOR]: (headers) => {
       const n = Number(/^entries=:-\d+:(\d+)$/.exec(headers.Range ?? '')?.[1] ?? 100);
-      if (opts.wideFails && n > 500) return { status: 502, body: '502: Bad Gateway' };
+      if (opts.wideFails && n > SUPERVISOR_LOG_ENTRIES_WIDE) return { status: 502, body: '502: Bad Gateway' };
       return { status: 200, body: journal.slice(-n).join('\n') };
     },
   });
 }
 
-test('more new lines than the latest 500 journal entries: the Supervisor is asked for 5000, and every new line is collected', async () => {
+test('more new lines than the 500 journal entries asked for: the Supervisor is asked for 5000, and every new line is collected', async () => {
   const journal = HA_LINES.slice(0, 5);
   const first = await adapterAt(T0, fakeJournal(journal)).fetchEvents(target(), CRED, null);
 
@@ -499,22 +636,42 @@ test('more new lines than the latest 500 journal entries: the Supervisor is aske
 
   assert.deepEqual(
     ha.calls.map((c) => c.headers.Range),
-    ['entries=:-499:500', 'entries=:-4999:5000']
+    ['entries=:-502:503', 'entries=:-5002:5003'],
+    'each request: the new entries plus the 3 lines of the tail window'
   );
   assert.deepEqual(messages(result), burst, 'all 797 new lines, nothing older');
   assert.equal(result.warning, undefined);
 });
 
-test('more new lines than 5000: the whole answer is collected and the gap is reported as a warning', async () => {
+test('up to 5000 new lines, however the tail window falls in the wider answer: exactly the new lines and no warning', async () => {
+  for (const [lastRecord, burst] of [
+    [1, 4998],
+    [1, 5000],
+    [61, 4950], // a 61-line traceback last: its window reaches 61 entries back
+    [61, 5000],
+  ]) {
+    const journal = [...HA_LINES.slice(0, 4), ...(lastRecord === 1 ? [HA_LINES[4]] : longError(0, lastRecord))];
+    const first = await adapterAt(T0, fakeJournal(journal)).fetchEvents(target(), CRED, null);
+    const added = Array.from({ length: burst }, (_, i) => bruteForceLine(i));
+    journal.push(...added);
+    const result = await adapterAt(T0 + 60_000, fakeJournal(journal)).fetchEvents(target(), CRED, first.nextCursor);
+    const label = `${burst} new lines after a ${lastRecord}-line record`;
+    assert.equal(result.events.length, burst, label);
+    assert.deepEqual(messages(result), added, label);
+    assert.equal(result.warning, undefined, `${label}: every new line was collected, so no warning`);
+  }
+});
+
+test('more new lines than 5000: the latest 5000 are collected and the gap is reported as a warning', async () => {
   const journal = HA_LINES.slice(0, 5);
   const first = await adapterAt(T0, fakeJournal(journal)).fetchEvents(target(), CRED, null);
-  journal.push(...Array.from({ length: 5200 }, (_, i) => bruteForceLine(i)));
+  journal.push(...Array.from({ length: 5001 }, (_, i) => bruteForceLine(i)));
 
   const result = await adapterAt(T0 + 60_000, fakeJournal(journal)).fetchEvents(target(), CRED, first.nextCursor);
-  assert.deepEqual(messages(result), journal.slice(-5000));
+  assert.deepEqual(messages(result), journal.slice(-5000), 'only lines that are certainly new: none of the 3-line window');
   assert.match(result.warning ?? '', /more lines since the last poll than its Supervisor returns at once .*not collected/);
 
-  // The wider request fails: the 500 entries already fetched are all kept.
+  // The wider request fails: the latest 500 of the first answer, which are certainly new, are kept.
   const failing = fakeJournal(journal, { wideFails: true });
   const narrow = await adapterAt(T0 + 60_000, failing).fetchEvents(target(), CRED, first.nextCursor);
   assert.equal(failing.calls.length, 2);

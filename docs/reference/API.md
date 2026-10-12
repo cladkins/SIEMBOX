@@ -2774,11 +2774,11 @@ default (not with `HA_DISABLE_LOG_FILE=true`); Home Assistant OS and Supervised
 installs write no log file (unless `HA_DUPLICATE_LOG_FILE` is set), so there
 `/api/error_log` answers `404` and the log comes from the Supervisor through
 `/api/hassio/core/logs`. The poller asks `/api/error_log` first and on a `404` uses
-`/api/hassio/core/logs?no_colors` with `Range: entries=:-499:500` (the latest 500
-journal entries). It remembers which endpoint works for each source (in the poll
-cursor), so it doesn't send a doomed request every poll, and re-probes
-`/api/error_log` every 6 hours and whenever the remembered endpoint fails. An
-endpoint set with `PATCH /sources/:id` is used alone. Lines are stored in Home
+`/api/hassio/core/logs?no_colors` with a `Range: entries=…` header for the latest
+journal entries (how many is described below). It remembers which endpoint works
+for each source (in the poll cursor), so it doesn't send a doomed request every
+poll, and re-probes `/api/error_log` every 6 hours and whenever the remembered
+endpoint fails. An endpoint set with `PATCH /sources/:id` is used alone. Lines are stored in Home
 Assistant's own format (colour codes removed), as the catalog parser expects. Both
 endpoints are admin-only: the token must be a long-lived access token created by
 a Home Assistant administrator.
@@ -2786,12 +2786,19 @@ a Home Assistant administrator.
 Only the end of the log is read. The file is requested with
 `Range: bytes=-5242880` (its last 5 MB; a server that ignores the range sends the
 whole file and its last 5 MB are kept), so a log that has grown past 5 MB keeps
-being collected. When the previous poll's last lines are no longer among the
-latest 500 journal entries, the Supervisor is asked again with
-`Range: entries=:-4999:5000`; if they aren't among those either, all 5000 lines
-are collected and a warning is logged to the error log. A poll resumes after
-the last record it saw (from that record's timestamped first line), so a
-traceback that repeats is not collected again.
+being collected. A poll resumes after the last record it saw, matched from that
+record's timestamped first line to its end, so a traceback that repeats is not
+collected again; this holds for a record of up to 2000 lines and about 256 KB
+(a longer one is matched by its last 100 lines only). A last line without its
+newline, which Home Assistant is still writing, is left for the next poll. The
+Supervisor is asked for 500 new journal entries plus the lines the poll resumes
+after (at least three: `Range: entries=:-502:503` after short records); a first
+poll, which collects the last 200 lines, asks for 2500 (`entries=:-2499:2500`) so
+that it reaches the start of the last record. When those lines are not in the
+answer, more than 500 lines arrived, and the Supervisor is asked again for 5000
+new entries plus them (`entries=:-5002:5003`). If they are not in that answer
+either, more than 5000 lines arrived: the latest 5000 are collected and a
+warning is logged to the error log.
 
 **Access:** every route requires a login. Reads (and the read-only `onboard/preview`) are open to any role. Starting or cancelling a scan and the source actions `confirm`, `ignore` and `onboard/confirm` require admin or operator, the roles that can open the Log Discovery page. Changing the scan scope, manual sources, a source's poll target and poll credentials requires admin. See [Roles for scan and asset writes](#roles-for-scan-and-asset-writes).
 
@@ -3103,12 +3110,16 @@ Sources.
   reads the token and the address together when it starts, so no poll can pair
   the old token with the new address. Without `credential` the request is a
   `400` and nothing changes. A source with no saved token can move freely.
-- A manual source's change is only applied if, when it is written, the source
+- With `expected_ip_address` (the address the client loaded; the Edit dialog
+  always sends it), the change applies only while the source still has that
+  address: if another admin moved it meanwhile, the request is a `409` and
+  nothing changes. Reload the source and try again.
+- A manual source's change is also only written if, at that moment, the source
   still has the address it was checked against (and, for a move without a token,
-  still has no saved token). If another edit or a token save landed in between,
-  the request is a `409` and nothing changes; reload the source and try again. A
-  poll that was already running when the source moved does not overwrite the
-  cleared cursor.
+  still has no saved token): the source row is locked for the write, so a token
+  save and a move never overlap. If another edit or a token save got in first,
+  the request is a `409` and nothing changes. A poll that was already running
+  when the source moved does not overwrite the cleared cursor.
 - Otherwise the saved credential, the schedule and the poll status are not
   changed, and no credential is ever returned.
 
@@ -3116,13 +3127,14 @@ Sources.
 
 **Request Body** (send only what changes; `null` returns a setting to its default):
 ```json
-{ "port": 8123, "tls": false, "endpoint": "/api/hassio/core/logs", "ip_address": "192.168.1.60" }
+{ "port": 8123, "tls": false, "endpoint": "/api/hassio/core/logs", "ip_address": "192.168.1.60", "expected_ip_address": "192.168.1.50" }
 ```
 - `port` - integer `1`–`65535`, or `null` for the default (a discovered source: the adapter's own port; a manual source: the fingerprint's `api_pull` `target_port`)
 - `tls` - boolean, or `null` for the default (a manual source: `true` for `authentik`, `false` otherwise)
 - `endpoint` - a path on the source itself, e.g. `/api/hassio/core/logs`, or `/ha/api/error_log` behind a reverse proxy. It must start with a single `/` (no scheme or host) and may not contain a query string or fragment, `.` or `..` segments, control characters, whitespace, backslashes or `%`-encoding; at most 256 characters. An endpoint that is set is the only one requested (Home Assistant's automatic fallback is off). `""` or `null` restores the fingerprint's endpoint.
 - `ip_address` - manual sources only: a literal IPv4/IPv6 address, validated exactly like `POST /sources/manual`. Sending a discovered source's current address back is accepted and changes nothing; a different one is refused with `403`.
 - `credential` - `{ "secret": "...", "username": "..." }`, required together with a changed `ip_address` when the source has a saved token, and accepted only then (otherwise `400`; to replace a token without moving the source use `POST /sources/:id/poller/credential`). `secret` is a non-blank string of at most 4096 characters; `username` (HTTP Basic sources such as AdGuard Home) at most 255. It is encrypted like any saved token and never returned.
+- `expected_ip_address` (optional) - the source's address as the client loaded it, a literal IPv4/IPv6 address (however IPv6 is written). Not a change by itself. If the source no longer has it, the request is a `409` and nothing changes; without it, the change applies to the source wherever it is now.
 
 **Response (200):**
 ```json
@@ -3149,7 +3161,7 @@ shape as `GET .../poller` (`{ "configured": false }` before a credential is save
 - `400` - an invalid field (the message names it and the rule), an empty body, or a source whose device type has no API pull method
 - `403` - caller is not an admin, or a new `ip_address` for a scan-discovered source
 - `404` - no source with that id
-- `409` - the new address already belongs to another source, or the source changed while this request was being checked (another edit or a token save); nothing was changed
+- `409` - the new address already belongs to another source, the source no longer has `expected_ip_address`, or the source changed while this request was being checked (another edit or a token save); nothing was changed
 
 ---
 
@@ -3272,16 +3284,18 @@ Save (or replace) the token for this source's `api_pull` method and start pollin
 
 **Request Body:**
 ```json
-{ "username": null, "secret": "the-api-token-or-password" }
+{ "username": null, "secret": "the-api-token-or-password", "expected_ip_address": "192.168.1.50" }
 ```
 - `secret` (required) - the token/password. Encrypted at rest (AES-256-GCM); never returned again after this call.
 - `username` (optional) - only used by HTTP Basic auth sources (AdGuard Home today); at most 255 characters
+- `expected_ip_address` (optional) - the source's address the token was entered for, a literal IPv4/IPv6 address. The token is saved only while the source still has it, checked again as it is written with the source row locked; if the source was moved meanwhile (`PATCH /sources/:id`), the request is a `409` and nothing is saved, so a token entered for one address never reaches another. The Log Discovery UI always sends it (the address it showed). Without it, the token is saved for the source at whatever address it has now.
 
 **Response (200):** Same shape as `GET .../poller` above.
 
 **Errors:**
-- `400` - missing/empty `secret`, a `username` over 255 characters, source has no matched fingerprint, or the fingerprint has no `api_pull` log-access method
+- `400` - missing/empty `secret`, a `username` over 255 characters, an `expected_ip_address` that is not a literal IP address, source has no matched fingerprint, or the fingerprint has no `api_pull` log-access method
 - `404` - source or fingerprint not found
+- `409` - the source no longer has `expected_ip_address`; nothing was saved
 
 ---
 

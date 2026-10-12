@@ -673,16 +673,19 @@ async function submitManualSource() {
   try {
     // 1) create the scan-less source, 2-3) reuse the existing poller routes to save
     // the credential + polling schedule, 4) poll once immediately for instant feedback.
-    const { id } = await logDiscoveryService.createManualSource({
+    const created = await logDiscoveryService.createManualSource({
       ip_address: form.ip_address.trim(),
       fingerprint_id: form.fingerprint_id,
       port: form.port,
       tls: form.tls,
     });
+    const id = created.id;
+    // The token typed here is for the address just entered: saved only while the source is still there.
     await logDiscoveryService.savePollerCredential(
       id,
       form.secret.trim(),
-      manualAuthBasic.value ? form.username.trim() : undefined
+      manualAuthBasic.value ? form.username.trim() : undefined,
+      { expectedIpAddress: created.ip_address }
     );
     await logDiscoveryService.setPolling(id, { poll_interval_minutes: form.poll_interval_minutes, enabled: form.enabled });
     const poll = await logDiscoveryService.runPollNow(id);
@@ -776,7 +779,9 @@ async function savePollerCredential() {
       ...(await logDiscoveryService.savePollerCredential(
         onboardTarget.value.id,
         pollerSecret.value.trim(),
-        pollerUsername.value.trim() || undefined
+        pollerUsername.value.trim() || undefined,
+        // The address this panel shows: the token is only saved while the source is still there.
+        { expectedIpAddress: pollerStatus.value?.target?.ip_address ?? onboardTarget.value.ip }
       )),
     };
     pollerSecret.value = '';

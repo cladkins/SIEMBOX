@@ -38,13 +38,17 @@ import { stripAnsi } from '../../../syslog/syslogParser';
 
 export const ERROR_LOG_ENDPOINT = '/api/error_log';
 export const SUPERVISOR_LOG_ENDPOINT = '/api/hassio/core/logs';
-/** Journal entries asked of the Supervisor per poll. */
+/**
+ * New journal entries asked of the Supervisor per poll. The request is for this
+ * many plus windowReach() more (the previous poll's tail window), so the window
+ * is in the answer whenever no more than this many lines arrived since.
+ */
 export const SUPERVISOR_LOG_ENTRIES = 500;
 /**
- * Asked for instead when the previous poll's last lines are no longer among the
- * latest SUPERVISOR_LOG_ENTRIES (more new lines than that since; a login brute
- * force can do it): about 1 MB. More new lines than this between two polls
- * leaves a gap, which the poll reports as a warning.
+ * Asked for instead (plus windowReach() more) when the window is not in that
+ * answer (more new lines than SUPERVISOR_LOG_ENTRIES since; a login brute force
+ * can do it): about 1 MB. More new lines than this between two polls leaves a
+ * gap: the latest this many are collected and the poll reports a warning.
  */
 export const SUPERVISOR_LOG_ENTRIES_WIDE = 5000;
 /**
@@ -58,7 +62,15 @@ export const LOG_MAX_BYTES = 5 * 1024 * 1024;
 export const ERROR_LOG_REPROBE_MS = 6 * 60 * 60 * 1000;
 
 const TAIL_WINDOW_LINES = 3;
-/** The tail window never grows past this many lines, even for a longer last record (see tailWindow). */
+/**
+ * How far back tailWindow looks for the last record's timestamped header line:
+ * a last record up to this many lines (and MAX_RECORD_CHARS) is resumed after
+ * exactly, however often it repeats.
+ */
+export const MAX_RECORD_LINES = 2000;
+/** About 256 KB: the most text the tail window (stored as the cursor) holds for one record. */
+export const MAX_RECORD_CHARS = 256 * 1024;
+/** The window when no header is within that reach (a log not in Home Assistant's format, or a longer record): its last lines alone. */
 export const MAX_TAIL_WINDOW_LINES = 100;
 const FIRST_POLL_FALLBACK_LINES = 200;
 const LINE_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?)/;
@@ -77,23 +89,37 @@ function splitLines(text: string): string[] {
 
 /**
  * The tail window: the last lines already seen, from the start of the last
- * record (its timestamped header line) to the end; at least TAIL_WINDOW_LINES
- * lines, at most MAX_TAIL_WINDOW_LINES. The header's millisecond timestamp is
- * what makes the window unique. A traceback that an integration logs again and
- * again repeats its last lines in every copy, so a window of bare trailing
- * lines would match the OLDEST copy in the next answer, and everything after it
- * would be taken as new on every poll.
+ * record (its timestamped header line) to the end, however long the record is
+ * (up to MAX_RECORD_LINES and MAX_RECORD_CHARS); at least TAIL_WINDOW_LINES
+ * lines. The header's millisecond timestamp is what makes the window unique. A
+ * traceback that an integration logs again and again repeats its lines in every
+ * copy, so a window of bare traceback lines would match the OLDEST copy in the
+ * next answer, and everything after it would be taken as new on every poll.
+ * Only when no header is within reach is the window the last
+ * MAX_TAIL_WINDOW_LINES lines.
  */
 function tailWindow(lines: string[]): string[] {
-  const floor = Math.max(0, lines.length - MAX_TAIL_WINDOW_LINES);
-  let start = floor; // no header within reach: as many lines as allowed
+  const floor = Math.max(0, lines.length - MAX_RECORD_LINES);
+  let chars = 0; // of the record's lines after its header
   for (let i = lines.length - 1; i >= floor; i--) {
-    if (LINE_TIMESTAMP_RE.test(lines[i])) {
-      start = i;
-      break;
-    }
+    if (LINE_TIMESTAMP_RE.test(lines[i])) return lines.slice(Math.min(i, Math.max(0, lines.length - TAIL_WINDOW_LINES)));
+    chars += lines[i].length + 1;
+    if (chars > MAX_RECORD_CHARS) break;
   }
-  return lines.slice(Math.min(start, Math.max(0, lines.length - TAIL_WINDOW_LINES)));
+  return lines.slice(-MAX_TAIL_WINDOW_LINES);
+}
+
+/**
+ * How many journal entries a Supervisor request needs beyond the new ones it
+ * asks for, so that its answer holds the previous poll's tail window and the
+ * next window can again start at its record's header: the window's own lines
+ * when it holds a record's header; otherwise (no window yet, or one of bare
+ * lines because its record began before the answer it came from, or is longer
+ * than a window holds) as many as a record can have, MAX_RECORD_LINES.
+ */
+export function windowReach(prevTail: string | null): number {
+  const window = prevTail ? splitLines(prevTail) : [];
+  return window.some((line) => LINE_TIMESTAMP_RE.test(line)) ? window.length : MAX_RECORD_LINES;
 }
 
 /** The index just after the first place `window` appears in `lines` as consecutive whole lines, or -1. */
@@ -121,16 +147,18 @@ export interface NewLines {
  * it in the new response tells us where to resume. If it's not found (HA
  * restarted and started a new log file, or more lines arrived than one answer
  * holds) or this is the first poll, fall back to a bounded tail so one poll
- * never floods the pipeline with the whole buffer -- except that with onMiss
- * 'all' a window that is not found takes the whole answer: in the Supervisor's
- * journal, which survives restarts, a missing window means every line in the
- * answer is new. A small duplicate/gap window across an HA restart is an
- * accepted platform limitation of this best-effort approach, not a bug to chase
- * further -- neither endpoint gives us anything more precise to key off. Both
- * endpoints carry the same lines, so a window found on one is found on the
- * other after a switch.
+ * never floods the pipeline with the whole buffer: the last `missLimit` lines
+ * of an answer the window is not in (200 by default). For the Supervisor's
+ * journal, which survives restarts, the caller passes the number of new lines
+ * the answer was asked for beyond the window: a window that is missing from it
+ * means more than that many arrived, so its latest that many are all new. A
+ * small duplicate/gap window across an HA restart is an accepted platform
+ * limitation of this best-effort approach, not a bug to chase further --
+ * neither endpoint gives us anything more precise to key off. Both endpoints
+ * carry the same lines, so a window found on one is found on the other after a
+ * switch.
  */
-export function selectNewLines(fullText: string, cursor: string | null, onMiss: 'bounded' | 'all' = 'bounded'): NewLines {
+export function selectNewLines(fullText: string, cursor: string | null, missLimit = FIRST_POLL_FALLBACK_LINES): NewLines {
   const lines = splitLines(fullText);
   if (lines.length === 0) return { newLines: [], nextCursor: cursor, gap: false };
   const nextCursor = tailWindow(lines).join('\n');
@@ -138,7 +166,7 @@ export function selectNewLines(fullText: string, cursor: string | null, onMiss: 
   if (cursor) {
     const after = indexAfterWindow(lines, splitLines(cursor));
     if (after !== -1) return { newLines: lines.slice(after), nextCursor, gap: false };
-    return { newLines: onMiss === 'all' ? lines : lines.slice(-FIRST_POLL_FALLBACK_LINES), nextCursor, gap: true };
+    return { newLines: lines.slice(-missLimit), nextCursor, gap: true };
   }
   return { newLines: lines.slice(-FIRST_POLL_FALLBACK_LINES), nextCursor, gap: false };
 }
@@ -251,6 +279,8 @@ interface LogResponse {
   path: string;
   supervisor: boolean;
   res: HttpFetchResult;
+  /** For a Supervisor answer: the new entries it was asked for beyond the previous poll's tail window. */
+  newEntries: number;
 }
 
 function isOk(r: LogResponse): boolean {
@@ -274,13 +304,22 @@ function startsMidLine(r: LogResponse): boolean {
   return !range || Number(range[1]) > 0;
 }
 
-/** An answer's log text: whole lines only, and a Supervisor answer as Home Assistant's native lines. */
+/**
+ * An answer's log text: whole lines only, and a Supervisor answer as Home
+ * Assistant's native lines. Home Assistant ends every record with a newline
+ * (so does the Supervisor, every journal line), so a last line without one is
+ * still being written: aiohttp sends the file up to its size when the request
+ * came, which can fall in the middle of a record. That line is left for the
+ * next poll, which reads it whole; taken now, it would be stored cut in two and
+ * its completed form would not match the tail window.
+ */
 function logText(r: LogResponse): string {
   let body = r.res.body;
   if (startsMidLine(r)) {
     const newline = body.indexOf('\n');
     body = newline === -1 ? '' : body.slice(newline + 1);
   }
+  body = body.slice(0, body.lastIndexOf('\n') + 1);
   return r.supervisor ? normalizeSupervisorLog(body) : body;
 }
 
@@ -361,7 +400,12 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
   const fetch = deps.fetch ?? httpFetch;
   const now = deps.now ?? Date.now;
 
-  async function get(base: string, path: string, secret: string, entries = SUPERVISOR_LOG_ENTRIES): Promise<LogResponse> {
+  /**
+   * One request for the log at `path`. From the Supervisor: `newEntries` plus
+   * `reach` entries (see windowReach), so the previous poll's tail window is in
+   * the answer whenever no more than newEntries lines arrived since.
+   */
+  async function get(base: string, path: string, secret: string, newEntries: number, reach: number): Promise<LogResponse> {
     const supervisor = isSupervisorLogPath(path);
     const headers: Record<string, string> = { Authorization: `Bearer ${secret}` };
     let url = `${base}${path}`;
@@ -370,6 +414,7 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
       // cursor), back N-1 entries, N entries: the latest N, in the same form the
       // Supervisor uses for its own default. .../logs/latest ignores Range and
       // takes ?lines instead.
+      const entries = newEntries + reach;
       headers.Range = `entries=:-${entries - 1}:${entries}`;
       url += path.endsWith('/latest') ? `?no_colors&lines=${entries}` : '?no_colors';
     } else {
@@ -385,21 +430,22 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
       // An empty file has no last bytes to send (aiohttp answers 416): ask for all of it.
       res = await fetch(url, { ...opts, headers: { Authorization: headers.Authorization } });
     }
-    return { path, supervisor, res };
+    return { path, supervisor, res, newEntries };
   }
 
   /**
-   * get(), and for the Supervisor's journal: when the previous poll's tail is
-   * not among the latest SUPERVISOR_LOG_ENTRIES entries (more new lines than
-   * that since), ask again for SUPERVISOR_LOG_ENTRIES_WIDE before the lines in
-   * between are given up. If that wider request fails, the first answer is used.
+   * get(), and for the Supervisor's journal: when the previous poll's tail
+   * window is not in the answer (more than SUPERVISOR_LOG_ENTRIES new lines
+   * since), ask again for SUPERVISOR_LOG_ENTRIES_WIDE new ones before the lines
+   * in between are given up. If that wider request fails, the first answer is used.
    */
   async function read(base: string, path: string, secret: string, prevTail: string | null): Promise<LogResponse> {
-    const r = await get(base, path, secret);
+    const reach = windowReach(prevTail);
+    const r = await get(base, path, secret, SUPERVISOR_LOG_ENTRIES, reach);
     if (!r.supervisor || !prevTail || !isOk(r) || isWebPage(r)) return r;
     if (!selectNewLines(logText(r), prevTail).gap) return r;
     try {
-      const wide = await get(base, path, secret, SUPERVISOR_LOG_ENTRIES_WIDE);
+      const wide = await get(base, path, secret, SUPERVISOR_LOG_ENTRIES_WIDE, reach);
       if (isOk(wide) && !isWebPage(wide)) return wide;
     } catch {
       // Keep the first answer; its gap is reported by toResult.
@@ -421,10 +467,11 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
       );
     }
     // In the Supervisor's journal, which survives restarts, a previous tail that
-    // is missing scrolled out: every line of the answer is new, and some lines
-    // before it were not collected. In the log file it means a restart started a
-    // new file: the bounded tail of selectNewLines.
-    const { newLines, nextCursor: tail, gap } = selectNewLines(logText(r), prevTail, r.supervisor ? 'all' : 'bounded');
+    // is missing from an answer asked for it plus newEntries more means more
+    // lines than that arrived: the latest newEntries are all new, and the lines
+    // before them were not collected. In the log file it means a restart started
+    // a new file: the bounded tail of selectNewLines.
+    const { newLines, nextCursor: tail, gap } = selectNewLines(logText(r), prevTail, r.supervisor ? r.newEntries : undefined);
     const events: PolledEvent[] = newLines.map((line) => ({
       message: line,
       timestamp: parseLineTimestamp(line),

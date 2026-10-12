@@ -19,6 +19,9 @@
  *   and address together when its turn comes, a poll still running when its
  *   source moves does not undo the move's cursor reset, and two overlapping
  *   edits are refused (409) rather than combined.
+ * - A token save or an edit made from a view of the source's old address (an
+ *   Edit dialog opened before another admin moved it) is refused (409), also
+ *   when the save and the move run at the same moment.
  *
  * Only the polling tests poll, and only their own local servers (127.0.0.1, or
  * other 127/8 addresses where the host has them). The other sources use
@@ -42,6 +45,7 @@ import { SessionModel } from '../models/Session';
 import { DiscoveryScanModel } from '../models/DiscoveryScan';
 import { DiscoverySourceModel } from '../models/DiscoverySource';
 import { DiscoverySourcePollerModel } from '../models/DiscoverySourcePoller';
+import { CredentialEncryption } from '../services/credentials/credentialEncryption';
 import { pollDueSources } from '../services/logDiscovery/apiPoll/poller';
 
 // The poller's credential is encrypted with this key; only set when the
@@ -508,7 +512,8 @@ test('run-now on a Home Assistant OS source: Supervisor fallback, remembered, na
     if (req.headers.authorization !== `Bearer ${SECRET}`) return void res.writeHead(401).end('401: Unauthorized');
     const plain = req.url.includes('no_colors');
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(lines.map((l) => (plain ? l : `\u001b[32m${l}\u001b[0m`)).join('\n'));
+    // Each journal line ends with a newline, as the Supervisor writes it.
+    res.end(lines.map((l) => `${plain ? l : `\u001b[32m${l}\u001b[0m`}\n`).join(''));
   });
   ha.listen(0, '127.0.0.1');
   await once(ha, 'listening');
@@ -531,9 +536,9 @@ test('run-now on a Home Assistant OS source: Supervisor fallback, remembered, na
     assert.deepEqual(await runNow(), { ok: true, count: 1 }, 'only the new line');
     assert.deepEqual(seen, [
       '/api/error_log bytes=-5242880',
-      '/api/hassio/core/logs?no_colors entries=:-499:500',
-      '/api/hassio/core/logs?no_colors entries=:-499:500',
-    ], 'one 404, then straight to the remembered Supervisor endpoint');
+      '/api/hassio/core/logs?no_colors entries=:-2499:2500',
+      '/api/hassio/core/logs?no_colors entries=:-502:503',
+    ], 'one 404, then straight to the remembered Supervisor endpoint (500 new entries plus the 3-line tail window)');
 
     const stored = await pool.query('SELECT raw_message, app_name FROM raw_logs WHERE discovery_source_id = $1 ORDER BY id', [row.id]);
     assert.deepEqual(stored.rows.map((r) => r.raw_message), lines, "Home Assistant's own lines, colour codes removed");
@@ -599,7 +604,7 @@ async function startFakeHomeAssistant(ip: string, opts: { hold?: boolean; lines?
     arrive();
     if (opts.hold) await released;
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(lines.join('\n'));
+    res.end(lines.map((line) => `${line}\n`).join('')); // every record ends with a newline, as in home-assistant.log
   });
   try {
     server.listen(0, ip);
@@ -765,4 +770,193 @@ test('a move without a token is refused (409) when a token was saved after its c
   assert.equal(r.status, 409, r.text);
   assert.equal((await sourceRow(id)).ip, ip, 'the source stays at the address its token was saved for');
   assert.ok(await pollerRow(id), 'the token is saved');
+});
+
+// ---------------------------------------------------------------------------
+// Saves and edits made from a view of the old address
+// ---------------------------------------------------------------------------
+
+async function storedSecret(id: number): Promise<string | null> {
+  const row = (await pool.query('SELECT * FROM discovery_source_pollers WHERE discovery_source_id = $1', [id])).rows[0];
+  return row ? DiscoverySourcePollerModel.decryptCredential(row).secret : null;
+}
+
+/** Only `id` is due in pollDueSources (sources of other test files may be due as well). */
+function onlyDue(t: TestContext, id: number) {
+  const findDueIds = DiscoverySourcePollerModel.findDueIds.bind(DiscoverySourcePollerModel);
+  t.mock.method(DiscoverySourcePollerModel, 'findDueIds', async () => (await findDueIds()).filter((due) => due === id));
+}
+
+/** Resolves once a request of this database waits for a row lock on a Log Discovery table (held by the test's open transaction). */
+async function lockWaiter(): Promise<void> {
+  for (let attempt = 0; attempt < 250; attempt++) {
+    const waiting = await pool.query(
+      `SELECT 1 FROM pg_stat_activity
+        WHERE datname = current_database() AND pid <> pg_backend_pid()
+          AND wait_event_type = 'Lock' AND query ILIKE '%discovery_source%'`
+    );
+    if (waiting.rowCount) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('no request waited for the lock');
+}
+
+test('a token entered while the source was shown at its old address is refused (409) after another admin moved it: it never reaches the new address', async (t) => {
+  if (!ready(t)) return;
+  const [ipA, ipC] = await freeLoopbacks(2);
+  const hostA = await startFakeHomeAssistant(ipA);
+  const hostC = hostA && (await startFakeHomeAssistant(ipC));
+  try {
+    if (!hostA || !hostC) return t.skip(NO_LOOPBACK_ALIASES);
+    const source = await manualSourceAt(ipA, hostA.port);
+    const path = `/api/log-discovery/sources/${source.id}`;
+    let r = await call('admin', 'POST', `${path}/poller/credential`, { secret: 'TOKEN-FOR-A', expected_ip_address: ipA });
+    assert.equal(r.status, 200, r.text);
+
+    // Admin 1 opens Edit: the source is at A. Admin 2 then moves it to C, with C's token.
+    const view = (await call('admin', 'GET', `${path}/poller`)).json.target;
+    assert.equal(view.ip_address, ipA);
+    r = await call('admin', 'PATCH', path, {
+      ip_address: ipC,
+      port: hostC.port,
+      credential: { secret: 'TOKEN-FOR-C' },
+      expected_ip_address: ipA,
+    });
+    assert.equal(r.status, 200, r.text);
+
+    // Admin 1 pastes a new token for the Home Assistant at A, as the dialog sends it.
+    r = await call('admin', 'POST', `${path}/poller/credential`, { secret: 'ROTATED-TOKEN-FOR-A', expected_ip_address: view.ip_address });
+    assert.equal(r.status, 409, r.text);
+    assert.match(r.json.message, /no longer at the address this token was entered for.*not saved/);
+    assert.equal(await storedSecret(source.id), 'TOKEN-FOR-C', "C's token stands");
+
+    const polled = await call('admin', 'POST', `${path}/poller/run-now`);
+    assert.equal(polled.json?.ok, true, polled.text);
+    assert.deepEqual(hostC.auth, ['Bearer TOKEN-FOR-C'], 'C only ever gets the token entered for it');
+    assert.deepEqual(hostA.auth, []);
+
+    // Entered for C (the address the source has now), the same save goes through.
+    r = await call('admin', 'POST', `${path}/poller/credential`, { secret: 'ROTATED-TOKEN-FOR-C', expected_ip_address: ipC });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(await storedSecret(source.id), 'ROTATED-TOKEN-FOR-C');
+  } finally {
+    await Promise.all([hostA?.close(), hostC?.close()]);
+  }
+});
+
+test('after a move without a token, a token entered for the old address is refused (409): nothing is saved and the new address gets no request', async (t) => {
+  if (!ready(t)) return;
+  const [ipA, ipC] = await freeLoopbacks(2);
+  const hostC = await startFakeHomeAssistant(ipC);
+  try {
+    if (!hostC) return t.skip(NO_LOOPBACK_ALIASES);
+    const source = await manualSourceAt(ipA, 8123); // no saved token, so a move needs none
+    const path = `/api/log-discovery/sources/${source.id}`;
+    let r = await call('admin', 'PATCH', path, { ip_address: ipC, port: hostC.port, expected_ip_address: ipA });
+    assert.equal(r.status, 200, r.text);
+
+    r = await call('admin', 'POST', `${path}/poller/credential`, { secret: 'TOKEN-TYPED-FOR-A', expected_ip_address: ipA });
+    assert.equal(r.status, 409, r.text);
+    assert.equal(await pollerRow(source.id), undefined, 'no token was saved');
+    onlyDue(t, source.id);
+    assert.deepEqual(await pollDueSources(), { polled: 0 });
+    assert.deepEqual(hostC.auth, []);
+
+    // Without expected_ip_address (an API client), a token is saved for the address the source has now.
+    r = await call('admin', 'POST', `${path}/poller/credential`, { secret: 'TOKEN-FOR-C' });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(await pollDueSources(), { polled: 1 });
+    assert.deepEqual(hostC.auth, ['Bearer TOKEN-FOR-C']);
+  } finally {
+    await hostC?.close();
+  }
+});
+
+test('a move without a token that waits behind a token save in progress is refused (409) once the save commits', async (t) => {
+  if (!ready(t)) return;
+  const { id, ip } = await manualSource(); // no saved token, so a move needs none
+  const newIp = await freeAddress();
+  const save = await pool.connect();
+  try {
+    // A token save that has written its row but not committed yet, as
+    // POST .../poller/credential does for the length of its statement.
+    await save.query('BEGIN');
+    const enc = CredentialEncryption.encrypt(SECRET);
+    await save.query(
+      `INSERT INTO discovery_source_pollers (discovery_source_id, fingerprint_id, log_access_method, encrypted_credential, encryption_iv, encryption_auth_tag)
+       VALUES ($1, 'home-assistant', 'api_pull', $2, $3, $4)`,
+      [id, enc.encrypted, enc.iv, enc.authTag]
+    );
+    const move = call('admin', 'PATCH', `/api/log-discovery/sources/${id}`, { ip_address: newIp, expected_ip_address: ip });
+    await lockWaiter(); // the move waits for the save's lock on the source row
+    await save.query('COMMIT');
+
+    const r = await move;
+    assert.equal(r.status, 409, r.text);
+    assert.equal((await sourceRow(id)).ip, ip, 'the source stays at the address its token was saved for');
+    assert.equal(await storedSecret(id), SECRET);
+  } finally {
+    await save.query('ROLLBACK').catch(() => {}); // only if the test failed before the COMMIT
+    save.release();
+  }
+});
+
+test('a token save that waits behind a move in progress is refused (409) once the move commits', async (t) => {
+  if (!ready(t)) return;
+  const { id, ip } = await manualSource();
+  const newIp = await freeAddress();
+  const move = await pool.connect();
+  try {
+    // A move that has changed the address but not committed yet.
+    await move.query('BEGIN');
+    await move.query('UPDATE discovery_sources SET ip_address = $2 WHERE id = $1', [id, newIp]);
+    const save = call('admin', 'POST', `/api/log-discovery/sources/${id}/poller/credential`, {
+      secret: 'TOKEN-TYPED-FOR-THE-OLD-ADDRESS',
+      expected_ip_address: ip,
+    });
+    await lockWaiter(); // the save waits for the move's lock on the source row
+    await move.query('COMMIT');
+
+    const r = await save;
+    assert.equal(r.status, 409, r.text);
+    assert.equal(await pollerRow(id), undefined, 'no token was saved for the moved source');
+  } finally {
+    await move.query('ROLLBACK').catch(() => {}); // only if the test failed before the COMMIT
+    move.release();
+  }
+});
+
+test('an edit sent with the address it was loaded with is refused (409) once the source moved; nothing changes', async (t) => {
+  if (!ready(t)) return;
+  const { id, ip } = await manualSource();
+  await withPoller(id);
+  const path = `/api/log-discovery/sources/${id}`;
+  const newIp = await freeAddress();
+  let r = await call('admin', 'PATCH', path, { ip_address: newIp, credential: { secret: 'NEW-TOKEN' }, expected_ip_address: ip });
+  assert.equal(r.status, 200, r.text);
+
+  // An Edit dialog still open on the old address saves a port change.
+  const before = { source: await sourceRow(id), poller: await pollerRow(id) };
+  r = await call('admin', 'PATCH', path, { port: 8124, expected_ip_address: ip });
+  assert.equal(r.status, 409, r.text);
+  assert.match(r.json.message, /changed while it was being edited.*nothing was saved/);
+  assert.deepEqual({ source: await sourceRow(id), poller: await pollerRow(id) }, before, 'nothing changed');
+
+  // Sent with the address the source has now, it applies.
+  r = await call('admin', 'PATCH', path, { port: 8124, expected_ip_address: newIp });
+  assert.equal(r.status, 200, r.text);
+  assert.equal((await sourceRow(id)).evidence.target_port, 8124);
+
+  // A malformed expected_ip_address is a 400 on both routes, and nothing is saved.
+  const malformed: Array<[string, string, unknown]> = [
+    ['PATCH', path, { port: 8125, expected_ip_address: 'homeassistant.local' }],
+    ['POST', `${path}/poller/credential`, { secret: 'x', expected_ip_address: '203.0.113.0/24' }],
+  ];
+  for (const [method, url, body] of malformed) {
+    r = await call('admin', method, url, body);
+    assert.equal(r.status, 400, `${method} ${r.text}`);
+    assert.match(r.json.message, /expected_ip_address must be a literal IPv4 or IPv6 address/);
+  }
+  assert.equal((await sourceRow(id)).evidence.target_port, 8124);
+  assert.equal(await storedSecret(id), 'NEW-TOKEN');
 });

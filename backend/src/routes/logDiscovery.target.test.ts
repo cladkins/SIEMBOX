@@ -80,6 +80,28 @@ test('sending the current address back changes nothing, for any source and howev
   assert.deepEqual(validateSourceTargetUpdate({ ip_address: 'FD00:0:0:0:0:0:0:50' }, v6), { ok: true, value: {} });
 });
 
+test('expected_ip_address: the current address (however IPv6 is written) passes; another one is a 409; a malformed one a 400', () => {
+  assert.deepEqual(validateSourceTargetUpdate({ port: 8124, expected_ip_address: '192.168.1.50' }, MANUAL), { ok: true, value: { port: 8124 } });
+  assert.deepEqual(
+    validateSourceTargetUpdate({ endpoint: '/api/hassio/core/logs', expected_ip_address: 'FD00:0:0:0:0:0:0:50' }, { manual: false, currentIp: 'fd00::50' }),
+    { ok: true, value: { endpoint: '/api/hassio/core/logs' } }
+  );
+
+  // Edited from a view of the source before it moved: refused, whatever else the body holds.
+  for (const body of [{ port: 8124, expected_ip_address: '192.168.1.40' }, { ip_address: '192.168.1.60', expected_ip_address: '192.168.1.40' }]) {
+    const stale = rejected(body);
+    assert.equal(stale.status, 409, JSON.stringify(body));
+    assert.match(stale.message, /changed while it was being edited.*nothing was saved/);
+  }
+
+  for (const expected_ip_address of ['homeassistant.local', '192.168.1.0/24', 50, 'fe80::1%eth0', '']) {
+    const r = rejected({ port: 8124, expected_ip_address });
+    assert.equal(r.status, 400, JSON.stringify(expected_ip_address));
+    assert.match(r.message, /expected_ip_address must be a literal IPv4 or IPv6 address/);
+  }
+  assert.match(rejected({ expected_ip_address: '192.168.1.50' }).message, /Nothing to change/, 'it is not a change on its own');
+});
+
 test('an empty or non-object body is a 400 that says what can be sent', () => {
   for (const body of [{}, { hostname: 'x' }, null, 'port=8123', [1]]) {
     const r = rejected(body);

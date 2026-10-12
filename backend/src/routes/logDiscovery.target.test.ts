@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateSourceTargetUpdate, validateManualSourceInput } from './logDiscovery';
+import { validateSourceTargetUpdate, validateManualSourceInput, parseReplacementCredential } from './logDiscovery';
 
 const MANUAL = { manual: true, currentIp: '192.168.1.50' };
 const DISCOVERED = { manual: false, currentIp: '192.168.1.50' };
@@ -86,4 +86,16 @@ test('an empty or non-object body is a 400 that says what can be sent', () => {
     assert.equal(r.status, 400);
   }
   assert.match(rejected({}).message, /Nothing to change/);
+});
+
+test('parseReplacementCredential: absent, valid, and every malformed shape', () => {
+  assert.equal(parseReplacementCredential(undefined), undefined);
+  assert.equal(parseReplacementCredential(null), undefined);
+  assert.deepEqual(parseReplacementCredential({ secret: ' tok ' }), { secret: ' tok ', username: null });
+  assert.deepEqual(parseReplacementCredential({ secret: 'tok', username: '' }), { secret: 'tok', username: null });
+  assert.deepEqual(parseReplacementCredential({ secret: 'tok', username: 'admin' }), { secret: 'tok', username: 'admin' });
+  for (const bad of ['tok', 42, [], {}, { secret: '' }, { secret: '  ' }, { secret: 7 }, { secret: 'x'.repeat(4097) }, { secret: 'tok', username: 1 }, { secret: 'tok', username: 'u'.repeat(257) }]) {
+    const r = parseReplacementCredential(bad);
+    assert.ok(r && 'error' in r, JSON.stringify(bad));
+  }
 });

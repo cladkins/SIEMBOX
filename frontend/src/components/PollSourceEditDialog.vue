@@ -46,7 +46,8 @@
         <el-form-item label="Address">
           <el-input v-model="form.ip_address" :disabled="!target.manual" data-test="address" />
           <span v-if="target.manual" class="field-hint">
-            A literal IP address (not a DNS name). The saved token is sent to the new address on the next poll.
+            A literal IP address (not a DNS name). A saved token is never sent to a new address: changing it asks for
+            the token again.
           </span>
           <span v-else class="field-hint">
             Found by a scan, so it is polled where the scan found it. Only a manually added source's address can change.
@@ -82,7 +83,7 @@
           <span class="field-hint">{{ endpointHint }}</span>
         </el-form-item>
 
-        <el-form-item :label="poller?.configured ? 'Replace token' : 'Token'">
+        <el-form-item :label="tokenLabel" :required="tokenRequiredForAddress">
           <div class="token-fields">
             <el-input v-if="basicAuth" v-model="form.username" placeholder="Username" class="token-username" />
             <el-input
@@ -91,7 +92,7 @@
               show-password
               clearable
               autocomplete="new-password"
-              :placeholder="poller?.configured ? 'Leave empty to keep the saved token' : 'Paste API token…'"
+              :placeholder="tokenPlaceholder"
               class="token-secret"
               data-test="secret"
             />
@@ -189,6 +190,22 @@ const isHomeAssistant = computed(() => fingerprintId.value === 'home-assistant')
 // AdGuard Home uses HTTP Basic: a username goes with the secret (as in the Onboard dialog).
 const basicAuth = computed(() => fingerprint.value?.log_access.find((la) => la.method === 'api_pull')?.auth === 'basic');
 
+/** A manual source moving to a new address while it has a saved token: the token must come again. */
+const tokenRequiredForAddress = computed(() => {
+  const view = target.value;
+  if (!view?.manual || !poller.value?.configured) return false;
+  const ip = form.ip_address.trim();
+  return ip !== '' && ip !== view.ip_address;
+});
+const tokenLabel = computed(() => {
+  if (tokenRequiredForAddress.value) return 'Token for the new address';
+  return poller.value?.configured ? 'Replace token' : 'Token';
+});
+const tokenPlaceholder = computed(() => {
+  if (tokenRequiredForAddress.value) return 'Required: the saved token is never sent to a new address';
+  return poller.value?.configured ? 'Leave empty to keep the saved token' : 'Paste API token…';
+});
+
 const title = computed(() => {
   const name = fingerprint.value?.name || 'API-polled source';
   const host = props.source ? props.source.hostname || props.source.ip : '';
@@ -280,8 +297,19 @@ async function save(pollNow: boolean) {
   if (pollNow && !poller.value?.configured && !secret) {
     return showError('Not saved', 'Paste a token first: this source has no saved token to poll with.');
   }
+  const tokenWithMove = tokenRequiredForAddress.value;
+  if (tokenWithMove && !secret) {
+    return showError(
+      'Not saved',
+      'Paste the token for the new address. A saved token is never sent to a new address, so moving this source needs it again.'
+    );
+  }
 
   const changes = buildChanges(view);
+  if (tokenWithMove && changes.ip_address !== undefined) {
+    // Sent with the move so the server swaps it in the same update.
+    changes.credential = basicAuth.value ? { secret, username: form.username.trim() } : { secret };
+  }
   const changed = Object.keys(changes).length > 0;
   // Which step failed decides what the error says was (not) saved.
   let step: 'target' | 'token' | 'poll' = 'target';
@@ -294,7 +322,10 @@ async function save(pollNow: boolean) {
       emit('saved');
     }
     step = 'token';
-    if (secret) {
+    if (changes.credential) {
+      // Already saved with the address change.
+      form.secret = '';
+    } else if (secret) {
       await logDiscoveryService.savePollerCredential(id, secret, basicAuth.value ? form.username.trim() : undefined, {
         quiet: true,
       });

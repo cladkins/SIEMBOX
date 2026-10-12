@@ -229,14 +229,35 @@ test('admin edits a manual source: saved where the poller reads it; cursor reset
   assert.equal(afterEndpoint.poll_cursor, null, 'a new endpoint starts from a fresh cursor');
   assert.deepEqual({ ...afterEndpoint, poll_cursor: before.poll_cursor }, before, 'credential, schedule and state untouched');
 
-  // Address: the row moves, the cursor resets again, the credential stays.
+  // Address: a saved token never follows the source to a new host. Without the
+  // token again the move is refused and nothing changes...
   await pool.query('UPDATE discovery_source_pollers SET poll_cursor = $2 WHERE discovery_source_id = $1', [id, 'x']);
   const newIp = await freeAddress();
+  const rowBeforeMove = await sourceRow(id);
+  const pollerBeforeMove = await pollerRow(id);
   r = await call('admin', 'PATCH', `/api/log-discovery/sources/${id}`, { ip_address: newIp });
+  assert.equal(r.status, 400, r.text);
+  assert.match(r.json.message, /needs the token again/);
+  assert.deepEqual(await sourceRow(id), rowBeforeMove, 'the address did not change');
+  assert.deepEqual(await pollerRow(id), pollerBeforeMove, 'the credential and cursor did not change');
+
+  // ...and with it, the move and the token swap land together; the schedule is kept.
+  const NEW_SECRET = 'replacement-token-for-the-new-address';
+  r = await call('admin', 'PATCH', `/api/log-discovery/sources/${id}`, { ip_address: newIp, credential: { secret: NEW_SECRET } });
   assert.equal(r.status, 200, r.text);
+  assertNoCredential(r.text);
+  assert.ok(!r.text.includes(NEW_SECRET), 'the new token is never echoed');
   assert.equal((await sourceRow(id)).ip, newIp);
-  assert.equal((await pollerRow(id)).poll_cursor, null);
-  assert.equal((await pollerRow(id)).encrypted_credential, before.encrypted_credential);
+  const moved = await pollerRow(id);
+  assert.equal(moved.poll_cursor, null);
+  assert.notEqual(moved.encrypted_credential, before.encrypted_credential, 'the old ciphertext is gone');
+  assert.equal(
+    DiscoverySourcePollerModel.decryptCredential({ ...moved } as Parameters<typeof DiscoverySourcePollerModel.decryptCredential>[0]).secret,
+    NEW_SECRET
+  );
+  assert.equal(moved.credential_username, null);
+  assert.equal(moved.enabled, before.enabled);
+  assert.equal(moved.poll_interval_minutes, before.poll_interval_minutes);
   assert.equal(r.json.target.effective_url, `https://${newIp}:8124/api/hassio/core/logs`);
 
   // Clearing the endpoint and the port: back to the fingerprint defaults (8123, its endpoint).
@@ -244,6 +265,46 @@ test('admin edits a manual source: saved where the poller reads it; cursor reset
   assert.equal(r.status, 200, r.text);
   assert.deepEqual((await sourceRow(id)).evidence, { manual: true, target_port: 8123, tls: true });
   assert.equal(r.json.target.effective_url, `https://${newIp}:8123/api/error_log`);
+});
+
+test('the credential field: only with an address change, only for a source with a saved token, and well-formed', async (t) => {
+  if (!ready(t)) return;
+  const path = (id: number) => `/api/log-discovery/sources/${id}`;
+
+  // No saved token yet: the address can change freely (there is nothing to leak),
+  // but a credential is refused (save it with the credential route instead).
+  const bare = await manualSource();
+  let r = await call('admin', 'PATCH', path(bare.id), { ip_address: await freeAddress() });
+  assert.equal(r.status, 200, r.text);
+  r = await call('admin', 'PATCH', path(bare.id), { ip_address: await freeAddress(), credential: { secret: 'x' } });
+  assert.equal(r.status, 400, r.text);
+  assert.match(r.json.message, /no saved token yet/);
+
+  const saved = await manualSource();
+  await withPoller(saved.id);
+  const before = { source: await sourceRow(saved.id), poller: await pollerRow(saved.id) };
+  const cases: Array<[unknown, RegExp]> = [
+    [{ port: 8124, credential: { secret: 'x' } }, /only accepted with an address change/],
+    [{ ip_address: await freeAddress(), credential: 'token' }, /credential must be an object/],
+    [{ ip_address: await freeAddress(), credential: { secret: '   ' } }, /non-empty string/],
+    [{ ip_address: await freeAddress(), credential: { secret: 'x'.repeat(4097) } }, /at most 4096/],
+    [{ ip_address: await freeAddress(), credential: { secret: 'x', username: 42 } }, /username must be a string/],
+  ];
+  for (const [body, message] of cases) {
+    r = await call('admin', 'PATCH', path(saved.id), body);
+    assert.equal(r.status, 400, JSON.stringify(body));
+    assert.match(r.json.message, message);
+  }
+  assert.deepEqual(await sourceRow(saved.id), before.source, 'nothing was saved');
+  assert.deepEqual(await pollerRow(saved.id), before.poller, 'the credential was not touched');
+
+  // Basic auth: the username travels with the secret.
+  r = await call('admin', 'PATCH', path(saved.id), {
+    ip_address: await freeAddress(),
+    credential: { secret: 'basic-pass', username: 'siembox' },
+  });
+  assert.equal(r.status, 200, r.text);
+  assert.equal((await pollerRow(saved.id)).credential_username, 'siembox');
 });
 
 test("a discovered source's overrides go to poll_overrides, survive a re-scan, reset cleanly, and its address can't change", async (t) => {

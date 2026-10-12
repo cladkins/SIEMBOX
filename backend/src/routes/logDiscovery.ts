@@ -4,7 +4,14 @@ import { ApiError } from '../middleware/errorHandler';
 import { authorize, requireOperator } from '../middleware/auth';
 import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { DiscoveryScanModel } from '../models/DiscoveryScan';
-import { DiscoverySource, DiscoverySourceModel, DiscoverySourceManualInput, UNIQUE_VIOLATION } from '../models/DiscoverySource';
+import {
+  DiscoverySource,
+  DiscoverySourceModel,
+  DiscoverySourceManualInput,
+  ReplacementCredential,
+  UNIQUE_VIOLATION,
+} from '../models/DiscoverySource';
+import { CredentialEncryption } from '../services/credentials/credentialEncryption';
 import { LogShipperModel } from '../models/LogShipper';
 import { DiscoverySourcePoller, DiscoverySourcePollerModel } from '../models/DiscoverySourcePoller';
 import { resolveScope, detectLocalInterfaces, isValidCidr, isSweepableCidr } from '../services/logDiscovery/scope';
@@ -242,6 +249,40 @@ export function validateSourceTargetUpdate(
   return { ok: true, value };
 }
 
+export const ADDRESS_NEEDS_TOKEN_MESSAGE =
+  "Changing the address of a source with a saved token needs the token again: send credential.secret with the new ip_address (a saved token is never sent to a new address)";
+
+const MAX_SECRET_LENGTH = 4096;
+const MAX_USERNAME_LENGTH = 256;
+
+export type ReplacementCredentialInput = { secret: string; username: string | null };
+
+/**
+ * PATCH /sources/:id's optional `credential` ({secret, username?}). undefined
+ * when absent; {error} when present but malformed. The secret is kept as
+ * typed (only checked for being non-blank), like POST .../poller/credential.
+ */
+export function parseReplacementCredential(value: unknown): ReplacementCredentialInput | { error: string } | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    return { error: 'credential must be an object: {"secret": "...", "username": "..."}' };
+  }
+  const c = value as Record<string, unknown>;
+  if (typeof c.secret !== 'string' || c.secret.trim().length === 0) {
+    return { error: 'credential.secret must be a non-empty string' };
+  }
+  if (c.secret.length > MAX_SECRET_LENGTH) return { error: `credential.secret must be at most ${MAX_SECRET_LENGTH} characters` };
+  let username: string | null = null;
+  if (c.username !== undefined && c.username !== null && c.username !== '') {
+    if (typeof c.username !== 'string') return { error: 'credential.username must be a string' };
+    if (c.username.length > MAX_USERNAME_LENGTH) {
+      return { error: `credential.username must be at most ${MAX_USERNAME_LENGTH} characters` };
+    }
+    username = c.username;
+  }
+  return { secret: c.secret, username };
+}
+
 /** The response of PATCH /sources/:id: the source row, its poller status and its poll target. Never a credential. */
 function sourceTargetResponse(source: DiscoverySource, poller: DiscoverySourcePoller | null, fingerprintId: string | null) {
   return {
@@ -433,9 +474,39 @@ router.patch('/sources/:id', authorize('admin'), async (req: Request, res: Respo
   if (!parsed.ok) throw new ApiError(parsed.status, parsed.message);
   const change = parsed.value;
 
+  // A saved token must never follow a manual source to a new address (an admin
+  // session, or a stolen one, could otherwise redirect it to any host): an
+  // address change on a source with a saved token needs the token again, and
+  // the swap happens in the same statement as the move.
+  const addressChanged = change.ip_address !== undefined;
+  const replacementInput = parseReplacementCredential((req.body as Record<string, unknown>).credential);
+  if (replacementInput && 'error' in replacementInput) throw new ApiError(400, replacementInput.error);
+  if (replacementInput && !addressChanged) {
+    throw new ApiError(
+      400,
+      'credential is only accepted with an address change; replace the token with POST /api/log-discovery/sources/:id/poller/credential'
+    );
+  }
+  if (replacementInput && !poller) {
+    throw new ApiError(400, 'This source has no saved token yet; save one with POST /api/log-discovery/sources/:id/poller/credential');
+  }
+  if (addressChanged && poller && !replacementInput) throw new ApiError(400, ADDRESS_NEEDS_TOKEN_MESSAGE);
+
+  let replacement: ReplacementCredential | null = null;
+  if (replacementInput) {
+    let enc: { encrypted: string; iv: string; authTag: string };
+    try {
+      enc = CredentialEncryption.encrypt(replacementInput.secret);
+    } catch (err) {
+      // The encryption error names the CREDENTIAL_ENCRYPTION_KEY problem; it never contains the secret.
+      throw new ApiError(500, `The token could not be encrypted, so nothing was changed: ${(err as Error).message}`);
+    }
+    replacement = { ...enc, username: replacementInput.username };
+  }
+
   const current = readTargetOverrides(source);
   const endpoint = change.endpoint !== undefined ? change.endpoint : current.endpoint ?? null;
-  const resetCursor = change.ip_address !== undefined || endpoint !== (current.endpoint ?? null);
+  const resetCursor = addressChanged || endpoint !== (current.endpoint ?? null);
 
   let updated: DiscoverySource | null;
   try {
@@ -455,7 +526,8 @@ router.patch('/sources/:id', authorize('admin'), async (req: Request, res: Respo
           tls: change.tls === undefined ? current.tls ?? defaults.tls : change.tls ?? defaults.tls,
           endpoint,
         },
-        resetCursor
+        resetCursor,
+        replacement
       );
     } else {
       const next: Record<string, unknown> = {};

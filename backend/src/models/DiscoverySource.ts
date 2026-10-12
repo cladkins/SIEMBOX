@@ -84,6 +84,19 @@ export interface ManualTargetUpdate {
   endpoint: string | null;
 }
 
+/**
+ * An already-encrypted replacement poll credential (CredentialEncryption.encrypt
+ * output plus the optional Basic-auth username). Applied in the same statement
+ * as a manual source's address change, so no poll can ever pair the old token
+ * with the new address.
+ */
+export interface ReplacementCredential {
+  encrypted: string;
+  iv: string;
+  authTag: string;
+  username: string | null;
+}
+
 /** Postgres unique_violation, e.g. a manual source moved to an address another source already has. */
 export const UNIQUE_VIOLATION = '23505';
 
@@ -214,7 +227,15 @@ export const DiscoverySourceModel = {
    * schedule and status are untouched. A new address that another source
    * already has fails with UNIQUE_VIOLATION. Null when the row doesn't exist.
    */
-  async updateManualTarget(id: number, target: ManualTargetUpdate, resetCursor: boolean): Promise<DiscoverySource | null> {
+  async updateManualTarget(
+    id: number,
+    target: ManualTargetUpdate,
+    resetCursor: boolean,
+    credential: ReplacementCredential | null = null
+  ): Promise<DiscoverySource | null> {
+    // One UPDATE of the poller row: Postgres applies only one of two
+    // data-modifying CTEs that touch the same row, so the cursor reset and the
+    // credential swap must share a statement-level UPDATE.
     const result = await query(
       `WITH updated AS (
          UPDATE discovery_sources
@@ -226,13 +247,30 @@ export const DiscoverySourceModel = {
                 updated_at = NOW()
           WHERE id = $1
           RETURNING *
-       ), cursor_reset AS (
+       ), poller_update AS (
          UPDATE discovery_source_pollers
-            SET poll_cursor = NULL, updated_at = NOW()
-          WHERE discovery_source_id = $1 AND $6::boolean AND EXISTS (SELECT 1 FROM updated)
+            SET poll_cursor = CASE WHEN $6::boolean THEN NULL ELSE poll_cursor END,
+                encrypted_credential = CASE WHEN $7::boolean THEN $8::text ELSE encrypted_credential END,
+                encryption_iv = CASE WHEN $7::boolean THEN $9::text ELSE encryption_iv END,
+                encryption_auth_tag = CASE WHEN $7::boolean THEN $10::text ELSE encryption_auth_tag END,
+                credential_username = CASE WHEN $7::boolean THEN $11::text ELSE credential_username END,
+                updated_at = NOW()
+          WHERE discovery_source_id = $1 AND ($6::boolean OR $7::boolean) AND EXISTS (SELECT 1 FROM updated)
        )
        SELECT * FROM updated`,
-      [id, target.ip_address, target.target_port, target.tls, target.endpoint, resetCursor]
+      [
+        id,
+        target.ip_address,
+        target.target_port,
+        target.tls,
+        target.endpoint,
+        resetCursor,
+        credential !== null,
+        credential?.encrypted ?? null,
+        credential?.iv ?? null,
+        credential?.authTag ?? null,
+        credential?.username ?? null,
+      ]
     );
     return result.rows[0] || null;
   },

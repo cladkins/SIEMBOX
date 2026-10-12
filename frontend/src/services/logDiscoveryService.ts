@@ -68,6 +68,12 @@ export interface SourceTargetChanges {
   tls?: boolean | null;
   /** A path such as /api/hassio/core/logs; null (or '') = the fingerprint's endpoint. */
   endpoint?: string | null;
+  /**
+   * Required with an ip_address change when the source has a saved token: the
+   * server never sends a saved token to a new address, so the token comes
+   * again and is swapped in the same update as the move.
+   */
+  credential?: { secret: string; username?: string };
 }
 
 export interface SourceTargetUpdateResult {

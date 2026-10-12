@@ -3087,9 +3087,13 @@ Sources.
   fresh. That poll reads the source's recent events again (for Home Assistant the
   last 200 lines, so lines already stored may be stored twice). A port or HTTPS
   change keeps the cursor.
-- The saved credential, the schedule and the poll status are not changed, and no
-  credential is returned. After an address change the saved token is sent to the
-  new address on the next poll.
+- A saved token is never sent to a new address. Changing a manual source's
+  address while it has a saved token requires the token again in `credential`;
+  the move and the token swap are applied in one database update, so no poll can
+  pair the old token with the new address. Without `credential` the request is a
+  `400` and nothing changes. A source with no saved token can move freely.
+- Otherwise the saved credential, the schedule and the poll status are not
+  changed, and no credential is ever returned.
 
 **Authentication:** Required (**admin**)
 
@@ -3101,6 +3105,7 @@ Sources.
 - `tls` - boolean, or `null` for the default (a manual source: `true` for `authentik`, `false` otherwise)
 - `endpoint` - a path on the source itself, e.g. `/api/hassio/core/logs`, or `/ha/api/error_log` behind a reverse proxy. It must start with a single `/` (no scheme or host) and may not contain a query string or fragment, `.` or `..` segments, control characters, whitespace, backslashes or `%`-encoding; at most 256 characters. An endpoint that is set is the only one requested (Home Assistant's automatic fallback is off). `""` or `null` restores the fingerprint's endpoint.
 - `ip_address` - manual sources only: a literal IPv4/IPv6 address, validated exactly like `POST /sources/manual`. Sending a discovered source's current address back is accepted and changes nothing; a different one is refused with `403`.
+- `credential` - `{ "secret": "...", "username": "..." }`, required together with a changed `ip_address` when the source has a saved token, and accepted only then (otherwise `400`; to replace a token without moving the source use `POST /sources/:id/poller/credential`). `secret` is a non-blank string of at most 4096 characters; `username` (HTTP Basic sources such as AdGuard Home) at most 256. It is encrypted like any saved token and never returned.
 
 **Response (200):**
 ```json

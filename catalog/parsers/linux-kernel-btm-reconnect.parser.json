@@ -1,0 +1,40 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "linux-kernel-btm-reconnect",
+  "parser_type": "regex",
+  "pattern": "^\\[(?<kernel_time>[\\d.]+)\\]\\s+BTM:\\s+\\[(?<mac_address>[0-9a-fA-F:]{17})\\]\\s+quick reconnect,\\s+last btm request\\s+(?<btm_seconds>\\d+)\\s+seconds ago\\.?$",
+  "field_mappings": {
+    "btm_seconds": "duration",
+    "kernel_time": "timestamp_raw",
+    "mac_address": "host"
+  },
+  "description": "Parses Linux kernel BTM (BSS Transition Management) quick reconnect log messages from wireless subsystem",
+  "priority": 300,
+  "derivations": [
+    {
+      "set": {
+        "event": "btm_quick_reconnect",
+        "service": "BTM"
+      },
+      "when": {
+        "host": {
+          "exists": true
+        }
+      }
+    }
+  ],
+  "event_type": "btm_reconnect",
+  "enabled": true,
+  "test_samples": [
+    {
+      "input": "[772595.013726] BTM: [0c:6a:c4:eb:c0:93] quick reconnect, last btm request 86 seconds ago.",
+      "expect": {
+        "host": "0c:6a:c4:eb:c0:93",
+        "event": "btm_quick_reconnect",
+        "service": "BTM",
+        "duration": "86",
+        "timestamp_raw": "772595.013726"
+      }
+    }
+  ]
+}

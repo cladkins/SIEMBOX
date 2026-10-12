@@ -162,6 +162,9 @@
           </template>
           <el-text size="small" type="info" style="display: block; margin-bottom: 12px">
             Sources configured in Log Discovery to pull events via their own API instead of pushing/shipping logs here.
+            <template v-if="!canOpenLogDiscovery">
+              Read-only: they're managed in Log Discovery, which needs the admin or operator role.
+            </template>
           </el-text>
           <el-table :data="apiPolledSources" stripe>
             <el-table-column label="Host" min-width="160">
@@ -187,7 +190,7 @@
                 <el-text v-else type="info">Never</el-text>
               </template>
             </el-table-column>
-            <el-table-column label="Actions" width="140" align="center">
+            <el-table-column v-if="canOpenLogDiscovery" label="Actions" width="140" align="center">
               <template #default>
                 <el-button size="small" @click="goToLogDiscovery">Manage</el-button>
               </template>
@@ -645,6 +648,9 @@ const authStore = useAuthStore();
 // regenerating that key and the HTTP push key are admin-only.
 const canManageShippers = computed(() => ['admin', 'operator'].includes(authStore.user?.role));
 const isAdmin = computed(() => authStore.isAdmin);
+// Mirrors the Log Discovery route's allowedRoles (router/index.ts). The router
+// sends any other role to the Dashboard, so they get no Manage link to it.
+const canOpenLogDiscovery = computed(() => ['admin', 'operator'].includes(authStore.user?.role));
 const readOnlyHint = 'Read-only: adding, changing or deleting shippers needs the admin or operator role.';
 
 const loading = ref(false);

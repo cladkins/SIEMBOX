@@ -91,7 +91,7 @@ Viewer < Analyst < Operator < Admin
 - Configure scan policies and automation
 
 **Restrictions:**
-- Still subject to rate limiting on credential operations
+- Still subject to the general API rate limit (no role is exempt)
 - All actions are logged in audit trail
 
 **Use Case:** Security administrators and team leads responsible for security configuration and credential management.
@@ -105,7 +105,6 @@ RBAC is enforced through middleware in `/backend/src/middleware/scanPermissions.
 app.post('/api/scans/assets',
   authenticate,
   requireAssetScanPermission,
-  assetScanRateLimiter,
   validateAssetScanRequest,
   handleValidationErrors,
   createAssetScan
@@ -115,7 +114,6 @@ app.post('/api/scans/assets',
 app.post('/api/scans/vulnerabilities',
   authenticate,
   requireVulnScanPermission,
-  vulnScanRateLimiter,
   validateVulnScanRequest,
   handleValidationErrors,
   createVulnScan
@@ -125,7 +123,6 @@ app.post('/api/scans/vulnerabilities',
 app.post('/api/credentials',
   authenticate,
   requireCredentialPermission,
-  credentialRateLimiter,
   validateCredentialCreation,
   handleValidationErrors,
   createCredential
@@ -211,7 +208,7 @@ CREATE TABLE scan_credentials (
 
 **Security Flow:**
 1. Validate user has Admin role
-2. Apply rate limiting (20 ops/hour)
+2. Count against the general API rate limit (per client address)
 3. Validate input format
 4. Encrypt password and private key with AES-256-GCM
 5. Store encrypted data with IV and auth tag
@@ -302,14 +299,16 @@ CREATE TABLE audit_logs (
 );
 ```
 
-`ip_address` is the client address as the API sees it. The API trusts one
-`X-Forwarded-For` hop (`trust proxy` is `1`): behind the web UI's nginx proxy
-that is the real client, but a caller that talks to the API port (8421)
-directly can put any value there. A value that is not an IP address is
-replaced by the TCP peer address (or NULL), so the row is always written
-instead of being rejected by the `INET` column. The scan permission checks
-also keep the TCP peer in `details.peerAddress` whenever it differs from
-`ip_address`, so a forged header still shows where the request came from.
+`ip_address` is the client address as the API sees it: the real client
+through the web UI's nginx (which reaches the backend over a unix socket only
+it can use), and the TCP address for a caller that talks to the API port
+(8421) directly, whatever `X-Forwarded-For` it sends. Only the proxies in
+`TRUSTED_PROXIES` may name a client (see DEPLOYMENT.md, "Client addresses and
+reverse proxies"). A value that is not an IP address (which only such a proxy
+could forward) is replaced by the TCP peer address (or NULL), so the row is
+always written instead of being rejected by the `INET` column. When a trusted
+proxy connected over TCP, the scan permission checks keep it in
+`details.peerAddress`.
 
 ### Logged Actions
 
@@ -432,47 +431,40 @@ Monitor audit logs for:
 
 ### Rate Limit Configuration
 
-Rate limiting prevents abuse and resource exhaustion:
-
-| Operation | Window | Limit | Bypass Role |
-|-----------|--------|-------|-------------|
-| Asset Scans | 10 minutes | 15 requests | Admin |
-| Vulnerability Scans | 30 minutes | 5 requests | Admin |
-| Credential Operations | 1 hour | 20 requests | None |
-| Audit Log Queries | 5 minutes | 30 requests | Admin |
-| General Scans | 15 minutes | 10 requests | Admin |
+Scan, credential and audit routes have no limits of their own: they share the
+general API limit of `API_RATE_LIMIT_MAX` (default 1000) requests per 15
+minutes per client address, with no role exemption. (Earlier versions of this
+document described per-operation scan limiters; they were never wired up, and
+their unused module has been removed.) The full list of limits is in
+API.md, "Rate Limiting".
 
 ### Rate Limit Headers
 
-Responses include standard rate limit headers:
+Responses include the general limit's headers:
 
 ```
-RateLimit-Limit: 15
-RateLimit-Remaining: 12
-RateLimit-Reset: 1702839600
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 997
+X-RateLimit-Reset: 1702839600
 ```
 
 ### Rate Limit Exceeded Response
 
+`429`, with a `Retry-After` header in seconds:
+
 ```json
 {
-  "error": "Too many scan requests",
-  "message": "You have exceeded the rate limit of 10 scans per 15 minutes. Please try again later.",
-  "retryAfter": "600"
+  "status": "error",
+  "statusCode": 429,
+  "code": "RATE_LIMITED",
+  "message": "Too many requests from your address. Try again in 12 minutes.",
+  "retryAfter": 702
 }
 ```
 
 ### Customizing Rate Limits
 
-Modify limits in `/backend/src/middleware/rateLimiter.ts`:
-
-```typescript
-export const scanRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,  // Time window
-  max: 10,                    // Max requests
-  skip: (req) => req.user?.role === 'admin'
-});
-```
+Set `API_RATE_LIMIT_MAX` in `.env` and redeploy (`docker compose up -d`).
 
 ---
 

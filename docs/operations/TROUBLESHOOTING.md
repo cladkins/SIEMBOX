@@ -1437,6 +1437,83 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 - `lookalike: DNS lookups failed for every lookalike candidate` — DNS from the
   backend is down or blocked; retried automatically.
 
+### Issue: Everyone shows the same IP address
+
+**Symptoms:**
+- Audit rows, the Admin dashboard's error list and shipper records show one
+  address (a `172.x` Docker address, your reverse proxy's, or `127.0.0.1`) for
+  every user.
+- Users who aren't doing much get `429 Too Many Requests` together: they all
+  share one budget of `API_RATE_LIMIT_MAX` (default 1000) requests per 15
+  minutes, and one budget of 10 failed sign-ins.
+- The backend log has `Ignored X-Forwarded-For from <address> ...` warnings.
+
+**Diagnosis:** as an admin, open `GET /api/admin/client-address` through the
+web UI's address and read `you` and `warnings`:
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" http://<host>:8420/api/admin/client-address
+docker logs siembox-backend 2>&1 | grep -E "Client addresses|Proxy socket|X-Forwarded-For|TRUSTED_PROXIES"
+```
+
+**Causes and fixes** (DEPLOYMENT.md, "Client addresses and reverse proxies",
+has the full table):
+- **`proxySocket.state` is `no-volume`:** the compose file predates the
+  `api-socket` volume. In bridge mode the `frontend` name still keeps addresses
+  correct; with host networking everyone shares the frontend container's
+  address. Pull the current compose file and redeploy.
+- **A reverse proxy in front of SIEMBox:** add it to `TRUSTED_PROXIES`, keeping
+  `frontend` (`TRUSTED_PROXIES=frontend,192.168.1.20`), and redeploy with
+  `docker compose up -d` (a plain restart keeps the old environment). A proxy
+  container on `siembox-network` can be listed by service name; one on the
+  Docker host must proxy to the host's LAN address, not `127.0.0.1`.
+- **`you.address` is the Docker gateway (`172.x.0.1`):** you are reaching a
+  published port over IPv6 or from the Docker host itself, which Docker's
+  userland proxy rewrites to the gateway. Use the host's IPv4 LAN address.
+- **A `TRUSTED_PROXIES` entry doesn't take effect:** `warnings` says why (a
+  rejected value such as `*` or `uniquelocal`, a name that doesn't resolve on
+  the backend's network, a name in host networking mode, where only IP
+  addresses work).
+
+### Issue: Frontend log shows `connect() to unix:/run/siembox/api.sock failed`
+
+**Symptoms:** the frontend container logs
+`connect() to unix:/run/siembox/api.sock failed (2: No such file or directory)`
+(or `(111: Connection refused)`), each followed by
+`upstream server temporarily disabled`, about every 30 seconds, while the web
+UI works.
+
+**Cause:** nginx proxies `/api` to the backend's unix socket on the
+`api-socket` volume and falls back to `BACKEND_UPSTREAM` over TCP when it can't
+connect, retrying the socket every 30 s. The socket is missing when:
+- the compose file predates the volume (images updated, compose file not);
+- the backend image is older than the frontend image;
+- the backend logged `Proxy socket not started: ...` (its reason follows), or
+  runs with `SIEMBOX_PROXY_SOCKET=off`;
+- the backend is restarting (a few lines then are normal; nginx stays on the
+  TCP fallback for up to 30 s after the backend is back, then returns to the
+  socket).
+
+**Solution:** pull the current compose file (it mounts `api-socket` at
+`/run/siembox` on the backend and read-only on the frontend) and redeploy with
+`docker compose up -d`. Then check `GET /api/admin/client-address`:
+`proxySocket.state` should be `listening` and `you.via` `proxy-socket`.
+
+### Issue: `429 Too Many Requests` or "Too many failed sign-in attempts from your address"
+
+**Cause:** a rate limit (DEPLOYMENT.md and API.md, "Rate Limiting"): more than
+`API_RATE_LIMIT_MAX` (default 1000) API requests in 15 minutes from one
+address, or 10 failed sign-ins in 15 minutes. The message says how long to
+wait; the counters are kept in memory.
+
+**Solution:**
+- Wait for the time in the message, or restart the backend to clear every
+  counter at once.
+- If many people share one address (an office NAT, a reverse proxy SIEMBox
+  doesn't trust), see "Everyone shows the same IP address" above, or raise
+  `API_RATE_LIMIT_MAX`.
+- Shippers and endpoint agents have their own limits (`SHIPPER_LOG_PUSH_MAX`,
+  `EDR_AGENT_RATE_MAX`); EDR enrollment counts toward the general limit.
+
 ---
 
 ## Frontend Issues

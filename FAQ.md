@@ -203,12 +203,20 @@ server {
     ssl_certificate_key /path/to/key.pem;
 
     location / {
-        proxy_pass http://localhost:8420;
+        # The host's LAN address, not localhost: Docker presents loopback
+        # clients of a published port as its gateway address.
+        proxy_pass http://192.168.1.10:8420;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 }
 ```
+
+Then add the proxy to `TRUSTED_PROXIES` in `.env` (keep `frontend`), e.g.
+`TRUSTED_PROXIES=frontend,192.168.1.10`, and run `docker compose up -d`, so
+SIEMBox sees each user's address instead of the proxy's. See DEPLOYMENT.md,
+"Client addresses and reverse proxies".
 
 ---
 

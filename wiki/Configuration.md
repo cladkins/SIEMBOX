@@ -13,6 +13,18 @@ SIEMBox is configured with environment variables (a `.env` file next to your com
 | `CORS_ORIGIN` | `*` | Allowed origin(s) for the API. |
 | `VITE_API_URL` | `/api` | Where the frontend calls the API. |
 
+## Client addresses & reverse proxies
+
+Rate limits, audit rows and shipper records use each client's address. The web UI's nginx reaches the backend over a unix socket on the `api-socket` volume (both compose files mount it), so browsers keep their real addresses. A direct caller on port 8421 (shipper, endpoint agent, script) is its TCP address: `X-Forwarded-For` and `X-Real-IP` from it are ignored unless it is listed in `TRUSTED_PROXIES`. See [DEPLOYMENT.md, "Client addresses and reverse proxies"](https://github.com/cladkins/SIEMBOX/blob/main/DEPLOYMENT.md#client-addresses-and-reverse-proxies) for every deployment mode, and check what the API sees at `GET /api/admin/client-address` (admin).
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `TRUSTED_PROXIES` | `frontend` | Comma-separated IPs, CIDRs or Compose service names whose `X-Forwarded-For` is believed (any hop). Names are looked up in Docker's DNS only, and only answers on the backend's own networks count. The value **replaces** the default, so keep `frontend` when adding a reverse proxy: `frontend,192.168.1.20`. `none` trusts only the socket. `*`, `true`, `/0` ranges, Express presets (`loopback`, …), hop counts and malformed entries are rejected (logged as errors); ranges wider than /24 (IPv4) or /64 (IPv6) log a warning. The Docker gateway is never trusted through a range. |
+| `API_RATE_LIMIT_MAX` | `1000` | Requests per 15 minutes per client address across `/api`. A `429` is JSON with `Retry-After`. |
+| `SIEMBOX_PROXY_SOCKET` | `/run/siembox/api.sock` | Where the backend listens for the frontend's nginx. It only listens when the directory exists (the volume is mounted); `off` disables it. Not set in the compose files. |
+
+POST `/api/auth/login` also allows at most **10 failed sign-ins per 15 minutes per address** (IPv6: per /64); successful sign-ins don't count. Counters are in memory and reset when the backend restarts.
+
 ## Database
 
 | Variable | Default | Notes |

@@ -253,6 +253,21 @@ To update SIEMBox to the latest version:
 
 Note: Do not run docker-compose commands directly. Your deployment environment will handle container updates.
 
+**Updating to the release with the proxy socket:** pull the new compose file
+too, not only the images. It adds the `api-socket` volume (backend
+`/run/siembox`, frontend `/run/siembox:ro`) and the `TRUSTED_PROXIES` and
+`API_RATE_LIMIT_MAX` settings. An older compose file keeps working: nginx falls
+back to TCP and logs `connect() to unix:/run/siembox/api.sock failed` about
+every 30 s. But with host networking every web UI user then shares one
+address. Other changes in that release:
+- `X-Forwarded-For` from direct callers on port 8421 is ignored. A reverse
+  proxy in front of SIEMBox needs `TRUSTED_PROXIES` (see [Client addresses and
+  reverse proxies](#client-addresses-and-reverse-proxies)).
+- A `429` from the general limit is JSON with `Retry-After`, and failed
+  sign-ins are limited to 10 per 15 minutes per address.
+- EDR agent enrollment counts toward the general limit, even with an
+  `X-Agent-ID` header.
+
 ## Database Migrations and Seeding
 
 ### Automatic Initialization
@@ -406,6 +421,13 @@ BACKEND_UPSTREAM=host.docker.internal:8421
 SIEMBOX_HOST_NETWORKING=true
 ```
 
+Leave the `api-socket` volume on both containers: in host networking mode it
+is what lets the web UI's requests keep their users' real addresses (see
+[Client addresses and reverse proxies](#client-addresses-and-reverse-proxies)).
+`BACKEND_UPSTREAM` is now only nginx's fallback route, but it is still
+required: nginx resolves it at startup, and `backend` does not resolve once
+the backend has left `siembox-network`.
+
 > ⚠️ **Apply steps 1 and 2 together.** `DB_HOST=localhost` (or `127.0.0.1`) is
 > only correct once `network_mode: host` is actually active on the backend. Set
 > on its own, the backend dials its *own* container instead of Postgres and
@@ -553,7 +575,7 @@ Configure in the UI under **Settings → Data Retention**:
 
 1. **Change default passwords immediately**
 2. **Use strong JWT secret** (32+ random characters)
-3. **Run behind reverse proxy** (nginx/traefik) with SSL
+3. **Run behind reverse proxy** (nginx/traefik) with SSL, and list it in `TRUSTED_PROXIES` (see [Client addresses and reverse proxies](#client-addresses-and-reverse-proxies))
 4. **Restrict port 514** to trusted networks only
 5. **Regular backups** of PostgreSQL database
 6. **Monitor disk space** - logs can grow quickly
@@ -563,7 +585,7 @@ Configure in the UI under **Settings → Data Retention**:
 
 SIEMBox requires these ports:
 - **8420**: Frontend web interface
-- **8421**: Backend API
+- **8421**: Backend API, for log shippers, endpoint agents and scripts (the web UI reaches the API through 8420). Callers here are identified by their TCP address; see [Client addresses and reverse proxies](#client-addresses-and-reverse-proxies)
 - **514/UDP**: Syslog ingestion (UDP)
 - **514/TCP**: Syslog ingestion (TCP)
 - **5432**: PostgreSQL. Both compose files publish it on `127.0.0.1` only. To query it from another machine, open an SSH tunnel to the Docker host (`ssh -L 5432:127.0.0.1:5432 user@docker-host`) instead of publishing it on the LAN.
@@ -586,6 +608,89 @@ sudo ufw allow from 192.168.1.0/24 to any port 514
 # Optional: API access
 sudo ufw allow 8420/tcp
 ```
+
+## Client addresses and reverse proxies
+
+SIEMBox's rate limits, audit rows, error log and shipper records all use the
+client's address. It works that address out like this:
+
+- **The web UI (port 8420).** The frontend's nginx reaches the backend over a
+  unix socket, `/run/siembox/api.sock`, on the `api-socket` volume that only
+  the backend and frontend containers mount. The backend believes the
+  `X-Forwarded-For` of requests on that socket, where nginx has put the address
+  it saw, so every browser keeps its real address.
+- **Direct callers on port 8421** (log shippers, endpoint agents, scripts,
+  anyone else) are their TCP address. `X-Forwarded-For` and `X-Real-IP` sent
+  to 8421 are ignored, unless the sender is listed in `TRUSTED_PROXIES`.
+- **`TRUSTED_PROXIES`** (default `frontend`) lists other proxies whose
+  `X-Forwarded-For` is believed: IP addresses, CIDR ranges and Compose service
+  names, comma-separated. The value replaces the default, so keep `frontend`
+  when you add one: `TRUSTED_PROXIES=frontend,192.168.1.20`. `none` trusts only
+  the socket.
+  - Names are looked up in Docker's own DNS only (never in host networking
+    mode), and only answers on the backend's Docker networks count, so a LAN
+    DNS server can't make some other host trusted.
+  - Values that would trust everyone (`*`, `true`, `0.0.0.0/0`, `::/0`),
+    Express's `loopback`/`linklocal`/`uniquelocal` presets, hop counts and
+    malformed entries are rejected with an error in the backend log. Ranges
+    wider than /24 (IPv4) or /64 (IPv6) work, with a warning.
+  - Docker's network gateway address is never trusted through a range: Docker
+    presents IPv6 and loopback clients of published ports with that address.
+- **`SIEMBOX_PROXY_SOCKET`** sets the socket path (default
+  `/run/siembox/api.sock`; `off` disables it). The backend only listens when
+  the directory already exists, i.e. when the volume is mounted.
+
+### By deployment mode
+
+| Mode | Web UI (8420) | Direct callers on 8421 | What to do |
+|---|---|---|---|
+| Bridge network, current compose file (the default) | Over the socket: each user's real address | Their TCP address; `X-Forwarded-For` ignored | Nothing |
+| Bridge network, older compose file (images updated only) | nginx falls back to TCP; `frontend` is trusted through Docker DNS, so addresses stay correct | Same | Nothing urgent. Update the compose file: until then the backend logs a hint at startup and nginx logs one `connect() to unix:/run/siembox/api.sock failed` line about every 30 s |
+| Host networking, current compose file | Over the socket | Their real address | Keep `BACKEND_UPSTREAM=host.docker.internal:8421` |
+| Host networking, older compose file | TCP from the frontend container, which can't be trusted by name here: every UI user shares one address (it can't be forged) | Their real address | Update the compose file |
+| Reverse proxy on another machine, in front of 8420 | nginx sees the proxy | — | `TRUSTED_PROXIES=frontend,<proxy IP>`; the proxy must append to `X-Forwarded-For` |
+| Proxy container (Nginx Proxy Manager, Traefik, Caddy, cloudflared) | Attach it to `siembox-network` and point it at `http://frontend:80` | — | `TRUSTED_PROXIES=frontend,<its service name>`; with host networking, give it a fixed `ipv4_address` and list that |
+| Proxy installed on the Docker host | Proxy to `http://<host LAN IP>:8420`, not `127.0.0.1` (Docker rewrites loopback clients of published ports to the gateway address) | — | `TRUSTED_PROXIES=frontend,<host LAN IP>` |
+| Host-networking backend, host proxy pointed straight at 8421 | — | The proxy is `127.0.0.1` | `TRUSTED_PROXIES=frontend,127.0.0.1` (only safe with host networking) |
+| IPv6 or loopback clients of published ports, Docker Desktop, rootless Docker's default port driver | These clients share the gateway address, which is never trusted | — | Reach SIEMBox over IPv4 on the host's LAN address, enable IPv6 on `siembox-network`, or switch rootless Docker to `slirp4netns` |
+| Kubernetes, Unraid and other templates | Every user shares one address until configured | — | Share the socket's directory between the two containers (an `emptyDir`), or list the frontend's address (`127.0.0.1` inside one pod) |
+| Development (`npm run dev`) | The Vite dev server connects from `127.0.0.1` | — | Nothing |
+
+Without any configuration a reverse proxy in front of SIEMBox makes every user
+look like the proxy, as before: one shared address that can't be forged. It
+shares the general limit of `API_RATE_LIMIT_MAX` (default 1000) requests per 15
+minutes, so set `TRUSTED_PROXIES` (or raise the limit).
+
+### Check what SIEMBox sees
+
+1. Sign in as an admin and request `GET /api/admin/client-address` through the
+   web UI's address (with your session token from the browser, or one from
+   `POST /api/auth/login`):
+
+   ```bash
+   curl -s -H "Authorization: Bearer $TOKEN" http://<host>:8420/api/admin/client-address
+   ```
+
+   `you.address` should be your machine's address and `you.via`
+   `proxy-socket`. `warnings` lists anything to fix: a missing volume, a
+   `TRUSTED_PROXIES` name that doesn't resolve, a proxy whose `X-Forwarded-For`
+   is being ignored. Right after the backend restarts, nginx stays on its TCP
+   fallback for up to 30 s before it tries the socket again, so check again
+   after that if `via` is not `proxy-socket` yet.
+2. Confirm a direct caller can't choose its address:
+
+   ```bash
+   curl -s -H "Authorization: Bearer $TOKEN" -H 'X-Forwarded-For: 1.2.3.4' \
+     http://<host>:8421/api/admin/client-address
+   ```
+
+   `you.address` is still your real address, `you.via` is `direct`, and a
+   warning says the header was ignored.
+3. The backend's startup log sums it up in one line, e.g. `Client addresses:
+   proxy socket /run/siembox/api.sock (listening); X-Forwarded-For trusted from
+   frontend -> 172.18.0.3; direct callers on :8421 use their TCP address.`
+   A local proxy whose header is ignored also shows up as an hourly
+   `Ignored X-Forwarded-For from ...` warning.
 
 ## Monitoring
 

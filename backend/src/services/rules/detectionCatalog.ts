@@ -68,7 +68,14 @@ interface DetCacheShape {
 let cache: DetCacheShape | null = null;
 const CACHE_TTL = 5 * 60 * 1000;
 
-/** Fetch + validate the detection catalog (cached). `get` is injectable for tests. */
+/** The fetch in progress, if any: callers that miss the cache meanwhile share it. */
+let inflight: { key: string; promise: Promise<DetectionEntry[]> } | null = null;
+
+/**
+ * Fetch + validate the detection catalog (cached). `get` is injectable for tests.
+ * As with the parser catalog, a call that arrives while a fetch is in flight
+ * waits for it, so a burst of reads costs one GitHub API call.
+ */
 export async function fetchDetectionCatalog(
   force = false,
   get: HttpGetter = httpsGet
@@ -78,7 +85,16 @@ export async function fetchDetectionCatalog(
   if (!force && cache && cache.source === key && Date.now() - cache.at < CACHE_TTL) {
     return { source: src, entries: cache.entries };
   }
+  if (!inflight || inflight.key !== key) {
+    const promise = loadDetectionCatalog(src, key, get).finally(() => {
+      if (inflight?.promise === promise) inflight = null;
+    });
+    inflight = { key, promise };
+  }
+  return { source: src, entries: await inflight.promise };
+}
 
+async function loadDetectionCatalog(src: CatalogSource, key: string, get: HttpGetter): Promise<DetectionEntry[]> {
   const paths = await listTreeFiles(src, get, '.yaml');
   const rules = new Map<string, { rule_yaml: string; parsed: any }>();
   const entries: DetectionEntry[] = [];
@@ -121,7 +137,7 @@ export async function fetchDetectionCatalog(
 
   entries.sort((a, b) => a.name.localeCompare(b.name));
   cache = { source: key, at: Date.now(), rules, entries };
-  return { source: src, entries };
+  return entries;
 }
 
 /** Get one catalog rule (its raw YAML + parsed form) by name. */

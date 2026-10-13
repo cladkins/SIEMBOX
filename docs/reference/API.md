@@ -39,6 +39,28 @@ Authorization: Bearer YOUR_JWT_TOKEN
 
 The only routes that take no login are `POST /api/auth/login`, the `/health` checks, the shipper-facing `/api/shippers` endpoints (authenticated by the shipper's API key or HTTP push key, see [Log Shippers](#log-shippers-endpoints)), and the EDR agent endpoints (enrollment token or per-agent key).
 
+### Roles
+
+Every signed-in user has one of four roles, each including the ones before it: `viewer` < `analyst` < `operator` < `admin` (see [User Management](../guides/USER-MANAGEMENT.md#user-roles)). A call a role may not make answers `403`. Viewers are read-only: the only non-GET calls open to them act on their own session or account, or compute an answer and store nothing (logout, `/api/auth/me/*`, `POST /api/parsers/:id/test`, `POST /api/ai/explain`, `POST /api/log-discovery/sources/:id/onboard/preview`, `POST /api/exposure/password-check`).
+
+Detection content, alert triage and the AI Analyst:
+
+| Route | Admin | Operator | Analyst | Viewer |
+|---|---|---|---|---|
+| `POST /api/parsers`, `PUT` / `DELETE /api/parsers/:id`, `POST /api/parsers/import` | yes | yes | yes | no |
+| `POST /api/parsers/validate`, `POST /api/parsers/test` (they run a pattern the caller supplies) | yes | yes | yes | no |
+| `POST /api/parsers/catalog/install`, `/catalog/install-all`, `/catalog/refresh` | yes | yes | yes | no |
+| `POST /api/rules`, `PUT` / `DELETE /api/rules/:id` | yes | yes | yes | no |
+| `POST /api/rules/catalog/install`, `/catalog/install-all`, `/catalog/refresh` | yes | yes | yes | no |
+| `PUT /api/alerts/:id`, `POST /api/alerts/:id/triage/rerun` | yes | yes | yes | no |
+| `DELETE /api/alerts/:id` | yes | no | no | no |
+| `POST /api/ai/chat`, `PATCH` / `DELETE /api/ai/chat/sessions/:id` | yes | yes | yes | no |
+| `POST /api/parsers/ai/generate`, `POST /api/rules/ai/generate`, `POST /api/rules/import/sigma`, `/import/sigma/preview`, `POST /api/packs/:id/install` | yes | no | no | no |
+
+The reads under these routes stay open to every role, but only analyst and up can force a catalog refetch with `GET /api/parsers/catalog?refresh=true` or `GET /api/rules/catalog?refresh=true`: a viewer's `refresh` flag is ignored and the cached listing comes back. `GET /api/ai/chat/health` answers only `{ "configured": true }` or `false`; the AI Analyst's provider, model and base URL are in the admin-only `GET /api/settings/ai-chat`. A refusal on the parser, rule, alert and AI Analyst writes above (all but the triage re-run and the last row) is recorded in `audit_logs` like a refused scan write (below). User management, settings and notification changes, Endpoints (EDR) and the admin dashboard are admin-only; shipper management has its own table under [Log Shippers](#log-shippers-endpoints). Every route and the roles it allows are listed in `backend/src/routes/routeInventory.test.ts`, which the test suite checks against the running API.
+
+(Earlier versions let any logged-in role, viewers included, make every call in this table except the triage re-run and the last row, deleting alerts included. A script that used a viewer's token for these writes needs an analyst's, or an admin's to delete alerts.)
+
 ### Roles for scan and asset writes
 
 Reads under `/api/assets`, `/api/vulnerabilities`, `/api/scheduled-scans`, `/api/log-discovery` and `/api/containers` are open to every logged-in role. Each write requires the roles that can open the UI page that makes the call; any other role gets `403`.
@@ -255,7 +277,7 @@ Change current user's password.
 
 Cleanup expired sessions (admin only).
 
-**Authentication:** Required (Admin role)
+**Authentication:** Required (Admin role; other roles get `403 Access denied. Required role: admin`)
 
 **Request Body:** None
 
@@ -606,7 +628,7 @@ Get single parser by ID.
 
 Create a new log parser.
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Request Body:**
 ```json
@@ -651,7 +673,7 @@ Create a new log parser.
 
 Update existing parser.
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Request Body:** (all fields optional)
 ```json
@@ -680,7 +702,7 @@ Update existing parser.
 
 Delete parser.
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Response (200):**
 ```json
@@ -698,7 +720,7 @@ Delete parser.
 
 Test a saved parser against a sample log.
 
-**Authentication:** Required
+**Authentication:** Required (any role: it runs a saved parser, and stores nothing)
 
 **Request Body:**
 ```json
@@ -737,7 +759,7 @@ Test a saved parser against a sample log.
 
 Test parser configuration without saving (for parser builder).
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Request Body:**
 ```json
@@ -763,7 +785,7 @@ Test parser configuration without saving (for parser builder).
 }
 ```
 
-**Use Case:** Frontend parser builder to validate configurations before saving.
+**Use Case:** Frontend parser builder to validate configurations before saving. The pattern is compiled and run on the API's event loop with no ReDoS check, so like `POST /api/parsers/validate` this needs analyst or higher; anyone can test a saved parser with `POST /api/parsers/:id/test`.
 
 ---
 
@@ -876,7 +898,7 @@ Get single detection rule.
 
 Create a new detection rule.
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Request Body:**
 ```json
@@ -931,7 +953,7 @@ alert:
 
 Update detection rule.
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Request Body:** (all fields optional)
 ```json
@@ -961,7 +983,7 @@ Update detection rule.
 
 Delete detection rule.
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Response (200):**
 ```json
@@ -985,28 +1007,39 @@ Install/import is never blind: every item is run through the validator and its
 self-tests before it is stored. A failing item returns `422` (with the
 validation / self-test details) unless you pass `force: true`.
 
+Browsing the catalogs and exporting are open to every role. Installing,
+updating, refreshing, importing and validating need analyst or higher (viewers
+get `403`, and their `?refresh=true` on a catalog listing is ignored); see
+[Roles](#roles).
+
 ### Catalog
 
 | Method & Path | Purpose |
 |---|---|
-| `GET /api/parsers/catalog` | Browse the parser catalog, each entry annotated with `installed` and `update_available`. `?refresh=true` bypasses the ~5-minute cache. Returns `{ source, parsers }`. |
+| `GET /api/parsers/catalog` | Browse the parser catalog, each entry annotated with `installed` and `update_available`. `?refresh=true` bypasses the ~5-minute cache for analyst and up; a viewer gets the cached listing. Returns `{ source, parsers }`. |
 | `GET /api/parsers/catalog/source` | The configured catalog source (repo / ref) for display. |
 | `POST /api/parsers/catalog/install` | Install or update a catalog parser by `name` (validate → self-test → upsert). Body: `{ "name": "nginx", "force": false }`. `201` created / `200` updated. |
+| `POST /api/parsers/catalog/install-all` | Install or update every catalog parser. Returns `{ total, installed, updated, failed }`. |
 | `POST /api/parsers/catalog/refresh` | Force a catalog cache refresh. Returns `{ refreshed, count }`. |
-| `GET /api/rules/catalog` | Browse the detection catalog (same annotations). Returns `{ source, rules }`. |
+| `GET /api/rules/catalog` | Browse the detection catalog (same annotations, same `?refresh=true`). Returns `{ source, rules }`. |
 | `GET /api/rules/catalog/source` | The configured catalog source. |
 | `POST /api/rules/catalog/install` | Install or update a catalog detection by `name`. |
+| `POST /api/rules/catalog/install-all` | Install or update every catalog detection. |
 | `POST /api/rules/catalog/refresh` | Force a catalog cache refresh. |
 
 Catalog source defaults to `cladkins/siembox-parsers` and is overridable via the
 `SIEMBOX_CATALOG_REPO` / `SIEMBOX_CATALOG_REF` env vars (`GITHUB_TOKEN` raises the
-GitHub API rate limit).
+GitHub API rate limit). Each fetch of a catalog lists the repository through the
+GitHub API, which allows 60 unauthenticated requests an hour per IP; requests
+that arrive while a fetch is in progress wait for it rather than starting
+another.
 
 ### Export / Import (portable parsers)
 
 | Method & Path | Purpose |
 |---|---|
 | `GET /api/parsers/:id/export` | Export an installed parser as a portable `siembox.parser/v1` JSON document. |
+| `POST /api/parsers/validate` | Validate a portable parser and run its self-tests without saving. Body: `{ "parser": { … }, "strict": false }`. |
 | `POST /api/parsers/import` | Import a portable parser. Body: `{ "parser": { … }, "force": false }`. Validated + self-tested before upsert; `422` on failure unless `force`. |
 
 ### AI Builder
@@ -1205,7 +1238,7 @@ Get single alert details.
 
 Update alert (change status, assign user, add notes).
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Request Body:** (all fields optional)
 ```json
@@ -1291,9 +1324,9 @@ Manually (re-)run AI triage for an alert, bypassing the severity and duplicate-a
 
 ### DELETE /api/alerts/:id
 
-Delete alert.
+Delete alert. This destroys evidence, so it is admin-only; triage closes an alert as `closed` or `false_positive` instead.
 
-**Authentication:** Required
+**Authentication:** Required (admin; other roles get `403`)
 
 **Response (200):**
 ```json
@@ -1341,10 +1374,12 @@ Get all users (admin only).
 ]
 ```
 
-**User Roles:**
-- `admin` - Full system access
-- `analyst` - View and manage alerts, logs, rules
-- `viewer` - Read-only access
+**User Roles** (each includes the ones before it; see [Roles](#roles) and the
+[permission table](../guides/USER-MANAGEMENT.md#permission-table)):
+- `viewer` - Read-only
+- `analyst` - Alert triage, the AI Analyst, parsers and detection rules (create, edit, delete, catalog installs)
+- `operator` - Scans, Log Discovery and log shipper management
+- `admin` - Full access: users, settings, Endpoints (EDR), deleting alerts
 
 ---
 

@@ -1,11 +1,17 @@
 import { Router, Request, Response } from 'express';
 import { ApiError } from '../middleware/errorHandler';
+import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { explain, getChatAiPublicConfig, getTriagePublicConfig } from '../services/ai/aiService';
 import { runAnalystChat } from '../services/ai/analystChat';
 import { ChatThreadModel } from '../models/ChatThread';
 import type { Role } from '../services/ai/analystTools';
 
 const router = Router();
+
+// The AI Analyst is for analysts and up (its page and the "Ask AI" button are
+// hidden from viewers): a chat drives the LLM tool loop, and its cost. Reading
+// your own past threads stays open to every role. Refusals go to audit_logs.
+const requireAnalystChat = requireScanPermission(UserRole.Analyst, 'ai_chat');
 
 // "Explain this" assistant. Available to any authenticated user (read-only
 // analysis), unlike the admin-only parser/detection generators. Reuses the
@@ -64,11 +70,14 @@ function titleFrom(message: string): string {
   return message.trim().replace(/\s+/g, ' ').slice(0, 60) || 'New chat';
 }
 
-// Public config for the chat model (no secrets) — lets the UI show a
-// "not configured" banner before the user types.
+// Whether the chat model is configured, so the UI can show a "not configured"
+// banner before the user types. Every role may ask, so it answers only that:
+// the provider, model and base URL (which can carry credentials or internal
+// host names) stay behind GET /api/settings/ai-chat (admin-only).
 router.get('/chat/health', async (_req: Request, res: Response) => {
   try {
-    res.json(await getChatAiPublicConfig());
+    const cfg = await getChatAiPublicConfig();
+    res.json({ configured: cfg.configured });
   } catch {
     throw new ApiError(500, 'Failed to read AI analyst config');
   }
@@ -108,7 +117,7 @@ router.get('/chat/sessions/:id', async (req: Request, res: Response) => {
 });
 
 // Rename a thread.
-router.patch('/chat/sessions/:id', async (req: Request, res: Response) => {
+router.patch('/chat/sessions/:id', requireAnalystChat, async (req: Request, res: Response) => {
   if (!req.user) throw new ApiError(401, 'Authentication required');
   const id = parseInt(req.params.id, 10);
   const { title } = req.body ?? {};
@@ -120,7 +129,7 @@ router.patch('/chat/sessions/:id', async (req: Request, res: Response) => {
 });
 
 // Delete a thread (and its messages, via cascade).
-router.delete('/chat/sessions/:id', async (req: Request, res: Response) => {
+router.delete('/chat/sessions/:id', requireAnalystChat, async (req: Request, res: Response) => {
   if (!req.user) throw new ApiError(401, 'Authentication required');
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) throw new ApiError(400, 'invalid session id');
@@ -131,7 +140,7 @@ router.delete('/chat/sessions/:id', async (req: Request, res: Response) => {
 
 // Send a message to the analyst. Creates a thread if none is supplied, loads the
 // thread's prior turns, runs the read-only tool loop, and persists both turns.
-router.post('/chat', async (req: Request, res: Response) => {
+router.post('/chat', requireAnalystChat, async (req: Request, res: Response) => {
   if (!req.user) throw new ApiError(401, 'Authentication required');
   const userId = req.user.id;
   const role = req.user.role as Role;

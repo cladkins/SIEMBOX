@@ -74,6 +74,10 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 ### Parsers
 
+Reads take any role. Creating, changing or deleting a parser, testing an unsaved
+pattern and catalog installs need an analyst, operator or admin token (a
+viewer's gets `403`).
+
 ```bash
 # List all parsers
 curl -H "Authorization: Bearer $TOKEN" \
@@ -108,6 +112,9 @@ curl -X POST http://localhost:8421/api/parsers/test \
 ```
 
 ### Detection Rules
+
+Reads take any role. Creating, changing or deleting a rule and catalog installs
+need an analyst, operator or admin token (a viewer's gets `403`).
 
 ```bash
 # List all rules

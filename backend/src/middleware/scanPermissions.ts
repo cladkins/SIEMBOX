@@ -43,7 +43,7 @@ const ROLE_HIERARCHY: UserRole[] = [
 /**
  * Check if user has required role or higher in hierarchy
  */
-function hasRequiredRole(userRole: string, requiredRole: UserRole): boolean {
+export function hasRequiredRole(userRole: string, requiredRole: UserRole): boolean {
   const userRoleIndex = ROLE_HIERARCHY.indexOf(userRole as UserRole);
   const requiredRoleIndex = ROLE_HIERARCHY.indexOf(requiredRole);
 
@@ -59,7 +59,8 @@ function hasRequiredRole(userRole: string, requiredRole: UserRole): boolean {
  * Requires user to have specified role or higher in hierarchy
  */
 export const requireScanPermission = (requiredRole: UserRole, resourceType?: string) => {
-  return async (req: Request, _res: Response, next: NextFunction) => {
+  // Named so routeInventory.test.ts can tell a router.use() gate from a handler.
+  return async function requireRole(req: Request, _res: Response, next: NextFunction) {
     try {
       // Ensure user is authenticated
       if (!req.user) {

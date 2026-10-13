@@ -1234,6 +1234,26 @@ For a `403`, use an account with the role listed under **Cause**: an admin to re
 
 ---
 
+### Issue: 403 When Changing Parsers, Rules or Alerts, or Using the AI Analyst
+
+**Symptoms:**
+- A script or integration using a viewer's token gets `403 Access denied. Required role: analyst or higher. Your role: viewer` when it creates, changes, deletes, imports or installs parsers or detection rules (including `/catalog/install`, `/catalog/install-all` and `/catalog/refresh`), calls `POST /api/parsers/validate` or `POST /api/parsers/test`, updates an alert (`PUT /api/alerts/:id`), or uses the AI Analyst (`POST /api/ai/chat`, renaming or deleting a chat thread)
+- An analyst or operator gets `403 Access denied. Required role: admin or higher` from `DELETE /api/alerts/:id`
+- A viewer no longer sees Add, Import, Delete or Install on the Parsers and Detection Rules pages (Edit is now View), the Update buttons on Alerts, or the AI triage panel's Analyze now, Re-run, Ask the analyst and Use suggested status buttons
+
+**Cause:** viewers are read-only. Changing parsers and detection rules, triaging alerts and the AI Analyst need analyst or higher, and deleting an alert needs an admin. Earlier versions let any logged-in role make these calls, deleting alerts included. See [Roles](../reference/API.md#roles).
+
+**Solution:** use an analyst, operator or admin account for those calls, and an admin to delete an alert (or close it as `closed` or `false_positive`, which needs only an analyst). A browser tab that was open during the upgrade still shows the old controls: reload it. Each refusal is written to the audit log, which shows which accounts still make these calls:
+```sql
+SELECT a.created_at, u.username, a.resource_type, a.details->>'method' AS method, a.details->>'path' AS path
+  FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id
+ WHERE a.action = 'access.denied' AND a.resource_type IN ('parser', 'detection_rule', 'alert', 'ai_chat')
+ ORDER BY a.created_at DESC LIMIT 50;
+```
+`path` is relative to the route family (`resource_type`), for example `/12` for `PUT /api/parsers/12`.
+
+---
+
 ## Performance Issues
 
 ### Issue: Slow Query Response

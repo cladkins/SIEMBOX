@@ -105,6 +105,7 @@
                       @click="openCorrelated(c, 'view')"
                     >View</el-button>
                     <el-button
+                      v-if="authStore.canAnalyst"
                       type="success"
                       size="small"
                       :loading="loadingCorrelated === c.id"
@@ -169,7 +170,8 @@
         <el-table-column label="Actions" width="200" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" size="small" @click="viewAlert(row)">View</el-button>
-            <el-button type="success" size="small" @click="updateStatus(row)">Update</el-button>
+            <!-- Triage (status, notes) is analyst and up; viewers are read-only. -->
+            <el-button v-if="authStore.canAnalyst" type="success" size="small" @click="updateStatus(row)">Update</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -224,6 +226,7 @@ import { ref, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAlertsStore, type Alert } from '@/stores/alerts';
 import { useTriageStore } from '@/stores/triage';
+import { useAuthStore } from '@/stores/auth';
 import { ElMessage } from 'element-plus';
 import { format } from 'date-fns';
 import { Search, Download, ArrowDown, Loading } from '@element-plus/icons-vue';
@@ -233,6 +236,7 @@ import AlertDetailDialog from '@/components/AlertDetailDialog.vue';
 const route = useRoute();
 const alertsStore = useAlertsStore();
 const triageStore = useTriageStore();
+const authStore = useAuthStore();
 
 const filters = ref({
   severity: '',

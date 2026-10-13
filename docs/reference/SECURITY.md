@@ -369,16 +369,25 @@ curl -X POST http://localhost:8421/api/users \
 
 ### Role-Based Access Control (RBAC)
 
+Four roles, each including the ones before it. The API checks the role on every
+route (a role that may not make a call gets `403`), and the UI hides or disables
+what a role can't use. The full permission table is in
+[User Management](../guides/USER-MANAGEMENT.md#permission-table); every route and
+the roles it allows are listed in `backend/src/routes/routeInventory.test.ts`,
+which the test suite checks against the running API.
+
 | Role | Permissions |
 |------|-------------|
-| **admin** | Full system access: manage users, settings, parsers, rules, alerts, logs |
-| **analyst** | Manage alerts, view logs, create/edit parsers and rules (cannot manage users) |
-| **viewer** | Read-only access to alerts and logs (cannot create/edit anything) |
+| **admin** | Full system access: users, every settings area, Endpoints (EDR), deleting alerts, the AI builders, Sigma import, Content Pack installs, shipper keys |
+| **operator** | Everything an analyst can do, plus vulnerability, container, scheduled and Log Discovery scans, and managing log shippers (operators see shipper API keys) |
+| **analyst** | Everything a viewer can do, plus alert triage, the AI Analyst, creating, editing, installing and deleting parsers and detection rules, asset inventory edits and discovery scans |
+| **viewer** | Read-only: can view logs, alerts, parsers, rules and shippers, but cannot create, edit or delete anything; changes only its own password and MFA |
 
 **Best Practices:**
 - Use admin role only for initial setup and user management
 - Daily operations should use analyst accounts
 - Dashboards/reports use viewer accounts
+- Give the operator role only to the people who run scans or manage shippers
 - Disable accounts immediately when employees leave
 - Review user accounts monthly
 

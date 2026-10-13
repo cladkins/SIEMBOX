@@ -56,7 +56,7 @@
     </div>
 
     <template #footer>
-      <el-button type="success" @click="alert && emit('edit-status', alert)">Update Status</el-button>
+      <el-button v-if="authStore.canAnalyst" type="success" @click="alert && emit('edit-status', alert)">Update Status</el-button>
       <el-button @click="emit('update:modelValue', false)">Close</el-button>
     </template>
   </el-dialog>
@@ -68,6 +68,7 @@ import { format } from 'date-fns';
 import type { Alert } from '@/stores/alerts';
 import ExplainWithAI from '@/components/ExplainWithAI.vue';
 import AlertTriagePanel from '@/components/AlertTriagePanel.vue';
+import { useAuthStore } from '@/stores/auth';
 
 const props = withDefaults(
   defineProps<{
@@ -82,6 +83,9 @@ const emit = defineEmits<{
   'update:modelValue': [value: boolean];
   'edit-status': [alert: Alert, proposedStatus?: string];
 }>();
+
+// Changing an alert's status is analyst and up; viewers only read it.
+const authStore = useAuthStore();
 
 const tab = ref(props.initialTab);
 watch(

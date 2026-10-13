@@ -21,9 +21,16 @@ import {
 } from '../services/rules/detectionRecommendations';
 import { generateDetection } from '../services/ai/aiService';
 import { authorize } from '../middleware/auth';
+import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { query } from '../config/database';
 
 const router = Router();
+
+// app.ts mounts this router behind `authenticate`, so the reads are open to every
+// role. Creating, changing, deleting or installing a detection needs analyst or
+// higher (a viewer could otherwise disable detections); a refused call is
+// written to audit_logs. The AI builder and Sigma import stay admin-only.
+const requireRuleWrite = requireScanPermission(UserRole.Analyst, 'detection_rule');
 
 // Get all rules
 router.get('/', async (_req: Request, res: Response) => {
@@ -158,7 +165,7 @@ router.get('/catalog/source', (_req: Request, res: Response) => {
 
 // Install (or update) a detection rule from the catalog by name: fetch -> validate
 // -> upsert. Preserves the operator's enabled toggle on update (like the importer).
-router.post('/catalog/install', async (req: Request, res: Response) => {
+router.post('/catalog/install', requireRuleWrite, async (req: Request, res: Response) => {
   try {
     const { name } = req.body ?? {};
     if (!name || typeof name !== 'string') {
@@ -213,7 +220,7 @@ router.post('/catalog/install', async (req: Request, res: Response) => {
 // the populate path for a catalog-only (unseeded) install. Bad items are
 // recorded in `failed` and skipped rather than aborting the batch; the engine is
 // reloaded once at the end.
-router.post('/catalog/install-all', async (req: Request, res: Response) => {
+router.post('/catalog/install-all', requireRuleWrite, async (req: Request, res: Response) => {
   try {
     const { entries } = await fetchDetectionCatalog(req.query.refresh === 'true');
     const results = {
@@ -280,7 +287,7 @@ router.post('/catalog/install-all', async (req: Request, res: Response) => {
 });
 
 // Force a detection catalog cache refresh.
-router.post('/catalog/refresh', async (_req: Request, res: Response) => {
+router.post('/catalog/refresh', requireRuleWrite, async (_req: Request, res: Response) => {
   try {
     clearDetectionCache();
     const { entries } = await fetchDetectionCatalog(true);
@@ -435,7 +442,7 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
 });
 
 // Create rule
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', requireRuleWrite, async (req: Request, res: Response) => {
   try {
     const { name, description, enabled, severity, rule_yaml, tags } = req.body;
 
@@ -469,7 +476,7 @@ router.post('/', async (req: Request, res: Response) => {
 });
 
 // Update rule
-router.put('/:id', async (req: Request, res: Response) => {
+router.put('/:id', requireRuleWrite, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const updateData = req.body;
@@ -500,7 +507,7 @@ router.put('/:id', async (req: Request, res: Response) => {
 });
 
 // Delete rule
-router.delete('/:id', async (req: Request, res: Response) => {
+router.delete('/:id', requireRuleWrite, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const deleted = await DetectionRuleModel.delete(id);

@@ -4,7 +4,7 @@ import rateLimit, { type ClientRateLimitInfo } from 'express-rate-limit';
 import { UserModel } from '../models/User';
 import { SessionModel } from '../models/Session';
 import { ApiError } from '../middleware/errorHandler';
-import { authenticate } from '../middleware/auth';
+import { authenticate, requireAdmin } from '../middleware/auth';
 import { logger } from '../utils/logger';
 import * as MfaService from '../services/auth/mfaService';
 import { rateLimitedHandler, signInLimitKey } from '../net/requestLimits';
@@ -303,14 +303,10 @@ router.post('/me/mfa/disable', authenticate, async (req: Request, res: Response)
   }
 });
 
-// Cleanup expired sessions (can be called periodically)
-router.post('/cleanup', authenticate, async (req: Request, res: Response) => {
+// Cleanup expired sessions (can be called periodically). Admin-only, gated at
+// the route like every other role check (routeInventory.test.ts runs the gates).
+router.post('/cleanup', authenticate, requireAdmin, async (_req: Request, res: Response) => {
   try {
-    // Only admins can trigger cleanup
-    if (req.user?.role !== 'admin') {
-      throw new ApiError(403, 'Admin access required');
-    }
-
     const deletedCount = await SessionModel.deleteExpired();
 
     logger.info('Expired sessions cleaned up', { count: deletedCount });

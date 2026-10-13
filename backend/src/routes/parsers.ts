@@ -50,10 +50,19 @@ import {
 import { generateParser } from '../services/ai/aiService';
 import { scanParserRedos } from '../services/parser/redos';
 import { authorize } from '../middleware/auth';
+import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { ApiError } from '../middleware/errorHandler';
 import { query } from '../config/database';
 
 const router = Router();
+
+// app.ts mounts this router behind `authenticate`, so the reads are open to every
+// role. Anything that changes a parser, or runs a regex the caller supplies
+// (/validate, /test: no ReDoS check, and the match runs on the event loop that
+// also serves the API and syslog ingestion), needs analyst or higher. A refused
+// call is written to audit_logs. POST /:id/test stays open: it runs a saved
+// parser on a sample the caller supplies.
+const requireParserWrite = requireScanPermission(UserRole.Analyst, 'parser');
 
 /** Upsert a (already-validated) portable parser by name. Shared by import + catalog install. */
 async function upsertPortableParser(portable: PortableParser): Promise<{ action: 'created' | 'updated'; parser: Parser | null }> {
@@ -224,7 +233,7 @@ router.get('/recommendations', async (req: Request, res: Response) => {
 
 // Validate a portable parser (and run its self-tests) WITHOUT saving. Used by the
 // import preview UI and shares the exact logic the catalog CI runs.
-router.post('/validate', async (req: Request, res: Response) => {
+router.post('/validate', requireParserWrite, async (req: Request, res: Response) => {
   try {
     const { parser, strict } = req.body ?? {};
     const validation = validatePortableParser(parser, { strict: !!strict });
@@ -241,7 +250,7 @@ router.post('/validate', async (req: Request, res: Response) => {
 
 // Import a portable parser: validate -> run self-tests -> upsert by name. Refuses
 // to import a parser whose own test_samples fail, unless `force` is set.
-router.post('/import', async (req: Request, res: Response) => {
+router.post('/import', requireParserWrite, async (req: Request, res: Response) => {
   try {
     const { parser, force } = req.body ?? {};
     const validation = validatePortableParser(parser, { strict: false });
@@ -317,7 +326,7 @@ router.get('/catalog/source', (_req: Request, res: Response) => {
 
 // Install (or update) a parser from the catalog by name: fetch -> validate ->
 // self-test -> upsert. Refuses on failing self-tests unless `force`.
-router.post('/catalog/install', async (req: Request, res: Response) => {
+router.post('/catalog/install', requireParserWrite, async (req: Request, res: Response) => {
   try {
     const { name, force } = req.body ?? {};
     if (!name || typeof name !== 'string') {
@@ -356,7 +365,7 @@ router.post('/catalog/install', async (req: Request, res: Response) => {
 // the populate path for a catalog-only (unseeded) install. Each item is
 // validated + self-tested; a bad item is recorded in `failed` and skipped
 // rather than aborting the batch. `force` installs items whose self-tests fail.
-router.post('/catalog/install-all', async (req: Request, res: Response) => {
+router.post('/catalog/install-all', requireParserWrite, async (req: Request, res: Response) => {
   try {
     const force = !!(req.body && req.body.force);
     const { entries } = await fetchCatalog(req.query.refresh === 'true');
@@ -402,7 +411,7 @@ router.post('/catalog/install-all', async (req: Request, res: Response) => {
 });
 
 // Force a catalog cache refresh.
-router.post('/catalog/refresh', async (_req: Request, res: Response) => {
+router.post('/catalog/refresh', requireParserWrite, async (_req: Request, res: Response) => {
   try {
     clearCatalogCache();
     const { entries } = await fetchCatalog(true);
@@ -504,7 +513,7 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
 });
 
 // Create parser
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', requireParserWrite, async (req: Request, res: Response) => {
   try {
     const { name, description, enabled, priority, parser_type, pattern, field_mappings, test_samples } = req.body;
 
@@ -533,7 +542,7 @@ router.post('/', async (req: Request, res: Response) => {
 });
 
 // Update parser
-router.put('/:id', async (req: Request, res: Response) => {
+router.put('/:id', requireParserWrite, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const parser = await ParserModel.update(id, req.body);
@@ -552,7 +561,7 @@ router.put('/:id', async (req: Request, res: Response) => {
 });
 
 // Delete parser
-router.delete('/:id', async (req: Request, res: Response) => {
+router.delete('/:id', requireParserWrite, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const deleted = await ParserModel.delete(id);
@@ -598,7 +607,7 @@ router.post('/:id/test', async (req: Request, res: Response) => {
 });
 
 // Test parser configuration without saving (for parser builder)
-router.post('/test', async (req: Request, res: Response) => {
+router.post('/test', requireParserWrite, async (req: Request, res: Response) => {
   try {
     const { parser_type, pattern, field_mappings, sample } = req.body;
 

@@ -8,7 +8,7 @@
             <div class="subtitle">
               One-click bundles of parsers + detections for a technology. Installing a pack pulls the
               referenced content from the catalog. Detections apply immediately; new parsers take effect
-              after the next backend restart.
+              after the next backend restart.<template v-if="!authStore.isAdmin"> An admin installs packs.</template>
             </div>
           </div>
           <el-button size="small" :loading="loading" @click="load">
@@ -80,7 +80,8 @@
             </el-collapse-item>
           </el-collapse>
 
-          <div class="pack-actions">
+          <!-- Installing a pack is admin-only (POST /api/packs/:id/install). -->
+          <div v-if="authStore.isAdmin" class="pack-actions">
             <el-button
               type="primary"
               size="small"
@@ -100,6 +101,7 @@
 <script setup lang="ts">
 import { ref, onMounted, h } from 'vue';
 import { api } from '@/services/api';
+import { useAuthStore } from '@/stores/auth';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Refresh,
@@ -133,6 +135,7 @@ function iconFor(name: string) {
   return ICON_MAP[name] || Box;
 }
 
+const authStore = useAuthStore();
 const packs = ref<any[]>([]);
 const loading = ref(false);
 const installing = ref('');

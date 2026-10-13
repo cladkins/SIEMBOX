@@ -12,7 +12,7 @@ Most endpoints require a **JWT**. Log in (`POST /api/auth/login`), then send the
 Authorization: Bearer <YOUR_JWT_TOKEN>
 ```
 
-Tokens are valid for **24 hours**. Role-based access applies (Admin / Analyst / Operator / Viewer) — some endpoints (user management, AI builders, threat-feed/provider config, Endpoint fleet) are **admin-only**. Endpoint agents authenticate separately with a per-agent API key.
+Tokens are valid for **24 hours**. Role-based access applies (Admin / Analyst / Operator / Viewer) — viewers are read-only, changing parsers, detection rules and alerts and using the AI Analyst need **analyst** or higher, and some endpoints (user management, AI builders, threat-feed/provider config, Endpoint fleet, deleting alerts) are **admin-only**. Endpoint agents authenticate separately with a per-agent API key.
 
 ## Response & error format
 

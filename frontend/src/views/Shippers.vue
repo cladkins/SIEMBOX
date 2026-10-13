@@ -149,8 +149,9 @@
 
     <!-- API-Polled Sources (Log Discovery) -- separate from the shippers above: these have no
          agent/heartbeat/API key of their own, SIEMBox reaches out to them on a schedule instead.
-         Read-only here; credential save/rotate/revoke stays in Log Discovery so there's one place
-         that owns that flow rather than two drifting copies of it. -->
+         Admins can edit a source's connection here with the same dialog Log Discovery uses
+         (PollSourceEditDialog), so there is one flow, not two drifting copies of it; enabling,
+         the schedule and revoking stay in Log Discovery. -->
     <el-row v-if="apiPolledSources.length > 0" :gutter="20" style="margin-top: 20px">
       <el-col :span="24">
         <el-card>
@@ -176,12 +177,19 @@
             <el-table-column label="Source" min-width="140">
               <template #default="{ row }">{{ fingerprintName(row.matched_fingerprint_id) }}</template>
             </el-table-column>
-            <el-table-column label="Status" width="140">
+            <el-table-column label="Status" min-width="260">
               <template #default="{ row }">
                 <el-tag v-if="!row.poller.enabled" size="small" type="info">paused</el-tag>
                 <el-tag v-else :type="row.poller.last_status === 'error' ? 'danger' : 'success'" size="small">
                   {{ row.poller.last_status === 'error' ? 'error' : 'polling' }}
                 </el-tag>
+                <!-- What is polled (no token or query string) and why the last poll failed. -->
+                <div v-if="row.poller.effective_url" class="poll-url" :title="row.poller.effective_url">
+                  {{ row.poller.effective_url }}
+                </div>
+                <div v-if="row.poller.last_status === 'error' && row.poller.last_error" class="poll-error">
+                  {{ row.poller.last_error }}
+                </div>
               </template>
             </el-table-column>
             <el-table-column label="Last Polled" width="180">
@@ -190,8 +198,12 @@
                 <el-text v-else type="info">Never</el-text>
               </template>
             </el-table-column>
-            <el-table-column v-if="canOpenLogDiscovery" label="Actions" width="140" align="center">
-              <template #default>
+            <el-table-column v-if="canOpenLogDiscovery" label="Actions" width="170" align="center">
+              <template #default="{ row }">
+                <!-- Editing the connection is admin-only in the API; operators only get Manage. -->
+                <el-button v-if="isAdmin" size="small" type="primary" data-test="edit-polled-source" @click="openEditPolledSource(row)">
+                  Edit
+                </el-button>
                 <el-button size="small" @click="goToLogDiscovery">Manage</el-button>
               </template>
             </el-table-column>
@@ -199,6 +211,14 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <poll-source-edit-dialog
+      v-if="isAdmin"
+      v-model="editPolledSourceVisible"
+      :source="editPolledSource"
+      :fingerprints="dlFingerprints"
+      @saved="fetchApiPolledSources"
+    />
 
     <!-- Create/Edit Shipper Dialog -->
     <el-dialog
@@ -639,6 +659,7 @@ import {
 } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
 import logDiscoveryService, { type RankedSource, type FingerprintEntry } from '@/services/logDiscoveryService';
+import PollSourceEditDialog from '@/components/PollSourceEditDialog.vue';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -675,6 +696,9 @@ const directError = ref('');
 
 const apiPolledSources = ref<RankedSource[]>([]);
 const dlFingerprints = ref<FingerprintEntry[]>([]);
+// Admin-only "Edit" on an API-polled source (address/port/HTTPS/endpoint/token).
+const editPolledSourceVisible = ref(false);
+const editPolledSource = ref<RankedSource | null>(null);
 const activityLog = ref<any[]>([]);
 const activityLoading = ref(false);
 
@@ -757,6 +781,11 @@ async function fetchApiPolledSources() {
   } catch {
     apiPolledSources.value = [];
   }
+}
+
+function openEditPolledSource(source: RankedSource) {
+  editPolledSource.value = source;
+  editPolledSourceVisible.value = true;
 }
 
 function goToLogDiscovery() {
@@ -1269,5 +1298,21 @@ function formatActivityType(type: string): string {
 .ip-sub {
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+
+.poll-url {
+  margin-top: 4px;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  word-break: break-all;
+}
+
+.poll-error {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-color-danger);
+  word-break: break-word;
 }
 </style>

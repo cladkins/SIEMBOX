@@ -1,0 +1,15 @@
+-- Migration 036: editable poll targets for scan-discovered Log Discovery sources.
+--
+-- An admin can now change how SIEMBox reaches an API-polled source: its port,
+-- HTTPS on/off and the API endpoint path (PATCH /api/log-discovery/sources/:id).
+-- A manually added source keeps these where it always has, in
+-- discovery_sources.evidence ({manual, target_port, tls}, now plus endpoint).
+-- A scan-discovered source can't: every re-scan rewrites its evidence. Its
+-- overrides go here instead, in a column the scan upsert never writes:
+--   {"port": 8124, "tls": true, "endpoint": "/api/hassio/core/logs"}
+-- Every key is optional. NULL (the default) means no override, so a discovered
+-- source is polled at exactly the URL it was before this column existed. The
+-- address of a discovered source is never overridable.
+--
+-- Idempotent: ADD COLUMN IF NOT EXISTS.
+ALTER TABLE discovery_sources ADD COLUMN IF NOT EXISTS poll_overrides JSONB;

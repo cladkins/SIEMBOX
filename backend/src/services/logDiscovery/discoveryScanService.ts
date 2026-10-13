@@ -15,6 +15,7 @@ import { gatherSignals } from './probePipeline';
 import { matchHost } from './matcher';
 import { rankSources, RankableItem } from './ranker';
 import { renderOnboardInstructions, SiemboxSyslogSettings } from './onboarder';
+import { effectivePollUrl } from './apiPoll/pollTarget';
 import { DiscoveredSignals, LogAccessMethod, ProbePlan, RankedResult, RuntimeSource } from './types';
 
 // ---------------------------------------------------------------------------
@@ -354,6 +355,7 @@ export async function getRankedSources(): Promise<RankedResult> {
         last_status: (row.poller_last_status as 'ok' | 'error' | null) ?? null,
         last_polled_at: row.poller_last_polled_at,
         last_error: row.poller_last_error,
+        effective_url: row.poller_configured ? effectivePollUrl(row, row.poller_fingerprint_id, row.poller_cursor) : null,
       },
     },
     fingerprint: row.matched_fingerprint_id ? getFingerprintById(row.matched_fingerprint_id) || null : null,

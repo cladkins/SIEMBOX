@@ -54,7 +54,7 @@ Reads under `/api/assets`, `/api/vulnerabilities`, `/api/scheduled-scans`, `/api
 | `POST /api/scheduled-scans`, `PUT` / `DELETE /api/scheduled-scans/:id`, `POST /api/scheduled-scans/:id/run` | yes | yes | no | no |
 | `POST /api/log-discovery/scans`, `POST /api/log-discovery/scans/:id/cancel` | yes | yes | no | no |
 | `POST /api/log-discovery/sources/:id/confirm`, `/ignore`, `/onboard/confirm` | yes | yes | no | no |
-| `PUT /api/log-discovery/scope/cidrs`, `POST /api/log-discovery/sources/manual`, `DELETE /api/log-discovery/sources/:id`, the `/sources/:id/poller` writes | yes | no | no | no |
+| `PUT /api/log-discovery/scope/cidrs`, `POST /api/log-discovery/sources/manual`, `PATCH` and `DELETE /api/log-discovery/sources/:id`, the `/sources/:id/poller` writes | yes | no | no | no |
 | `POST /api/containers/scan` | yes | yes | no | no |
 
 A refused scan or asset write is also recorded in `audit_logs` (`action` `access.denied`, with the required and actual role); the admin-only log-discovery routes and the log-discovery source actions answer `403` without that audit entry. The entry's `ip_address` is the client address (see [Rate Limiting](#rate-limiting)): the browser's real address through the web UI, and the caller's TCP address on a direct call to port 8421, whatever `X-Forwarded-For` it sends. Only a proxy listed in `TRUSTED_PROXIES` can name another client; when what it forwards is not an IP address, the TCP peer address is stored instead, so the entry is always written, and when it connected over TCP its own address is kept in `details.peerAddress`. Shipper management has its own table under [Log Shippers](#log-shippers-endpoints). (Earlier versions let any logged-in role, viewers included, make these calls.)
@@ -2793,10 +2793,56 @@ only -- see `backend/src/services/logDiscovery/`).
 For sources whose fingerprint declares an `api_pull` log-access method
 (Authentik, Home Assistant, Pi-hole, AdGuard Home today), the poller endpoints
 below are the alternative to the manual copy-paste recipe: save a token and
-SIEMBOX pulls that source's events on a schedule instead. See
+SIEMBOX pulls that source's events on a schedule instead. How a source is
+reached (address of a manual source, port, HTTPS, endpoint path) can be changed
+later with [`PATCH /sources/:id`](#patch-apilog-discoverysourcesid). See
 `backend/src/services/logDiscovery/apiPoll/`.
 
-**Access:** every route requires a login. Reads (and the read-only `onboard/preview`) are open to any role. Starting or cancelling a scan and the source actions `confirm`, `ignore` and `onboard/confirm` require admin or operator, the roles that can open the Log Discovery page. Changing the scan scope, manual sources and poll credentials requires admin. See [Roles for scan and asset writes](#roles-for-scan-and-asset-writes).
+**Home Assistant** serves its log in one of two places, depending on the install:
+`/api/error_log` returns the log file, which Container and Core installs write by
+default (not with `HA_DISABLE_LOG_FILE=true`); Home Assistant OS and Supervised
+installs write no log file (unless `HA_DUPLICATE_LOG_FILE` is set), so there
+`/api/error_log` answers `404` and the log comes from the Supervisor through
+`/api/hassio/core/logs`. The poller asks `/api/error_log` first and on a `404` uses
+`/api/hassio/core/logs?no_colors` with a `Range: entries=…` header for the latest
+journal entries (how many is described below). It remembers which endpoint works
+for each source (in the poll cursor), so it doesn't send a doomed request every
+poll, and re-probes `/api/error_log` every 6 hours and whenever the remembered
+endpoint fails. An endpoint set with `PATCH /sources/:id` is used alone. Lines are stored in Home
+Assistant's own format (colour codes removed), as the catalog parser expects. Both
+endpoints are admin-only: the token must be a long-lived access token created by
+a Home Assistant administrator.
+
+Only the end of the log is read. The file is requested with a byte range for its
+last 5 MB plus the lines the poll resumes after (`Range: bytes=-5242880` on a
+first poll, and that plus their size after; a server that ignores the range sends
+the whole file and the same last bytes are kept), so a log that has grown past
+5 MB keeps being collected, and up to 5 MB logged since the last poll is
+collected whole. When more was logged since the last poll, so that the lines the
+poll resumes after are not all in the answer, every whole line of it is
+collected, except those it starts with that the last poll collected already (it
+began inside that record), and a warning is logged to the error log: the lines
+before them were not collected, or, when the answer may have begun inside the
+last record collected, may not have been. (When the whole file was read and lacks
+those lines, it is a new file, started by a restart: its last 200 lines are
+collected, as on a first poll.) A cursor stored by an earlier version, which read
+only the first 5 MB of a longer log, can end in a cut line; it is still found, so
+the first poll after an upgrade collects only the lines after it. A poll resumes
+after the last record it saw, matched from that record's timestamped first line
+to its end, so a traceback that repeats is not collected again; this holds for a
+record of up to 2000 lines and about 256 KB (a longer one is matched by its last
+100 lines only). A last
+line without its newline, which Home Assistant is still writing, is left for the
+next poll. The Supervisor is asked for 500 new journal entries plus the lines the
+poll resumes after (at least three: `Range: entries=:-502:503` after short
+records); a first poll, which collects the last 200 lines, asks for 2500
+(`entries=:-2499:2500`) so that it reaches the start of the last record. When
+those lines are not in the answer, more than 500 lines arrived, and the
+Supervisor is asked again for 5000 new entries plus them (`entries=:-5002:5003`).
+If they are not in that answer either, more than 5000 lines arrived: the latest
+5000 are collected and a warning is logged to the error log.
+
+**Access:** every route requires a login. Reads (and the read-only `onboard/preview`) are open to any role. Starting or cancelling a scan and the source actions `confirm`, `ignore` and `onboard/confirm` require admin or operator, the roles that can open the Log Discovery page. Changing the scan scope, manual sources, a source's poll target and poll credentials requires admin. See [Roles for scan and asset writes](#roles-for-scan-and-asset-writes).
 
 ### GET /api/log-discovery/scope
 
@@ -2994,12 +3040,27 @@ into `top` and `advanced` (the long tail), each with a plain-language `reason`.
       "security_value": 10,
       "status": "candidate",
       "selected_log_access": null,
-      "reason": "OPNsense can provide firewall logs, network traffic flow, dns queries."
+      "reason": "OPNsense can provide firewall logs, network traffic flow, dns queries.",
+      "poller": {
+        "configured": false,
+        "enabled": false,
+        "last_status": null,
+        "last_polled_at": null,
+        "last_error": null,
+        "effective_url": null
+      }
     }
   ],
   "advanced": []
 }
 ```
+
+`poller` summarizes API polling for the source: whether a credential is saved
+(`configured`) and polling is on, the last poll's `last_status`, `last_polled_at`
+and `last_error`, and `effective_url`, the URL being polled: scheme, host, port
+and path, never a token or query string (for Home Assistant, the endpoint in use,
+e.g. `http://192.168.1.50:8123/api/hassio/core/logs` after the automatic
+fallback). `effective_url` is `null` when no credential is saved.
 
 ---
 
@@ -3031,7 +3092,7 @@ host) rather than creating a duplicate.
   "tls": true
 }
 ```
-- `ip_address` (required) - a **literal** IPv4/IPv6 address (a DNS name is rejected with `400`; the column is `INET`)
+- `ip_address` (required) - a **literal** IPv4/IPv6 address (a DNS name, or an IPv6 zone index such as `fe80::1%eth0`, is rejected with `400`; the column is `INET`)
 - `fingerprint_id` (required) - a pollable device type: one of the ids from `GET /poller/supported-fingerprints` (currently `authentik`, `home-assistant`, `pihole`, `adguard-home`), and it must declare an `api_pull` log-access method
 - `port` (optional) - integer `1`–`65535`; defaults to the fingerprint's `api_pull` `target_port`
 - `tls` (optional) - boolean; defaults to `true` for `authentik`, `false` otherwise
@@ -3063,6 +3124,92 @@ re-scanning or ignoring it, never deleted here.
 **Error Responses:**
 - `403` - the source is not a manual row (scan-discovered sources cannot be deleted here)
 - `404` - no source with that id
+
+---
+
+### PATCH /api/log-discovery/sources/:id
+
+Change how SIEMBOX reaches an API-polled source: its port, HTTPS on/off, the API
+endpoint path, and, for a **manually added** source only, its address. This is the
+**Edit** action on the Log Discovery page and under Log Shippers → API-Polled
+Sources.
+
+- A **manual** source's settings are updated where `POST /sources/manual` keeps
+  them: the row's `ip_address`, and `evidence` (`target_port`, `tls`, plus
+  `endpoint` when one is set); `open_ports` follows the port. A re-scan of the
+  host keeps these keys.
+- A **scan-discovered** source's settings go to its `poll_overrides`
+  (`{port, tls, endpoint}`, migration `036`), which a re-scan never touches. Its
+  address is the one the scan found and cannot change. With no overrides it is
+  polled at exactly the URL it always was.
+- A new `endpoint` or address clears the poll cursor, so the next poll starts
+  fresh. That poll reads the source's recent events again (for Home Assistant the
+  last 200 lines, so lines already stored may be stored twice). A port or HTTPS
+  change keeps the cursor.
+- A saved token is never sent to a new address. Changing a manual source's
+  address while it has a saved token requires the token again in `credential`;
+  the move and the token swap are applied in one database update, and each poll
+  reads the token and the address together when it starts, so no poll can pair
+  the old token with the new address. Without `credential` the request is a
+  `400` and nothing changes. A source with no saved token can move freely.
+- With `expected_ip_address` (the address the client loaded; the Edit dialog
+  always sends it), the change applies only while the source still has that
+  address: if another admin moved it meanwhile, the request is a `409` and
+  nothing changes. Reload the source and try again.
+- The change is also only written if, at that moment, the source still has the
+  address and the settings (port, HTTPS, endpoint) it was checked against and
+  merged with (and, for a move without a token, still has no saved token): the
+  source row is locked for the write, so a token save and a move never overlap,
+  and two edits never combine or undo each other. If another admin's edit of
+  this source got in first, or a token save got in before a move without a
+  token, the request is a `409` and nothing changes. A token save for the
+  source's current address does not conflict with a change that keeps the
+  address: both apply. A poll that was already running when the source moved or
+  its endpoint changed does not overwrite the cleared cursor; other changes made
+  while a poll runs (the interval, polling on or off, a new token for the same
+  address) don't change where the next poll resumes.
+- Otherwise the saved credential, the schedule and the poll status are not
+  changed, and no credential is ever returned.
+
+**Authentication:** Required (**admin**)
+
+**Request Body** (send only what changes; `null` returns a setting to its default):
+```json
+{ "port": 8123, "tls": false, "endpoint": "/api/hassio/core/logs", "ip_address": "192.168.1.60", "expected_ip_address": "192.168.1.50" }
+```
+- `port` - integer `1`–`65535`, or `null` for the default (a discovered source: the adapter's own port; a manual source: the fingerprint's `api_pull` `target_port`)
+- `tls` - boolean, or `null` for the default (a manual source: `true` for `authentik`, `false` otherwise)
+- `endpoint` - a path on the source itself, e.g. `/api/hassio/core/logs`, or `/ha/api/error_log` behind a reverse proxy. It must start with a single `/` (no scheme or host) and may not contain a query string or fragment, `.` or `..` segments, control characters, whitespace, backslashes or `%`-encoding; at most 256 characters. An endpoint that is set is the only one requested (Home Assistant's automatic fallback is off). `""` or `null` restores the fingerprint's endpoint.
+- `ip_address` - manual sources only: a literal IPv4/IPv6 address, validated exactly like `POST /sources/manual`. Sending a discovered source's current address back is accepted and changes nothing; a different one is refused with `403`.
+- `credential` - `{ "secret": "...", "username": "..." }`, required together with a changed `ip_address` when the source has a saved token, and accepted only then (otherwise `400`; to replace a token without moving the source use `POST /sources/:id/poller/credential`). `secret` is a non-blank string of at most 4096 characters; `username` (HTTP Basic sources such as AdGuard Home) at most 255. It is encrypted like any saved token and never returned.
+- `expected_ip_address` (optional) - the source's address as the client loaded it, a literal IPv4/IPv6 address (however IPv6 is written). Not a change by itself. If the source no longer has it, the request is a `409` and nothing changes; without it, the change applies to the source wherever it is now.
+
+**Response (200):**
+```json
+{
+  "source": { "id": 94, "ip_address": "192.168.1.50", "evidence": { "manual": true, "target_port": 8123, "tls": false, "endpoint": "/api/hassio/core/logs" }, "poll_overrides": null },
+  "poller": { "configured": true, "fingerprint_id": "home-assistant", "enabled": true, "poll_interval_minutes": 5, "last_status": "error", "last_error": "Home Assistant at http://192.168.1.50:8123 answered 404 for both log endpoints. ..." },
+  "target": {
+    "fingerprint_id": "home-assistant",
+    "manual": true,
+    "ip_address": "192.168.1.50",
+    "port": 8123,
+    "tls": false,
+    "effective_url": "http://192.168.1.50:8123/api/hassio/core/logs",
+    "overrides": { "port": 8123, "tls": false, "endpoint": "/api/hassio/core/logs" },
+    "defaults": { "port": 8123, "tls": false, "endpoint": "/api/error_log" }
+  }
+}
+```
+`source` is the full `discovery_sources` row (abridged above); `poller` is the same
+shape as `GET .../poller` (`{ "configured": false }` before a credential is saved);
+`target` is described there. Call `POST /sources/:id/poller/run-now` to poll at once.
+
+**Errors:**
+- `400` - an invalid field (the message names it and the rule), an empty body, or a source whose device type has no API pull method
+- `403` - caller is not an admin, or a new `ip_address` for a scan-discovered source
+- `404` - no source with that id
+- `409` - the new address already belongs to another source, the source no longer has `expected_ip_address`, or the source changed while this request was being checked (another admin's edit of it, or a token saved before a move without a token); nothing was changed
 
 ---
 
@@ -3138,7 +3285,7 @@ Fingerprint ids with a real poll adapter (e.g. `["authentik", "home-assistant", 
 
 ### GET /api/log-discovery/sources/:id/poller
 
-Poller status for a source. Never includes the credential itself.
+Poller status for a source, and how it is reached (`target`). Never includes the credential itself.
 
 **Authentication:** Required
 
@@ -3153,10 +3300,27 @@ Poller status for a source. Never includes the credential itself.
   "last_polled_at": "2025-12-17T10:05:00Z",
   "last_status": "ok",
   "last_error": null,
-  "last_event_count": 3
+  "last_event_count": 3,
+  "target": {
+    "fingerprint_id": "authentik",
+    "manual": false,
+    "ip_address": "192.168.1.20",
+    "port": 9443,
+    "tls": true,
+    "effective_url": "https://192.168.1.20:9443/api/v3/events/events/",
+    "overrides": { "port": null, "tls": null, "endpoint": null },
+    "defaults": { "port": 9443, "tls": true, "endpoint": "/api/v3/events/events/" }
+  }
 }
 ```
-**Response (200) — not configured:** `{ "configured": false }`
+**Response (200) — not configured:** `{ "configured": false, "target": { ... } }`
+
+`target` is what the edit dialog shows: `port` and `tls` in use (an override, else
+the default), `effective_url` (the URL being polled: scheme, host, port and path,
+never a token or query string), the stored `overrides` (for a scan-discovered
+source `null` where the default applies; a manual source always has its port and
+scheme), and the `defaults`. `manual` says whether the address can be changed.
+`target` is `null` when the source's device type has no API pull method.
 
 ---
 
@@ -3168,16 +3332,18 @@ Save (or replace) the token for this source's `api_pull` method and start pollin
 
 **Request Body:**
 ```json
-{ "username": null, "secret": "the-api-token-or-password" }
+{ "username": null, "secret": "the-api-token-or-password", "expected_ip_address": "192.168.1.50" }
 ```
 - `secret` (required) - the token/password. Encrypted at rest (AES-256-GCM); never returned again after this call.
-- `username` (optional) - only used by HTTP Basic auth sources (AdGuard Home today)
+- `username` (optional) - only used by HTTP Basic auth sources (AdGuard Home today); at most 255 characters
+- `expected_ip_address` (optional) - the source's address the token was entered for, a literal IPv4/IPv6 address. The token is saved only while the source still has it, checked again as it is written with the source row locked; if the source was moved meanwhile (`PATCH /sources/:id`), the request is a `409` and nothing is saved, so a token entered for one address never reaches another. The Log Discovery UI always sends it: the address it showed when the token was typed, even if it has shown another one since. Without it, the token is saved for the source at whatever address it has now.
 
 **Response (200):** Same shape as `GET .../poller` above.
 
 **Errors:**
-- `400` - missing/empty `secret`, source has no matched fingerprint, or the fingerprint has no `api_pull` log-access method
+- `400` - missing/empty `secret`, a `username` over 255 characters, an `expected_ip_address` that is not a literal IP address, source has no matched fingerprint, or the fingerprint has no `api_pull` log-access method
 - `404` - source or fingerprint not found
+- `409` - the source no longer has `expected_ip_address`; nothing was saved
 
 ---
 
@@ -3212,7 +3378,7 @@ Both fields optional; `poll_interval_minutes` is clamped to `[1, 1440]`.
 
 ### POST /api/log-discovery/sources/:id/poller/run-now
 
-Poll immediately instead of waiting for the next scheduled cycle -- for UI feedback right after saving a credential.
+Poll immediately instead of waiting for the next scheduled cycle -- for UI feedback right after saving a credential or editing the source.
 
 **Authentication:** Required (Admin)
 
@@ -3220,6 +3386,14 @@ Poll immediately instead of waiting for the next scheduled cycle -- for UI feedb
 ```json
 { "ok": true, "count": 3 }
 ```
+A failed poll is still a `200`, with `ok: false` and `error`, the same text that is
+stored as `last_error`. The text says what to do, for example (Home Assistant):
+- `Home Assistant rejected the token (HTTP 401 from /api/error_log): it is invalid or revoked, or it belongs to a user who is not an administrator. ...`
+- `Home Assistant at http://192.168.1.50:8123 answered 404 for both log endpoints. ...`
+- `Home Assistant could not get its log from the Supervisor (HTTP 502 from /api/hassio/core/logs): ...`
+- `Couldn't connect to http://192.168.1.50:8124/api/error_log: connection refused; check the address and port (...)`
+
+See [Troubleshooting: API-polled sources](../operations/TROUBLESHOOTING.md#issue-an-api-polled-source-keeps-failing-home-assistant-http-404-from-error_log).
 
 **Errors:**
 - `404` - no poller configured for this source yet

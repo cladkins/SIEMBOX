@@ -129,6 +129,7 @@ const ROUTERS: Array<{ mount: string; router: Router; routes: Gate[] }> = [
       ['put', '/scope/cidrs', ADMIN_ONLY],
       ['post', '/sources/manual', ADMIN_ONLY],
       ['delete', '/sources/:id', ADMIN_ONLY],
+      ['patch', '/sources/:id', ADMIN_ONLY],
       ['post', '/sources/:id/poller/credential', ADMIN_ONLY],
       ['delete', '/sources/:id/poller/credential', ADMIN_ONLY],
       ['patch', '/sources/:id/poller', ADMIN_ONLY],

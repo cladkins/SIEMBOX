@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderTemplate, loadTemplate, buildTemplateVars, renderOnboardInstructions } from './onboarder';
+import { getFingerprintById } from './fingerprintLoader';
 import { FingerprintEntry, RuntimeSource } from './types';
 
 test('renderTemplate substitutes known vars and blanks unknown ones', () => {
@@ -110,6 +111,26 @@ test('renderOnboardInstructions fills the api_poller template', () => {
   );
   assert.match(text, /https:\/\/192\.168\.1\.50:8123\/api\/error_log/);
   assert.match(text, /logger -n 10\.0\.0\.5 -P 514/);
+});
+
+test("the bundled Home Assistant recipe names both log endpoints and the administrator token; a method without a note renders no gap", () => {
+  const ha = getFingerprintById('home-assistant')!;
+  const apiPull = ha.log_access.find((la) => la.method === 'api_pull')!;
+  const text = renderOnboardInstructions(ha, source({ open_ports: [8123] }), apiPull, { host: '10.0.0.5', port: 514 });
+  assert.match(text, /https:\/\/192\.168\.1\.50:8123\/api\/error_log/);
+  assert.match(text, /-t home-assistant\n\nOn Home Assistant OS and Supervised installs \/api\/error_log answers 404/);
+  assert.match(text, /use \/api\/hassio\/core\/logs\?no_colors there instead/);
+  assert.match(text, /long-lived access token created by an administrator/);
+  assert.match(text, /Security tab\)\.\n\nReplace \$YOUR_TOKEN/);
+
+  const plain = renderOnboardInstructions(
+    fingerprint({ onboard_template: 'templates/api_poller.j2' }),
+    source(),
+    { method: 'api_pull', endpoint: '/api/x', target_port: 9443 },
+    { host: '10.0.0.5', port: 514 }
+  );
+  assert.match(plain, /-t pihole\n\nReplace \$YOUR_TOKEN/);
+  assert.doesNotMatch(plain, /undefined/);
 });
 
 test('buildTemplateVars prefers the log access target_port over everything else', () => {

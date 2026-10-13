@@ -111,6 +111,27 @@ curl http://localhost:8421/api/health
 
 ---
 
+### Issue: Frontend image build fails on an old Node 20 image
+
+**Symptoms:** `docker compose up -d --build` (building from source) fails in the
+frontend's `npm run type-check` / `npm run build` step, often after the warning
+`You are using Node.js 20.x. Vite requires Node.js version 20.19+ or 22.12+`.
+
+**Cause:** The frontend builds with Vite 8, which needs Node.js 20.19 or newer.
+`frontend/Dockerfile` builds on `node:20-alpine`, and Docker reuses a copy of that
+image pulled before 20.19 (March 2025) instead of fetching the current one.
+
+**Fix:** Pull the current base image while building:
+
+```bash
+docker compose build --pull frontend
+docker compose up -d
+```
+
+The prebuilt images (`compose.prod.yaml`) are not affected.
+
+---
+
 ### Issue: Backend can't reach Postgres on 127.0.0.1
 
 **Symptoms:**

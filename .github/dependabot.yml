@@ -37,6 +37,17 @@ updates:
       frontend-minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+    ignore:
+      # Same as the backend: @types/node stays on the major of the Node the
+      # frontend builds on (frontend/Dockerfile: node:20-alpine, CI's Node 20).
+      # Move it in the same change as both.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # vue-tsc 3.3.12 and 3.3.13 lose template scope after a component prop
+      # containing "//" (a URL), failing type-check on valid templates
+      # (vuejs/language-tools#6240). Later versions still come through.
+      - dependency-name: "vue-tsc"
+        versions: ["3.3.12", "3.3.13"]
 
   - package-ecosystem: github-actions
     directory: "/"

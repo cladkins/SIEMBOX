@@ -218,7 +218,7 @@ router.get('/users/search', async (req: Request, res: Response) => {
  */
 router.get('/users/:id/activity', async (req: Request, res: Response) => {
   try {
-    const userId = parseInt(req.params.id);
+    const userId = parseInt(req.params.id as string);
     const limit = parseInt(req.query.limit as string) || 50;
     const offset = parseInt(req.query.offset as string) || 0;
 

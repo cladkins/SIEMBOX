@@ -62,7 +62,7 @@ router.get('/', async (_req: Request, res: Response) => {
 
 // Enable/disable a feed or change its refresh interval (admin only).
 router.put('/feeds/:id', authorize('admin'), async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (Number.isNaN(id)) throw new ApiError(400, 'Invalid feed id');
   try {
     let feed = await FeedService.getFeed(id);
@@ -84,7 +84,7 @@ router.put('/feeds/:id', authorize('admin'), async (req: Request, res: Response)
 
 // Refresh one feed now (admin or operator).
 router.post('/feeds/:id/refresh', authorize('admin', 'operator'), async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (Number.isNaN(id)) throw new ApiError(400, 'Invalid feed id');
   const result = await FeedService.refreshFeed(id);
   res.json(result);
@@ -120,7 +120,7 @@ router.put('/providers/:name', authorize('admin'), async (req: Request, res: Res
 
 // Combined lookup for an IP: which feeds flag it + live reputation results.
 router.get('/lookup/:ip', async (req: Request, res: Response) => {
-  const ip = (req.params.ip || '').trim();
+  const ip = ((req.params.ip as string) || '').trim();
   if (!isIP(ip)) throw new ApiError(400, 'Invalid IP address');
   try {
     const [feeds, reputation] = await Promise.all([

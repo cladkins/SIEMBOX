@@ -389,10 +389,33 @@ interface Layer {
   name: string;
   handle: Handler & { stack?: Layer[]; resetKey?: unknown };
   method?: string;
-  keys: unknown[];
-  regexp: RegExp & { fast_slash?: boolean };
+  /** The path use() mounted it at, as recordMountPaths() saw it. */
+  mountPath?: unknown;
   route?: { path: unknown; methods: Record<string, boolean>; stack: Layer[] };
 }
+
+/**
+ * Express 5's router keeps no mount path on a use() layer, only a matcher
+ * function, so record the path each router.use() / app.use() call was given on
+ * the layers it adds. Installed when this file loads, before app.ts builds its
+ * routers.
+ */
+function recordMountPaths(): void {
+  type Use = (this: { stack: Layer[] }, ...args: unknown[]) => unknown;
+  const proto = express.Router.prototype as { use: Use };
+  const use = proto.use;
+  proto.use = function (this: { stack: Layer[] }, ...args: unknown[]) {
+    const before = this.stack.length;
+    const result = use.apply(this, args);
+    // As router.use() reads it: a leading non-function argument is the path.
+    let first = args[0];
+    while (Array.isArray(first) && first.length > 0) first = first[0];
+    const path = typeof first === 'function' ? '/' : args[0];
+    for (const layer of this.stack.slice(before)) layer.mountPath = path;
+    return result;
+  };
+}
+recordMountPaths();
 
 /** One (method, path) the app serves, with its route layer. */
 interface Served {
@@ -427,29 +450,32 @@ async function closedPort(): Promise<number> {
   return port;
 }
 
-/** The path an app.use(path, ...) layer is mounted at ('' for a path-less one). Express 4. */
+/** The path an app.use(path, ...) layer is mounted at ('' for a path-less one). */
 function mountPathOf(layer: Layer): string {
-  if (layer.regexp.fast_slash) return '';
-  const m = /^\^((?:\\\/[\w.~-]+)+)\\\/\?\(\?=\\\/\|\$\)$/.exec(layer.regexp.source);
-  assert.ok(m && layer.keys.length === 0, `cannot read a mount path from ${layer.regexp}: teach mountPathOf() this form`);
-  return m[1].replace(/\\\//g, '/');
+  const path = layer.mountPath;
+  if (path === '/') return '';
+  assert.ok(
+    typeof path === 'string' && /^(?:\/[\w.~-]+)+$/.test(path),
+    `cannot read a mount path from ${String(path)}: teach mountPathOf() this form`
+  );
+  return path;
 }
 
 /**
  * Middleware mounted with app.use() or router.use() that only passes a request
- * on, or ends it with an error, so it needs no INVENTORY line: Express's own,
- * the address tracker, CORS, the body parsers, the timeout logger, the login
- * check, the role gates (middleware/auth.ts authorize(), scanPermissions.ts
- * requireScanPermission()) and the closing 404 and error handlers. Rate limiters
- * are recognized by their resetKey(). walk() refuses any other non-route layer.
+ * on, or ends it with an error, so it needs no INVENTORY line: the address
+ * tracker, CORS, the body parsers and their {} default, the timeout logger, the
+ * login check, the role gates (middleware/auth.ts authorize(), scanPermissions.ts
+ * requireScanPermission()) and the closing 404 and error handlers. (Express 5
+ * mounts no middleware of its own.) Rate limiters are recognized by their
+ * resetKey(). walk() refuses any other non-route layer.
  */
 const PASS_THROUGH = new Set([
-  'query',
-  'expressInit',
   'ignoredForwardedForTracker',
   'corsMiddleware',
   'jsonParser',
   'urlencodedParser',
+  'emptyBodyDefault',
   'logClientTimeouts',
   'authenticate',
   'authorizeRoles',
@@ -464,7 +490,7 @@ function describeMount(layer: Layer, prefix: string): string {
   try {
     return prefix + mountPathOf(layer) || '/';
   } catch {
-    return `${prefix} ${layer.regexp}`;
+    return `${prefix} ${String(layer.mountPath)}`;
   }
 }
 
@@ -557,9 +583,9 @@ before(async () => {
   const { LogShipperModel } = await import('../models/LogShipper');
   mock.method(LogShipperModel, 'findById', async () => null);
 
-  const app = (await import('../app')).default as Application & { _router?: { stack: Layer[] } };
-  assert.ok(app._router?.stack, 'Express internals changed (no app._router.stack): update walk() and mountPathOf()');
-  const stack = app._router.stack;
+  const app = (await import('../app')).default;
+  const stack = (app.router as unknown as { stack?: Layer[] }).stack;
+  assert.ok(stack, 'Express internals changed (no app.router.stack): update walk() and mountPathOf()');
   served = walk(stack, '', mounts);
 
   // Each route's handler (its method's last layer) answers with the route it belongs to.
@@ -649,7 +675,7 @@ test('walk() refuses whatever use() mounts that is not a router or a known pass-
   withSubApp.use('/api/dummy-subapp', subApp);
   const withStatic = express();
   withStatic.use('/api/dummy-static', express.static('/nonexistent'));
-  const stackOf = (app: Application) => (app as Application & { _router: { stack: Layer[] } })._router.stack;
+  const stackOf = (app: Application) => app.router.stack as unknown as Layer[];
   for (const [what, stack] of [
     ['router.use() of a handler', inRouter.stack as unknown as Layer[]],
     ['a mounted sub-app', stackOf(withSubApp)],

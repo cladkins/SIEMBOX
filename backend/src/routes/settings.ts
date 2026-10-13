@@ -510,7 +510,7 @@ router.post('/ip-whitelist', authorize('admin'), async (req: Request, res: Respo
 // Update IP whitelist entry
 router.put('/ip-whitelist/:id', authorize('admin'), async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const { id } = req.params as { id: string };
     const { description, rule_id } = req.body;
 
     const result = await query(
@@ -538,7 +538,7 @@ router.put('/ip-whitelist/:id', authorize('admin'), async (req: Request, res: Re
 // Delete IP from whitelist
 router.delete('/ip-whitelist/:id', authorize('admin'), async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const { id } = req.params as { id: string };
 
     const result = await query(
       `DELETE FROM ip_whitelist WHERE id = $1 RETURNING ip_address::text`,

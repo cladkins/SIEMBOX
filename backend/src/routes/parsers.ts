@@ -428,7 +428,7 @@ router.post('/catalog/refresh', requireParserWrite, async (_req: Request, res: R
 // Get single parser
 router.get('/:id', async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const parser = await ParserModel.findById(id);
 
     if (!parser) {
@@ -445,7 +445,7 @@ router.get('/:id', async (req: Request, res: Response) => {
 // Export a saved parser as a portable .parser.json (the catalog-shareable format).
 router.get('/:id/export', async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const parser = await ParserModel.findById(id);
     if (!parser) {
       throw new ApiError(404, 'Parser not found');
@@ -466,7 +466,7 @@ router.get('/:id/export', async (req: Request, res: Response) => {
 // credential; the catalog's CI + maintainer review are the merge gate.
 router.get('/:id/contribute', async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const parser = await ParserModel.findById(id);
     if (!parser) throw new ApiError(404, 'Parser not found');
 
@@ -548,7 +548,7 @@ router.post('/', requireParserWrite, async (req: Request, res: Response) => {
 // Update parser
 router.put('/:id', requireParserWrite, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const parser = await ParserModel.update(id, req.body);
 
     if (!parser) {
@@ -567,7 +567,7 @@ router.put('/:id', requireParserWrite, async (req: Request, res: Response) => {
 // Delete parser
 router.delete('/:id', requireParserWrite, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const deleted = await ParserModel.delete(id);
 
     if (!deleted) {
@@ -585,7 +585,7 @@ router.delete('/:id', requireParserWrite, async (req: Request, res: Response) =>
 // Test parser against sample log (saved parser)
 router.post('/:id/test', async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const { sample } = req.body;
 
     if (!sample) {

@@ -90,7 +90,7 @@ router.post('/', requireScheduleWrite, async (req: Request, res: Response) => {
 
 // PUT /:id - update a schedule
 router.put('/:id', requireScheduleWrite, async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (isNaN(id)) {
     throw new ApiError(400, 'Invalid id');
   }
@@ -126,7 +126,7 @@ router.put('/:id', requireScheduleWrite, async (req: Request, res: Response) => 
 
 // DELETE /:id - remove a schedule
 router.delete('/:id', requireScheduleWrite, async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (isNaN(id)) {
     throw new ApiError(400, 'Invalid id');
   }
@@ -139,7 +139,7 @@ router.delete('/:id', requireScheduleWrite, async (req: Request, res: Response) 
 
 // POST /:id/run - trigger a schedule immediately
 router.post('/:id/run', requireScheduleWrite, async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (isNaN(id)) {
     throw new ApiError(400, 'Invalid id');
   }

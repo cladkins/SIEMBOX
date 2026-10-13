@@ -201,7 +201,7 @@ router.get('/direct-syslog-sources', authenticate, async (_req: Request, res: Re
 // Get single shipper with full config
 router.get('/:id', authenticate, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const shipper = await LogShipperModel.getFullConfig(id);
 
     if (!shipper) {
@@ -249,7 +249,7 @@ router.post('/', authenticate, requireOperator, async (req: Request, res: Respon
 // Update shipper
 router.put('/:id', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     // Only the editable fields: api_key changes go through regenerate-key, the
     // push key through its own routes, and status/version/etc. come from the shipper.
     const updates = pickFields<LogShipper>(req.body, SHIPPER_EDITABLE_FIELDS);
@@ -277,7 +277,7 @@ router.put('/:id', authenticate, requireOperator, async (req: Request, res: Resp
 // Delete shipper
 router.delete('/:id', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const deleted = await LogShipperModel.delete(id);
 
     if (!deleted) {
@@ -295,7 +295,7 @@ router.delete('/:id', authenticate, requireOperator, async (req: Request, res: R
 // Get shipper sources
 router.get('/:id/sources', authenticate, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const sources = await ShipperSourceModel.findByShipperId(id);
     res.json(sources);
   } catch {
@@ -306,7 +306,7 @@ router.get('/:id/sources', authenticate, async (req: Request, res: Response) => 
 // Add source to shipper
 router.post('/:id/sources', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
-    const shipper_id = parseInt(req.params.id);
+    const shipper_id = parseInt(req.params.id as string);
     const { source_type, enabled, file_path, container_name, journal_unit, tag, facility } = req.body;
 
     if (!source_type || !tag) {
@@ -336,7 +336,7 @@ router.post('/:id/sources', authenticate, requireOperator, async (req: Request, 
 // Update source
 router.put('/sources/:sourceId', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
-    const sourceId = parseInt(req.params.sourceId);
+    const sourceId = parseInt(req.params.sourceId as string);
     // The UI sends the whole form (including `id`); keep only the editable fields.
     const updates = pickFields<ShipperSource>(req.body, SOURCE_EDITABLE_FIELDS);
 
@@ -362,7 +362,7 @@ router.put('/sources/:sourceId', authenticate, requireOperator, async (req: Requ
 // Delete source
 router.delete('/sources/:sourceId', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
-    const sourceId = parseInt(req.params.sourceId);
+    const sourceId = parseInt(req.params.sourceId as string);
     const deleted = await ShipperSourceModel.delete(sourceId);
 
     if (!deleted) {
@@ -379,7 +379,7 @@ router.delete('/sources/:sourceId', authenticate, requireOperator, async (req: R
 // Get shipper volumes
 router.get('/:id/volumes', authenticate, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const volumes = await ShipperVolumeModel.findByShipperId(id);
     res.json(volumes);
   } catch {
@@ -390,7 +390,7 @@ router.get('/:id/volumes', authenticate, async (req: Request, res: Response) => 
 // Add volume to shipper
 router.post('/:id/volumes', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
-    const shipper_id = parseInt(req.params.id);
+    const shipper_id = parseInt(req.params.id as string);
     const { host_path, container_path, read_only } = req.body;
 
     if (!host_path || !container_path) {
@@ -425,7 +425,7 @@ router.post('/:id/volumes', authenticate, requireOperator, async (req: Request, 
 // Delete volume
 router.delete('/volumes/:volumeId', authenticate, requireOperator, async (req: Request, res: Response) => {
   try {
-    const volumeId = parseInt(req.params.volumeId);
+    const volumeId = parseInt(req.params.volumeId as string);
     const deleted = await ShipperVolumeModel.delete(volumeId);
 
     if (!deleted) {
@@ -442,7 +442,7 @@ router.delete('/volumes/:volumeId', authenticate, requireOperator, async (req: R
 // Get shipper activity log
 router.get('/:id/activity', authenticate, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const limit = parseInt(req.query.limit as string) || 50;
     const activity = await ShipperActivityModel.getRecentActivity(id, limit);
     res.json(activity);
@@ -454,7 +454,7 @@ router.get('/:id/activity', authenticate, async (req: Request, res: Response) =>
 // Regenerate API key (admin-only, like the HTTP push key; see the access model above)
 router.post('/:id/regenerate-key', authenticate, requireAdmin, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const newApiKey = generateApiKey();
 
     const shipper = await LogShipperModel.update(id, { api_key: newApiKey });
@@ -484,7 +484,7 @@ router.post('/:id/regenerate-key', authenticate, requireAdmin, async (req: Reque
 // again, unlike the syslog api_key above.
 router.post('/:id/http-push-key', authenticate, authorize('admin'), async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const shipper = await LogShipperModel.findById(id);
     if (!shipper) {
       throw new ApiError(404, 'Shipper not found');
@@ -507,7 +507,7 @@ router.post('/:id/http-push-key', authenticate, authorize('admin'), async (req: 
 // to the syslog path, see CLAUDE.md).
 router.delete('/:id/http-push-key', authenticate, authorize('admin'), async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const shipper = await LogShipperModel.findById(id);
     if (!shipper) {
       throw new ApiError(404, 'Shipper not found');
@@ -629,7 +629,7 @@ router.post('/containers', async (req: Request, res: Response) => {
 // Get shipper configuration (for shipper to poll)
 router.get('/config/:api_key', async (req: Request, res: Response) => {
   try {
-    const { api_key } = req.params;
+    const { api_key } = req.params as { api_key: string };
 
     const shipper = await LogShipperModel.findByApiKey(api_key);
 
@@ -679,7 +679,7 @@ router.get('/config/:api_key', async (req: Request, res: Response) => {
 //             { scanId, kind:'nuclei', nucleiArgs, targets }, ... ] }
 router.get('/scan-jobs/:api_key', async (req: Request, res: Response) => {
   try {
-    const { api_key } = req.params;
+    const { api_key } = req.params as { api_key: string };
 
     const shipper = await LogShipperModel.findByApiKey(api_key);
     if (!shipper) {

@@ -7,6 +7,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildExposureMessage, type ExposureNotice } from './notificationService';
+import { buildBreachFinding, HibpSource, toBreachRecord } from '../exposure/leakedCredentialService';
+import { toExposureNotice } from '../exposure/findingWriter';
 
 const notice = (severity: string, title: string, description?: string): ExposureNotice => ({
   source: 'leaked-creds',
@@ -51,4 +53,30 @@ test('many findings become one message led by the worst, listing at most ten', (
   assert.equal(lines.filter((l) => l.startsWith('- [')).length, 10);
   assert.ok(lines.includes('- ...and 4 more'));
   assert.ok(lines.includes('worst one'));
+});
+
+test('a grouped leaked-creds message credits HIBP and its licence exactly once', () => {
+  // Real findings from the HIBP source: each description ends with the licence line.
+  const source = new HibpSource({ getApiKey: async () => undefined });
+  const identity = { id: 1, kind: 'email_domain' as const, value: 'example.com' };
+  const hit = (alias: string, name: string, dataClasses: string[]) => ({
+    account: `${alias}@example.com`,
+    alias,
+    breach: toBreachRecord({ Name: name, Title: name, DataClasses: dataClasses, Attribution: '@credit' }),
+  });
+  const notices = [
+    hit('a', 'Canva', ['Email addresses']),
+    hit('b', 'Adobe', ['Passwords']), // the worst, but not first
+    hit('c', 'Gawker', ['Names']),
+  ].map((h) => toExposureNotice(buildBreachFinding(source, identity, h)));
+  const msg = buildExposureMessage(notices);
+  assert.match(msg.title, /b@example\.com found in Adobe breach/);
+  const count = (needle: string) => msg.body.split(needle).length - 1;
+  assert.equal(count('https://haveibeenpwned.com'), 1);
+  assert.equal(count('https://creativecommons.org/licenses/by/4.0/'), 1);
+  assert.match(msg.body, /licensed under CC BY 4\.0/);
+  assert.ok(!msg.body.includes('@credit'), 'per-breach attribution stays out of notifications');
+
+  const single = buildExposureMessage([notices[0]]);
+  assert.match(single.body, /Have I Been Pwned \(https:\/\/haveibeenpwned\.com\), licensed under CC BY 4\.0/);
 });

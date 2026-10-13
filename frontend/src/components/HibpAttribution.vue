@@ -1,15 +1,25 @@
 <template>
-  <!-- Required wherever HIBP data is shown: its data is licensed CC BY 4.0. -->
+  <!-- Breach data from HIBP is licensed CC BY 4.0: credit it, with a link, wherever it is shown.
+       Pwned Passwords needs no attribution, but HIBP welcomes it. -->
   <p class="hibp-attribution">
-    Breach data from
-    <a :href="HIBP_HOME_URL" target="_blank" rel="noopener noreferrer">Have I Been Pwned</a>,
-    licensed under
-    <a :href="CC_BY_4_URL" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>.
+    <template v-if="variant === 'passwords'">
+      Password data from
+      <a :href="HIBP_PASSWORDS_URL" target="_blank" rel="noopener noreferrer">Pwned Passwords</a>
+      by Have I Been Pwned.
+    </template>
+    <template v-else>
+      Breach data from
+      <a :href="HIBP_HOME_URL" target="_blank" rel="noopener noreferrer">Have I Been Pwned</a>,
+      licensed under
+      <a :href="CC_BY_4_URL" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>.
+    </template>
   </p>
 </template>
 
 <script setup lang="ts">
-import { CC_BY_4_URL, HIBP_HOME_URL } from '@/utils/exposure';
+import { CC_BY_4_URL, HIBP_HOME_URL, HIBP_PASSWORDS_URL } from '@/utils/exposure';
+
+withDefaults(defineProps<{ variant?: 'breach' | 'passwords' }>(), { variant: 'breach' });
 </script>
 
 <style scoped>

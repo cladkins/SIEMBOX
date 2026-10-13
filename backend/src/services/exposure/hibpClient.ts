@@ -9,11 +9,19 @@
  *    404 = in no breach. Sensitive and retired breaches are never returned here;
  *  - breacheddomain/{domain} → { alias: [breachName, ...] }, only for domains
  *    the key owner verified in the HIBP dashboard (403 otherwise; 404 = none).
- *    Includes sensitive breaches;
+ *    Includes sensitive breaches. A verified domain larger than the plan
+ *    covers is NOT refused: HIBP answers 200 with only its subscription-free
+ *    breaches;
+ *  - subscribeddomains → [{ DomainName, PwnCount, ... }], the domains verified
+ *    on the key's account (Core and Pro plans). No 404 behaviour is
+ *    documented, so a 404 here is an error, never an empty list;
  *  - breaches → every breach model, no key needed (enriches domain results);
- *  - subscription/status → the key's plan, including its requests-per-minute;
+ *  - subscription/status → the key's plan, including its requests-per-minute
+ *    and the largest domain it can search;
  *  - 401 bad key, 403 forbidden, 429 rate limited (retry-after = seconds),
- *    5xx (often Cloudflare's 503) transient.
+ *    5xx (often Cloudflare's 503) transient. HIBP's public test key gets 401
+ *    from subscribeddomains and subscription/status (it only works on the
+ *    breach searches, for HIBP's test accounts).
  *
  * SSRF: the host is a constant baked into a URL object; a user-supplied
  * account or domain only ever lands in ONE path segment via
@@ -67,6 +75,8 @@ export interface HibpBreach {
   IsSpamList?: boolean;
   IsMalware?: boolean;
   IsStealerLog?: boolean;
+  /** Credit the party that provided the data asked for (free text: a handle, an address, a URL). */
+  Attribution?: string | null;
 }
 
 export interface HibpSubscriptionStatus {
@@ -74,9 +84,39 @@ export interface HibpSubscriptionStatus {
   Description?: string;
   SubscribedUntil?: string;
   Rpm?: number;
+  /** The largest domain (breached addresses, spam lists excluded) the plan can search. */
   DomainSearchMaxBreachedAccounts?: number | null;
+  /** How many domains the plan can add; null = no maximum. */
+  MaxBreachedDomains?: number | null;
   IncludesStealerLogs?: boolean;
+  IncludesAutoSubdomainVerification?: boolean;
+  IncludesCustomerDomains?: boolean;
+  IncludesBulkDomainAdd?: boolean;
+  IncludesKAnon?: boolean;
 }
+
+/** One domain verified on the key's account (subscribeddomains), numbers sanitized. */
+export interface HibpSubscribedDomain {
+  /** As HIBP spells it; services/exposure/hibpDomains.ts normalizes it. */
+  DomainName: string;
+  /** Breached addresses at the last search; null before the first search. */
+  PwnCount: number | null;
+  PwnCountExcludingSpamLists: number | null;
+  /** The count when the current subscription was taken out (locked in until renewal). */
+  PwnCountExcludingSpamListsAtLastSubscriptionRenewal: number | null;
+  NextSubscriptionRenewal: string | null;
+}
+
+export interface HibpSubscribedDomainList {
+  domains: HibpSubscribedDomain[];
+  /** Entries left out because they weren't objects with a string DomainName. */
+  unreadable: number;
+  /** Entries past the parse cap (MAX_SUBSCRIBED_DOMAINS_PARSED), not read at all. */
+  overLimit: number;
+}
+
+/** The most subscribeddomains entries read from one answer. */
+export const MAX_SUBSCRIBED_DOMAINS_PARSED = 5_000;
 
 export type FetchFn = (url: URL, init: RequestInit) => Promise<Response>;
 
@@ -148,6 +188,32 @@ function unexpectedShape(): HibpError {
   });
 }
 
+/** A count HIBP reports: finite and not negative, else null (unknown). */
+function countOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/** A date-time string HIBP reports (bounded, parseable), else null. */
+function dateTextOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.length <= 64 && !Number.isNaN(Date.parse(value))
+    ? value
+    : null;
+}
+
+/** Read one subscribeddomains entry; null when it has no string DomainName. */
+function toSubscribedDomain(entry: unknown): HibpSubscribedDomain | null {
+  if (!isPlainObject(entry) || typeof entry.DomainName !== 'string') return null;
+  return {
+    DomainName: entry.DomainName,
+    PwnCount: countOrNull(entry.PwnCount),
+    PwnCountExcludingSpamLists: countOrNull(entry.PwnCountExcludingSpamLists),
+    PwnCountExcludingSpamListsAtLastSubscriptionRenewal: countOrNull(
+      entry.PwnCountExcludingSpamListsAtLastSubscriptionRenewal
+    ),
+    NextSubscriptionRenewal: dateTextOrNull(entry.NextSubscriptionRenewal),
+  };
+}
+
 /** Constant host; `value` (user data) is confined to one encoded path segment. */
 function endpoint(path: string, value?: string): URL {
   // encodeURIComponent leaves "." alone, and "." / ".." segments would be
@@ -212,6 +278,34 @@ export class HibpClient {
     const body = await this.get(endpoint('subscription/status'), true);
     if (!isPlainObject(body)) throw unexpectedShape();
     return body as HibpSubscriptionStatus;
+  }
+
+  /**
+   * The domains verified on the key's account (its domain search dashboard).
+   * Only a 200 with a JSON array is an answer: a 404 is undocumented here, so
+   * it is an error rather than "no domains" (reading it as an empty list would
+   * silently skip every domain if HIBP ever moved the endpoint).
+   */
+  async subscribedDomains(): Promise<HibpSubscribedDomainList> {
+    const body = await this.get(endpoint('subscribeddomains'), true);
+    if (body === null) {
+      throw new HibpError('transient', 'HIBP answered HTTP 404 for the verified-domain list', {
+        status: 404,
+      });
+    }
+    if (!Array.isArray(body)) throw unexpectedShape();
+    const domains: HibpSubscribedDomain[] = [];
+    let unreadable = 0;
+    for (const entry of body.slice(0, MAX_SUBSCRIBED_DOMAINS_PARSED)) {
+      const domain = toSubscribedDomain(entry);
+      if (domain) domains.push(domain);
+      else unreadable++;
+    }
+    return {
+      domains,
+      unreadable,
+      overLimit: Math.max(0, body.length - MAX_SUBSCRIBED_DOMAINS_PARSED),
+    };
   }
 
   /** Parsed JSON for a 200, null for a 404; throws HibpError for anything else. */

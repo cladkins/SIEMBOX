@@ -16,6 +16,8 @@ export interface Alert {
   triage_status?: 'pending' | 'analyzing' | 'complete' | 'failed' | 'skipped' | null;
   triage_verdict?: 'true_positive' | 'false_positive' | 'suspicious' | 'inconclusive' | null;
   triage_risk_score?: number | null;
+  /** What raised the alert outside the rules engine (e.g. 'edr', 'leaked-creds'); null for rule alerts. */
+  source?: string | null;
 }
 
 export interface AlertFilterOptions {
@@ -254,13 +256,13 @@ export class AlertModel {
        representative AS (
          SELECT DISTINCT ON (group_key)
            id, rule_id, parsed_log_id, severity, title, description,
-           matched_data, status, assigned_to, created_at, updated_at, group_key,
+           matched_data, status, assigned_to, created_at, updated_at, source, group_key,
            triage_status, triage_verdict, triage_risk_score
          FROM filtered
          ORDER BY group_key, sev_rank DESC, created_at DESC, id DESC
        )
        SELECT r.id, r.rule_id, r.parsed_log_id, r.severity, r.title, r.description,
-              r.matched_data, r.status, r.assigned_to, r.created_at, r.updated_at,
+              r.matched_data, r.status, r.assigned_to, r.created_at, r.updated_at, r.source,
               r.triage_status, r.triage_verdict, r.triage_risk_score,
               g.correlated_count, g.correlated
        FROM representative r

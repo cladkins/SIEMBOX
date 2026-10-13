@@ -66,7 +66,8 @@ export function startLeakedCredsJob(): void {
     key: LEAKED_CREDS_JOB_KEY,
     name: 'Leaked-credential checks',
     description:
-      'Checks monitored email addresses and email domains against Have I Been Pwned when each is due.',
+      'Checks monitored email addresses and email domains against Have I Been Pwned when each is due. ' +
+      'Email domains are searched only once they are verified on the HIBP account.',
     intervalMs: CHECK_INTERVAL_MS,
   });
   startupTimer = setTimeout(() => {

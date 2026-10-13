@@ -92,6 +92,8 @@
           </template>
         </el-table-column>
       </el-table>
+      <!-- Leaked-credential alerts carry HIBP breach data (CC BY 4.0): credit it when any is listed. -->
+      <HibpAttribution v-if="showsHibpAlerts" />
 
       <el-empty v-if="!loading && rows.length === 0" description="No alerts match these filters" />
 
@@ -132,7 +134,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { format } from 'date-fns';
 import { ElMessage } from 'element-plus';
 import { Loading } from '@element-plus/icons-vue';
@@ -141,12 +143,16 @@ import { useAlertsStore, type Alert } from '@/stores/alerts';
 import { useTriageStore } from '@/stores/triage';
 import { useAuthStore } from '@/stores/auth';
 import AlertDetailDialog from '@/components/AlertDetailDialog.vue';
+import HibpAttribution from '@/components/HibpAttribution.vue';
+import { isHibpAlert } from '@/utils/exposure';
 
 const alertsStore = useAlertsStore();
 const triageStore = useTriageStore();
 const authStore = useAuthStore();
 
 const rows = ref<Alert[]>([]);
+// HIBP's breach data must be credited wherever it is shown.
+const showsHibpAlerts = computed(() => rows.value.some(isHibpAlert));
 const total = ref(0);
 const loading = ref(false);
 const currentPage = ref(1);

@@ -141,6 +141,12 @@ const LOGIN_REQUIRED: Array<[string, string, unknown?]> = [
   ['POST', '/api/log-discovery/sources/1/onboard/confirm', { confirm: true }],
   ['PATCH', '/api/log-discovery/sources/1', { port: 8123 }],
   ['POST', '/api/containers/scan', { image_ref: 'nginx:latest' }],
+  // Getting Started completion (any role reads it; admins change it)
+  ['GET', '/api/settings/onboarding'],
+  ['PUT', '/api/settings/onboarding', { completed: true }],
+  // The HIBP key's verified domains (admin-only account data)
+  ['GET', '/api/exposure/providers/hibp/verified-domains'],
+  ['POST', '/api/exposure/providers/hibp/verified-domains/refresh'],
 ];
 
 for (const [method, path, body] of LOGIN_REQUIRED) {

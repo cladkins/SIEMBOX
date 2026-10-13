@@ -15,6 +15,14 @@
  * all checks until HIBP's retry-after has passed and ends the cycle; a
  * rejected key pauses for an hour (or until the key is changed) — neither
  * retries in a loop. The remaining identities stay due for the next cycle.
+ *
+ * Email domains: HIBP only searches a domain verified on the key's account
+ * (403 otherwise). Before searching a due email domain the run makes sure it
+ * knows which domains are verified (the subscribeddomains list, kept in
+ * system_settings: see hibpDomains.ts, refreshed at most every few hours) and
+ * skips the ones a complete list doesn't include: last_status 'unverified',
+ * no HIBP call, not a failure. When the list can't be read the domain is
+ * searched as before, and a 403 then reads as "unverified" too.
  */
 import crypto from 'crypto';
 import { logger } from '../../utils/logger';
@@ -30,8 +38,35 @@ import {
   type RecordFindingResult,
 } from './findingWriter';
 import { NotificationService, type ExposureNotice } from '../notifications/notificationService';
-import { HibpClient, HibpError, DEFAULT_RETRY_AFTER_SECONDS, type HibpBreach } from './hibpClient';
+import {
+  HibpClient,
+  HibpError,
+  DEFAULT_RETRY_AFTER_SECONDS,
+  type HibpBreach,
+  type HibpSubscribedDomainList,
+  type HibpSubscriptionStatus,
+} from './hibpClient';
 import { getExposureSetting, getHibpApiKey, isHibpEnabled, HIBP_PROVIDER } from './settings';
+import {
+  buildSnapshot,
+  failedSnapshot,
+  hibpDomainStatus,
+  isSkippedState,
+  markHibpDomainSnapshotStale,
+  needsDomainRefresh,
+  planFromStatus,
+  readHibpDomainSnapshot,
+  skipNote,
+  toDomainListError,
+  toHibpVerifiedDomainsView,
+  updateHibpDomainSnapshot,
+  type HibpDomainListError,
+  type HibpDomainSnapshot,
+  type HibpDomainSnapshotState,
+  type HibpPlanSnapshot,
+  type HibpVerifiedDomainsView,
+  type IdentityHibpDomain,
+} from './hibpDomains';
 
 export const LEAKED_CREDS_SOURCE = 'leaked-creds' as const;
 /** Job-registry key of the scheduled run (jobs/leakedCreds.ts). */
@@ -52,6 +87,12 @@ export interface BreachRecord {
   isStealerLog: boolean;
   isSpamList: boolean;
   isFabricated: boolean;
+  /**
+   * Credit the party that supplied the breach asked for (HIBP's `Attribution`):
+   * plain text, control characters removed, at most 300 characters; null/absent
+   * when there is none.
+   */
+  attribution?: string | null;
 }
 
 /** One account found in one breach. `alias` is set for email-domain searches. */
@@ -67,12 +108,15 @@ export type IdentityRef = Pick<MonitoredIdentity, 'kind' | 'value'>;
  * How a check failed, which decides what the run loop does next:
  *  - rate_limited: pause every check until retryAfterSeconds pass; end the cycle
  *  - auth: the key is unusable; pause and end the cycle
- *  - identity: about this identity only (e.g. unverified domain); skip it until
+ *  - identity: about this identity only (e.g. a malformed value); skip it until
  *    its next interval and carry on
+ *  - unverified: the provider won't search this email domain for this account
+ *    (HIBP's 403 on a domain search: not verified, or no domain search on the
+ *    plan); recorded as 'unverified' rather than a failure, then carry on
  *  - transient: provider trouble; leave the identity due and carry on, but end
  *    the cycle after repeated failures
  */
-export type ExposureSourceErrorKind = 'rate_limited' | 'auth' | 'identity' | 'transient';
+export type ExposureSourceErrorKind = 'rate_limited' | 'auth' | 'identity' | 'unverified' | 'transient';
 
 export class ExposureSourceError extends Error {
   readonly kind: ExposureSourceErrorKind;
@@ -90,15 +134,42 @@ export class ExposureSourceError extends Error {
   }
 }
 
+/** A verified-domain listing: the account's domains and, when known, its plan. */
+export interface VerifiedDomainListing {
+  list: HibpSubscribedDomainList;
+  /** null when the plan couldn't be read (the previous one is kept). */
+  plan: HibpPlanSnapshot | null;
+}
+
 export interface ExposureSource {
   readonly id: string;
   readonly label: string;
   /** Link the data must be attributed to wherever it is shown. */
   readonly attribution: string;
+  /** The data's licence, credited next to the attribution link in descriptions. */
+  readonly license?: { name: string; url: string };
   isConfigured(): Promise<boolean>;
   /** Every breach hit for the identity; throws ExposureSourceError. */
   check(identity: IdentityRef): Promise<ExposureHit[]>;
+  /**
+   * The email domains the account may search (HIBP: subscribeddomains), for a
+   * source whose domain search is limited to verified domains. Throws the
+   * provider's error (HibpError) so its HTTP status can be classified.
+   * `refreshPlan` re-reads the plan instead of using the cached one.
+   */
+  listVerifiedDomains?(options: { refreshPlan: boolean }): Promise<VerifiedDomainListing>;
 }
+
+/** last_error when a domain search was refused (403) while verification was unknown. */
+export const FALLBACK_403_NOTE =
+  "HIBP refused the domain search (HTTP 403): the domain isn't verified on this HIBP account, or the key's " +
+  "plan doesn't include domain search. Verify it in the HIBP dashboard, then re-check verification.";
+
+/** last_error when HIBP refused (403) a domain its own list shows as verified. */
+export const CONTRADICTION_NOTE =
+  'HIBP refused the domain search (HTTP 403) although the domain is listed as verified on your HIBP account: ' +
+  'the plan may not cover it (number of domains, or a plan without domain search), or it was just removed ' +
+  'from the dashboard. SIEMBox re-reads the list before the next search.';
 
 // ---- Severity, fingerprint, finding -------------------------------------------
 
@@ -138,7 +209,7 @@ export function breachFingerprint(
   return crypto.createHash('sha256').update(parts.join(':')).digest('hex');
 }
 
-type SourceInfo = Pick<ExposureSource, 'id' | 'label' | 'attribution'>;
+type SourceInfo = Pick<ExposureSource, 'id' | 'label' | 'attribution' | 'license'>;
 
 function describeBreach(source: SourceInfo, hit: ExposureHit): string {
   const b = hit.breach;
@@ -150,7 +221,10 @@ function describeBreach(source: SourceInfo, hit: ExposureHit): string {
   if (exposesCredentials(b) || b.isStealerLog) {
     parts.push('Change this password everywhere it was used and turn on MFA for the account.');
   }
-  parts.push(`Source: ${source.label} (${source.attribution}).`);
+  // HIBP's licence (CC BY 4.0) asks for clear attribution with a link wherever
+  // its data is used: alert descriptions, notifications and exports carry it.
+  const license = source.license ? `, licensed under ${source.license.name} (${source.license.url})` : '';
+  parts.push(`Source: ${source.label} (${source.attribution})${license}.`);
   return parts.join(' ');
 }
 
@@ -184,6 +258,8 @@ export function buildBreachFinding(
       is_fabricated: b.isFabricated,
       source: source.id,
       attribution: source.attribution,
+      // Credit the provider of the breach data designated (plain text only).
+      ...(b.attribution ? { breach_attribution: b.attribution } : {}),
     },
   };
 }
@@ -191,6 +267,22 @@ export function buildBreachFinding(
 // ---- Have I Been Pwned ---------------------------------------------------------
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
+
+const MAX_BREACH_ATTRIBUTION_LENGTH = 300;
+
+/**
+ * HIBP's per-breach Attribution as plain text: control characters (and the
+ * invisible bidi/zero-width formatting ones, which could reorder what is
+ * displayed) become spaces; trimmed, capped; null if empty.
+ */
+export function cleanBreachAttribution(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const text = value
+    // eslint-disable-next-line no-control-regex -- stripping control characters is the point
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g, ' ')
+    .trim();
+  return text ? text.slice(0, MAX_BREACH_ATTRIBUTION_LENGTH).trim() : null;
+}
 
 export function toBreachRecord(b: HibpBreach): BreachRecord {
   return {
@@ -207,6 +299,7 @@ export function toBreachRecord(b: HibpBreach): BreachRecord {
     isStealerLog: b.IsStealerLog === true,
     isSpamList: b.IsSpamList === true,
     isFabricated: b.IsFabricated === true,
+    attribution: cleanBreachAttribution(b.Attribution),
   };
 }
 
@@ -216,7 +309,7 @@ function unknownBreach(name: string): BreachRecord {
 }
 
 const DEFAULT_RPM = 10; // HIBP's smallest plan
-const RPM_TTL_MS = 6 * 60 * 60 * 1000;
+const PLAN_TTL_MS = 6 * 60 * 60 * 1000;
 const CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
 const CATALOG_MIN_REFRESH_MS = 10 * 60 * 1000;
 
@@ -228,7 +321,7 @@ export function spacingForRpm(rpm: number | null | undefined): number {
 
 type HibpClientLike = Pick<
   HibpClient,
-  'breachedAccount' | 'breachedDomain' | 'allBreaches' | 'subscriptionStatus'
+  'breachedAccount' | 'breachedDomain' | 'allBreaches' | 'subscriptionStatus' | 'subscribedDomains'
 >;
 
 export interface HibpSourceOptions {
@@ -264,6 +357,7 @@ export class HibpSource implements ExposureSource {
   readonly id = 'hibp';
   readonly label = HIBP_PROVIDER.label;
   readonly attribution = HIBP_PROVIDER.attribution;
+  readonly license = { name: HIBP_PROVIDER.license, url: HIBP_PROVIDER.licenseUrl };
 
   private readonly getApiKey: () => Promise<string | undefined>;
   private readonly isEnabled: () => Promise<boolean>;
@@ -272,7 +366,14 @@ export class HibpSource implements ExposureSource {
   private readonly now: () => number;
 
   private lastCallAt = 0;
-  private rpm: { value: number | null; at: number } | null = null;
+  /** Every keyed call takes its turn here, so concurrent callers (a run and an admin's re-check) never burst. */
+  private paceChain: Promise<void> = Promise.resolve();
+  /** subscription/status, cached; `status` null when it couldn't be read. */
+  private plan: { status: HibpSubscriptionStatus | null; at: number } | null = null;
+  /** The plan lookup in flight, shared by concurrent callers. */
+  private planLookup: Promise<HibpSubscriptionStatus | null> | null = null;
+  /** Bumped by reset(), so a lookup started for the old key doesn't fill the cache. */
+  private planGeneration = 0;
   private catalog: { byName: Map<string, BreachRecord>; at: number } | null = null;
 
   constructor(options: HibpSourceOptions = {}) {
@@ -289,7 +390,9 @@ export class HibpSource implements ExposureSource {
 
   /** Forget what was learned about the key (call after the key changes). */
   reset(): void {
-    this.rpm = null;
+    this.plan = null;
+    this.planLookup = null;
+    this.planGeneration++;
   }
 
   async check(identity: IdentityRef): Promise<ExposureHit[]> {
@@ -297,7 +400,7 @@ export class HibpSource implements ExposureSource {
     if (!apiKey) throw new ExposureSourceError('auth', 'No usable HIBP API key is configured');
     const client = this.createClient(apiKey);
     try {
-      await this.learnRateLimit(client);
+      await this.learnPlan(client, false);
       await this.pace();
       if (identity.kind === 'email') {
         const breaches = await client.breachedAccount(identity.value);
@@ -308,13 +411,11 @@ export class HibpSource implements ExposureSource {
         byAlias = await client.breachedDomain(identity.value);
       } catch (err) {
         // A 403 on a domain search is about that domain, not the key: HIBP only
-        // searches domains the key owner has verified (and within the plan's size).
+        // searches domains verified on the key's account, and only on plans with
+        // domain search. (A domain larger than the plan is NOT refused: HIBP
+        // answers 200 with only its subscription-free breaches.)
         if (err instanceof HibpError && err.status === 403) {
-          throw new ExposureSourceError(
-            'identity',
-            'HIBP refused the domain search (HTTP 403): verify this domain in your HIBP domain ' +
-              'dashboard, and check that your plan covers its number of breached accounts'
-          );
+          throw new ExposureSourceError('unverified', FALLBACK_403_NOTE);
         }
         throw err;
       }
@@ -324,31 +425,66 @@ export class HibpSource implements ExposureSource {
     }
   }
 
-  /** Space keyed calls so a cycle stays under the plan's requests per minute. */
-  private async pace(): Promise<void> {
-    const wait = this.lastCallAt + spacingForRpm(this.rpm?.value) - this.now();
-    if (wait > 0) await this.sleep(wait);
-    this.lastCallAt = this.now();
+  /**
+   * The domains verified on the key's account (subscribeddomains), with the
+   * plan (cached subscription/status, or re-read with `refreshPlan`). Both
+   * calls are paced with every other keyed call. Throws HibpError; a failed
+   * plan lookup other than a 429 only leaves the plan unknown.
+   */
+  async listVerifiedDomains(options: { refreshPlan: boolean }): Promise<VerifiedDomainListing> {
+    const apiKey = await this.getApiKey();
+    if (!apiKey) throw new HibpError('auth', 'No usable HIBP API key is configured');
+    const client = this.createClient(apiKey);
+    const status = await this.learnPlan(client, options.refreshPlan);
+    await this.pace();
+    const list = await client.subscribedDomains();
+    return { list, plan: planFromStatus(status) };
   }
 
   /**
-   * Read the plan's RPM from subscription/status (cached). Best effort: only a
-   * 429 stops the cycle. Any other failure just means pacing for the smallest
-   * plan until the next refresh — the breach search that follows is the
-   * authoritative key check (HIBP's documented test key, for one, is refused
-   * here but accepted by the breach endpoints).
+   * Space keyed calls so a cycle stays under the plan's requests per minute.
+   * Callers queue on one promise chain, so the gap holds between concurrent
+   * callers too.
    */
-  private async learnRateLimit(client: HibpClientLike): Promise<void> {
-    if (this.rpm && this.now() - this.rpm.at < RPM_TTL_MS) return;
-    let value: number | null = null;
+  private pace(): Promise<void> {
+    const turn = this.paceChain.then(async () => {
+      const wait = this.lastCallAt + spacingForRpm(this.plan?.status?.Rpm) - this.now();
+      if (wait > 0) await this.sleep(wait);
+      this.lastCallAt = this.now();
+    });
+    this.paceChain = turn.catch(() => undefined);
+    return turn;
+  }
+
+  /**
+   * Read the plan from subscription/status (cached for 6 hours; concurrent
+   * lookups share one call). Best effort: only a 429 stops the caller. Any
+   * other failure just means pacing for the smallest plan until the next
+   * refresh — the breach search that follows is the authoritative key check
+   * (HIBP's documented test key, for one, is refused here but accepted by the
+   * breach endpoints).
+   */
+  private async learnPlan(client: HibpClientLike, force: boolean): Promise<HibpSubscriptionStatus | null> {
+    if (!force && this.plan && this.now() - this.plan.at < PLAN_TTL_MS) return this.plan.status;
+    if (this.planLookup) return this.planLookup;
+    const generation = this.planGeneration;
+    const lookup = (async () => {
+      let status: HibpSubscriptionStatus | null = null;
+      try {
+        await this.pace();
+        status = await client.subscriptionStatus();
+      } catch (err) {
+        if (err instanceof HibpError && err.kind === 'rate_limited') throw err;
+      }
+      if (generation === this.planGeneration) this.plan = { status, at: this.now() };
+      return status;
+    })();
+    this.planLookup = lookup;
     try {
-      await this.pace();
-      const status = await client.subscriptionStatus();
-      value = typeof status.Rpm === 'number' && status.Rpm > 0 ? status.Rpm : null;
-    } catch (err) {
-      if (err instanceof HibpError && err.kind === 'rate_limited') throw err;
+      return await lookup;
+    } finally {
+      if (this.planLookup === lookup) this.planLookup = null;
     }
-    this.rpm = { value, at: this.now() };
   }
 
   /** The domain search returns names only; fill in each breach from the catalog. */
@@ -401,6 +537,11 @@ export interface LeakedCredentialRunSummary {
   newFindings: number;
   /** Identities whose check failed (see their last_error). */
   failed: number;
+  /**
+   * Email domains skipped because they aren't verified on the HIBP account (or
+   * HIBP refused them with a 403 while that was unknown). Not failures.
+   */
+  unverified: number;
   /** Identities still due after this run (left for the next cycle). */
   remaining: number;
   /** True when the run did no work; `reason` says why. */
@@ -419,8 +560,21 @@ export interface LeakedCredentialStore {
   countDue(force: boolean): Promise<number>;
   markChecked(id: number): Promise<void>;
   markFailed(id: number, error: string, advance: boolean): Promise<void>;
+  /** An email domain skipped as not verified on HIBP: last_status 'unverified'. */
+  markUnverified(id: number, note: string): Promise<void>;
   recordFinding(input: FindingInput): Promise<RecordFindingResult>;
   notify(notices: ExposureNotice[]): Promise<void>;
+  /** The verified-domain snapshot as the stored key sees it (hibpDomains.ts). */
+  loadDomainSnapshot(): Promise<HibpDomainSnapshotState>;
+  /** Write `build(previous)` unless the stored key changed from `keyRef`; null when dropped. */
+  saveDomainSnapshot(
+    keyRef: string,
+    build: (previous: HibpDomainSnapshot | null) => HibpDomainSnapshot
+  ): Promise<HibpDomainSnapshot | null>;
+  markDomainSnapshotStale(): Promise<void>;
+  /** Make unverified email domains among `values` due again; returns the rows reset. */
+  requeueVerified(values: readonly string[]): Promise<Array<{ id: number; enabled: boolean }>>;
+  listEmailDomains(): Promise<Array<{ id: number; value: string; enabled: boolean }>>;
 }
 
 const dbStore: LeakedCredentialStore = {
@@ -429,9 +583,15 @@ const dbStore: LeakedCredentialStore = {
   countDue: (force) => MonitoredIdentityModel.countDue(force),
   markChecked: (id) => MonitoredIdentityModel.markChecked(id),
   markFailed: (id, error, advance) => MonitoredIdentityModel.markFailed(id, error, advance),
+  markUnverified: (id, note) => MonitoredIdentityModel.markUnverified(id, note),
   // Notifications are sent once per identity (grouped), not once per finding.
   recordFinding: (input) => recordFinding(input, { notify: false }),
   notify: (notices) => NotificationService.notifyExposure(notices),
+  loadDomainSnapshot: () => readHibpDomainSnapshot(),
+  saveDomainSnapshot: (keyRef, build) => updateHibpDomainSnapshot(keyRef, build),
+  markDomainSnapshotStale: () => markHibpDomainSnapshotStale(),
+  requeueVerified: (values) => MonitoredIdentityModel.requeueVerified(values),
+  listEmailDomains: () => MonitoredIdentityModel.listEmailDomains(),
 };
 
 export interface RunOptions {
@@ -458,18 +618,30 @@ const hibpSource = new HibpSource();
 let inFlight: Promise<LeakedCredentialRunSummary> | null = null;
 let pausedUntil = 0;
 let pauseReason: string | null = null;
+let pauseKind: 'rate_limited' | 'auth' | null = null;
 let lastRun: { at: string; trigger: string; summary: LeakedCredentialRunSummary } | null = null;
 
-function pause(untilMs: number, reason: string): void {
+function pause(untilMs: number, reason: string, kind: 'rate_limited' | 'auth'): void {
   pausedUntil = untilMs;
   pauseReason = reason;
+  pauseKind = kind;
   logger.warn(`[LeakedCreds] ${reason}`);
+}
+
+function liftPause(): void {
+  pausedUntil = 0;
+  pauseReason = null;
+  pauseKind = null;
+}
+
+/** End of an active rate-limit pause (ms since the epoch), or 0. */
+function rateLimitPauseEnd(): number {
+  return pauseKind === 'rate_limited' && pausedUntil > Date.now() ? pausedUntil : 0;
 }
 
 /** Lift a rate-limit/auth pause and forget the cached plan — call when the HIBP key or flag changes. */
 export function resetLeakedCredentialPause(): void {
-  pausedUntil = 0;
-  pauseReason = null;
+  liftPause();
   hibpSource.reset();
 }
 
@@ -492,6 +664,7 @@ const skippedRun = (reason: string): LeakedCredentialRunSummary => ({
   checked: 0,
   newFindings: 0,
   failed: 0,
+  unverified: 0,
   remaining: 0,
   skipped: true,
   reason,
@@ -523,9 +696,176 @@ export function describeRunSummary(s: LeakedCredentialRunSummary): string {
     `${s.newFindings} new finding${s.newFindings === 1 ? '' : 's'}`,
   ];
   if (s.failed) parts.push(`${s.failed} failed`);
+  if (s.unverified) parts.push(`${s.unverified} skipped (not verified on HIBP)`);
   if (s.remaining) parts.push(`${s.remaining} still due`);
   return parts.join(', ') + (s.error ? ` (stopped: ${s.error})` : '');
 }
+
+// ---- Verified HIBP domains (shared by runs and the admin's re-check) ------------------
+
+interface DomainRefreshOutcome {
+  /** The snapshot written; null when nothing was written (the key changed meanwhile). */
+  snapshot: HibpDomainSnapshot | null;
+  /** The listing's failure, or null after a success. */
+  error: HibpDomainListError | null;
+  /** Identities that turned verified and were made due again. */
+  requeued: Array<{ id: number; enabled: boolean }>;
+}
+
+// One refresh per key at a time: a run and an admin's re-check share it.
+const refreshesInFlight = new Map<string, Promise<DomainRefreshOutcome>>();
+
+function refreshDomainSnapshotShared(
+  source: ExposureSource,
+  store: LeakedCredentialStore,
+  keyRef: string,
+  options: { refreshPlan: boolean }
+): Promise<DomainRefreshOutcome> {
+  const existing = refreshesInFlight.get(keyRef);
+  if (existing) return existing;
+  const run = refreshDomainSnapshot(source, store, keyRef, options).finally(() => {
+    if (refreshesInFlight.get(keyRef) === run) refreshesInFlight.delete(keyRef);
+  });
+  refreshesInFlight.set(keyRef, run);
+  return run;
+}
+
+/**
+ * Ask the source for the verified list and persist the outcome, success or
+ * failure. A success re-queues identities that were skipped as unverified and
+ * are now listed, and lifts an auth pause (the key just worked); a 429 pauses
+ * every check, after the failure is recorded.
+ */
+async function refreshDomainSnapshot(
+  source: ExposureSource,
+  store: LeakedCredentialStore,
+  keyRef: string,
+  options: { refreshPlan: boolean }
+): Promise<DomainRefreshOutcome> {
+  if (!source.listVerifiedDomains) return { snapshot: null, error: null, requeued: [] };
+  let listing: VerifiedDomainListing;
+  try {
+    listing = await source.listVerifiedDomains({ refreshPlan: options.refreshPlan });
+  } catch (err) {
+    const error = toDomainListError(err, Date.now());
+    // The kind and status only: never the body, never the key.
+    logger.warn(
+      `[LeakedCreds] could not list verified HIBP domains: ${error.kind}${error.status !== null ? ` (HTTP ${error.status})` : ''}`
+    );
+    const snapshot = await store.saveDomainSnapshot(keyRef, (previous) =>
+      failedSnapshot(previous, error, keyRef, new Date())
+    );
+    if (error.kind === 'rate_limited' && error.retry_after) {
+      pause(
+        Date.parse(error.retry_after),
+        `${source.label} rate limit reached; checks resume after ${error.retry_after}`,
+        'rate_limited'
+      );
+    }
+    return { snapshot, error, requeued: [] };
+  }
+
+  const identities = await store.listEmailDomains();
+  const snapshot = await store.saveDomainSnapshot(keyRef, (previous) =>
+    buildSnapshot(
+      listing.list,
+      listing.plan ?? previous?.plan ?? null,
+      identities.map((i) => i.value),
+      keyRef,
+      new Date()
+    )
+  );
+  if (!snapshot) return { snapshot: null, error: null, requeued: [] };
+  if (pauseKind === 'auth') liftPause();
+  const verified = identities
+    .filter((i) => {
+      const state = hibpDomainStatus(i.value, snapshot, true).state;
+      return state === 'verified' || state === 'verified_limited';
+    })
+    .map((i) => i.value);
+  const requeued = await store.requeueVerified(verified);
+  return { snapshot, error: null, requeued };
+}
+
+export type HibpDomainsRefreshErrorKind = 'no_key' | 'rate_limited';
+
+/** Why an admin's re-check didn't ask HIBP at all. */
+export class HibpDomainsRefreshError extends Error {
+  readonly kind: HibpDomainsRefreshErrorKind;
+  /** rate_limited: when a re-check may call HIBP again (ISO). */
+  readonly retryAt: string | null;
+
+  constructor(kind: HibpDomainsRefreshErrorKind, message: string, retryAt: string | null = null) {
+    super(message);
+    this.name = 'HibpDomainsRefreshError';
+    this.kind = kind;
+    this.retryAt = retryAt;
+  }
+}
+
+export interface HibpDomainsRefreshResult {
+  view: HibpVerifiedDomainsView;
+  /** False when HIBP was asked less than a minute ago and that answer is shown. */
+  refreshed: boolean;
+  /** Enabled identities that turned verified and are due again. */
+  becameDue: number[];
+}
+
+/** The account view of the verified domains (never calls HIBP). */
+export async function getHibpVerifiedDomainsView(
+  options: { store?: LeakedCredentialStore } = {}
+): Promise<HibpVerifiedDomainsView> {
+  const store = options.store ?? dbStore;
+  const [state, identities] = await Promise.all([store.loadDomainSnapshot(), store.listEmailDomains()]);
+  return toHibpVerifiedDomainsView({
+    snapshot: state.snapshot,
+    keyUsable: state.keyUsable,
+    identities,
+    now: Date.now(),
+    pausedUntil: rateLimitPauseEnd(),
+    attribution: HIBP_PROVIDER.attribution,
+  });
+}
+
+/**
+ * An admin's "Re-check with HIBP": list the verified domains and the plan now,
+ * unless HIBP was asked less than a minute ago (install-wide cooldown; the
+ * cached answer comes back with refreshed=false). Concurrent re-checks share
+ * one call. Refused without a usable key, and during a rate-limit pause. The
+ * provider's enabled flag is not required (like the key test).
+ */
+export async function refreshHibpVerifiedDomains(
+  options: { source?: ExposureSource; store?: LeakedCredentialStore } = {}
+): Promise<HibpDomainsRefreshResult> {
+  const source = options.source ?? hibpSource;
+  const store = options.store ?? dbStore;
+  const state = await store.loadDomainSnapshot();
+  if (!state.keyRef || !state.keyUsable || !source.listVerifiedDomains) {
+    throw new HibpDomainsRefreshError('no_key', 'No usable HIBP API key is saved; save one first');
+  }
+  const now = Date.now();
+  const snapshotRetry =
+    state.snapshot?.error?.kind === 'rate_limited' ? Date.parse(state.snapshot.error.retry_after ?? '') || 0 : 0;
+  const pauseEnd = Math.max(rateLimitPauseEnd(), snapshotRetry);
+  if (pauseEnd > now) {
+    const at = new Date(pauseEnd).toISOString();
+    throw new HibpDomainsRefreshError('rate_limited', `HIBP rate limit reached; try again after ${at}`, at);
+  }
+
+  let outcome: DomainRefreshOutcome | null = null;
+  const pending = refreshesInFlight.get(state.keyRef);
+  if (pending) outcome = await pending;
+  else if (needsDomainRefresh(state.snapshot, now, { mode: 'manual' })) {
+    outcome = await refreshDomainSnapshotShared(source, store, state.keyRef, { refreshPlan: true });
+  }
+  return {
+    view: await getHibpVerifiedDomainsView({ store }),
+    refreshed: outcome !== null,
+    becameDue: outcome ? outcome.requeued.filter((r) => r.enabled).map((r) => r.id) : [],
+  };
+}
+
+// ---- Runs ---------------------------------------------------------------------------
 
 /**
  * Check every due identity once. Concurrent calls don't overlap: while a run
@@ -550,20 +890,67 @@ async function executeRun(options: RunOptions): Promise<LeakedCredentialRunSumma
   const reason = await getLeakedCredentialSkipReason({ force, source, store });
   if (reason) return skippedRun(reason);
 
-  const identities = await store.findDue(options.maxIdentities ?? DEFAULT_MAX_IDENTITIES, force);
+  const limit = options.maxIdentities ?? DEFAULT_MAX_IDENTITIES;
+  let identities = await store.findDue(limit, force);
   const budgetMs = options.budgetMs ?? SCHEDULED_RUN_BUDGET_MS;
   const startedAt = Date.now();
   const summary: LeakedCredentialRunSummary = {
     checked: 0,
     newFindings: 0,
     failed: 0,
+    unverified: 0,
     remaining: 0,
     skipped: false,
   };
+  const finish = async (): Promise<LeakedCredentialRunSummary> => {
+    summary.remaining = await store.countDue(false);
+    lastRun = { at: new Date().toISOString(), trigger: options.trigger ?? 'schedule', summary };
+    return summary;
+  };
+
+  // Which email domains HIBP will search: known before the first domain search.
+  const listsDomains = typeof source.listVerifiedDomains === 'function';
+  let snapshot: HibpDomainSnapshot | null = null;
+  if (listsDomains && identities.some((i) => i.kind === 'email_domain')) {
+    const state = await store.loadDomainSnapshot();
+    snapshot = state.snapshot;
+    const skipPending = identities.some(
+      (i) => i.kind === 'email_domain' && isSkippedState(hibpDomainStatus(i.value, snapshot, true).state)
+    );
+    if (
+      state.keyRef &&
+      needsDomainRefresh(snapshot, Date.now(), { mode: force ? 'force' : 'run', skipPending })
+    ) {
+      const refreshed = await refreshDomainSnapshotShared(source, store, state.keyRef, {
+        refreshPlan: false,
+      });
+      if (refreshed.error?.kind === 'rate_limited') {
+        // The pause is set; nothing else is sent to HIBP this cycle.
+        summary.rateLimitedUntil = refreshed.error.retry_after ?? undefined;
+        summary.error = refreshed.error.message;
+        return finish();
+      }
+      snapshot = refreshed.snapshot;
+      // Newly verified domains were made due: search them in this run.
+      if (refreshed.requeued.length > 0) identities = await store.findDue(limit, force);
+    }
+  }
+
   let consecutiveTransient = 0;
 
   for (const identity of identities) {
     if (Date.now() - startedAt >= budgetMs) break; // the rest stay due
+
+    let domainStatus: IdentityHibpDomain | null = null;
+    if (identity.kind === 'email_domain' && listsDomains) {
+      domainStatus = hibpDomainStatus(identity.value, snapshot, true);
+      if (isSkippedState(domainStatus.state)) {
+        // HIBP would refuse it (403): no call, no error, until it is verified.
+        await store.markUnverified(identity.id, skipNote(identity.value, domainStatus));
+        summary.unverified++;
+        continue;
+      }
+    }
 
     let hits: ExposureHit[];
     try {
@@ -577,7 +964,8 @@ async function executeRun(options: RunOptions): Promise<LeakedCredentialRunSumma
         summary.error = e.message;
         pause(
           until,
-          `${source.label} rate limit reached; checks resume after ${summary.rateLimitedUntil}`
+          `${source.label} rate limit reached; checks resume after ${summary.rateLimitedUntil}`,
+          'rate_limited'
         );
         break;
       }
@@ -585,9 +973,26 @@ async function executeRun(options: RunOptions): Promise<LeakedCredentialRunSumma
         summary.error = e.message;
         pause(
           Date.now() + AUTH_PAUSE_MS,
-          `${e.message}; checks are paused for an hour or until the key is updated`
+          `${e.message}; checks are paused for an hour or until the key is updated`,
+          'auth'
         );
         break;
+      }
+      if (e.kind === 'unverified') {
+        // The list may be out of date: the next run re-reads it (at most hourly).
+        if (listsDomains) await store.markDomainSnapshotStale();
+        consecutiveTransient = 0;
+        if (domainStatus?.state === 'verified' || domainStatus?.state === 'verified_limited') {
+          // Listed as verified, yet refused: an anomaly to look at, recorded as an
+          // error so the re-queue (which only takes 'unverified' rows) can't loop.
+          summary.failed++;
+          logger.warn(`[LeakedCreds] HIBP refused listed domain identity #${identity.id} (HTTP 403)`);
+          await store.markFailed(identity.id, CONTRADICTION_NOTE, true);
+        } else {
+          summary.unverified++;
+          await store.markUnverified(identity.id, e.message);
+        }
+        continue;
       }
       summary.failed++;
       logger.warn(`[LeakedCreds] check failed for identity #${identity.id}: ${e.message}`);
@@ -613,7 +1018,5 @@ async function executeRun(options: RunOptions): Promise<LeakedCredentialRunSumma
     if (fresh.length > 0) await store.notify(fresh);
   }
 
-  summary.remaining = await store.countDue(false);
-  lastRun = { at: new Date().toISOString(), trigger: options.trigger ?? 'schedule', summary };
-  return summary;
+  return finish();
 }

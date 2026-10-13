@@ -22,6 +22,9 @@ export const EXPOSURE_SETTING_DEFAULTS = {
   exposure_leaked_creds_enabled: 'true',
   exposure_hibp_enabled: 'false',
   exposure_hibp_key: '',
+  // The verified domains on the HIBP key's account, as one JSON snapshot bound
+  // to the stored key (see hibpDomains.ts); '' = not listed yet.
+  exposure_hibp_domains: '',
   // Domain monitoring (migration 035).
   exposure_domain_monitor_enabled: 'true',
   exposure_domain_expiry_warning_days: '30',
@@ -178,6 +181,9 @@ export const HIBP_PROVIDER = {
   docsUrl: 'https://haveibeenpwned.com/API/v3',
   signupUrl: 'https://haveibeenpwned.com/API/Key',
   attribution: 'https://haveibeenpwned.com',
+  /** HIBP's breach data is licensed CC BY 4.0: credit it wherever it is shown. */
+  license: 'CC BY 4.0',
+  licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
 } as const;
 
 /** HIBP keys are 32 hex characters (https://haveibeenpwned.com/API/v3#Authorisation). */
@@ -189,6 +195,9 @@ export interface ExposureProviderPublic {
   docsUrl: string;
   signupUrl: string;
   attribution: string;
+  /** The data's licence, e.g. "CC BY 4.0". */
+  license: string;
+  licenseUrl: string;
   configured: boolean;
   enabled: boolean;
   /**

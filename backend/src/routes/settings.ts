@@ -17,6 +17,15 @@ import {
   getTriagePublicConfig,
   saveTriageConfig,
 } from '../services/ai/aiService';
+import { logger } from '../utils/logger';
+import {
+  completeOnboarding,
+  completeOnboardingIfNeverRecorded,
+  getOnboardingState,
+  reopenOnboarding,
+  toPublicOnboardingState,
+  type OnboardingState,
+} from '../services/onboarding/onboardingState';
 
 const router = Router();
 
@@ -717,6 +726,53 @@ router.get('/auto-discovery/stats', authorize('admin'), async (_req: Request, re
   } catch {
     throw new ApiError(500, 'Failed to fetch auto-discovery statistics');
   }
+});
+
+// ===========================
+// Getting Started completion
+// ===========================
+// Install-wide, in one system_settings row (services/onboarding/onboardingState.ts).
+// GET is open to every signed-in role: the Dashboard and the checklist read it,
+// and only admins see who marked setup done. PUT is admin-only: completing
+// install setup, like every system_settings write, is an admin action.
+
+router.get('/onboarding', async (req: Request, res: Response) => {
+  const state = await getOnboardingState();
+  res.json(toPublicOnboardingState(state, req.user?.role === 'admin'));
+});
+
+// {"completed": true} marks setup done (atomic; the first completion's time and
+// admin are kept); {"completed": false} reopens it; {"completed": true,
+// "legacy": true} migrates a browser's old localStorage dismissal and applies
+// only if nothing was ever recorded. Unknown keys are ignored.
+router.put('/onboarding', authorize('admin'), async (req: Request, res: Response) => {
+  const body: unknown = req.body;
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    throw new ApiError(400, 'Expected a JSON object such as {"completed": true}');
+  }
+  const { completed, legacy } = body as Record<string, unknown>;
+  if (typeof completed !== 'boolean') throw new ApiError(400, 'completed must be true or false');
+  if (legacy !== undefined && typeof legacy !== 'boolean') {
+    throw new ApiError(400, 'legacy must be true or false');
+  }
+  if (legacy === true && !completed) {
+    throw new ApiError(400, 'legacy applies only to {"completed": true}');
+  }
+
+  const username = req.user?.username ?? 'unknown';
+  let state: OnboardingState;
+  if (!completed) {
+    state = await reopenOnboarding();
+    logger.info(`[Onboarding] reopened by ${username}`);
+  } else if (legacy === true) {
+    const result = await completeOnboardingIfNeverRecorded(username);
+    state = result.state;
+    if (result.applied) logger.info(`[Onboarding] legacy dismissal applied for ${username}`);
+  } else {
+    state = await completeOnboarding(username);
+    logger.info(`[Onboarding] marked done by ${username}`);
+  }
+  res.json(toPublicOnboardingState(state, true));
 });
 
 export default router;

@@ -1,21 +1,27 @@
 /**
  * Leaked-credential checks without a database: severity mapping, fingerprint
  * stability (re-checks must hit the same finding), the finding we build from a
- * breach, the HIBP source (domain-search expansion, pacing, 403 meaning), and
- * the run loop's handling of rate limits, rejected keys and flaky providers —
+ * breach, the HIBP source (domain-search expansion, pacing, 403 meaning), the
+ * run loop's handling of rate limits, rejected keys and flaky providers, and
+ * verified HIBP domains (skips, list refreshes, the admin's re-check) —
  * driven through an in-memory store. Run with `npm test` (tsx --test).
  */
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CONTRADICTION_NOTE,
   ExposureSourceError,
+  FALLBACK_403_NOTE,
+  HibpDomainsRefreshError,
   HibpSource,
   LEAKED_CREDS_ALREADY_RUNNING,
   breachFingerprint,
   breachSeverity,
   buildBreachFinding,
+  describeRunSummary,
   getLeakedCredentialRunState,
   getLeakedCredentialSkipReason,
+  refreshHibpVerifiedDomains,
   resetLeakedCredentialPause,
   runLeakedCredentialChecks,
   spacingForRpm,
@@ -25,8 +31,10 @@ import {
   type ExposureSource,
   type IdentityRef,
   type LeakedCredentialStore,
+  type VerifiedDomainListing,
 } from './leakedCredentialService';
 import { HibpError, type HibpBreach } from './hibpClient';
+import { buildSnapshot, failedSnapshot, toDomainListError, type HibpDomainSnapshot } from './hibpDomains';
 import { SECRET_KEY_PATTERN, type FindingInput } from './findingWriter';
 import type { MonitoredIdentity } from '../../models/Exposure';
 import type { ExposureNotice } from '../notifications/notificationService';
@@ -138,6 +146,7 @@ test('a breach hit becomes a leaked-creds finding with attribution and no secret
   assert.equal(finding.fingerprint, breachFingerprint(identity, 'Adobe', 'alice'));
   assert.match(finding.description ?? '', /haveibeenpwned\.com/);
   assert.match(finding.description ?? '', /Change this password/);
+  assert.equal('breach_attribution' in finding.detail, false, 'only when HIBP sent one');
   assert.equal(finding.detail.source, 'hibp');
   assert.equal(finding.detail.attribution, 'https://haveibeenpwned.com');
   assert.deepEqual(finding.detail.data_classes, ['Email addresses', 'Passwords']);
@@ -276,10 +285,9 @@ test('HibpSource: a 403 on a domain search is about the domain; a 401 is about t
   await assert.rejects(
     makeHibpSource(forbidden.client).check({ kind: 'email_domain', value: 'example.com' }),
     (err: unknown) =>
-      err instanceof ExposureSourceError &&
-      err.kind === 'identity' &&
-      /verify this domain/.test(err.message)
+      err instanceof ExposureSourceError && err.kind === 'unverified' && err.message === FALLBACK_403_NOTE
   );
+  assert.doesNotMatch(FALLBACK_403_NOTE, /plan covers its number/, 'an over-size domain is not refused');
 
   const badKey = fakeHibpClient({
     breachedAccount: async () => {
@@ -337,28 +345,79 @@ function identity(id: number, value = `user${id}@example.com`): MonitoredIdentit
   };
 }
 
-function memoryStore(identities: MonitoredIdentity[], options: { enabled?: boolean } = {}) {
+function memoryStore(
+  identities: MonitoredIdentity[],
+  options: { enabled?: boolean; snapshot?: HibpDomainSnapshot | null; keyRef?: string | null } = {}
+) {
   const due = new Set(identities.map((i) => i.id));
   const fingerprints = new Set<string>();
+  const byId = new Map(identities.map((i) => [i.id, i]));
+  const domains = {
+    keyRef: options.keyRef === undefined ? KEY_REF : options.keyRef,
+    snapshot: options.snapshot ?? null,
+  };
   const log = {
     checked: [] as number[],
     failed: [] as Array<{ id: number; error: string; advance: boolean }>,
+    unverified: [] as Array<{ id: number; note: string }>,
     findings: [] as FindingInput[],
     notifications: [] as ExposureNotice[][],
+    snapshotSaves: 0,
+    staleMarks: 0,
+    requeued: [] as number[][],
+  };
+  const setStatus = (id: number, status: string | null) => {
+    const row = byId.get(id);
+    if (row) row.last_status = status;
   };
   const store: LeakedCredentialStore = {
     isEnabled: async () => options.enabled ?? true,
     findDue: async (limit, force) =>
-      identities.filter((i) => force || due.has(i.id)).slice(0, limit),
-    countDue: async (force) => (force ? identities.length : due.size),
+      identities.filter((i) => i.enabled && (force || due.has(i.id))).slice(0, limit),
+    countDue: async (force) => (force ? identities.filter((i) => i.enabled).length : due.size),
     markChecked: async (id) => {
       log.checked.push(id);
+      setStatus(id, 'ok');
       due.delete(id);
     },
     markFailed: async (id, error, advance) => {
       log.failed.push({ id, error, advance });
+      setStatus(id, 'error');
       if (advance) due.delete(id);
     },
+    markUnverified: async (id, note) => {
+      log.unverified.push({ id, note });
+      setStatus(id, 'unverified');
+      due.delete(id);
+    },
+    loadDomainSnapshot: async () => ({
+      keyRef: domains.keyRef,
+      keyUsable: domains.keyRef !== null,
+      snapshot: domains.snapshot,
+    }),
+    saveDomainSnapshot: async (keyRef, build) => {
+      if (keyRef !== domains.keyRef) return null;
+      domains.snapshot = build(domains.snapshot);
+      log.snapshotSaves++;
+      return domains.snapshot;
+    },
+    markDomainSnapshotStale: async () => {
+      log.staleMarks++;
+      if (domains.snapshot) domains.snapshot = { ...domains.snapshot, stale: true };
+    },
+    requeueVerified: async (values) => {
+      const rows = identities.filter(
+        (i) => i.kind === 'email_domain' && i.last_status === 'unverified' && values.includes(i.value)
+      );
+      for (const row of rows) {
+        row.last_status = null;
+        if (row.enabled) due.add(row.id);
+      }
+      log.requeued.push(rows.map((r) => r.id));
+      return rows.map((r) => ({ id: r.id, enabled: r.enabled }));
+    },
+    listEmailDomains: async () =>
+      identities.filter((i) => i.kind === 'email_domain').map((i) => ({ id: i.id, value: i.value, enabled: i.enabled })),
     recordFinding: async (input) => {
       log.findings.push(input);
       const isNew = !fingerprints.has(input.fingerprint);
@@ -374,7 +433,7 @@ function memoryStore(identities: MonitoredIdentity[], options: { enabled?: boole
       log.notifications.push(notices);
     },
   };
-  return { store, log, due };
+  return { store, log, due, domains };
 }
 
 function scriptedSource(
@@ -416,6 +475,7 @@ test('run: each breach is recorded once, and an identity’s new findings are on
     checked: 2,
     newFindings: 2,
     failed: 0,
+    unverified: 0,
     remaining: 0,
     skipped: false,
   });
@@ -563,4 +623,387 @@ test('run: overlapping runs do not overlap', async () => {
   assert.deepEqual([second.skipped, second.reason], [true, LEAKED_CREDS_ALREADY_RUNNING]);
   release();
   assert.equal((await first).checked, 1);
+});
+
+// ---- verified HIBP domains --------------------------------------------------------------
+
+const KEY_REF = 'aaaaaaaaaaaaaaaa';
+const HOUR = 60 * 60 * 1000;
+
+function domainIdentity(id: number, value: string, overrides: Partial<MonitoredIdentity> = {}): MonitoredIdentity {
+  return { ...identity(id, value), kind: 'email_domain', ...overrides };
+}
+
+const listing = (names: string[]): VerifiedDomainListing => ({
+  list: {
+    domains: names.map((DomainName) => ({
+      DomainName,
+      PwnCount: 3,
+      PwnCountExcludingSpamLists: 3,
+      PwnCountExcludingSpamListsAtLastSubscriptionRenewal: 3,
+      NextSubscriptionRenewal: null,
+    })),
+    unreadable: 0,
+    overLimit: 0,
+  },
+  plan: { name: 'Core 2', domain_search_max_breached_accounts: 100, max_breached_domains: 3, subscribed_until: null },
+});
+
+/** A successful listing of `names`, `ageMs` old (relative to the real clock the run uses). */
+function listedSnapshot(names: string[], ageMs = 0, overrides: Partial<HibpDomainSnapshot> = {}): HibpDomainSnapshot {
+  return { ...buildSnapshot(listing(names).list, listing(names).plan, [], KEY_REF, new Date(Date.now() - ageMs)), ...overrides };
+}
+
+/**
+ * A source that lists verified domains (`verified` names, or an error to throw)
+ * and answers checks from `script`. Records the order of calls.
+ */
+function domainSource(
+  verified: string[] | (() => string[] | Error),
+  script: Record<string, () => ExposureHit[] | Error> = {}
+) {
+  const calls: string[] = [];
+  const listOptions: Array<{ refreshPlan: boolean }> = [];
+  const source: ExposureSource & { calls: string[]; listOptions: typeof listOptions } = {
+    ...scriptedSource({}),
+    calls,
+    listOptions,
+    check: async (i) => {
+      calls.push(`check:${i.value}`);
+      const outcome = script[i.value]?.() ?? [];
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    },
+    listVerifiedDomains: async (options) => {
+      calls.push('list');
+      listOptions.push(options);
+      const result = typeof verified === 'function' ? verified() : verified;
+      if (result instanceof Error) throw result;
+      return listing(result);
+    },
+  };
+  return source;
+}
+
+const unverified403 = () => new ExposureSourceError('unverified', FALLBACK_403_NOTE);
+
+test('domains: unverified ones are skipped without a call, verified ones and emails are checked', async () => {
+  const ids = [domainIdentity(1, 'good.example'), domainIdentity(2, 'nope.example'), identity(3, 'a@example.com')];
+  const { store, log } = memoryStore(ids, { snapshot: listedSnapshot(['good.example']) });
+  const source = domainSource(['good.example']);
+
+  const summary = await runLeakedCredentialChecks({ source, store });
+  assert.deepEqual(source.calls, ['check:good.example', 'check:a@example.com'], 'fresh list: no list call, no search for nope');
+  assert.deepEqual(
+    { checked: summary.checked, unverified: summary.unverified, failed: summary.failed },
+    { checked: 2, unverified: 1, failed: 0 }
+  );
+  assert.equal(log.unverified.length, 1);
+  assert.equal(log.unverified[0].id, 2);
+  assert.match(
+    log.unverified[0].note,
+    /^Skipped: nope\.example isn't verified on your HIBP account \(as of \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\)\. Verify it in the HIBP dashboard, then re-check verification\.$/
+  );
+  assert.match(describeRunSummary(summary), /1 skipped \(not verified on HIBP\)/);
+});
+
+test('domains: without a snapshot the list is fetched once, before any search, and saved', async () => {
+  const ids = [domainIdentity(1, 'good.example'), domainIdentity(2, 'other.example')];
+  const { store, log, domains } = memoryStore(ids);
+  const source = domainSource(['GOOD.example.']);
+  const summary = await runLeakedCredentialChecks({ source, store });
+  assert.deepEqual(source.calls, ['list', 'check:good.example']);
+  assert.deepEqual(source.listOptions, [{ refreshPlan: false }], 'a run uses the cached plan');
+  assert.equal(log.snapshotSaves, 1);
+  assert.deepEqual(domains.snapshot?.domains?.map((d) => d.domain), ['good.example']);
+  assert.equal(summary.unverified, 1);
+});
+
+test('domains: a fresh list is reused; a stale one is re-read after an hour; a pending skip shortens the wait', async () => {
+  const run = async (snapshot: HibpDomainSnapshot, ids: MonitoredIdentity[]) => {
+    resetLeakedCredentialPause();
+    const source = domainSource(['good.example']);
+    await runLeakedCredentialChecks({ source, store: memoryStore(ids, { snapshot }).store });
+    return source.calls.filter((c) => c === 'list').length;
+  };
+  const verifiedOnly = () => [domainIdentity(1, 'good.example')];
+  const withUnverified = () => [domainIdentity(1, 'good.example'), domainIdentity(2, 'nope.example')];
+
+  assert.equal(await run(listedSnapshot(['good.example'], 5 * HOUR), verifiedOnly()), 0, 'fresh');
+  assert.equal(await run(listedSnapshot(['good.example'], 6 * HOUR), verifiedOnly()), 1, '6 h old');
+  assert.equal(await run(listedSnapshot(['good.example'], HOUR + 1000, { stale: true }), verifiedOnly()), 1, 'stale, an hour old');
+  assert.equal(await run(listedSnapshot(['good.example'], 30 * 60 * 1000, { stale: true }), verifiedOnly()), 0, 'stale, under an hour');
+  assert.equal(await run(listedSnapshot(['good.example'], 2 * HOUR), withUnverified()), 1, 'a due domain would be skipped');
+  assert.equal(await run(listedSnapshot(['good.example'], 2 * HOUR), verifiedOnly()), 0);
+});
+
+test('domains: a failed listing is recorded; without a list the domain is searched, except after a 403', async () => {
+  const failures: Array<[HibpError, string, boolean]> = [
+    [new HibpError('auth', 'HIBP rejected the API key (HTTP 401)', { status: 401 }), 'auth', true],
+    [new HibpError('auth', 'refused', { status: 403 }), 'forbidden', false],
+    [new HibpError('transient', 'HIBP could not be reached'), 'network', true],
+    [new HibpError('transient', 'HIBP is temporarily unavailable (HTTP 503)', { status: 503 }), 'hibp_unavailable', true],
+    [new HibpError('transient', 'HIBP answered HTTP 404 for the verified-domain list', { status: 404 }), 'bad_response', true],
+  ];
+  for (const [err, kind, searched] of failures) {
+    resetLeakedCredentialPause();
+    const { store, domains, log } = memoryStore([domainIdentity(1, 'x.example')]);
+    const source = domainSource(() => err);
+    const summary = await runLeakedCredentialChecks({ source, store });
+    assert.equal(domains.snapshot?.error?.kind, kind);
+    assert.equal(domains.snapshot?.domains, null);
+    assert.equal(source.calls.includes('check:x.example'), searched, kind);
+    assert.equal(summary.unverified, searched ? 0 : 1, kind);
+    if (!searched) assert.equal(log.unverified[0].note, "Skipped: your HIBP plan doesn't include domain search.");
+  }
+
+  // With an older list, the list decides — except after a 403, which skips everything.
+  for (const [err, kind, listDecides] of failures) {
+    resetLeakedCredentialPause();
+    const old = listedSnapshot(['x.example'], 7 * HOUR);
+    const { store } = memoryStore([domainIdentity(1, 'x.example'), domainIdentity(2, 'y.example')], { snapshot: old });
+    const source = domainSource(() => err);
+    await runLeakedCredentialChecks({ source, store });
+    assert.equal(source.calls.includes('check:x.example'), listDecides, `${kind}: listed domain`);
+    assert.equal(source.calls.includes('check:y.example'), false, `${kind}: unlisted domain is skipped either way`);
+  }
+});
+
+test('domains: a 429 while listing pauses every check and searches nothing', async () => {
+  const { store, domains } = memoryStore([domainIdentity(1, 'x.example'), identity(2, 'a@example.com')]);
+  const source = domainSource(() => new HibpError('rate_limited', 'HIBP rate limit exceeded; retry after 30s', { status: 429, retryAfterSeconds: 30 }));
+  const summary = await runLeakedCredentialChecks({ source, store });
+  assert.deepEqual(source.calls, ['list']);
+  assert.ok(summary.rateLimitedUntil && Date.parse(summary.rateLimitedUntil) > Date.now() + 29_000);
+  assert.match(summary.error ?? '', /rate limit/);
+  assert.equal(domains.snapshot?.error?.kind, 'rate_limited', 'the failure is recorded before the pause');
+  assert.ok(getLeakedCredentialRunState().paused_until);
+
+  const next = await runLeakedCredentialChecks({ source, store });
+  assert.equal(next.skipped, true);
+  assert.match(next.reason ?? '', /rate limit reached/);
+  assert.deepEqual(source.calls, ['list']);
+});
+
+test('domains: a 403 search while verification is unknown reads as unverified and marks the list stale', async () => {
+  const ids = [domainIdentity(1, 'x.example'), domainIdentity(2, 'y.example')];
+  const { store, log, domains } = memoryStore(ids, {
+    snapshot: listedSnapshot([], 0, { skipped_entries: 1 }), // incomplete: absence proves nothing
+  });
+  const source = domainSource([], { 'x.example': unverified403, 'y.example': () => [] });
+  const summary = await runLeakedCredentialChecks({ source, store });
+  assert.deepEqual(source.calls, ['check:x.example', 'check:y.example'], 'the loop carries on');
+  assert.deepEqual(log.unverified, [{ id: 1, note: FALLBACK_403_NOTE }]);
+  assert.deepEqual(log.failed, []);
+  assert.deepEqual([summary.unverified, summary.failed, summary.checked], [1, 0, 1]);
+  assert.equal(log.staleMarks, 1);
+  assert.equal(domains.snapshot?.stale, true);
+});
+
+test('domains: a 403 for a domain listed as verified is an error, and a re-list does not re-queue it', async () => {
+  const ids = [domainIdentity(1, 'x.example')];
+  const { store, log, due } = memoryStore(ids, { snapshot: listedSnapshot(['x.example']) });
+  const source = domainSource(['x.example'], { 'x.example': unverified403 });
+  const summary = await runLeakedCredentialChecks({ source, store });
+  assert.deepEqual(log.failed, [{ id: 1, error: CONTRADICTION_NOTE, advance: true }]);
+  assert.deepEqual([summary.failed, summary.unverified], [1, 0]);
+  assert.equal(log.staleMarks, 1);
+  assert.equal(due.size, 0, 'it waits its interval');
+
+  // An admin's re-check that still lists it: nothing to re-queue (no loop).
+  const refreshed = await refreshHibpVerifiedDomains({ source, store: memoryStore(ids, { snapshot: listedSnapshot(['x.example'], 2 * 60_000) }).store });
+  assert.deepEqual(refreshed.becameDue, []);
+  assert.equal(ids[0].last_status, 'error');
+});
+
+test('domains: no email domain due means no list call; an old source checks every domain', async () => {
+  const emailsOnly = domainSource(['x.example']);
+  await runLeakedCredentialChecks({ source: emailsOnly, store: memoryStore([identity(1, 'a@example.com')]).store });
+  assert.deepEqual(emailsOnly.calls, ['check:a@example.com']);
+
+  const oldSource = scriptedSource({});
+  const { store, log } = memoryStore([domainIdentity(1, 'x.example'), domainIdentity(2, 'y.example')], {
+    snapshot: listedSnapshot([]),
+  });
+  const summary = await runLeakedCredentialChecks({ source: oldSource, store });
+  assert.deepEqual(oldSource.seen, ['x.example', 'y.example']);
+  assert.deepEqual([summary.checked, summary.unverified, log.snapshotSaves], [2, 0, 0]);
+});
+
+test('domains: a refresh that re-queues identities searches them in the same run', async () => {
+  const ids = [
+    domainIdentity(1, 'now-verified.example', { last_status: 'unverified', last_checked_at: new Date().toISOString() }),
+    domainIdentity(2, 'still-not.example'),
+  ];
+  const { store, log, due } = memoryStore(ids, { snapshot: listedSnapshot([], 2 * HOUR) });
+  due.delete(1); // checked (skipped) recently: not due by its interval
+  const source = domainSource(['now-verified.example']);
+  const summary = await runLeakedCredentialChecks({ source, store });
+  assert.deepEqual(log.requeued, [[1]]);
+  assert.deepEqual(source.calls, ['list', 'check:now-verified.example']);
+  assert.deepEqual([summary.checked, summary.unverified], [1, 1]);
+});
+
+test('HibpSource: listing and searching share one pacer; concurrent plan lookups make one call', async () => {
+  let now = 1_000_000;
+  const at: Array<[string, number]> = [];
+  let statusCalls = 0;
+  const client = {
+    subscriptionStatus: async () => {
+      statusCalls++;
+      at.push(['status', now]);
+      await new Promise((resolve) => setImmediate(resolve));
+      return { Rpm: 60, SubscriptionName: 'Core 3', DomainSearchMaxBreachedAccounts: 500, MaxBreachedDomains: 5 };
+    },
+    subscribedDomains: async () => {
+      at.push(['list', now]);
+      return { domains: [], unreadable: 0, overLimit: 0 };
+    },
+    breachedAccount: async () => {
+      at.push(['account', now]);
+      return [];
+    },
+    breachedDomain: async () => ({}),
+    allBreaches: async () => [],
+  };
+  const source = new HibpSource({
+    getApiKey: async () => '0123456789abcdef0123456789abcdef',
+    isEnabled: async () => true,
+    createClient: () => client as never,
+    sleep: async (ms) => {
+      await new Promise((resolve) => setImmediate(resolve));
+      now += ms;
+    },
+    now: () => now,
+  });
+
+  const [listed] = await Promise.all([
+    source.listVerifiedDomains({ refreshPlan: false }),
+    source.check({ kind: 'email', value: 'a@example.com' }),
+    source.check({ kind: 'email', value: 'b@example.com' }),
+  ]);
+  assert.equal(statusCalls, 1, 'one shared plan lookup');
+  assert.deepEqual(listed.plan, {
+    name: 'Core 3',
+    domain_search_max_breached_accounts: 500,
+    max_breached_domains: 5,
+    subscribed_until: null,
+  });
+  const times = at.map(([, t]) => t);
+  for (let i = 1; i < times.length; i++) {
+    assert.ok(times[i] - times[i - 1] >= spacingForRpm(60), `call ${i} came ${times[i] - times[i - 1]} ms after the previous one`);
+  }
+  assert.equal(at.length, 4);
+
+  // A manual re-check re-reads the plan even though it is cached.
+  await source.listVerifiedDomains({ refreshPlan: true });
+  assert.equal(statusCalls, 2);
+  await source.listVerifiedDomains({ refreshPlan: false });
+  assert.equal(statusCalls, 2);
+});
+
+test('refreshHibpVerifiedDomains: cooldown, shared calls, key changes, pauses and re-queues', async () => {
+  // No usable key.
+  await assert.rejects(
+    refreshHibpVerifiedDomains({ source: domainSource([]), store: memoryStore([], { keyRef: null }).store }),
+    (err: unknown) => err instanceof HibpDomainsRefreshError && err.kind === 'no_key'
+  );
+
+  // Inside the cooldown: the cached answer, no call.
+  const cooled = domainSource(['x.example']);
+  const recent = await refreshHibpVerifiedDomains({
+    source: cooled,
+    store: memoryStore([], { snapshot: listedSnapshot(['x.example'], 10_000) }).store,
+  });
+  assert.deepEqual([recent.refreshed, cooled.calls.length, recent.view.state], [false, 0, 'listed']);
+
+  // Two at once share one call, and a manual re-check re-reads the plan.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const ids = [domainIdentity(1, 'x.example', { last_status: 'unverified' }), domainIdentity(2, 'y.example', { enabled: false, last_status: 'unverified' })];
+  const shared = memoryStore(ids, { snapshot: listedSnapshot([], 5 * 60_000) });
+  let lists = 0;
+  const slow: ExposureSource = {
+    ...domainSource([]),
+    listVerifiedDomains: async (options) => {
+      lists++;
+      assert.deepEqual(options, { refreshPlan: true });
+      await gate;
+      return listing(['x.example', 'y.example']);
+    },
+  };
+  const first = refreshHibpVerifiedDomains({ source: slow, store: shared.store });
+  const second = refreshHibpVerifiedDomains({ source: slow, store: shared.store });
+  await new Promise((resolve) => setImmediate(resolve));
+  // A key saved meanwhile: a re-check for the new key doesn't join the old one.
+  const otherKey = memoryStore([], { keyRef: 'bbbbbbbbbbbbbbbb' });
+  const forNewKey = refreshHibpVerifiedDomains({ source: domainSource(['z.example']), store: otherKey.store });
+  release();
+  const [a, b, c] = await Promise.all([first, second, forNewKey]);
+  assert.equal(lists, 1, 'one HIBP round trip for both');
+  assert.deepEqual([a.refreshed, b.refreshed], [true, true]);
+  assert.deepEqual(a.becameDue, [1], 'enabled identities that turned verified are due again');
+  assert.deepEqual(shared.log.requeued, [[1, 2]], 're-queued once, the disabled one included');
+  assert.deepEqual(c.view.domains?.map((d) => d.domain), ['z.example']);
+
+  // An auth pause is lifted by a successful listing (the key works)...
+  const authStore = memoryStore([identity(9, 'a@example.com')]);
+  await runLeakedCredentialChecks({
+    source: scriptedSource({ 'a@example.com': () => new ExposureSourceError('auth', 'HIBP rejected the API key (HTTP 401)') }),
+    store: authStore.store,
+  });
+  assert.ok(getLeakedCredentialRunState().paused_until);
+  await refreshHibpVerifiedDomains({ source: domainSource([]), store: authStore.store });
+  assert.equal(getLeakedCredentialRunState().paused_until, null);
+
+  // ...a rate-limit pause is not: the re-check is refused and nothing is sent.
+  const limitedStore = memoryStore([identity(9, 'a@example.com')]);
+  await runLeakedCredentialChecks({
+    source: scriptedSource({ 'a@example.com': () => new ExposureSourceError('rate_limited', 'slow down', 30) }),
+    store: limitedStore.store,
+  });
+  const refused = domainSource([]);
+  await assert.rejects(
+    refreshHibpVerifiedDomains({ source: refused, store: limitedStore.store }),
+    (err: unknown) => err instanceof HibpDomainsRefreshError && err.kind === 'rate_limited' && !!err.retryAt
+  );
+  assert.equal(refused.calls.length, 0);
+  assert.ok(getLeakedCredentialRunState().paused_until);
+
+  // A 429 recorded in the snapshot (e.g. before a restart) is honoured too.
+  resetLeakedCredentialPause();
+  const recorded = failedSnapshot(
+    null,
+    toDomainListError(new HibpError('rate_limited', 'x', { status: 429, retryAfterSeconds: 120 }), Date.now()),
+    KEY_REF,
+    new Date()
+  );
+  await assert.rejects(
+    refreshHibpVerifiedDomains({ source: refused, store: memoryStore([], { snapshot: recorded }).store }),
+    (err: unknown) => err instanceof HibpDomainsRefreshError && err.kind === 'rate_limited'
+  );
+});
+
+test('findings carry HIBP’s per-breach attribution as plain text, and descriptions the licence', () => {
+  const source = new HibpSource({ getApiKey: async () => undefined });
+  const record = toBreachRecord({
+    Name: 'Combo',
+    Title: 'Combo list',
+    Attribution: ' @someone\u0000\nvia https://t.me/x\u202e ',
+  } as HibpBreach);
+  assert.equal(record.attribution, '@someone  via https://t.me/x', 'control and bidi characters removed');
+  assert.equal(toBreachRecord({ Name: 'A', Attribution: '   ' } as HibpBreach).attribution, null);
+  assert.equal(toBreachRecord({ Name: 'A', Attribution: 'x'.repeat(400) } as HibpBreach).attribution?.length, 300);
+  assert.equal(toBreachRecord({ Name: 'A', Attribution: 7 } as unknown as HibpBreach).attribution, null);
+
+  const finding = buildBreachFinding(source, { id: 1, kind: 'email', value: 'a@example.com' }, {
+    account: 'a@example.com',
+    breach: record,
+  });
+  assert.equal(finding.detail.breach_attribution, record.attribution);
+  assert.match(
+    finding.description ?? '',
+    /Source: Have I Been Pwned \(https:\/\/haveibeenpwned\.com\), licensed under CC BY 4\.0 \(https:\/\/creativecommons\.org\/licenses\/by\/4\.0\/\)\.$/
+  );
+  assert.ok(!(finding.description ?? '').includes('@someone'), 'not added to descriptions or notifications');
 });

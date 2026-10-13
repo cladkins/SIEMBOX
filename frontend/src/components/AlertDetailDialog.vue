@@ -37,6 +37,8 @@
           <div class="matched-data">
             <h4>Matched Data</h4>
             <pre>{{ JSON.stringify(alert.matched_data, null, 2) }}</pre>
+            <!-- A leaked-credential alert carries HIBP breach data (CC BY 4.0): credit it here. -->
+            <HibpAttribution v-if="isHibpAlert(alert)" />
           </div>
 
           <div class="alert-explain">
@@ -68,6 +70,8 @@ import { format } from 'date-fns';
 import type { Alert } from '@/stores/alerts';
 import ExplainWithAI from '@/components/ExplainWithAI.vue';
 import AlertTriagePanel from '@/components/AlertTriagePanel.vue';
+import HibpAttribution from '@/components/HibpAttribution.vue';
+import { isHibpAlert } from '@/utils/exposure';
 import { useAuthStore } from '@/stores/auth';
 
 const props = withDefaults(

@@ -7,9 +7,10 @@ import apiClient from './api';
  * both go through this client, so anything entered in one shows up in the
  * other.
  *
- * Every GET is open to any signed-in user. Every write is admin-only (403
- * otherwise) except checkPassword(), which any signed-in user may call (it is
- * rate limited per IP instead).
+ * Every GET is open to any signed-in user except getHibpVerifiedDomains()
+ * (the HIBP account's own data, admin-only like the key test). Every write is
+ * admin-only (403 otherwise) except checkPassword(), which any signed-in user
+ * may call (it is rate limited per IP instead).
  */
 
 export type DomainScope = 'own' | 'brand';
@@ -91,6 +92,31 @@ export interface WatchedDomainInput {
 /** Body of PUT /domains/:id. The domain itself can't change (delete and re-add instead). */
 export type WatchedDomainUpdate = Partial<Omit<WatchedDomainInput, 'domain'>>;
 
+/** An email domain's standing with HIBP for the saved key. */
+export type HibpDomainState = 'verified' | 'verified_limited' | 'not_verified' | 'unavailable' | 'unknown';
+/** Why verification is unknown (`state: 'unknown'` only). */
+export type HibpDomainUnknownReason =
+  | 'no_key'
+  | 'not_checked'
+  | 'auth'
+  | 'rate_limited'
+  | 'network'
+  | 'hibp_unavailable'
+  | 'bad_response'
+  | 'list_incomplete';
+
+/** GET /identities → hibp_domain (email domains only). Read from the stored list: never a call to HIBP. */
+export interface IdentityHibpDomain {
+  state: HibpDomainState;
+  reason: HibpDomainUnknownReason | null;
+  /** not_verified only: a listed parent domain (HIBP verifies each name separately). */
+  verified_parent: string | null;
+  /** When the list used was fetched. */
+  listed_at: string | null;
+  /** The server's explanation, shown as-is for 'unknown' (and any state this UI doesn't know). */
+  message: string;
+}
+
 export interface MonitoredIdentity {
   id: number;
   kind: IdentityKind;
@@ -98,9 +124,15 @@ export interface MonitoredIdentity {
   enabled: boolean;
   interval_minutes: number;
   last_checked_at: string | null;
-  /** 'ok' or 'error' once checked; null before the first check. */
+  /**
+   * 'ok', 'error' or 'unverified' (an email domain skipped because it isn't
+   * verified on the HIBP account: not a failure); null before the first check.
+   * Kept a string so an unknown value still renders.
+   */
   last_status: string | null;
   last_error: string | null;
+  /** Email domains: whether HIBP will search it. null for an email; absent from older backends. */
+  hibp_domain?: IdentityHibpDomain | null;
   created_at: string;
   updated_at: string;
 }
@@ -171,6 +203,9 @@ export interface ExposureProvider {
   docsUrl: string;
   signupUrl: string;
   attribution: string;
+  /** The data's licence ("CC BY 4.0"); absent from older backends. */
+  license?: string;
+  licenseUrl?: string;
   /** A key is saved. */
   configured: boolean;
   enabled: boolean;
@@ -189,7 +224,72 @@ export interface HibpSubscription {
   /** Requests per minute the plan allows. */
   rpm: number | null;
   domain_search_max_breached_accounts: number | null;
+  /** How many domains the plan can add (null: no maximum, or an older backend). */
+  max_breached_domains?: number | null;
   includes_stealer_logs: boolean | null;
+}
+
+/** Overall state of the HIBP key's verified-domain list. */
+export type HibpVerifiedDomainsState = 'no_key' | 'not_checked' | 'listed' | 'error';
+export type HibpDomainListErrorKind =
+  | 'auth'
+  | 'forbidden'
+  | 'rate_limited'
+  | 'network'
+  | 'hibp_unavailable'
+  | 'bad_response';
+
+/** Why the latest listing failed. */
+export interface HibpDomainListError {
+  kind: HibpDomainListErrorKind;
+  status: number | null;
+  message: string;
+  /** rate_limited: no listing before this time. */
+  retry_after: string | null;
+}
+
+export interface HibpPlanView {
+  name: string | null;
+  domain_search_max_breached_accounts: number | null;
+  /** null: no maximum, or unknown. */
+  max_breached_domains: number | null;
+  subscribed_until: string | null;
+}
+
+export interface HibpVerifiedDomain {
+  domain: string;
+  pwn_count: number | null;
+  pwn_count_excluding_spam_lists: number | null;
+  pwn_count_excluding_spam_lists_at_last_subscription_renewal: number | null;
+  next_subscription_renewal: string | null;
+  /** The plan covers the domain's size; null when unknown. */
+  within_plan: boolean | null;
+  /** The monitored email_domain identity, if any. */
+  identity_id: number | null;
+}
+
+/** GET /providers/hibp/verified-domains (admin): the account view; never calls HIBP. */
+export interface HibpVerifiedDomainsView {
+  state: HibpVerifiedDomainsState;
+  checked_at: string | null;
+  listed_at: string | null;
+  stale: boolean;
+  error: HibpDomainListError | null;
+  plan: HibpPlanView | null;
+  domains: HibpVerifiedDomain[] | null;
+  truncated: boolean;
+  skipped_entries: number;
+  /** The earliest time a re-check will call HIBP (cooldown or rate-limit pause); null = now. */
+  next_refresh_allowed_at: string | null;
+  attribution: string;
+}
+
+/** POST /providers/hibp/verified-domains/refresh. */
+export interface HibpVerifiedDomainsRefreshResult extends HibpVerifiedDomainsView {
+  /** False: HIBP was asked less than a minute ago, and that answer is shown. */
+  refreshed: boolean;
+  /** Identities that turned verified and are due again. */
+  became_due: number[];
 }
 
 export interface HibpTestResult {
@@ -213,6 +313,8 @@ export interface LeakedCredentialRunSummary {
   checked: number;
   newFindings: number;
   failed: number;
+  /** Email domains skipped as not verified on HIBP (not failures); absent from older backends. */
+  unverified?: number;
   /** Identities still due afterwards. */
   remaining: number;
   /** True when the run did no work; `reason` says why. */
@@ -266,6 +368,11 @@ export interface PasswordCheckResult {
 // on the server; the client's default 10 s timeout would give up first.
 const RUN_NOW_TIMEOUT_MS = 150_000;
 const HIBP_TEST_TIMEOUT_MS = 30_000;
+// A re-check makes two paced HIBP calls, possibly behind a running check
+// (about 42 s at 10 requests per minute).
+const HIBP_REFRESH_TIMEOUT_MS = 60_000;
+/** The axios error code of a request this client gave up waiting for. */
+export const CLIENT_TIMEOUT_CODE = 'ECONNABORTED';
 const PASSWORD_CHECK_TIMEOUT_MS = 25_000;
 
 // For calls whose every caller shows the API's own message when they fail
@@ -362,6 +469,25 @@ class ExposureServiceClient {
       dropRequestBody(error);
       throw error;
     }
+  }
+
+  /** The HIBP key's verified domains, plan and latest listing. Admin only; never calls HIBP. */
+  async getHibpVerifiedDomains(): Promise<HibpVerifiedDomainsView> {
+    const response = await apiClient.get('/exposure/providers/hibp/verified-domains', HANDLED);
+    return response.data;
+  }
+
+  /**
+   * Re-check with HIBP which domains are verified (at most once a minute
+   * install-wide; otherwise the cached answer with refreshed=false). Admin
+   * only. 400 without a usable key; 429 during a rate-limit pause.
+   */
+  async refreshHibpVerifiedDomains(): Promise<HibpVerifiedDomainsRefreshResult> {
+    const response = await apiClient.post('/exposure/providers/hibp/verified-domains/refresh', undefined, {
+      timeout: HIBP_REFRESH_TIMEOUT_MS,
+      ...HANDLED,
+    });
+    return response.data;
   }
 
   // ---- Watched domains ------------------------------------------------------

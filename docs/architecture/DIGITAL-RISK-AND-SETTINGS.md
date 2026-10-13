@@ -194,7 +194,7 @@ A status banner at the top says which state the feature is in: *no API key*, *ne
 | 3 | Exposure backend foundation: migration 034, `/api/exposure`, encrypted HIBP key, leaked-credential job, Pwned Passwords check, `notifyExposure` | — | Done (#266) |
 | 4 | Digital Risk settings page + onboarding Digital Risk step | 2, 3 | Done (#268) |
 | 5 | Domain monitoring collectors + `domain-monitor` job (migration 035) | 3 | Done (#269) |
-| 6 | HIBP domain-search polish (verified-domain status, attribution) + storing onboarding completion server-side | 3, 4 | Done (PR-6) |
+| 6 | HIBP domain-search polish (verified-domain status, attribution) + storing onboarding completion server-side | 3, 4 | Done (#304) |
 
 ---
 

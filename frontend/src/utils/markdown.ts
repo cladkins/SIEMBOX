@@ -36,6 +36,9 @@ function fixInlineNumberedList(text: string): string {
 }
 
 export function renderMarkdown(text: string): string {
-  const html = marked.parse(fixInlineNumberedList(text || ''), { breaks: true, async: false }) as string;
+  // `async: false` makes marked return a string, never a Promise (typed by its
+  // overloads, so no cast), and makes it throw rather than go async if an
+  // async extension is ever registered globally.
+  const html = marked.parse(fixInlineNumberedList(text || ''), { breaks: true, async: false });
   return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
 }

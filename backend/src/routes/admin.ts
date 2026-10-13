@@ -11,6 +11,7 @@ import { authenticate, requireAdmin } from '../middleware/auth';
 import { query } from '../config/database';
 import { ErrorLogService } from '../services/errors/errorLogService';
 import { listRecurringJobs } from '../services/jobs/jobRegistry';
+import { clientAddressReport } from '../net/diagnostics';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -447,6 +448,19 @@ router.get('/jobs', async (req: Request, res: Response) => {
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }
+});
+
+/**
+ * GET /api/admin/client-address
+ * How the API sees the caller (address, how the request arrived, the TCP peer,
+ * X-Forwarded-For) plus the proxy socket, TRUSTED_PROXIES and what they
+ * resolved to, the Docker gateways, peers whose X-Forwarded-For was ignored,
+ * and warnings. For checking a deployment's proxy setup (DEPLOYMENT.md,
+ * "Client addresses and reverse proxies").
+ */
+router.get('/client-address', (req: Request, res: Response) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(clientAddressReport(req));
 });
 
 export default router;

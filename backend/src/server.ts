@@ -1,5 +1,9 @@
 import dotenv from 'dotenv';
+import type { Server } from 'node:http';
 import app from './app';
+import { createApiServer, listenProxySocket, stopListening } from './net/apiListeners';
+import { clientAddressSummary } from './net/diagnostics';
+import { trustedProxies } from './net/trustedProxies';
 import { logger } from './utils/logger';
 import pool, { closePools } from './config/database';
 import { diagnoseDbConnectionError } from './config/dbDiagnostics';
@@ -52,6 +56,8 @@ const CLEANUP_INTERVAL_HOURS = process.env.CLEANUP_INTERVAL_HOURS
 
 let syslogServer: SyslogServer;
 let cleanupService: CleanupService;
+let apiServer: Server | undefined;
+let proxySocketServer: Server | null = null;
 
 const startServer = async () => {
   try {
@@ -153,8 +159,14 @@ const startServer = async () => {
     // ~10k files inline and tripping the client timeout. Fire-and-forget.
     void TemplateService.warmCache();
 
-    // Start Express API server
-    app.listen(PORT, () => {
+    // Look up the TRUSTED_PROXIES names first (at most 1 s), so the first
+    // request the frontend proxies over TCP already gets its client's address.
+    await trustedProxies.start();
+
+    // Start the Express API: TCP for direct callers, the proxy socket for the
+    // bundled nginx (see net/apiListeners.ts).
+    apiServer = createApiServer(app);
+    apiServer.listen(PORT, () => {
       logger.info(`SIEMBox API server running on http://${HOST}:${PORT}`);
       logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
       logger.info(`Health check: http://${HOST}:${PORT}/health`);
@@ -162,6 +174,8 @@ const startServer = async () => {
       logger.info(`Cleanup service running (interval: ${CLEANUP_INTERVAL_HOURS} hours)`);
       logger.info(`Auto-discovery job running (interval: 6 hours)`);
     });
+    proxySocketServer = (await listenProxySocket(app)).server;
+    logger.info(clientAddressSummary(PORT));
   } catch (error) {
     logger.error('Failed to start server:', error);
     const hint = diagnoseDbConnectionError(error);
@@ -179,6 +193,11 @@ const shutdown = async (signal: string) => {
   if (shuttingDown) return;
   shuttingDown = true;
   logger.info(`${signal} signal received: closing servers`);
+  // Stop taking API requests on both listeners (this also removes the proxy
+  // socket's file, so nginx moves to its fallback at once).
+  stopListening(apiServer);
+  stopListening(proxySocketServer);
+  trustedProxies.stop();
   if (syslogServer) {
     try {
       // Stops listening, then gives messages already accepted a few seconds to

@@ -1,9 +1,10 @@
 /**
  * AuditService.log must always write its row. audit_logs.ip_address is INET and
- * callers pass client-influenced addresses (req.ip follows X-Forwarded-For), so
- * a value Postgres would reject is stored as NULL rather than failing the INSERT
- * (log() only reports a failed INSERT, so the row would be lost). Hermetic: the
- * pool is mocked. Run with `npm test` (tsx --test).
+ * callers pass request-derived addresses (req.ip, which a trusted proxy's
+ * X-Forwarded-For can set to anything), so a value Postgres would reject is
+ * stored as NULL rather than failing the INSERT (log() only reports a failed
+ * INSERT, so the row would be lost). Hermetic: the pool is mocked. Run with
+ * `npm test` (tsx --test).
  */
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';

@@ -48,7 +48,7 @@ install instructions.
 - **Scan timing:** the agent reports no forward schedule — it runs on the server-set cadence in `AgentConfig` (heartbeat 60s, config 5m, inventory 1h, **vuln scan daily**) and only reports `scan_started_at`/`scan_completed_at` after a scan. Those are stored on the agent row; the Endpoints UI shows the real last scan + duration and derives **next scan ≈ last completed + `vuln_scan_interval_seconds`**.
 - **Detections:** `type='detection'` → alerts; `telemetry` events are ignored for now.
 - **Offline:** an agent reads as offline when `last_seen` is older than 5 minutes.
-- **Rate limiting:** authenticated agent traffic (`X-Agent-ID` present) is exempt from the global IP limiter so a fleet behind one NAT IP isn't throttled.
+- **Rate limiting:** the agent-key routes (heartbeat, config, YARA, inventory, events, vulnerabilities) carrying `X-Agent-ID`, with the method each route answers, skip the general per-address limiter, so a fleet behind one NAT address isn't throttled; they have their own, higher per-address limit (`EDR_AGENT_RATE_MAX`, default 30000 per 15 minutes) in front of agent auth. Enrollment counts toward the general limit, with or without `X-Agent-ID`. The address is the agent's TCP address: an `X-Forwarded-For` it sends to port 8421 is ignored.
 
 ## YARA rule packs (server-delivered)
 

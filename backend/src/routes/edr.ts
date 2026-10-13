@@ -26,28 +26,30 @@ import {
   getYaraStatus,
 } from '../services/edr/yaraService';
 import { refreshYaraForge } from '../services/edr/yaraForgeService';
+import { rateLimitedHandler, requestLimitKey } from '../net/requestLimits';
 
 const router = Router();
 
-// The global IP limiter (app.ts) exempts agent-authenticated /api/edr/* traffic
-// based only on the X-Agent-ID header's presence, so without this an invalid or
-// unauthenticated request would reach authenticateAgent's DB lookup with no
-// throttle at all. This per-IP limiter runs in FRONT of agent auth to bound that
-// (and the work it triggers). The ceiling is high on purpose: many endpoint
-// agents legitimately share one NAT egress IP — raise EDR_AGENT_RATE_MAX for
-// large fleets behind a single public IP. Enrollment stays on the global limiter
-// (it carries no X-Agent-ID, so it was never exempt).
+// The general limiter (app.ts) exempts the agent-key routes below when they
+// carry X-Agent-ID, so without this an invalid or unauthenticated request would
+// reach authenticateAgent's DB lookup with no throttle at all. This
+// per-address limiter runs in FRONT of agent auth to bound that (and the work
+// it triggers). The ceiling is high on purpose: many endpoint agents
+// legitimately share one NAT egress address — raise EDR_AGENT_RATE_MAX for
+// large fleets behind a single public IP.
 const edrAgentLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: Number(process.env.EDR_AGENT_RATE_MAX) || 30000, // requests per IP per window
-  message: 'Too many agent requests from this IP, please try again later.',
-  standardHeaders: true,
+  limit: Number(process.env.EDR_AGENT_RATE_MAX) || 30000, // requests per address per window
+  keyGenerator: requestLimitKey,
+  standardHeaders: 'draft-6',
   legacyHeaders: false,
+  handler: rateLimitedHandler('Too many agent requests from your address.'),
 });
 
 // ---- Agent-facing endpoints -------------------------------------------------
 
 // Enrollment — unauthenticated; the body carries a one-time enrollment token.
+// Counted by the general limiter (app.ts) whatever headers it carries.
 router.post('/agents/enroll', async (req: Request, res: Response) => {
   const result = await enrollAgent(req.body ?? {}, req.ip);
   res.status(200).json(result);

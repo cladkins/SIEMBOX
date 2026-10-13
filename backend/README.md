@@ -57,9 +57,15 @@ backend/
 │   ├── middleware/            # Express middleware
 │   │   ├── auth.ts            # Authentication & authorization
 │   │   ├── errorHandler.ts    # Global error handling
-│   │   ├── rateLimiter.ts     # Rate limiting configs
 │   │   ├── scanPermissions.ts # Asset scan authorization
 │   │   └── scanValidation.ts  # Input validation
+│   ├── net/                   # Client addresses: TCP + proxy-socket listeners,
+│   │   │                      # TRUSTED_PROXIES, rate-limit keys, diagnostics
+│   │   ├── apiListeners.ts
+│   │   ├── clientAddress.ts
+│   │   ├── trustedProxies.ts
+│   │   ├── requestLimits.ts
+│   │   └── diagnostics.ts
 │   ├── routes/                # API endpoint controllers
 │   │   ├── auth.ts            # Authentication endpoints
 │   │   ├── users.ts           # User management

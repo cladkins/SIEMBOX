@@ -43,10 +43,10 @@ export interface AuditLogWithUser extends AuditLogEntry {
 
 /**
  * `value` in a form audit_logs.ip_address (INET) accepts, or null when it is not
- * an IP address. Callers pass client-influenced values (req.ip follows
- * X-Forwarded-For), and Postgres rejecting one would fail the INSERT, which
- * log() only reports, so the audit row would be lost. Node accepts IPv6 zone ids
- * ('fe80::1%eth0') that INET does not, so the zone is cut off.
+ * an IP address. Callers pass request-derived values (req.ip, which a trusted
+ * proxy's X-Forwarded-For can set), and Postgres rejecting one would fail the
+ * INSERT, which log() only reports, so the audit row would be lost. Node accepts
+ * IPv6 zone ids ('fe80::1%eth0') that INET does not, so the zone is cut off.
  */
 export function toInet(value: unknown): string | null {
   if (typeof value !== 'string') return null;

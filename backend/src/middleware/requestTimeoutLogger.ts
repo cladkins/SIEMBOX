@@ -19,7 +19,8 @@ import { ErrorLogService } from '../services/errors/errorLogService';
  * (which never show a timeout banner) are ignored.
  */
 export function requestTimeoutLogger(minElapsedMs = 5000) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  // Named so routeInventory.test.ts can tell it passes every request on.
+  return function logClientTimeouts(req: Request, res: Response, next: NextFunction): void {
     // Only API traffic; static/asset aborts are noise and never show a banner.
     if (!req.path.startsWith('/api')) return next();
 

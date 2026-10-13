@@ -14,7 +14,12 @@
  *
  * The test fails when the app serves a route the inventory doesn't list, when
  * the inventory lists a route the app no longer serves, and when a route lets
- * in or keeps out the wrong roles.
+ * in or keeps out the wrong roles. Only routes (router.get/post/...) can be
+ * listed, so anything else mounted with app.use() or router.use() fails it too
+ * unless it is a known pass-through (PASS_THROUGH): a handler function, a
+ * mounted sub-app or express.static could answer requests no line covers. As a
+ * backstop, an admin's request for a path no route declares, under every mount,
+ * must reach the not-found handler.
  *
  * How it runs: the app listens on an ephemeral port, and each route's own
  * handler is swapped for a stub that answers with the route it belongs to. So
@@ -38,7 +43,7 @@ import { once } from 'node:events';
 import net from 'node:net';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { Application } from 'express';
+import express, { type Application } from 'express';
 
 type Role = 'admin' | 'operator' | 'analyst' | 'viewer';
 const ROLES: Role[] = ['admin', 'operator', 'analyst', 'viewer'];
@@ -400,6 +405,8 @@ let server: Server | undefined;
 let base = '';
 let closePools: (() => Promise<void>) | undefined;
 let served: Served[] = [];
+/** Every router mount path, '' (the app itself) included. */
+const mounts = new Set<string>(['']);
 let swappedLimiters = 0;
 const restoreLogger: Array<() => void> = [];
 /** What this file reads back from a mock.method() stub. */
@@ -427,8 +434,45 @@ function mountPathOf(layer: Layer): string {
   return m[1].replace(/\\\//g, '/');
 }
 
-/** Every route under `stack`, with nested routers' mount paths prefixed. */
-function walk(stack: Layer[], prefix = ''): Served[] {
+/**
+ * Middleware mounted with app.use() or router.use() that only passes a request
+ * on, or ends it with an error, so it needs no INVENTORY line: Express's own,
+ * the address tracker, CORS, the body parsers, the timeout logger, the login
+ * check, the role gates (middleware/auth.ts authorize(), scanPermissions.ts
+ * requireScanPermission()) and the closing 404 and error handlers. Rate limiters
+ * are recognized by their resetKey(). walk() refuses any other non-route layer.
+ */
+const PASS_THROUGH = new Set([
+  'query',
+  'expressInit',
+  'ignoredForwardedForTracker',
+  'corsMiddleware',
+  'jsonParser',
+  'urlencodedParser',
+  'logClientTimeouts',
+  'authenticate',
+  'authorizeRoles',
+  'requireRole',
+  'notFoundHandler',
+  'bodyParserErrorHandler',
+  'errorHandler',
+]);
+
+/** Where a layer is mounted, for an error message. */
+function describeMount(layer: Layer, prefix: string): string {
+  try {
+    return prefix + mountPathOf(layer) || '/';
+  } catch {
+    return `${prefix} ${layer.regexp}`;
+  }
+}
+
+/**
+ * Every route under `stack`, with nested routers' mount paths prefixed. Each
+ * router's mount path goes into `mounts`. Fails on a non-route layer that is
+ * neither a router nor a known pass-through.
+ */
+function walk(stack: Layer[], prefix = '', mounts = new Set<string>()): Served[] {
   const out: Served[] = [];
   for (const layer of stack) {
     if (layer.route) {
@@ -440,7 +484,16 @@ function walk(stack: Layer[], prefix = ''): Served[] {
         out.push({ id: `${method.toUpperCase()} ${path}`, method: method.toUpperCase(), path, route });
       }
     } else if (layer.handle.stack) {
-      out.push(...walk(layer.handle.stack, prefix + mountPathOf(layer)));
+      const mount = prefix + mountPathOf(layer);
+      mounts.add(mount);
+      out.push(...walk(layer.handle.stack, mount, mounts));
+    } else {
+      assert.ok(
+        PASS_THROUGH.has(layer.name) || typeof layer.handle.resetKey === 'function',
+        `unclassified handler "${layer.name}" mounted with use() at ${describeMount(layer, prefix)}: it could answer ` +
+          'requests INVENTORY does not list (a handler, a sub-app, express.static). Serve it as routes ' +
+          '(router.get/post/...) and list them, or, if it only passes requests on, add its name to PASS_THROUGH'
+      );
     }
   }
   return out;
@@ -506,7 +559,7 @@ before(async () => {
   const app = (await import('../app')).default as Application & { _router?: { stack: Layer[] } };
   assert.ok(app._router?.stack, 'Express internals changed (no app._router.stack): update walk() and mountPathOf()');
   const stack = app._router.stack;
-  served = walk(stack);
+  served = walk(stack, '', mounts);
 
   // Each route's handler (its method's last layer) answers with the route it belongs to.
   for (const { id, method, route } of served) {
@@ -583,6 +636,54 @@ test('the inventory lists every route the app serves, and nothing else', () => {
     [],
     'routes INVENTORY lists that the app no longer serves: remove their lines'
   );
+});
+
+test('walk() refuses whatever use() mounts that is not a router or a known pass-through', () => {
+  const handler = (_req: unknown, res: { json(body: unknown): void }) => res.json({});
+  const inRouter = express.Router();
+  inRouter.use('/dummy-mw', handler);
+  const subApp = express();
+  subApp.post('/purge', handler);
+  const withSubApp = express();
+  withSubApp.use('/api/dummy-subapp', subApp);
+  const withStatic = express();
+  withStatic.use('/api/dummy-static', express.static('/nonexistent'));
+  const stackOf = (app: Application) => (app as Application & { _router: { stack: Layer[] } })._router.stack;
+  for (const [what, stack] of [
+    ['router.use() of a handler', inRouter.stack as unknown as Layer[]],
+    ['a mounted sub-app', stackOf(withSubApp)],
+    ['express.static', stackOf(withStatic)],
+  ] as const) {
+    assert.throws(() => walk(stack), /unclassified handler/, what);
+  }
+
+  // Routers, gates, body parsers and limiters are fine.
+  const fine = express.Router();
+  fine.use(express.json());
+  const nested = express.Router();
+  nested.get('/x', handler);
+  fine.use('/nested', nested);
+  assert.deepEqual(
+    walk(fine.stack as unknown as Layer[], '/api/fine').map((s) => s.id),
+    ['GET /api/fine/nested/x']
+  );
+});
+
+test('a path no route declares, under every mount and with every method, reaches the not-found handler', async () => {
+  // Deeper than any route, so no :param route matches it; an admin passes every gate.
+  const unlisted = '/__inventory_unlisted__'.repeat(6);
+  for (const mount of mounts) {
+    for (const method of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) {
+      const url = mount + unlisted;
+      const outcome = await call(method, url, asRole('admin'));
+      assert.deepEqual(
+        { status: outcome.status, reached: outcome.reached, message: outcome.message },
+        { status: 404, reached: undefined, message: `Route ${url} not found` },
+        `${method} ${url}: something mounted under ${mount || '/'} answered a path no route declares`
+      );
+    }
+  }
+  assert.ok(mounts.size > 20, `found ${mounts.size} router mounts`);
 });
 
 test('viewers are read-only: every non-GET route open to them is a known safe one', () => {

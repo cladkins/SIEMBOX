@@ -57,7 +57,7 @@ Detection content, alert triage and the AI Analyst:
 | `POST /api/ai/chat`, `PATCH` / `DELETE /api/ai/chat/sessions/:id` | yes | yes | yes | no |
 | `POST /api/parsers/ai/generate`, `POST /api/rules/ai/generate`, `POST /api/rules/import/sigma`, `/import/sigma/preview`, `POST /api/packs/:id/install` | yes | no | no | no |
 
-The reads under these routes stay open to every role. `GET /api/ai/chat/health` answers only `{ "configured": true }` or `false`; the AI Analyst's provider, model and base URL are in the admin-only `GET /api/settings/ai-chat`. A refusal on the parser, rule, alert and AI Analyst writes above (all but the triage re-run and the last row) is recorded in `audit_logs` like a refused scan write (below). User management, settings and notification changes, Endpoints (EDR) and the admin dashboard are admin-only; shipper management has its own table under [Log Shippers](#log-shippers-endpoints). Every route and the roles it allows are listed in `backend/src/routes/routeInventory.test.ts`, which the test suite checks against the running API.
+The reads under these routes stay open to every role, but only analyst and up can force a catalog refetch with `GET /api/parsers/catalog?refresh=true` or `GET /api/rules/catalog?refresh=true`: a viewer's `refresh` flag is ignored and the cached listing comes back. `GET /api/ai/chat/health` answers only `{ "configured": true }` or `false`; the AI Analyst's provider, model and base URL are in the admin-only `GET /api/settings/ai-chat`. A refusal on the parser, rule, alert and AI Analyst writes above (all but the triage re-run and the last row) is recorded in `audit_logs` like a refused scan write (below). User management, settings and notification changes, Endpoints (EDR) and the admin dashboard are admin-only; shipper management has its own table under [Log Shippers](#log-shippers-endpoints). Every route and the roles it allows are listed in `backend/src/routes/routeInventory.test.ts`, which the test suite checks against the running API.
 
 (Earlier versions let any logged-in role, viewers included, make every call in this table except the triage re-run and the last row, deleting alerts included. A script that used a viewer's token for these writes needs an analyst's, or an admin's to delete alerts.)
 
@@ -1009,18 +1009,19 @@ validation / self-test details) unless you pass `force: true`.
 
 Browsing the catalogs and exporting are open to every role. Installing,
 updating, refreshing, importing and validating need analyst or higher (viewers
-get `403`); see [Roles](#roles).
+get `403`, and their `?refresh=true` on a catalog listing is ignored); see
+[Roles](#roles).
 
 ### Catalog
 
 | Method & Path | Purpose |
 |---|---|
-| `GET /api/parsers/catalog` | Browse the parser catalog, each entry annotated with `installed` and `update_available`. `?refresh=true` bypasses the ~5-minute cache. Returns `{ source, parsers }`. |
+| `GET /api/parsers/catalog` | Browse the parser catalog, each entry annotated with `installed` and `update_available`. `?refresh=true` bypasses the ~5-minute cache for analyst and up; a viewer gets the cached listing. Returns `{ source, parsers }`. |
 | `GET /api/parsers/catalog/source` | The configured catalog source (repo / ref) for display. |
 | `POST /api/parsers/catalog/install` | Install or update a catalog parser by `name` (validate → self-test → upsert). Body: `{ "name": "nginx", "force": false }`. `201` created / `200` updated. |
 | `POST /api/parsers/catalog/install-all` | Install or update every catalog parser. Returns `{ total, installed, updated, failed }`. |
 | `POST /api/parsers/catalog/refresh` | Force a catalog cache refresh. Returns `{ refreshed, count }`. |
-| `GET /api/rules/catalog` | Browse the detection catalog (same annotations). Returns `{ source, rules }`. |
+| `GET /api/rules/catalog` | Browse the detection catalog (same annotations, same `?refresh=true`). Returns `{ source, rules }`. |
 | `GET /api/rules/catalog/source` | The configured catalog source. |
 | `POST /api/rules/catalog/install` | Install or update a catalog detection by `name`. |
 | `POST /api/rules/catalog/install-all` | Install or update every catalog detection. |
@@ -1028,7 +1029,10 @@ get `403`); see [Roles](#roles).
 
 Catalog source defaults to `cladkins/siembox-parsers` and is overridable via the
 `SIEMBOX_CATALOG_REPO` / `SIEMBOX_CATALOG_REF` env vars (`GITHUB_TOKEN` raises the
-GitHub API rate limit).
+GitHub API rate limit). Each fetch of a catalog lists the repository through the
+GitHub API, which allows 60 unauthenticated requests an hour per IP; requests
+that arrive while a fetch is in progress wait for it rather than starting
+another.
 
 ### Export / Import (portable parsers)
 
@@ -1370,10 +1374,12 @@ Get all users (admin only).
 ]
 ```
 
-**User Roles:**
-- `admin` - Full system access
-- `analyst` - View and manage alerts, logs, rules
-- `viewer` - Read-only access
+**User Roles** (each includes the ones before it; see [Roles](#roles) and the
+[permission table](../guides/USER-MANAGEMENT.md#permission-table)):
+- `viewer` - Read-only
+- `analyst` - Alert triage, the AI Analyst, parsers and detection rules (create, edit, delete, catalog installs)
+- `operator` - Scans, Log Discovery and log shipper management
+- `admin` - Full access: users, settings, Endpoints (EDR), deleting alerts
 
 ---
 

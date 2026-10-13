@@ -22,7 +22,8 @@ SIEMBox has four roles. Each one includes everything the roles before it can do:
 Content Packs, shippers and threat intel, but cannot create, edit or delete anything. Besides
 reading, a viewer can only manage their own account (password, MFA), test a saved parser
 against a sample, export or contribute a parser or rule, use "Explain this", and check a
-password against known breaches.
+password against known breaches through the API (`POST /api/exposure/password-check`; the
+check's card in Settings → Digital Risk is admin-only).
 
 ### Analyst
 **Detection content and alert triage.** Everything a viewer can do, plus:
@@ -58,12 +59,13 @@ from the API, and the UI hides or disables the matching control.
 | Asset Inventory and Templates pages | no | yes | yes | yes |
 | Vulnerability, container, scheduled-scan and Log Discovery pages | no | no | yes | yes |
 | Own account: password, MFA | yes | yes | yes | yes |
-| Test a saved parser, export or contribute a parser or rule, "Explain this", password breach check | yes | yes | yes | yes |
+| Test a saved parser, export or contribute a parser or rule, "Explain this" | yes | yes | yes | yes |
+| Password breach check through the API (the Settings → Digital Risk card is admin-only) | yes | yes | yes | yes |
 | Triage alerts (status, notes, assignee), re-run AI triage | no | yes | yes | yes |
 | AI Analyst chat, SOC Triage page | no | yes | yes | yes |
 | Create, edit, enable/disable, import or delete parsers; test an unsaved parser | no | yes | yes | yes |
 | Create, edit, enable/disable or delete detection rules | no | yes | yes | yes |
-| Install, update or refresh the parser and detection catalogs | no | yes | yes | yes |
+| Install, update or refresh (re-fetch from GitHub) the parser and detection catalogs | no | yes | yes | yes |
 | Asset inventory edits, asset discovery scans, vulnerability template refresh | no | yes | yes | yes |
 | Vulnerability scans, template download, mark vulnerabilities remediated | no | no | yes | yes |
 | Container scans, scheduled scans | no | no | yes | yes |

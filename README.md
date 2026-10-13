@@ -21,7 +21,7 @@ A lightweight, self-hosted Security Information and Event Management (SIEM) syst
 - **Ready-made parsers in the catalog**: Nginx, Traefik, Caddy, Authelia, Keycloak, Nextcloud, Pi-hole, Vaultwarden, UniFi, Home Assistant, Plex, Jellyfin, and more — one click to install from *Parsers → Browse Catalog*.
 - **Alert management**: View, acknowledge, and manage security alerts.
 - **Log retention**: Configurable retention policies with automated cleanup.
-- **User management**: Role-based access control (Admin, Analyst, Viewer).
+- **User management**: Role-based access control (Admin, Operator, Analyst, Viewer).
 - **Dashboard**: Real-time visualization of logs, alerts, assets, and vulnerabilities.
 
 ## Quick Start

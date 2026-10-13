@@ -21,7 +21,7 @@ import {
 } from '../services/rules/detectionRecommendations';
 import { generateDetection } from '../services/ai/aiService';
 import { authorize } from '../middleware/auth';
-import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
+import { hasRequiredRole, requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { query } from '../config/database';
 
 const router = Router();
@@ -139,9 +139,12 @@ router.get('/recommendations', async (req: Request, res: Response) => {
 });
 
 // Browse the detection catalog (remote GitHub repo), annotated with install status.
+// `?refresh=true` bypasses the 5-minute cache for analyst and up only, as in
+// GET /api/parsers/catalog: a viewer's flag is ignored.
 router.get('/catalog', async (req: Request, res: Response) => {
   try {
-    const { source, entries } = await fetchDetectionCatalog(req.query.refresh === 'true');
+    const force = req.query.refresh === 'true' && hasRequiredRole(req.user?.role ?? '', UserRole.Analyst);
+    const { source, entries } = await fetchDetectionCatalog(force);
     const installed = await DetectionRuleModel.findAll();
     const bySig = new Map(installed.map((r) => [r.name, ruleSignature(r)]));
     const rules = entries.map((e) => {

@@ -112,7 +112,8 @@ export const optionalAuthenticate = async (
  * Requires specific roles to access route
  */
 export const authorize = (...allowedRoles: ('admin' | 'analyst' | 'viewer' | 'operator')[]) => {
-  return (req: Request, _res: Response, next: NextFunction) => {
+  // Named so routeInventory.test.ts can tell a router.use() gate from a handler.
+  return function authorizeRoles(req: Request, _res: Response, next: NextFunction) {
     if (!req.user) {
       return next(new ApiError(401, 'Authentication required'));
     }

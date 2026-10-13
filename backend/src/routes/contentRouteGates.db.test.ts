@@ -11,22 +11,28 @@
  * test's own rows, or sends a body the handler rejects with 400 before doing any
  * work, or (the catalog install-all and refresh calls, which check nothing in the
  * request) reaches a catalog source pointed at a repository that does not exist.
+ * The catalog browse test stands a fake GitHub in for that repository while it
+ * runs, to count the tree listings (the calls that use the GitHub API quota).
  *
  * Skips itself when Postgres isn't reachable. Every row created here (users,
  * sessions, parsers, rules, alerts, audit and error-log rows) is removed again,
  * along with what an interrupted earlier run left behind.
  * Run with `npm test` (tsx --test).
  */
-import { test, before, after } from 'node:test';
+import { test, before, after, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'crypto';
-import { once } from 'node:events';
+import https from 'node:https';
+import { EventEmitter, once } from 'node:events';
+import { PassThrough } from 'node:stream';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import app from '../app';
 import pool, { closePools } from '../config/database';
 import { UserModel } from '../models/User';
 import { SessionModel } from '../models/Session';
+import { clearCatalogCache } from '../services/parser/catalogService';
+import { clearDetectionCache } from '../services/rules/detectionCatalog';
 
 const ROLES = ['admin', 'operator', 'analyst', 'viewer'] as const;
 type Role = (typeof ROLES)[number];
@@ -112,6 +118,8 @@ interface Body {
   fields?: Record<string, unknown> | null;
   parser?: { id: number };
   configured?: unknown;
+  parsers?: Array<{ name: string }>;
+  rules?: Array<{ name: string }>;
 }
 
 async function call(role: Role | null, method: string, path: string, body?: unknown) {
@@ -266,6 +274,78 @@ test('detection rules: a viewer can no longer create, install, change or delete;
 
   assert.equal((await call('admin', 'DELETE', `/api/rules/${id}`)).status, 200);
   assert.equal(await row('detection_rules', id), undefined);
+});
+
+/**
+ * Stands in for GitHub during one test: the catalog repository (set at the top
+ * of this file) holds one parser and one detection, and any other URL is a 404.
+ * The tree listing answers after 300 ms, so requests sent together overlap it.
+ * Returns how many tree listings were made: each one uses the GitHub API quota.
+ */
+function fakeCatalogRepo(t: TestContext): { trees: () => number } {
+  const repo = process.env.SIEMBOX_CATALOG_REPO;
+  const ref = process.env.SIEMBOX_CATALOG_REF;
+  const files: Record<string, string> = {
+    [`parsers/${name}-catalog.parser.json`]: JSON.stringify(portableParser('catalog')),
+    [`detections/${name}-catalog.yaml`]: [`name: ${name}-catalog`, 'description: role gate test', 'severity: low', ruleBody('catalog').rule_yaml].join('\n'),
+  };
+  let trees = 0;
+  const get = (url: string, _options: unknown, onResponse: (res: PassThrough) => void) => {
+    let status = 404;
+    let body = '';
+    let delay = 0;
+    const raw = `https://raw.githubusercontent.com/${repo}/${ref}/`;
+    if (url === `https://api.github.com/repos/${repo}/git/trees/${ref}?recursive=1`) {
+      trees++;
+      [status, delay] = [200, 300];
+      body = JSON.stringify({ tree: Object.keys(files).map((path) => ({ path, type: 'blob' })) });
+    } else if (url.startsWith(raw) && files[url.slice(raw.length)] !== undefined) {
+      [status, body] = [200, files[url.slice(raw.length)]];
+    }
+    const res = Object.assign(new PassThrough(), { statusCode: status, headers: {} });
+    setTimeout(() => {
+      onResponse(res);
+      res.end(body);
+    }, delay);
+    return Object.assign(new EventEmitter(), { setTimeout: () => undefined, destroy: () => undefined });
+  };
+  t.mock.method(https as unknown as { get: typeof get }, 'get', get);
+  return { trees: () => trees };
+}
+
+test("catalogs: a viewer's ?refresh=true is served from the cache; analyst and up refetch; reads sent together share one fetch", async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const github = fakeCatalogRepo(t);
+  try {
+    for (const [path, list] of [
+      ['/api/parsers/catalog', 'parsers'],
+      ['/api/rules/catalog', 'rules'],
+    ] as const) {
+      clearCatalogCache();
+      clearDetectionCache();
+      const start = github.trees();
+      const burst = await Promise.all(Array.from({ length: 8 }, () => call('viewer', 'GET', path)));
+      for (const res of burst) {
+        assert.equal(res.status, 200, `viewer GET ${path}`);
+        assert.deepEqual(res.json[list]?.map((e) => e.name), [`${name}-catalog`], 'the fake catalog is listed');
+      }
+      assert.equal(github.trees() - start, 1, `${path}: eight reads of a cold cache share one fetch`);
+
+      const viewerRefresh = await call('viewer', 'GET', `${path}?refresh=true`);
+      assert.equal(viewerRefresh.status, 200);
+      assert.deepEqual(viewerRefresh.json[list]?.map((e) => e.name), [`${name}-catalog`]);
+      assert.equal(github.trees() - start, 1, `${path}: a viewer's ?refresh=true is served from the cache`);
+
+      for (const [i, role] of (['analyst', 'operator', 'admin'] as const).entries()) {
+        assert.equal((await call(role, 'GET', `${path}?refresh=true`)).status, 200, `${role} GET ${path}?refresh=true`);
+        assert.equal(github.trees() - start, 2 + i, `${path}: ${role}'s ?refresh=true refetches`);
+      }
+    }
+  } finally {
+    // The other tests' catalog calls must reach the nonexistent repository again.
+    clearCatalogCache();
+    clearDetectionCache();
+  }
 });
 
 test('alerts: a viewer can no longer triage; only an admin deletes', async (t) => {

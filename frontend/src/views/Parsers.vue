@@ -393,7 +393,7 @@
         >
           <el-icon><Download /></el-icon> Install all
         </el-button>
-        <el-button size="small" :loading="catalogLoading" @click="loadCatalog(true)">
+        <el-button v-if="canEdit" size="small" :loading="catalogLoading" @click="loadCatalog(true)">
           <el-icon><Refresh /></el-icon> Refresh
         </el-button>
       </div>

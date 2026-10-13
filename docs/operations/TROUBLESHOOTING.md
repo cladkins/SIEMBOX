@@ -1239,9 +1239,10 @@ For a `403`, use an account with the role listed under **Cause**: an admin to re
 **Symptoms:**
 - A script or integration using a viewer's token gets `403 Access denied. Required role: analyst or higher. Your role: viewer` when it creates, changes, deletes, imports or installs parsers or detection rules (including `/catalog/install`, `/catalog/install-all` and `/catalog/refresh`), calls `POST /api/parsers/validate` or `POST /api/parsers/test`, updates an alert (`PUT /api/alerts/:id`), or uses the AI Analyst (`POST /api/ai/chat`, renaming or deleting a chat thread)
 - An analyst or operator gets `403 Access denied. Required role: admin or higher` from `DELETE /api/alerts/:id`
-- A viewer no longer sees Add, Import, Delete or Install on the Parsers and Detection Rules pages (Edit is now View), the Update buttons on Alerts, or the AI triage panel's Analyze now, Re-run, Ask the analyst and Use suggested status buttons
+- A viewer no longer sees Add, Import, Delete or Install on the Parsers and Detection Rules pages (Edit is now View), Refresh in the catalog dialogs, the Update buttons on Alerts, or the AI triage panel's Analyze now, Re-run, Ask the analyst and Use suggested status buttons
+- A viewer's `GET /api/parsers/catalog?refresh=true` or `GET /api/rules/catalog?refresh=true` returns the cached catalog instead of fetching it again from GitHub
 
-**Cause:** viewers are read-only. Changing parsers and detection rules, triaging alerts and the AI Analyst need analyst or higher, and deleting an alert needs an admin. Earlier versions let any logged-in role make these calls, deleting alerts included. See [Roles](../reference/API.md#roles).
+**Cause:** viewers are read-only. Changing parsers and detection rules, re-fetching their catalogs from GitHub (each fetch uses the GitHub API's 60-requests-an-hour allowance), triaging alerts and the AI Analyst need analyst or higher, and deleting an alert needs an admin. Earlier versions let any logged-in role make these calls, deleting alerts included. See [Roles](../reference/API.md#roles).
 
 **Solution:** use an analyst, operator or admin account for those calls, and an admin to delete an alert (or close it as `closed` or `false_positive`, which needs only an analyst). A browser tab that was open during the upgrade still shows the old controls: reload it. Each refusal is written to the audit log, which shows which accounts still make these calls:
 ```sql

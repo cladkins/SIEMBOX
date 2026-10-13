@@ -50,7 +50,7 @@ import {
 import { generateParser } from '../services/ai/aiService';
 import { scanParserRedos } from '../services/parser/redos';
 import { authorize } from '../middleware/auth';
-import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
+import { hasRequiredRole, requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { ApiError } from '../middleware/errorHandler';
 import { query } from '../config/database';
 
@@ -299,10 +299,14 @@ router.post('/ai/generate', authorize('admin'), async (req: Request, res: Respon
 });
 
 // Browse the parser catalog (remote GitHub repo), annotated with install status.
-// `?refresh=true` bypasses the 5-minute cache.
+// `?refresh=true` bypasses the 5-minute cache for analyst and up, the roles that
+// may POST /catalog/refresh: a forced fetch lists the repo through the GitHub API
+// (60 unauthenticated calls an hour), so a viewer's flag is ignored and they get
+// the cached listing.
 router.get('/catalog', async (req: Request, res: Response) => {
   try {
-    const { source, entries } = await fetchCatalog(req.query.refresh === 'true');
+    const force = req.query.refresh === 'true' && hasRequiredRole(req.user?.role ?? '', UserRole.Analyst);
+    const { source, entries } = await fetchCatalog(force);
     const installed = await ParserModel.findAll();
     const bySig = new Map(installed.map((p) => [p.name, parserSignature(p)]));
     const parsers = entries.map((e) => {

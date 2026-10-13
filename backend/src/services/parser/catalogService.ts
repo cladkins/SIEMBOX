@@ -209,7 +209,15 @@ function toEntry(p: PortableParser, filePath: string, v: ValidationResult, t: Se
   };
 }
 
-/** Fetch + validate the whole catalog (cached). `get` is injectable for tests. */
+/** The fetch in progress, if any: callers that miss the cache meanwhile share it. */
+let inflight: { key: string; promise: Promise<CatalogEntry[]> } | null = null;
+
+/**
+ * Fetch + validate the whole catalog (cached). `get` is injectable for tests.
+ * Each fetch lists the repo through the GitHub API (60 unauthenticated calls an
+ * hour per IP), so a call that arrives while one is in flight, forced or not,
+ * waits for it instead of starting another: a burst of reads costs one call.
+ */
 export async function fetchCatalog(
   force = false,
   get: HttpGetter = httpsGet
@@ -219,7 +227,16 @@ export async function fetchCatalog(
   if (!force && cache && cache.source === key && Date.now() - cache.at < CACHE_TTL) {
     return { source: src, entries: cache.entries };
   }
+  if (!inflight || inflight.key !== key) {
+    const promise = loadCatalog(src, key, get).finally(() => {
+      if (inflight?.promise === promise) inflight = null;
+    });
+    inflight = { key, promise };
+  }
+  return { source: src, entries: await inflight.promise };
+}
 
+async function loadCatalog(src: CatalogSource, key: string, get: HttpGetter): Promise<CatalogEntry[]> {
   const paths = await listParserPaths(src, get);
   const parsers = new Map<string, PortableParser>();
   const entries: CatalogEntry[] = [];
@@ -252,7 +269,7 @@ export async function fetchCatalog(
 
   entries.sort((a, b) => a.name.localeCompare(b.name));
   cache = { source: key, at: Date.now(), parsers, entries };
-  return { source: src, entries };
+  return entries;
 }
 
 /** Get one catalog parser by name (uses the cache; refreshes if missing). */

@@ -98,16 +98,30 @@ export interface ReplacementCredential {
 }
 
 /**
- * What the edit route checked a manual source's change against. The update only
- * applies while it still holds, so two edits that overlap can't combine into a
- * state neither checked (e.g. one edit's stale address with the other's new
- * token), and a token save never lands on the far side of a move it overlapped.
+ * What the edit route checked a manual source's change against, and merged it
+ * with. The update only applies while it still holds, so two edits that overlap
+ * can't combine into a state neither checked (e.g. one edit's stale address with
+ * the other's new token, or one edit's port with the other's HTTPS switch
+ * undone), and a token save never lands on the far side of a move it overlapped.
  */
 export interface ManualTargetExpectation {
   /** The address that was checked: the update applies only while the source still has it. */
   ip_address: string;
+  /**
+   * The source's evidence as the route read it. Only its poll settings
+   * (target_port, tls, endpoint) are compared: the update applies only while
+   * the source still has those, so it never undoes another edit's change of a
+   * setting this one left as it was.
+   */
+  evidence: Record<string, unknown>;
   /** Set for an address change without a new token, which is only allowed while no token is saved: the update applies only while there is still none. */
   noSavedToken: boolean;
+}
+
+/** A manual source's poll settings in its evidence (see upsertManual), as compared by updateManualTarget. */
+function manualPollSettings(evidence: Record<string, unknown> | null): string {
+  const e = evidence || {};
+  return JSON.stringify({ target_port: e.target_port ?? null, tls: e.tls ?? null, endpoint: e.endpoint ?? null });
 }
 
 /** Postgres unique_violation, e.g. a manual source moved to an address another source already has. */
@@ -235,20 +249,24 @@ export const DiscoverySourceModel = {
    * Change a MANUALLY added source's poll target in place: its address, and the
    * port/scheme/endpoint in evidence, exactly where upsertManual keeps them
    * (open_ports follows the port, as there). Other evidence keys are kept.
-   * With resetCursor, the poller's cursor is cleared in the same statement, so
-   * the next poll starts fresh against the new target; the stored credential
+   * With resetCursor, the poller's cursor is cleared in the same statement, and
+   * its cursor_generation changes so that a poll still running for the old
+   * target doesn't write its cursor back (DiscoverySourcePollerModel.recordResult):
+   * the next poll starts fresh against the new target. The stored credential
    * (unless replaced), schedule and status are untouched. A new address that
    * another source already has fails with UNIQUE_VIOLATION. Null when the row
-   * doesn't exist, or no longer matches `expected` (it changed since the route
-   * read it): nothing is changed then.
+   * doesn't exist, or no longer matches `expected` (another edit changed its
+   * address or poll settings since the route read it): nothing is changed then.
    *
    * One transaction: the source row is locked FOR UPDATE first (only while it
-   * still has expected.ip_address). That waits for a token save in progress on
-   * this source (DiscoverySourcePollerModel.upsertCredential holds the row FOR
-   * SHARE) and makes any later save wait for this one. For a move without a
-   * token, whether a token is saved is then read by a statement of its own: its
-   * snapshot, taken after the lock, includes a save that committed while this
-   * transaction waited, which a condition inside the UPDATE would not see.
+   * still has expected.ip_address and expected.evidence's poll settings). That
+   * waits for a token save or another edit in progress on this source
+   * (DiscoverySourcePollerModel.upsertCredential holds the row FOR SHARE), and
+   * re-checks the row they leave; any later save or edit waits for this one.
+   * For a move without a token, whether a token is saved is then read by a
+   * statement of its own: its snapshot, taken after the lock, includes a save
+   * that committed while this transaction waited, which a condition inside the
+   * UPDATE would not see.
    */
   async updateManualTarget(
     id: number,
@@ -261,10 +279,13 @@ export const DiscoverySourceModel = {
     let connectionBroken = false;
     try {
       await client.query('BEGIN');
-      const locked = await client.query(`SELECT 1 FROM discovery_sources WHERE id = $1 AND ip_address = $2::inet FOR UPDATE`, [
-        id,
-        expected.ip_address,
-      ]);
+      const locked = await client.query(
+        `SELECT 1 FROM discovery_sources
+          WHERE id = $1 AND ip_address = $2::inet
+            AND jsonb_build_object('target_port', evidence->'target_port', 'tls', evidence->'tls', 'endpoint', evidence->'endpoint') = $3::jsonb
+          FOR UPDATE`,
+        [id, expected.ip_address, manualPollSettings(expected.evidence)]
+      );
       let unchanged = (locked.rowCount ?? 0) > 0;
       if (unchanged && expected.noSavedToken) {
         const saved = await client.query(`SELECT 1 FROM discovery_source_pollers WHERE discovery_source_id = $1`, [id]);
@@ -276,7 +297,9 @@ export const DiscoverySourceModel = {
       }
       // One UPDATE of the poller row: Postgres applies only one of two
       // data-modifying CTEs that touch the same row, so the cursor reset and the
-      // credential swap must share a statement-level UPDATE.
+      // credential swap must share a statement-level UPDATE. Either one starts a
+      // new cursor generation: a poll still running for the old target keeps
+      // its cursor to itself.
       const result = await client.query(
         `WITH updated AS (
            UPDATE discovery_sources
@@ -295,6 +318,7 @@ export const DiscoverySourceModel = {
                   encryption_iv = CASE WHEN $7::boolean THEN $9::text ELSE encryption_iv END,
                   encryption_auth_tag = CASE WHEN $7::boolean THEN $10::text ELSE encryption_auth_tag END,
                   credential_username = CASE WHEN $7::boolean THEN $11::text ELSE credential_username END,
+                  cursor_generation = nextval('discovery_poll_cursor_generation_seq'),
                   updated_at = NOW()
             WHERE discovery_source_id = $1 AND ($6::boolean OR $7::boolean) AND EXISTS (SELECT 1 FROM updated)
          )
@@ -330,26 +354,39 @@ export const DiscoverySourceModel = {
   /**
    * Set a scan-discovered source's poll overrides ({port?, tls?, endpoint?}), or
    * clear them all with null. Never touches the address or the scan-owned
-   * evidence. resetCursor as in updateManualTarget.
+   * evidence. resetCursor as in updateManualTarget. `expected` is the source's
+   * poll_overrides as the edit route read them (and merged the change with):
+   * the update applies only while the source still has them and is still a
+   * scan-discovered source, so it never undoes another edit's change that
+   * committed in between. Null when the row doesn't exist or no longer matches;
+   * nothing is changed then.
    */
   async setPollOverrides(
     id: number,
     overrides: Record<string, unknown> | null,
-    resetCursor: boolean
+    resetCursor: boolean,
+    expected: Record<string, unknown> | null
   ): Promise<DiscoverySource | null> {
     const result = await query(
       `WITH updated AS (
          UPDATE discovery_sources
             SET poll_overrides = $2::jsonb, updated_at = NOW()
           WHERE id = $1
+            AND poll_overrides IS NOT DISTINCT FROM $4::jsonb
+            AND evidence->'manual' IS DISTINCT FROM 'true'::jsonb
           RETURNING *
        ), cursor_reset AS (
          UPDATE discovery_source_pollers
-            SET poll_cursor = NULL, updated_at = NOW()
+            SET poll_cursor = NULL, cursor_generation = nextval('discovery_poll_cursor_generation_seq'), updated_at = NOW()
           WHERE discovery_source_id = $1 AND $3::boolean AND EXISTS (SELECT 1 FROM updated)
        )
        SELECT * FROM updated`,
-      [id, overrides === null ? null : JSON.stringify(overrides), resetCursor]
+      [
+        id,
+        overrides === null ? null : JSON.stringify(overrides),
+        resetCursor,
+        expected === null ? null : JSON.stringify(expected),
+      ]
     );
     return result.rows[0] || null;
   },

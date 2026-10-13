@@ -352,7 +352,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Refresh, Aim, Plus } from '@element-plus/icons-vue';
 import logDiscoveryService, {
@@ -408,6 +408,11 @@ const onboardMethodIndex = ref(0);
 const pollableFingerprintIds = ref<string[]>([]);
 const pollerStatus = ref<PollerStatus | null>(null);
 const pollerSecret = ref('');
+// The address the panel showed when the token in pollerSecret was typed. The
+// token is saved only for that address (expected_ip_address), so it never
+// reaches another one, also when the panel was reloaded in between (Poll now,
+// Edit connection…) and now shows the address another admin moved the source to.
+const pollerSecretAddress = ref<string | null>(null);
 const pollerUsername = ref('');
 const pollerInterval = ref(5);
 const pollerEnabled = ref(true);
@@ -753,6 +758,22 @@ async function loadPollerStatus() {
   pollerInterval.value = pollerStatus.value.poll_interval_minutes ?? 5;
 }
 
+/** The address the poller panel shows: its poll target's, or the source row's until that has loaded. */
+function shownPollAddress(): string | null {
+  return pollerStatus.value?.target?.ip_address ?? onboardTarget.value?.ip ?? null;
+}
+
+// A token is bound to the address shown when typing it starts, and unbound when
+// the field is emptied (cleared, saved, or another source or method opened).
+watch(
+  pollerSecret,
+  (value, previous) => {
+    if (!value) pollerSecretAddress.value = null;
+    else if (!previous) pollerSecretAddress.value = shownPollAddress();
+  },
+  { flush: 'sync' }
+);
+
 async function onOnboardMethodChange() {
   pollerSecret.value = '';
   pollerUsername.value = '';
@@ -780,8 +801,8 @@ async function savePollerCredential() {
         onboardTarget.value.id,
         pollerSecret.value.trim(),
         pollerUsername.value.trim() || undefined,
-        // The address this panel shows: the token is only saved while the source is still there.
-        { expectedIpAddress: pollerStatus.value?.target?.ip_address ?? onboardTarget.value.ip }
+        // The address shown when the token was typed: it is only saved while the source is still there.
+        { expectedIpAddress: pollerSecretAddress.value ?? shownPollAddress() ?? undefined, quiet: true }
       )),
     };
     pollerSecret.value = '';
@@ -790,6 +811,14 @@ async function savePollerCredential() {
     ElMessage.success('Token saved — polling will start on the next cycle');
     loadSources();
   } catch (err: any) {
+    if (err.response?.status === 409) {
+      // The source was moved after the token was typed: nothing was saved, and
+      // that token is for the old address. Show where the source is now.
+      pollerSecret.value = '';
+      pollerUsername.value = '';
+      await loadPollerStatus().catch(() => {});
+      loadSources();
+    }
     ElMessage.error(err.response?.data?.message || 'Failed to save token');
   } finally {
     savingCredential.value = false;

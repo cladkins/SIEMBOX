@@ -2786,19 +2786,24 @@ a Home Assistant administrator.
 Only the end of the log is read. The file is requested with
 `Range: bytes=-5242880` (its last 5 MB; a server that ignores the range sends the
 whole file and its last 5 MB are kept), so a log that has grown past 5 MB keeps
-being collected. A poll resumes after the last record it saw, matched from that
-record's timestamped first line to its end, so a traceback that repeats is not
-collected again; this holds for a record of up to 2000 lines and about 256 KB
-(a longer one is matched by its last 100 lines only). A last line without its
-newline, which Home Assistant is still writing, is left for the next poll. The
-Supervisor is asked for 500 new journal entries plus the lines the poll resumes
-after (at least three: `Range: entries=:-502:503` after short records); a first
-poll, which collects the last 200 lines, asks for 2500 (`entries=:-2499:2500`) so
-that it reaches the start of the last record. When those lines are not in the
-answer, more than 500 lines arrived, and the Supervisor is asked again for 5000
-new entries plus them (`entries=:-5002:5003`). If they are not in that answer
-either, more than 5000 lines arrived: the latest 5000 are collected and a
-warning is logged to the error log.
+being collected. When more than 5 MB was logged since the last poll, the lines
+the poll resumes after are not in those last 5 MB: then every whole line of the
+last 5 MB is collected (all of them are new) and a warning is logged to the error
+log, because the lines before them were not collected. (When the whole file was
+read and lacks those lines, it is a new file, started by a restart: its last 200
+lines are collected, as on a first poll.) A poll resumes after the last record it
+saw, matched from that record's timestamped first line to its end, so a traceback
+that repeats is not collected again; this holds for a record of up to 2000 lines
+and about 256 KB (a longer one is matched by its last 100 lines only). A last
+line without its newline, which Home Assistant is still writing, is left for the
+next poll. The Supervisor is asked for 500 new journal entries plus the lines the
+poll resumes after (at least three: `Range: entries=:-502:503` after short
+records); a first poll, which collects the last 200 lines, asks for 2500
+(`entries=:-2499:2500`) so that it reaches the start of the last record. When
+those lines are not in the answer, more than 500 lines arrived, and the
+Supervisor is asked again for 5000 new entries plus them (`entries=:-5002:5003`).
+If they are not in that answer either, more than 5000 lines arrived: the latest
+5000 are collected and a warning is logged to the error log.
 
 **Access:** every route requires a login. Reads (and the read-only `onboard/preview`) are open to any role. Starting or cancelling a scan and the source actions `confirm`, `ignore` and `onboard/confirm` require admin or operator, the roles that can open the Log Discovery page. Changing the scan scope, manual sources, a source's poll target and poll credentials requires admin. See [Roles for scan and asset writes](#roles-for-scan-and-asset-writes).
 
@@ -3114,12 +3119,18 @@ Sources.
   always sends it), the change applies only while the source still has that
   address: if another admin moved it meanwhile, the request is a `409` and
   nothing changes. Reload the source and try again.
-- A manual source's change is also only written if, at that moment, the source
-  still has the address it was checked against (and, for a move without a token,
-  still has no saved token): the source row is locked for the write, so a token
-  save and a move never overlap. If another edit or a token save got in first,
-  the request is a `409` and nothing changes. A poll that was already running
-  when the source moved does not overwrite the cleared cursor.
+- The change is also only written if, at that moment, the source still has the
+  address and the settings (port, HTTPS, endpoint) it was checked against and
+  merged with (and, for a move without a token, still has no saved token): the
+  source row is locked for the write, so a token save and a move never overlap,
+  and two edits never combine or undo each other. If another admin's edit of
+  this source got in first, or a token save got in before a move without a
+  token, the request is a `409` and nothing changes. A token save for the
+  source's current address does not conflict with a change that keeps the
+  address: both apply. A poll that was already running when the source moved or
+  its endpoint changed does not overwrite the cleared cursor; other changes made
+  while a poll runs (the interval, polling on or off, a new token for the same
+  address) don't change where the next poll resumes.
 - Otherwise the saved credential, the schedule and the poll status are not
   changed, and no credential is ever returned.
 
@@ -3161,7 +3172,7 @@ shape as `GET .../poller` (`{ "configured": false }` before a credential is save
 - `400` - an invalid field (the message names it and the rule), an empty body, or a source whose device type has no API pull method
 - `403` - caller is not an admin, or a new `ip_address` for a scan-discovered source
 - `404` - no source with that id
-- `409` - the new address already belongs to another source, the source no longer has `expected_ip_address`, or the source changed while this request was being checked (another edit or a token save); nothing was changed
+- `409` - the new address already belongs to another source, the source no longer has `expected_ip_address`, or the source changed while this request was being checked (another admin's edit of it, or a token saved before a move without a token); nothing was changed
 
 ---
 
@@ -3288,7 +3299,7 @@ Save (or replace) the token for this source's `api_pull` method and start pollin
 ```
 - `secret` (required) - the token/password. Encrypted at rest (AES-256-GCM); never returned again after this call.
 - `username` (optional) - only used by HTTP Basic auth sources (AdGuard Home today); at most 255 characters
-- `expected_ip_address` (optional) - the source's address the token was entered for, a literal IPv4/IPv6 address. The token is saved only while the source still has it, checked again as it is written with the source row locked; if the source was moved meanwhile (`PATCH /sources/:id`), the request is a `409` and nothing is saved, so a token entered for one address never reaches another. The Log Discovery UI always sends it (the address it showed). Without it, the token is saved for the source at whatever address it has now.
+- `expected_ip_address` (optional) - the source's address the token was entered for, a literal IPv4/IPv6 address. The token is saved only while the source still has it, checked again as it is written with the source row locked; if the source was moved meanwhile (`PATCH /sources/:id`), the request is a `409` and nothing is saved, so a token entered for one address never reaches another. The Log Discovery UI always sends it: the address it showed when the token was typed, even if it has shown another one since. Without it, the token is saved for the source at whatever address it has now.
 
 **Response (200):** Same shape as `GET .../poller` above.
 

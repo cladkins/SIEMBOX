@@ -56,7 +56,7 @@ const EXPECTED_IP_ADDRESS_MESSAGE =
   "expected_ip_address must be a literal IPv4 or IPv6 address: the source's address as you loaded it";
 
 export const SOURCE_CHANGED_MESSAGE =
-  'This source changed while it was being edited (its address or saved token): nothing was saved. Reload it and try again.';
+  'This source changed while it was being edited (its address, its connection settings or its saved token): nothing was saved. Reload it and try again.';
 
 export const TOKEN_ADDRESS_CHANGED_MESSAGE =
   'The source is no longer at the address this token was entered for (its address was changed in the meantime): the token was not saved. Reload the source, check its address and enter the token again.';
@@ -486,10 +486,11 @@ router.delete('/sources/:id', authorize('admin'), async (req: Request, res: Resp
 // touched, the saved credential only by a move that brings a new one (below),
 // and the response never includes the credential. An expected_ip_address (the
 // address the client loaded; the Edit dialog always sends it) that the source no
-// longer has is a 409. A manual source's update only applies if its address
-// (and, for a move without a token, its having no saved token) is still what
-// was checked here: an edit that overlaps another, or a token save, is refused
-// with 409 instead of mixing the two.
+// longer has is a 409. The update only applies if the source still has the
+// address and the settings read here, which the change was merged with (and, for
+// a move without a token, still has no saved token): an edit that overlaps
+// another one, or a move that overlaps a token save, is refused with 409
+// instead of undoing the other or mixing the two.
 router.patch('/sources/:id', authorize('admin'), async (req: Request, res: Response) => {
   const id = parseSourceId(req);
   const source = await DiscoverySourceModel.findById(id);
@@ -561,11 +562,11 @@ router.patch('/sources/:id', authorize('admin'), async (req: Request, res: Respo
         },
         resetCursor,
         replacement,
-        // What was checked above. Another edit that commits in between (a move,
-        // a token saved) makes this a no-op: the 409 below.
-        { ip_address: source.ip_address, noSavedToken: addressChanged && !replacement }
+        // What was checked and merged with above. Another edit that commits in
+        // between (a move, another setting, a token saved before a move without
+        // one) makes this a no-op: the 409 below.
+        { ip_address: source.ip_address, evidence: source.evidence, noSavedToken: addressChanged && !replacement }
       );
-      if (!updated && (await DiscoverySourceModel.findById(id))) throw new ApiError(409, SOURCE_CHANGED_MESSAGE);
     } else {
       const next: Record<string, unknown> = {};
       const port = change.port === undefined ? current.port : change.port ?? undefined;
@@ -573,8 +574,15 @@ router.patch('/sources/:id', authorize('admin'), async (req: Request, res: Respo
       if (port !== undefined) next.port = port;
       if (tls !== undefined) next.tls = tls;
       if (endpoint !== null) next.endpoint = endpoint;
-      updated = await DiscoverySourceModel.setPollOverrides(id, Object.keys(next).length > 0 ? next : null, resetCursor);
+      // Only while the source still has the overrides merged with here.
+      updated = await DiscoverySourceModel.setPollOverrides(
+        id,
+        Object.keys(next).length > 0 ? next : null,
+        resetCursor,
+        source.poll_overrides
+      );
     }
+    if (!updated && (await DiscoverySourceModel.findById(id))) throw new ApiError(409, SOURCE_CHANGED_MESSAGE);
   } catch (err) {
     if ((err as { code?: unknown } | null)?.code === UNIQUE_VIOLATION) {
       throw new ApiError(409, `Another discovery source already has the address ${change.ip_address}`);

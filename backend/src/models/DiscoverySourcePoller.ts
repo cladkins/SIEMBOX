@@ -19,6 +19,12 @@ export interface DiscoverySourcePoller {
   last_status: PollerStatus | null;
   last_error: string | null;
   last_event_count: number | null;
+  /**
+   * Changes (to a new value from a sequence; migration 037) only when the cursor
+   * is reset for a new target: a new address or endpoint. BIGINT, read as a
+   * string. See RecordResultInput.startedFrom.
+   */
+  cursor_generation: string;
   created_at: string;
   updated_at: string;
 }
@@ -57,11 +63,14 @@ export interface RecordResultInput {
   cursor?: string | null;
   /**
    * The `version` of the PollSnapshot the poll started from. With it, the cursor
-   * is only written when the poller row is unchanged since then (status is
-   * always recorded): a cursor reset or a new token for a new address that
+   * is only written while the row still has that cursor_generation (the status
+   * is always recorded): a cursor reset for a new address or endpoint that
    * commits while the poll runs is not undone by the old target's cursor.
+   * Nothing else changes the generation, so a change of the interval, polling
+   * on/off, a new token for the same address or another poll's result never
+   * makes a running poll drop its cursor (its lines would be stored again).
    */
-  startedFrom?: string | null;
+  startedFrom?: string;
 }
 
 /**
@@ -73,8 +82,8 @@ export interface RecordResultInput {
 export interface PollSnapshot {
   poller: DiscoverySourcePoller;
   source: Pick<DiscoverySource, 'id' | 'ip_address' | 'hostname' | 'open_ports' | 'evidence' | 'poll_overrides'>;
-  /** The poller row's updated_at at full precision, for RecordResultInput.startedFrom. */
-  version: string | null;
+  /** The poller row's cursor_generation, for RecordResultInput.startedFrom. */
+  version: string;
 }
 
 const MIN_INTERVAL_MINUTES = 1;
@@ -114,7 +123,7 @@ export const DiscoverySourcePollerModel = {
    */
   async findPollSnapshot(sourceId: number): Promise<PollSnapshot | null> {
     const r = await query(
-      `SELECT dsp.*, dsp.updated_at::text AS poller_version,
+      `SELECT dsp.*, dsp.cursor_generation::text AS poller_version,
               ds.ip_address, ds.hostname, ds.open_ports, ds.evidence, ds.poll_overrides
          FROM discovery_source_pollers dsp
          JOIN discovery_sources ds ON ds.id = dsp.discovery_source_id
@@ -133,10 +142,11 @@ export const DiscoverySourcePollerModel = {
 
   /**
    * Create or replace the credential for a source. Deliberately excludes
-   * enabled/poll_interval_minutes/poll_cursor/last_* from the UPDATE SET list
-   * (mirrors DiscoverySourceModel.upsert's exclusion of status/selected_log_access)
-   * so rotating a token doesn't reset the poll interval or force a re-backfill.
-   * The INSERT branch supplies first-ever defaults only.
+   * enabled/poll_interval_minutes/poll_cursor/cursor_generation/last_* from the
+   * UPDATE SET list (mirrors DiscoverySourceModel.upsert's exclusion of
+   * status/selected_log_access) so rotating a token doesn't reset the poll
+   * interval or force a re-backfill, nor make a poll running meanwhile drop its
+   * cursor. The INSERT branch supplies first-ever defaults only.
    *
    * The statement locks the source row (FOR SHARE) before it writes, and a
    * change of a manual source's address locks it FOR UPDATE
@@ -206,9 +216,9 @@ export const DiscoverySourcePollerModel = {
    * from the most recent attempt, not most recent success — same convention as
    * threat_feeds. poll_cursor is only touched when the caller actually has a
    * new one; a failed fetch keeps the last-good position. With startedFrom, the
-   * new cursor is only written if nothing else wrote the row while the poll ran
-   * (an edit that reset the cursor, a new token, another poll's result); the
-   * row's own value is kept otherwise.
+   * new cursor is only written while the row still has the cursor_generation
+   * the poll started from: after a reset for a new address or endpoint made
+   * while the poll ran, the row's own (cleared) cursor is kept.
    */
   async recordResult(sourceId: number, result: RecordResultInput): Promise<void> {
     const status: PollerStatus = result.ok ? 'ok' : 'error';
@@ -217,7 +227,7 @@ export const DiscoverySourcePollerModel = {
         `UPDATE discovery_source_pollers
             SET last_polled_at = NOW(), last_status = $2, last_error = $3, last_event_count = $4,
                 poll_cursor = CASE
-                  WHEN NOT $6::boolean OR updated_at IS NOT DISTINCT FROM $7::timestamptz THEN $5
+                  WHEN NOT $6::boolean OR cursor_generation = $7::bigint THEN $5
                   ELSE poll_cursor
                 END,
                 updated_at = NOW()

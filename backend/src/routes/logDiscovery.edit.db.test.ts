@@ -19,6 +19,11 @@
  *   and address together when its turn comes, a poll still running when its
  *   source moves does not undo the move's cursor reset, and two overlapping
  *   edits are refused (409) rather than combined.
+ * - A poll still running when the interval, polling on/off or the token for
+ *   the same address changes keeps its cursor, so nothing is stored twice.
+ * - Two overlapping edits of different settings: the later write is refused
+ *   (409) instead of undoing the other one; a token save for the same address
+ *   and a change that keeps the address both apply.
  * - A token save or an edit made from a view of the source's old address (an
  *   Edit dialog opened before another admin moved it) is refused (409), also
  *   when the save and the move run at the same moment.
@@ -713,24 +718,237 @@ test("a poll still running when its source moves does not undo the move's cursor
   }
 });
 
-/** Holds the first DiscoverySourceModel.updateManualTarget call -- after the edit route's checks, before its write -- until release(). */
-function holdFirstManualUpdate(t: TestContext) {
-  const update = DiscoverySourceModel.updateManualTarget.bind(DiscoverySourceModel);
+/**
+ * A fake Home Assistant serving `lines` as they are when each request comes
+ * (plain INFO lines; every record ends with a newline). hold() makes its next
+ * answer wait until release(). Null when the host can't listen on `ip`.
+ */
+async function startLogHost(ip: string, lines: string[]) {
+  let gate: { arrive: () => void; released: Promise<void> } | null = null;
+  const server = http.createServer(async (_req, res) => {
+    const held = gate;
+    gate = null;
+    if (held) {
+      held.arrive();
+      await held.released;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(lines.map((line) => `${line}\n`).join(''));
+  });
+  try {
+    server.listen(0, ip);
+    await once(server, 'listening');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EADDRNOTAVAIL') return null;
+    throw err;
+  }
+  return {
+    port: (server.address() as AddressInfo).port,
+    hold() {
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      let arrive!: () => void;
+      const arrived = new Promise<void>((resolve) => (arrive = resolve));
+      gate = { arrive, released };
+      return { arrived, release };
+    },
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+let lineSeq = 0;
+/** `n` distinct Home Assistant INFO lines (no detection rule fires on them). */
+function infoLines(n: number): string[] {
+  return Array.from({ length: n }, () => {
+    lineSeq++;
+    const time = new Date(Date.UTC(2026, 9, 12, 15, 0) + lineSeq * 7).toISOString().replace('T', ' ').slice(0, 23);
+    return `${time} INFO (MainThread) [homeassistant.core] Edit test line ${tag}-${lineSeq}`;
+  });
+}
+
+/** How many lines the source stored, and how many of them were stored more than once. */
+async function storedLines(id: number): Promise<{ rows: number; duplicates: number }> {
+  const r = await pool.query('SELECT count(*)::int AS n, count(DISTINCT raw_message)::int AS d FROM raw_logs WHERE discovery_source_id = $1', [id]);
+  return { rows: r.rows[0].n, duplicates: r.rows[0].n - r.rows[0].d };
+}
+
+test('a poll running while the interval, polling on/off or the token for the same address changes keeps its cursor: the next poll stores nothing twice', async (t) => {
+  if (!ready(t)) return;
+  const writes: Array<[string, (id: number, ip: string) => Promise<Array<{ status: number; text: string }>>]> = [
+    ['the interval', async (id) => [await call('admin', 'PATCH', `/api/log-discovery/sources/${id}/poller`, { poll_interval_minutes: 10 })]],
+    [
+      'polling off and on',
+      async (id) => [
+        await call('admin', 'PATCH', `/api/log-discovery/sources/${id}/poller`, { enabled: false }),
+        await call('admin', 'PATCH', `/api/log-discovery/sources/${id}/poller`, { enabled: true }),
+      ],
+    ],
+    [
+      'a new token for the same address',
+      async (id, ip) => [
+        await call('admin', 'POST', `/api/log-discovery/sources/${id}/poller/credential`, { secret: 'ROTATED', expected_ip_address: ip }),
+      ],
+    ],
+  ];
+  const ips = await freeLoopbacks(writes.length);
+  for (const [i, [label, write]] of writes.entries()) {
+    const lines = infoLines(30);
+    const host = await startLogHost(ips[i], lines);
+    if (!host) return t.skip(NO_LOOPBACK_ALIASES);
+    try {
+      const source = await manualSourceAt(ips[i], host.port);
+      await saveToken(source.id, 'TOKEN');
+      const runNow = async () => (await call('admin', 'POST', `/api/log-discovery/sources/${source.id}/poller/run-now`)).json;
+      assert.deepEqual(await runNow(), { ok: true, count: 30 }, label);
+
+      lines.push(...infoLines(50));
+      const held = host.hold();
+      const run = runNow();
+      await held.arrived; // the poll has read its cursor and waits for the answer
+      for (const r of await write(source.id, ips[i])) assert.equal(r.status, 200, `${label}: ${r.text}`);
+      held.release();
+      assert.deepEqual(await run, { ok: true, count: 50 }, label);
+
+      lines.push(...infoLines(1));
+      assert.deepEqual(await runNow(), { ok: true, count: 1 }, `${label}: the next poll resumes after the held poll's lines`);
+      assert.deepEqual(await storedLines(source.id), { rows: 81, duplicates: 0 }, label);
+    } finally {
+      await host.close();
+    }
+  }
+});
+
+test("the scheduled cycle's first poll keeps its cursor when the interval changes while it runs: its lines are not stored again", async (t) => {
+  if (!ready(t)) return;
+  const [ip] = await freeLoopbacks(1);
+  const lines = infoLines(300);
+  const host = await startLogHost(ip, lines);
+  try {
+    if (!host) return t.skip(NO_LOOPBACK_ALIASES);
+    const source = await manualSourceAt(ip, host.port);
+    await saveToken(source.id, 'TOKEN'); // never polled: due, with no cursor yet
+    onlyDue(t, source.id);
+
+    const held = host.hold();
+    const cycle = pollDueSources();
+    await held.arrived;
+    const r = await call('admin', 'PATCH', `/api/log-discovery/sources/${source.id}/poller`, { poll_interval_minutes: 1 });
+    assert.equal(r.status, 200, r.text);
+    held.release();
+    assert.deepEqual(await cycle, { polled: 1 });
+    assert.notEqual((await pollerRow(source.id)).poll_cursor, null, 'the first poll wrote its cursor');
+
+    const next = await call('admin', 'POST', `/api/log-discovery/sources/${source.id}/poller/run-now`);
+    assert.deepEqual(next.json, { ok: true, count: 0 }, 'not a first poll again');
+    assert.deepEqual(await storedLines(source.id), { rows: 200, duplicates: 0 });
+  } finally {
+    await host?.close();
+  }
+});
+
+test("a poll of the old address doesn't write its cursor into a token saved for a new one, after a revoke and a move without a token", async (t) => {
+  if (!ready(t)) return;
+  const [ipA, ipC] = await freeLoopbacks(2);
+  const linesA = infoLines(5);
+  const hostA = await startLogHost(ipA, linesA);
+  try {
+    if (!hostA) return t.skip(NO_LOOPBACK_ALIASES);
+    const source = await manualSourceAt(ipA, hostA.port);
+    const path = `/api/log-discovery/sources/${source.id}`;
+    await saveToken(source.id, 'TOKEN-FOR-A');
+
+    const held = hostA.hold();
+    const run = call('admin', 'POST', `${path}/poller/run-now`);
+    await held.arrived;
+    // While A's poll runs: the token is revoked (its row deleted), the source moves without one,
+    // and a token is saved for C (a new row).
+    assert.equal((await call('admin', 'DELETE', `${path}/poller/credential`)).status, 200);
+    let r = await call('admin', 'PATCH', path, { ip_address: ipC, expected_ip_address: ipA });
+    assert.equal(r.status, 200, r.text);
+    r = await call('admin', 'POST', `${path}/poller/credential`, { secret: 'TOKEN-FOR-C', expected_ip_address: ipC });
+    assert.equal(r.status, 200, r.text);
+    held.release();
+    await run;
+
+    assert.equal((await pollerRow(source.id)).poll_cursor, null, "C's first poll starts fresh, not after A's lines");
+  } finally {
+    await hostA?.close();
+  }
+});
+
+/** Holds the first DiscoverySourceModel[method] call -- after the edit route's checks, before its write -- until release(). */
+function holdFirstWrite(t: TestContext, method: 'updateManualTarget' | 'setPollOverrides') {
+  const write = DiscoverySourceModel[method].bind(DiscoverySourceModel) as (...args: unknown[]) => Promise<unknown>;
   let release!: () => void;
   const released = new Promise<void>((resolve) => (release = resolve));
   let arrive!: () => void;
   const arrived = new Promise<void>((resolve) => (arrive = resolve));
   let first = true;
-  t.mock.method(DiscoverySourceModel, 'updateManualTarget', async (...args: Parameters<typeof update>) => {
+  t.mock.method(DiscoverySourceModel, method, async (...args: unknown[]) => {
     if (first) {
       first = false;
       arrive();
       await released;
     }
-    return update(...args);
+    return write(...args);
   });
   return { arrived, release };
 }
+
+/** Holds the first DiscoverySourceModel.updateManualTarget call -- after the edit route's checks, before its write -- until release(). */
+function holdFirstManualUpdate(t: TestContext) {
+  return holdFirstWrite(t, 'updateManualTarget');
+}
+
+test("two overlapping edits of different settings: the later write is refused (409) instead of undoing the other's change", async (t) => {
+  if (!ready(t)) return;
+  // A manual source: the port change was checked before the HTTPS switch was saved.
+  const manual = await manualSource();
+  let held = holdFirstWrite(t, 'updateManualTarget');
+  let first = call('admin', 'PATCH', `/api/log-discovery/sources/${manual.id}`, { port: 8124, expected_ip_address: manual.ip });
+  await held.arrived;
+  let second = await call('admin', 'PATCH', `/api/log-discovery/sources/${manual.id}`, { tls: true, expected_ip_address: manual.ip });
+  assert.equal(second.status, 200, second.text);
+  held.release();
+  let r = await first;
+  assert.equal(r.status, 409, r.text);
+  assert.match(r.json.message, /changed while it was being edited.*nothing was saved/);
+  assert.deepEqual((await sourceRow(manual.id)).evidence, { manual: true, target_port: 8123, tls: true }, 'the HTTPS switch stands');
+
+  // A scan-discovered source: the port change was checked before the endpoint was saved.
+  t.mock.restoreAll();
+  const scanned = await scannedSource();
+  held = holdFirstWrite(t, 'setPollOverrides');
+  first = call('admin', 'PATCH', `/api/log-discovery/sources/${scanned.id}`, { port: 8124 });
+  await held.arrived;
+  second = await call('admin', 'PATCH', `/api/log-discovery/sources/${scanned.id}`, { endpoint: '/api/hassio/core/logs' });
+  assert.equal(second.status, 200, second.text);
+  held.release();
+  r = await first;
+  assert.equal(r.status, 409, r.text);
+  assert.deepEqual((await sourceRow(scanned.id)).poll_overrides, { endpoint: '/api/hassio/core/logs' }, 'the endpoint stands');
+
+  // Sent again, each change applies on top of the other.
+  r = await call('admin', 'PATCH', `/api/log-discovery/sources/${scanned.id}`, { port: 8124 });
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual((await sourceRow(scanned.id)).poll_overrides, { port: 8124, endpoint: '/api/hassio/core/logs' });
+});
+
+test('a settings change and a token save for the same address do not conflict: both apply', async (t) => {
+  if (!ready(t)) return;
+  const { id, ip } = await manualSource();
+  await withPoller(id);
+  const held = holdFirstManualUpdate(t);
+  const edit = call('admin', 'PATCH', `/api/log-discovery/sources/${id}`, { port: 8124, expected_ip_address: ip });
+  await held.arrived;
+  const saved = await call('admin', 'POST', `/api/log-discovery/sources/${id}/poller/credential`, { secret: 'ROTATED', expected_ip_address: ip });
+  assert.equal(saved.status, 200, saved.text);
+  held.release();
+  const r = await edit;
+  assert.equal(r.status, 200, r.text);
+  assert.equal((await sourceRow(id)).evidence.target_port, 8124);
+  assert.equal(await storedSecret(id), 'ROTATED');
+});
 
 test('an edit checked before another edit moved the source is refused (409): its stale address is never written back under the new token', async (t) => {
   if (!ready(t)) return;

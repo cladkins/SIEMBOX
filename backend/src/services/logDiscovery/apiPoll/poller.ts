@@ -100,7 +100,9 @@ export async function pollOneSource(sourceId: number, opts: PollOneOptions = {})
     });
 
     // startedFrom: an edit that reset the cursor (a new address or endpoint)
-    // while this poll ran keeps its reset; this poll's cursor belongs to the old target.
+    // while this poll ran keeps its reset; this poll's cursor belongs to the old
+    // target. Other changes made meanwhile (the interval, polling on/off, a new
+    // token for the same address) don't stop this cursor from being written.
     await DiscoverySourcePollerModel.recordResult(sourceId, { ok: true, count, cursor: result.nextCursor, startedFrom: version });
     if (result.warning) reportPollWarning(sourceId, fingerprint.name, result.warning);
     return { ok: true, count };

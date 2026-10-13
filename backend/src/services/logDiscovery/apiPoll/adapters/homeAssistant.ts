@@ -55,7 +55,9 @@ export const SUPERVISOR_LOG_ENTRIES_WIDE = 5000;
  * At most this much of a log is read per request: the END of the log file
  * (Range: bytes=-LOG_MAX_BYTES), and the newest part of any longer answer.
  * home-assistant.log only rotates when Home Assistant starts, so it can grow far
- * past this between restarts, and its newest lines are the ones wanted.
+ * past this between restarts, and its newest lines are the ones wanted. More
+ * than this logged between two polls leaves a gap: the latest LOG_MAX_BYTES are
+ * collected and the poll reports a warning, as for SUPERVISOR_LOG_ENTRIES_WIDE.
  */
 export const LOG_MAX_BYTES = 5 * 1024 * 1024;
 /** While on the Supervisor fallback, try /api/error_log again this often. */
@@ -147,18 +149,19 @@ export interface NewLines {
  * it in the new response tells us where to resume. If it's not found (HA
  * restarted and started a new log file, or more lines arrived than one answer
  * holds) or this is the first poll, fall back to a bounded tail so one poll
- * never floods the pipeline with the whole buffer: the last `missLimit` lines
- * of an answer the window is not in (200 by default). For the Supervisor's
- * journal, which survives restarts, the caller passes the number of new lines
- * the answer was asked for beyond the window: a window that is missing from it
- * means more than that many arrived, so its latest that many are all new. A
- * small duplicate/gap window across an HA restart is an accepted platform
- * limitation of this best-effort approach, not a bug to chase further --
- * neither endpoint gives us anything more precise to key off. Both endpoints
- * carry the same lines, so a window found on one is found on the other after a
- * switch.
+ * never floods the pipeline with the whole buffer: the last `onMiss` lines of
+ * an answer the window is not in (200 by default). When the caller knows that
+ * every line of such an answer is new, it passes how many: for the
+ * Supervisor's journal, which survives restarts, the number of new lines the
+ * answer was asked for beyond the window (a window that is missing from it
+ * means more than that many arrived, so its latest that many are all new); for
+ * the end of a log file longer than one read, 'all' (see toResult). A small
+ * duplicate/gap window across an HA restart is an accepted platform limitation
+ * of this best-effort approach, not a bug to chase further -- neither endpoint
+ * gives us anything more precise to key off. Both endpoints carry the same
+ * lines, so a window found on one is found on the other after a switch.
  */
-export function selectNewLines(fullText: string, cursor: string | null, missLimit = FIRST_POLL_FALLBACK_LINES): NewLines {
+export function selectNewLines(fullText: string, cursor: string | null, onMiss: number | 'all' = FIRST_POLL_FALLBACK_LINES): NewLines {
   const lines = splitLines(fullText);
   if (lines.length === 0) return { newLines: [], nextCursor: cursor, gap: false };
   const nextCursor = tailWindow(lines).join('\n');
@@ -166,7 +169,7 @@ export function selectNewLines(fullText: string, cursor: string | null, missLimi
   if (cursor) {
     const after = indexAfterWindow(lines, splitLines(cursor));
     if (after !== -1) return { newLines: lines.slice(after), nextCursor, gap: false };
-    return { newLines: lines.slice(-missLimit), nextCursor, gap: true };
+    return { newLines: onMiss === 'all' ? lines : lines.slice(-onMiss), nextCursor, gap: true };
   }
   return { newLines: lines.slice(-FIRST_POLL_FALLBACK_LINES), nextCursor, gap: false };
 }
@@ -453,7 +456,18 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
     return r;
   }
 
-  function toResult(r: LogResponse, base: string, prevTail: string | null, errorLogCheckedAt: number | null): PollFetchResult {
+  /**
+   * The events of a log answer. `tailFromSupervisor`: the previous tail came
+   * from the Supervisor's journal, and `r` is the log file (/api/error_log
+   * answering again after the fallback).
+   */
+  function toResult(
+    r: LogResponse,
+    base: string,
+    prevTail: string | null,
+    errorLogCheckedAt: number | null,
+    tailFromSupervisor = false
+  ): PollFetchResult {
     // A web page instead of a log means the port or path reaches something else
     // (a reverse proxy's or another app's UI); its lines must not be ingested.
     if (isWebPage(r)) {
@@ -466,12 +480,21 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
         }
       );
     }
-    // In the Supervisor's journal, which survives restarts, a previous tail that
-    // is missing from an answer asked for it plus newEntries more means more
-    // lines than that arrived: the latest newEntries are all new, and the lines
-    // before them were not collected. In the log file it means a restart started
-    // a new file: the bounded tail of selectNewLines.
-    const { newLines, nextCursor: tail, gap } = selectNewLines(logText(r), prevTail, r.supervisor ? r.newEntries : undefined);
+    // A previous tail that is missing from the answer means:
+    // - in the Supervisor's journal, which survives restarts, asked for the tail
+    //   plus newEntries more: more lines than that arrived. The latest
+    //   newEntries are all new; the lines before them were not collected.
+    // - in the END of a log file longer than one read (startsMidLine): more than
+    //   LOG_MAX_BYTES arrived since the last poll, whether in the same file or
+    //   in a new one after a restart (a file read from its start doesn't start
+    //   mid-line). Every line of the answer is new; the ones before it were not
+    //   collected. Not when the tail came from the Supervisor: the file can hold
+    //   lines the journal already gave.
+    // - in a whole log file: a restart started a new file (or the endpoint
+    //   changed): the bounded tail of selectNewLines.
+    const fileOverflow = !r.supervisor && startsMidLine(r) && !tailFromSupervisor;
+    const onMiss = r.supervisor ? r.newEntries : fileOverflow ? 'all' : undefined;
+    const { newLines, nextCursor: tail, gap } = selectNewLines(logText(r), prevTail, onMiss);
     const events: PolledEvent[] = newLines.map((line) => ({
       message: line,
       timestamp: parseLineTimestamp(line),
@@ -480,6 +503,8 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
     const result: PollFetchResult = { events, nextCursor: serializeCursor({ tail, errorLogCheckedAt }) };
     if (gap && r.supervisor) {
       result.warning = `Home Assistant logged more lines since the last poll than its Supervisor returns at once (the ${events.length} collected now are the latest): the lines before them were not collected.`;
+    } else if (gap && fileOverflow) {
+      result.warning = `Home Assistant logged more than ${LOG_MAX_BYTES / (1024 * 1024)} MB since the last poll, more of its log file than one poll reads (the ${events.length} lines collected now are the latest): the lines before them were not collected.`;
     }
     return result;
   }
@@ -519,7 +544,8 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
     }
 
     const file = await readLog(primary);
-    if (isOk(file)) return toResult(file, base, state.tail, null); // (back) on the log file
+    // (Back) on the log file. After the fallback, the tail came from the journal.
+    if (isOk(file)) return toResult(file, base, state.tail, null, state.errorLogCheckedAt !== null);
     if (file.res.status !== 404) throw responseError(file, base);
 
     const supervisor = rememberedFailure ?? (await readLog(SUPERVISOR_LOG_ENDPOINT));

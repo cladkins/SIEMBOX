@@ -688,6 +688,96 @@ test('the log file: a window that is gone (Home Assistant restarted, a new file)
   assert.deepEqual(ha.paths(), [FILE], 'no second request for the file');
 });
 
+/**
+ * /api/error_log as Home Assistant serves it (aiohttp's FileResponse): the
+ * byte Range asked for, as a 206 with its Content-Range (the whole file when it
+ * is shorter). The log is ASCII, so characters are bytes.
+ */
+function fakeLogFile(log: { text: string }) {
+  return fakeHomeAssistant({
+    [FILE]: (headers) => {
+      const size = log.text.length;
+      const suffix = /^bytes=-(\d+)$/.exec(headers.Range ?? '');
+      if (!suffix) return { status: 200, body: log.text };
+      const start = Math.max(0, size - Number(suffix[1]));
+      return { status: 206, body: log.text.slice(start), headers: { 'content-range': `bytes ${start}-${size - 1}/${size}` } };
+    },
+  });
+}
+
+/** `bytes` worth of brute-force lines, numbered from `from`. */
+function bruteForceBurst(from: number, bytes: number): string[] {
+  const lines: string[] = [];
+  for (let size = 0; size < bytes; size += lines[lines.length - 1].length + 1) lines.push(bruteForceLine(from + lines.length));
+  return lines;
+}
+
+test('more than 5 MB logged between two polls of the log file: every line of the last 5 MB is collected, and the gap is reported as a warning', async () => {
+  const log = { text: HA_LINES.join('\n') + '\n' };
+  const first = await adapterAt(T0, fakeLogFile(log)).fetchEvents(target(), CRED, null);
+
+  // Up to 5 MB since the last poll: the window is in the answer, every new line, no warning.
+  const fits = bruteForceBurst(0, 4.9 * 1024 * 1024);
+  log.text += fits.join('\n') + '\n';
+  const ha = fakeLogFile(log);
+  const before = await adapterAt(T0 + 60_000, ha).fetchEvents(target(), CRED, first.nextCursor);
+  assert.equal(ha.calls[0].headers.Range, FILE_RANGE);
+  assert.equal(before.events.length, fits.length);
+  assert.deepEqual(messages(before), fits);
+  assert.equal(before.warning, undefined);
+
+  // 5.5 MB since: the answer is the file's last 5 MB, after the window. All of it is new.
+  const burst = bruteForceBurst(fits.length, 5.5 * 1024 * 1024);
+  log.text += burst.join('\n') + '\n';
+  const result = await adapterAt(T0 + 120_000, fakeLogFile(log)).fetchEvents(target(), CRED, before.nextCursor);
+  const lastFiveMb = log.text.slice(log.text.length - 5 * 1024 * 1024);
+  const whole = lastFiveMb.slice(lastFiveMb.indexOf('\n') + 1).split('\n').filter(Boolean); // its first line is cut
+  assert.ok(whole.length > 20_000, `${whole.length} lines in the last 5 MB`);
+  assert.deepEqual(messages(result), whole, 'every whole line of the answer, not the last 200');
+  assert.deepEqual(messages(result), burst.slice(-whole.length), 'all of them new');
+  assert.match(
+    result.warning ?? '',
+    new RegExp(`more than 5 MB since the last poll.*the ${whole.length} lines collected now are the latest.*not collected`)
+  );
+
+  // The next poll resumes after them as usual.
+  const later = bruteForceBurst(fits.length + burst.length, 2000);
+  log.text += later.join('\n') + '\n';
+  const next = await adapterAt(T0 + 180_000, fakeLogFile(log)).fetchEvents(target(), CRED, result.nextCursor);
+  assert.deepEqual(messages(next), later);
+  assert.equal(next.warning, undefined);
+});
+
+test('a new file after a restart: read whole, the 200-line bound and no warning; read past its start (over 5 MB), all of the answer and the warning', async () => {
+  const restarted = { text: bruteForceBurst(0, 300_000).join('\n') + '\n' };
+  const small = await adapterAt(T0, fakeLogFile(restarted)).fetchEvents(target(), CRED, HA_TAIL);
+  assert.equal(small.events.length, 200, 'a 206 from byte 0 is the whole file: the bounded tail');
+  assert.equal(small.warning, undefined);
+
+  // A restart and over 5 MB logged since the last poll: everything in the new file is new.
+  const big = { text: bruteForceBurst(0, 6 * 1024 * 1024).join('\n') + '\n' };
+  const overflow = await adapterAt(T0, fakeLogFile(big)).fetchEvents(target(), CRED, HA_TAIL);
+  assert.ok(overflow.events.length > 20_000);
+  assert.match(overflow.warning ?? '', /more than 5 MB since the last poll/);
+});
+
+test('back on the log file after the Supervisor fallback: a journal tail that is not in the end of a long file keeps the 200-line bound', async () => {
+  // The file may hold lines the journal already gave, so its lines are not all taken as new.
+  const log = { text: bruteForceBurst(0, 6 * 1024 * 1024).join('\n') + '\n' };
+  const cursor = serializeCursor({ tail: HA_TAIL, errorLogCheckedAt: T0 });
+  const ha = fakeLogFile(log);
+  const result = await adapterAt(T0 + ERROR_LOG_REPROBE_MS, ha).fetchEvents(target(), CRED, cursor);
+  assert.deepEqual(ha.paths(), [FILE]);
+  assert.equal(result.events.length, 200);
+  assert.equal(result.warning, undefined);
+  assert.equal(parseCursor(result.nextCursor).errorLogCheckedAt, null, 'back on the file endpoint');
+
+  // A first poll of a file over 5 MB is the 200-line bound too.
+  const firstPoll = await adapterAt(T0, fakeLogFile(log)).fetchEvents(target(), CRED, null);
+  assert.equal(firstPoll.events.length, 200);
+  assert.equal(firstPoll.warning, undefined);
+});
+
 // ---------------------------------------------------------------------------
 // Line format
 // ---------------------------------------------------------------------------

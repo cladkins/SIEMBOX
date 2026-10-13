@@ -26,6 +26,12 @@ updates:
       # Move it in the same change as the Dockerfile base image and CI's Node.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # js-yaml stays on 4.x (the v4-legacy line): js-yaml 5 rejects
+      # under-indented continuation lines that 4 accepts, which existing rules
+      # and pasted Sigma contain. The frontend pins the same major so both
+      # parse a rule the same way; move them together, after testing that.
+      - dependency-name: "js-yaml"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: "/frontend"
@@ -48,6 +54,11 @@ updates:
       # (vuejs/language-tools#6240). Later versions still come through.
       - dependency-name: "vue-tsc"
         versions: ["3.3.12", "3.3.13"]
+      # js-yaml stays on 4.x, the backend's major (see the backend entry): the
+      # rule editor must parse YAML exactly as the backend does, and js-yaml 5
+      # rejects under-indented continuation lines that 4 accepts.
+      - dependency-name: "js-yaml"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"

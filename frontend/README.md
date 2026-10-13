@@ -13,8 +13,8 @@ The SIEMBox frontend is a modern Vue.js 3 single-page application (SPA) that pro
 - **TypeScript 5.3.3** - Type-safe JavaScript
 - **Vite 8** - Next-generation build tool
 - **Element Plus 2.5.1** - Vue 3 UI component library
-- **Pinia 2.1.7** - State management
-- **Vue Router 4.2.5** - Routing
+- **Pinia 4** - State management
+- **Vue Router 5** - Routing
 - **Chart.js 4.4.1** - Data visualization
 - **Axios 1.6.4** - HTTP client
 

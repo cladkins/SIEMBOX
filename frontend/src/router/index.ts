@@ -2,6 +2,16 @@ import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { settingsAreas, settingsRouteName } from '@/views/settings/areas';
 
+// The meta fields the guard below reads, merged into vue-router's RouteMeta:
+// the guard needs no casts, and a wrong value type in a route fails type-check.
+declare module 'vue-router' {
+  interface RouteMeta {
+    requiresAuth?: boolean;
+    requiresAdmin?: boolean;
+    allowedRoles?: string[];
+  }
+}
+
 const routes: RouteRecordRaw[] = [
   {
     path: '/login',
@@ -157,23 +167,23 @@ const router = createRouter({
   routes,
 });
 
-// Navigation guard for authentication
-router.beforeEach((to, _from, next) => {
+// Navigation guard for authentication. It returns where to go instead of
+// calling the third `next` argument, which vue-router 5 deprecates: a returned
+// path redirects, and returning nothing lets the navigation through.
+router.beforeEach((to) => {
   const authStore = useAuthStore();
   const requiresAuth = to.matched.some((record) => record.meta.requiresAuth);
   const requiresAdmin = to.matched.some((record) => record.meta.requiresAdmin);
-  const allowedRoles = to.matched.find((record) => record.meta.allowedRoles)?.meta.allowedRoles as string[] | undefined;
+  const allowedRoles = to.matched.find((record) => record.meta.allowedRoles)?.meta.allowedRoles;
 
   if (requiresAuth && !authStore.isAuthenticated) {
-    next('/login');
+    return '/login';
   } else if (to.path === '/login' && authStore.isAuthenticated) {
-    next('/');
+    return '/';
   } else if (requiresAdmin && authStore.user?.role !== 'admin') {
-    next('/'); // Redirect non-admins to dashboard
+    return '/'; // Redirect non-admins to dashboard
   } else if (allowedRoles && !allowedRoles.includes(authStore.user?.role || '')) {
-    next('/'); // Redirect users without proper role to dashboard
-  } else {
-    next();
+    return '/'; // Redirect users without proper role to dashboard
   }
 });
 

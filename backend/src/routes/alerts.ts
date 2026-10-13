@@ -187,7 +187,7 @@ router.get('/triage-risk-summary', async (_req: Request, res: Response) => {
 // Get single alert
 router.get('/:id', async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const alert = await AlertModel.findById(id);
 
     if (!alert) {
@@ -206,7 +206,7 @@ router.get('/:id', async (req: Request, res: Response) => {
 // so the frontend's poll never trips the axios error interceptor.
 router.get('/:id/triage', async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const alert = await AlertModel.findById(id);
     if (!alert) throw new ApiError(404, 'Alert not found');
 
@@ -234,7 +234,7 @@ router.get('/:id/triage', async (req: Request, res: Response) => {
 router.post('/:id/triage/rerun', authorize('admin', 'analyst', 'operator'), async (req: Request, res: Response) => {
   try {
     if (!req.user) throw new ApiError(401, 'Authentication required');
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const alert = await AlertModel.findById(id);
     if (!alert) throw new ApiError(404, 'Alert not found');
 
@@ -253,7 +253,7 @@ router.post('/:id/triage/rerun', authorize('admin', 'analyst', 'operator'), asyn
 // Update alert (change status, assign user)
 router.put('/:id', requireAlertTriage, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const { status, assigned_to, description } = req.body;
 
     const alert = await AlertModel.update(id, {
@@ -276,7 +276,7 @@ router.put('/:id', requireAlertTriage, async (req: Request, res: Response) => {
 // Delete alert
 router.delete('/:id', requireAlertDelete, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const deleted = await AlertModel.delete(id);
 
     if (!deleted) {

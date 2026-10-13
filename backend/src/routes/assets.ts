@@ -168,7 +168,7 @@ router.get('/scans', async (req: Request, res: Response) => {
 router.get('/scans/:scanId', async (req: Request, res: Response): Promise<void> => {
   try {
     console.log('[ASSETS] GET /scans/:scanId route hit with param:', req.params.scanId, 'query:', req.query);
-    const scanId = parseInt(req.params.scanId);
+    const scanId = parseInt(req.params.scanId as string);
 
     if (isNaN(scanId)) {
       console.log('[ASSETS] Invalid scanId, returning 400');
@@ -201,7 +201,7 @@ router.get('/scans/:scanId', async (req: Request, res: Response): Promise<void> 
  */
 router.get('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
-    const assetId = parseInt(req.params.id);
+    const assetId = parseInt(req.params.id as string);
 
     if (isNaN(assetId)) {
       res.status(400).json({ error: 'Invalid asset ID' });
@@ -237,7 +237,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
  */
 router.get('/:id/related', async (req: Request, res: Response): Promise<void> => {
   try {
-    const assetId = parseInt(req.params.id);
+    const assetId = parseInt(req.params.id as string);
 
     if (isNaN(assetId)) {
       res.status(400).json({ error: 'Invalid asset ID' });
@@ -295,7 +295,7 @@ router.post('/', authenticate, requireAssetWrite, async (req: Request, res: Resp
  */
 router.put('/:id', authenticate, requireAssetWrite, async (req: Request, res: Response): Promise<void> => {
   try {
-    const assetId = parseInt(req.params.id);
+    const assetId = parseInt(req.params.id as string);
 
     if (isNaN(assetId)) {
       res.status(400).json({ error: 'Invalid asset ID' });
@@ -328,7 +328,7 @@ router.put('/:id', authenticate, requireAssetWrite, async (req: Request, res: Re
  */
 router.delete('/:id', authenticate, requireAssetWrite, async (req: Request, res: Response): Promise<void> => {
   try {
-    const assetId = parseInt(req.params.id);
+    const assetId = parseInt(req.params.id as string);
 
     if (isNaN(assetId)) {
       res.status(400).json({ error: 'Invalid asset ID' });
@@ -361,7 +361,7 @@ router.delete('/:id', authenticate, requireAssetWrite, async (req: Request, res:
  */
 router.get('/:id/services', async (req: Request, res: Response): Promise<void> => {
   try {
-    const assetId = parseInt(req.params.id);
+    const assetId = parseInt(req.params.id as string);
 
     if (isNaN(assetId)) {
       res.status(400).json({ error: 'Invalid asset ID' });

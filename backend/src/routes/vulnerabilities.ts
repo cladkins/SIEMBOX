@@ -164,7 +164,7 @@ router.get('/templates/search', async (req: Request, res: Response) => {
  */
 router.get('/templates/category/:categoryId', async (req: Request, res: Response) => {
   try {
-    const categoryId = req.params.categoryId;
+    const categoryId = req.params.categoryId as string;
     const limit = parseInt(req.query.limit as string) || 500; // Increase default limit
 
     console.log(`[VULN] GET /templates/category/${categoryId} with limit ${limit}`);
@@ -200,7 +200,7 @@ router.get('/templates/category/:categoryId', async (req: Request, res: Response
  */
 router.get('/templates/tag/:tag', async (req: Request, res: Response) => {
   try {
-    const tag = req.params.tag;
+    const tag = req.params.tag as string;
     const limit = parseInt(req.query.limit as string) || 100;
 
     const templates = await TemplateService.getTemplatesByTag(tag, limit);
@@ -225,7 +225,7 @@ router.get('/templates/tag/:tag', async (req: Request, res: Response) => {
  */
 router.get('/templates/severity/:severity', async (req: Request, res: Response) => {
   try {
-    const severity = req.params.severity;
+    const severity = req.params.severity as string;
     const limit = parseInt(req.query.limit as string) || 500;
 
     const templates = await TemplateService.getTemplatesBySeverity(severity, limit);
@@ -361,7 +361,7 @@ router.get('/scans', async (req: Request, res: Response) => {
  */
 router.get('/scans/:scanId', async (req: Request, res: Response): Promise<void> => {
   try {
-    const scanId = parseInt(req.params.scanId);
+    const scanId = parseInt(req.params.scanId as string);
 
     if (isNaN(scanId)) {
       res.status(400).json({ error: 'Invalid scan ID' });
@@ -394,7 +394,7 @@ router.get('/scans/:scanId', async (req: Request, res: Response): Promise<void> 
  */
 router.get('/scans/:scanId/status', async (req: Request, res: Response): Promise<void> => {
   try {
-    const scanId = parseInt(req.params.scanId);
+    const scanId = parseInt(req.params.scanId as string);
 
     if (isNaN(scanId)) {
       res.status(400).json({ error: 'Invalid scan ID' });
@@ -554,7 +554,7 @@ router.post('/scans', authenticate, requireVulnScanPermission, async (req: Reque
  */
 router.post('/scans/:scanId/cancel', authenticate, requireVulnScanPermission, async (req: Request, res: Response): Promise<void> => {
   try {
-    const scanId = parseInt(req.params.scanId);
+    const scanId = parseInt(req.params.scanId as string);
 
     if (isNaN(scanId)) {
       res.status(400).json({ error: 'Invalid scan ID' });
@@ -776,7 +776,7 @@ router.get('/', async (req: Request, res: Response) => {
  */
 router.get('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
-    const vulnId = parseInt(req.params.id);
+    const vulnId = parseInt(req.params.id as string);
 
     if (isNaN(vulnId)) {
       res.status(400).json({ error: 'Invalid vulnerability ID' });
@@ -803,7 +803,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
  */
 router.get('/asset/:assetId', async (req: Request, res: Response): Promise<void> => {
   try {
-    const assetId = parseInt(req.params.assetId);
+    const assetId = parseInt(req.params.assetId as string);
 
     if (isNaN(assetId)) {
       res.status(400).json({ error: 'Invalid asset ID' });
@@ -840,8 +840,8 @@ router.get('/asset/:assetId', async (req: Request, res: Response): Promise<void>
  */
 router.patch('/:assetId/:vulnId', authenticate, requireRemediationPermission, async (req: Request, res: Response): Promise<void> => {
   try {
-    const assetId = parseInt(req.params.assetId);
-    const vulnId = parseInt(req.params.vulnId);
+    const assetId = parseInt(req.params.assetId as string);
+    const vulnId = parseInt(req.params.vulnId as string);
 
     if (isNaN(assetId) || isNaN(vulnId)) {
       res.status(400).json({ error: 'Invalid asset ID or vulnerability ID' });

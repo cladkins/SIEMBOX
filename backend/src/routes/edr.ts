@@ -60,7 +60,7 @@ router.post('/agents/enroll', async (req: Request, res: Response) => {
 // bundle makes it rise and the agent re-pulls config. See buildAgentConfig.
 router.post('/agents/:id/heartbeat', edrAgentLimiter, authenticateAgent, requireAgentMatchesParam, async (req: Request, res: Response) => {
   const { status, agent_version } = req.body ?? {};
-  const base = await EdrAgentModel.heartbeat(req.params.id, status, agent_version);
+  const base = await EdrAgentModel.heartbeat(req.params.id as string, status, agent_version);
   const yaraVersion = await getCurrentYaraVersion();
   res.status(200).json({ config_version: (base ?? req.edrAgent!.config_version) + yaraVersion });
 });
@@ -136,7 +136,7 @@ router.get('/tokens', authenticate, authorize('admin'), async (_req: Request, re
 // Revoke (delete) an enrollment token by its hash. Revoking an active token
 // stops it being used to enroll; on a used/expired token it just clears the row.
 router.delete('/tokens/:hash', authenticate, authorize('admin'), async (req: Request, res: Response) => {
-  const ok = await EdrEnrollmentTokenModel.delete(req.params.hash);
+  const ok = await EdrEnrollmentTokenModel.delete(req.params.hash as string);
   if (!ok) throw new ApiError(404, 'Token not found');
   res.json({ deleted: true });
 });
@@ -156,7 +156,7 @@ router.post('/yara/refresh', authenticate, authorize('admin'), async (_req: Requ
 
 // Endpoint detail.
 router.get('/agents/:id', authenticate, authorize('admin'), async (req: Request, res: Response) => {
-  const agent = await EdrAgentModel.findById(req.params.id);
+  const agent = await EdrAgentModel.findById(req.params.id as string);
   if (!agent) throw new ApiError(404, 'Agent not found');
   const safe: any = { ...agent };
   delete safe.api_key_hash; // never expose the agent's auth secret
@@ -165,7 +165,7 @@ router.get('/agents/:id', authenticate, authorize('admin'), async (req: Request,
 
 // Endpoint's vulnerabilities (reuses the existing asset-vuln store).
 router.get('/agents/:id/vulnerabilities', authenticate, authorize('admin'), async (req: Request, res: Response) => {
-  const agent = await EdrAgentModel.findById(req.params.id);
+  const agent = await EdrAgentModel.findById(req.params.id as string);
   if (!agent) throw new ApiError(404, 'Agent not found');
   const vulns = agent.asset_id ? await VulnerabilityRepository.getAssetVulnerabilities(agent.asset_id) : [];
   res.json({ vulnerabilities: vulns });
@@ -173,7 +173,7 @@ router.get('/agents/:id/vulnerabilities', authenticate, authorize('admin'), asyn
 
 // Endpoint's detections (alerts) — reuses the existing alerts table.
 router.get('/agents/:id/detections', authenticate, authorize('admin'), async (req: Request, res: Response) => {
-  const agent = await EdrAgentModel.findById(req.params.id);
+  const agent = await EdrAgentModel.findById(req.params.id as string);
   if (!agent) throw new ApiError(404, 'Agent not found');
   if (!agent.asset_id) { res.json({ alerts: [] }); return; }
   const limit = Math.min(parseInt((req.query.limit as string) || '100', 10) || 100, 500);
@@ -190,7 +190,7 @@ router.get('/agents/:id/detections', authenticate, authorize('admin'), async (re
 
 // Deregister an endpoint (does not delete its asset/alerts/vulns).
 router.delete('/agents/:id', authenticate, authorize('admin'), async (req: Request, res: Response) => {
-  const ok = await EdrAgentModel.delete(req.params.id);
+  const ok = await EdrAgentModel.delete(req.params.id as string);
   if (!ok) throw new ApiError(404, 'Agent not found');
   res.json({ deleted: true });
 });

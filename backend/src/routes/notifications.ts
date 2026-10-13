@@ -55,7 +55,7 @@ router.post('/channels', requireAdmin, async (req: Request, res: Response) => {
 });
 
 router.put('/channels/:id', requireAdmin, async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (isNaN(id)) throw new ApiError(400, 'Invalid id');
   const existing = await NotificationChannelModel.findById(id);
   if (!existing) throw new ApiError(404, 'Channel not found');
@@ -67,7 +67,7 @@ router.put('/channels/:id', requireAdmin, async (req: Request, res: Response) =>
 });
 
 router.delete('/channels/:id', requireAdmin, async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (isNaN(id)) throw new ApiError(400, 'Invalid id');
   const ok = await NotificationChannelModel.delete(id);
   if (!ok) throw new ApiError(404, 'Channel not found');
@@ -75,7 +75,7 @@ router.delete('/channels/:id', requireAdmin, async (req: Request, res: Response)
 });
 
 router.post('/channels/:id/test', requireAdmin, async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (isNaN(id)) throw new ApiError(400, 'Invalid id');
   const channel = await NotificationChannelModel.findById(id);
   if (!channel) throw new ApiError(404, 'Channel not found');

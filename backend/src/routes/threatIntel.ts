@@ -12,7 +12,7 @@ const router = Router();
  * queries are index-/key-filtered, so they stay fast.
  */
 router.get('/ip/:ip', async (req: Request, res: Response) => {
-  const ip = (req.params.ip || '').trim();
+  const ip = ((req.params.ip as string) || '').trim();
   if (!isIP(ip)) {
     throw new ApiError(400, 'Invalid IP address');
   }
@@ -71,7 +71,7 @@ router.get('/ip/:ip', async (req: Request, res: Response) => {
  * per-IP alert counts. Backs the map drill-down (click a country -> its IPs).
  */
 router.get('/country/:code', async (req: Request, res: Response) => {
-  const code = (req.params.code || '').trim().toUpperCase();
+  const code = ((req.params.code as string) || '').trim().toUpperCase();
   if (!/^[A-Z]{2}$/.test(code)) {
     throw new ApiError(400, 'Invalid country code');
   }

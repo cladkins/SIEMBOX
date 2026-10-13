@@ -72,8 +72,9 @@ services:
       # address.
       EDR_AGENT_RATE_MAX: ${EDR_AGENT_RATE_MAX:-}
       SHIPPER_LOG_PUSH_MAX: ${SHIPPER_LOG_PUSH_MAX:-}
-      # Where the backend listens for the frontend's nginx (empty =
-      # /run/siembox/api.sock, on the api-socket volume below; `off` disables it).
+      # The proxy socket for the frontend's nginx. Leave it empty
+      # (/run/siembox/api.sock on the api-socket volume below, the only path
+      # the bundled nginx connects to); `off` runs without the socket.
       SIEMBOX_PROXY_SOCKET: ${SIEMBOX_PROXY_SOCKET:-}
       # EDR YARA rule packs (optional). Built-in starter bundle ships by default;
       # set EDR_YARA_FORGE_ENABLED=true to auto-import YARA-Forge Extended daily.

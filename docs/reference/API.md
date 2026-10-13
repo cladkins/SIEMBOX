@@ -114,7 +114,7 @@ memory and reset when the backend restarts.
 | Limit | Default (per 15 minutes) | Applies to | Headers |
 |-------|--------------------------|------------|---------|
 | General | 1000 requests (`API_RATE_LIMIT_MAX`) | Every `/api` request, except the two exemptions below | `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` |
-| Sign-in (interim) | 10 failed sign-ins per account, 100 per address across all accounts | `POST /api/auth/login`, per username (as typed, ignoring case and surrounding spaces) and address. Past 100 failures from an address, only accounts that already failed from it are refused, so people sharing an address don't lock each other out. Successful sign-ins, the "MFA code required" step and `5xx` answers are not counted | `RateLimit-*` (the per-account limit) |
+| Sign-in (interim) | 10 failed sign-ins per account, 100 per address across all accounts | `POST /api/auth/login`, per username (as typed, ignoring case and surrounding spaces) and address. Past 100 failures from an address, only accounts that already failed from it in their own current 15-minute window are refused, so people sharing an address don't lock each other out. Successful sign-ins, the "MFA code required" step and `5xx` answers are not counted | `RateLimit-*` (the per-account limit) |
 | EDR agents | 30000 requests (`EDR_AGENT_RATE_MAX`) | Agent-key routes, which skip the general limit when they carry `X-Agent-ID` and use the route's own method: `POST` heartbeat, `GET` (or `HEAD`) config and YARA, `POST` inventory, events and vulnerabilities. Any other method, and enrollment, is under the general limit. | `RateLimit-*` |
 | HTTP log push | 6000 requests (`SHIPPER_LOG_PUSH_MAX`) | `POST /api/shippers/logs`, which skips the general limit when it carries `X-Shipper-ID` (other methods on that path don't) | `RateLimit-*` |
 | Password check | 30 requests | `POST /api/exposure/password-check` | `RateLimit-*` |
@@ -177,7 +177,7 @@ Authenticate user and receive JWT token.
 - `401` - Invalid credentials
 - `403` - Account is disabled
 - `413` - Request body larger than 16 kB
-- `429` - Too many failed sign-ins: 10 per 15 minutes for this username from this address ("Too many failed sign-in attempts for this account from your address"), or, past 100 failures from this address across all usernames, this username already failed from it ("Too many failed sign-in attempts from your address"). An IPv6 client's /64 counts as one address. Successful sign-ins and `5xx` answers don't count. JSON body with `code: "RATE_LIMITED"`, `message` and `retryAfter`, plus a `Retry-After` header; see [Rate Limiting](#rate-limiting)
+- `429` - Too many failed sign-ins: 10 per 15 minutes for this username from this address ("Too many failed sign-in attempts for this account from your address"), or, past 100 failures from this address across all usernames, this username already failed from it in its own 15-minute window ("Too many failed sign-in attempts from your address"; `retryAfter` is when that window or the address's ends, whichever is first, unless the username also reached its own 10). An IPv6 client's /64 counts as one address. Successful sign-ins and `5xx` answers don't count. JSON body with `code: "RATE_LIMITED"`, `message` and `retryAfter`, plus a `Retry-After` header; see [Rate Limiting](#rate-limiting)
 
 ---
 
@@ -5008,7 +5008,9 @@ reverse proxies"). Sent with `Cache-Control: no-store`.
   limits and the sign-in limit count against (an IPv6 sign-in key is the /64).
 - `proxySocket.state`: `listening`, `off` (`SIEMBOX_PROXY_SOCKET=off`),
   `no-volume` (its directory is missing, so the `api-socket` volume is not
-  mounted) or `error` (with `error`).
+  mounted) or `error` (with `error`). A socket listening anywhere but
+  `/run/siembox/api.sock` is a warning: the bundled frontend's nginx never
+  connects to another path.
 - `trustedProxies.entries[].kind`: `address`, `range` or `name`. A name's
   `status` is `resolved`, `not-found`, `error` (the lookup failed; the last
   answer is kept), `pending` or `not-looked-up` (outside a container or with
@@ -5023,15 +5025,19 @@ reverse proxies"). Sent with `Cache-Control: no-store`.
   is not a trusted proxy) or `forwarded` (a proxy in front of the web UI's
   nginx, or of a trusted proxy, that passed on an `X-Forwarded-For` of its own
   but is not trusted itself, so it is taken for the client). `local` marks
-  private, loopback, ULA and link-local addresses, which are usually a proxy
-  that should be trusted. `sustained` is set once it has gone on for more than
-  45 s: with host networking, the frontend's address shows up for up to 30 s
-  after a backend restart while nginx uses its TCP fallback, which is expected.
-  Requests to this endpoint are never counted.
+  private, carrier-grade NAT, loopback, ULA and link-local addresses, which are
+  usually a proxy that should be trusted. `requests` and `firstSeen` describe
+  the current episode, and `sustained` is set once an episode has gone on for
+  more than 45 s. With host networking, the frontend's address shows up for up
+  to 30 s after a backend restart or a timed-out request while nginx uses its
+  TCP fallback, which is expected: a `direct` peer's episode ends when it has
+  been quiet for more than 30 s while the proxy socket served requests, so
+  those windows don't add up. Requests to this endpoint are never counted.
 - `warnings`: what to fix, in words. Ignored headers are only listed for
   `local`, `sustained` peers, and for this request itself (a direct call that
   carried `X-Forwarded-For`, or a request that came through a proxy that isn't
-  trusted).
+  trusted). A proxy on a public address is never listed for its own sake (any
+  client could get its address counted), so check `you.address` through it.
 
 ---
 

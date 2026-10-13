@@ -4,7 +4,7 @@
  * for their own request and what is misconfigured.
  */
 import type { Request } from 'express';
-import { proxySocketState, type ProxySocketState } from './apiListeners';
+import { DEFAULT_PROXY_SOCKET, proxySocketState, type ProxySocketState } from './apiListeners';
 import { clientAddress, normalizeIp, PROXY_SOCKET_PEER, requestVia, signInNetworkKey } from './clientAddress';
 import { requestLimitKey } from './requestLimits';
 import { trustedProxies, type TrustedProxies, type TrustedProxiesReport } from './trustedProxies';
@@ -88,6 +88,13 @@ export function clientAddressReport(
         ' Update your compose file (DEPLOYMENT.md, "Updating").'
     );
   }
+  if (socket.state === 'listening' && socket.path !== DEFAULT_PROXY_SOCKET) {
+    warnings.push(
+      `The proxy socket listens on ${socket.path} (SIEMBOX_PROXY_SOCKET), but the bundled frontend's nginx only ` +
+        `connects to ${DEFAULT_PROXY_SOCKET}, so the web UI reaches the API over TCP. Unless a proxy of your own ` +
+        'uses that path, unset SIEMBOX_PROXY_SOCKET.'
+    );
+  }
   for (const { entry, reason } of report.rejected) {
     warnings.push(`TRUSTED_PROXIES entry "${entry}" is ignored: ${reason}.`);
   }
@@ -110,13 +117,16 @@ export function clientAddressReport(
     }
   }
   warnings.push(...report.warnings);
-  // Local peers only, and only once it has gone on for more than 45 s: nginx's
-  // TCP fallback after a backend restart is expected to be ignored briefly.
+  // Local peers only: any client gets its own address counted as a forwarding
+  // proxy by sending an X-Forwarded-For of its own, so advice about public
+  // addresses could be planted from the internet. And only once an episode has
+  // gone on for more than 45 s: nginx's TCP fallback after a backend restart is
+  // expected to be ignored briefly.
   for (const ignored of report.ignoredForwardedFor.peers) {
     if (!ignored.local || !ignored.sustained) continue;
     warnings.push(
       `X-Forwarded-For from ${ignored.address} has been ignored on ${ignored.requests} requests since ` +
-        `${ignored.firstSeen}: ${proxies.ignoredPeerAdvice(ignored)}`
+        `${ignored.firstSeen}: ${proxies.ignoredPeerAdvice(ignored, socket)}`
     );
   }
   if (via === 'direct' && forwardedFor !== null) {
@@ -128,7 +138,7 @@ export function clientAddressReport(
   if (forwarder) {
     warnings.push(
       `This request reached SIEMBox through ${forwarder}, which sent X-Forwarded-For of its own but is not a trusted ` +
-        `proxy, so ${forwarder} is taken for the client: ${proxies.ignoredPeerAdvice({ address: forwarder, kind: 'forwarded' })}`
+        `proxy, so ${forwarder} is taken for the client: ${proxies.ignoredPeerAdvice({ address: forwarder, kind: 'forwarded' }, socket)}`
     );
   }
   if (address && proxies.isGateway(address)) {

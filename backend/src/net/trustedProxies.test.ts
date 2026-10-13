@@ -8,6 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Request } from 'express';
+import type { ProxySocketState } from './apiListeners';
 import { PROXY_SOCKET_PEER } from './clientAddress';
 import {
   IGNORED_HEADER_GRACE_MS,
@@ -478,6 +479,112 @@ test('ignored X-Forwarded-For: the fallback window after a backend restart is no
   assert.equal(episode.requests, 31, 'counted afresh');
   assert.equal(episode.sustained, false);
   assert.equal(log.of('warn').filter((m) => m.startsWith('Ignored X-Forwarded-For')).length, 0);
+});
+
+const LISTENING: ProxySocketState = { state: 'listening', path: '/run/siembox/api.sock' };
+
+/**
+ * Host networking with the current compose file: UI requests come over the
+ * proxy socket, except during nginx's TCP fallback windows, which come from
+ * the frontend container's address (172.18.0.3), untrusted here. `traffic`
+ * advances the clock one request at a time, every `everyMs`, for `forMs`.
+ */
+function hostModeTracker() {
+  let now = 5_000_000;
+  const { instance, log } = proxies(undefined, { now: () => now, hostNetworking: true, proxySocket: () => LISTENING });
+  const traffic = (peer: string, forMs: number, everyMs = SECOND) => {
+    for (let waited = 0; waited <= forMs; waited += everyMs) {
+      instance.noteRequest(directRequest(peer, '192.168.1.50'));
+      now += everyMs;
+    }
+  };
+  return {
+    instance,
+    traffic,
+    pause: (ms: number) => {
+      now += ms;
+    },
+    warnings: () => log.of('warn').filter((m) => m.startsWith('Ignored X-Forwarded-For')),
+    frontend: () => instance.describe().ignoredForwardedFor.peers.find((p) => p.address === '172.18.0.3'),
+  };
+}
+
+test('ignored X-Forwarded-For: separate fallback windows with the socket working in between are separate episodes', () => {
+  const { traffic, pause, warnings, frontend } = hostModeTracker();
+  traffic('172.18.0.3', 30 * SECOND); // a backend restart
+  traffic(PROXY_SOCKET_PEER, 10 * 60 * SECOND, 5 * SECOND); // back on the socket
+  traffic('172.18.0.3', 30 * SECOND); // a request on the socket timed out
+  assert.deepEqual(warnings(), []);
+  assert.equal(frontend()?.requests, 31, 'counted from the start of the second window');
+  assert.equal(frontend()?.sustained, false);
+
+  // A short outage a minute after a restart is no different.
+  pause(IGNORED_PEER_TTL_MS + SECOND);
+  traffic('172.18.0.3', 8 * SECOND);
+  traffic(PROXY_SOCKET_PEER, 60 * SECOND, 5 * SECOND);
+  traffic('172.18.0.3', 30 * SECOND);
+  assert.deepEqual(warnings(), []);
+  assert.equal(frontend()?.sustained, false);
+});
+
+test('ignored X-Forwarded-For: without requests on the socket, separate windows still add up (the frontend never uses it)', () => {
+  const { traffic, pause, warnings, frontend } = hostModeTracker();
+  traffic('172.18.0.3', 30 * SECOND);
+  pause(10 * 60 * SECOND);
+  traffic('172.18.0.3', 30 * SECOND);
+  assert.equal(warnings().length, 1);
+  assert.match(
+    warnings()[0],
+    /^Ignored X-Forwarded-For from 172\.18\.0\.3 \(32 requests in 63\d s\): it calls the API directly .*If it is the SIEMBox frontend, it is not reaching the proxy socket the backend listens on/
+  );
+  assert.equal(frontend()?.sustained, true);
+});
+
+test('ignored X-Forwarded-For: the advice for a direct caller follows what became of the proxy socket', () => {
+  const advice = (socket: ProxySocketState) =>
+    proxies(undefined, { proxySocket: () => socket }).instance.ignoredPeerAdvice({ address: '172.18.0.3', kind: 'direct' });
+  const compose = /If it is the SIEMBox frontend, update your compose file so the backend and frontend share the api-socket volume; if it is your own reverse proxy, add it to TRUSTED_PROXIES/;
+  assert.match(advice({ state: 'no-volume', path: '/run/siembox/api.sock', directory: '/run/siembox' }), compose);
+  assert.match(advice({ state: 'not-started' }), compose);
+  const others: Array<[ProxySocketState, RegExp]> = [
+    [LISTENING, /it is not reaching the proxy socket the backend listens on: check that the frontend container runs the current image and mounts the api-socket volume at \/run\/siembox; if it is your own/],
+    [
+      { state: 'listening', path: '/run/siembox/other.sock' },
+      /its nginx only connects to \/run\/siembox\/api\.sock, but SIEMBOX_PROXY_SOCKET has the backend listen on \/run\/siembox\/other\.sock: unset SIEMBOX_PROXY_SOCKET; if it is your own/,
+    ],
+    [{ state: 'off' }, /it cannot use the proxy socket while SIEMBOX_PROXY_SOCKET=off: unset SIEMBOX_PROXY_SOCKET; if it is your own/],
+    [{ state: 'error', path: '/run/siembox/api.sock', error: 'EACCES' }, /it cannot use the proxy socket, which failed to open \(EACCES\); if it is your own/],
+  ];
+  for (const [socket, expected] of others) {
+    const text = advice(socket);
+    assert.match(text, expected);
+    assert.doesNotMatch(text, /update your compose file/, JSON.stringify(socket));
+  }
+  // A forwarding proxy is never the frontend, whatever the socket.
+  const forwarded = proxies(undefined, { proxySocket: () => LISTENING }).instance;
+  assert.match(forwarded.ignoredPeerAdvice({ address: '192.168.1.20', kind: 'forwarded' }), /If it is your reverse proxy, add it to TRUSTED_PROXIES/);
+});
+
+test('ignored X-Forwarded-For: once the socket stops serving, sparse requests over TCP still add up', () => {
+  const { traffic, warnings, frontend } = hostModeTracker();
+  traffic(PROXY_SOCKET_PEER, 60 * SECOND, 5 * SECOND); // the web UI used the socket...
+  traffic('172.18.0.3', 3 * 60 * SECOND, 40 * SECOND); // ...until nginx lost it for good; quiet gaps of 40 s
+  assert.equal(warnings().length, 1);
+  assert.match(warnings()[0], /^Ignored X-Forwarded-For from 172\.18\.0\.3 \(3 requests in 80 s\)/);
+  assert.equal(frontend()?.sustained, true);
+});
+
+test('ignored X-Forwarded-For: a caller that keeps sending is reported while the socket serves the web UI', () => {
+  const { instance, pause, warnings } = hostModeTracker();
+  // A reverse proxy on the Docker host pointed straight at port 8421, not listed in TRUSTED_PROXIES.
+  for (let i = 0; i < 8; i++) {
+    instance.noteRequest(directRequest('127.0.0.1', '192.168.1.60'));
+    pause(5 * SECOND);
+    instance.noteRequest(directRequest(PROXY_SOCKET_PEER, '192.168.1.50'));
+    pause(5 * SECOND);
+  }
+  assert.equal(warnings().length, 1);
+  assert.match(warnings()[0], /^Ignored X-Forwarded-For from 127\.0\.0\.1 \(6 requests in 50 s\)/);
 });
 
 test('ignored X-Forwarded-For: requests to GET /api/admin/client-address are not counted', () => {

@@ -128,7 +128,27 @@ test('report: a local proxy whose header keeps being ignored for more than 45 s 
   now += 20_000;
   proxies.noteRequest(request('172.18.0.3', '172.18.0.3', '192.168.1.50', [], '/api/alerts'));
   const [warning] = report().warnings;
-  assert.match(warning, /^X-Forwarded-For from 172\.18\.0\.3 has been ignored on 31 requests since .*: it calls the API directly .*update your compose file/);
+  // The socket is listening, yet nothing came over it: the frontend can't reach it.
+  assert.match(
+    warning,
+    /^X-Forwarded-For from 172\.18\.0\.3 has been ignored on 31 requests since .*: it calls the API directly .*If it is the SIEMBox frontend, it is not reaching the proxy socket the backend listens on: check that the frontend container runs the current image and mounts the api-socket volume/
+  );
+  // Without the volume, the compose file is what to fix.
+  const old = clientAddressReport(request(PROXY_SOCKET_PEER, '192.168.1.50', '192.168.1.50', ['192.168.1.50']), proxies, NO_VOLUME);
+  assert.match(old.warnings.join('\n'), /from 172\.18\.0\.3 has been ignored .*update your compose file so the backend and frontend share the api-socket volume/);
+});
+
+test('report: a proxy socket on a path the bundled nginx never connects to is a warning', async () => {
+  const custom = { state: 'listening', path: '/run/siembox/other.sock' } as const;
+  const report = clientAddressReport(request('172.18.0.3', '172.18.0.3'), await started(undefined, { hostNetworking: true }), custom);
+  assert.ok(
+    report.warnings.includes(
+      "The proxy socket listens on /run/siembox/other.sock (SIEMBOX_PROXY_SOCKET), but the bundled frontend's nginx " +
+        'only connects to /run/siembox/api.sock, so the web UI reaches the API over TCP. Unless a proxy of your own ' +
+        'uses that path, unset SIEMBOX_PROXY_SOCKET.'
+    ),
+    report.warnings.join('\n')
+  );
 });
 
 test('report: a request through a reverse proxy SIEMBox does not trust says so, and so does the tracker', async () => {

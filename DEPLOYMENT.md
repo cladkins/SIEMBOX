@@ -275,14 +275,17 @@ shares one address.
 Other changes in that release:
 - `X-Forwarded-For` from direct callers on port 8421 is ignored. A reverse
   proxy in front of SIEMBox needs `TRUSTED_PROXIES` (see [Client addresses and
-  reverse proxies](#client-addresses-and-reverse-proxies)); until then the
-  backend logs which proxy it is ignoring.
+  reverse proxies](#client-addresses-and-reverse-proxies)); until then every
+  user behind it shares its address. The backend logs which proxy it is
+  ignoring only for a proxy on a private or other local address; check a
+  proxy on a public address (such as Cloudflare's) with
+  `GET /api/admin/client-address` through it.
 - A `429` from the general limit is JSON with `Retry-After`.
 - Failed sign-ins are limited: 10 per account per address, and 100 per address
   across all accounts, per 15 minutes. People who share an address (behind an
   office NAT, or a reverse proxy SIEMBox doesn't trust) don't lock each other
-  out: past the 100, only accounts that already failed from that address are
-  refused.
+  out: past the 100, only accounts that already failed from that address in
+  their own 15-minute window are refused.
 - EDR agent enrollment counts toward the general limit, even with an
   `X-Agent-ID` header.
 
@@ -659,9 +662,11 @@ client's address. It works that address out like this:
     wider than /24 (IPv4) or /64 (IPv6) work, with a warning.
   - Docker's network gateway address is never trusted through a range: Docker
     presents IPv6 and loopback clients of published ports with that address.
-- **`SIEMBOX_PROXY_SOCKET`** (in `.env`) sets the socket path (default
-  `/run/siembox/api.sock`; `off` disables it). The backend only listens when
-  the directory already exists, i.e. when the volume is mounted.
+- **`SIEMBOX_PROXY_SOCKET`** (in `.env`): leave it unset, or set `off` to run
+  without the socket. The bundled frontend's nginx only ever connects to
+  `/run/siembox/api.sock`, so another path leaves the web UI on its TCP
+  fallback (only a proxy of your own could use it). The backend only listens
+  when the directory already exists, i.e. when the volume is mounted.
 
 ### By deployment mode
 
@@ -683,9 +688,16 @@ Without any configuration a reverse proxy in front of SIEMBox makes every user
 look like the proxy, as before: one shared address that can't be forged. It
 shares the general limit of `API_RATE_LIMIT_MAX` (default 1000) requests per 15
 minutes and the sign-in limit's 100 failures per address, so set
-`TRUSTED_PROXIES` (or raise the general limit). Until you do, the backend logs
-an hourly `Ignored X-Forwarded-For from <proxy>` warning and
-`GET /api/admin/client-address` lists it under `warnings`.
+`TRUSTED_PROXIES` (or raise the general limit). Until you do, a proxy on a
+private, carrier-grade NAT, loopback, ULA or link-local address gets an hourly
+`Ignored X-Forwarded-For from <proxy>` warning in the backend log, and
+`GET /api/admin/client-address` lists it under `warnings`. A proxy on a public
+address (Cloudflare's proxy in front of a forwarded port, a VPS proxying over
+the internet) gets neither, because any client could get its own public
+address listed that way: it only appears in `ignoredForwardedFor.peers` (with
+`local: false`). So after putting a proxy in front of SIEMBox, request
+`GET /api/admin/client-address` through it and check that `you.address` is
+your own address.
 
 ### Check what SIEMBox sees
 
@@ -699,8 +711,9 @@ an hourly `Ignored X-Forwarded-For from <proxy>` warning and
 
    `you.address` should be your machine's address and `you.via`
    `proxy-socket`. `warnings` lists anything to fix: a missing volume, a
-   `TRUSTED_PROXIES` name that doesn't resolve, a proxy whose `X-Forwarded-For`
-   is being ignored (yours, if your request came through one). Right after the
+   `TRUSTED_PROXIES` name that doesn't resolve, a proxy on a private address
+   whose `X-Forwarded-For` keeps being ignored, and the proxy your own request
+   came through if it isn't trusted (whatever its address). Right after the
    backend restarts, nginx stays on its TCP fallback for up to 30 s before it
    tries the socket again, so check again after that if `via` is not
    `proxy-socket` yet.
@@ -720,9 +733,11 @@ an hourly `Ignored X-Forwarded-For from <proxy>` warning and
    frontend -> 172.18.0.3; direct callers on :8421 use their TCP address.`
    A local address whose `X-Forwarded-For` keeps being ignored for more than
    45 s (a proxy in front of the web UI, or a caller of port 8421) also shows
-   up as an hourly `Ignored X-Forwarded-For from ...` warning. Shorter bursts
-   are expected with host networking for up to 30 s after a backend restart,
-   while nginx uses its TCP fallback, and are not reported.
+   up as an hourly `Ignored X-Forwarded-For from ...` warning. With host
+   networking, the frontend's own address is expected for up to 30 s after a
+   backend restart or a request that timed out, while nginx uses its TCP
+   fallback. Each such window counts on its own once the socket has served
+   requests again, so separate windows don't add up and are not reported.
 
 ## Monitoring
 

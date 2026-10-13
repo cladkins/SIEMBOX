@@ -1449,7 +1449,10 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   own 10).
 - The backend log has hourly `Ignored X-Forwarded-For from <address> ...`
   warnings: a proxy in front of the web UI, or a caller of port 8421, whose
-  `X-Forwarded-For` has been ignored for more than 45 s.
+  `X-Forwarded-For` has been ignored for more than 45 s. Only proxies on
+  private, carrier-grade NAT, loopback, ULA or link-local addresses are logged:
+  one on a public address (Cloudflare's proxy, a VPS proxying over the
+  internet) is not, so its absence proves nothing. Check `you.address` below.
 
 **Diagnosis:** as an admin, open `GET /api/admin/client-address` through the
 web UI's address and read `you` and `warnings`:
@@ -1468,7 +1471,15 @@ has the full table):
   `frontend` (`TRUSTED_PROXIES=frontend,192.168.1.20`), and redeploy with
   `docker compose up -d` (a plain restart keeps the old environment). A proxy
   container on `siembox-network` can be listed by service name; one on the
-  Docker host must proxy to the host's LAN address, not `127.0.0.1`.
+  Docker host must proxy to the host's LAN address, not `127.0.0.1`. A proxy
+  on a public address shows up in `ignoredForwardedFor.peers` with
+  `local: false`, and in `warnings` only when your own request came through
+  it.
+- **`proxySocket.state` is `listening`, yet the frontend's address is reported
+  as ignored:** the frontend isn't reaching the socket. Check that the
+  frontend container runs the current image and mounts `api-socket` at
+  `/run/siembox`, and that `SIEMBOX_PROXY_SOCKET` is unset (the bundled nginx
+  only connects to `/run/siembox/api.sock`).
 - **`you.address` is the Docker gateway (`172.x.0.1`):** you are reaching a
   published port over IPv6 or from the Docker host itself, which Docker's
   userland proxy rewrites to the gateway. Use the host's IPv4 LAN address.
@@ -1482,7 +1493,8 @@ has the full table):
   `ignoredForwardedFor.peers` right after a backend restart:** expected. nginx
   uses its TCP fallback for up to 30 s after the socket failed (a restart, or a
   request that timed out), and that address can't be trusted by name here.
-  Only if it goes on for more than 45 s is it reported in `warnings`.
+  Each such window counts on its own once the socket serves requests again;
+  only one that goes on for more than 45 s is reported in `warnings`.
 
 ### Issue: Frontend log shows `connect() to unix:/run/siembox/api.sock failed`
 
@@ -1498,7 +1510,8 @@ connect, retrying the socket every 30 s. The socket is missing when:
 - the compose file predates the volume (images updated, compose file not);
 - the backend image is older than the frontend image;
 - the backend logged `Proxy socket not started: ...` (its reason follows), or
-  runs with `SIEMBOX_PROXY_SOCKET=off`;
+  runs with `SIEMBOX_PROXY_SOCKET=off` or with it set to another path (the
+  bundled nginx only connects to `/run/siembox/api.sock`);
 - the backend is restarting (a few lines then are normal; nginx stays on the
   TCP fallback for up to 30 s after the backend is back, then returns to the
   socket).
@@ -1518,9 +1531,9 @@ nginx worker use the fallback for 30 s, followed by the same
 `API_RATE_LIMIT_MAX` (default 1000) API requests in 15 minutes from one
 address; 10 failed sign-ins in 15 minutes for one account from one address
 ("... for this account from your address"); or, after 100 failed sign-ins
-from one address, another try for an account that already failed from it
-("... from your address"). The message says how long to wait; the counters
-are kept in memory.
+from one address, another try for an account that already failed from it in
+its own 15-minute window ("... from your address"). The message says how long
+to wait; the counters are kept in memory.
 
 **Solution:**
 - Wait for the time in the message, or restart the backend to clear every

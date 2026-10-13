@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { Router, Request, Response, NextFunction } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { type ClientRateLimitInfo } from 'express-rate-limit';
 import { UserModel } from '../models/User';
 import { SessionModel } from '../models/Session';
 import { ApiError } from '../middleware/errorHandler';
@@ -21,9 +21,9 @@ const router = Router();
  *   address (an office NAT, a reverse proxy SIEMBox doesn't trust) can still
  *   sign in to their own accounts.
  * - 100 per address across all accounts, so trying many accounts is bounded
- *   too. Past it, only accounts that already failed from that address are
- *   refused: someone who types their password right is never locked out by
- *   other people's failures.
+ *   too. Past it, only accounts that already failed from that address in
+ *   their own current 15-minute window are refused: someone who types their
+ *   password right is never locked out by other people's failures.
  *
  * Only a completed check that failed counts: not a successful sign-in, not the
  * "MFA code required" answer (it follows a correct password), not a 5xx (no
@@ -72,13 +72,39 @@ const addressFailureLimiter = rateLimit({
   standardHeaders: false,
   legacyHeaders: false,
   // Over the limit: refuse the account only if it already failed from this
-  // address in its current window; otherwise let the attempt through.
+  // address in a window of its own that is still open; otherwise let the
+  // attempt through.
   handler: (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve(accountFailureLimiter.getKey(signInAccountKey(req)))
-      .then((account) => ((account?.totalHits ?? 0) > 0 ? refuseAddress(req, res) : next()))
+      .then((account) => {
+        const end = account ? refusalEnd(req, account) : null;
+        if (end === null) {
+          next();
+        } else {
+          res.setHeader('Retry-After', String(Math.max(1, Math.ceil((end - Date.now()) / 1000))));
+          refuseAddress(req, res);
+        }
+      })
       .catch(next);
   },
 });
+
+/**
+ * Past the address's limit, when refusing this account ends, or null when it
+ * isn't refused because its entry holds no failure from a window that is
+ * still open. (express-rate-limit's MemoryStore.get returns an entry whose
+ * window has ended until a sweep every 15 minutes drops it, and the account
+ * limiter, which would start a new window, doesn't run for a refused attempt.)
+ * Otherwise the refusal ends with the account's window, or with the address's
+ * if that comes first and the account hasn't reached its own limit.
+ */
+function refusalEnd(req: Request, account: ClientRateLimitInfo): number | null {
+  const accountEnd = account.resetTime?.getTime();
+  if (account.totalHits <= 0 || accountEnd === undefined || accountEnd <= Date.now()) return null;
+  const addressEnd = (req as Request & { rateLimit?: { resetTime?: Date } }).rateLimit?.resetTime?.getTime();
+  if (addressEnd === undefined || account.totalHits >= FAILURES_PER_ACCOUNT) return accountEnd;
+  return Math.min(accountEnd, addressEnd);
+}
 
 // Login
 router.post('/login', addressFailureLimiter, accountFailureLimiter, async (req: Request, res: Response) => {

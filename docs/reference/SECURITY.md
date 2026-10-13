@@ -870,10 +870,12 @@ backend restarts):
 - Sign-in: 10 failed `POST /api/auth/login` attempts per account per 15
   minutes per address (an IPv6 client's /64), and 100 per address across all
   accounts; past those 100, only accounts that already failed from that
-  address are refused. So someone sharing your address (an office NAT, a
-  reverse proxy SIEMBox doesn't trust) can't lock every user out, but can
-  still pause one account they know the name of, from that address, for up
-  to 15 minutes. Successful sign-ins and `5xx` answers don't count.
+  address in their own 15-minute window are refused. So someone sharing your
+  address (an office NAT, a reverse proxy SIEMBox doesn't trust) can't lock
+  every user out, but can still pause one account they know the name of, from
+  that address, 15 minutes at a time (one failure for it once the address is
+  past 100). This interim limit goes away with per-account sign-in
+  protection. Successful sign-ins and `5xx` answers don't count.
 - EDR agent routes (30000, `EDR_AGENT_RATE_MAX`) and HTTP log pushes (6000,
   `SHIPPER_LOG_PUSH_MAX`) have their own limits and skip the general one when
   they carry `X-Agent-ID` / `X-Shipper-ID` with the route's own method. Agent

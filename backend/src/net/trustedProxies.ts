@@ -45,6 +45,7 @@ import net from 'node:net';
 import os from 'node:os';
 import type { NextFunction, Request, Response } from 'express';
 import { logger } from '../utils/logger';
+import { DEFAULT_PROXY_SOCKET, proxySocketState, type ProxySocketState } from './apiListeners';
 import { normalizeIp, PROXY_SOCKET_PEER } from './clientAddress';
 
 export const DEFAULT_TRUSTED_PROXIES = 'frontend';
@@ -57,10 +58,19 @@ const BOOT_WAIT_MS = 1000;
 /** Peers whose ignored X-Forwarded-For is counted. */
 export const MAX_TRACKED_PEERS = 100;
 /**
- * How long a peer's X-Forwarded-For must keep being ignored before it is
- * reported. nginx goes back to the socket 30 s (its fail_timeout) after the
- * socket failed (a backend restart, a timed-out request) and uses its TCP
- * fallback until then, which with host networking is an untrusted peer.
+ * How long nginx keeps using its TCP fallback after the proxy socket failed (a
+ * backend restart, a request that timed out): its fail_timeout in
+ * frontend/nginx.conf.template. With host networking that fallback is a peer
+ * that isn't trusted.
+ */
+export const NGINX_FALLBACK_MS = 30_000;
+/**
+ * How long a peer's X-Forwarded-For must keep being ignored, in one episode,
+ * before it is reported: longer than one nginx fallback window. A direct
+ * peer's episode ends when it has been quiet for longer than a fallback window
+ * while the proxy socket served requests, so separate windows (a restart, then
+ * a timeout) never add up. Without requests on the socket (an outdated compose
+ * file, a frontend that can't reach it) nothing ends an episode.
  */
 export const IGNORED_HEADER_GRACE_MS = 45_000;
 /** A peer whose X-Forwarded-For hasn't been ignored for this long is forgotten. */
@@ -136,6 +146,8 @@ export interface TrustedProxiesOptions {
   resolver?: NameResolver;
   log?: Log;
   now?: () => number;
+  /** What became of the proxy socket, for the advice about an ignored peer (default: apiListeners' state). */
+  proxySocket?: () => ProxySocketState;
 }
 
 interface AddressEntry {
@@ -404,6 +416,7 @@ export type IgnoredHeaderKind = 'direct' | 'forwarded';
 interface IgnoredPeer {
   address: string;
   kind: IgnoredHeaderKind;
+  /** Requests in the current episode, which started at firstSeen. */
   requests: number;
   firstSeen: number;
   lastSeen: number;
@@ -411,7 +424,7 @@ interface IgnoredPeer {
   local: boolean;
 }
 
-/** Ignored for longer than nginx's fallback window after a socket failure. */
+/** Ignored, in one episode, for longer than nginx's fallback window after a socket failure. */
 function isSustained(peer: Pick<IgnoredPeer, 'firstSeen' | 'lastSeen'>): boolean {
   return peer.lastSeen - peer.firstSeen > IGNORED_HEADER_GRACE_MS;
 }
@@ -424,6 +437,28 @@ function forwardedEntries(header: string | string[] | undefined): string[] {
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+/**
+ * What to do when the bundled frontend's nginx calls the API over TCP (its
+ * fallback) for good, by what became of the proxy socket. The template's nginx
+ * only ever connects to DEFAULT_PROXY_SOCKET.
+ */
+function frontendFix(socket: ProxySocketState): string {
+  switch (socket.state) {
+    case 'listening':
+      return socket.path === DEFAULT_PROXY_SOCKET
+        ? 'it is not reaching the proxy socket the backend listens on: check that the frontend container runs the ' +
+            'current image and mounts the api-socket volume at /run/siembox'
+        : `its nginx only connects to ${DEFAULT_PROXY_SOCKET}, but SIEMBOX_PROXY_SOCKET has the backend listen on ` +
+            `${socket.path}: unset SIEMBOX_PROXY_SOCKET`;
+    case 'off':
+      return 'it cannot use the proxy socket while SIEMBOX_PROXY_SOCKET=off: unset SIEMBOX_PROXY_SOCKET';
+    case 'error':
+      return `it cannot use the proxy socket, which failed to open (${socket.error})`;
+    default:
+      return 'update your compose file so the backend and frontend share the api-socket volume';
+  }
 }
 
 /** Whether a request is for the diagnostics endpoint (which Express matches case-insensitively, trailing slash or not). */
@@ -480,6 +515,7 @@ export class TrustedProxies {
   private readonly readFile: (path: string) => string | null;
   private readonly log: Log;
   private readonly now: () => number;
+  private readonly proxySocket: () => ProxySocketState;
   private resolver: NameResolver | undefined;
   private exact = new AddressList();
   private ranges = new AddressList();
@@ -491,6 +527,8 @@ export class TrustedProxies {
   private dockerNetworks: Set<string> | null = null;
   private readonly peers = new Map<string, IgnoredPeer>();
   private untracked = 0;
+  /** When the proxy socket last served a request; null if it hasn't since startup. */
+  private lastSocketRequest: number | null = null;
   private timer: NodeJS.Timeout | null = null;
   private refreshing: Promise<void> | null = null;
 
@@ -505,6 +543,7 @@ export class TrustedProxies {
     this.readFile = options.readFile ?? readFileOrNull;
     this.log = options.log ?? logger;
     this.now = options.now ?? Date.now;
+    this.proxySocket = options.proxySocket ?? proxySocketState;
     this.resolver = options.resolver;
     this.inContainer = options.inContainer ?? (fs.existsSync('/.dockerenv') || fs.existsSync('/run/.containerenv'));
 
@@ -788,16 +827,17 @@ export class TrustedProxies {
    * Counts a request whose X-Forwarded-For is ignored: one that came over TCP
    * from a peer that is not trusted ('direct'), or one whose header was passed
    * on by an untrusted proxy in front of a trusted one ('forwarded'). Local
-   * peers (private, loopback, ULA, link-local) are most likely a proxy that
-   * should be trusted, so once that has gone on for more than 45 s they get a
-   * warning, at most once an hour each. Requests to GET
-   * /api/admin/client-address are not counted.
+   * peers (private, carrier-grade NAT, loopback, ULA, link-local) are most
+   * likely a proxy that should be trusted, so once that has gone on for more
+   * than 45 s they get a warning, at most once an hour each. Requests to GET
+   * /api/admin/client-address are not counted. Every request on the proxy
+   * socket is timed, since that is what ends a direct peer's episode.
    */
   noteRequest(req: Request): void {
-    const header = req.headers['x-forwarded-for'];
-    if (header === undefined || isDiagnosticsRequest(req)) return;
     const peer = req.socket?.remoteAddress;
-    if (!peer) return;
+    if (peer === PROXY_SOCKET_PEER) this.lastSocketRequest = this.now();
+    const header = req.headers['x-forwarded-for'];
+    if (header === undefined || isDiagnosticsRequest(req) || !peer) return;
     if (peer !== PROXY_SOCKET_PEER) {
       const ip = normalizeIp(peer);
       if (!ip) return;
@@ -817,6 +857,19 @@ export class TrustedProxies {
     if (record && now - record.lastSeen > IGNORED_PEER_TTL_MS) {
       this.peers.delete(key); // forgotten: this is a new episode
       record = undefined;
+    }
+    if (
+      record &&
+      kind === 'direct' &&
+      now - record.lastSeen > NGINX_FALLBACK_MS &&
+      this.lastSocketRequest !== null &&
+      this.lastSocketRequest > record.lastSeen
+    ) {
+      // Quiet for longer than a fallback window while the socket kept serving
+      // the web UI: nginx's last fallback window ended, so this is a new one
+      // (the hourly limit on warnings carries over).
+      record.firstSeen = now;
+      record.requests = 0;
     }
     if (!record) {
       const local = LOCAL_RANGES.check(ip);
@@ -869,9 +922,13 @@ export class TrustedProxies {
   /**
    * What an ignored peer means and what to do about it, as a clause that
    * starts with "it" (the log line and the admin report put it after the
-   * address).
+   * address). For a direct caller that may be the bundled frontend, the fix
+   * depends on what became of the proxy socket.
    */
-  ignoredPeerAdvice(peer: { address: string; kind: IgnoredHeaderKind }): string {
+  ignoredPeerAdvice(
+    peer: { address: string; kind: IgnoredHeaderKind },
+    socket: ProxySocketState = this.proxySocket()
+  ): string {
     const { address } = peer;
     const shared =
       peer.kind === 'forwarded'
@@ -888,8 +945,8 @@ export class TrustedProxies {
       return `${shared} If it is your reverse proxy, add it to TRUSTED_PROXIES (keep "frontend" in the list).`;
     }
     return (
-      `${shared} If it is the SIEMBox frontend, update your compose file so the backend and frontend share the ` +
-      'api-socket volume; if it is your own reverse proxy, add it to TRUSTED_PROXIES (keep "frontend" in the list).'
+      `${shared} If it is the SIEMBox frontend, ${frontendFix(socket)}; if it is your own reverse proxy, add it ` +
+      'to TRUSTED_PROXIES (keep "frontend" in the list).'
     );
   }
 

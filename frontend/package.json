@@ -8,6 +8,7 @@
     "build": "vite build",
     "type-check": "vue-tsc --noEmit",
     "build:check": "vue-tsc && vite build",
+    "check:legal-comments": "node scripts/check-legal-comments.mjs",
     "preview": "vite preview",
     "lint": "eslint src",
     "format": "prettier --write \"src/**/*.{vue,ts,css}\""

@@ -28,6 +28,12 @@ export default defineConfig({
     target: ['es2020', 'edge88', 'firefox78', 'chrome87', 'safari14'],
     rolldownOptions: {
       output: {
+        // Keep the libraries' license and copyright headers (/*! ... */,
+        // @license, @preserve) in the minified bundle, as Vite 5's esbuild
+        // minifier did. Vite 8 strips them when minifying, and the MIT and
+        // Apache-2.0 code we ship (Vue, Chart.js, DOMPurify, ...) must carry
+        // its notice. scripts/check-legal-comments.mjs fails CI without them.
+        comments: { legal: true },
         // The vendor chunks of Vite 5's manualChunks object, which Rolldown no
         // longer accepts. Like manualChunks, a group also takes in the
         // dependencies of the modules it matches (Vue, lodash-es, dayjs,

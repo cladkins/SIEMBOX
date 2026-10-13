@@ -399,8 +399,10 @@ which the test suite checks against the running API.
 Reading `/api/settings` is admin-only too: other roles get `403` there, except
 `GET /api/settings/syslog` (the syslog host and port that shippers send to).
 Other areas' routes still show their own non-secret settings to every role, such
-as the notification and Digital Risk switches, the Log Discovery scan scope, and
-the AI Analyst's provider, model and base URL.
+as the notification and Digital Risk switches and the Log Discovery scan scope.
+`GET /api/ai/chat/health` tells every role only whether the AI Analyst is
+configured; its provider, model and base URL are in the admin-only
+`GET /api/settings/ai-chat`.
 
 No route returns a stored provider API key (AI, AbuseIPDB, OTX, Have I Been
 Pwned) to anyone, though an admin can redirect the AI keys (see

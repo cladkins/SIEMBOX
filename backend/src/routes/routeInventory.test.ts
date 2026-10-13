@@ -153,7 +153,7 @@ const INVENTORY: Row[] = [
   ['PUT', '/api/settings/ai-chat', ADMIN_ONLY],
   ['GET', '/api/settings/ai-triage', ADMIN_ONLY],
   ['PUT', '/api/settings/ai-triage', ADMIN_ONLY],
-  ['GET', '/api/settings', ANY_ROLE], // admin-only once PR #294 lands
+  ['GET', '/api/settings', ADMIN_ONLY],
   ['GET', '/api/settings/retention', ADMIN_ONLY],
   ['PUT', '/api/settings/retention', ADMIN_ONLY],
   ['POST', '/api/settings/retention/cleanup', ADMIN_ONLY],

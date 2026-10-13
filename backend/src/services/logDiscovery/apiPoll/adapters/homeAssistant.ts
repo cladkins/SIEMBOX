@@ -25,11 +25,11 @@
 //
 // Neither endpoint filters by time, so new lines are found with a tail-window
 // text cursor (selectNewLines). Only the end of a log is read: the last
-// LOG_MAX_BYTES of the file (a byte Range request) and the Supervisor's latest
-// journal entries. Lines reach the pipeline in Home Assistant's native format,
-// which catalog/parsers/home-assistant.parser.json expects: /api/error_log
-// verbatim, the Supervisor's lines without colour codes or a journal prefix
-// (normalizeSupervisorLine).
+// LOG_MAX_BYTES of the file plus the tail window (a byte Range request) and the
+// Supervisor's latest journal entries. Lines reach the pipeline in Home
+// Assistant's native format, which catalog/parsers/home-assistant.parser.json
+// expects: /api/error_log verbatim, the Supervisor's lines without colour codes
+// or a journal prefix (normalizeSupervisorLine).
 import { ApiPollAdapter, PollCredential, PollFetchResult, PollTarget, PolledEvent } from '../types';
 import { httpFetch, HttpFetchOptions, HttpFetchResult } from '../httpFetch';
 import { urlHost } from '../urls';
@@ -52,11 +52,12 @@ export const SUPERVISOR_LOG_ENTRIES = 500;
  */
 export const SUPERVISOR_LOG_ENTRIES_WIDE = 5000;
 /**
- * At most this much of a log is read per request: the END of the log file
- * (Range: bytes=-LOG_MAX_BYTES), and the newest part of any longer answer.
- * home-assistant.log only rotates when Home Assistant starts, so it can grow far
- * past this between restarts, and its newest lines are the ones wanted. More
- * than this logged between two polls leaves a gap: the latest LOG_MAX_BYTES are
+ * How much of a log is read per request: the END of the log file, its last
+ * LOG_MAX_BYTES plus the previous poll's tail window (windowReadBytes), and the
+ * newest LOG_MAX_BYTES of a Supervisor answer. home-assistant.log only rotates
+ * when Home Assistant starts, so it can grow far past this between restarts,
+ * and its newest lines are the ones wanted. Up to this much logged between two
+ * polls is collected whole; more leaves a gap: the latest LOG_MAX_BYTES are
  * collected and the poll reports a warning, as for SUPERVISOR_LOG_ENTRIES_WIDE.
  */
 export const LOG_MAX_BYTES = 5 * 1024 * 1024;
@@ -124,7 +125,27 @@ export function windowReach(prevTail: string | null): number {
   return window.some((line) => LINE_TIMESTAMP_RE.test(line)) ? window.length : MAX_RECORD_LINES;
 }
 
-/** The index just after the first place `window` appears in `lines` as consecutive whole lines, or -1. */
+/**
+ * How many bytes beyond LOG_MAX_BYTES a read of the log file asks for, so that
+ * the previous poll's tail window is wholly in the answer whenever no more than
+ * LOG_MAX_BYTES were logged after it: the window's bytes as stored, one more
+ * per line for a CRLF ending, two more per line for a blank (CRLF) line among
+ * them, one for the last line's ending and one for the byte before the window
+ * (the answer's first line is dropped as cut). At most LOG_MAX_BYTES.
+ */
+export function windowReadBytes(prevTail: string | null): number {
+  if (!prevTail) return 0;
+  return Math.min(LOG_MAX_BYTES, Buffer.byteLength(prevTail, 'utf8') + 3 * splitLines(prevTail).length + 2);
+}
+
+/**
+ * The index just after the first place `window` appears in `lines` as
+ * consecutive whole lines, or -1. Failing that, a window whose last line is
+ * only the start of the line in `lines` is accepted: a cursor stored before
+ * this adapter read the end of the file can end in a cut line (the old reader
+ * kept the first 5 MB of a longer log, and took a last line still being
+ * written). Cursors written now hold whole lines only (logText).
+ */
 function indexAfterWindow(lines: string[], window: string[]): number {
   if (window.length === 0) return -1;
   for (let i = 0; i + window.length <= lines.length; i++) {
@@ -132,7 +153,27 @@ function indexAfterWindow(lines: string[], window: string[]): number {
     while (j < window.length && lines[i + j] === window[j]) j++;
     if (j === window.length) return i + window.length;
   }
+  const last = window.length - 1;
+  for (let i = 0; i + window.length <= lines.length; i++) {
+    let j = 0;
+    while (j < last && lines[i + j] === window[j]) j++;
+    if (j === last && lines[i + last].startsWith(window[last])) return i + window.length;
+  }
   return -1;
+}
+
+/**
+ * The most lines (fewer than the whole window) that `lines` starts with and
+ * `window` ends with: how far into the window a text that starts inside it
+ * starts. 0 when it starts with no part of it.
+ */
+function windowEndOverlap(lines: string[], window: string[]): number {
+  for (let k = Math.min(window.length - 1, lines.length); k > 0; k--) {
+    let j = 0;
+    while (j < k && lines[j] === window[window.length - k + j]) j++;
+    if (j === k) return k;
+  }
+  return 0;
 }
 
 export interface NewLines {
@@ -140,6 +181,14 @@ export interface NewLines {
   nextCursor: string | null;
   /** True when a previous tail window was given but is not in this text: lines in between may be missing. */
   gap: boolean;
+  /**
+   * With onMiss 'all' and a window that is not in the text: how many lines the
+   * text starts with that are the end of the window, already collected and so
+   * left out. With a timestamped line among them the text is known to continue
+   * from the window (no gap); with none it may be another copy of the same
+   * record's lines (gap stays true).
+   */
+  overlap: number;
 }
 
 /**
@@ -155,23 +204,34 @@ export interface NewLines {
  * Supervisor's journal, which survives restarts, the number of new lines the
  * answer was asked for beyond the window (a window that is missing from it
  * means more than that many arrived, so its latest that many are all new); for
- * the end of a log file longer than one read, 'all' (see toResult). A small
- * duplicate/gap window across an HA restart is an accepted platform limitation
- * of this best-effort approach, not a bug to chase further -- neither endpoint
- * gives us anything more precise to key off. Both endpoints carry the same
- * lines, so a window found on one is found on the other after a switch.
+ * the end of a log file longer than one read, 'all' (see toResult): every line
+ * after the part of the window the text starts with, if any (see NewLines'
+ * overlap). A small duplicate/gap window across an HA restart is an accepted
+ * platform limitation of this best-effort approach, not a bug to chase further
+ * -- neither endpoint gives us anything more precise to key off. Both endpoints
+ * carry the same lines, so a window found on one is found on the other after a
+ * switch.
  */
 export function selectNewLines(fullText: string, cursor: string | null, onMiss: number | 'all' = FIRST_POLL_FALLBACK_LINES): NewLines {
   const lines = splitLines(fullText);
-  if (lines.length === 0) return { newLines: [], nextCursor: cursor, gap: false };
+  if (lines.length === 0) return { newLines: [], nextCursor: cursor, gap: false, overlap: 0 };
   const nextCursor = tailWindow(lines).join('\n');
 
   if (cursor) {
-    const after = indexAfterWindow(lines, splitLines(cursor));
-    if (after !== -1) return { newLines: lines.slice(after), nextCursor, gap: false };
-    return { newLines: onMiss === 'all' ? lines : lines.slice(-onMiss), nextCursor, gap: true };
+    const window = splitLines(cursor);
+    const after = indexAfterWindow(lines, window);
+    if (after !== -1) return { newLines: lines.slice(after), nextCursor, gap: false, overlap: 0 };
+    if (onMiss !== 'all') return { newLines: lines.slice(-onMiss), nextCursor, gap: true, overlap: 0 };
+    // The text may start inside the window (it began within the window's
+    // record): those lines were collected already. A timestamped line among
+    // them is that record's own (its millisecond timestamp), so the text
+    // continues from the window. Bare lines alone (a traceback's) can also be
+    // another copy of the same record logged later, so a gap stays possible.
+    const overlap = windowEndOverlap(lines, window);
+    const anchored = lines.slice(0, overlap).some((line) => LINE_TIMESTAMP_RE.test(line));
+    return { newLines: lines.slice(overlap), nextCursor, gap: !anchored, overlap };
   }
-  return { newLines: lines.slice(-FIRST_POLL_FALLBACK_LINES), nextCursor, gap: false };
+  return { newLines: lines.slice(-FIRST_POLL_FALLBACK_LINES), nextCursor, gap: false, overlap: 0 };
 }
 
 export function buildBaseUrl(target: PollTarget): string {
@@ -298,7 +358,7 @@ function isWebPage(r: LogResponse): boolean {
 /**
  * True when the answer starts part-way through a line: the server sent a byte
  * range from past the start of the file (206, Content-Range "bytes N-.../..."
- * with N > 0), or a longer answer was cut to its last LOG_MAX_BYTES.
+ * with N > 0), or a longer answer was cut to its last bytes (httpFetch keep: 'tail').
  */
 function startsMidLine(r: LogResponse): boolean {
   if (r.res.truncated) return true;
@@ -324,6 +384,12 @@ function logText(r: LogResponse): string {
   }
   body = body.slice(0, body.lastIndexOf('\n') + 1);
   return r.supervisor ? normalizeSupervisorLog(body) : body;
+}
+
+/** What logText drops from the start of an answer that starts mid-line: the end of the cut line, without its line ending. */
+function cutFirstLine(r: LogResponse): string {
+  const newline = r.res.body.indexOf('\n');
+  return (newline === -1 ? r.res.body : r.res.body.slice(0, newline)).replace(/\r$/, '');
 }
 
 const FIX_IN_SETTINGS = "this source's settings (Log Discovery, Edit)";
@@ -404,14 +470,17 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
   const now = deps.now ?? Date.now;
 
   /**
-   * One request for the log at `path`. From the Supervisor: `newEntries` plus
-   * `reach` entries (see windowReach), so the previous poll's tail window is in
-   * the answer whenever no more than newEntries lines arrived since.
+   * One request for the log at `path`, so the previous poll's tail window
+   * (prevTail) is in the answer whenever no more than newEntries lines (from the
+   * Supervisor) or LOG_MAX_BYTES (from the log file) arrived since. From the
+   * Supervisor: `newEntries` plus `reach` entries (see windowReach). From the
+   * file: its last LOG_MAX_BYTES plus windowReadBytes.
    */
-  async function get(base: string, path: string, secret: string, newEntries: number, reach: number): Promise<LogResponse> {
+  async function get(base: string, path: string, secret: string, newEntries: number, reach: number, prevTail: string | null): Promise<LogResponse> {
     const supervisor = isSupervisorLogPath(path);
     const headers: Record<string, string> = { Authorization: `Bearer ${secret}` };
     let url = `${base}${path}`;
+    let maxBytes = LOG_MAX_BYTES;
     if (supervisor) {
       // entries=cursor[[:num_skip]:num_entries]: from the end of the journal (no
       // cursor), back N-1 entries, N entries: the latest N, in the same form the
@@ -422,12 +491,13 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
       url += path.endsWith('/latest') ? `?no_colors&lines=${entries}` : '?no_colors';
     } else {
       // The end of the log file. /api/error_log is aiohttp's FileResponse, which
-      // answers 206 with just the last LOG_MAX_BYTES (no compression without an
+      // answers 206 with just the bytes asked for (no compression without an
       // Accept-Encoding). A server that ignores Range sends the whole file, and
       // httpFetch then keeps its end (keep: 'tail').
-      headers.Range = `bytes=-${LOG_MAX_BYTES}`;
+      maxBytes += windowReadBytes(prevTail);
+      headers.Range = `bytes=-${maxBytes}`;
     }
-    const opts: HttpFetchOptions = { headers, maxBytes: LOG_MAX_BYTES, keep: 'tail' };
+    const opts: HttpFetchOptions = { headers, maxBytes, keep: 'tail' };
     let res = await fetch(url, opts);
     if (!supervisor && res.status === 416) {
       // An empty file has no last bytes to send (aiohttp answers 416): ask for all of it.
@@ -444,11 +514,11 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
    */
   async function read(base: string, path: string, secret: string, prevTail: string | null): Promise<LogResponse> {
     const reach = windowReach(prevTail);
-    const r = await get(base, path, secret, SUPERVISOR_LOG_ENTRIES, reach);
+    const r = await get(base, path, secret, SUPERVISOR_LOG_ENTRIES, reach, prevTail);
     if (!r.supervisor || !prevTail || !isOk(r) || isWebPage(r)) return r;
     if (!selectNewLines(logText(r), prevTail).gap) return r;
     try {
-      const wide = await get(base, path, secret, SUPERVISOR_LOG_ENTRIES_WIDE, reach);
+      const wide = await get(base, path, secret, SUPERVISOR_LOG_ENTRIES_WIDE, reach, prevTail);
       if (isOk(wide) && !isWebPage(wide)) return wide;
     } catch {
       // Keep the first answer; its gap is reported by toResult.
@@ -484,17 +554,20 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
     // - in the Supervisor's journal, which survives restarts, asked for the tail
     //   plus newEntries more: more lines than that arrived. The latest
     //   newEntries are all new; the lines before them were not collected.
-    // - in the END of a log file longer than one read (startsMidLine): more than
-    //   LOG_MAX_BYTES arrived since the last poll, whether in the same file or
-    //   in a new one after a restart (a file read from its start doesn't start
-    //   mid-line). Every line of the answer is new; the ones before it were not
+    // - in the END of a log file longer than one read (startsMidLine), which was
+    //   asked for the tail plus LOG_MAX_BYTES: more than LOG_MAX_BYTES arrived
+    //   since the last poll, whether in the same file or in a new one after a
+    //   restart (a file read from its start doesn't start mid-line). Every line
+    //   of the answer is new, except any the answer starts with that are the
+    //   end of the tail (it began inside the tail's record); unless those place
+    //   it (see selectNewLines), the lines before the answer were not
     //   collected. Not when the tail came from the Supervisor: the file can hold
     //   lines the journal already gave.
     // - in a whole log file: a restart started a new file (or the endpoint
     //   changed): the bounded tail of selectNewLines.
     const fileOverflow = !r.supervisor && startsMidLine(r) && !tailFromSupervisor;
     const onMiss = r.supervisor ? r.newEntries : fileOverflow ? 'all' : undefined;
-    const { newLines, nextCursor: tail, gap } = selectNewLines(logText(r), prevTail, onMiss);
+    const { newLines, nextCursor: tail, gap, overlap } = selectNewLines(logText(r), prevTail, onMiss);
     const events: PolledEvent[] = newLines.map((line) => ({
       message: line,
       timestamp: parseLineTimestamp(line),
@@ -504,7 +577,15 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
     if (gap && r.supervisor) {
       result.warning = `Home Assistant logged more lines since the last poll than its Supervisor returns at once (the ${events.length} collected now are the latest): the lines before them were not collected.`;
     } else if (gap && fileOverflow) {
-      result.warning = `Home Assistant logged more than ${LOG_MAX_BYTES / (1024 * 1024)} MB since the last poll, more of its log file than one poll reads (the ${events.length} lines collected now are the latest): the lines before them were not collected.`;
+      // Lines were certainly missed when the answer began after the tail: it
+      // starts with none of the tail's lines, and the line it cut is not the
+      // end of the tail's last one. Otherwise it may have begun inside the tail,
+      // before anything new (it can't be told from another copy of the same lines).
+      const cut = cutFirstLine(r);
+      const lastSeen = splitLines(prevTail ?? '').pop() ?? '';
+      const certain = overlap === 0 && cut !== '' && !lastSeen.endsWith(cut);
+      const missed = certain ? 'the lines before them were not collected' : 'lines logged before them may not have been collected';
+      result.warning = `Home Assistant logged more than ${LOG_MAX_BYTES / (1024 * 1024)} MB since the last poll, more of its log file than one poll reads (the ${events.length} lines collected now are the latest): ${missed}.`;
     }
     return result;
   }

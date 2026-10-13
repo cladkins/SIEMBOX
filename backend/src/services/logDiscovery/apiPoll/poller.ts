@@ -142,7 +142,7 @@ function reportPollWarning(sourceId: number, sourceName: string, warning: string
   ErrorLogService.logBackgroundError('discovery-api-poller', warning.slice(0, 500), {
     dedupeKey: `poll-warning-${sourceId}`,
     translation: {
-      human: `Some ${sourceName} log lines were not collected`,
+      human: `Some ${sourceName} log lines may not have been collected`,
       category: 'configuration',
       severity: 'warning',
       resolution: "Shorten the source's poll interval (Log Discovery or Log Shippers, API-Polled Sources) so fewer lines arrive between polls",

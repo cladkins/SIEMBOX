@@ -24,6 +24,7 @@ import {
   MAX_RECORD_CHARS,
   SUPERVISOR_LOG_ENTRIES_WIDE,
   windowReach,
+  windowReadBytes,
 } from './homeAssistant';
 import { HttpFetchOptions, HttpFetchResult } from '../httpFetch';
 import { PollTarget } from '../types';
@@ -107,8 +108,13 @@ function colored(line: string): string {
 const T0 = Date.parse('2026-10-12T14:10:00Z');
 const FILE = '/api/error_log';
 const SUPERVISOR = '/api/hassio/core/logs';
-/** The byte Range asked of the log file: its last 5 MB. */
+/** The byte Range a first poll (no tail window yet) asks of the log file: its last 5 MB. */
 const FILE_RANGE = 'bytes=-5242880';
+/**
+ * The byte Range a poll that resumes after HA_TAIL asks for: the last 5 MB plus
+ * the window (357 bytes as stored, 3 per line for its 4 lines, and 2).
+ */
+const FILE_RANGE_AFTER_HA_TAIL = 'bytes=-5243251';
 /**
  * A first poll of the Supervisor's journal (no tail window yet): 500 new
  * entries plus MAX_RECORD_LINES (2000), so the window can start at the last
@@ -603,7 +609,8 @@ test('an empty log file (416 to the byte Range) is asked for again without Range
   assert.equal(result.nextCursor, 'previous tail', 'the cursor is kept');
   assert.deepEqual(
     ha.calls.map((c) => c.headers.Range ?? null),
-    [FILE_RANGE, null]
+    // The last 5 MB plus the window: its 13 bytes, 3 for its one line, and 2.
+    ['bytes=-5242898', null]
   );
 });
 
@@ -721,23 +728,30 @@ test('more than 5 MB logged between two polls of the log file: every line of the
   log.text += fits.join('\n') + '\n';
   const ha = fakeLogFile(log);
   const before = await adapterAt(T0 + 60_000, ha).fetchEvents(target(), CRED, first.nextCursor);
-  assert.equal(ha.calls[0].headers.Range, FILE_RANGE);
+  assert.equal(ha.calls[0].headers.Range, FILE_RANGE_AFTER_HA_TAIL);
   assert.equal(before.events.length, fits.length);
   assert.deepEqual(messages(before), fits);
   assert.equal(before.warning, undefined);
 
-  // 5.5 MB since: the answer is the file's last 5 MB, after the window. All of it is new.
+  // 5.5 MB since: the answer (the last 5 MB and the window's bytes) starts after the window. All of it is new.
   const burst = bruteForceBurst(fits.length, 5.5 * 1024 * 1024);
   log.text += burst.join('\n') + '\n';
-  const result = await adapterAt(T0 + 120_000, fakeLogFile(log)).fetchEvents(target(), CRED, before.nextCursor);
-  const lastFiveMb = log.text.slice(log.text.length - 5 * 1024 * 1024);
-  const whole = lastFiveMb.slice(lastFiveMb.indexOf('\n') + 1).split('\n').filter(Boolean); // its first line is cut
-  assert.ok(whole.length > 20_000, `${whole.length} lines in the last 5 MB`);
+  const overflow = fakeLogFile(log);
+  const result = await adapterAt(T0 + 120_000, overflow).fetchEvents(target(), CRED, before.nextCursor);
+  const asked = Number(/^bytes=-(\d+)$/.exec(overflow.calls[0].headers.Range)![1]);
+  assert.equal(asked, 5 * 1024 * 1024 + windowReadBytes(before.nextCursor));
+  const answer = log.text.slice(log.text.length - asked);
+  const whole = answer.slice(answer.indexOf('\n') + 1).split('\n').filter(Boolean); // its first line is cut
+  assert.ok(whole.length > 20_000, `${whole.length} lines in the answer`);
   assert.deepEqual(messages(result), whole, 'every whole line of the answer, not the last 200');
   assert.deepEqual(messages(result), burst.slice(-whole.length), 'all of them new');
+  // (Whether it says lines were or may not have been collected depends on where the answer cut a
+  // line, see the next tests: these lines all end alike, so the cut part can also end the window.)
   assert.match(
     result.warning ?? '',
-    new RegExp(`more than 5 MB since the last poll.*the ${whole.length} lines collected now are the latest.*not collected`)
+    new RegExp(
+      `^Home Assistant logged more than 5 MB since the last poll, more of its log file than one poll reads \\(the ${whole.length} lines collected now are the latest\\): .*not .*collected\\.$`
+    )
   );
 
   // The next poll resumes after them as usual.
@@ -746,6 +760,138 @@ test('more than 5 MB logged between two polls of the log file: every line of the
   const next = await adapterAt(T0 + 180_000, fakeLogFile(log)).fetchEvents(target(), CRED, result.nextCursor);
   assert.deepEqual(messages(next), later);
   assert.equal(next.warning, undefined);
+});
+
+/** Brute-force lines of exactly `bytes` bytes, newlines included (the last line padded to fit). */
+function exactBurst(bytes: number): string[] {
+  const lines = bruteForceBurst(0, bytes - 600);
+  const used = lines.reduce((n, line) => n + line.length + 1, 0);
+  const last = bruteForceLine(lines.length);
+  lines.push(`${last} ${'.'.repeat(bytes - used - last.length - 2)}`);
+  assert.equal(lines.join('\n').length + 1, bytes);
+  return lines;
+}
+
+const FIVE_MB = 5 * 1024 * 1024;
+
+/** A record's bytes in the log file: its lines and their newlines. */
+function fileBytes(record: string[]): number {
+  return record.join('\n').length + 1;
+}
+
+/**
+ * A poll of a log file that ends on `lastRecord` (so it is the tail window),
+ * then the next poll after exactly `bytes` more were logged.
+ */
+async function pollAcross(lastRecord: string[], bytes: number) {
+  const log = { text: [...HA_LINES.slice(0, 4), ...lastRecord].join('\n') + '\n' };
+  const first = await adapterAt(T0, fakeLogFile(log)).fetchEvents(target(), CRED, null);
+  assert.equal(first.nextCursor, lastRecord.join('\n'), 'the window is the last record');
+  const added = exactBurst(bytes);
+  log.text += added.join('\n') + '\n';
+  const ha = fakeLogFile(log);
+  const result = await adapterAt(T0 + 60_000, ha).fetchEvents(target(), CRED, first.nextCursor);
+  return { added, result, range: ha.calls[0].headers.Range, window: first.nextCursor! };
+}
+
+test('up to 5 MB logged after a long record, so that the last 5 MB start inside it: exactly the new lines and no warning', async () => {
+  for (const [label, lastRecord] of [
+    ['a 1003-line traceback', longError(0, 1003)],
+    ['a 60-line traceback', longError(0, 60)],
+    ['three one-line records', [LINE1, LINE2, LINE3]],
+  ] as const) {
+    // The file's last 5 MB start half-way through the record.
+    const { added, result, range, window } = await pollAcross([...lastRecord], FIVE_MB - Math.floor(fileBytes([...lastRecord]) / 2));
+    assert.equal(range, `bytes=-${FIVE_MB + windowReadBytes(window)}`, `${label}: the last 5 MB and the window are asked for`);
+    assert.equal(result.events.length, added.length, label);
+    assert.deepEqual(messages(result), added, `${label}: none of the window again`);
+    assert.equal(result.warning, undefined, `${label}: nothing was missed`);
+  }
+  // Exactly 5 MB.
+  const { added, result } = await pollAcross(longError(0, 60), FIVE_MB);
+  assert.deepEqual(messages(result), added);
+  assert.equal(result.warning, undefined);
+});
+
+test('more than 5 MB logged, the read beginning inside the last record collected: its lines are not collected again', async () => {
+  // The answer is the file's last FIVE_MB + windowReadBytes bytes, which is `slack` more than the
+  // window's own bytes; so FIVE_MB + slack + d new bytes start it d bytes into the window.
+  const slack = (record: string[]) => windowReadBytes(record.join('\n')) - fileBytes(record);
+  const oneLine = [LINE1, LINE2, LINE3];
+  const traceback = longError(0, 60);
+  assert.deepEqual([slack(oneLine), slack(traceback)], [10, 181]);
+
+  // One-line records: it starts half-way through the first, so the other two (timestamped) place it.
+  const placed = await pollAcross(oneLine, FIVE_MB + slack(oneLine) + Math.floor(LINE1.length / 2));
+  assert.deepEqual(messages(placed.result), placed.added, 'exactly the new lines');
+  assert.equal(placed.result.warning, undefined, 'nothing was missed');
+
+  // A traceback: it starts half-way through, with bare lines of the window. They are left out, but
+  // they could also be another copy of the same traceback logged later, so a gap stays possible.
+  const bare = await pollAcross(traceback, FIVE_MB + slack(traceback) + Math.floor(fileBytes(traceback) / 2));
+  assert.deepEqual(messages(bare.result), bare.added, 'none of the traceback again');
+  assert.equal(
+    bare.result.warning,
+    `Home Assistant logged more than 5 MB since the last poll, more of its log file than one poll reads (the ${bare.added.length} lines collected now are the latest): lines logged before them may not have been collected.`
+  );
+
+  // It starts in the window's last line: no line of the window is left, and nothing was missed either.
+  const lastLine = await pollAcross(traceback, FIVE_MB + slack(traceback) + fileBytes(traceback) - 5);
+  assert.deepEqual(messages(lastLine.result), lastLine.added);
+  assert.match(lastLine.result.warning ?? '', /: lines logged before them may not have been collected\.$/);
+
+  // It starts in the first new line: that line is cut, so a line was missed for certain.
+  const past = await pollAcross(traceback, FIVE_MB + slack(traceback) + fileBytes(traceback) + 20);
+  assert.deepEqual(messages(past.result), past.added.slice(1));
+  assert.match(past.result.warning ?? '', /: the lines before them were not collected\.$/);
+});
+
+test('selectNewLines with onMiss "all": a text that starts inside the window skips that part; only a timestamped line in it rules out a gap', () => {
+  const window = [LINE2, LINE3, ...repeatedError(5)];
+  const cursor = window.join('\n');
+  const after = [LATER_INFO, LINE4];
+
+  const anchored = selectNewLines([...window.slice(1), ...after].join('\n'), cursor, 'all');
+  assert.deepEqual(anchored.newLines, after);
+  assert.equal(anchored.gap, false);
+  assert.equal(anchored.overlap, window.length - 1);
+
+  const bareTail = selectNewLines([...window.slice(-2), ...after].join('\n'), cursor, 'all');
+  assert.deepEqual(bareTail.newLines, after);
+  assert.equal(bareTail.gap, true, 'bare traceback lines could be another copy');
+  assert.equal(bareTail.overlap, 2);
+
+  const none = selectNewLines(after.join('\n'), cursor, 'all');
+  assert.deepEqual(none.newLines, after);
+  assert.equal(none.gap, true);
+  assert.equal(none.overlap, 0);
+
+  // A bounded onMiss is unchanged: the latest lines, no overlap search.
+  assert.deepEqual(selectNewLines([...window.slice(1), ...after].join('\n'), cursor, 1).newLines, [LINE4]);
+});
+
+test('a cursor whose last line is cut (stored before this version: the first 5 MB of a longer log, or a line still being written) is found', async () => {
+  // The previous reader kept the first 5,242,880 characters of the file and stored its last three
+  // lines, the last one cut at that point, as the cursor; it then found nothing new every poll.
+  const lines = bruteForceBurst(0, 5.3 * 1024 * 1024);
+  const log = { text: lines.join('\n') + '\n' };
+  const firstFiveMb = log.text.slice(0, 5 * 1024 * 1024);
+  const oldCursor = firstFiveMb.split('\n').filter(Boolean).slice(-3).join('\n');
+  const cutAt = firstFiveMb.split('\n').filter(Boolean).length - 1; // the index of the cut line
+  assert.notEqual(oldCursor.split('\n')[2], lines[cutAt], 'the cursor ends in a cut line');
+
+  const result = await adapterAt(T0, fakeLogFile(log)).fetchEvents(target(), CRED, oldCursor);
+  assert.deepEqual(messages(result), lines.slice(cutAt + 1), 'only the lines after it: none of the 5 MB already stored');
+  assert.equal(result.warning, undefined);
+
+  // A last line caught while it was written, in a whole file.
+  const whole = lines.slice(0, 400);
+  const partial = [whole[297], whole[298], whole[299].slice(0, 40)].join('\n');
+  const resumed = await adapterAt(T0, fakeHomeAssistant({ [FILE]: { status: 200, body: whole.join('\n') } })).fetchEvents(target(), CRED, partial);
+  assert.deepEqual(messages(resumed), whole.slice(300), 'not the 200-line bound');
+
+  // Only the last line may be cut: the lines before it must match whole.
+  assert.equal(selectNewLines(whole.join('\n'), [whole[297].slice(0, 40), whole[298], whole[299]].join('\n')).gap, true);
 });
 
 test('a new file after a restart: read whole, the 200-line bound and no warning; read past its start (over 5 MB), all of the answer and the warning', async () => {

@@ -2783,18 +2783,25 @@ Assistant's own format (colour codes removed), as the catalog parser expects. Bo
 endpoints are admin-only: the token must be a long-lived access token created by
 a Home Assistant administrator.
 
-Only the end of the log is read. The file is requested with
-`Range: bytes=-5242880` (its last 5 MB; a server that ignores the range sends the
-whole file and its last 5 MB are kept), so a log that has grown past 5 MB keeps
-being collected. When more than 5 MB was logged since the last poll, the lines
-the poll resumes after are not in those last 5 MB: then every whole line of the
-last 5 MB is collected (all of them are new) and a warning is logged to the error
-log, because the lines before them were not collected. (When the whole file was
-read and lacks those lines, it is a new file, started by a restart: its last 200
-lines are collected, as on a first poll.) A poll resumes after the last record it
-saw, matched from that record's timestamped first line to its end, so a traceback
-that repeats is not collected again; this holds for a record of up to 2000 lines
-and about 256 KB (a longer one is matched by its last 100 lines only). A last
+Only the end of the log is read. The file is requested with a byte range for its
+last 5 MB plus the lines the poll resumes after (`Range: bytes=-5242880` on a
+first poll, and that plus their size after; a server that ignores the range sends
+the whole file and the same last bytes are kept), so a log that has grown past
+5 MB keeps being collected, and up to 5 MB logged since the last poll is
+collected whole. When more was logged since the last poll, so that the lines the
+poll resumes after are not all in the answer, every whole line of it is
+collected, except those it starts with that the last poll collected already (it
+began inside that record), and a warning is logged to the error log: the lines
+before them were not collected, or, when the answer may have begun inside the
+last record collected, may not have been. (When the whole file was read and lacks
+those lines, it is a new file, started by a restart: its last 200 lines are
+collected, as on a first poll.) A cursor stored by an earlier version, which read
+only the first 5 MB of a longer log, can end in a cut line; it is still found, so
+the first poll after an upgrade collects only the lines after it. A poll resumes
+after the last record it saw, matched from that record's timestamped first line
+to its end, so a traceback that repeats is not collected again; this holds for a
+record of up to 2000 lines and about 256 KB (a longer one is matched by its last
+100 lines only). A last
 line without its newline, which Home Assistant is still writing, is left for the
 next poll. The Supervisor is asked for 500 new journal entries plus the lines the
 poll resumes after (at least three: `Range: entries=:-502:503` after short

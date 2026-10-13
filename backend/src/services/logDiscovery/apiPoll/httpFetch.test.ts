@@ -13,7 +13,7 @@ import http from 'node:http';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { httpFetch } from './httpFetch';
-import { makeHomeAssistantAdapter, LOG_MAX_BYTES } from './adapters/homeAssistant';
+import { makeHomeAssistantAdapter, LOG_MAX_BYTES, windowReadBytes } from './adapters/homeAssistant';
 import { PollTarget } from './types';
 
 const servers: http.Server[] = [];
@@ -132,7 +132,7 @@ for (const honourRange of [true, false]) {
       [BAN_LINE],
       'the line written after the 5 MB mark is collected'
     );
-    assert.deepEqual(ha.ranges, [`bytes=-${LOG_MAX_BYTES}`, `bytes=-${LOG_MAX_BYTES}`]);
+    assert.deepEqual(ha.ranges, [`bytes=-${LOG_MAX_BYTES}`, `bytes=-${LOG_MAX_BYTES + windowReadBytes(first.nextCursor)}`], "then the window's bytes too");
   });
 }
 

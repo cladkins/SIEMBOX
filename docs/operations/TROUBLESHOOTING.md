@@ -130,9 +130,9 @@ TypeError [ERR_INVALID_ARG_VALUE]: The argument 'format' must be one of: 'reset'
 `frontend/Dockerfile` builds on `node:20-alpine`, and Docker reuses whatever copy
 of that image it pulled earlier instead of fetching the current one. Vite's
 bundler, Rolldown, crashes before Vite checks the Node version on Node 20.11 and
-older (images pulled before March 2024: the `styleText` export error) and on
-20.12 (pulled before May 2024: the `ERR_INVALID_ARG_VALUE` error). Node 20.13 to
-20.18 only print
+older (images pulled before late March 2024: the `styleText` export error) and
+on 20.12 (pulled between late March and early May 2024: the
+`ERR_INVALID_ARG_VALUE` error). Node 20.13 to 20.18 only print
 `You are using Node.js 20.x. Vite requires Node.js version 20.19+ or 22.12+`
 and still build the same files; the fix below clears that warning too.
 

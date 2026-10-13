@@ -224,10 +224,7 @@ export function tlsProbe(ip: string, port: number, opts: ActiveProbeOptions = {}
         socket.destroy();
         if (!cert || !cert.subject) return finish(null);
         const san = cert.subjectaltname ? cert.subjectaltname.split(',').map((s) => s.trim()) : undefined;
-        // @types/node 26 types subject attributes as string | string[] (a cert with
-        // several CNs does give an array at runtime). The cast is types-only: the
-        // value is passed through exactly as before.
-        finish({ port, subject_cn: cert.subject.CN as string | undefined, san });
+        finish({ port, subject_cn: cert.subject.CN, san });
       }
     );
     socket.once('timeout', () => {

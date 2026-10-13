@@ -1,63 +1,24 @@
 /**
- * YAML for the backend: js-yaml 5, loading documents the way js-yaml 4 did.
+ * YAML for the backend. Load and dump YAML through this module, not js-yaml
+ * directly, so the parser is chosen in one place.
  *
- * Everything SIEMBox reads as YAML (rules/ and the detection catalog, rules and
- * Sigma pasted into the UI, Nuclei templates, discovery fingerprints) was
- * written against js-yaml 4. js-yaml 5's `load()` defaults to the bare YAML 1.2
- * core schema, where js-yaml 4's default schema also resolved `<<` merge keys
- * and unquoted timestamps (to Date), read the !!binary, !!omap and !!pairs
- * tags, and stringified collection mapping keys (`? [a, b]`); LOAD_SCHEMA adds
- * those back. js-yaml 5 also finds no document in a stream that holds only
- * comments or blank lines (js-yaml 4 found one empty, null document), and its
- * `load()` throws on a stream with no document (js-yaml 4 returned undefined);
- * `load()` and `loadAll()` below return what js-yaml 4 did. Load YAML through
- * this module, not js-yaml directly.
- *
- * Still different from js-yaml 4, on input none of the shipped content uses:
- *  - numbers follow YAML 1.2 core resolution: `0b101`, `-0x1F` and `+0o17` stay
- *    strings, `-.5` and `+.5` are numbers, and `-0` is -0;
- *  - impossible dates and times (`2024-02-30`, `25:00:00`) stay strings rather
- *    than rolling over, and years 0000-0099 are no longer read as 19xx;
- *  - !!set throws (js-yaml 5 would build a Set; js-yaml 4 built an object);
- *  - a tab right after `[`, `{`, `,` or `:` in a flow collection nested under a
- *    block key (`a: [1,<TAB>2]`) is a syntax error;
- *  - one load merges at most 10,000 keys through `<<` (maxTotalMergeKeys);
- *  - a few inputs js-yaml 4 rejected now load (an empty key, `!!null ""`), and
- *    error messages are worded differently.
- *
- * `dump` is js-yaml's own: its default schema quotes any string a YAML 1.1 or
- * 1.2 reader could mistake for another type.
+ * It is js-yaml 4, on its maintained 4.x line (npm dist-tag v4-legacy; 4.3 adds
+ * the maxTotalMergeKeys cap on `<<` merge work). Everything SIEMBox reads as
+ * YAML (rules/ and the detection catalog, rules and Sigma pasted into the UI,
+ * Nuclei templates, discovery fingerprints) was written against js-yaml 4, and
+ * the frontend's YAML check runs js-yaml 4 too. js-yaml 5 loads some of it
+ * differently, and no schema or option turns these off:
+ *  - a quoted string or flow collection whose continuation line is indented no
+ *    deeper than its key, or a tab before or inside a flow collection
+ *    (`key:<TAB>[x]`, `-<TAB>[x]`, `[a,<TAB>b]`), is a "deficient indentation"
+ *    error, so rules stored that way could no longer be saved;
+ *  - an empty list entry (`-`) followed by a less-indented entry closes the
+ *    inner list, which silently regroups a Sigma selection;
+ *  - block content on a `---` line, and a key after `<<` that repeats a merged
+ *    non-string key, are errors.
+ * Its load() also defaults to the bare YAML 1.2 core schema (no `<<`,
+ * timestamps, !!binary, !!omap or !!pairs), throws on an empty stream, and
+ * resolves some number and date spellings differently. yaml.test.ts pins the
+ * js-yaml 4 behaviour each of these relies on.
  */
-import {
-  loadAll as loadDocuments,
-  CORE_SCHEMA,
-  mergeTag,
-  timestampTag,
-  binaryTag,
-  omapTag,
-  pairsTag,
-  legacyMapTag,
-  YAMLException,
-} from 'js-yaml';
-
-export { dump } from 'js-yaml';
-
-const LOAD_SCHEMA = CORE_SCHEMA.withTags(mergeTag, timestampTag, binaryTag, omapTag, pairsTag, legacyMapTag);
-
-// Input js-yaml 4 read as no document at all: blank (spaces, after an optional
-// BOM) up to at most one line break. Any other input without content, such as
-// only comments or several blank lines, was one empty (null) document.
-const NO_DOCUMENT = /^\uFEFF?[ ]*[\r\n]?$/;
-
-/** Parse a YAML stream that may hold several `---`-separated documents. */
-export function loadAll(input: string): unknown[] {
-  const documents = loadDocuments(input, { schema: LOAD_SCHEMA });
-  return documents.length === 0 && !NO_DOCUMENT.test(input) ? [null] : documents;
-}
-
-/** Parse a single-document YAML string: undefined when it holds no document. Throws on invalid YAML. */
-export function load(input: string): unknown {
-  const documents = loadAll(input);
-  if (documents.length > 1) throw new YAMLException('expected a single document in the stream, but found more');
-  return documents[0];
-}
+export { load, loadAll, dump, YAMLException } from 'js-yaml';

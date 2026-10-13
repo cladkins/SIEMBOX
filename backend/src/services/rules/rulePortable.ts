@@ -169,5 +169,5 @@ export function toPortableRule(rule: any): PortableRule {
 
 /** Serialize a stored rule to the catalog's portable YAML. */
 export function portableRuleToYaml(rule: any): string {
-  return yaml.dump(toPortableRule(rule), { lineWidth: 100, noRefs: true });
+  return yaml.dump(toPortableRule(rule), { lineWidth: 100, noRefs: true, sortKeys: false });
 }

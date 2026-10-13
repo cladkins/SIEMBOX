@@ -236,3 +236,20 @@ test('invalid YAML returns a single error result', () => {
   assert.equal(results[0].rule, null);
   assert.ok(results[0].errors[0].toLowerCase().includes('yaml'));
 });
+
+test('a pasted rule with wrapped quoted text and a wrapped tag list converts', () => {
+  // Continuation lines no deeper than their key, as an editor or a chat paste
+  // wraps them: js-yaml 4 folds them, and the YAML loader must keep doing so.
+  const results = convertSigmaYaml(
+    'title: Admin Area Access\n' +
+      'description: "Detects requests to the admin area\nof the proxy"\n' +
+      'tags: [attack.t1190,\nattack.initial_access]\n' +
+      'level: medium\n' +
+      'detection:\n  selection:\n    c-uri|startswith: /admin\n  condition: selection\n'
+  );
+  assert.equal(results.length, 1);
+  assertValid(results[0]);
+  assert.equal(results[0].rule!.description, 'Detects requests to the admin area of the proxy');
+  assert.ok(results[0].rule!.tags!.includes('attack.t1190'));
+  assert.ok(results[0].rule!.tags!.includes('attack.initial_access'));
+});

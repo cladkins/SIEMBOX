@@ -20,6 +20,12 @@ updates:
       backend-minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+    ignore:
+      # @types/node stays on the major of the oldest Node the backend runs on
+      # (backend/Dockerfile: node:20-alpine), so tsc rejects APIs that Node lacks.
+      # Move it in the same change as the Dockerfile base image and CI's Node.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: "/frontend"

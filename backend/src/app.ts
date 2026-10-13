@@ -1,5 +1,4 @@
-import 'express-async-errors'; // Must be imported before routes
-import express, { Application, Request, Response } from 'express';
+import express, { Application, NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { bodyParserErrorHandler, errorHandler, notFoundHandler } from './middleware/errorHandler';
@@ -40,6 +39,10 @@ const app: Application = express();
 // caller is its TCP peer address. See net/clientAddress.ts and
 // net/trustedProxies.ts. Never a hop count: a hop count trusts whoever connects.
 app.set('trust proxy', trustedProxies.trust);
+
+// Query strings parse as they did under Express 4 (qs: `a[]=1`, `a[b]=1`).
+// Express 5 defaults to 'simple' (node:querystring).
+app.set('query parser', 'extended');
 
 // First: count requests whose X-Forwarded-For is ignored (from a direct caller,
 // or from a proxy in front of nginx that isn't trusted), so a proxy that ought
@@ -95,6 +98,14 @@ app.use('/api/', apiRateLimiter);
 app.use('/api/auth', express.json({ limit: '16kb' }), express.urlencoded({ extended: true, limit: '16kb' }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Express 5's parsers leave req.body undefined when they read no body (a GET, a
+// DELETE, a POST without a JSON or form Content-Type); Express 4's set it to {}.
+// Keep {}, so handlers that destructure req.body answer with their own 400s.
+app.use(function emptyBodyDefault(req: Request, _res: Response, next: NextFunction) {
+  if (req.body === undefined) req.body = {};
+  next();
+});
 
 // Surface client-side request timeouts (slow endpoints the browser gave up on)
 // in the Admin dashboard's Recent Errors panel — the server doesn't throw on

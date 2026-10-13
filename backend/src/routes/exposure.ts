@@ -390,7 +390,7 @@ router.post('/domains', adminOnly, async (req: Request, res: Response) => {
 });
 
 router.put('/domains/:id', adminOnly, async (req: Request, res: Response) => {
-  const id = parseId(req.params.id, 'domain');
+  const id = parseId(req.params.id as string, 'domain');
   const body = bodyOf(req);
   if (body.domain !== undefined) {
     throw new ApiError(400, 'The domain itself cannot be changed; delete it and add the new one');
@@ -412,7 +412,7 @@ router.put('/domains/:id', adminOnly, async (req: Request, res: Response) => {
 });
 
 router.delete('/domains/:id', adminOnly, async (req: Request, res: Response) => {
-  const id = parseId(req.params.id, 'domain');
+  const id = parseId(req.params.id as string, 'domain');
   if (!(await WatchedDomainModel.delete(id))) throw new ApiError(404, 'Watched domain not found');
   res.json({ message: 'Watched domain deleted' });
 });
@@ -420,7 +420,7 @@ router.delete('/domains/:id', adminOnly, async (req: Request, res: Response) => 
 // Run this domain's collectors now, whatever its schedule (also when the domain
 // is switched off). Each collector has its own timeouts; allow a few minutes.
 router.post('/domains/:id/run-now', adminOnly, async (req: Request, res: Response) => {
-  const id = parseId(req.params.id, 'domain');
+  const id = parseId(req.params.id as string, 'domain');
   const result = await runDomainNow(id);
   if (result.kind === 'not_found') throw new ApiError(404, 'Watched domain not found');
   if (result.kind === 'busy') {
@@ -462,7 +462,7 @@ router.post('/identities', adminOnly, async (req: Request, res: Response) => {
 });
 
 router.put('/identities/:id', adminOnly, async (req: Request, res: Response) => {
-  const id = parseId(req.params.id, 'identity');
+  const id = parseId(req.params.id as string, 'identity');
   const body = bodyOf(req);
   if (body.kind !== undefined || body.value !== undefined) {
     throw new ApiError(
@@ -479,7 +479,7 @@ router.put('/identities/:id', adminOnly, async (req: Request, res: Response) => 
 });
 
 router.delete('/identities/:id', adminOnly, async (req: Request, res: Response) => {
-  const id = parseId(req.params.id, 'identity');
+  const id = parseId(req.params.id as string, 'identity');
   if (!(await MonitoredIdentityModel.delete(id)))
     throw new ApiError(404, 'Monitored identity not found');
   res.json({ message: 'Monitored identity deleted' });
@@ -519,7 +519,7 @@ router.get('/findings', async (req: Request, res: Response) => {
 });
 
 router.post('/findings/:id/resolve', adminOnly, async (req: Request, res: Response) => {
-  const id = parseId(req.params.id, 'finding', Number.MAX_SAFE_INTEGER);
+  const id = parseId(req.params.id as string, 'finding', Number.MAX_SAFE_INTEGER);
   const finding = await ExposureFindingModel.resolve(id);
   if (!finding) throw new ApiError(404, 'Finding not found');
   res.json(finding);

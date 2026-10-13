@@ -195,12 +195,11 @@ test('the 16 kB cap is only for /api/auth: other routes keep the general limit',
 
 /**
  * Names of the middleware app.ts mounts for `path` (path-less global middleware
- * excluded). Compared by name because express-async-errors, which app.ts loads,
- * wraps every layer's handle, so the function objects differ.
+ * excluded).
  */
 function mountNames(path: string): string[] {
-  return (app as any)._router.stack
-    .filter((l: any) => !l.regexp.fast_slash && l.regexp.test(path))
+  return (app as any).router.stack
+    .filter((l: any) => !l.slash && l.match(path))
     .map((l: any) => l.name);
 }
 

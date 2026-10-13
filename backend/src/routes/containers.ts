@@ -71,7 +71,7 @@ router.get('/scans', async (req: Request, res: Response) => {
 // Get a single scan with its vulnerabilities
 router.get('/scans/:id', async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(req.params.id as string, 10);
     if (Number.isNaN(id)) {
       throw new ApiError(400, 'Invalid scan id');
     }

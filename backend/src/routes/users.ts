@@ -22,7 +22,7 @@ router.get('/', requireAdmin, async (_req: Request, res: Response) => {
 // Get single user (admin only)
 router.get('/:id', requireAdmin, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const user = await UserModel.findByIdSafe(id);
 
     if (!user) {
@@ -81,7 +81,7 @@ router.post('/', requireAdmin, async (req: Request, res: Response) => {
 // Update user (admin only)
 router.put('/:id', requireAdmin, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const { username, email, password, role, enabled } = req.body;
 
     // Validate password length if provided
@@ -129,7 +129,7 @@ router.put('/:id', requireAdmin, async (req: Request, res: Response) => {
 // Delete user (admin only)
 router.delete('/:id', requireAdmin, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
 
     // Prevent self-deletion
     if (id === req.user!.id) {

@@ -394,7 +394,7 @@ router.post('/import/sigma', authorize('admin'), async (req: Request, res: Respo
 // Get single rule
 router.get('/:id', async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const rule = await DetectionRuleModel.findById(id);
 
     if (!rule) {
@@ -414,7 +414,7 @@ router.get('/:id', async (req: Request, res: Response) => {
 // PR or holds a credential; the catalog's CI + maintainer review are the gate.
 router.get('/:id/contribute', async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const rule = await DetectionRuleModel.findById(id);
     if (!rule) throw new ApiError(404, 'Rule not found');
 
@@ -481,7 +481,7 @@ router.post('/', requireRuleWrite, async (req: Request, res: Response) => {
 // Update rule
 router.put('/:id', requireRuleWrite, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const updateData = req.body;
 
     // If rule_yaml is being updated, parse it
@@ -512,7 +512,7 @@ router.put('/:id', requireRuleWrite, async (req: Request, res: Response) => {
 // Delete rule
 router.delete('/:id', requireRuleWrite, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const deleted = await DetectionRuleModel.delete(id);
 
     if (!deleted) {

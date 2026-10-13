@@ -19,7 +19,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as yaml from 'js-yaml';
+import * as yaml from '../../utils/yaml';
 import { compileUserRegex, validateUserRegex } from './userRegex';
 
 const RULES = path.join(__dirname, '../../../../rules');

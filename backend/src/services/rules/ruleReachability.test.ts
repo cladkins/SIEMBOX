@@ -29,7 +29,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as yaml from 'js-yaml';
+import * as yaml from '../../utils/yaml';
 import { runParser, ParserDef } from '../parser/runParser';
 import { evaluatePureCondition, PURE_CONDITION_OPERATORS } from './conditionMatch';
 

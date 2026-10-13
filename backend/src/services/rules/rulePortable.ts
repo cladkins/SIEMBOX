@@ -4,7 +4,7 @@
  * under rules/); this validates its structure against what the rules engine
  * actually supports, so a rule that passes CI imports and evaluates cleanly.
  */
-import yaml from 'js-yaml';
+import * as yaml from '../../utils/yaml';
 import { validateUserRegex } from './userRegex';
 
 /** Condition operators the rules engine implements (see rulesEngine.ts). */
@@ -169,5 +169,5 @@ export function toPortableRule(rule: any): PortableRule {
 
 /** Serialize a stored rule to the catalog's portable YAML. */
 export function portableRuleToYaml(rule: any): string {
-  return yaml.dump(toPortableRule(rule), { lineWidth: 100, noRefs: true, sortKeys: false });
+  return yaml.dump(toPortableRule(rule), { lineWidth: 100, noRefs: true });
 }

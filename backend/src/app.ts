@@ -1,5 +1,6 @@
 import express, { Application, NextFunction, Request, Response } from 'express';
 import cors from 'cors';
+import qs from 'qs';
 import rateLimit from 'express-rate-limit';
 import { bodyParserErrorHandler, errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requestTimeoutLogger } from './middleware/requestTimeoutLogger';
@@ -40,9 +41,11 @@ const app: Application = express();
 // net/trustedProxies.ts. Never a hop count: a hop count trusts whoever connects.
 app.set('trust proxy', trustedProxies.trust);
 
-// Query strings parse as they did under Express 4 (qs: `a[]=1`, `a[b]=1`).
-// Express 5 defaults to 'simple' (node:querystring).
-app.set('query parser', 'extended');
+// Query strings parse as they did under Express 4: qs (`a[]=1`, `a[b]=1`) with
+// Express 4's options. Express 5 defaults to 'simple' (node:querystring), and its
+// 'extended' drops arrayLimit to qs's default of 20, so a key repeated 21 times
+// or an index above 20 would turn into an index-keyed object.
+app.set('query parser', (str: string) => qs.parse(str, { allowPrototypes: true, arrayLimit: 1000 }));
 
 // First: count requests whose X-Forwarded-For is ignored (from a direct caller,
 // or from a proxy in front of nginx that isn't trusted), so a proxy that ought

@@ -36,6 +36,7 @@
     "node-nmap": "^4.0.0",
     "nodemailer": "^10.1.0",
     "pg": "^8.23.1",
+    "qs": "^6.16.0",
     "recheck": "^4.5.0",
     "winston": "^3.19.0",
     "xml2js": "^0.6.2"
@@ -49,6 +50,7 @@
     "@types/jsonwebtoken": "^9.0.5",
     "@types/node": "^20.10.5",
     "@types/pg": "^8.23.1",
+    "@types/qs": "^6.15.1",
     "@types/xml2js": "^0.4.14",
     "eslint": "^10.12.0",
     "prettier": "^3.9.9",

@@ -11,7 +11,7 @@ The SIEMBox frontend is a modern Vue.js 3 single-page application (SPA) that pro
 
 - **Vue.js 3.4.5** - Progressive JavaScript framework
 - **TypeScript 5.3.3** - Type-safe JavaScript
-- **Vite 5.0.11** - Next-generation build tool
+- **Vite 8** - Next-generation build tool
 - **Element Plus 2.5.1** - Vue 3 UI component library
 - **Pinia 2.1.7** - State management
 - **Vue Router 4.2.5** - Routing
@@ -59,7 +59,8 @@ frontend/
 
 ### Prerequisites
 
-- Node.js 20.19+, 22.13+ or 24+ (required by ESLint 10, which `npm run lint` uses)
+- Node.js 20.19+, 22.13+ or 24+ (Vite 8, which `npm run dev` and `npm run build` use,
+  needs 20.19+ or 22.12+; ESLint 10, which `npm run lint` uses, needs 20.19+, 22.13+ or 24+)
 - npm or yarn
 - Backend API running (see `/backend/README.md`)
 
@@ -502,23 +503,23 @@ rm -rf node_modules/.vite
 
 ### Code Splitting
 
-Vite automatically splits code. For manual chunks:
+Vite automatically splits code. Vendor chunks (`element-plus`, `chart`) are set
+in `vite.config.ts` as `build.rolldownOptions.output.codeSplitting.groups`, each a
+`name` plus a `test` regex on module paths:
 
 ```typescript
-// vite.config.ts
-export default defineConfig({
-  build: {
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          'element-plus': ['element-plus'],
-          'chart': ['chart.js', 'vue-chartjs']
-        }
-      }
-    }
-  }
-})
+// vite.config.ts (excerpt)
+codeSplitting: {
+  groups: [
+    { name: 'chart', test: /[\\/]node_modules[\\/](chart\.js|vue-chartjs)[\\/].*\.m?js$/ },
+  ],
+},
 ```
+
+Vite 8 bundles with Rolldown, which no longer accepts the object form of
+`rollupOptions.output.manualChunks` from Vite 5 (the build fails with
+`TypeError: manualChunks is not a function`). See `vite.config.ts` for the full
+set of groups and why each is there.
 
 ### Lazy Loading Components
 

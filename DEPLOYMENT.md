@@ -600,7 +600,7 @@ Configure in the UI under **Settings → Data Retention**:
 4. **Restrict port 514** to trusted networks only
 5. **Regular backups** of PostgreSQL database
 6. **Monitor disk space** - logs can grow quickly
-7. **Update regularly** - `git pull && docker compose up -d --build`
+7. **Update regularly** - `git pull && docker compose build --pull && docker compose up -d` (`--pull` also refreshes the `node:20-alpine` and `nginx:alpine` base images, which a plain `up -d --build` keeps reusing)
 
 ## Network Configuration
 

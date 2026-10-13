@@ -136,6 +136,7 @@ const LOGIN_REQUIRED: Array<[string, string, unknown?]> = [
   ['POST', '/api/log-discovery/sources/1/confirm'],
   ['POST', '/api/log-discovery/sources/1/ignore'],
   ['POST', '/api/log-discovery/sources/1/onboard/confirm', { confirm: true }],
+  ['PATCH', '/api/log-discovery/sources/1', { port: 8123 }],
   ['POST', '/api/containers/scan', { image_ref: 'nginx:latest' }],
 ];
 

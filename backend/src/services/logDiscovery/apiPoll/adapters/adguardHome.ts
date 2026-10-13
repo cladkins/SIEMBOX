@@ -7,16 +7,18 @@
 import crypto from 'crypto';
 import { ApiPollAdapter, PollCredential, PollFetchResult, PollTarget, PolledEvent } from '../types';
 import { httpFetch, basicAuthHeader } from '../httpFetch';
+import { resolveEndpoint, urlHost } from '../urls';
 
 const PAGE_LIMIT = 500;
+const DEFAULT_ENDPOINT = '/control/querylog';
 
 export function buildBaseUrl(target: PollTarget): string {
   // Default (scan-discovered source): AdGuard Home's admin UI/API on http://ip:3000.
-  // A manual source may override the port and/or switch to https; absent both, this
+  // A manual source (or an admin's override) may change the port and/or switch to https; absent both, this
   // is byte-for-byte the previous http://ip:3000.
   const https = target.tls != null ? target.tls : false;
   const port = target.port ?? 3000;
-  return `${https ? 'https' : 'http'}://${target.ip}:${port}`;
+  return `${https ? 'https' : 'http'}://${urlHost(target.ip)}:${port}`;
 }
 
 function synthesizeEventId(entry: any): string {
@@ -42,7 +44,7 @@ async function fetchEvents(target: PollTarget, credential: PollCredential, curso
   if (!credential.username) {
     throw new Error('AdGuard Home requires a username in addition to the password/token');
   }
-  const endpoint = target.logAccess.endpoint || '/control/querylog';
+  const endpoint = resolveEndpoint(target, DEFAULT_ENDPOINT);
   const url = `${buildBaseUrl(target)}${endpoint}?limit=${PAGE_LIMIT}`;
 
   const res = await httpFetch(url, { headers: { Authorization: basicAuthHeader(credential.username, credential.secret) } });
@@ -75,4 +77,5 @@ async function fetchEvents(target: PollTarget, credential: PollCredential, curso
 export const adguardHomeAdapter: ApiPollAdapter = {
   fingerprintId: 'adguard-home',
   fetchEvents,
+  describeUrl: (target) => `${buildBaseUrl(target)}${resolveEndpoint(target, DEFAULT_ENDPOINT)}`,
 };

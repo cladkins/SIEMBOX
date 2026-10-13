@@ -327,6 +327,7 @@ const INVENTORY: Row[] = [
   ['GET', '/api/log-discovery/sources', ANY_ROLE],
   ['POST', '/api/log-discovery/sources/manual', ADMIN_ONLY],
   ['DELETE', '/api/log-discovery/sources/:id', ADMIN_ONLY],
+  ['PATCH', '/api/log-discovery/sources/:id', ADMIN_ONLY],
   ['POST', '/api/log-discovery/sources/:id/confirm', OPERATOR_UP],
   ['POST', '/api/log-discovery/sources/:id/ignore', OPERATOR_UP],
   ['POST', '/api/log-discovery/sources/:id/onboard/preview', ANY_ROLE],

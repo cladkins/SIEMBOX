@@ -264,6 +264,9 @@ test('log discovery: scans and source triage need admin or operator; scope stays
   await pastTheGate(['operator', 'admin'], 'POST', '/api/log-discovery/scans/abc/cancel');
   await refused(['operator', 'analyst', 'viewer'], 'PUT', '/api/log-discovery/scope/cidrs', { cidrs: 'x' });
   await pastTheGate(['admin'], 'PUT', '/api/log-discovery/scope/cidrs', { cidrs: 'x' });
+  // Editing a source's poll target (address, port, HTTPS, endpoint) is admin-only like the other poller writes.
+  await refused(['operator', 'analyst', 'viewer'], 'PATCH', '/api/log-discovery/sources/abc', { port: 8123 });
+  await pastTheGate(['admin'], 'PATCH', '/api/log-discovery/sources/abc', { port: 8123 });
 });
 
 test('container scans need admin or operator', async (t) => {

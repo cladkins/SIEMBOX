@@ -3,9 +3,10 @@
 // but generalized to an arbitrary URL/headers instead of a fixed probe.
 //
 // No hostname allowlist (unlike feedService's external-URL allowlist): the
-// target host is always discovery_sources.ip_address, populated only by the
-// scan pipeline, never free text from a request — there's no attacker-
-// controlled-host surface here even without one.
+// target host is always discovery_sources.ip_address — populated by the scan
+// pipeline, or by an admin adding or editing a manual source (a literal IP,
+// validated by the route) — never a DNS name or URL from a request. An admin's
+// endpoint override is validated as a plain path, so it can't change the host.
 import http from 'http';
 import https from 'https';
 import { URL } from 'url';
@@ -14,6 +15,13 @@ export interface HttpFetchOptions {
   headers?: Record<string, string>;
   timeoutMs?: number;
   maxBytes?: number;
+  /**
+   * Which end of a body longer than maxBytes is kept: 'head' (default) keeps
+   * the first maxBytes, for a JSON answer that is unusable cut anywhere; 'tail'
+   * keeps the last maxBytes, for a log whose newest lines are at its end (its
+   * first line is then usually cut in two; the result says truncated).
+   */
+  keep?: 'head' | 'tail';
   /**
    * Defaults to true (verified). Only ever passed false by the authentik
    * adapter, matching the same trade-off already accepted for
@@ -28,6 +36,8 @@ export interface HttpFetchResult {
   status: number;
   body: string;
   headers: http.IncomingHttpHeaders;
+  /** True when the body was longer than maxBytes and only one end of it is here (see keep). */
+  truncated?: boolean;
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -39,10 +49,13 @@ export function httpFetch(url: string, opts: HttpFetchOptions = {}): Promise<Htt
     const mod = parsed.protocol === 'https:' ? https : http;
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
+    const keepTail = opts.keep === 'tail';
 
     const req = mod.request(
       {
-        hostname: parsed.hostname,
+        // URL keeps an IPv6 literal's brackets ("[fe80::1]"); http.request would
+        // try to resolve that as a DNS name, so pass the bare address.
+        hostname: parsed.hostname.replace(/^\[(.*)\]$/, '$1'),
         port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
         path: `${parsed.pathname}${parsed.search}`,
         method: 'GET',
@@ -51,12 +64,34 @@ export function httpFetch(url: string, opts: HttpFetchOptions = {}): Promise<Htt
         ...(parsed.protocol === 'https:' ? { rejectUnauthorized: opts.rejectUnauthorized ?? true } : {}),
       },
       (res) => {
-        let body = '';
+        // Raw bytes, decoded once at the end: a multi-byte UTF-8 character split
+        // across two chunks would otherwise come out garbled.
+        const chunks: Buffer[] = [];
+        let held = 0;
+        let truncated = false;
         res.on('data', (chunk: Buffer) => {
-          if (body.length < maxBytes) body += chunk.toString('utf8');
+          if (keepTail) {
+            chunks.push(chunk);
+            held += chunk.length;
+            // Drop whole chunks that are entirely older than the last maxBytes.
+            while (chunks.length > 1 && held - chunks[0].length >= maxBytes) {
+              held -= chunks.shift()!.length;
+              truncated = true;
+            }
+          } else if (held < maxBytes) {
+            chunks.push(chunk);
+            held += chunk.length;
+          } else {
+            truncated = true;
+          }
         });
         res.on('end', () => {
-          resolve({ status: res.statusCode || 0, body: body.slice(0, maxBytes), headers: res.headers });
+          let body = Buffer.concat(chunks);
+          if (body.length > maxBytes) {
+            truncated = true;
+            body = keepTail ? body.subarray(body.length - maxBytes) : body.subarray(0, maxBytes);
+          }
+          resolve({ status: res.statusCode || 0, body: body.toString('utf8'), headers: res.headers, truncated });
         });
       }
     );

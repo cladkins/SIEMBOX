@@ -75,7 +75,7 @@ from the API, and the UI hides or disables the matching control.
 | Delete alerts | no | no | no | yes |
 | AI parser and detection builders, Sigma import, Content Pack install | no | no | no | yes |
 | Users, Settings areas (other than Account), Endpoints (EDR), Admin dashboard | no | no | no | yes |
-| Shipper key regeneration and HTTP push keys; Log Discovery scope, manual sources and poll credentials; threat feed and Digital Risk configuration | no | no | no | yes |
+| Shipper key regeneration and HTTP push keys; Log Discovery scope, manual sources, editing a source's poll target, and poll credentials; threat feed and Digital Risk configuration | no | no | no | yes |
 
 The pages a role can't open only hide data from the UI: every signed-in role can read assets,
 vulnerabilities, scans and Digital Risk findings through the API, and no role can change them

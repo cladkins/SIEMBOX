@@ -1,11 +1,11 @@
 import { Pool } from 'pg';
-import dotenv from 'dotenv';
+import { loadDotenv } from './dotenv';
 import { logger } from '../utils/logger';
 import { createPoolRouter } from './poolRouter';
 import { withConnectRetry, DEFAULT_RETRY_OPTIONS, RetryOptions } from '../utils/dbRetry';
 import { envInt } from '../utils/envInt';
 
-dotenv.config();
+loadDotenv();
 
 const connection = {
   host: process.env.DB_HOST || 'localhost',

@@ -7,7 +7,7 @@
  *   SIEMBOX_CATALOG_DETECTIONS_PATH  default "detections"
  * (repo/ref/token are shared with the parser catalog — see catalogService.)
  */
-import * as yaml from 'js-yaml';
+import * as yaml from '../../utils/yaml';
 import { logger } from '../../utils/logger';
 import { validateRule } from './rulePortable';
 import {

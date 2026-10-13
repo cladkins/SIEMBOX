@@ -111,6 +111,42 @@ curl http://localhost:8421/api/health
 
 ---
 
+### Issue: Frontend image build fails on an old Node 20 image
+
+**Symptoms:** `docker compose up -d --build` (building from source) fails in the
+frontend's `npm run build` (`vite build`) step, after `npm run type-check`
+passed, with one of these errors and no warning from Vite before it:
+
+```
+SyntaxError: The requested module 'node:util' does not provide an export named 'styleText'
+```
+
+```
+TypeError [ERR_INVALID_ARG_VALUE]: The argument 'format' must be one of: 'reset', 'bold', ...
+    at styleText (node:util:...)
+```
+
+**Cause:** The frontend builds with Vite 8, which needs Node.js 20.19 or newer.
+`frontend/Dockerfile` builds on `node:20-alpine`, and Docker reuses whatever copy
+of that image it pulled earlier instead of fetching the current one. Vite's
+bundler, Rolldown, crashes before Vite checks the Node version on Node 20.11 and
+older (images pulled before late March 2024: the `styleText` export error) and
+on 20.12 (pulled between late March and early May 2024: the
+`ERR_INVALID_ARG_VALUE` error). Node 20.13 to 20.18 only print
+`You are using Node.js 20.x. Vite requires Node.js version 20.19+ or 22.12+`
+and still build the same files; the fix below clears that warning too.
+
+**Fix:** Pull the current base image while building:
+
+```bash
+docker compose build --pull frontend
+docker compose up -d
+```
+
+The prebuilt images (`compose.prod.yaml`) are not affected.
+
+---
+
 ### Issue: Backend can't reach Postgres on 127.0.0.1
 
 **Symptoms:**

@@ -20,7 +20,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import * as yaml from 'js-yaml';
+import * as yaml from '../utils/yaml';
 import { DEFAULT_PROXY_SOCKET } from './apiListeners';
 import { DEFAULT_TRUSTED_PROXIES } from './trustedProxies';
 

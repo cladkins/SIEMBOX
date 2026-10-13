@@ -110,6 +110,19 @@ CREDENTIAL_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(3
   must be re-entered.
 - As an alternative to storing the AI key encrypted, you can inject it at runtime
   via `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` and never persist it.
+- No API route returns a provider key stored from the UI, not even to an admin.
+  These are the AI builder, AI Analyst and AI Triage keys, the AbuseIPDB and OTX
+  keys, and the Have I Been Pwned key. The settings pages report a key as
+  configured or not, and `GET /api/settings` (admin-only) withholds them. An
+  encrypted key together with `CREDENTIAL_ENCRYPTION_KEY` gives back the
+  plaintext, so protect database backups like the `.env` file.
+- An admin can still make the backend send an AI key somewhere else. Changing
+  the provider or base URL of the AI builder, AI Analyst or AI Triage settings
+  keeps the stored key, and the next AI request sends it to the new endpoint.
+  That includes an Anthropic key, which goes out as a Bearer token once the
+  provider is switched to OpenAI, and a key set with `OPENAI_API_KEY`. Treat
+  admin access as able to use and redirect the AI keys. The AbuseIPDB, OTX and
+  Have I Been Pwned keys only go to those services' own hosts.
 
 ### AI Builder & Catalog Trust (v2)
 
@@ -382,6 +395,25 @@ which the test suite checks against the running API.
 | **operator** | Everything an analyst can do, plus vulnerability, container, scheduled and Log Discovery scans, and managing log shippers (operators see shipper API keys) |
 | **analyst** | Everything a viewer can do, plus alert triage, the AI Analyst, creating, editing, installing and deleting parsers and detection rules, asset inventory edits and discovery scans |
 | **viewer** | Read-only: can view logs, alerts, parsers, rules and shippers, but cannot create, edit or delete anything; changes only its own password and MFA |
+
+Reading `/api/settings` is admin-only too: other roles get `403` there, except
+`GET /api/settings/syslog` (the syslog host and port that shippers send to).
+Other areas' routes still show their own non-secret settings to every role, such
+as the notification and Digital Risk switches and the Log Discovery scan scope.
+`GET /api/ai/chat/health` tells every role only whether the AI Analyst is
+configured; its provider, model and base URL are in the admin-only
+`GET /api/settings/ai-chat`.
+
+No route returns a stored provider API key (AI, AbuseIPDB, OTX, Have I Been
+Pwned) to anyone, though an admin can redirect the AI keys (see
+[Secrets & Credential Encryption](#secrets--credential-encryption-v2)). Two other
+kinds of stored secret are shown to the roles that manage them:
+- Each shipper's syslog API key, to admins and operators (`GET /api/shippers`
+  and `GET /api/shippers/:id`). The key lets whoever holds it act as that
+  shipper, so give the operator role only to people you'd trust with every
+  shipper.
+- Notification channel secrets (Slack webhook URL, ntfy token, SMTP password),
+  to admins (`GET /api/notifications/channels`).
 
 **Best Practices:**
 - Use admin role only for initial setup and user management

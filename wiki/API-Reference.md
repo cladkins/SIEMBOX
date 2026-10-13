@@ -61,7 +61,7 @@ Tokens are valid for **24 hours**. Role-based access applies (Admin / Analyst / 
 | Threat Feeds | `/api/threat-feeds` | Feed status + reputation provider config (admin). |
 | Shippers | `/api/shippers` | Log shipper registration/keys, ingest. |
 | Notifications | `/api/notifications` | Email / Slack / NTFY config. |
-| Settings | `/api/settings` | System + AI builder settings. |
+| Settings | `/api/settings` | System, retention, syslog and AI settings (admin only, except reading the syslog host and port). Stored API keys are never returned. |
 | Users | `/api/users` | User management (admin). |
 | Admin | `/api/admin` | Admin dashboard data. |
 

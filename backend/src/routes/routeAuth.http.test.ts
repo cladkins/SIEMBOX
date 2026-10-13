@@ -1,7 +1,7 @@
 /**
  * HTTP-level check against the real Express app (app.ts with every router and
  * middleware) on an ephemeral port. Without a login, shipper management, asset,
- * vulnerability and scan routes answer 401, and the shipper agent's
+ * vulnerability, settings and scan routes answer 401, and the shipper agent's
  * key-authenticated endpoints still do not ask for one.
  *
  * Hermetic: before app.ts (and so config/database.ts) is loaded, DB_HOST and
@@ -125,6 +125,9 @@ const LOGIN_REQUIRED: Array<[string, string, unknown?]> = [
   ['POST', '/api/vulnerabilities/templates/download'],
   ['POST', '/api/vulnerabilities/scans', { target: '192.0.2.1' }],
   ['POST', '/api/vulnerabilities/scans/1/cancel'],
+  // Settings reads (every route; all but /syslog also need admin, see settingsRouteGates.test.ts)
+  ['GET', '/api/settings'],
+  ['GET', '/api/settings/syslog'],
   // Scan routers mounted behind authenticate (writes also check the role)
   ['GET', '/api/scheduled-scans'],
   ['POST', '/api/scheduled-scans', { name: 'x', scan_type: 'asset', scan_options: { targets: ['192.0.2.1'] }, interval_minutes: 60 }],
@@ -203,7 +206,7 @@ function mountNames(path: string): string[] {
 
 // The per-route role gates in these routers rely on the mount-level authenticate
 // having set req.user.
-for (const mount of ['/api/assets', '/api/vulnerabilities', '/api/scheduled-scans', '/api/log-discovery', '/api/containers']) {
+for (const mount of ['/api/assets', '/api/vulnerabilities', '/api/scheduled-scans', '/api/log-discovery', '/api/containers', '/api/settings']) {
   test(`app.ts mounts ${mount} behind authenticate`, () => {
     assert.ok(mountNames(mount).includes(authenticateName));
   });

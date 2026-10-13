@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { query } from '../config/database';
+import { settingRowForAdmin } from '../services/settings/settingsRedaction';
 import {
   startManualCleanup,
   getCleanupJob,
@@ -156,14 +157,14 @@ router.put('/ai-triage', authorize('admin'), async (req: Request, res: Response)
   }
 });
 
-// Get all system settings as a key/value list
-// Frontend reads these as [{ setting_key, setting_value }, ...]
-router.get('/', async (_req: Request, res: Response) => {
+// Every system setting as [{ setting_key, setting_value, redacted }, ...]. Admin
+// only, like the other settings reads; the UI doesn't call it (each settings
+// page has its own route). Stored credentials, and any key not on the reviewed
+// list, come back with the value withheld (services/settings/settingsRedaction.ts).
+router.get('/', authorize('admin'), async (_req: Request, res: Response) => {
   try {
-    const result = await query(
-      `SELECT key AS setting_key, value AS setting_value FROM system_settings ORDER BY key`
-    );
-    res.json(result.rows);
+    const result = await query(`SELECT key, value FROM system_settings ORDER BY key`);
+    res.json(result.rows.map((row) => settingRowForAdmin(row.key, row.value)));
   } catch {
     throw new ApiError(500, 'Failed to fetch settings');
   }

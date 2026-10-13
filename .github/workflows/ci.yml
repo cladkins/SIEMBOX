@@ -3,7 +3,8 @@
 # backend:  npm ci, build, run every migration against a fresh Postgres, npm test
 #           (the DB-backed suites run because Postgres is up), eslint (errors
 #           fail; warnings don't).
-# frontend: npm ci, vue-tsc type-check, production build, eslint (errors fail;
+# frontend: npm ci, vue-tsc type-check, production build, a check that the
+#           bundle kept its libraries' license headers, eslint (errors fail;
 #           warnings don't).
 #
 # Dependabot PRs get a read-only token and no secrets here, which is all this
@@ -86,4 +87,5 @@ jobs:
       - run: npm ci
       - run: npm run type-check
       - run: npm run build
+      - run: npm run check:legal-comments
       - run: npm run lint

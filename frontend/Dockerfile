@@ -37,6 +37,13 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # compose.yaml/compose.prod.yaml). nginx's own runtime variables ($uri, $host,
 # etc.) pass through untouched -- that script only substitutes names that are
 # actual container env vars, and those aren't.
+#
+# The template proxies /api to the backend's unix socket at
+# /run/siembox/api.sock, on the api-socket volume the compose files mount
+# (read-only is enough to connect), and falls back to BACKEND_UPSTREAM over TCP
+# while the socket is missing. Without the volume the image still works: nginx
+# logs a "connect() to unix:/run/siembox/api.sock failed" error about every
+# 30 s and serves the API through the fallback.
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 
 # Expose port

@@ -67,6 +67,12 @@ test('an IPv6 literal is accepted', () => {
   assert.equal(r.ok, true);
 });
 
+test('an IPv6 zone index is rejected (net.isIP accepts it, the INET column does not)', () => {
+  const r = validateManualSourceInput({ ip_address: 'fe80::1%eth0', fingerprint_id: 'home-assistant' });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.status, 400);
+});
+
 test('a non-pollable fingerprint id is rejected (real fingerprint without a poll adapter)', () => {
   // proxmox is a real bundled fingerprint but has no api_pull poll adapter.
   const r = validateManualSourceInput({ ip_address: '192.168.1.5', fingerprint_id: 'proxmox' });

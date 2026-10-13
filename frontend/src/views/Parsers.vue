@@ -43,7 +43,7 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="" width="110" align="right">
+          <el-table-column v-if="canEdit" label="" width="110" align="right">
             <template #default="{ row }">
               <el-button
                 type="primary"
@@ -73,7 +73,7 @@
                 ({{ u.unparsed_high_sev_daily.toLocaleString() }} warn+)</template>
             </span>
             <code class="uncovered-example">{{ u.example }}</code>
-            <el-button size="small" text type="primary" @click="aiFromSource(u)">
+            <el-button v-if="isAdmin" size="small" text type="primary" @click="aiFromSource(u)">
               Generate with AI<template v-if="u.samples?.length > 1"> ({{ u.samples.length }} samples)</template>
             </el-button>
           </div>
@@ -86,7 +86,7 @@
         <div class="card-header">
           <span>Log Parsers</span>
           <div class="header-actions">
-            <el-button size="small" @click="openAiBuilder">
+            <el-button v-if="isAdmin" size="small" @click="openAiBuilder">
               <el-icon><MagicStick /></el-icon> Generate with AI
             </el-button>
             <el-button size="small" @click="openCatalog">
@@ -95,10 +95,10 @@
             <el-button size="small" tag="a" href="https://github.com/cladkins/siembox-catalog" target="_blank" rel="noopener">
               Catalog repo ↗
             </el-button>
-            <el-button size="small" @click="triggerImport">
+            <el-button v-if="canEdit" size="small" @click="triggerImport">
               <el-icon><Upload /></el-icon> Import
             </el-button>
-            <el-button type="primary" size="small" @click="showCreateDialog">
+            <el-button v-if="canEdit" type="primary" size="small" @click="showCreateDialog">
               <el-icon><Plus /></el-icon> Add Parser
             </el-button>
             <input
@@ -162,7 +162,7 @@
             <el-switch
               v-model="row.enabled"
               @change="toggleParser(row)"
-              :disabled="updating"
+              :disabled="updating || !canEdit"
             />
           </template>
         </el-table-column>
@@ -170,23 +170,23 @@
         <el-table-column label="Actions" width="420" fixed="right">
           <template #default="{ row }">
             <el-button size="small" @click="testParser(row)">Test</el-button>
-            <el-button size="small" @click="editParser(row)">Edit</el-button>
+            <el-button size="small" @click="editParser(row)">{{ canEdit ? 'Edit' : 'View' }}</el-button>
             <el-button size="small" @click="exportParser(row)">Export</el-button>
             <el-button size="small" @click="contributeParser(row)">Contribute</el-button>
-            <el-button type="danger" size="small" @click="deleteParser(row)">Delete</el-button>
+            <el-button v-if="canEdit" type="danger" size="small" @click="deleteParser(row)">Delete</el-button>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
 
-    <!-- Create/Edit Parser Dialog -->
+    <!-- Create/Edit Parser Dialog (read-only "View" for viewers) -->
     <el-dialog
       v-model="dialogVisible"
-      :title="editMode ? 'Edit Parser' : 'Create Parser'"
+      :title="editMode ? (canEdit ? 'Edit Parser' : 'View Parser') : 'Create Parser'"
       width="900px"
       @close="resetForm"
     >
-      <el-form :model="parserForm" :rules="rules" ref="formRef" label-width="120px">
+      <el-form :model="parserForm" :rules="rules" ref="formRef" label-width="120px" :disabled="!canEdit">
         <el-form-item label="Name" prop="name">
           <el-input v-model="parserForm.name" placeholder="e.g., SSH Authentication" />
         </el-form-item>
@@ -251,7 +251,9 @@
           </div>
         </el-form-item>
 
-        <el-form-item label="Test Sample">
+        <!-- Tests the unsaved pattern (POST /parsers/test), so it goes with editing;
+             a viewer tests a saved parser with the row's Test button. -->
+        <el-form-item v-if="canEdit" label="Test Sample">
           <el-input
             v-model="testSample"
             type="textarea"
@@ -276,8 +278,8 @@
       </el-form>
 
       <template #footer>
-        <el-button @click="dialogVisible = false">Cancel</el-button>
-        <el-button type="primary" @click="saveParser" :loading="saving">
+        <el-button @click="dialogVisible = false">{{ canEdit ? 'Cancel' : 'Close' }}</el-button>
+        <el-button v-if="canEdit" type="primary" @click="saveParser" :loading="saving">
           {{ editMode ? 'Update' : 'Create' }} Parser
         </el-button>
       </template>
@@ -382,6 +384,7 @@
         <div style="flex: 1" />
         <span class="catalog-count">{{ filteredParserCatalog.length }} / {{ catalog.length }}</span>
         <el-button
+          v-if="canEdit"
           size="small"
           type="primary"
           :loading="installingAll"
@@ -390,7 +393,7 @@
         >
           <el-icon><Download /></el-icon> Install all
         </el-button>
-        <el-button size="small" :loading="catalogLoading" @click="loadCatalog(true)">
+        <el-button v-if="canEdit" size="small" :loading="catalogLoading" @click="loadCatalog(true)">
           <el-icon><Refresh /></el-icon> Refresh
         </el-button>
       </div>
@@ -427,7 +430,7 @@
             <el-tag v-else type="info" size="small" effect="plain">Available</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="Action" width="140" fixed="right">
+        <el-table-column v-if="canEdit" label="Action" width="140" fixed="right">
           <template #default="{ row }">
             <el-tooltip
               v-if="!row.valid"
@@ -585,8 +588,16 @@ e.g. Jan 1 12:00:00 host myapp: login failed from 203.0.113.5"
 <script setup lang="ts">
 import { ref, onMounted, reactive, computed } from 'vue';
 import { api } from '@/services/api';
+import { useAuthStore } from '@/stores/auth';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
 import { Plus, Delete, Right, CircleCheck, Upload, Shop, Refresh, MagicStick, Download, InfoFilled } from '@element-plus/icons-vue';
+
+// Viewers browse, test saved parsers, export and contribute. Changing parsers
+// (create, edit, enable, import, catalog install, delete) is analyst and up,
+// and the AI builder is admin-only, matching the API's role gates.
+const authStore = useAuthStore();
+const canEdit = computed(() => authStore.canAnalyst);
+const isAdmin = computed(() => authStore.isAdmin);
 
 const parsers = ref<any[]>([]);
 const matchStats = ref<{ window: string; by_parser: Record<string, number>; unparsed: number } | null>(null);

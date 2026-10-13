@@ -11,21 +11,23 @@
 // confirming against a real instance during the manual E2E pass.
 import { ApiPollAdapter, PollCredential, PollFetchResult, PollTarget, PolledEvent } from '../types';
 import { httpFetch } from '../httpFetch';
+import { resolveEndpoint, urlHost } from '../urls';
 
 const MAX_PAGES_PER_TICK = 5;
 const PAGE_SIZE = 100;
 const FIRST_POLL_LOOKBACK_MS = 60 * 60 * 1000; // 1h — bounds the very first pull instead of fetching all history
+const DEFAULT_ENDPOINT = '/api/v3/events/events/';
 
 export function buildBaseUrl(target: PollTarget): string {
   // Default (scan-discovered source, no target.port/target.tls): authentik.yaml
   // signals 9443 (HTTPS, primary) and 9000 (HTTP, secondary).
   const defaultHttps = target.openPorts.includes(9443) || !target.openPorts.includes(9000);
-  // A manual source may override the scheme and/or port; each falls back to the
+  // A manual source (or an admin's override) may set the scheme and/or port; each falls back to the
   // discovered-source derivation independently, so an absent evidence case is
   // byte-for-byte the previous https://ip:9443 / http://ip:9000.
   const https = target.tls != null ? target.tls : defaultHttps;
   const port = target.port ?? (defaultHttps ? 9443 : 9000);
-  return `${https ? 'https' : 'http'}://${target.ip}:${port}`;
+  return `${https ? 'https' : 'http'}://${urlHost(target.ip)}:${port}`;
 }
 
 export function isFailure(action: string | undefined | null): boolean {
@@ -63,7 +65,7 @@ async function fetchEvents(target: PollTarget, credential: PollCredential, curso
   let page = 1;
 
   for (; page <= MAX_PAGES_PER_TICK; page++) {
-    const url = `${baseUrl}${target.logAccess.endpoint || '/api/v3/events/events/'}?ordering=created&created__gte=${encodeURIComponent(
+    const url = `${baseUrl}${resolveEndpoint(target, DEFAULT_ENDPOINT)}?ordering=created&created__gte=${encodeURIComponent(
       since.toISOString()
     )}&page_size=${PAGE_SIZE}&page=${page}`;
     const res = await httpFetch(url, {
@@ -105,4 +107,5 @@ async function fetchEvents(target: PollTarget, credential: PollCredential, curso
 export const authentikAdapter: ApiPollAdapter = {
   fingerprintId: 'authentik',
   fetchEvents,
+  describeUrl: (target) => `${buildBaseUrl(target)}${resolveEndpoint(target, DEFAULT_ENDPOINT)}`,
 };

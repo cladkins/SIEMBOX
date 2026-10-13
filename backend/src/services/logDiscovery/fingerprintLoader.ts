@@ -4,7 +4,7 @@
 // contribution shouldn't take down every other fingerprint.
 import * as fs from 'fs';
 import * as path from 'path';
-import * as yaml from 'js-yaml';
+import * as yaml from '../../utils/yaml';
 import { logger } from '../../utils/logger';
 import { FingerprintEntry } from './types';
 

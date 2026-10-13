@@ -16,6 +16,7 @@ import { groupContainers, DockerContainer } from '../services/scanner/dockerDisc
 import { ShipperContainerModel } from '../models/ShipperContainer';
 import { authenticate, authorize, requireAdmin, requireOperator } from '../middleware/auth';
 import { authenticateShipperPush } from '../middleware/shipperPushAuth';
+import { rateLimitedHandler, requestLimitKey } from '../net/requestLimits';
 import { sha256hex } from '../models/EdrAgent';
 import { ingestPushedLogs, MAX_LOG_PUSH_BATCH_SIZE } from '../services/shippers/logPushService';
 import { unknownSources, isDatabaseBusy } from '../services/shippers/unknownSources';
@@ -851,20 +852,21 @@ router.post('/discovery-results', async (req: Request, res: Response): Promise<v
 // middleware/shipperPushAuth.ts. NOT JWT, NOT the syslog api_key above.)
 // ============================================================================
 
-// The global IP limiter (app.ts) exempts this path so a busy shipper isn't
+// The general limiter (app.ts) exempts this path so a busy shipper isn't
 // throttled by the generic UI limit — but that exemption keys only off the
 // X-Shipper-ID header's presence, so unauthenticated/invalid-key requests would
-// otherwise hit the auth lookup with no throttle at all. This dedicated per-IP
-// limiter sits in front of auth to bound that (and the DB work auth does),
-// while still giving real shippers far more headroom than the UI limit.
+// otherwise hit the auth lookup with no throttle at all. This dedicated
+// per-address limiter sits in front of auth to bound that (and the DB work auth
+// does), while still giving real shippers far more headroom than the UI limit.
 // Generous for batched pushes (each request carries up to 1000 entries);
 // override with SHIPPER_LOG_PUSH_MAX if you push harder.
 const logPushLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: Number(process.env.SHIPPER_LOG_PUSH_MAX) || 6000, // requests per IP per window
-  message: 'Too many log-push requests from this IP, please try again later.',
-  standardHeaders: true,
+  limit: Number(process.env.SHIPPER_LOG_PUSH_MAX) || 6000, // requests per address per window
+  keyGenerator: requestLimitKey,
+  standardHeaders: 'draft-6',
   legacyHeaders: false,
+  handler: rateLimitedHandler('Too many log-push requests from your address.'),
 });
 
 // Accepts a single log ({"message": "..."}) or a batch ({"logs": [...]}).

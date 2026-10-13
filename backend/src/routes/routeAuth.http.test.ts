@@ -139,6 +139,7 @@ const LOGIN_REQUIRED: Array<[string, string, unknown?]> = [
   ['POST', '/api/log-discovery/sources/1/confirm'],
   ['POST', '/api/log-discovery/sources/1/ignore'],
   ['POST', '/api/log-discovery/sources/1/onboard/confirm', { confirm: true }],
+  ['PATCH', '/api/log-discovery/sources/1', { port: 8123 }],
   ['POST', '/api/containers/scan', { image_ref: 'nginx:latest' }],
 ];
 
@@ -171,6 +172,25 @@ test('login and the health check stay reachable without a login', async () => {
   const login = await call('POST', '/api/auth/login', {});
   assert.equal(login.status, 400, 'missing credentials is a validation error, not an auth wall');
   assert.equal(login.message, 'Username and password are required');
+});
+
+test('a /api/auth body over 16 kB is refused with 413, JSON or form-encoded', async () => {
+  const password = 'x'.repeat(20 * 1024);
+  for (const [type, body] of [
+    ['application/json', JSON.stringify({ username: 'a', password })],
+    ['application/x-www-form-urlencoded', new URLSearchParams({ username: 'a', password }).toString()],
+  ]) {
+    const res = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': type }, body });
+    assert.equal(res.status, 413, type);
+    assert.equal(((await res.json()) as { message?: string }).message, 'Request body is too large');
+  }
+});
+
+test('the 16 kB cap is only for /api/auth: other routes keep the general limit', async () => {
+  // Fails key validation (400) after parsing, rather than 413 before it.
+  const r = await call('POST', '/api/shippers/register', { padding: 'x'.repeat(20 * 1024) });
+  assert.equal(r.status, 400);
+  assert.equal(r.message, 'API key is required');
 });
 
 /**

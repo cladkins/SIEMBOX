@@ -18,7 +18,7 @@
         Only {{ triageStore.minSeverity }}+ severity alerts are triaged automatically.
       </el-text>
       <el-text v-else type="info">No analysis yet.</el-text>
-      <div class="actions">
+      <div v-if="canAnalyst" class="actions">
         <el-button size="small" :loading="running" @click="runNow">Analyze now</el-button>
       </div>
     </template>
@@ -33,14 +33,14 @@
 
     <template v-else-if="row.status === 'failed'">
       <el-alert type="error" :closable="false" show-icon :title="row.error || 'Triage failed'" />
-      <div class="actions">
+      <div v-if="canAnalyst" class="actions">
         <el-button size="small" :loading="running" @click="runNow">Re-run</el-button>
       </div>
     </template>
 
     <template v-else-if="row.status === 'skipped'">
       <el-text type="info">Skipped — {{ row.error || 'no reason given' }}.</el-text>
-      <div class="actions">
+      <div v-if="canAnalyst" class="actions">
         <el-button size="small" :loading="running" @click="runNow">Analyze now</el-button>
       </div>
     </template>
@@ -73,7 +73,7 @@
           <li v-for="(q, i) in row.suggested_queries" :key="i">
             <span class="query-label">{{ q.label }}</span>
             <span v-if="q.why" class="query-why">— {{ q.why }}</span>
-            <el-button link size="small" @click="askAnalyst(q)">Ask the analyst</el-button>
+            <el-button v-if="canAnalyst" link size="small" @click="askAnalyst(q)">Ask the analyst</el-button>
           </li>
         </ul>
       </div>
@@ -88,7 +88,7 @@
               </ol>
               <p v-if="row.remediation.notes" class="remediation-notes"><strong>Note:</strong> {{ row.remediation.notes }}</p>
             </div>
-            <el-button size="small" @click="useSuggestedStatus">
+            <el-button v-if="canAnalyst" size="small" @click="useSuggestedStatus">
               Use suggested status ({{ formatStatus(row.remediation.proposed_status) }})
             </el-button>
           </div>
@@ -128,7 +128,7 @@
         >
           <span class="degraded">⚠ stopped early at the analysis budget</span>
         </el-tooltip>
-        <el-button v-if="canRerun" size="small" :loading="running" @click="runNow">Re-run</el-button>
+        <el-button v-if="canAnalyst" size="small" :loading="running" @click="runNow">Re-run</el-button>
       </div>
     </template>
   </div>
@@ -162,7 +162,9 @@ let elapsedTimer: number | null = null;
 
 const row = computed(() => triageStore.byAlert[props.alertId] ?? null);
 const eligible = computed(() => triageStore.eligibleByAlert[props.alertId] ?? true);
-const canRerun = computed(() => ['admin', 'analyst', 'operator'].includes(authStore.user?.role || ''));
+// Re-running triage, asking the AI Analyst and changing the alert's status are
+// analyst and up (the API refuses viewers); a viewer only reads the analysis.
+const canAnalyst = computed(() => authStore.canAnalyst);
 
 function verdictLabel(v: string | null): string {
   return (v || 'inconclusive').replace('_', ' ').toUpperCase();

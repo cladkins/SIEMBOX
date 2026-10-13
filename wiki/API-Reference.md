@@ -12,7 +12,7 @@ Most endpoints require a **JWT**. Log in (`POST /api/auth/login`), then send the
 Authorization: Bearer <YOUR_JWT_TOKEN>
 ```
 
-Tokens are valid for **24 hours**. Role-based access applies (Admin / Analyst / Operator / Viewer) — some endpoints (user management, AI builders, threat-feed/provider config, Endpoint fleet) are **admin-only**. Endpoint agents authenticate separately with a per-agent API key.
+Tokens are valid for **24 hours**. Role-based access applies (Admin / Analyst / Operator / Viewer) — viewers are read-only, changing parsers, detection rules and alerts and using the AI Analyst need **analyst** or higher, and some endpoints (user management, AI builders, threat-feed/provider config, Endpoint fleet, deleting alerts) are **admin-only**. Endpoint agents authenticate separately with a per-agent API key.
 
 ## Response & error format
 
@@ -36,8 +36,11 @@ Tokens are valid for **24 hours**. Role-based access applies (Admin / Analyst / 
 
 ## Rate limiting
 
-- **100 requests / 15 minutes / IP.**
-- `X-RateLimit-Remaining` reports what's left.
+- **1000 requests / 15 minutes per client address** across `/api` (`API_RATE_LIMIT_MAX`). `X-RateLimit-Remaining` reports what's left.
+- **10 failed sign-ins / 15 minutes per account per address** on `POST /api/auth/login`, and 100 per address across all accounts, past which only accounts that already failed from that address are refused (successful sign-ins don't count).
+- EDR agent traffic and HTTP log pushes have their own, higher limits; EDR enrollment counts toward the general one.
+- A `429` is JSON (`code: "RATE_LIMITED"`, `message`, `retryAfter`) with a `Retry-After` header.
+- The address is the browser's real one through the web UI (port 8420). A direct caller on port 8421 is its TCP address: `X-Forwarded-For` from it is ignored unless it is in `TRUSTED_PROXIES` (see [Configuration](Configuration#client-addresses--reverse-proxies)).
 
 ## Endpoint areas
 

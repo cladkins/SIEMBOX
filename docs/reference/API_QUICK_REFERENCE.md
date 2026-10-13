@@ -74,6 +74,10 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 ### Parsers
 
+Reads take any role. Creating, changing or deleting a parser, testing an unsaved
+pattern and catalog installs need an analyst, operator or admin token (a
+viewer's gets `403`).
+
 ```bash
 # List all parsers
 curl -H "Authorization: Bearer $TOKEN" \
@@ -108,6 +112,9 @@ curl -X POST http://localhost:8421/api/parsers/test \
 ```
 
 ### Detection Rules
+
+Reads take any role. Creating, changing or deleting a rule and catalog installs
+need an analyst, operator or admin token (a viewer's gets `403`).
 
 ```bash
 # List all rules
@@ -336,20 +343,25 @@ Performs case-insensitive search across relevant fields.
 
 ## Rate Limits
 
+Per client address, per 15 minutes. A direct caller on port 8421 is its TCP
+address; its `X-Forwarded-For` is ignored (see [API.md](API.md#rate-limiting)).
+
 | Endpoint | Limit |
 |----------|-------|
-| General API | 100 requests / 15 minutes |
-| Asset scans | 10 scans / 15 minutes |
-| Vulnerability scans | 5 scans / 30 minutes |
-| Credential operations | 20 requests / hour |
-| Audit logs | 30 requests / 5 minutes |
+| General API (`/api/*`) | 1000 requests (`API_RATE_LIMIT_MAX`) |
+| `POST /api/auth/login` | 10 failed sign-ins per account; 100 per address across accounts, after which only accounts that already failed are refused (successful ones don't count) |
+| EDR agent routes with `X-Agent-ID`, with the route's own method (not enrollment) | 30000 requests (`EDR_AGENT_RATE_MAX`) |
+| `POST /api/shippers/logs` with `X-Shipper-ID` | 6000 requests (`SHIPPER_LOG_PUSH_MAX`) |
+| `POST /api/exposure/password-check` | 30 requests |
 
-Rate limit headers:
+General API headers:
 ```
-RateLimit-Limit: 100
-RateLimit-Remaining: 95
-RateLimit-Reset: 1704812400
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 995
+X-RateLimit-Reset: 1704812400
 ```
+
+A `429` is JSON (`{"status":"error","statusCode":429,"code":"RATE_LIMITED","message":"...","retryAfter":702}`) with a `Retry-After` header in seconds.
 
 ---
 

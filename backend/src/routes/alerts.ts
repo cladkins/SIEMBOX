@@ -5,8 +5,16 @@ import { triageAlert } from '../services/ai/triageService';
 import { getTriageOperationalConfig } from '../services/ai/aiService';
 import { ApiError } from '../middleware/errorHandler';
 import { authorize } from '../middleware/auth';
+import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
 
 const router = Router();
+
+// app.ts mounts this router behind `authenticate`, so the reads are open to every
+// role. Triage (status, assignee, notes) needs analyst or higher. Deleting an
+// alert destroys evidence, so it is admin-only like retention cleanup; triage
+// closes alerts as closed or false_positive instead. Refusals go to audit_logs.
+const requireAlertTriage = requireScanPermission(UserRole.Analyst, 'alert');
+const requireAlertDelete = requireScanPermission(UserRole.Admin, 'alert');
 
 const SEVERITY_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
 
@@ -243,7 +251,7 @@ router.post('/:id/triage/rerun', authorize('admin', 'analyst', 'operator'), asyn
 });
 
 // Update alert (change status, assign user)
-router.put('/:id', async (req: Request, res: Response) => {
+router.put('/:id', requireAlertTriage, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const { status, assigned_to, description } = req.body;
@@ -266,7 +274,7 @@ router.put('/:id', async (req: Request, res: Response) => {
 });
 
 // Delete alert
-router.delete('/:id', async (req: Request, res: Response) => {
+router.delete('/:id', requireAlertDelete, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const deleted = await AlertModel.delete(id);

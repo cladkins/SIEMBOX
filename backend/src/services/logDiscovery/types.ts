@@ -50,6 +50,8 @@ export interface LogAccessMethod {
   auth?: string;
   path?: string;
   endpoint?: string;
+  /** Optional caveat shown with this method's onboarding recipe (e.g. an install type where the endpoint differs). */
+  note?: string;
 }
 
 export interface FingerprintCredentials {
@@ -133,6 +135,8 @@ export interface RuntimeSourcePollerStatus {
   last_status: 'ok' | 'error' | null;
   last_polled_at: string | null;
   last_error: string | null;
+  /** The URL being polled (scheme, host, port, path; no credential or query string). Null when not configured. */
+  effective_url: string | null;
 }
 
 export interface RuntimeSource {

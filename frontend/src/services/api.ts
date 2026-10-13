@@ -37,6 +37,21 @@ declare module 'axios' {
   }
 }
 
+/**
+ * What to tell the user about a 429: the API's message ("Too many requests from
+ * your address. Try again in 12 minutes."), or a wait worked out from the
+ * Retry-After header (seconds).
+ */
+function rateLimitMessage(error: AxiosError): string {
+  const message = (error.response?.data as { message?: unknown } | undefined)?.message;
+  if (typeof message === 'string' && message.trim()) return message;
+  const seconds = Number(error.response?.headers?.['retry-after']);
+  if (!Number.isFinite(seconds) || seconds <= 0) return 'Too many requests. Please try again later.';
+  if (seconds < 60) return `Too many requests — try again in ${Math.ceil(seconds)} s.`;
+  const minutes = Math.ceil(seconds / 60);
+  return `Too many requests — try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`;
+}
+
 // Response interceptor
 apiClient.interceptors.response.use(
   (response) => response,
@@ -62,6 +77,11 @@ apiClient.interceptors.response.use(
         case 404:
           ElMessage.error('Resource not found.');
           break;
+        case 429:
+          // Rate limited. One toast however many requests got the 429 (the UI
+          // polls), with the server's own message when it sent one.
+          ElMessage({ type: 'error', message: rateLimitMessage(error), grouping: true });
+          break;
         case 500:
           ElMessage.error('Server error. Please try again later.');
           break;
@@ -85,9 +105,10 @@ export default apiClient;
 
 // API service methods
 export const api = {
-  // Auth
+  // Auth. The Login view shows every failure itself (wrong password, MFA step,
+  // disabled account, too many attempts), so the generic toast is skipped.
   login: (username: string, password: string, code?: string) =>
-    apiClient.post('/auth/login', { username, password, ...(code ? { code } : {}) }),
+    apiClient.post('/auth/login', { username, password, ...(code ? { code } : {}) }, { skipErrorToast: true }),
   logout: () => apiClient.post('/auth/logout'),
   getProfile: () => apiClient.get('/auth/me'),
   changeOwnPassword: (currentPassword: string, newPassword: string) =>

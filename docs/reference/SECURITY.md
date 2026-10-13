@@ -382,11 +382,19 @@ curl -X POST http://localhost:8421/api/users \
 
 ### Role-Based Access Control (RBAC)
 
+Four roles, each including the ones before it. The API checks the role on every
+route (a role that may not make a call gets `403`), and the UI hides or disables
+what a role can't use. The full permission table is in
+[User Management](../guides/USER-MANAGEMENT.md#permission-table); every route and
+the roles it allows are listed in `backend/src/routes/routeInventory.test.ts`,
+which the test suite checks against the running API.
+
 | Role | Permissions |
 |------|-------------|
-| **admin** | Full system access: manage users, settings, parsers, rules, alerts, logs |
-| **analyst** | Manage alerts, view logs, create/edit parsers and rules (cannot manage users) |
-| **viewer** | Read-only access to alerts and logs (cannot create/edit anything) |
+| **admin** | Full system access: users, every settings area, Endpoints (EDR), deleting alerts, the AI builders, Sigma import, Content Pack installs, shipper keys |
+| **operator** | Everything an analyst can do, plus vulnerability, container, scheduled and Log Discovery scans, and managing log shippers (operators see shipper API keys) |
+| **analyst** | Everything a viewer can do, plus alert triage, the AI Analyst, creating, editing, installing and deleting parsers and detection rules, asset inventory edits and discovery scans |
+| **viewer** | Read-only: can view logs, alerts, parsers, rules and shippers, but cannot create, edit or delete anything; changes only its own password and MFA |
 
 Reading `/api/settings` is admin-only too: other roles get `403` there, except
 `GET /api/settings/syslog` (the syslog host and port that shippers send to).
@@ -409,6 +417,7 @@ kinds of stored secret are shown to the roles that manage them:
 - Use admin role only for initial setup and user management
 - Daily operations should use analyst accounts
 - Dashboards/reports use viewer accounts
+- Give the operator role only to the people who run scans or manage shippers
 - Disable accounts immediately when employees leave
 - Review user accounts monthly
 
@@ -496,11 +505,16 @@ server {
     add_header X-XSS-Protection "1; mode=block" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
-    # Proxy to SIEMBox frontend
+    # Everything, the API included, goes to SIEMBox's web UI container, which
+    # forwards /api to the backend itself. Use the host's LAN address, not
+    # localhost: Docker presents loopback clients of a published port as its
+    # network gateway, an address SIEMBox never trusts.
     location / {
-        proxy_pass http://localhost:8420;
+        proxy_pass http://192.168.1.10:8420;   # this host's LAN address
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        # Append, never replace: SIEMBox takes the client from the entry
+        # this proxy adds.
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
@@ -508,23 +522,13 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-    }
 
-    # API endpoint
-    location /api {
-        proxy_pass http://localhost:8421/api;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # Increase timeout for long-running queries
+        # Long-running requests (the AI builder)
         proxy_read_timeout 300s;
-        proxy_connect_timeout 300s;
     }
 
-    # Rate limiting
-    limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+    # Rate limiting (the matching zone goes in the http block:
+    #   limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;)
     limit_req zone=api_limit burst=20 nodelay;
 
     # Access logs
@@ -532,6 +536,20 @@ server {
     error_log /var/log/nginx/siembox-error.log;
 }
 ```
+
+Then tell SIEMBox to believe this proxy's `X-Forwarded-For`, keeping the
+bundled frontend in the list, and redeploy (`docker compose up -d`; a plain
+restart keeps the old environment):
+
+```bash
+# .env
+TRUSTED_PROXIES=frontend,192.168.1.10
+```
+
+Don't send `/api` straight to port 8421 from here: direct callers on 8421 are
+identified by their TCP address, so every user would share the proxy's. Check
+the result as an admin with `GET /api/admin/client-address` (see DEPLOYMENT.md,
+"Client addresses and reverse proxies").
 
 ```bash
 # Enable site and get certificate
@@ -576,6 +594,12 @@ services:
       - "traefik.http.routers.siembox.entrypoints=websecure"
       - "traefik.http.routers.siembox.tls.certresolver=myresolver"
       - "traefik.http.services.siembox.loadbalancer.server.port=80"
+
+  backend:
+    environment:
+      # Believe Traefik's X-Forwarded-For (resolved through Docker DNS on
+      # siembox-network); keep the bundled frontend in the list.
+      TRUSTED_PROXIES: frontend,traefik
 ```
 
 ### Self-Signed Certificates (Dev/Internal Only)
@@ -877,9 +901,32 @@ CORS_ORIGIN=https://siembox.company.com
 
 ### Rate Limiting
 
-**Current Implementation:**
-- 100 requests per 15 minutes per IP
-- Applied at application level
+**Current Implementation** (in memory, per client address; reset when the
+backend restarts):
+- General: `API_RATE_LIMIT_MAX` (default 1000) requests per 15 minutes per
+  address across `/api`. A `429` is JSON (`code: "RATE_LIMITED"`) with
+  `Retry-After`.
+- Sign-in: 10 failed `POST /api/auth/login` attempts per account per 15
+  minutes per address (an IPv6 client's /64), and 100 per address across all
+  accounts; past those 100, only accounts that already failed from that
+  address in their own 15-minute window are refused. So someone sharing your
+  address (an office NAT, a reverse proxy SIEMBox doesn't trust) can't lock
+  every user out, but can still pause one account they know the name of, from
+  that address, 15 minutes at a time (one failure for it once the address is
+  past 100). This interim limit goes away with per-account sign-in
+  protection. Successful sign-ins and `5xx` answers don't count.
+- EDR agent routes (30000, `EDR_AGENT_RATE_MAX`) and HTTP log pushes (6000,
+  `SHIPPER_LOG_PUSH_MAX`) have their own limits and skip the general one when
+  they carry `X-Agent-ID` / `X-Shipper-ID` with the route's own method. Agent
+  enrollment counts toward the general limit. The Pwned Passwords check allows
+  30 per 15 minutes.
+- Bodies sent to `/api/auth/*` are capped at 16 kB (`413` above that).
+
+The address can't be forged: the web UI's nginx reaches the backend over a
+unix socket on a volume only those two containers mount, and a direct caller
+on port 8421 is its TCP address, whatever `X-Forwarded-For` it sends. Only the
+proxies in `TRUSTED_PROXIES` (default `frontend`) may name a client. See
+DEPLOYMENT.md, "Client addresses and reverse proxies".
 
 **Enhanced Rate Limiting:**
 

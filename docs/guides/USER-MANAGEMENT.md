@@ -14,29 +14,77 @@ The User Management feature enables administrators to:
 
 ## User Roles
 
-SIEMBox supports three user roles with different permission levels:
-
-### Admin
-**Full Access**: Complete control over all SIEMBox features
-- Manage users, parsers, rules, shippers, and settings
-- View and manage all logs and alerts
-- Configure system-wide settings
-- Delete and modify any resource
-
-### Analyst
-**Operational Access**: Manage security operations
-- View and manage alerts
-- Create and edit parsers
-- Create and edit detection rules
-- View logs and parsed data
-- **Cannot**: Manage users, shippers, or system settings
+SIEMBox has four roles. Each one includes everything the roles before it can do:
+**viewer < analyst < operator < admin**.
 
 ### Viewer
-**Read-Only Access**: Monitor security events
-- View logs and parsed data
-- View alerts (cannot modify)
-- View parsers and rules (cannot modify)
-- **Cannot**: Create, edit, or delete any resources
+**Read-only.** A viewer can see the dashboard, logs, alerts, parsers, detection rules,
+Content Packs, shippers and threat intel, but cannot create, edit or delete anything. Besides
+reading, a viewer can only manage their own account (password, MFA), test a saved parser
+against a sample, export or contribute a parser or rule, use "Explain this", and check a
+password against known breaches through the API (`POST /api/exposure/password-check`; the
+check's card in Settings → Digital Risk is admin-only).
+
+### Analyst
+**Detection content and alert triage.** Everything a viewer can do, plus:
+- triage alerts (status, notes, assignee) and re-run AI triage
+- use the AI Analyst and the SOC Triage page
+- create, edit, enable/disable, import and delete parsers, and test unsaved patterns
+- create, edit, enable/disable and delete detection rules
+- install from the parser and detection catalogs (one, all, or the Recommended list)
+- edit the asset inventory, run asset discovery scans and refresh vulnerability templates
+
+### Operator
+**Scanning and log collection.** Everything an analyst can do, plus:
+- run and cancel vulnerability scans, download templates and mark vulnerabilities remediated
+- container scans, scheduled scans, and Log Discovery scans and source triage
+- manage log shippers (create, edit, delete, sources and volumes); operators see each
+  shipper's syslog API key
+- refresh threat feeds
+
+### Admin
+**Full access.** Everything an operator can do, plus users, every Settings area (AI, data
+retention, log ingestion, notifications, detections, asset discovery, Digital Risk, system),
+the Endpoints (EDR) and Admin pages, deleting alerts, the AI parser and detection builders,
+Sigma import and Content Pack installs.
+
+### Permission table
+
+What each role can do through the UI and the API. A role that may not make a call gets `403`
+from the API, and the UI hides or disables the matching control.
+
+| Action | Viewer | Analyst | Operator | Admin |
+|---|---|---|---|---|
+| View the dashboard, logs, alerts, parsers, rules, catalogs, Content Packs, shippers, threat intel | yes | yes | yes | yes |
+| Asset Inventory and Templates pages | no | yes | yes | yes |
+| Vulnerability, container, scheduled-scan and Log Discovery pages | no | no | yes | yes |
+| Own account: password, MFA | yes | yes | yes | yes |
+| Test a saved parser, export or contribute a parser or rule, "Explain this" | yes | yes | yes | yes |
+| Password breach check through the API (the Settings → Digital Risk card is admin-only) | yes | yes | yes | yes |
+| Triage alerts (status, notes, assignee), re-run AI triage | no | yes | yes | yes |
+| AI Analyst chat, SOC Triage page | no | yes | yes | yes |
+| Create, edit, enable/disable, import or delete parsers; test an unsaved parser | no | yes | yes | yes |
+| Create, edit, enable/disable or delete detection rules | no | yes | yes | yes |
+| Install, update or refresh (re-fetch from GitHub) the parser and detection catalogs | no | yes | yes | yes |
+| Asset inventory edits, asset discovery scans, vulnerability template refresh | no | yes | yes | yes |
+| Vulnerability scans, template download, mark vulnerabilities remediated | no | no | yes | yes |
+| Container scans, scheduled scans | no | no | yes | yes |
+| Log Discovery scans; confirm, ignore and onboard discovered sources | no | no | yes | yes |
+| Manage log shippers (create, edit, delete, sources, volumes); see shipper API keys | no | no | yes | yes |
+| Refresh threat feeds | no | no | yes | yes |
+| Delete alerts | no | no | no | yes |
+| AI parser and detection builders, Sigma import, Content Pack install | no | no | no | yes |
+| Users, Settings areas (other than Account), Endpoints (EDR), Admin dashboard | no | no | no | yes |
+| Shipper key regeneration and HTTP push keys; Log Discovery scope, manual sources, editing a source's poll target, and poll credentials; threat feed and Digital Risk configuration | no | no | no | yes |
+
+The pages a role can't open only hide data from the UI: every signed-in role can read assets,
+vulnerabilities, scans and Digital Risk findings through the API, and no role can change them
+through it without the matching write permission above.
+
+A refused parser, rule, alert, AI Analyst, asset or scan change is also recorded in the audit
+log (`audit_logs`, action `access.denied`). The full per-route list lives in
+`backend/src/routes/routeInventory.test.ts`; the test suite checks it against the running API.
+See [API Reference → Roles](../reference/API.md#roles) for the routes.
 
 ## Accessing User Management
 
@@ -51,7 +99,7 @@ SIEMBox supports three user roles with different permission levels:
 The User Management page displays a table with all users:
 - **Username**: Unique user identifier
 - **Email**: User's email address
-- **Role**: User's permission level (Admin/Analyst/Viewer)
+- **Role**: User's permission level (Admin/Operator/Analyst/Viewer)
 - **Created**: Account creation timestamp
 - **Actions**: Edit and Delete buttons
 
@@ -61,7 +109,7 @@ The User Management page displays a table with all users:
 2. Fill in the required fields:
    - **Username**: 3+ characters, cannot be changed after creation
    - **Email**: Valid email address
-   - **Role**: Select from Admin, Analyst, or Viewer
+   - **Role**: Select from Admin, Operator, Analyst, or Viewer
    - **Password**: Minimum 8 characters
    - **Confirm Password**: Must match password
 3. Click **Create**
@@ -209,8 +257,9 @@ curl -X DELETE http://localhost:5000/api/users/2 \
 1. Create separate accounts for each user (never share accounts)
 2. Remove user accounts promptly when employees leave
 3. Use analyst role for most security team members
-4. Reserve admin role for system administrators only
-5. Use viewer role for stakeholders who need read-only access
+4. Use operator role for the people who run scans and manage log shippers (operators see shipper API keys)
+5. Reserve admin role for system administrators only
+6. Use viewer role for stakeholders who need read-only access
 
 ## Troubleshooting
 

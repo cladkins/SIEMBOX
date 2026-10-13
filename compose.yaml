@@ -58,6 +58,24 @@ services:
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-changeme}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      # Client addresses (DEPLOYMENT.md, "Client addresses and reverse proxies").
+      # X-Forwarded-For is believed only from the bundled frontend, over the
+      # api-socket volume below or by its service name, and from what this
+      # lists: IPs, CIDRs or Compose service names, comma-separated. The value
+      # replaces the default, so to add your reverse proxy keep `frontend`:
+      #   TRUSTED_PROXIES=frontend,192.168.1.20
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-frontend}
+      # Requests per 15 minutes per client address across /api (empty = 1000).
+      API_RATE_LIMIT_MAX: ${API_RATE_LIMIT_MAX:-}
+      # The EDR agent routes' and HTTP log pushes' own per-address limits per 15
+      # minutes (empty = 30000 and 6000); raise them for a big fleet behind one
+      # address.
+      EDR_AGENT_RATE_MAX: ${EDR_AGENT_RATE_MAX:-}
+      SHIPPER_LOG_PUSH_MAX: ${SHIPPER_LOG_PUSH_MAX:-}
+      # The proxy socket for the frontend's nginx. Leave it empty
+      # (/run/siembox/api.sock on the api-socket volume below, the only path
+      # the bundled nginx connects to); `off` runs without the socket.
+      SIEMBOX_PROXY_SOCKET: ${SIEMBOX_PROXY_SOCKET:-}
       # EDR YARA rule packs (optional). Built-in starter bundle ships by default;
       # set EDR_YARA_FORGE_ENABLED=true to auto-import YARA-Forge Extended daily.
       EDR_YARA_FORGE_ENABLED: ${EDR_YARA_FORGE_ENABLED:-}
@@ -65,6 +83,10 @@ services:
     volumes:
       - ./rules:/app/rules:ro  # Mount rules directory as read-only
       - ./nuclei-templates:/root/nuclei-templates  # Nuclei vulnerability templates (bind mount for easy customization)
+      # The private channel from the frontend's nginx: the backend listens on
+      # /run/siembox/api.sock, and only containers that mount this volume can
+      # connect. Keep it in every network mode, host networking included.
+      - api-socket:/run/siembox
     ports:
       # Ignored entirely once network_mode: host is enabled below -- comment
       # this block out too when you do.
@@ -84,7 +106,8 @@ services:
     # Visibility" section before enabling. To enable: comment out `networks:`
     # below AND the `ports:` block above, uncomment the line below, then set
     # DB_HOST=localhost, BACKEND_UPSTREAM=host.docker.internal:8421, and
-    # SIEMBOX_HOST_NETWORKING=true in your .env file.
+    # SIEMBOX_HOST_NETWORKING=true in your .env file. Keep the api-socket
+    # volume: it is what gives the web UI's users their real addresses here.
     # network_mode: host
     networks:
       - siembox-network
@@ -99,12 +122,17 @@ services:
         VITE_API_URL: ${VITE_API_URL:-/api}
     container_name: siembox-frontend
     environment:
-      # Where nginx proxies /api requests. Defaults to the backend's Docker-DNS
-      # name on siembox-network. If you've enabled the backend's optional
-      # network_mode: host above, set this to host.docker.internal:8421 in
-      # your .env instead (see DEPLOYMENT.md's "Log Discovery and Network
-      # Visibility" section).
+      # nginx proxies /api over the api-socket volume below and falls back to
+      # this TCP address while the socket is unavailable. Defaults to the
+      # backend's Docker-DNS name on siembox-network. If you've enabled the
+      # backend's optional network_mode: host above, set this to
+      # host.docker.internal:8421 in your .env instead: it is still required
+      # there, because nginx resolves it at startup (see DEPLOYMENT.md's "Log
+      # Discovery and Network Visibility" section).
       BACKEND_UPSTREAM: ${BACKEND_UPSTREAM:-backend:8421}
+    volumes:
+      # The backend's proxy socket; read-only is enough to connect.
+      - api-socket:/run/siembox:ro
     ports:
       - "8420:80"
     depends_on:
@@ -121,6 +149,9 @@ services:
 
 volumes:
   postgres-data:
+    driver: local
+  # Holds the backend's API socket for the frontend (see the backend's volumes).
+  api-socket:
     driver: local
 
 networks:

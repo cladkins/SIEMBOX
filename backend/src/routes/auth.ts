@@ -1,15 +1,113 @@
-import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
+import { Router, Request, Response, NextFunction } from 'express';
+import rateLimit, { type ClientRateLimitInfo } from 'express-rate-limit';
 import { UserModel } from '../models/User';
 import { SessionModel } from '../models/Session';
 import { ApiError } from '../middleware/errorHandler';
-import { authenticate } from '../middleware/auth';
+import { authenticate, requireAdmin } from '../middleware/auth';
 import { logger } from '../utils/logger';
 import * as MfaService from '../services/auth/mfaService';
+import { rateLimitedHandler, signInLimitKey } from '../net/requestLimits';
 
 const router = Router();
 
+/*
+ * Stopgap until per-account sign-in protection lands (PR 2 replaces all of
+ * this). Two in-memory limits on failed sign-ins, per 15 minutes; a restart
+ * clears them:
+ *
+ * - 10 per account per address (an IPv6 client's /64). An attacker guessing one
+ *   account's password gets 10 tries, while everyone else who shares that
+ *   address (an office NAT, a reverse proxy SIEMBox doesn't trust) can still
+ *   sign in to their own accounts.
+ * - 100 per address across all accounts, so trying many accounts is bounded
+ *   too. Past it, only accounts that already failed from that address in
+ *   their own current 15-minute window are refused: someone who types their
+ *   password right is never locked out by other people's failures.
+ *
+ * Only a completed check that failed counts: not a successful sign-in, not the
+ * "MFA code required" answer (it follows a correct password), not a 5xx (no
+ * password was checked, e.g. while the database is down) and not a refusal.
+ */
+const SIGN_IN_WINDOW_MS = 15 * 60 * 1000;
+const FAILURES_PER_ACCOUNT = 10;
+const FAILURES_PER_ADDRESS = 100;
+
+function notAFailedSignIn(_req: Request, res: Response): boolean {
+  const status = res.statusCode;
+  return status < 400 || status >= 500 || status === 429 || res.locals.mfaCodeRequested === true;
+}
+
+/**
+ * The address's sign-in key plus the username as typed, trimmed and
+ * lower-cased (so changing its case is no way around the limit), hashed so a
+ * key never holds what someone typed.
+ */
+function signInAccountKey(req: Request): string {
+  const username = String(req.body?.username ?? '').trim().toLowerCase();
+  const account = crypto.createHash('sha256').update(username).digest('hex').slice(0, 32);
+  return `${signInLimitKey(req)}|${account}`;
+}
+
+const accountFailureLimiter = rateLimit({
+  windowMs: SIGN_IN_WINDOW_MS,
+  limit: FAILURES_PER_ACCOUNT,
+  skipSuccessfulRequests: true,
+  requestWasSuccessful: notAFailedSignIn,
+  keyGenerator: signInAccountKey,
+  standardHeaders: 'draft-6',
+  legacyHeaders: false,
+  handler: rateLimitedHandler('Too many failed sign-in attempts for this account from your address.'),
+});
+
+const refuseAddress = rateLimitedHandler('Too many failed sign-in attempts from your address.');
+
+const addressFailureLimiter = rateLimit({
+  windowMs: SIGN_IN_WINDOW_MS,
+  limit: FAILURES_PER_ADDRESS,
+  skipSuccessfulRequests: true,
+  requestWasSuccessful: notAFailedSignIn,
+  keyGenerator: signInLimitKey,
+  // The account limiter's RateLimit-* headers are the ones the client sees.
+  standardHeaders: false,
+  legacyHeaders: false,
+  // Over the limit: refuse the account only if it already failed from this
+  // address in a window of its own that is still open; otherwise let the
+  // attempt through.
+  handler: (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(accountFailureLimiter.getKey(signInAccountKey(req)))
+      .then((account) => {
+        const end = account ? refusalEnd(req, account) : null;
+        if (end === null) {
+          next();
+        } else {
+          res.setHeader('Retry-After', String(Math.max(1, Math.ceil((end - Date.now()) / 1000))));
+          refuseAddress(req, res);
+        }
+      })
+      .catch(next);
+  },
+});
+
+/**
+ * Past the address's limit, when refusing this account ends, or null when it
+ * isn't refused because its entry holds no failure from a window that is
+ * still open. (express-rate-limit's MemoryStore.get returns an entry whose
+ * window has ended until a sweep every 15 minutes drops it, and the account
+ * limiter, which would start a new window, doesn't run for a refused attempt.)
+ * Otherwise the refusal ends with the account's window, or with the address's
+ * if that comes first and the account hasn't reached its own limit.
+ */
+function refusalEnd(req: Request, account: ClientRateLimitInfo): number | null {
+  const accountEnd = account.resetTime?.getTime();
+  if (account.totalHits <= 0 || accountEnd === undefined || accountEnd <= Date.now()) return null;
+  const addressEnd = (req as Request & { rateLimit?: { resetTime?: Date } }).rateLimit?.resetTime?.getTime();
+  if (addressEnd === undefined || account.totalHits >= FAILURES_PER_ACCOUNT) return accountEnd;
+  return Math.min(accountEnd, addressEnd);
+}
+
 // Login
-router.post('/login', async (req: Request, res: Response) => {
+router.post('/login', addressFailureLimiter, accountFailureLimiter, async (req: Request, res: Response) => {
   try {
     const { username, password } = req.body;
 
@@ -39,6 +137,7 @@ router.post('/login', async (req: Request, res: Response) => {
     if (user.mfa_enabled) {
       const code = (req.body?.code ?? '').toString().trim();
       if (!code) {
+        res.locals.mfaCodeRequested = true; // not a failed sign-in (notAFailedSignIn)
         res.status(401).json({ message: 'MFA code required', mfaRequired: true });
         return;
       }
@@ -204,14 +303,10 @@ router.post('/me/mfa/disable', authenticate, async (req: Request, res: Response)
   }
 });
 
-// Cleanup expired sessions (can be called periodically)
-router.post('/cleanup', authenticate, async (req: Request, res: Response) => {
+// Cleanup expired sessions (can be called periodically). Admin-only, gated at
+// the route like every other role check (routeInventory.test.ts runs the gates).
+router.post('/cleanup', authenticate, requireAdmin, async (_req: Request, res: Response) => {
   try {
-    // Only admins can trigger cleanup
-    if (req.user?.role !== 'admin') {
-      throw new ApiError(403, 'Admin access required');
-    }
-
     const deletedCount = await SessionModel.deleteExpired();
 
     logger.info('Expired sessions cleaned up', { count: deletedCount });

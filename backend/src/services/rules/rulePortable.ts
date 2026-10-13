@@ -4,7 +4,7 @@
  * under rules/); this validates its structure against what the rules engine
  * actually supports, so a rule that passes CI imports and evaluates cleanly.
  */
-import yaml from 'js-yaml';
+import * as yaml from '../../utils/yaml';
 import { validateUserRegex } from './userRegex';
 
 /** Condition operators the rules engine implements (see rulesEngine.ts). */

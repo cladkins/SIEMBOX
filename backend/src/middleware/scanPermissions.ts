@@ -3,13 +3,14 @@ import { ApiError } from './errorHandler';
 import { AuditService, toInet } from '../services/audit/auditService';
 
 /**
- * Where a request came from, for an audit row. req.ip follows one
- * X-Forwarded-For hop (app.ts: trust proxy 1). Behind the nginx frontend that is
- * the real client; on a direct call to the API port it is whatever the caller
- * put in the header. A value that is not an address falls back to the TCP peer,
- * so the row is still written (ip_address is INET). When the peer differs from
- * ipAddress (the proxy, or a forged header) it comes back as peerAddress, for
- * the row's details.
+ * Where a request came from, for an audit row. req.ip is the client address
+ * (net/clientAddress.ts): through the web UI's nginx it is the real client, and
+ * on a direct call to the API port it is the caller's TCP address, whatever its
+ * X-Forwarded-For says. A value that is not an address (only a trusted proxy
+ * can supply one) falls back to the TCP peer, so the row is still written
+ * (ip_address is INET). When a TCP peer differs from ipAddress (a trusted proxy
+ * in TRUSTED_PROXIES) it comes back as peerAddress, for the row's details; the
+ * proxy socket's peer is not an address and is left out.
  */
 export function auditSource(req: Request): { ipAddress: string | null; peerAddress?: string } {
   const peer = toInet(req.socket?.remoteAddress);
@@ -42,7 +43,7 @@ const ROLE_HIERARCHY: UserRole[] = [
 /**
  * Check if user has required role or higher in hierarchy
  */
-function hasRequiredRole(userRole: string, requiredRole: UserRole): boolean {
+export function hasRequiredRole(userRole: string, requiredRole: UserRole): boolean {
   const userRoleIndex = ROLE_HIERARCHY.indexOf(userRole as UserRole);
   const requiredRoleIndex = ROLE_HIERARCHY.indexOf(requiredRole);
 
@@ -58,7 +59,8 @@ function hasRequiredRole(userRole: string, requiredRole: UserRole): boolean {
  * Requires user to have specified role or higher in hierarchy
  */
 export const requireScanPermission = (requiredRole: UserRole, resourceType?: string) => {
-  return async (req: Request, _res: Response, next: NextFunction) => {
+  // Named so routeInventory.test.ts can tell a router.use() gate from a handler.
+  return async function requireRole(req: Request, _res: Response, next: NextFunction) {
     try {
       // Ensure user is authenticated
       if (!req.user) {

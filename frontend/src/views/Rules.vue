@@ -52,7 +52,7 @@
               <span v-else>{{ row.est_daily_matches.toLocaleString() }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="" width="110" align="right">
+          <el-table-column v-if="canEdit" label="" width="110" align="right">
             <template #default="{ row }">
               <el-button
                 type="primary"
@@ -78,7 +78,7 @@
         <div class="card-header">
           <span>Detection Rules</span>
           <div class="header-actions">
-            <el-button size="small" @click="openAiBuilder">
+            <el-button v-if="isAdmin" size="small" @click="openAiBuilder">
               <el-icon><MagicStick /></el-icon> Generate with AI
             </el-button>
             <el-button size="small" @click="openCatalog">
@@ -87,10 +87,10 @@
             <el-button size="small" tag="a" href="https://github.com/cladkins/siembox-catalog" target="_blank" rel="noopener">
               Catalog repo ↗
             </el-button>
-            <el-button size="small" @click="openSigmaImport">
+            <el-button v-if="isAdmin" size="small" @click="openSigmaImport">
               <el-icon><Upload /></el-icon> Import Sigma
             </el-button>
-            <el-button type="primary" size="small" @click="showCreateDialog">
+            <el-button v-if="canEdit" type="primary" size="small" @click="showCreateDialog">
               <el-icon><Plus /></el-icon> Add Rule
             </el-button>
           </div>
@@ -136,7 +136,7 @@
             <el-switch
               v-model="row.enabled"
               @change="toggleRule(row)"
-              :disabled="updating"
+              :disabled="updating || !canEdit"
             />
           </template>
         </el-table-column>
@@ -150,22 +150,22 @@
         <el-table-column prop="description" label="Description" min-width="300" show-overflow-tooltip />
         <el-table-column label="Actions" width="300" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" @click="editRule(row)">Edit</el-button>
+            <el-button size="small" @click="editRule(row)">{{ canEdit ? 'Edit' : 'View' }}</el-button>
             <el-button size="small" @click="contributeRule(row)">Contribute</el-button>
-            <el-button type="danger" size="small" @click="deleteRule(row)">Delete</el-button>
+            <el-button v-if="canEdit" type="danger" size="small" @click="deleteRule(row)">Delete</el-button>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
 
-    <!-- Create/Edit Rule Dialog -->
+    <!-- Create/Edit Rule Dialog (read-only "View" for viewers) -->
     <el-dialog
       v-model="dialogVisible"
-      :title="editMode ? 'Edit Detection Rule' : 'Create Detection Rule'"
+      :title="editMode ? (canEdit ? 'Edit Detection Rule' : 'View Detection Rule') : 'Create Detection Rule'"
       width="1000px"
       @close="resetForm"
     >
-      <el-form :model="ruleForm" :rules="formRules" ref="formRef" label-width="120px">
+      <el-form :model="ruleForm" :rules="formRules" ref="formRef" label-width="120px" :disabled="!canEdit">
         <el-form-item label="Name" prop="name">
           <el-input v-model="ruleForm.name" placeholder="e.g., SSH Brute Force Detection" />
         </el-form-item>
@@ -251,8 +251,8 @@
       </el-form>
 
       <template #footer>
-        <el-button @click="dialogVisible = false">Cancel</el-button>
-        <el-button type="primary" @click="saveRule" :loading="saving">
+        <el-button @click="dialogVisible = false">{{ canEdit ? 'Cancel' : 'Close' }}</el-button>
+        <el-button v-if="canEdit" type="primary" @click="saveRule" :loading="saving">
           {{ editMode ? 'Update' : 'Create' }} Rule
         </el-button>
       </template>
@@ -285,6 +285,7 @@
         <div style="flex: 1" />
         <span class="catalog-count">{{ filteredRuleCatalog.length }} / {{ catalog.length }}</span>
         <el-button
+          v-if="canEdit"
           size="small"
           type="primary"
           :loading="installingAll"
@@ -293,7 +294,7 @@
         >
           <el-icon><Download /></el-icon> Install all
         </el-button>
-        <el-button size="small" :loading="catalogLoading" @click="loadCatalog(true)">
+        <el-button v-if="canEdit" size="small" :loading="catalogLoading" @click="loadCatalog(true)">
           <el-icon><Refresh /></el-icon> Refresh
         </el-button>
       </div>
@@ -328,7 +329,7 @@
             <el-tag v-else type="info" size="small" effect="plain">Available</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="Action" width="130" fixed="right">
+        <el-table-column v-if="canEdit" label="Action" width="130" fixed="right">
           <template #default="{ row }">
             <el-tooltip v-if="!row.valid" :content="(row.errors && row.errors[0]) || 'Invalid rule'" placement="top">
               <el-button size="small" disabled>Invalid</el-button>
@@ -520,9 +521,17 @@
 <script setup lang="ts">
 import { ref, onMounted, reactive, computed } from 'vue';
 import { api } from '@/services/api';
+import { useAuthStore } from '@/stores/auth';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
 import { Plus, CircleCheck, Shop, Refresh, MagicStick, Download, Upload, Warning, InfoFilled } from '@element-plus/icons-vue';
 import yaml from 'js-yaml';
+
+// Viewers browse rules and contribute them. Changing rules (create, edit,
+// enable, catalog install, delete) is analyst and up; the AI builder and Sigma
+// import are admin-only, matching the API's role gates.
+const authStore = useAuthStore();
+const canEdit = computed(() => authStore.canAnalyst);
+const isAdmin = computed(() => authStore.isAdmin);
 
 const rules = ref<any[]>([]);
 const recs = ref<any>(null);

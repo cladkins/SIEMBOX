@@ -13,8 +13,8 @@
  * which check nothing in the request) reaches a service stubbed below. So a
  * broken gate fails the test without starting a scan or touching anyone's data.
  *
- * Denials on scan gates land in audit_logs, also when X-Forwarded-For is not an
- * address. Skips itself when Postgres isn't reachable. Every row created here
+ * Denials on scan gates land in audit_logs, with the caller's TCP address even
+ * when it sends X-Forwarded-For. Skips itself when Postgres isn't reachable. Every row created here
  * (users, sessions, assets, schedules, audit and error-log rows) is removed
  * again, along with what an interrupted earlier run left behind.
  * Run with `npm test` (tsx --test).
@@ -264,6 +264,9 @@ test('log discovery: scans and source triage need admin or operator; scope stays
   await pastTheGate(['operator', 'admin'], 'POST', '/api/log-discovery/scans/abc/cancel');
   await refused(['operator', 'analyst', 'viewer'], 'PUT', '/api/log-discovery/scope/cidrs', { cidrs: 'x' });
   await pastTheGate(['admin'], 'PUT', '/api/log-discovery/scope/cidrs', { cidrs: 'x' });
+  // Editing a source's poll target (address, port, HTTPS, endpoint) is admin-only like the other poller writes.
+  await refused(['operator', 'analyst', 'viewer'], 'PATCH', '/api/log-discovery/sources/abc', { port: 8123 });
+  await pastTheGate(['admin'], 'PATCH', '/api/log-discovery/sources/abc', { port: 8123 });
 });
 
 test('container scans need admin or operator', async (t) => {
@@ -294,12 +297,13 @@ test('scan-gate denials are recorded in audit_logs', async (t) => {
   }
 });
 
-test('a denial is audited whatever X-Forwarded-For says, and keeps the real peer when it is forged', async (t) => {
+test('a denial on a direct call is audited with the caller\'s TCP address, whatever X-Forwarded-For says', async (t) => {
   if (!dbReady) return t.skip(SKIP);
-  // app.ts trusts one proxy hop, so on a direct call req.ip is the caller's own
-  // right-most X-Forwarded-For entry. audit_logs.ip_address is INET.
+  // A direct caller cannot pick its address (net/clientAddress.ts): the
+  // header is ignored, so there is no forged address to record and no separate
+  // peer to keep. audit_logs.ip_address is INET.
   const agent = `${name}-xff`;
-  for (const forwarded of ['not-an-ip', '10.9.9.9']) {
+  for (const forwarded of ['not-an-ip', '10.9.9.9', '198.51.100.7, 10.9.9.9']) {
     const r = await call('viewer', 'POST', '/api/containers/scan', {}, {
       'X-Forwarded-For': forwarded,
       'User-Agent': `${agent} ${forwarded}`,
@@ -315,7 +319,8 @@ test('a denial is audited whatever X-Forwarded-For says, and keeps the real peer
   );
   assert.deepEqual(rows.rows, [
     { user_agent: `${agent} not-an-ip`, ip: '127.0.0.1', peer: null },
-    { user_agent: `${agent} 10.9.9.9`, ip: '10.9.9.9', peer: '127.0.0.1' },
+    { user_agent: `${agent} 10.9.9.9`, ip: '127.0.0.1', peer: null },
+    { user_agent: `${agent} 198.51.100.7, 10.9.9.9`, ip: '127.0.0.1', peer: null },
   ]);
 });
 

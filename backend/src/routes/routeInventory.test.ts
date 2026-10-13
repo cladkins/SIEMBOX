@@ -1,0 +1,769 @@
+/**
+ * Every route the API serves and who may call it, checked against the real app
+ * (app.ts with every router and middleware).
+ *
+ * ADDING, REMOVING OR CHANGING A ROUTE IS A ONE-LINE CHANGE TO `INVENTORY` BELOW:
+ *   [method, full path as the router declares it (with :params), who, AUDITED?]
+ * `who` is PUBLIC (no login: sign-in and /health), AGENT (a shipper or EDR
+ * agent's own key, never a login), or the roles that may call it: the roles of
+ * the UI page(s) that make the call (allowedRoles in frontend/src/router/index.ts).
+ * Viewers are read-only: a POST, PUT, PATCH or DELETE open to them must also be
+ * in VIEWER_SAFE_WRITES, with the reason it changes nothing shared. AUDITED
+ * marks the gates built on middleware/scanPermissions.ts, which write each
+ * refusal to audit_logs.
+ *
+ * The test fails when the app serves a route the inventory doesn't list, when
+ * the inventory lists a route the app no longer serves, and when a route lets
+ * in or keeps out the wrong roles. Only routes (router.get/post/...) can be
+ * listed, so anything else mounted with app.use() or router.use() fails it too
+ * unless it is a known pass-through (PASS_THROUGH): a handler function, a
+ * mounted sub-app or express.static could answer requests no line covers. As a
+ * backstop, an admin's request for a path no route declares, under every mount,
+ * must reach the not-found handler.
+ *
+ * How it runs: the app listens on an ephemeral port, and each route's own
+ * handler is swapped for a stub that answers with the route it belongs to. So
+ * everything in front of the handler (the mount-level authenticate in app.ts,
+ * router.use() gates, per-route role gates, agent-key checks) runs exactly as
+ * Express dispatches it, and no handler does any work. Each route is then called
+ * without a login and with one session per role. Rate limiters (express-rate-limit
+ * middleware, recognized by its resetKey()) are swapped for pass-throughs: they
+ * are not role gates, and this file calls every route several times.
+ *
+ * Hermetic: before app.ts (and so config/database.ts) is loaded, DB_HOST and
+ * DB_PORT point at a local port nothing listens on; the pool is also mocked to
+ * throw. Sessions come from stubbed SessionModel/UserModel lookups, agent and
+ * shipper key lookups find nothing, and AuditService.log and
+ * ErrorLogService.logError are recorded instead of written.
+ * Run with `npm test` (tsx --test).
+ */
+import { test, before, after, mock } from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import net from 'node:net';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import express, { type Application } from 'express';
+
+type Role = 'admin' | 'operator' | 'analyst' | 'viewer';
+const ROLES: Role[] = ['admin', 'operator', 'analyst', 'viewer'];
+
+/** Any signed-in role. For reads, and for VIEWER_SAFE_WRITES. */
+const ANY_ROLE: Role[] = ROLES;
+/** Analyst and up: detection content, alert triage, the AI Analyst, Asset Inventory and Templates. */
+const ANALYST_UP: Role[] = ['admin', 'operator', 'analyst'];
+/** Operator and up: scanning, log discovery, shipper management, feed refresh. */
+const OPERATOR_UP: Role[] = ['admin', 'operator'];
+const ADMIN_ONLY: Role[] = ['admin'];
+/** No login. */
+const PUBLIC = 'public';
+/** A shipper's or EDR agent's own key (in a header, the body or the URL), never a login. */
+const AGENT = 'agent';
+/** The gate writes each refusal to audit_logs (middleware/scanPermissions.ts). */
+const AUDITED = true;
+
+type Who = Role[] | typeof PUBLIC | typeof AGENT;
+type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+type Row = [method: Method, path: string, who: Who, audited?: boolean];
+
+// One line per route. Keep each router's lines in the order the router declares them.
+const INVENTORY: Row[] = [
+  // app.ts
+  ['GET', '/health', PUBLIC],
+  ['GET', '/health/database-status', PUBLIC],
+
+  // routes/auth.ts: sign-in, and the caller's own account
+  ['POST', '/api/auth/login', PUBLIC],
+  ['POST', '/api/auth/logout', ANY_ROLE],
+  ['GET', '/api/auth/me', ANY_ROLE],
+  ['PUT', '/api/auth/me/password', ANY_ROLE],
+  ['POST', '/api/auth/me/mfa/setup', ANY_ROLE],
+  ['POST', '/api/auth/me/mfa/enable', ANY_ROLE],
+  ['POST', '/api/auth/me/mfa/disable', ANY_ROLE],
+  ['POST', '/api/auth/cleanup', ADMIN_ONLY],
+
+  // routes/users.ts: Users page
+  ['GET', '/api/users', ADMIN_ONLY],
+  ['GET', '/api/users/:id', ADMIN_ONLY],
+  ['POST', '/api/users', ADMIN_ONLY],
+  ['PUT', '/api/users/:id', ADMIN_ONLY],
+  ['DELETE', '/api/users/:id', ADMIN_ONLY],
+
+  // routes/logs.ts
+  ['GET', '/api/logs/parse-coverage', ANY_ROLE],
+  ['GET', '/api/logs/raw', ANY_ROLE],
+  ['GET', '/api/logs/parsed', ANY_ROLE],
+  ['GET', '/api/logs/parsed/search', ANY_ROLE],
+
+  // routes/parsers.ts: Parsers page. /validate and /test run a regex the caller
+  // supplies, so they sit with the writes; /:id/test runs a saved parser.
+  ['GET', '/api/parsers', ANY_ROLE],
+  ['GET', '/api/parsers/match-stats', ANY_ROLE],
+  ['GET', '/api/parsers/recommendations', ANY_ROLE],
+  ['POST', '/api/parsers/validate', ANALYST_UP, AUDITED],
+  ['POST', '/api/parsers/import', ANALYST_UP, AUDITED],
+  ['POST', '/api/parsers/ai/generate', ADMIN_ONLY],
+  ['GET', '/api/parsers/catalog', ANY_ROLE],
+  ['GET', '/api/parsers/catalog/source', ANY_ROLE],
+  ['POST', '/api/parsers/catalog/install', ANALYST_UP, AUDITED],
+  ['POST', '/api/parsers/catalog/install-all', ANALYST_UP, AUDITED],
+  ['POST', '/api/parsers/catalog/refresh', ANALYST_UP, AUDITED],
+  ['GET', '/api/parsers/:id', ANY_ROLE],
+  ['GET', '/api/parsers/:id/export', ANY_ROLE],
+  ['GET', '/api/parsers/:id/contribute', ANY_ROLE],
+  ['POST', '/api/parsers', ANALYST_UP, AUDITED],
+  ['PUT', '/api/parsers/:id', ANALYST_UP, AUDITED],
+  ['DELETE', '/api/parsers/:id', ANALYST_UP, AUDITED],
+  ['POST', '/api/parsers/:id/test', ANY_ROLE],
+  ['POST', '/api/parsers/test', ANALYST_UP, AUDITED],
+
+  // routes/rules.ts: Rules page
+  ['GET', '/api/rules', ANY_ROLE],
+  ['POST', '/api/rules/ai/generate', ADMIN_ONLY],
+  ['GET', '/api/rules/recommendations', ANY_ROLE],
+  ['GET', '/api/rules/catalog', ANY_ROLE],
+  ['GET', '/api/rules/catalog/source', ANY_ROLE],
+  ['POST', '/api/rules/catalog/install', ANALYST_UP, AUDITED],
+  ['POST', '/api/rules/catalog/install-all', ANALYST_UP, AUDITED],
+  ['POST', '/api/rules/catalog/refresh', ANALYST_UP, AUDITED],
+  ['POST', '/api/rules/import/sigma/preview', ADMIN_ONLY],
+  ['POST', '/api/rules/import/sigma', ADMIN_ONLY],
+  ['GET', '/api/rules/:id', ANY_ROLE],
+  ['GET', '/api/rules/:id/contribute', ANY_ROLE],
+  ['POST', '/api/rules', ANALYST_UP, AUDITED],
+  ['PUT', '/api/rules/:id', ANALYST_UP, AUDITED],
+  ['DELETE', '/api/rules/:id', ANALYST_UP, AUDITED],
+
+  // routes/alerts.ts: Alerts and SOC Triage pages. Deleting destroys evidence.
+  ['GET', '/api/alerts', ANY_ROLE],
+  ['GET', '/api/alerts/export', ANY_ROLE],
+  ['GET', '/api/alerts/statistics', ANY_ROLE],
+  ['GET', '/api/alerts/by-country', ANY_ROLE],
+  ['GET', '/api/alerts/triage-risk-summary', ANY_ROLE],
+  ['GET', '/api/alerts/:id', ANY_ROLE],
+  ['GET', '/api/alerts/:id/triage', ANY_ROLE],
+  ['POST', '/api/alerts/:id/triage/rerun', ANALYST_UP],
+  ['PUT', '/api/alerts/:id', ANALYST_UP, AUDITED],
+  ['DELETE', '/api/alerts/:id', ADMIN_ONLY, AUDITED],
+
+  // routes/settings.ts: Settings hub (admin areas)
+  ['GET', '/api/settings/ai', ADMIN_ONLY],
+  ['PUT', '/api/settings/ai', ADMIN_ONLY],
+  ['GET', '/api/settings/ai-chat', ADMIN_ONLY],
+  ['PUT', '/api/settings/ai-chat', ADMIN_ONLY],
+  ['GET', '/api/settings/ai-triage', ADMIN_ONLY],
+  ['PUT', '/api/settings/ai-triage', ADMIN_ONLY],
+  ['GET', '/api/settings', ANY_ROLE], // admin-only once PR #294 lands
+  ['GET', '/api/settings/retention', ADMIN_ONLY],
+  ['PUT', '/api/settings/retention', ADMIN_ONLY],
+  ['POST', '/api/settings/retention/cleanup', ADMIN_ONLY],
+  ['GET', '/api/settings/retention/cleanup/status', ADMIN_ONLY],
+  ['GET', '/api/settings/retention/stats', ADMIN_ONLY],
+  ['GET', '/api/settings/syslog', ANY_ROLE],
+  ['PUT', '/api/settings/syslog', ADMIN_ONLY],
+  ['GET', '/api/settings/syslog/status', ADMIN_ONLY],
+  ['GET', '/api/settings/ip-whitelist', ADMIN_ONLY],
+  ['POST', '/api/settings/ip-whitelist', ADMIN_ONLY],
+  ['PUT', '/api/settings/ip-whitelist/:id', ADMIN_ONLY],
+  ['DELETE', '/api/settings/ip-whitelist/:id', ADMIN_ONLY],
+  ['POST', '/api/settings/ip-whitelist/check', ADMIN_ONLY],
+  ['GET', '/api/settings/auto-discovery', ADMIN_ONLY],
+  ['PUT', '/api/settings/auto-discovery', ADMIN_ONLY],
+  ['GET', '/api/settings/auto-discovery/stats', ADMIN_ONLY],
+
+  // routes/shippers.ts: Shippers page, then the shipper agent's own endpoints
+  ['GET', '/api/shippers', ANY_ROLE],
+  ['GET', '/api/shippers/unknown-sources', ANY_ROLE],
+  ['GET', '/api/shippers/direct-syslog-sources', ANY_ROLE],
+  ['GET', '/api/shippers/:id', ANY_ROLE],
+  ['POST', '/api/shippers', OPERATOR_UP],
+  ['PUT', '/api/shippers/:id', OPERATOR_UP],
+  ['DELETE', '/api/shippers/:id', OPERATOR_UP],
+  ['GET', '/api/shippers/:id/sources', ANY_ROLE],
+  ['POST', '/api/shippers/:id/sources', OPERATOR_UP],
+  ['PUT', '/api/shippers/sources/:sourceId', OPERATOR_UP],
+  ['DELETE', '/api/shippers/sources/:sourceId', OPERATOR_UP],
+  ['GET', '/api/shippers/:id/volumes', ANY_ROLE],
+  ['POST', '/api/shippers/:id/volumes', OPERATOR_UP],
+  ['DELETE', '/api/shippers/volumes/:volumeId', OPERATOR_UP],
+  ['GET', '/api/shippers/:id/activity', ANY_ROLE],
+  ['POST', '/api/shippers/:id/regenerate-key', ADMIN_ONLY],
+  ['POST', '/api/shippers/:id/http-push-key', ADMIN_ONLY],
+  ['DELETE', '/api/shippers/:id/http-push-key', ADMIN_ONLY],
+  ['POST', '/api/shippers/register', AGENT],
+  ['POST', '/api/shippers/containers', AGENT],
+  ['GET', '/api/shippers/config/:api_key', AGENT],
+  ['GET', '/api/shippers/scan-jobs/:api_key', AGENT],
+  ['POST', '/api/shippers/scan-results', AGENT],
+  ['POST', '/api/shippers/discovery-results', AGENT],
+  ['POST', '/api/shippers/logs', AGENT],
+
+  // routes/assets.ts: Asset Inventory page
+  ['GET', '/api/assets', ANY_ROLE],
+  ['GET', '/api/assets/statistics', ANY_ROLE],
+  ['GET', '/api/assets/scans/active', ANY_ROLE],
+  ['GET', '/api/assets/scans/statistics', ANY_ROLE],
+  ['GET', '/api/assets/scans', ANY_ROLE],
+  ['GET', '/api/assets/scans/:scanId', ANY_ROLE],
+  ['GET', '/api/assets/:id', ANY_ROLE],
+  ['GET', '/api/assets/:id/related', ANY_ROLE],
+  ['POST', '/api/assets', ANALYST_UP, AUDITED],
+  ['PUT', '/api/assets/:id', ANALYST_UP, AUDITED],
+  ['DELETE', '/api/assets/:id', ANALYST_UP, AUDITED],
+  ['GET', '/api/assets/:id/services', ANY_ROLE],
+  ['POST', '/api/assets/scan', ANALYST_UP, AUDITED],
+  ['POST', '/api/assets/discover', ANALYST_UP, AUDITED],
+
+  // routes/vulnerabilities.ts: Templates (refresh) and Vulnerability Scanning and Management pages
+  ['GET', '/api/vulnerabilities/summary', ANY_ROLE],
+  ['GET', '/api/vulnerabilities/templates', ANY_ROLE],
+  ['GET', '/api/vulnerabilities/templates/categories', ANY_ROLE],
+  ['GET', '/api/vulnerabilities/templates/tags', ANY_ROLE],
+  ['GET', '/api/vulnerabilities/templates/search', ANY_ROLE],
+  ['GET', '/api/vulnerabilities/templates/category/:categoryId', ANY_ROLE],
+  ['GET', '/api/vulnerabilities/templates/tag/:tag', ANY_ROLE],
+  ['GET', '/api/vulnerabilities/templates/severity/:severity', ANY_ROLE],
+  ['POST', '/api/vulnerabilities/templates/refresh', ANALYST_UP, AUDITED],
+  ['POST', '/api/vulnerabilities/templates/download', OPERATOR_UP, AUDITED],
+  ['GET', '/api/vulnerabilities/scans/active', ANY_ROLE],
+  ['GET', '/api/vulnerabilities/scans', ANY_ROLE],
+  ['GET', '/api/vulnerabilities/scans/:scanId', ANY_ROLE],
+  ['GET', '/api/vulnerabilities/scans/:scanId/status', ANY_ROLE],
+  ['POST', '/api/vulnerabilities/scans', OPERATOR_UP, AUDITED],
+  ['POST', '/api/vulnerabilities/scans/:scanId/cancel', OPERATOR_UP, AUDITED],
+  ['GET', '/api/vulnerabilities', ANY_ROLE],
+  ['GET', '/api/vulnerabilities/:id', ANY_ROLE],
+  ['GET', '/api/vulnerabilities/asset/:assetId', ANY_ROLE],
+  ['PATCH', '/api/vulnerabilities/:assetId/:vulnId', OPERATOR_UP, AUDITED],
+
+  // routes/admin.ts: Admin dashboard
+  ['GET', '/api/admin/overview', ADMIN_ONLY],
+  ['GET', '/api/admin/users/search', ADMIN_ONLY],
+  ['GET', '/api/admin/users/:id/activity', ADMIN_ONLY],
+  ['GET', '/api/admin/errors', ADMIN_ONLY],
+  ['GET', '/api/admin/jobs', ADMIN_ONLY],
+  ['GET', '/api/admin/client-address', ADMIN_ONLY],
+
+  // routes/scheduledScans.ts: Scheduled Scans page
+  ['GET', '/api/scheduled-scans', ANY_ROLE],
+  ['POST', '/api/scheduled-scans', OPERATOR_UP, AUDITED],
+  ['PUT', '/api/scheduled-scans/:id', OPERATOR_UP, AUDITED],
+  ['DELETE', '/api/scheduled-scans/:id', OPERATOR_UP, AUDITED],
+  ['POST', '/api/scheduled-scans/:id/run', OPERATOR_UP, AUDITED],
+
+  // routes/notifications.ts: Settings > Notifications (channel config is redacted for non-admins)
+  ['GET', '/api/notifications/channels', ANY_ROLE],
+  ['POST', '/api/notifications/channels', ADMIN_ONLY],
+  ['PUT', '/api/notifications/channels/:id', ADMIN_ONLY],
+  ['DELETE', '/api/notifications/channels/:id', ADMIN_ONLY],
+  ['POST', '/api/notifications/channels/:id/test', ADMIN_ONLY],
+  ['POST', '/api/notifications/test-alert', ADMIN_ONLY],
+  ['GET', '/api/notifications/settings', ANY_ROLE],
+  ['PUT', '/api/notifications/settings', ADMIN_ONLY],
+
+  // routes/ai.ts: "Explain this" for everyone; the AI Analyst (chat) is analyst and up
+  ['POST', '/api/ai/explain', ANY_ROLE],
+  ['GET', '/api/ai/chat/health', ANY_ROLE],
+  ['GET', '/api/ai/triage/health', ANY_ROLE],
+  ['GET', '/api/ai/chat/sessions', ANY_ROLE],
+  ['GET', '/api/ai/chat/sessions/:id', ANY_ROLE],
+  ['PATCH', '/api/ai/chat/sessions/:id', ANALYST_UP, AUDITED],
+  ['DELETE', '/api/ai/chat/sessions/:id', ANALYST_UP, AUDITED],
+  ['POST', '/api/ai/chat', ANALYST_UP, AUDITED],
+
+  // routes/containers.ts: Container Scanning page
+  ['GET', '/api/containers/discovered', ANY_ROLE],
+  ['GET', '/api/containers/inventory', ANY_ROLE],
+  ['POST', '/api/containers/scan', OPERATOR_UP, AUDITED],
+  ['GET', '/api/containers/scans', ANY_ROLE],
+  ['GET', '/api/containers/scans/:id', ANY_ROLE],
+
+  // routes/threatIntel.ts
+  ['GET', '/api/threat-intel/ip/:ip', ANY_ROLE],
+  ['GET', '/api/threat-intel/country/:code', ANY_ROLE],
+
+  // routes/threatFeeds.ts: Threat Intel page (feed refresh for operators, configuration for admins)
+  ['GET', '/api/threat-feeds/summary', ANY_ROLE],
+  ['GET', '/api/threat-feeds', ANY_ROLE],
+  ['PUT', '/api/threat-feeds/feeds/:id', ADMIN_ONLY],
+  ['POST', '/api/threat-feeds/feeds/:id/refresh', OPERATOR_UP],
+  ['POST', '/api/threat-feeds/refresh', OPERATOR_UP],
+  ['PUT', '/api/threat-feeds/providers/:name', ADMIN_ONLY],
+  ['GET', '/api/threat-feeds/lookup/:ip', ANY_ROLE],
+
+  // routes/edr.ts: the endpoint agent's own endpoints, then the Endpoints page
+  ['POST', '/api/edr/agents/enroll', AGENT],
+  ['POST', '/api/edr/agents/:id/heartbeat', AGENT],
+  ['GET', '/api/edr/agents/:id/config', AGENT],
+  ['GET', '/api/edr/agents/:id/yara', AGENT],
+  ['POST', '/api/edr/inventory', AGENT],
+  ['POST', '/api/edr/events', AGENT],
+  ['POST', '/api/edr/vulnerabilities', AGENT],
+  ['GET', '/api/edr/agents', ADMIN_ONLY],
+  ['POST', '/api/edr/tokens', ADMIN_ONLY],
+  ['GET', '/api/edr/tokens', ADMIN_ONLY],
+  ['DELETE', '/api/edr/tokens/:hash', ADMIN_ONLY],
+  ['GET', '/api/edr/yara', ADMIN_ONLY],
+  ['POST', '/api/edr/yara/refresh', ADMIN_ONLY],
+  ['GET', '/api/edr/agents/:id', ADMIN_ONLY],
+  ['GET', '/api/edr/agents/:id/vulnerabilities', ADMIN_ONLY],
+  ['GET', '/api/edr/agents/:id/detections', ADMIN_ONLY],
+  ['DELETE', '/api/edr/agents/:id', ADMIN_ONLY],
+
+  // routes/packs.ts: Content Packs page
+  ['GET', '/api/packs', ANY_ROLE],
+  ['POST', '/api/packs/:id/install', ADMIN_ONLY],
+
+  // routes/logDiscovery.ts: Log Discovery page. Scope, manual sources and poll
+  // credentials are admin-only.
+  ['GET', '/api/log-discovery/scope', ANY_ROLE],
+  ['GET', '/api/log-discovery/scope/cidrs', ANY_ROLE],
+  ['PUT', '/api/log-discovery/scope/cidrs', ADMIN_ONLY],
+  ['GET', '/api/log-discovery/fingerprints', ANY_ROLE],
+  ['POST', '/api/log-discovery/scans', OPERATOR_UP, AUDITED],
+  ['GET', '/api/log-discovery/scans', ANY_ROLE],
+  ['GET', '/api/log-discovery/scans/:id', ANY_ROLE],
+  ['POST', '/api/log-discovery/scans/:id/cancel', OPERATOR_UP, AUDITED],
+  ['GET', '/api/log-discovery/sources', ANY_ROLE],
+  ['POST', '/api/log-discovery/sources/manual', ADMIN_ONLY],
+  ['DELETE', '/api/log-discovery/sources/:id', ADMIN_ONLY],
+  ['PATCH', '/api/log-discovery/sources/:id', ADMIN_ONLY],
+  ['POST', '/api/log-discovery/sources/:id/confirm', OPERATOR_UP],
+  ['POST', '/api/log-discovery/sources/:id/ignore', OPERATOR_UP],
+  ['POST', '/api/log-discovery/sources/:id/onboard/preview', ANY_ROLE],
+  ['POST', '/api/log-discovery/sources/:id/onboard/confirm', OPERATOR_UP],
+  ['GET', '/api/log-discovery/poller/supported-fingerprints', ANY_ROLE],
+  ['GET', '/api/log-discovery/sources/:id/poller', ANY_ROLE],
+  ['POST', '/api/log-discovery/sources/:id/poller/credential', ADMIN_ONLY],
+  ['DELETE', '/api/log-discovery/sources/:id/poller/credential', ADMIN_ONLY],
+  ['PATCH', '/api/log-discovery/sources/:id/poller', ADMIN_ONLY],
+  ['POST', '/api/log-discovery/sources/:id/poller/run-now', ADMIN_ONLY],
+
+  // routes/exposure.ts: Digital Risk (readable by every role; configured by admins)
+  ['GET', '/api/exposure/status', ANY_ROLE],
+  ['GET', '/api/exposure/settings', ANY_ROLE],
+  ['PUT', '/api/exposure/settings', ADMIN_ONLY],
+  ['GET', '/api/exposure/providers', ANY_ROLE],
+  ['PUT', '/api/exposure/providers/hibp', ADMIN_ONLY],
+  ['POST', '/api/exposure/providers/hibp/test', ADMIN_ONLY],
+  ['GET', '/api/exposure/domains', ANY_ROLE],
+  ['POST', '/api/exposure/domains', ADMIN_ONLY],
+  ['PUT', '/api/exposure/domains/:id', ADMIN_ONLY],
+  ['DELETE', '/api/exposure/domains/:id', ADMIN_ONLY],
+  ['POST', '/api/exposure/domains/:id/run-now', ADMIN_ONLY],
+  ['GET', '/api/exposure/identities', ANY_ROLE],
+  ['POST', '/api/exposure/identities', ADMIN_ONLY],
+  ['PUT', '/api/exposure/identities/:id', ADMIN_ONLY],
+  ['DELETE', '/api/exposure/identities/:id', ADMIN_ONLY],
+  ['GET', '/api/exposure/findings', ANY_ROLE],
+  ['POST', '/api/exposure/findings/:id/resolve', ADMIN_ONLY],
+  ['POST', '/api/exposure/run-now', ADMIN_ONLY],
+  ['POST', '/api/exposure/password-check', ANY_ROLE],
+];
+
+/**
+ * The only non-GET routes open to viewers. None changes anything shared: each
+ * acts on the caller's own session or account, or computes an answer and stores
+ * nothing. A new entry needs the same kind of reason.
+ */
+const VIEWER_SAFE_WRITES = new Set([
+  'POST /api/auth/logout', // the caller's own session
+  'PUT /api/auth/me/password', // the caller's own account
+  'POST /api/auth/me/mfa/setup',
+  'POST /api/auth/me/mfa/enable',
+  'POST /api/auth/me/mfa/disable',
+  'POST /api/parsers/:id/test', // runs a saved parser on a sample; stores nothing
+  'POST /api/ai/explain', // explains what the caller can already see; stores nothing
+  'POST /api/log-discovery/sources/:id/onboard/preview', // renders instructions; stores nothing
+  'POST /api/exposure/password-check', // k-anonymity lookup; stores nothing
+]);
+
+// ---------------------------------------------------------------------------
+
+const TOKENS = Object.fromEntries(ROLES.map((role) => [role, `route-inventory-session-${role}`])) as Record<Role, string>;
+const USER_IDS = Object.fromEntries(ROLES.map((role, i) => [role, 900_001 + i])) as Record<Role, number>;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- any Express middleware or handler
+type Handler = (...args: any[]) => unknown;
+interface Layer {
+  name: string;
+  handle: Handler & { stack?: Layer[]; resetKey?: unknown };
+  method?: string;
+  keys: unknown[];
+  regexp: RegExp & { fast_slash?: boolean };
+  route?: { path: unknown; methods: Record<string, boolean>; stack: Layer[] };
+}
+
+/** One (method, path) the app serves, with its route layer. */
+interface Served {
+  id: string;
+  method: string;
+  path: string;
+  route: NonNullable<Layer['route']>;
+}
+
+let server: Server | undefined;
+let base = '';
+let closePools: (() => Promise<void>) | undefined;
+let served: Served[] = [];
+/** Every router mount path, '' (the app itself) included. */
+const mounts = new Set<string>(['']);
+let swappedLimiters = 0;
+const restoreLogger: Array<() => void> = [];
+/** What this file reads back from a mock.method() stub. */
+interface Recorder {
+  mock: { callCount(): number; resetCalls(): void; calls: Array<{ arguments: unknown[] }> };
+}
+let poolQuery: Recorder | undefined;
+let poolConnect: Recorder | undefined;
+let auditLog: Recorder | undefined;
+
+/** A local TCP port that nothing listens on (bound, then released). */
+async function closedPort(): Promise<number> {
+  const probe = net.createServer().listen(0, '127.0.0.1');
+  await once(probe, 'listening');
+  const { port } = probe.address() as AddressInfo;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return port;
+}
+
+/** The path an app.use(path, ...) layer is mounted at ('' for a path-less one). Express 4. */
+function mountPathOf(layer: Layer): string {
+  if (layer.regexp.fast_slash) return '';
+  const m = /^\^((?:\\\/[\w.~-]+)+)\\\/\?\(\?=\\\/\|\$\)$/.exec(layer.regexp.source);
+  assert.ok(m && layer.keys.length === 0, `cannot read a mount path from ${layer.regexp}: teach mountPathOf() this form`);
+  return m[1].replace(/\\\//g, '/');
+}
+
+/**
+ * Middleware mounted with app.use() or router.use() that only passes a request
+ * on, or ends it with an error, so it needs no INVENTORY line: Express's own,
+ * the address tracker, CORS, the body parsers, the timeout logger, the login
+ * check, the role gates (middleware/auth.ts authorize(), scanPermissions.ts
+ * requireScanPermission()) and the closing 404 and error handlers. Rate limiters
+ * are recognized by their resetKey(). walk() refuses any other non-route layer.
+ */
+const PASS_THROUGH = new Set([
+  'query',
+  'expressInit',
+  'ignoredForwardedForTracker',
+  'corsMiddleware',
+  'jsonParser',
+  'urlencodedParser',
+  'logClientTimeouts',
+  'authenticate',
+  'authorizeRoles',
+  'requireRole',
+  'notFoundHandler',
+  'bodyParserErrorHandler',
+  'errorHandler',
+]);
+
+/** Where a layer is mounted, for an error message. */
+function describeMount(layer: Layer, prefix: string): string {
+  try {
+    return prefix + mountPathOf(layer) || '/';
+  } catch {
+    return `${prefix} ${layer.regexp}`;
+  }
+}
+
+/**
+ * Every route under `stack`, with nested routers' mount paths prefixed. Each
+ * router's mount path goes into `mounts`. Fails on a non-route layer that is
+ * neither a router nor a known pass-through.
+ */
+function walk(stack: Layer[], prefix = '', mounts = new Set<string>()): Served[] {
+  const out: Served[] = [];
+  for (const layer of stack) {
+    if (layer.route) {
+      const { route } = layer;
+      assert.equal(typeof route.path, 'string', `route paths are strings (got ${String(route.path)} under ${prefix})`);
+      const path = prefix && route.path === '/' ? prefix : prefix + (route.path as string);
+      for (const method of Object.keys(route.methods)) {
+        assert.notEqual(method, '_all', `${path} uses router.all(): list each method instead`);
+        out.push({ id: `${method.toUpperCase()} ${path}`, method: method.toUpperCase(), path, route });
+      }
+    } else if (layer.handle.stack) {
+      const mount = prefix + mountPathOf(layer);
+      mounts.add(mount);
+      out.push(...walk(layer.handle.stack, mount, mounts));
+    } else {
+      assert.ok(
+        PASS_THROUGH.has(layer.name) || typeof layer.handle.resetKey === 'function',
+        `unclassified handler "${layer.name}" mounted with use() at ${describeMount(layer, prefix)}: it could answer ` +
+          'requests INVENTORY does not list (a handler, a sub-app, express.static). Serve it as routes ' +
+          '(router.get/post/...) and list them, or, if it only passes requests on, add its name to PASS_THROUGH'
+      );
+    }
+  }
+  return out;
+}
+
+/** Every layer under `stack`: middleware, routers, routes and the layers inside routes. */
+function allLayers(stack: Layer[]): Layer[] {
+  return stack.flatMap((layer) => [
+    layer,
+    ...(layer.route ? layer.route.stack : []),
+    ...(layer.handle.stack ? allLayers(layer.handle.stack) : []),
+  ]);
+}
+
+before(async () => {
+  const port = await closedPort();
+  process.env.DB_HOST = '127.0.0.1';
+  process.env.DB_PORT = String(port);
+  const db = await import('../config/database');
+  closePools = db.closePools;
+  const { host, port: poolPort } = (db.default as unknown as { options: { host?: string; port?: number } }).options;
+  assert.deepEqual({ host, port: poolPort }, { host: '127.0.0.1', port }, 'the pool must point at the closed port');
+  const noSql = async () => {
+    throw new Error('SQL must not run in routeInventory.test.ts');
+  };
+  poolQuery = mock.method(db.default, 'query', noSql) as unknown as Recorder;
+  poolConnect = mock.method(db.default, 'connect', noSql) as unknown as Recorder;
+
+  // 403s and 401s are logged at error level; keep this file's output readable.
+  const { logger } = await import('../utils/logger');
+  for (const transport of logger.transports) {
+    const was = transport.silent;
+    transport.silent = true;
+    restoreLogger.push(() => (transport.silent = was));
+  }
+
+  const { AuditService } = await import('../services/audit/auditService');
+  auditLog = mock.method(AuditService, 'log', async () => undefined) as unknown as Recorder;
+  const { ErrorLogService } = await import('../services/errors/errorLogService');
+  mock.method(ErrorLogService, 'logError', async () => undefined);
+
+  // One signed-in user per role: authenticate() looks the token up, then the user.
+  const { SessionModel } = await import('../models/Session');
+  const { UserModel } = await import('../models/User');
+  const roleOfToken = new Map(ROLES.map((role) => [TOKENS[role], role]));
+  const roleOfUser = new Map(ROLES.map((role) => [USER_IDS[role], role]));
+  mock.method(SessionModel, 'findByToken', async (token: string) => {
+    const role = roleOfToken.get(token);
+    return role ? { id: USER_IDS[role], user_id: USER_IDS[role], token, expires_at: new Date(Date.now() + 3_600_000), created_at: new Date() } : null;
+  });
+  mock.method(UserModel, 'findById', async (id: number) => {
+    const role = roleOfUser.get(id);
+    return role
+      ? { id, username: `inventory-${role}`, email: `inventory-${role}@siembox.invalid`, role, enabled: true }
+      : null;
+  });
+  // No EDR agent or shipper exists, so no key (a login's included) can pass.
+  const { EdrAgentModel } = await import('../models/EdrAgent');
+  mock.method(EdrAgentModel, 'findById', async () => null);
+  const { LogShipperModel } = await import('../models/LogShipper');
+  mock.method(LogShipperModel, 'findById', async () => null);
+
+  const app = (await import('../app')).default as Application & { _router?: { stack: Layer[] } };
+  assert.ok(app._router?.stack, 'Express internals changed (no app._router.stack): update walk() and mountPathOf()');
+  const stack = app._router.stack;
+  served = walk(stack, '', mounts);
+
+  // Each route's handler (its method's last layer) answers with the route it belongs to.
+  for (const { id, method, route } of served) {
+    const own = route.stack.filter((l) => l.method === undefined || l.method === method.toLowerCase());
+    own[own.length - 1].handle = (_req: unknown, res: { status(code: number): { json(body: unknown): void } }) =>
+      res.status(200).json({ reached: id });
+  }
+  for (const layer of allLayers(stack)) {
+    if (typeof layer.handle.resetKey === 'function') {
+      layer.handle = (_req: unknown, _res: unknown, next: () => void) => next();
+      swappedLimiters++;
+    }
+  }
+
+  server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+});
+
+after(async () => {
+  if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
+  await closePools?.();
+  for (const restore of restoreLogger) restore();
+});
+
+interface Outcome {
+  status: number;
+  /** The route whose (stub) handler answered, if one did. */
+  reached?: string;
+  message?: string;
+}
+
+async function call(method: string, path: string, headers: Record<string, string> = {}): Promise<Outcome> {
+  const res = await fetch(base + path, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: method === 'GET' ? undefined : '{}',
+  });
+  // API errors are { status: 'error', statusCode, message } (middleware/errorHandler.ts).
+  const json = (await res.json().catch(() => null)) as { reached?: string; message?: string } | null;
+  return { status: res.status, reached: json?.reached, message: json?.message };
+}
+
+const asRole = (role: Role) => ({ Authorization: `Bearer ${TOKENS[role]}` });
+/** A route's path with every :param filled in. */
+const urlOf = (path: string) => path.replace(/:\w+/g, '1');
+
+function describeWho(who: Who): string {
+  if (who === PUBLIC) return 'no login';
+  if (who === AGENT) return 'agent key, never a login';
+  return who === ANY_ROLE ? 'any role' : who.join(', ');
+}
+
+test('the inventory lists every route the app serves, and nothing else', () => {
+  const listed = INVENTORY.map(([method, path]) => `${method} ${path}`);
+  assert.deepEqual(
+    listed.filter((id, i) => listed.indexOf(id) !== i),
+    [],
+    'each route is listed once'
+  );
+  const servedIds = served.map((s) => s.id);
+  assert.deepEqual(
+    servedIds.filter((id, i) => servedIds.indexOf(id) !== i),
+    [],
+    'no route is declared twice (the second would never run)'
+  );
+  assert.deepEqual(
+    servedIds.filter((id) => !listed.includes(id)),
+    [],
+    'routes the app serves that INVENTORY does not classify: add one line each, with the roles that may call it'
+  );
+  assert.deepEqual(
+    listed.filter((id) => !servedIds.includes(id)),
+    [],
+    'routes INVENTORY lists that the app no longer serves: remove their lines'
+  );
+});
+
+test('walk() refuses whatever use() mounts that is not a router or a known pass-through', () => {
+  const handler = (_req: unknown, res: { json(body: unknown): void }) => res.json({});
+  const inRouter = express.Router();
+  inRouter.use('/dummy-mw', handler);
+  const subApp = express();
+  subApp.post('/purge', handler);
+  const withSubApp = express();
+  withSubApp.use('/api/dummy-subapp', subApp);
+  const withStatic = express();
+  withStatic.use('/api/dummy-static', express.static('/nonexistent'));
+  const stackOf = (app: Application) => (app as Application & { _router: { stack: Layer[] } })._router.stack;
+  for (const [what, stack] of [
+    ['router.use() of a handler', inRouter.stack as unknown as Layer[]],
+    ['a mounted sub-app', stackOf(withSubApp)],
+    ['express.static', stackOf(withStatic)],
+  ] as const) {
+    assert.throws(() => walk(stack), /unclassified handler/, what);
+  }
+
+  // Routers, gates, body parsers and limiters are fine.
+  const fine = express.Router();
+  fine.use(express.json());
+  const nested = express.Router();
+  nested.get('/x', handler);
+  fine.use('/nested', nested);
+  assert.deepEqual(
+    walk(fine.stack as unknown as Layer[], '/api/fine').map((s) => s.id),
+    ['GET /api/fine/nested/x']
+  );
+});
+
+test('a path no route declares, under every mount and with every method, reaches the not-found handler', async () => {
+  // Deeper than any route, so no :param route matches it; an admin passes every gate.
+  const unlisted = '/__inventory_unlisted__'.repeat(6);
+  for (const mount of mounts) {
+    for (const method of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) {
+      const url = mount + unlisted;
+      const outcome = await call(method, url, asRole('admin'));
+      assert.deepEqual(
+        { status: outcome.status, reached: outcome.reached, message: outcome.message },
+        { status: 404, reached: undefined, message: `Route ${url} not found` },
+        `${method} ${url}: something mounted under ${mount || '/'} answered a path no route declares`
+      );
+    }
+  }
+  assert.ok(mounts.size > 20, `found ${mounts.size} router mounts`);
+});
+
+test('viewers are read-only: every non-GET route open to them is a known safe one', () => {
+  const viewerWrites = INVENTORY.filter(([method, , who]) => method !== 'GET' && Array.isArray(who) && who.includes('viewer')).map(
+    ([method, path]) => `${method} ${path}`
+  );
+  assert.deepEqual(viewerWrites.filter((id) => !VIEWER_SAFE_WRITES.has(id)), [], 'writes a viewer may call');
+  assert.deepEqual([...VIEWER_SAFE_WRITES].filter((id) => !viewerWrites.includes(id)), [], 'stale VIEWER_SAFE_WRITES entries');
+});
+
+test('the rate limiters were found and set aside', () => {
+  // The general /api limiter at least; scan, agent and log-push routes have their own.
+  assert.ok(swappedLimiters >= 1, 'no express-rate-limit middleware found: did the way limiters are recognized change?');
+});
+
+for (const [method, path, who, audited = false] of INVENTORY) {
+  const id = `${method} ${path}`;
+  const url = urlOf(path);
+
+  test(`${id}: ${describeWho(who)}`, async () => {
+    if (who === PUBLIC) {
+      assert.equal((await call(method, url)).reached, id, 'reachable without a login');
+      return;
+    }
+
+    if (who === AGENT) {
+      // No login gate in front: without credentials the route's own check answers.
+      const anonymous = await call(method, url);
+      assert.notEqual(anonymous.message, 'Authentication required', 'does not ask for a login');
+      assert.notEqual(anonymous.status, 403);
+      // A login is no agent key: with the agent headers, a session token gets
+      // exactly what any other non-key token gets, whatever the role.
+      const agentHeaders = { 'X-Agent-ID': '1', 'X-Shipper-ID': '1' };
+      const stranger = await call(method, url, { ...agentHeaders, Authorization: 'Bearer not-an-agent-key' });
+      assert.notEqual(stranger.status, 403);
+      for (const role of ROLES) {
+        const withLogin = await call(method, url, { ...agentHeaders, ...asRole(role) });
+        assert.deepEqual(
+          { status: withLogin.status, reached: withLogin.reached },
+          { status: stranger.status, reached: stranger.reached },
+          `${role}'s session neither unlocks nor is refused by role`
+        );
+      }
+      return;
+    }
+
+    const anonymous = await call(method, url);
+    assert.equal(anonymous.status, 401, 'needs a login');
+    assert.equal(anonymous.message, 'Authentication required');
+
+    for (const role of ROLES) {
+      auditLog!.mock.resetCalls();
+      const outcome = await call(method, url, asRole(role));
+      if (who.includes(role)) {
+        assert.equal(outcome.reached, id, `${role} gets through to this route's handler (status ${outcome.status}: ${outcome.message ?? ''})`);
+        assert.equal(auditLog!.mock.callCount(), 0, `${role}: nothing is audited when the gates pass`);
+        continue;
+      }
+      assert.equal(outcome.status, 403, `${role} is refused with 403`);
+      assert.equal(outcome.reached, undefined);
+      if (!audited) {
+        assert.equal(auditLog!.mock.callCount(), 0, `${role}: this gate does not audit (mark the line AUDITED if it now does)`);
+        continue;
+      }
+      assert.equal(auditLog!.mock.callCount(), 1, `${role}: the refusal is written to the audit log`);
+      const [entry] = auditLog!.mock.calls[0].arguments as unknown as [
+        { action: string; userId: number; responseStatus: number; details: { userRole: string; method: string } },
+      ];
+      assert.equal(entry.action, 'access.denied');
+      assert.equal(entry.userId, USER_IDS[role]);
+      assert.equal(entry.responseStatus, 403);
+      assert.equal(entry.details.userRole, role);
+      assert.equal(entry.details.method, method);
+    }
+  });
+}
+
+// Keep last: proves the file stayed hermetic.
+test('nothing in this file reached the database', () => {
+  assert.equal(poolQuery!.mock.callCount(), 0, 'no query may run');
+  assert.equal(poolConnect!.mock.callCount(), 0, 'no connection may be opened');
+});

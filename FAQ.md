@@ -96,7 +96,7 @@ Basic Docker knowledge is helpful but not required. The deployment guide provide
 
 Yes, but it's more complex. You'll need to:
 1. Install PostgreSQL 15+
-2. Install Node.js 18+
+2. Install Node.js 20.19+ or 22.13+ (the frontend's Vite 8 build and ESLint 10 need it)
 3. Build backend and frontend manually
 4. Configure environment variables
 5. Set up a reverse proxy (Nginx)
@@ -203,12 +203,20 @@ server {
     ssl_certificate_key /path/to/key.pem;
 
     location / {
-        proxy_pass http://localhost:8420;
+        # The host's LAN address, not localhost: Docker presents loopback
+        # clients of a published port as its gateway address.
+        proxy_pass http://192.168.1.10:8420;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 }
 ```
+
+Then add the proxy to `TRUSTED_PROXIES` in `.env` (keep `frontend`), e.g.
+`TRUSTED_PROXIES=frontend,192.168.1.10`, and run `docker compose up -d`, so
+SIEMBox sees each user's address instead of the proxy's. See DEPLOYMENT.md,
+"Client addresses and reverse proxies".
 
 ---
 

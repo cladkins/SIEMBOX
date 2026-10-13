@@ -13,6 +13,7 @@ import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { ApiError } from '../middleware/errorHandler';
 import { authorize } from '../middleware/auth';
+import { rateLimitedHandler, requestLimitKey } from '../net/requestLimits';
 import { listRecurringJobs } from '../services/jobs/jobRegistry';
 import {
   DEFAULT_COLLECTORS,
@@ -75,15 +76,10 @@ const MAX_INT4 = 2_147_483_647;
 const passwordCheckLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 30,
-  standardHeaders: true,
+  keyGenerator: requestLimitKey,
+  standardHeaders: 'draft-6',
   legacyHeaders: false,
-  handler: (_req, res) => {
-    res.status(429).json({
-      status: 'error',
-      statusCode: 429,
-      message: 'Too many password checks from this address; try again in a few minutes.',
-    });
-  },
+  handler: rateLimitedHandler(() => 'Too many password checks from this address; try again in a few minutes.'),
 });
 
 // ---- Input helpers -----------------------------------------------------------

@@ -39,6 +39,28 @@ Authorization: Bearer YOUR_JWT_TOKEN
 
 The only routes that take no login are `POST /api/auth/login`, the `/health` checks, the shipper-facing `/api/shippers` endpoints (authenticated by the shipper's API key or HTTP push key, see [Log Shippers](#log-shippers-endpoints)), and the EDR agent endpoints (enrollment token or per-agent key).
 
+### Roles
+
+Every signed-in user has one of four roles, each including the ones before it: `viewer` < `analyst` < `operator` < `admin` (see [User Management](../guides/USER-MANAGEMENT.md#user-roles)). A call a role may not make answers `403`. Viewers are read-only: the only non-GET calls open to them act on their own session or account, or compute an answer and store nothing (logout, `/api/auth/me/*`, `POST /api/parsers/:id/test`, `POST /api/ai/explain`, `POST /api/log-discovery/sources/:id/onboard/preview`, `POST /api/exposure/password-check`).
+
+Detection content, alert triage and the AI Analyst:
+
+| Route | Admin | Operator | Analyst | Viewer |
+|---|---|---|---|---|
+| `POST /api/parsers`, `PUT` / `DELETE /api/parsers/:id`, `POST /api/parsers/import` | yes | yes | yes | no |
+| `POST /api/parsers/validate`, `POST /api/parsers/test` (they run a pattern the caller supplies) | yes | yes | yes | no |
+| `POST /api/parsers/catalog/install`, `/catalog/install-all`, `/catalog/refresh` | yes | yes | yes | no |
+| `POST /api/rules`, `PUT` / `DELETE /api/rules/:id` | yes | yes | yes | no |
+| `POST /api/rules/catalog/install`, `/catalog/install-all`, `/catalog/refresh` | yes | yes | yes | no |
+| `PUT /api/alerts/:id`, `POST /api/alerts/:id/triage/rerun` | yes | yes | yes | no |
+| `DELETE /api/alerts/:id` | yes | no | no | no |
+| `POST /api/ai/chat`, `PATCH` / `DELETE /api/ai/chat/sessions/:id` | yes | yes | yes | no |
+| `POST /api/parsers/ai/generate`, `POST /api/rules/ai/generate`, `POST /api/rules/import/sigma`, `/import/sigma/preview`, `POST /api/packs/:id/install` | yes | no | no | no |
+
+The reads under these routes stay open to every role, but only analyst and up can force a catalog refetch with `GET /api/parsers/catalog?refresh=true` or `GET /api/rules/catalog?refresh=true`: a viewer's `refresh` flag is ignored and the cached listing comes back. `GET /api/ai/chat/health` answers only `{ "configured": true }` or `false`; the AI Analyst's provider, model and base URL are in the admin-only `GET /api/settings/ai-chat`. A refusal on the parser, rule, alert and AI Analyst writes above (all but the triage re-run and the last row) is recorded in `audit_logs` like a refused scan write (below). User management, settings and notification changes, Endpoints (EDR) and the admin dashboard are admin-only; shipper management has its own table under [Log Shippers](#log-shippers-endpoints). Every route and the roles it allows are listed in `backend/src/routes/routeInventory.test.ts`, which the test suite checks against the running API.
+
+(Earlier versions let any logged-in role, viewers included, make every call in this table except the triage re-run and the last row, deleting alerts included. A script that used a viewer's token for these writes needs an analyst's, or an admin's to delete alerts.)
+
 ### Roles for scan and asset writes
 
 Reads under `/api/assets`, `/api/vulnerabilities`, `/api/scheduled-scans`, `/api/log-discovery` and `/api/containers` are open to every logged-in role. Each write requires the roles that can open the UI page that makes the call; any other role gets `403`.
@@ -54,10 +76,10 @@ Reads under `/api/assets`, `/api/vulnerabilities`, `/api/scheduled-scans`, `/api
 | `POST /api/scheduled-scans`, `PUT` / `DELETE /api/scheduled-scans/:id`, `POST /api/scheduled-scans/:id/run` | yes | yes | no | no |
 | `POST /api/log-discovery/scans`, `POST /api/log-discovery/scans/:id/cancel` | yes | yes | no | no |
 | `POST /api/log-discovery/sources/:id/confirm`, `/ignore`, `/onboard/confirm` | yes | yes | no | no |
-| `PUT /api/log-discovery/scope/cidrs`, `POST /api/log-discovery/sources/manual`, `DELETE /api/log-discovery/sources/:id`, the `/sources/:id/poller` writes | yes | no | no | no |
+| `PUT /api/log-discovery/scope/cidrs`, `POST /api/log-discovery/sources/manual`, `PATCH` and `DELETE /api/log-discovery/sources/:id`, the `/sources/:id/poller` writes | yes | no | no | no |
 | `POST /api/containers/scan` | yes | yes | no | no |
 
-A refused scan or asset write is also recorded in `audit_logs` (`action` `access.denied`, with the required and actual role); the admin-only log-discovery routes and the log-discovery source actions answer `403` without that audit entry. The entry's `ip_address` is the client address the API derives from one `X-Forwarded-For` hop, which is the real client behind the web UI's proxy but whatever the caller sends on a direct call to port 8421. When that value is not an IP address, the TCP peer address is stored instead, so the entry is always written; when the TCP peer differs from `ip_address`, it is kept in `details.peerAddress`. Shipper management has its own table under [Log Shippers](#log-shippers-endpoints). (Earlier versions let any logged-in role, viewers included, make these calls.)
+A refused scan or asset write is also recorded in `audit_logs` (`action` `access.denied`, with the required and actual role); the admin-only log-discovery routes and the log-discovery source actions answer `403` without that audit entry. The entry's `ip_address` is the client address (see [Rate Limiting](#rate-limiting)): the browser's real address through the web UI, and the caller's TCP address on a direct call to port 8421, whatever `X-Forwarded-For` it sends. Only a proxy listed in `TRUSTED_PROXIES` can name another client; when what it forwards is not an IP address, the TCP peer address is stored instead, so the entry is always written, and when it connected over TCP its own address is kept in `details.peerAddress`. Shipper management has its own table under [Log Shippers](#log-shippers-endpoints). (Earlier versions let any logged-in role, viewers included, make these calls.)
 
 ---
 
@@ -104,9 +126,37 @@ runs. These rejections are never logged with the body's contents.
 
 ## Rate Limiting
 
-- **Limit:** 100 requests per 15 minutes per IP address
-- **Response Header:** `X-RateLimit-Remaining` shows remaining requests
-- **Exceeded:** Returns `429 Too Many Requests`
+Limits count per **client address** (IPv6 sign-in limits: per /64). Requests
+through the web UI's nginx (port 8420) carry the browser's real address. A
+direct caller on port 8421 is its TCP address: `X-Forwarded-For` and
+`X-Real-IP` from it are ignored unless it is listed in `TRUSTED_PROXIES` (see
+DEPLOYMENT.md, "Client addresses and reverse proxies"). Counters are kept in
+memory and reset when the backend restarts.
+
+| Limit | Default (per 15 minutes) | Applies to | Headers |
+|-------|--------------------------|------------|---------|
+| General | 1000 requests (`API_RATE_LIMIT_MAX`) | Every `/api` request, except the two exemptions below | `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` |
+| Sign-in (interim) | 10 failed sign-ins per account, 100 per address across all accounts | `POST /api/auth/login`, per username (as typed, ignoring case and surrounding spaces) and address. Past 100 failures from an address, only accounts that already failed from it in their own current 15-minute window are refused, so people sharing an address don't lock each other out. Successful sign-ins, the "MFA code required" step and `5xx` answers are not counted | `RateLimit-*` (the per-account limit) |
+| EDR agents | 30000 requests (`EDR_AGENT_RATE_MAX`) | Agent-key routes, which skip the general limit when they carry `X-Agent-ID` and use the route's own method: `POST` heartbeat, `GET` (or `HEAD`) config and YARA, `POST` inventory, events and vulnerabilities. Any other method, and enrollment, is under the general limit. | `RateLimit-*` |
+| HTTP log push | 6000 requests (`SHIPPER_LOG_PUSH_MAX`) | `POST /api/shippers/logs`, which skips the general limit when it carries `X-Shipper-ID` (other methods on that path don't) | `RateLimit-*` |
+| Password check | 30 requests | `POST /api/exposure/password-check` | `RateLimit-*` |
+
+A limited request gets `429` with a `Retry-After` header (seconds) and a JSON
+body in the usual error envelope:
+
+```json
+{
+  "status": "error",
+  "statusCode": 429,
+  "code": "RATE_LIMITED",
+  "message": "Too many requests from your address. Try again in 12 minutes.",
+  "retryAfter": 702
+}
+```
+
+`retryAfter` matches the `Retry-After` header. Request bodies sent to
+`/api/auth/*` are limited to 16 kB (a larger one gets `413`); other routes
+accept up to 10 MB.
 
 ---
 
@@ -148,6 +198,8 @@ Authenticate user and receive JWT token.
 - `400` - Missing username or password
 - `401` - Invalid credentials
 - `403` - Account is disabled
+- `413` - Request body larger than 16 kB
+- `429` - Too many failed sign-ins: 10 per 15 minutes for this username from this address ("Too many failed sign-in attempts for this account from your address"), or, past 100 failures from this address across all usernames, this username already failed from it in its own 15-minute window ("Too many failed sign-in attempts from your address"; `retryAfter` is when that window or the address's ends, whichever is first, unless the username also reached its own 10). An IPv6 client's /64 counts as one address. Successful sign-ins and `5xx` answers don't count. JSON body with `code: "RATE_LIMITED"`, `message` and `retryAfter`, plus a `Retry-After` header; see [Rate Limiting](#rate-limiting)
 
 ---
 
@@ -225,7 +277,7 @@ Change current user's password.
 
 Cleanup expired sessions (admin only).
 
-**Authentication:** Required (Admin role)
+**Authentication:** Required (Admin role; other roles get `403 Access denied. Required role: admin`)
 
 **Request Body:** None
 
@@ -576,7 +628,7 @@ Get single parser by ID.
 
 Create a new log parser.
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Request Body:**
 ```json
@@ -621,7 +673,7 @@ Create a new log parser.
 
 Update existing parser.
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Request Body:** (all fields optional)
 ```json
@@ -650,7 +702,7 @@ Update existing parser.
 
 Delete parser.
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Response (200):**
 ```json
@@ -668,7 +720,7 @@ Delete parser.
 
 Test a saved parser against a sample log.
 
-**Authentication:** Required
+**Authentication:** Required (any role: it runs a saved parser, and stores nothing)
 
 **Request Body:**
 ```json
@@ -707,7 +759,7 @@ Test a saved parser against a sample log.
 
 Test parser configuration without saving (for parser builder).
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Request Body:**
 ```json
@@ -733,7 +785,7 @@ Test parser configuration without saving (for parser builder).
 }
 ```
 
-**Use Case:** Frontend parser builder to validate configurations before saving.
+**Use Case:** Frontend parser builder to validate configurations before saving. The pattern is compiled and run on the API's event loop with no ReDoS check, so like `POST /api/parsers/validate` this needs analyst or higher; anyone can test a saved parser with `POST /api/parsers/:id/test`.
 
 ---
 
@@ -846,7 +898,7 @@ Get single detection rule.
 
 Create a new detection rule.
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Request Body:**
 ```json
@@ -901,7 +953,7 @@ alert:
 
 Update detection rule.
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Request Body:** (all fields optional)
 ```json
@@ -931,7 +983,7 @@ Update detection rule.
 
 Delete detection rule.
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Response (200):**
 ```json
@@ -955,28 +1007,39 @@ Install/import is never blind: every item is run through the validator and its
 self-tests before it is stored. A failing item returns `422` (with the
 validation / self-test details) unless you pass `force: true`.
 
+Browsing the catalogs and exporting are open to every role. Installing,
+updating, refreshing, importing and validating need analyst or higher (viewers
+get `403`, and their `?refresh=true` on a catalog listing is ignored); see
+[Roles](#roles).
+
 ### Catalog
 
 | Method & Path | Purpose |
 |---|---|
-| `GET /api/parsers/catalog` | Browse the parser catalog, each entry annotated with `installed` and `update_available`. `?refresh=true` bypasses the ~5-minute cache. Returns `{ source, parsers }`. |
+| `GET /api/parsers/catalog` | Browse the parser catalog, each entry annotated with `installed` and `update_available`. `?refresh=true` bypasses the ~5-minute cache for analyst and up; a viewer gets the cached listing. Returns `{ source, parsers }`. |
 | `GET /api/parsers/catalog/source` | The configured catalog source (repo / ref) for display. |
 | `POST /api/parsers/catalog/install` | Install or update a catalog parser by `name` (validate → self-test → upsert). Body: `{ "name": "nginx", "force": false }`. `201` created / `200` updated. |
+| `POST /api/parsers/catalog/install-all` | Install or update every catalog parser. Returns `{ total, installed, updated, failed }`. |
 | `POST /api/parsers/catalog/refresh` | Force a catalog cache refresh. Returns `{ refreshed, count }`. |
-| `GET /api/rules/catalog` | Browse the detection catalog (same annotations). Returns `{ source, rules }`. |
+| `GET /api/rules/catalog` | Browse the detection catalog (same annotations, same `?refresh=true`). Returns `{ source, rules }`. |
 | `GET /api/rules/catalog/source` | The configured catalog source. |
 | `POST /api/rules/catalog/install` | Install or update a catalog detection by `name`. |
+| `POST /api/rules/catalog/install-all` | Install or update every catalog detection. |
 | `POST /api/rules/catalog/refresh` | Force a catalog cache refresh. |
 
 Catalog source defaults to `cladkins/siembox-parsers` and is overridable via the
 `SIEMBOX_CATALOG_REPO` / `SIEMBOX_CATALOG_REF` env vars (`GITHUB_TOKEN` raises the
-GitHub API rate limit).
+GitHub API rate limit). Each fetch of a catalog lists the repository through the
+GitHub API, which allows 60 unauthenticated requests an hour per IP; requests
+that arrive while a fetch is in progress wait for it rather than starting
+another.
 
 ### Export / Import (portable parsers)
 
 | Method & Path | Purpose |
 |---|---|
 | `GET /api/parsers/:id/export` | Export an installed parser as a portable `siembox.parser/v1` JSON document. |
+| `POST /api/parsers/validate` | Validate a portable parser and run its self-tests without saving. Body: `{ "parser": { … }, "strict": false }`. |
 | `POST /api/parsers/import` | Import a portable parser. Body: `{ "parser": { … }, "force": false }`. Validated + self-tested before upsert; `422` on failure unless `force`. |
 
 ### AI Builder
@@ -1175,7 +1238,7 @@ Get single alert details.
 
 Update alert (change status, assign user, add notes).
 
-**Authentication:** Required
+**Authentication:** Required (admin, operator or analyst; viewers get `403`)
 
 **Request Body:** (all fields optional)
 ```json
@@ -1261,9 +1324,9 @@ Manually (re-)run AI triage for an alert, bypassing the severity and duplicate-a
 
 ### DELETE /api/alerts/:id
 
-Delete alert.
+Delete alert. This destroys evidence, so it is admin-only; triage closes an alert as `closed` or `false_positive` instead.
 
-**Authentication:** Required
+**Authentication:** Required (admin; other roles get `403`)
 
 **Response (200):**
 ```json
@@ -1311,10 +1374,12 @@ Get all users (admin only).
 ]
 ```
 
-**User Roles:**
-- `admin` - Full system access
-- `analyst` - View and manage alerts, logs, rules
-- `viewer` - Read-only access
+**User Roles** (each includes the ones before it; see [Roles](#roles) and the
+[permission table](../guides/USER-MANAGEMENT.md#permission-table)):
+- `viewer` - Read-only
+- `analyst` - Alert triage, the AI Analyst, parsers and detection rules (create, edit, delete, catalog installs)
+- `operator` - Scans, Log Discovery and log shipper management
+- `admin` - Full access: users, settings, Endpoints (EDR), deleting alerts
 
 ---
 
@@ -2465,9 +2530,9 @@ If the database can't be reached (including a connection pool that stays exhaust
 **Errors:**
 - `400` - Body isn't a single log object or `{ "logs": [...] }`, empty `logs` array, or batch exceeds 1000 entries
 - `401` - Missing/invalid `X-Shipper-ID` or Bearer key, or HTTP push not provisioned for this shipper
-- `429` - Too many log-push requests from this IP (see rate limit below)
+- `429` - Too many log-push requests from this address (see rate limit below; JSON body with `code: "RATE_LIMITED"` and `retryAfter`, plus a `Retry-After` header)
 
-**Rate limit:** this endpoint has its own per-IP limiter (default **6000 requests / 15 min**, override with the `SHIPPER_LOG_PUSH_MAX` env var) that runs *before* authentication, so unauthenticated or invalid-key traffic is throttled rather than hammering the auth lookup unbounded. It's well above the generic UI limit — batch your pushes (up to 1000 entries each) to stay comfortably under it.
+**Rate limit:** this endpoint has its own per-address limiter (default **6000 requests / 15 min**, override with the `SHIPPER_LOG_PUSH_MAX` env var) that runs *before* authentication, so unauthenticated or invalid-key traffic is throttled rather than hammering the auth lookup unbounded. It's well above the generic UI limit — batch your pushes (up to 1000 entries each) to stay comfortably under it. The address is the pushing host's TCP address; an `X-Forwarded-For` header it sends is ignored (see [Rate Limiting](#rate-limiting)).
 
 ---
 
@@ -2807,10 +2872,56 @@ only -- see `backend/src/services/logDiscovery/`).
 For sources whose fingerprint declares an `api_pull` log-access method
 (Authentik, Home Assistant, Pi-hole, AdGuard Home today), the poller endpoints
 below are the alternative to the manual copy-paste recipe: save a token and
-SIEMBOX pulls that source's events on a schedule instead. See
+SIEMBOX pulls that source's events on a schedule instead. How a source is
+reached (address of a manual source, port, HTTPS, endpoint path) can be changed
+later with [`PATCH /sources/:id`](#patch-apilog-discoverysourcesid). See
 `backend/src/services/logDiscovery/apiPoll/`.
 
-**Access:** every route requires a login. Reads (and the read-only `onboard/preview`) are open to any role. Starting or cancelling a scan and the source actions `confirm`, `ignore` and `onboard/confirm` require admin or operator, the roles that can open the Log Discovery page. Changing the scan scope, manual sources and poll credentials requires admin. See [Roles for scan and asset writes](#roles-for-scan-and-asset-writes).
+**Home Assistant** serves its log in one of two places, depending on the install:
+`/api/error_log` returns the log file, which Container and Core installs write by
+default (not with `HA_DISABLE_LOG_FILE=true`); Home Assistant OS and Supervised
+installs write no log file (unless `HA_DUPLICATE_LOG_FILE` is set), so there
+`/api/error_log` answers `404` and the log comes from the Supervisor through
+`/api/hassio/core/logs`. The poller asks `/api/error_log` first and on a `404` uses
+`/api/hassio/core/logs?no_colors` with a `Range: entries=…` header for the latest
+journal entries (how many is described below). It remembers which endpoint works
+for each source (in the poll cursor), so it doesn't send a doomed request every
+poll, and re-probes `/api/error_log` every 6 hours and whenever the remembered
+endpoint fails. An endpoint set with `PATCH /sources/:id` is used alone. Lines are stored in Home
+Assistant's own format (colour codes removed), as the catalog parser expects. Both
+endpoints are admin-only: the token must be a long-lived access token created by
+a Home Assistant administrator.
+
+Only the end of the log is read. The file is requested with a byte range for its
+last 5 MB plus the lines the poll resumes after (`Range: bytes=-5242880` on a
+first poll, and that plus their size after; a server that ignores the range sends
+the whole file and the same last bytes are kept), so a log that has grown past
+5 MB keeps being collected, and up to 5 MB logged since the last poll is
+collected whole. When more was logged since the last poll, so that the lines the
+poll resumes after are not all in the answer, every whole line of it is
+collected, except those it starts with that the last poll collected already (it
+began inside that record), and a warning is logged to the error log: the lines
+before them were not collected, or, when the answer may have begun inside the
+last record collected, may not have been. (When the whole file was read and lacks
+those lines, it is a new file, started by a restart: its last 200 lines are
+collected, as on a first poll.) A cursor stored by an earlier version, which read
+only the first 5 MB of a longer log, can end in a cut line; it is still found, so
+the first poll after an upgrade collects only the lines after it. A poll resumes
+after the last record it saw, matched from that record's timestamped first line
+to its end, so a traceback that repeats is not collected again; this holds for a
+record of up to 2000 lines and about 256 KB (a longer one is matched by its last
+100 lines only). A last
+line without its newline, which Home Assistant is still writing, is left for the
+next poll. The Supervisor is asked for 500 new journal entries plus the lines the
+poll resumes after (at least three: `Range: entries=:-502:503` after short
+records); a first poll, which collects the last 200 lines, asks for 2500
+(`entries=:-2499:2500`) so that it reaches the start of the last record. When
+those lines are not in the answer, more than 500 lines arrived, and the
+Supervisor is asked again for 5000 new entries plus them (`entries=:-5002:5003`).
+If they are not in that answer either, more than 5000 lines arrived: the latest
+5000 are collected and a warning is logged to the error log.
+
+**Access:** every route requires a login. Reads (and the read-only `onboard/preview`) are open to any role. Starting or cancelling a scan and the source actions `confirm`, `ignore` and `onboard/confirm` require admin or operator, the roles that can open the Log Discovery page. Changing the scan scope, manual sources, a source's poll target and poll credentials requires admin. See [Roles for scan and asset writes](#roles-for-scan-and-asset-writes).
 
 ### GET /api/log-discovery/scope
 
@@ -3008,12 +3119,27 @@ into `top` and `advanced` (the long tail), each with a plain-language `reason`.
       "security_value": 10,
       "status": "candidate",
       "selected_log_access": null,
-      "reason": "OPNsense can provide firewall logs, network traffic flow, dns queries."
+      "reason": "OPNsense can provide firewall logs, network traffic flow, dns queries.",
+      "poller": {
+        "configured": false,
+        "enabled": false,
+        "last_status": null,
+        "last_polled_at": null,
+        "last_error": null,
+        "effective_url": null
+      }
     }
   ],
   "advanced": []
 }
 ```
+
+`poller` summarizes API polling for the source: whether a credential is saved
+(`configured`) and polling is on, the last poll's `last_status`, `last_polled_at`
+and `last_error`, and `effective_url`, the URL being polled: scheme, host, port
+and path, never a token or query string (for Home Assistant, the endpoint in use,
+e.g. `http://192.168.1.50:8123/api/hassio/core/logs` after the automatic
+fallback). `effective_url` is `null` when no credential is saved.
 
 ---
 
@@ -3045,7 +3171,7 @@ host) rather than creating a duplicate.
   "tls": true
 }
 ```
-- `ip_address` (required) - a **literal** IPv4/IPv6 address (a DNS name is rejected with `400`; the column is `INET`)
+- `ip_address` (required) - a **literal** IPv4/IPv6 address (a DNS name, or an IPv6 zone index such as `fe80::1%eth0`, is rejected with `400`; the column is `INET`)
 - `fingerprint_id` (required) - a pollable device type: one of the ids from `GET /poller/supported-fingerprints` (currently `authentik`, `home-assistant`, `pihole`, `adguard-home`), and it must declare an `api_pull` log-access method
 - `port` (optional) - integer `1`–`65535`; defaults to the fingerprint's `api_pull` `target_port`
 - `tls` (optional) - boolean; defaults to `true` for `authentik`, `false` otherwise
@@ -3077,6 +3203,92 @@ re-scanning or ignoring it, never deleted here.
 **Error Responses:**
 - `403` - the source is not a manual row (scan-discovered sources cannot be deleted here)
 - `404` - no source with that id
+
+---
+
+### PATCH /api/log-discovery/sources/:id
+
+Change how SIEMBOX reaches an API-polled source: its port, HTTPS on/off, the API
+endpoint path, and, for a **manually added** source only, its address. This is the
+**Edit** action on the Log Discovery page and under Log Shippers → API-Polled
+Sources.
+
+- A **manual** source's settings are updated where `POST /sources/manual` keeps
+  them: the row's `ip_address`, and `evidence` (`target_port`, `tls`, plus
+  `endpoint` when one is set); `open_ports` follows the port. A re-scan of the
+  host keeps these keys.
+- A **scan-discovered** source's settings go to its `poll_overrides`
+  (`{port, tls, endpoint}`, migration `036`), which a re-scan never touches. Its
+  address is the one the scan found and cannot change. With no overrides it is
+  polled at exactly the URL it always was.
+- A new `endpoint` or address clears the poll cursor, so the next poll starts
+  fresh. That poll reads the source's recent events again (for Home Assistant the
+  last 200 lines, so lines already stored may be stored twice). A port or HTTPS
+  change keeps the cursor.
+- A saved token is never sent to a new address. Changing a manual source's
+  address while it has a saved token requires the token again in `credential`;
+  the move and the token swap are applied in one database update, and each poll
+  reads the token and the address together when it starts, so no poll can pair
+  the old token with the new address. Without `credential` the request is a
+  `400` and nothing changes. A source with no saved token can move freely.
+- With `expected_ip_address` (the address the client loaded; the Edit dialog
+  always sends it), the change applies only while the source still has that
+  address: if another admin moved it meanwhile, the request is a `409` and
+  nothing changes. Reload the source and try again.
+- The change is also only written if, at that moment, the source still has the
+  address and the settings (port, HTTPS, endpoint) it was checked against and
+  merged with (and, for a move without a token, still has no saved token): the
+  source row is locked for the write, so a token save and a move never overlap,
+  and two edits never combine or undo each other. If another admin's edit of
+  this source got in first, or a token save got in before a move without a
+  token, the request is a `409` and nothing changes. A token save for the
+  source's current address does not conflict with a change that keeps the
+  address: both apply. A poll that was already running when the source moved or
+  its endpoint changed does not overwrite the cleared cursor; other changes made
+  while a poll runs (the interval, polling on or off, a new token for the same
+  address) don't change where the next poll resumes.
+- Otherwise the saved credential, the schedule and the poll status are not
+  changed, and no credential is ever returned.
+
+**Authentication:** Required (**admin**)
+
+**Request Body** (send only what changes; `null` returns a setting to its default):
+```json
+{ "port": 8123, "tls": false, "endpoint": "/api/hassio/core/logs", "ip_address": "192.168.1.60", "expected_ip_address": "192.168.1.50" }
+```
+- `port` - integer `1`–`65535`, or `null` for the default (a discovered source: the adapter's own port; a manual source: the fingerprint's `api_pull` `target_port`)
+- `tls` - boolean, or `null` for the default (a manual source: `true` for `authentik`, `false` otherwise)
+- `endpoint` - a path on the source itself, e.g. `/api/hassio/core/logs`, or `/ha/api/error_log` behind a reverse proxy. It must start with a single `/` (no scheme or host) and may not contain a query string or fragment, `.` or `..` segments, control characters, whitespace, backslashes or `%`-encoding; at most 256 characters. An endpoint that is set is the only one requested (Home Assistant's automatic fallback is off). `""` or `null` restores the fingerprint's endpoint.
+- `ip_address` - manual sources only: a literal IPv4/IPv6 address, validated exactly like `POST /sources/manual`. Sending a discovered source's current address back is accepted and changes nothing; a different one is refused with `403`.
+- `credential` - `{ "secret": "...", "username": "..." }`, required together with a changed `ip_address` when the source has a saved token, and accepted only then (otherwise `400`; to replace a token without moving the source use `POST /sources/:id/poller/credential`). `secret` is a non-blank string of at most 4096 characters; `username` (HTTP Basic sources such as AdGuard Home) at most 255. It is encrypted like any saved token and never returned.
+- `expected_ip_address` (optional) - the source's address as the client loaded it, a literal IPv4/IPv6 address (however IPv6 is written). Not a change by itself. If the source no longer has it, the request is a `409` and nothing changes; without it, the change applies to the source wherever it is now.
+
+**Response (200):**
+```json
+{
+  "source": { "id": 94, "ip_address": "192.168.1.50", "evidence": { "manual": true, "target_port": 8123, "tls": false, "endpoint": "/api/hassio/core/logs" }, "poll_overrides": null },
+  "poller": { "configured": true, "fingerprint_id": "home-assistant", "enabled": true, "poll_interval_minutes": 5, "last_status": "error", "last_error": "Home Assistant at http://192.168.1.50:8123 answered 404 for both log endpoints. ..." },
+  "target": {
+    "fingerprint_id": "home-assistant",
+    "manual": true,
+    "ip_address": "192.168.1.50",
+    "port": 8123,
+    "tls": false,
+    "effective_url": "http://192.168.1.50:8123/api/hassio/core/logs",
+    "overrides": { "port": 8123, "tls": false, "endpoint": "/api/hassio/core/logs" },
+    "defaults": { "port": 8123, "tls": false, "endpoint": "/api/error_log" }
+  }
+}
+```
+`source` is the full `discovery_sources` row (abridged above); `poller` is the same
+shape as `GET .../poller` (`{ "configured": false }` before a credential is saved);
+`target` is described there. Call `POST /sources/:id/poller/run-now` to poll at once.
+
+**Errors:**
+- `400` - an invalid field (the message names it and the rule), an empty body, or a source whose device type has no API pull method
+- `403` - caller is not an admin, or a new `ip_address` for a scan-discovered source
+- `404` - no source with that id
+- `409` - the new address already belongs to another source, the source no longer has `expected_ip_address`, or the source changed while this request was being checked (another admin's edit of it, or a token saved before a move without a token); nothing was changed
 
 ---
 
@@ -3152,7 +3364,7 @@ Fingerprint ids with a real poll adapter (e.g. `["authentik", "home-assistant", 
 
 ### GET /api/log-discovery/sources/:id/poller
 
-Poller status for a source. Never includes the credential itself.
+Poller status for a source, and how it is reached (`target`). Never includes the credential itself.
 
 **Authentication:** Required
 
@@ -3167,10 +3379,27 @@ Poller status for a source. Never includes the credential itself.
   "last_polled_at": "2025-12-17T10:05:00Z",
   "last_status": "ok",
   "last_error": null,
-  "last_event_count": 3
+  "last_event_count": 3,
+  "target": {
+    "fingerprint_id": "authentik",
+    "manual": false,
+    "ip_address": "192.168.1.20",
+    "port": 9443,
+    "tls": true,
+    "effective_url": "https://192.168.1.20:9443/api/v3/events/events/",
+    "overrides": { "port": null, "tls": null, "endpoint": null },
+    "defaults": { "port": 9443, "tls": true, "endpoint": "/api/v3/events/events/" }
+  }
 }
 ```
-**Response (200) — not configured:** `{ "configured": false }`
+**Response (200) — not configured:** `{ "configured": false, "target": { ... } }`
+
+`target` is what the edit dialog shows: `port` and `tls` in use (an override, else
+the default), `effective_url` (the URL being polled: scheme, host, port and path,
+never a token or query string), the stored `overrides` (for a scan-discovered
+source `null` where the default applies; a manual source always has its port and
+scheme), and the `defaults`. `manual` says whether the address can be changed.
+`target` is `null` when the source's device type has no API pull method.
 
 ---
 
@@ -3182,16 +3411,18 @@ Save (or replace) the token for this source's `api_pull` method and start pollin
 
 **Request Body:**
 ```json
-{ "username": null, "secret": "the-api-token-or-password" }
+{ "username": null, "secret": "the-api-token-or-password", "expected_ip_address": "192.168.1.50" }
 ```
 - `secret` (required) - the token/password. Encrypted at rest (AES-256-GCM); never returned again after this call.
-- `username` (optional) - only used by HTTP Basic auth sources (AdGuard Home today)
+- `username` (optional) - only used by HTTP Basic auth sources (AdGuard Home today); at most 255 characters
+- `expected_ip_address` (optional) - the source's address the token was entered for, a literal IPv4/IPv6 address. The token is saved only while the source still has it, checked again as it is written with the source row locked; if the source was moved meanwhile (`PATCH /sources/:id`), the request is a `409` and nothing is saved, so a token entered for one address never reaches another. The Log Discovery UI always sends it: the address it showed when the token was typed, even if it has shown another one since. Without it, the token is saved for the source at whatever address it has now.
 
 **Response (200):** Same shape as `GET .../poller` above.
 
 **Errors:**
-- `400` - missing/empty `secret`, source has no matched fingerprint, or the fingerprint has no `api_pull` log-access method
+- `400` - missing/empty `secret`, a `username` over 255 characters, an `expected_ip_address` that is not a literal IP address, source has no matched fingerprint, or the fingerprint has no `api_pull` log-access method
 - `404` - source or fingerprint not found
+- `409` - the source no longer has `expected_ip_address`; nothing was saved
 
 ---
 
@@ -3226,7 +3457,7 @@ Both fields optional; `poll_interval_minutes` is clamped to `[1, 1440]`.
 
 ### POST /api/log-discovery/sources/:id/poller/run-now
 
-Poll immediately instead of waiting for the next scheduled cycle -- for UI feedback right after saving a credential.
+Poll immediately instead of waiting for the next scheduled cycle -- for UI feedback right after saving a credential or editing the source.
 
 **Authentication:** Required (Admin)
 
@@ -3234,6 +3465,14 @@ Poll immediately instead of waiting for the next scheduled cycle -- for UI feedb
 ```json
 { "ok": true, "count": 3 }
 ```
+A failed poll is still a `200`, with `ok: false` and `error`, the same text that is
+stored as `last_error`. The text says what to do, for example (Home Assistant):
+- `Home Assistant rejected the token (HTTP 401 from /api/error_log): it is invalid or revoked, or it belongs to a user who is not an administrator. ...`
+- `Home Assistant at http://192.168.1.50:8123 answered 404 for both log endpoints. ...`
+- `Home Assistant could not get its log from the Supervisor (HTTP 502 from /api/hassio/core/logs): ...`
+- `Couldn't connect to http://192.168.1.50:8124/api/error_log: connection refused; check the address and port (...)`
+
+See [Troubleshooting: API-polled sources](../operations/TROUBLESHOOTING.md#issue-an-api-polled-source-keeps-failing-home-assistant-http-404-from-error_log).
 
 **Errors:**
 - `404` - no poller configured for this source yet
@@ -4978,6 +5217,80 @@ Unified view of background work. Returns two lists:
 - `failed` - Last cycle threw (see `lastError`)
 - `skipped` - Ran but deliberately did nothing (switched off in settings, or nothing due)
 - `disabled` - Not scheduled in this process at all
+
+### GET /api/admin/client-address
+
+How the API sees the caller, and how it is working out client addresses: for
+checking a deployment's proxy setup (DEPLOYMENT.md, "Client addresses and
+reverse proxies"). Sent with `Cache-Control: no-store`.
+
+**Authentication:** Required (Admin)
+
+**Response (200):**
+```json
+{
+  "you": {
+    "address": "192.168.1.50",
+    "via": "proxy-socket",
+    "peer": "proxy socket",
+    "forwardedFor": "192.168.1.50",
+    "rateLimitKey": "192.168.1.50",
+    "signInKey": "192.168.1.50"
+  },
+  "proxySocket": { "state": "listening", "path": "/run/siembox/api.sock" },
+  "trustedProxies": {
+    "configured": "frontend",
+    "entries": [
+      { "entry": "frontend", "kind": "name", "addresses": ["172.18.0.3"], "status": "resolved", "resolvedAt": "2026-10-12T16:40:00.000Z" }
+    ],
+    "rejected": [],
+    "nameLookup": { "enabled": true }
+  },
+  "hostNetworking": false,
+  "gateways": ["172.18.0.1"],
+  "ownNetworks": ["172.18.0.2/16"],
+  "ignoredForwardedFor": { "peers": [], "untracked": 0 },
+  "warnings": []
+}
+```
+
+- `you.via`: `proxy-socket` (through the web UI's nginx), `trusted-proxy` (a
+  `TRUSTED_PROXIES` peer supplied the address) or `direct` (the TCP address;
+  any `X-Forwarded-For` was ignored). `you.peer` is the TCP peer, or
+  `proxy socket`. `rateLimitKey` and `signInKey` are the keys the request
+  limits and the sign-in limit count against (an IPv6 sign-in key is the /64).
+- `proxySocket.state`: `listening`, `off` (`SIEMBOX_PROXY_SOCKET=off`),
+  `no-volume` (its directory is missing, so the `api-socket` volume is not
+  mounted) or `error` (with `error`). A socket listening anywhere but
+  `/run/siembox/api.sock` is a warning: the bundled frontend's nginx never
+  connects to another path.
+- `trustedProxies.entries[].kind`: `address`, `range` or `name`. A name's
+  `status` is `resolved`, `not-found`, `error` (the lookup failed; the last
+  answer is kept), `pending` or `not-looked-up` (outside a container or with
+  host networking; `nameLookup.reason` says which). `ignoredAnswers` lists DNS
+  answers that were not trusted: not on the backend's own networks, the
+  gateway, or not confirmed by Docker's DNS as a container on those networks
+  (an answer from another DNS server).
+- `gateways`: Docker gateway addresses, which are never trusted through a range.
+- `ignoredForwardedFor.peers`: addresses whose `X-Forwarded-For` was ignored in
+  the last hour (at most 100), each `{address, kind, requests, firstSeen,
+  lastSeen, local, sustained}`. `kind` is `direct` (a caller of port 8421 that
+  is not a trusted proxy) or `forwarded` (a proxy in front of the web UI's
+  nginx, or of a trusted proxy, that passed on an `X-Forwarded-For` of its own
+  but is not trusted itself, so it is taken for the client). `local` marks
+  private, carrier-grade NAT, loopback, ULA and link-local addresses, which are
+  usually a proxy that should be trusted. `requests` and `firstSeen` describe
+  the current episode, and `sustained` is set once an episode has gone on for
+  more than 45 s. With host networking, the frontend's address shows up for up
+  to 30 s after a backend restart or a timed-out request while nginx uses its
+  TCP fallback, which is expected: a `direct` peer's episode ends when it has
+  been quiet for more than 30 s while the proxy socket served requests, so
+  those windows don't add up. Requests to this endpoint are never counted.
+- `warnings`: what to fix, in words. Ignored headers are only listed for
+  `local`, `sustained` peers, and for this request itself (a direct call that
+  carried `X-Forwarded-For`, or a request that came through a proxy that isn't
+  trusted). A proxy on a public address is never listed for its own sake (any
+  client could get its address counted), so check `you.address` through it.
 
 ---
 

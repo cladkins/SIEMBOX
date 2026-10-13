@@ -12,6 +12,10 @@ export const useAuthStore = defineStore('auth', () => {
   // Admin-only UI (the Settings hub's admin areas and the links that point at
   // them) shares this one role check.
   const isAdmin = computed(() => user.value?.role === 'admin');
+  // Analyst and up (analyst, operator, admin): viewers are read-only. The API
+  // requires this role for parser and rule changes, alert triage and the AI
+  // Analyst, so controls for those hide or disable themselves with this check.
+  const canAnalyst = computed(() => ['admin', 'operator', 'analyst'].includes(user.value?.role));
 
   const login = async (username: string, password: string, code?: string) => {
     const response = await api.login(username, password, code);
@@ -35,6 +39,7 @@ export const useAuthStore = defineStore('auth', () => {
     user,
     isAuthenticated,
     isAdmin,
+    canAnalyst,
     login,
     logout,
   };

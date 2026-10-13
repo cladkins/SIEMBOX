@@ -11,7 +11,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import * as yaml from 'js-yaml';
+import * as yaml from '../utils/yaml';
 import { validateRule } from '../services/rules/rulePortable';
 
 function findRuleFiles(target: string): string[] {

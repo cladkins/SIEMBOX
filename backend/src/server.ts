@@ -1,4 +1,4 @@
-import dotenv from 'dotenv';
+import { loadDotenv } from './config/dotenv';
 import type { Server } from 'node:http';
 import app from './app';
 import { createApiServer, listenProxySocket, stopListening } from './net/apiListeners';
@@ -25,7 +25,7 @@ import { TemplateService } from './services/scanner/templateService';
 import { CredentialEncryption } from './services/credentials/credentialEncryption';
 import { ErrorLogService } from './services/errors/errorLogService';
 
-dotenv.config();
+loadDotenv();
 
 // Last-resort capture. Anything that escaped a service's own try/catch — a
 // rejected promise nobody awaited, a throw from a timer callback — used to

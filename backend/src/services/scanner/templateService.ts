@@ -7,7 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as yaml from 'js-yaml';
+import * as yaml from '../../utils/yaml';
 import * as https from 'https';
 import { exec, spawn } from 'child_process';
 import { logger } from '../../utils/logger';

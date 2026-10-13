@@ -20,7 +20,7 @@
  *   - `or`, `not`, `1 of ...`, `| count(...)`, parentheses
  *   - OR-lists combined with contains/startswith/endswith
  */
-import yaml from 'js-yaml';
+import * as yaml from '../../utils/yaml';
 import { PortableRule, RuleCondition, RULE_SEVERITIES } from './rulePortable';
 
 export interface SigmaConvertResult {

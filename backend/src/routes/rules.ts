@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { DetectionRuleModel } from '../models/DetectionRule';
-import yaml from 'js-yaml';
+import * as yaml from '../utils/yaml';
 import { ApiError } from '../middleware/errorHandler';
 import { RulesEngine } from '../services/rules/rulesEngine';
 import { validateRule, toPortableRule, portableRuleToYaml } from '../services/rules/rulePortable';

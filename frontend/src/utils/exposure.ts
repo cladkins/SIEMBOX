@@ -408,7 +408,8 @@ function listErrorAlert(error: HibpDomainListError): VerifiedDomainsAlert {
         text:
           "HIBP rejected the key when listing verified domains (HTTP 401). HIBP's public test key always gets this " +
           'answer; for a real key, check it with Test key or replace it.',
-        actions: ['test_key'],
+        // Re-check once the key works again (e.g. a lapsed subscription renewed on the same key).
+        actions: ['test_key', 'recheck'],
       };
     case 'forbidden':
       return {
@@ -416,7 +417,8 @@ function listErrorAlert(error: HibpDomainListError): VerifiedDomainsAlert {
         text:
           "HIBP refused to list verified domains (HTTP 403): this key's plan doesn't include domain search (Core and " +
           "Pro plans do; High RPM plans don't). Email addresses are still checked; email domains are skipped.",
-        actions: ['plans'],
+        // Re-check after upgrading the plan on the same key.
+        actions: ['plans', 'recheck'],
       };
     case 'rate_limited':
       return {

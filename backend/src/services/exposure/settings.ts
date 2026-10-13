@@ -261,6 +261,25 @@ export async function saveHibpProvider(input: {
   }
 }
 
+/**
+ * Whether `stored` (the exposure_hibp_key setting) holds exactly `apiKey`
+ * (null or '': whether it holds no key at all). A value this backend can't
+ * decrypt matches no key, so saving over it (or clearing it) is a change.
+ */
+export function storedHibpKeyMatches(stored: string, apiKey: string | null): boolean {
+  if (!apiKey) return stored === '';
+  const saved = decryptStoredHibpKey(stored, false);
+  if (saved === undefined) return false;
+  const a = Buffer.from(saved);
+  const b = Buffer.from(apiKey);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/** Whether `apiKey` is the key already saved (see storedHibpKeyMatches). */
+export async function isSavedHibpKey(apiKey: string | null): Promise<boolean> {
+  return storedHibpKeyMatches(await getExposureSetting('exposure_hibp_key'), apiKey);
+}
+
 export async function isHibpEnabled(): Promise<boolean> {
   return (await getExposureSetting('exposure_hibp_enabled')) === 'true';
 }

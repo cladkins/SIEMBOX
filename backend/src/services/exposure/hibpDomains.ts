@@ -482,6 +482,11 @@ export function isSkippedState(state: HibpDomainState): boolean {
   return state === 'not_verified' || state === 'unavailable';
 }
 
+/** True for the states of a domain the list shows as verified (re-queued when it was skipped). */
+export function isListedState(state: HibpDomainState): boolean {
+  return state === 'verified' || state === 'verified_limited';
+}
+
 const ms = (iso: string | null | undefined): number => {
   const t = iso ? Date.parse(iso) : NaN;
   return Number.isNaN(t) ? 0 : t;

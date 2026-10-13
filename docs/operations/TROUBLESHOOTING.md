@@ -1592,7 +1592,9 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   (`example.com` doesn't cover `mail.example.com`).
 - `unavailable` — HIBP refused to list verified domains (`403`): the plan has no
   domain search (HIBP's High RPM plans don't; Core and Pro plans do). Email
-  domains are skipped, email addresses are still checked.
+  domains are skipped, email addresses are still checked. After changing the
+  plan on the same key, click **Re-check with HIBP** on the Have I Been Pwned
+  card (it is offered for a `401` too, once the key works again).
 - `unknown` — verification couldn't be read, so the domain is **searched as
   before**. `reason`: `no_key` (no usable key), `not_checked` (not listed yet for
   this key), `auth` (`401`: HIBP's public test key `000…0` always gets this
@@ -1616,9 +1618,11 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   `haveibeenpwned.com` over HTTPS: allow egress to it (breach checks need it too).
 - **Timing:** a re-check within a minute of the last one returns the cached
   answer (`refreshed: false`). After HIBP answers `429`, every breach check is
-  paused until its `retry-after` has passed, and a re-check meanwhile gets `429`
-  with a `Retry-After` header. Saving a new key clears the list; the next due
-  check or a re-check reads the new key's.
+  paused until its `retry-after` has passed (a run already in progress stops
+  too), and a re-check meanwhile gets `429` with a `Retry-After` header.
+  Re-entering the same key or switching the provider off and on doesn't lift
+  that wait: HIBP's limit belongs to the key. Saving a different key clears the
+  list and starts afresh; the next due check or a re-check reads the new key's.
 
 **Getting Started reminder:** the Dashboard reminder is shown to admins until
 one of them finishes or hides it, for every admin of the install (stored

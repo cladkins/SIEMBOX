@@ -344,6 +344,9 @@ async function recheck(quiet = false) {
   } catch (error) {
     if (!quiet) ElMessage.error(refreshFailureMessage(error));
     void loadDomains(false);
+    // A timed-out re-check may still have finished on the server: the page
+    // re-reads what depends on it either way.
+    emit('domains-refreshed');
   } finally {
     rechecking.value = false;
   }

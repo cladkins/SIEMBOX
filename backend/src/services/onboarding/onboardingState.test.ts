@@ -45,6 +45,14 @@ test('completionValue round-trips through the parser', () => {
     completed_by: 'alice',
     recorded: true,
   });
+  // A migrated browser dismissal names nobody.
+  assert.equal(completionValue(null, at), JSON.stringify({ at: at.toISOString() }));
+  assert.deepEqual(parseOnboardingState(completionValue(null, at)), {
+    completed: true,
+    completed_at: at.toISOString(),
+    completed_by: null,
+    recorded: true,
+  });
 });
 
 test('toPublicOnboardingState: the admin username is for admins only', () => {

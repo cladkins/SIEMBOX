@@ -1785,7 +1785,9 @@ Mark setup done, or bring the Dashboard reminder back for every administrator.
 - `{ "completed": true, "legacy": true }` migrates a browser's pre-server-side
   dismissal (the `onboarding_dismissed` localStorage flag). It applies only when
   nothing was ever recorded, so a stale browser can never undo an admin's
-  reopen; otherwise it changes nothing. The web UI sends it once, from an
+  reopen; otherwise it changes nothing. It is recorded with `completed_by:
+  null`: the flag doesn't say who dismissed the reminder, so the admin whose
+  browser carried it over isn't credited. The web UI sends it once, from an
   admin's browser that still holds the flag.
 
 **Response (200):** the state, as `GET` returns it to an admin.
@@ -4257,9 +4259,11 @@ like the key test, is admin-only; **all writes require the admin role**.
   subscription status; 10/min until known), and a run and an admin's re-check
   share one pacer, so they never burst. A `429` (from any keyed call, the
   verified-domain list included) pauses all checks until HIBP's `retry-after`
-  has passed; a rejected key (`401`) pauses them for an hour or until the key is
-  changed (a successful verified-domain listing also lifts that pause: the key
-  just worked). Neither retries in a loop; unchecked identities simply stay due.
+  has passed, a run already in progress included (saving the same key again
+  doesn't lift it; a different key does); a rejected key (`401`) pauses them
+  for an hour or until the key is saved again (a successful verified-domain
+  listing also lifts that pause: the key just worked). Neither retries in a
+  loop; unchecked identities simply stay due.
 - Findings are deduplicated on `sha256(kind:value:[alias:]breach)`: re-checks
   only update `last_seen`, never raise a second alert, and never reopen a
   resolved finding.
@@ -4568,11 +4572,14 @@ makes every leaked-credential check skip: put the original
 
 ### PUT /api/exposure/providers/hibp
 
-Save the HIBP API key and/or enable the provider. Saving (or re-enabling) also
-lifts any rate-limit or rejected-key pause. Saving or clearing `api_key` also
-resets the verified-domain list (it belongs to the old key's account):
+Save the HIBP API key and/or enable the provider. Saving a different key (or
+clearing it) lifts any rate-limit or rejected-key pause and resets the
+verified-domain list (it belongs to the old key's account):
 [`GET /providers/hibp/verified-domains`](#get-apiexposureprovidershibpverified-domains)
 reads `not_checked` until the next run or re-check lists the new key's domains.
+Re-entering the key that is already saved, or only changing `enabled`, keeps
+the stored key and its list and lifts only a rejected-key pause: after a `429`,
+checks and re-checks stay paused until HIBP's `retry-after` has passed.
 
 **Authentication:** Required (Admin)
 
@@ -4691,8 +4698,10 @@ Re-check with HIBP now: reads `subscription/status` (so a plan change shows at
 once) and `subscribeddomains`, paced with every other HIBP call. At most once a
 minute install-wide; concurrent re-checks share one call. Identities skipped as
 `unverified` that are now listed become due straight away (their
-`last_checked_at`, `last_status` and `last_error` are cleared). The provider's
-`enabled` flag is not required, as for the key test.
+`last_checked_at`, `last_status` and `last_error` are cleared), including while
+a check runs: the run decides each skip on the list as it is at that moment, so
+it searches such a domain instead of marking it `unverified` again. The
+provider's `enabled` flag is not required, as for the key test.
 
 **Authentication:** Required (Admin)
 
@@ -4706,7 +4715,7 @@ minute install-wide; concurrent re-checks share one call. Identities skipped as
   view comes back and nothing is sent.
 - A failed attempt still answers `200`, with the failure in `error`. A `429`
   from HIBP is recorded there and pauses every breach check until its
-  `retry-after` has passed.
+  `retry-after` has passed, a run in progress included.
 - `became_due` lists the enabled identities that turned verified and were made
   due again.
 

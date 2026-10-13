@@ -7,7 +7,7 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { CredentialEncryption } from '../credentials/credentialEncryption';
-import { isStoredHibpKeyUsable } from './settings';
+import { isStoredHibpKeyUsable, storedHibpKeyMatches } from './settings';
 
 const KEY_A = 'a1'.repeat(32);
 const KEY_B = 'b2'.repeat(32);
@@ -69,4 +69,19 @@ test('a key that does not decrypt is tried once, not on every status request', (
   process.env.CREDENTIAL_ENCRYPTION_KEY = KEY_A;
   assert.equal(isStoredHibpKeyUsable(resaved), false);
   assert.equal(calls, 3);
+});
+
+test('storedHibpKeyMatches: the same key re-entered matches; another key, a clear or an unreadable value does not', () => {
+  const stored = storedUnder(KEY_A);
+  assert.equal(storedHibpKeyMatches(stored, HIBP_KEY), true);
+  assert.equal(storedHibpKeyMatches(stored, 'f'.repeat(32)), false);
+  assert.equal(storedHibpKeyMatches(stored, HIBP_KEY.slice(1)), false);
+  assert.equal(storedHibpKeyMatches(stored, null), false, 'clearing a saved key is a change');
+  assert.equal(storedHibpKeyMatches(stored, ''), false);
+  assert.equal(storedHibpKeyMatches('', null), true, 'nothing saved, nothing to clear');
+  assert.equal(storedHibpKeyMatches('', HIBP_KEY), false);
+
+  process.env.CREDENTIAL_ENCRYPTION_KEY = KEY_B; // it can't be decrypted any more
+  assert.equal(storedHibpKeyMatches(stored, HIBP_KEY), false, 'saving it again re-encrypts it');
+  assert.equal(storedHibpKeyMatches(stored, null), false);
 });

@@ -5,7 +5,8 @@
  *
  *   missing row          → never recorded, not completed
  *   ''                   → recorded, not completed (an admin reopened it)
- *   {"at": ISO, "by": u} → completed (any other non-empty value counts too)
+ *   {"at": ISO, "by": u} → completed ({"at": ISO} alone for a migrated browser
+ *                          dismissal; any other non-empty value counts too)
  *
  * Completion only turns the Dashboard reminder off for administrators; the
  * checklist itself is always reachable. Nothing here is secret: the value is a
@@ -70,8 +71,9 @@ export function toPublicOnboardingState(state: OnboardingState, isAdmin: boolean
   };
 }
 
-/** The value written on completion. */
-export function completionValue(username: string, now = new Date()): string {
+/** The value written on completion; `username` null for one nobody can be credited with. */
+export function completionValue(username: string | null, now = new Date()): string {
+  if (username === null) return JSON.stringify({ at: now.toISOString() });
   return JSON.stringify({ at: now.toISOString(), by: username.slice(0, MAX_USERNAME_LENGTH) });
 }
 
@@ -108,15 +110,19 @@ export async function reopenOnboarding(): Promise<OnboardingState> {
 /**
  * A browser's pre-server-side dismissal (localStorage), migrated once: applied
  * only when nothing was ever recorded, so a stale browser can never undo an
- * admin's reopen. Returns the state, and whether this call wrote it.
+ * admin's reopen. The old flag says only that someone using that browser
+ * dismissed the reminder, so it is recorded without `by` (the admin whose
+ * browser carried it over didn't necessarily do it). Returns the state, and
+ * whether this call wrote it.
  */
-export async function completeOnboardingIfNeverRecorded(
-  username: string
-): Promise<{ state: OnboardingState; applied: boolean }> {
+export async function completeOnboardingIfNeverRecorded(): Promise<{
+  state: OnboardingState;
+  applied: boolean;
+}> {
   const r = await query(
     `INSERT INTO system_settings (key, value) VALUES ($1, $2)
      ON CONFLICT (key) DO NOTHING`,
-    [ONBOARDING_SETTING_KEY, completionValue(username)]
+    [ONBOARDING_SETTING_KEY, completionValue(null)]
   );
   return { state: await getOnboardingState(), applied: (r.rowCount ?? 0) > 0 };
 }

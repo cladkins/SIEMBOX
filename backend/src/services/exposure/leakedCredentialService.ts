@@ -51,6 +51,7 @@ import {
   buildSnapshot,
   failedSnapshot,
   hibpDomainStatus,
+  isListedState,
   isSkippedState,
   markHibpDomainSnapshotStale,
   needsDomainRefresh,
@@ -330,6 +331,12 @@ export interface HibpSourceOptions {
   createClient?: (apiKey: string) => HibpClientLike;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /**
+   * End of a rate-limit pause (ms since the epoch, as `now`), or 0: no keyed
+   * call is sent before it, whoever is calling. The service's own source reads
+   * the shared leaked-credential pause.
+   */
+  pausedUntil?: () => number;
 }
 
 function toSourceError(err: unknown): ExposureSourceError {
@@ -364,6 +371,7 @@ export class HibpSource implements ExposureSource {
   private readonly createClient: (apiKey: string) => HibpClientLike;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
+  private readonly pausedUntil: () => number;
 
   private lastCallAt = 0;
   /** Every keyed call takes its turn here, so concurrent callers (a run and an admin's re-check) never burst. */
@@ -382,6 +390,7 @@ export class HibpSource implements ExposureSource {
     this.createClient = options.createClient ?? ((apiKey) => new HibpClient({ apiKey }));
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.now = options.now ?? Date.now;
+    this.pausedUntil = options.pausedUntil ?? (() => 0);
   }
 
   async isConfigured(): Promise<boolean> {
@@ -444,13 +453,23 @@ export class HibpSource implements ExposureSource {
   /**
    * Space keyed calls so a cycle stays under the plan's requests per minute.
    * Callers queue on one promise chain, so the gap holds between concurrent
-   * callers too.
+   * callers too. A call whose turn comes during a rate-limit pause (a 429 to
+   * another caller while it waited) is not sent: it fails as rate-limited.
    */
   private pace(): Promise<void> {
     const turn = this.paceChain.then(async () => {
       const wait = this.lastCallAt + spacingForRpm(this.plan?.status?.Rpm) - this.now();
       if (wait > 0) await this.sleep(wait);
-      this.lastCallAt = this.now();
+      const until = this.pausedUntil();
+      const now = this.now();
+      if (until > now) {
+        throw new HibpError(
+          'rate_limited',
+          `HIBP rate limit reached; checks resume after ${new Date(until).toISOString()}`,
+          { retryAfterSeconds: Math.ceil((until - now) / 1000) }
+        );
+      }
+      this.lastCallAt = now;
     });
     this.paceChain = turn.catch(() => undefined);
     return turn;
@@ -612,7 +631,9 @@ const DEFAULT_MAX_IDENTITIES = 100;
 const AUTH_PAUSE_MS = 60 * 60 * 1000;
 const MAX_CONSECUTIVE_TRANSIENT = 2;
 
-const hibpSource = new HibpSource();
+// A 429 to any caller (a run or an admin's re-check) holds every keyed call,
+// including one already waiting its turn in the pacer.
+const hibpSource = new HibpSource({ pausedUntil: () => rateLimitPauseEnd() });
 
 // In-process state, like the job registry: it describes this process's runs.
 let inFlight: Promise<LeakedCredentialRunSummary> | null = null;
@@ -639,8 +660,23 @@ function rateLimitPauseEnd(): number {
   return pauseKind === 'rate_limited' && pausedUntil > Date.now() ? pausedUntil : 0;
 }
 
-/** Lift a rate-limit/auth pause and forget the cached plan — call when the HIBP key or flag changes. */
+/**
+ * Lift a rate-limit/auth pause and forget the cached plan — call when a
+ * different HIBP key is saved (or the key is cleared): HIBP's rate limit and
+ * plan belong to the key.
+ */
 export function resetLeakedCredentialPause(): void {
+  liftPause();
+  hibpSource.reset();
+}
+
+/**
+ * Lift only a rejected-key pause (the admin re-saved the same key or toggled
+ * the provider, e.g. after renewing the subscription). A rate-limit pause
+ * stays until HIBP's retry-after has passed: the same key gets the same limit.
+ */
+export function liftLeakedCredentialAuthPause(): void {
+  if (pauseKind !== 'auth') return;
   liftPause();
   hibpSource.reset();
 }
@@ -778,10 +814,7 @@ async function refreshDomainSnapshot(
   if (!snapshot) return { snapshot: null, error: null, requeued: [] };
   if (pauseKind === 'auth') liftPause();
   const verified = identities
-    .filter((i) => {
-      const state = hibpDomainStatus(i.value, snapshot, true).state;
-      return state === 'verified' || state === 'verified_limited';
-    })
+    .filter((i) => isListedState(hibpDomainStatus(i.value, snapshot, true).state))
     .map((i) => i.value);
   const requeued = await store.requeueVerified(verified);
   return { snapshot, error: null, requeued };
@@ -940,14 +973,35 @@ async function executeRun(options: RunOptions): Promise<LeakedCredentialRunSumma
 
   for (const identity of identities) {
     if (Date.now() - startedAt >= budgetMs) break; // the rest stay due
+    if (pausedUntil > Date.now()) {
+      // A 429 to a concurrent call (an admin's re-check) pauses every check,
+      // this run's included; the rest stay due.
+      summary.error = pauseReason ?? `paused until ${new Date(pausedUntil).toISOString()}`;
+      if (pauseKind === 'rate_limited') summary.rateLimitedUntil = new Date(pausedUntil).toISOString();
+      break;
+    }
 
     let domainStatus: IdentityHibpDomain | null = null;
     if (identity.kind === 'email_domain' && listsDomains) {
       domainStatus = hibpDomainStatus(identity.value, snapshot, true);
       if (isSkippedState(domainStatus.state)) {
+        // An admin's re-check may have listed it since this run read the
+        // snapshot (and re-queued it): decide on the snapshot as it is now.
+        snapshot = (await store.loadDomainSnapshot()).snapshot;
+        domainStatus = hibpDomainStatus(identity.value, snapshot, true);
+      }
+      if (isSkippedState(domainStatus.state)) {
         // HIBP would refuse it (403): no call, no error, until it is verified.
         await store.markUnverified(identity.id, skipNote(identity.value, domainStatus));
-        summary.unverified++;
+        // A re-check writes its list, then re-queues. If that landed between the
+        // read above and this write, the write undid the re-queue: read once
+        // more and, if the domain is listed now, re-queue it here instead.
+        const after = (await store.loadDomainSnapshot()).snapshot;
+        if (isListedState(hibpDomainStatus(identity.value, after, true).state)) {
+          await store.requeueVerified([identity.value]);
+        } else {
+          summary.unverified++;
+        }
         continue;
       }
     }
@@ -982,7 +1036,7 @@ async function executeRun(options: RunOptions): Promise<LeakedCredentialRunSumma
         // The list may be out of date: the next run re-reads it (at most hourly).
         if (listsDomains) await store.markDomainSnapshotStale();
         consecutiveTransient = 0;
-        if (domainStatus?.state === 'verified' || domainStatus?.state === 'verified_limited') {
+        if (domainStatus && isListedState(domainStatus.state)) {
           // Listed as verified, yet refused: an anomaly to look at, recorded as an
           // error so the re-queue (which only takes 'unverified' rows) can't loop.
           summary.failed++;

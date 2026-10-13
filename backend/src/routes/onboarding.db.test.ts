@@ -154,7 +154,10 @@ test('legacy dismissal on an install that never recorded anything completes it',
   const r = await call('admin', 'PUT', { completed: true, legacy: true });
   assert.equal(r.status, 200);
   assert.equal(r.json.completed, true);
-  assert.equal(r.json.completed_by, `${name}-admin`);
+  assert.match(r.json.completed_at, /^\d{4}-\d\d-\d\dT/);
+  // The old flag says only that some browser dismissed the reminder, not who did.
+  assert.equal(r.json.completed_by, null, 'a migrated dismissal is not attributed to the migrating admin');
+  assert.deepEqual(Object.keys(JSON.parse((await storedValue()) ?? '{}')), ['at']);
   await pool.query('DELETE FROM system_settings WHERE key = $1', [KEY]);
 });
 

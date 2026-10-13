@@ -408,6 +408,49 @@ test('a 429 is recorded and pauses; the next re-check is refused with Retry-Afte
   assert.equal(hibpCalls(), calls);
 });
 
+test('re-saving the same key during a 429 keeps the wait; only a different key starts afresh', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  if (operatorKeyPresent) return t.skip('an HIBP key is already stored here; not touching it');
+  await saveKey(API_KEY);
+  await setSetting('exposure_hibp_domains', ''); // no earlier wait recorded
+  hibp.fail = new HibpError('rate_limited', 'HIBP rate limit exceeded; retry after 3600s', {
+    status: 429,
+    retryAfterSeconds: 3600,
+  });
+  assert.equal((await call('admin', 'POST', REFRESH)).json.error.kind, 'rate_limited');
+  const recorded = await snapshotRaw();
+  const envelope = (await pool.query(`SELECT value FROM system_settings WHERE key = 'exposure_hibp_key'`)).rows[0].value;
+  hibp.fail = null;
+
+  // The admin re-enters the same key (and toggles the provider) hoping to clear the banner.
+  const calls = hibpCalls();
+  assert.equal((await call('admin', 'PUT', '/api/exposure/providers/hibp', { api_key: API_KEY })).status, 200);
+  assert.equal((await call('admin', 'PUT', '/api/exposure/providers/hibp', { enabled: true })).status, 200);
+  assert.equal(await snapshotRaw(), recorded, 'the recorded retry-after is kept');
+  assert.equal(
+    (await pool.query(`SELECT value FROM system_settings WHERE key = 'exposure_hibp_key'`)).rows[0].value,
+    envelope,
+    'the same key is not re-encrypted, so the snapshot stays bound to it'
+  );
+  const status = await call('viewer', 'GET', '/api/exposure/status');
+  assert.ok(status.json.leaked_creds.paused_until, 'breach checks stay paused');
+  const refused = await call('admin', 'POST', REFRESH);
+  assert.equal(refused.status, 429);
+  assert.ok(Number(refused.headers.get('retry-after')) > 3500);
+  assert.equal(hibpCalls(), calls, 'nothing is sent to HIBP inside its retry-after');
+
+  // A different key has its own limit: a fresh start.
+  await saveKey(OTHER_KEY);
+  assert.equal(await snapshotRaw(), '');
+  assert.equal((await call('viewer', 'GET', '/api/exposure/status')).json.leaked_creds.paused_until, null);
+  hibp.domains = [VERIFIED];
+  const fresh = await call('admin', 'POST', REFRESH);
+  assert.equal(fresh.status, 200);
+  assert.equal(fresh.json.state, 'listed');
+  await saveKey(API_KEY);
+  await setSetting('exposure_hibp_enabled', 'false');
+});
+
 test('a new key resets the list; a list written for the old key reads as not checked', async (t) => {
   if (!dbReady) return t.skip(SKIP);
   if (operatorKeyPresent) return t.skip('an HIBP key is already stored here; not touching it');

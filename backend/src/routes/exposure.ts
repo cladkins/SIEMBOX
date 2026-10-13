@@ -38,6 +38,7 @@ import {
   getHibpApiKey,
   getHibpProviderPublic,
   isExposureSeverity,
+  isSavedHibpKey,
   isValidResolverSetting,
   saveHibpProvider,
   updateExposureSettings,
@@ -60,6 +61,7 @@ import {
   MANUAL_RUN_BUDGET_MS,
   getHibpVerifiedDomainsView,
   getLeakedCredentialRunState,
+  liftLeakedCredentialAuthPause,
   refreshHibpVerifiedDomains,
   resetLeakedCredentialPause,
   runLeakedCredentialChecks,
@@ -308,9 +310,13 @@ router.put('/providers/hibp', adminOnly, async (req: Request, res: Response) => 
     }
   }
   const enabled = optionalBoolean(body, 'enabled');
+  // Re-entering the key that is already saved changes nothing at HIBP (same
+  // rate limit, same verified domains), so the stored envelope is left alone:
+  // the snapshot bound to it, and any retry-after it records, still apply.
+  const keyChanged = apiKey !== undefined && !(await isSavedHibpKey(apiKey));
 
   try {
-    await saveHibpProvider({ apiKey, enabled });
+    await saveHibpProvider({ apiKey: keyChanged ? apiKey : undefined, enabled });
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     if (message.includes('CREDENTIAL_ENCRYPTION_KEY')) {
@@ -321,12 +327,17 @@ router.put('/providers/hibp', adminOnly, async (req: Request, res: Response) => 
     }
     throw new ApiError(500, 'Failed to save the HIBP provider settings');
   }
-  // The verified-domain list belongs to the old key's account. (A list written
-  // for another key is ignored anyway: it is bound to the stored envelope.)
-  if (apiKey !== undefined) await clearHibpDomainSnapshot();
-  // A new key (or re-enabling) deserves a fresh start: lift any rate-limit or
-  // rejected-key pause and re-read the plan.
-  resetLeakedCredentialPause();
+  if (keyChanged) {
+    // The verified-domain list belongs to the old key's account. (A list written
+    // for another key is ignored anyway: it is bound to the stored envelope.)
+    await clearHibpDomainSnapshot();
+    // A different key has its own rate limit and plan: a fresh start.
+    resetLeakedCredentialPause();
+  } else {
+    // The same key (or only the enabled flag): retry a rejected key, but keep
+    // honouring a 429's retry-after.
+    liftLeakedCredentialAuthPause();
+  }
   res.json(await getHibpProviderPublic());
 });
 

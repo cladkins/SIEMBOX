@@ -49,7 +49,7 @@
       ref="providerCard"
       class="section"
       :encryption-error="encryptionError"
-      @changed="refreshStatus"
+      @changed="onProviderChanged"
       @encryption-error="encryptionError = $event"
       @domains-refreshed="onDomainsRefreshed('provider')"
       @identities-changed="onIdentitiesChanged"
@@ -161,11 +161,20 @@ async function refreshBanner() {
   ]);
 }
 
-// A manual run changes identities' last-check state and may add findings.
+// A manual run changes identities' last-check state and may add findings; a
+// run with a due email domain may also have re-listed the verified domains.
 function onCheckRan() {
   void refreshStatus();
   void identitiesCard.value?.reload();
+  void providerCard.value?.reloadDomains();
   void reloadFindings();
+}
+
+// The HIBP key was saved, replaced or removed (or the provider toggled): each
+// email domain's verification line belongs to the key, so it is re-read too.
+function onProviderChanged() {
+  void refreshStatus();
+  void identitiesCard.value?.reload();
 }
 
 // HIBP was asked which domains are verified (from either card): the identities'

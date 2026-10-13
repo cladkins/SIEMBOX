@@ -372,8 +372,12 @@ function memoryStore(
   };
   const store: LeakedCredentialStore = {
     isEnabled: async () => options.enabled ?? true,
+    // Copies, as rows read from the database are: later writes don't show through.
     findDue: async (limit, force) =>
-      identities.filter((i) => i.enabled && (force || due.has(i.id))).slice(0, limit),
+      identities
+        .filter((i) => i.enabled && (force || due.has(i.id)))
+        .slice(0, limit)
+        .map((i) => ({ ...i })),
     countDue: async (force) => (force ? identities.filter((i) => i.enabled).length : due.size),
     markChecked: async (id) => {
       log.checked.push(id);
@@ -388,6 +392,8 @@ function memoryStore(
     markUnverified: async (id, note) => {
       log.unverified.push({ id, note });
       setStatus(id, 'unverified');
+      const row = byId.get(id);
+      if (row) row.last_checked_at = new Date().toISOString();
       due.delete(id);
     },
     loadDomainSnapshot: async () => ({
@@ -411,6 +417,7 @@ function memoryStore(
       );
       for (const row of rows) {
         row.last_status = null;
+        row.last_checked_at = null;
         if (row.enabled) due.add(row.id);
       }
       log.requeued.push(rows.map((r) => r.id));
@@ -982,6 +989,149 @@ test('refreshHibpVerifiedDomains: cooldown, shared calls, key changes, pauses an
     refreshHibpVerifiedDomains({ source: refused, store: memoryStore([], { snapshot: recorded }).store }),
     (err: unknown) => err instanceof HibpDomainsRefreshError && err.kind === 'rate_limited'
   );
+});
+
+/** Hold the check of `value` until release(); `started` resolves when that check begins. */
+function holdCheck(source: ExposureSource, value: string) {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let begin!: () => void;
+  const started = new Promise<void>((resolve) => (begin = resolve));
+  const check = source.check.bind(source);
+  source.check = async (i) => {
+    if (i.value === value) {
+      begin();
+      await gate;
+    }
+    return check(i);
+  };
+  return { started, release };
+}
+
+test('domains: a Re-check during a run is not undone: the skip is decided on the list as it is now', async () => {
+  const ids = [
+    identity(1, 'a@example.com'),
+    domainIdentity(2, 'd.example', {
+      last_status: 'unverified',
+      last_checked_at: new Date(Date.now() - 2 * 24 * HOUR).toISOString(), // due again by its interval
+    }),
+  ];
+  // Listed two minutes ago without d.example: fresh for the run, past the re-check's cooldown.
+  const { store, log, due } = memoryStore(ids, { snapshot: listedSnapshot([], 2 * 60_000) });
+  const source = domainSource(['d.example']);
+  const held = holdCheck(source, 'a@example.com');
+
+  const run = runLeakedCredentialChecks({ source, store });
+  await held.started;
+  // Meanwhile the admin verifies d.example at HIBP and clicks Re-check.
+  const recheck = await refreshHibpVerifiedDomains({ source, store });
+  assert.deepEqual(recheck.becameDue, [2]);
+  held.release();
+  const summary = await run;
+
+  assert.deepEqual(source.calls, ['list', 'check:a@example.com', 'check:d.example'], 'd.example is searched in this run');
+  assert.deepEqual(log.unverified, [], 'the re-queue is not overwritten with "unverified"');
+  assert.deepEqual([summary.checked, summary.unverified, summary.failed], [2, 0, 0]);
+  assert.equal(ids[1].last_status, 'ok');
+  assert.equal(due.has(2), false);
+});
+
+test('domains: a Re-check landing between the skip decision and its write still re-queues the domain', async () => {
+  const ids = [
+    domainIdentity(1, 'd.example', {
+      last_status: 'unverified',
+      last_checked_at: new Date(Date.now() - 2 * 24 * HOUR).toISOString(),
+    }),
+  ];
+  const { store, due, domains } = memoryStore(ids, { snapshot: listedSnapshot([], 2 * 60_000) });
+  const write = store.markUnverified.bind(store);
+  // The admin's re-check writes its list and re-queues just before the run's write lands.
+  store.markUnverified = async (id, note) => {
+    domains.snapshot = listedSnapshot(['d.example']);
+    await store.requeueVerified(['d.example']);
+    await write(id, note);
+  };
+  const source = domainSource(['d.example']);
+  const summary = await runLeakedCredentialChecks({ source, store });
+  assert.deepEqual(source.calls, [], 'skipped on the list it read');
+  assert.equal(summary.unverified, 0, 'not counted as skipped: it is due again');
+  assert.equal(ids[0].last_status, null, 'back to "not checked yet", not "Not verified"');
+  assert.equal(due.has(1), true, 'due again, so the next run searches it');
+});
+
+test('run: a 429 from a concurrent Re-check stops a run in progress: nothing more is sent', async () => {
+  const { store, due } = memoryStore([identity(1), identity(2), identity(3)]);
+  const source = domainSource(
+    () => new HibpError('rate_limited', 'HIBP rate limit exceeded; retry after 120s', { status: 429, retryAfterSeconds: 120 })
+  );
+  const held = holdCheck(source, 'user1@example.com');
+
+  const run = runLeakedCredentialChecks({ source, store });
+  await held.started;
+  const recheck = await refreshHibpVerifiedDomains({ source, store });
+  assert.equal(recheck.view.error?.kind, 'rate_limited');
+  assert.ok(getLeakedCredentialRunState().paused_until, 'the shared pause is set');
+  held.release();
+  const summary = await run;
+
+  assert.deepEqual(source.calls, ['list', 'check:user1@example.com'], 'user2 and user3 are not sent inside retry-after');
+  assert.equal(summary.checked, 1);
+  assert.match(summary.error ?? '', /rate limit/);
+  assert.ok(summary.rateLimitedUntil && Date.parse(summary.rateLimitedUntil) > Date.now() + 100_000);
+  assert.deepEqual([...due], [2, 3], 'the rest stay due');
+});
+
+test('HibpSource: no keyed call is sent while a rate-limit pause is on, even one already waiting its turn', async () => {
+  let now = 1_000_000;
+  let pausedUntil = 0;
+  let pauseWhileWaiting = true;
+  const sent: string[] = [];
+  const client = {
+    subscriptionStatus: async () => {
+      sent.push('status');
+      return { Rpm: 60 };
+    },
+    subscribedDomains: async () => {
+      sent.push('list');
+      return { domains: [], unreadable: 0, overLimit: 0 };
+    },
+    breachedAccount: async () => {
+      sent.push('account');
+      return [];
+    },
+    breachedDomain: async () => ({}),
+    allBreaches: async () => [],
+  };
+  const source = new HibpSource({
+    getApiKey: async () => '0123456789abcdef0123456789abcdef',
+    isEnabled: async () => true,
+    createClient: () => client as never,
+    sleep: async (ms) => {
+      now += ms;
+      // A 429 elsewhere (a run, or an admin's re-check) while this call waits its turn.
+      if (pauseWhileWaiting) pausedUntil = now + 60_000;
+    },
+    now: () => now,
+    pausedUntil: () => pausedUntil,
+  });
+
+  // The plan lookup goes out at once; the search waits its turn, and the pause starts meanwhile.
+  await assert.rejects(
+    source.check({ kind: 'email', value: 'a@example.com' }),
+    (err: unknown) => err instanceof ExposureSourceError && err.kind === 'rate_limited' && (err.retryAfterSeconds ?? 0) >= 59
+  );
+  assert.deepEqual(sent, ['status']);
+  await assert.rejects(
+    source.listVerifiedDomains({ refreshPlan: true }),
+    (err: unknown) => err instanceof HibpError && err.kind === 'rate_limited'
+  );
+  assert.deepEqual(sent, ['status'], 'neither the plan nor the list is asked for');
+
+  // Once it has passed, calls flow again.
+  pauseWhileWaiting = false;
+  now = pausedUntil + 1;
+  await source.check({ kind: 'email', value: 'a@example.com' });
+  assert.deepEqual(sent, ['status', 'account']);
 });
 
 test('findings carry HIBP’s per-breach attribution as plain text, and descriptions the licence', () => {

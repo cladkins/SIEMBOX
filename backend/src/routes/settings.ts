@@ -765,7 +765,7 @@ router.put('/onboarding', authorize('admin'), async (req: Request, res: Response
     state = await reopenOnboarding();
     logger.info(`[Onboarding] reopened by ${username}`);
   } else if (legacy === true) {
-    const result = await completeOnboardingIfNeverRecorded(username);
+    const result = await completeOnboardingIfNeverRecorded();
     state = result.state;
     if (result.applied) logger.info(`[Onboarding] legacy dismissal applied for ${username}`);
   } else {

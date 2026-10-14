@@ -26,17 +26,28 @@
           />
         </el-form-item>
 
-        <el-form-item v-if="aiForm.provider !== 'ollama'" label="API Key">
+        <el-form-item v-if="aiForm.provider !== 'ollama'" label="API Key" :required="aiKeyNeeded && !aiForm.removeKey">
           <el-input
             v-model="aiForm.apiKey"
             type="password"
             show-password
             style="width: 320px"
-            :placeholder="aiKeyPlaceholder"
+            :placeholder="aiKeyNeeded ? NEW_KEY_PLACEHOLDER : aiKeyPlaceholder"
+            :disabled="aiKeyNeeded && aiForm.removeKey"
           />
-          <el-text size="small" :type="aiConfigured ? 'success' : 'warning'" style="margin-left: 10px">
+          <el-text v-if="!aiKeyNeeded" size="small" :type="aiKeyStatusType" style="margin-left: 10px">
             {{ aiKeyStatus }}
           </el-text>
+          <div v-if="aiKeyNeeded" class="key-needed" data-test="ai-key-needed">
+            <el-text size="small" type="warning">{{ KEY_NEEDED_TEXT }}</el-text>
+            <el-checkbox v-model="aiForm.removeKey" size="small">
+              Remove the saved key instead<template v-if="ENV_KEY_VARS[aiForm.provider]">
+                (the {{ ENV_KEY_VARS[aiForm.provider] }} environment variable is used, if set)</template>
+            </el-checkbox>
+          </div>
+        </el-form-item>
+        <el-form-item v-else-if="aiKeyNeeded" label="API Key">
+          <el-text size="small" type="info">{{ OLLAMA_REMOVES_KEY_TEXT }}</el-text>
         </el-form-item>
 
         <el-form-item>
@@ -47,7 +58,8 @@
         <el-text size="small" type="info">
           Powers "Generate with AI" on the Parsers and Detection Rules pages. The API key is stored
           encrypted at rest; you can instead set ANTHROPIC_API_KEY / OPENAI_API_KEY as environment variables.
-          Leave the key blank to keep the existing one.
+          Leave the key blank to keep the existing one. A saved key is only sent to the provider and base URL
+          it was saved for, so changing either asks for the key again.
         </el-text>
       </el-form>
     </el-card>
@@ -76,23 +88,41 @@
             <el-input
               v-model="chatForm.baseUrl"
               style="width: 320px"
-              :placeholder="chatForm.provider === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com/v1'"
+              :placeholder="blankBaseUrl(chatForm.provider, aiSaved)"
             />
           </el-form-item>
 
-          <el-form-item v-if="chatForm.provider !== 'ollama'" label="API Key">
+          <el-form-item
+            v-if="chatForm.provider !== 'ollama'"
+            label="API Key"
+            :required="chatKeyNeeded && !chatForm.removeKey"
+          >
             <el-input
               v-model="chatForm.apiKey"
               type="password"
               show-password
               style="width: 320px"
-              :placeholder="chatKeyPlaceholder"
+              :placeholder="chatKeyNeeded ? NEW_KEY_PLACEHOLDER : chatKeyPlaceholder"
+              :disabled="chatKeyNeeded && chatForm.removeKey"
             />
-            <el-text size="small" :type="chatConfigured ? 'success' : 'warning'" style="margin-left: 10px">
+            <el-text v-if="!chatKeyNeeded" size="small" :type="chatKeyStatusType" style="margin-left: 10px">
               {{ chatKeyStatus }}
             </el-text>
+            <div v-if="chatKeyNeeded" class="key-needed" data-test="chat-key-needed">
+              <el-text size="small" type="warning">{{ KEY_NEEDED_TEXT }}</el-text>
+              <el-checkbox v-model="chatForm.removeKey" size="small">
+                Remove the saved key instead (the AI Builder's key is used where the AI Builder sends it, else
+                the environment variable, if set)
+              </el-checkbox>
+            </div>
+          </el-form-item>
+          <el-form-item v-else-if="chatKeyNeeded" label="API Key">
+            <el-text size="small" type="info">{{ OLLAMA_REMOVES_KEY_TEXT }}</el-text>
           </el-form-item>
         </template>
+        <el-form-item v-else-if="chatKeySaved" label="API Key">
+          <el-text size="small" type="info">{{ INHERIT_REMOVES_KEY_TEXT }}</el-text>
+        </el-form-item>
 
         <el-form-item>
           <el-button type="primary" @click="saveChatSettings" :loading="chatSaving">
@@ -103,7 +133,9 @@
           Powers the conversational AI Analyst. Leave the provider on "Inherit main AI config" to reuse the
           AI Builder model above, or choose a separate model (e.g. a larger one, or a local Ollama instruct
           model like Qwen2.5 / Llama 3.1) just for the analyst — the tool loop works best with a strong
-          instruction-following model. Key stored encrypted at rest; leave blank to keep the existing one.
+          instruction-following model. Key stored encrypted at rest; leave blank to keep the existing one. A
+          saved key is only sent to the provider and base URL it was saved for, so changing either asks for
+          the key again; the AI Builder's key is only used where the AI Builder sends it.
           <span v-if="chatInheritsFrom === 'main'"> Currently inheriting the main AI config.</span>
         </el-text>
       </el-form>
@@ -174,23 +206,41 @@
             <el-input
               v-model="triageForm.baseUrl"
               style="width: 320px"
-              :placeholder="triageForm.provider === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com/v1'"
+              :placeholder="blankBaseUrl(triageForm.provider, chatSaved)"
             />
           </el-form-item>
 
-          <el-form-item v-if="triageForm.provider !== 'ollama'" label="API Key">
+          <el-form-item
+            v-if="triageForm.provider !== 'ollama'"
+            label="API Key"
+            :required="triageKeyNeeded && !triageForm.removeKey"
+          >
             <el-input
               v-model="triageForm.apiKey"
               type="password"
               show-password
               style="width: 320px"
-              :placeholder="triageKeyPlaceholder"
+              :placeholder="triageKeyNeeded ? NEW_KEY_PLACEHOLDER : triageKeyPlaceholder"
+              :disabled="triageKeyNeeded && triageForm.removeKey"
             />
-            <el-text size="small" :type="triageConfigured ? 'success' : 'warning'" style="margin-left: 10px">
+            <el-text v-if="!triageKeyNeeded" size="small" :type="triageKeyStatusType" style="margin-left: 10px">
               {{ triageKeyStatus }}
             </el-text>
+            <div v-if="triageKeyNeeded" class="key-needed" data-test="triage-key-needed">
+              <el-text size="small" type="warning">{{ KEY_NEEDED_TEXT }}</el-text>
+              <el-checkbox v-model="triageForm.removeKey" size="small">
+                Remove the saved key instead (the AI Analyst's key is used where the AI Analyst sends it, else
+                the environment variable, if set)
+              </el-checkbox>
+            </div>
+          </el-form-item>
+          <el-form-item v-else-if="triageKeyNeeded" label="API Key">
+            <el-text size="small" type="info">{{ OLLAMA_REMOVES_KEY_TEXT }}</el-text>
           </el-form-item>
         </template>
+        <el-form-item v-else-if="triageKeySaved" label="API Key">
+          <el-text size="small" type="info">{{ INHERIT_REMOVES_KEY_TEXT }}</el-text>
+        </el-form-item>
 
         <el-form-item>
           <el-button type="primary" @click="saveTriageSettings" :loading="triageSaving">
@@ -200,7 +250,8 @@
         <el-text size="small" type="info">
           Read-only, same as the AI Analyst — no create/update/delete tools. Costs roughly one LLM call per
           analyzed alert, so a strong instruction-following model works best; the tool loop works on local
-          Ollama models too. Key stored encrypted at rest; leave blank to keep the existing one.
+          Ollama models too. Key stored encrypted at rest; leave blank to keep the existing one. A saved key
+          is only sent to the provider and base URL it was saved for, so changing either asks for the key again.
           <span v-if="triageInheritsFrom === 'chat'"> Currently inheriting the AI Analyst config.</span>
         </el-text>
       </el-form>
@@ -214,26 +265,67 @@ import { api } from '@/services/api';
 import { ElMessage } from 'element-plus';
 import { Check } from '@element-plus/icons-vue';
 import HelpTip from '@/components/HelpTip.vue';
+import { ENV_KEY_VARS, blankBaseUrl, keyNeeded, type AiEndpoint } from './aiKeyTarget';
+
+// A saved key is only sent to the provider and base URL it was saved for (the
+// API answers 400 to a change of either without apiKey), so each form asks for
+// the key again when an edit changes where its key would go, unless it goes
+// back to where the key was saved for (keySavedFor).
+const NEW_KEY_PLACEHOLDER = 'API key for the new provider or base URL';
+const KEY_NEEDED_TEXT =
+  'You changed the provider or base URL. The saved key is only sent to the provider and base URL it was ' +
+  'saved for, so enter the key for this one.';
+const OLLAMA_REMOVES_KEY_TEXT = 'Ollama uses no API key: saving removes the saved key.';
+const INHERIT_REMOVES_KEY_TEXT =
+  'This config has a key of its own saved; inheriting removes it, along with its own model and base URL.';
+const MISMATCH_STATUS = 'Saved key not used: it was saved for another provider or base URL';
+const PROVIDER_LABELS: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI', ollama: 'Ollama' };
+const ENTER_KEY_WARNING = 'Enter the API key for the new provider or base URL, or choose to remove the saved key.';
+
+type KeySource = 'stored' | 'env' | 'none';
+
+function keyStatus(configured: boolean, source: KeySource, mismatch: boolean, savedFor: AiEndpoint | null): string {
+  if (mismatch && savedFor) {
+    // Say where, so the form can be pointed back there (that needs no key).
+    const label = PROVIDER_LABELS[savedFor.provider] || savedFor.provider;
+    return `Saved key not used: it was saved for ${savedFor.provider === 'anthropic' ? label : `${label} at ${savedFor.baseUrl}`}`;
+  }
+  if (mismatch) return MISMATCH_STATUS;
+  if (!configured) return 'No API key configured';
+  return source === 'env' ? 'Configured via environment variable' : 'Key configured';
+}
+
+function keyPlaceholder(source: KeySource, mismatch: boolean): string {
+  if (mismatch) return 'paste your API key';
+  if (source === 'stored') return '•••••••• (saved — leave blank to keep)';
+  if (source === 'env') return 'set via environment variable';
+  return 'paste your API key';
+}
 
 // AI builder settings
 const aiLoading = ref(false);
 const aiSaving = ref(false);
 const aiConfigured = ref(false);
-const aiKeySource = ref<'stored' | 'env' | 'none'>('none');
-const aiForm = reactive({ provider: 'anthropic', model: '', baseUrl: '', apiKey: '' });
+const aiKeySource = ref<KeySource>('none');
+const aiKeySaved = ref(false);
+const aiKeyMismatch = ref(false);
+/** Where its saved key was saved for (keySavedFor); null when none can be read. */
+const aiKeySavedFor = ref<AiEndpoint | null>(null);
+/** The saved config: where its key goes now. The analyst inherits from it. */
+const aiSaved = reactive<AiEndpoint>({ provider: 'anthropic', baseUrl: '' });
+const aiForm = reactive({ provider: 'anthropic', model: '', baseUrl: '', apiKey: '', removeKey: false });
 
 const aiModelPlaceholder = computed(() =>
   ({ anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', ollama: 'llama3.1' } as Record<string, string>)[aiForm.provider] || ''
 );
-const aiKeyPlaceholder = computed(() =>
-  aiKeySource.value === 'stored' ? '•••••••• (saved — leave blank to keep)'
-  : aiKeySource.value === 'env' ? 'set via environment variable'
-  : 'paste your API key'
-);
+const aiKeyPlaceholder = computed(() => keyPlaceholder(aiKeySource.value, aiKeyMismatch.value));
 const aiKeyStatus = computed(() =>
-  aiConfigured.value
-    ? aiKeySource.value === 'env' ? 'Configured via environment variable' : 'Key configured'
-    : 'No API key configured'
+  keyStatus(aiConfigured.value, aiKeySource.value, aiKeyMismatch.value, aiKeySavedFor.value)
+);
+const aiKeyStatusType = computed(() => (aiConfigured.value && !aiKeyMismatch.value ? 'success' : 'warning'));
+/** The edit moves the saved key's provider or base URL, not back to its own: a new key (or removing it) is needed. */
+const aiKeyNeeded = computed(() =>
+  keyNeeded(aiForm, aiSaved, { keySaved: aiKeySaved.value, keySavedFor: aiKeySavedFor.value })
 );
 
 async function fetchAiSettings() {
@@ -244,8 +336,14 @@ async function fetchAiSettings() {
     aiForm.model = data.model || '';
     aiForm.baseUrl = data.baseUrl || '';
     aiForm.apiKey = '';
+    aiForm.removeKey = false;
+    aiSaved.provider = aiForm.provider;
+    aiSaved.baseUrl = aiForm.baseUrl;
     aiConfigured.value = !!data.configured;
     aiKeySource.value = data.keySource || 'none';
+    aiKeySaved.value = !!data.keySaved;
+    aiKeyMismatch.value = !!data.keyMismatch;
+    aiKeySavedFor.value = data.keySavedFor ?? null;
   } catch (error) {
     // non-admins / not configured — leave defaults
   } finally {
@@ -254,13 +352,21 @@ async function fetchAiSettings() {
 }
 
 async function saveAiSettings() {
+  if (aiKeyNeeded.value && aiForm.provider !== 'ollama' && !aiForm.apiKey && !aiForm.removeKey) {
+    ElMessage.warning(ENTER_KEY_WARNING);
+    return;
+  }
   aiSaving.value = true;
   try {
     const payload: any = { provider: aiForm.provider, model: aiForm.model, baseUrl: aiForm.baseUrl };
-    if (aiForm.apiKey) payload.apiKey = aiForm.apiKey; // only send when changing
+    if (aiKeyNeeded.value && (aiForm.provider === 'ollama' || aiForm.removeKey)) payload.apiKey = '';
+    else if (aiForm.apiKey) payload.apiKey = aiForm.apiKey; // only send when changing
     await api.updateAiSettings(payload);
     ElMessage.success('AI settings saved');
     await fetchAiSettings();
+    // The analyst and triage inherit from here: refresh what they report, not their forms.
+    await fetchChatSettings(false);
+    await fetchTriageSettings(false);
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || 'Failed to save AI settings');
   } finally {
@@ -272,42 +378,55 @@ async function saveAiSettings() {
 const chatLoading = ref(false);
 const chatSaving = ref(false);
 const chatConfigured = ref(false);
-const chatKeySource = ref<'stored' | 'env' | 'none'>('none');
+const chatKeySource = ref<KeySource>('none');
+const chatKeySaved = ref(false);
+const chatKeyMismatch = ref(false);
+const chatKeySavedFor = ref<AiEndpoint | null>(null);
 const chatInheritsFrom = ref<'chat' | 'main'>('main');
-const chatForm = reactive({ provider: '', model: '', baseUrl: '', apiKey: '' });
+/** Where the analyst sends requests now (inherited or its own). Triage inherits from it. */
+const chatSaved = reactive<AiEndpoint>({ provider: '', baseUrl: '' });
+const chatForm = reactive({ provider: '', model: '', baseUrl: '', apiKey: '', removeKey: false });
 
 const chatModelPlaceholder = computed(() =>
   ({ anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', ollama: 'llama3.1' } as Record<string, string>)[
     chatForm.provider
   ] || 'inherits main config'
 );
-const chatKeyPlaceholder = computed(() =>
-  chatKeySource.value === 'stored'
-    ? '•••••••• (saved — leave blank to keep)'
-    : chatKeySource.value === 'env'
-    ? 'set via environment variable'
-    : 'paste your API key'
-);
+const chatKeyPlaceholder = computed(() => keyPlaceholder(chatKeySource.value, chatKeyMismatch.value));
 const chatKeyStatus = computed(() =>
-  chatConfigured.value
-    ? chatKeySource.value === 'env'
-      ? 'Configured via environment variable'
-      : 'Key configured'
-    : 'No API key configured'
+  keyStatus(chatConfigured.value, chatKeySource.value, chatKeyMismatch.value, chatKeySavedFor.value)
+);
+const chatKeyStatusType = computed(() => (chatConfigured.value && !chatKeyMismatch.value ? 'success' : 'warning'));
+const chatKeyNeeded = computed(() =>
+  keyNeeded(chatForm, chatSaved, { keySaved: chatKeySaved.value, keySavedFor: chatKeySavedFor.value }, aiSaved)
 );
 
-async function fetchChatSettings() {
+/**
+ * Load the analyst config; `resetForm` false keeps the form's edits and refreshes only what it reports.
+ * The form holds the analyst's own base URL setting (ownBaseUrl), not the one it resolves to: a blank
+ * one stays blank and keeps following the AI Builder, and an untouched form still points where the
+ * analyst does after the AI Builder moves (keyNeeded resolves it against aiSaved).
+ */
+async function fetchChatSettings(resetForm = true) {
   chatLoading.value = true;
   try {
     const { data } = await api.getChatAiSettings();
     chatInheritsFrom.value = data.inheritsFrom || 'main';
-    const own = data.inheritsFrom === 'chat';
-    chatForm.provider = own ? data.provider || '' : '';
-    chatForm.model = own ? data.model || '' : '';
-    chatForm.baseUrl = own ? data.baseUrl || '' : '';
-    chatForm.apiKey = '';
+    if (resetForm) {
+      const own = data.inheritsFrom === 'chat';
+      chatForm.provider = own ? data.provider || '' : '';
+      chatForm.model = own ? data.model || '' : '';
+      chatForm.baseUrl = own ? data.ownBaseUrl || '' : '';
+      chatForm.apiKey = '';
+      chatForm.removeKey = false;
+    }
+    chatSaved.provider = data.provider || '';
+    chatSaved.baseUrl = data.baseUrl || '';
     chatConfigured.value = !!data.configured;
     chatKeySource.value = data.keySource || 'none';
+    chatKeySaved.value = !!data.keySaved;
+    chatKeyMismatch.value = !!data.keyMismatch;
+    chatKeySavedFor.value = data.keySavedFor ?? null;
   } catch (error) {
     // non-admins / not configured — leave defaults
   } finally {
@@ -316,17 +435,29 @@ async function fetchChatSettings() {
 }
 
 async function saveChatSettings() {
+  const own = !!chatForm.provider;
+  if (own && chatKeyNeeded.value && chatForm.provider !== 'ollama' && !chatForm.apiKey && !chatForm.removeKey) {
+    ElMessage.warning(ENTER_KEY_WARNING);
+    return;
+  }
   chatSaving.value = true;
   try {
     const payload: any = { provider: chatForm.provider };
-    if (chatForm.provider) {
+    if (own) {
       payload.model = chatForm.model;
       payload.baseUrl = chatForm.baseUrl;
-      if (chatForm.apiKey) payload.apiKey = chatForm.apiKey; // only send when changing
+      if (chatKeyNeeded.value && (chatForm.provider === 'ollama' || chatForm.removeKey)) payload.apiKey = '';
+      else if (chatForm.apiKey) payload.apiKey = chatForm.apiKey; // only send when changing
+    } else {
+      // Inherit everything: drop this config's own model, base URL and key.
+      payload.model = '';
+      payload.baseUrl = '';
+      if (chatKeySaved.value) payload.apiKey = '';
     }
     await api.updateChatAiSettings(payload);
     ElMessage.success('AI Analyst settings saved');
     await fetchChatSettings();
+    await fetchTriageSettings(false);
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || 'Failed to save analyst settings');
   } finally {
@@ -339,13 +470,18 @@ async function saveChatSettings() {
 const triageLoading = ref(false);
 const triageSaving = ref(false);
 const triageConfigured = ref(false);
-const triageKeySource = ref<'stored' | 'env' | 'none'>('none');
+const triageKeySource = ref<KeySource>('none');
+const triageKeySaved = ref(false);
+const triageKeyMismatch = ref(false);
+const triageKeySavedFor = ref<AiEndpoint | null>(null);
 const triageInheritsFrom = ref<'triage' | 'chat'>('chat');
+const triageSaved = reactive<AiEndpoint>({ provider: '', baseUrl: '' });
 const triageForm = reactive({
   provider: '',
   model: '',
   baseUrl: '',
   apiKey: '',
+  removeKey: false,
   enabled: false,
   minSeverity: 'medium',
   dailyCap: 200,
@@ -359,39 +495,52 @@ const triageModelPlaceholder = computed(() =>
     triageForm.provider
   ] || 'inherits AI Analyst config'
 );
-const triageKeyPlaceholder = computed(() =>
-  triageKeySource.value === 'stored'
-    ? '•••••••• (saved — leave blank to keep)'
-    : triageKeySource.value === 'env'
-    ? 'set via environment variable'
-    : 'paste your API key'
-);
+const triageKeyPlaceholder = computed(() => keyPlaceholder(triageKeySource.value, triageKeyMismatch.value));
 const triageKeyStatus = computed(() =>
-  triageConfigured.value
-    ? triageKeySource.value === 'env'
-      ? 'Configured via environment variable'
-      : 'Key configured'
-    : 'No API key configured'
+  keyStatus(triageConfigured.value, triageKeySource.value, triageKeyMismatch.value, triageKeySavedFor.value)
+);
+const triageKeyStatusType = computed(() =>
+  triageConfigured.value && !triageKeyMismatch.value ? 'success' : 'warning'
+);
+const triageKeyNeeded = computed(() =>
+  keyNeeded(
+    triageForm,
+    triageSaved,
+    { keySaved: triageKeySaved.value, keySavedFor: triageKeySavedFor.value },
+    chatSaved
+  )
 );
 
-async function fetchTriageSettings() {
+/**
+ * Load the triage config; `resetForm` false keeps the form's edits and refreshes only what it reports.
+ * As for the analyst, the form holds triage's own base URL setting (ownBaseUrl), resolved against chatSaved.
+ */
+async function fetchTriageSettings(resetForm = true) {
   triageLoading.value = true;
   try {
     const { data } = await api.getTriageAiSettings();
     triageInheritsFrom.value = data.inheritsFrom || 'chat';
-    const own = data.inheritsFrom === 'triage';
-    triageForm.provider = own ? data.provider || '' : '';
-    triageForm.model = own ? data.model || '' : '';
-    triageForm.baseUrl = own ? data.baseUrl || '' : '';
-    triageForm.apiKey = '';
+    if (resetForm) {
+      const own = data.inheritsFrom === 'triage';
+      triageForm.provider = own ? data.provider || '' : '';
+      triageForm.model = own ? data.model || '' : '';
+      triageForm.baseUrl = own ? data.ownBaseUrl || '' : '';
+      triageForm.apiKey = '';
+      triageForm.removeKey = false;
+      triageForm.enabled = !!data.enabled;
+      triageForm.minSeverity = data.minSeverity || 'medium';
+      triageForm.dailyCap = data.dailyCap ?? 200;
+      triageForm.maxConcurrent = data.maxConcurrent ?? 2;
+      triageForm.maxToolCalls = data.maxToolCalls ?? 6;
+      triageForm.wallBudgetSeconds = data.wallBudgetSeconds ?? 110;
+    }
+    triageSaved.provider = data.provider || '';
+    triageSaved.baseUrl = data.baseUrl || '';
     triageConfigured.value = !!data.configured;
     triageKeySource.value = data.keySource || 'none';
-    triageForm.enabled = !!data.enabled;
-    triageForm.minSeverity = data.minSeverity || 'medium';
-    triageForm.dailyCap = data.dailyCap ?? 200;
-    triageForm.maxConcurrent = data.maxConcurrent ?? 2;
-    triageForm.maxToolCalls = data.maxToolCalls ?? 6;
-    triageForm.wallBudgetSeconds = data.wallBudgetSeconds ?? 110;
+    triageKeySaved.value = !!data.keySaved;
+    triageKeyMismatch.value = !!data.keyMismatch;
+    triageKeySavedFor.value = data.keySavedFor ?? null;
   } catch (error) {
     // non-admins — leave defaults
   } finally {
@@ -400,6 +549,11 @@ async function fetchTriageSettings() {
 }
 
 async function saveTriageSettings() {
+  const own = !!triageForm.provider;
+  if (own && triageKeyNeeded.value && triageForm.provider !== 'ollama' && !triageForm.apiKey && !triageForm.removeKey) {
+    ElMessage.warning(ENTER_KEY_WARNING);
+    return;
+  }
   triageSaving.value = true;
   try {
     const payload: any = {
@@ -411,10 +565,16 @@ async function saveTriageSettings() {
       maxToolCalls: triageForm.maxToolCalls,
       wallBudgetSeconds: triageForm.wallBudgetSeconds,
     };
-    if (triageForm.provider) {
+    if (own) {
       payload.model = triageForm.model;
       payload.baseUrl = triageForm.baseUrl;
-      if (triageForm.apiKey) payload.apiKey = triageForm.apiKey; // only send when changing
+      if (triageKeyNeeded.value && (triageForm.provider === 'ollama' || triageForm.removeKey)) payload.apiKey = '';
+      else if (triageForm.apiKey) payload.apiKey = triageForm.apiKey; // only send when changing
+    } else {
+      // Inherit everything: drop this config's own model, base URL and key.
+      payload.model = '';
+      payload.baseUrl = '';
+      if (triageKeySaved.value) payload.apiKey = '';
     }
     await api.updateTriageAiSettings(payload);
     ElMessage.success('AI Triage settings saved');
@@ -432,3 +592,15 @@ onMounted(() => {
   fetchTriageSettings();
 });
 </script>
+
+<style scoped>
+.key-needed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+</style>

@@ -34,6 +34,12 @@ declare module 'axios' {
      * toast below would only repeat it. A 401 still signs out and says so.
      */
     skipErrorToast?: boolean;
+    /**
+     * The caller also shows its own message when no answer came at all (the
+     * API can't be reached, or the request timed out), so skip those toasts
+     * too. Only with skipErrorToast.
+     */
+    skipNetworkErrorToast?: boolean;
   }
 }
 
@@ -57,6 +63,9 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
     if (error.response && error.response.status !== 401 && error.config?.skipErrorToast) {
+      return Promise.reject(error);
+    }
+    if (!error.response && error.config?.skipErrorToast && error.config.skipNetworkErrorToast) {
       return Promise.reject(error);
     }
     const authStore = useAuthStore();
@@ -103,10 +112,13 @@ apiClient.interceptors.response.use(
 
 export default apiClient;
 
+/** For calls whose caller shows every failure inline, including no answer at all. */
+const SHOWN_INLINE = { skipErrorToast: true, skipNetworkErrorToast: true } as const;
+
 // API service methods
 export const api = {
   // Auth. The Login view shows every failure itself (wrong password, MFA step,
-  // disabled account, a sign-in pause), so the generic toast is skipped.
+  // disabled account, a sign-in pause, no answer), so the generic toasts are skipped.
   // browserToken is this browser's token for the username, if it signed in
   // before (stores/auth.ts): it lets the browser sign in while the account or
   // network is paused.
@@ -114,17 +126,18 @@ export const api = {
     apiClient.post(
       '/auth/login',
       { username, password, ...(code ? { code } : {}), ...(browserToken ? { browserToken } : {}) },
-      { skipErrorToast: true }
+      SHOWN_INLINE
     ),
   logout: () => apiClient.post('/auth/logout'),
   getProfile: () => apiClient.get('/auth/me'),
-  // A wrong current password is a 400 (429 once paused); the caller shows it.
+  // A wrong current password is a 400 (429 once paused); the caller shows it,
+  // and "unavailable" when no answer came.
   changeOwnPassword: (currentPassword: string, newPassword: string) =>
-    apiClient.put('/auth/me/password', { currentPassword, newPassword }, { skipErrorToast: true }),
+    apiClient.put('/auth/me/password', { currentPassword, newPassword }, SHOWN_INLINE),
   // MFA (TOTP) — the logged-in user manages their own
   mfaSetup: () => apiClient.post('/auth/me/mfa/setup'),
-  mfaEnable: (code: string) => apiClient.post('/auth/me/mfa/enable', { code }, { skipErrorToast: true }),
-  mfaDisable: (code: string) => apiClient.post('/auth/me/mfa/disable', { code }, { skipErrorToast: true }),
+  mfaEnable: (code: string) => apiClient.post('/auth/me/mfa/enable', { code }, SHOWN_INLINE),
+  mfaDisable: (code: string) => apiClient.post('/auth/me/mfa/disable', { code }, SHOWN_INLINE),
 
   // Logs
   getRawLogs: (params?: any) => apiClient.get('/logs/raw', { params }),

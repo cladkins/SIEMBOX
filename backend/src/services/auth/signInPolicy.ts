@@ -15,11 +15,14 @@
  * | Scope | Key                    | Counts                                             | T  | Cap    | On a full success |
  * |-------|------------------------|----------------------------------------------------|----|--------|-------------------|
  * | aip   | aip:<h(user)>:<net>    | wrong passwords, new browsers, one network         | 5  | 15 min | reset             |
- * | ip    | ip:<net>               | wrong passwords, new browsers, any username        | 20 | 30 min | refund only       |
+ * | ip    | ip:<net>               | wrong passwords, new browsers, any username (*)    | 20 | 30 min | refund only       |
  * | acct  | acct:<h(user)>         | wrong passwords, new browsers, every network       | 20 | 60 min | refund only       |
  * | br    | br:<id>                | wrong passwords and codes from one known browser   | 10 | 15 min | reset             |
  * | mfa   | mfa:<user id>          | wrong codes (sign-in from new browsers, disabling) | 5  | 60 min | reset             |
  * | pwc   | pwc:<user id>          | wrong current passwords on a password change       | 5  | 60 min | reset             |
+ *
+ * (*) While paused, the network key refuses only usernames that already
+ * failed from that network in their current streak (refusingPauses).
  *
  * h(user) hashes the username exactly as typed, so a username that doesn't
  * exist gets the same keys, thresholds and messages as one that does, and no
@@ -187,6 +190,31 @@ export function streakEnded(secondsSinceLastFailure: number | null): boolean {
 export function retryAfterSeconds(remainingMs: number): number {
   if (!Number.isFinite(remainingMs) || remainingMs <= 0) return 1;
   return Math.max(1, Math.ceil(remainingMs / 1000));
+}
+
+/** A key's state as a reservation sees it (failures and the pause left, after the 24 h decay). */
+export interface KeyState {
+  scope: SignInScope;
+  /** Milliseconds left on its pause; 0 when it isn't paused. */
+  remainingMs: number;
+  /** Failures in its current streak (0 once the streak has ended). */
+  failures: number;
+}
+
+/**
+ * Which of an attempt's paused keys refuse it. A paused network key only
+ * refuses a username that already failed from that network in its current
+ * streak (its account+network key has failures): one attacker on a shared
+ * address (a NAT, an outer proxy SIEMBox doesn't trust) must not lock out
+ * everyone behind it, so someone who hasn't failed from there still gets
+ * their password checked, and a sprayer gets at most one guess per username
+ * per network per streak. It is decided from the account+network key alone,
+ * which looks the same for a username that exists and one that doesn't.
+ */
+export function refusingPauses<T extends KeyState>(keys: T[]): T[] {
+  const accountNetwork = keys.find((key) => key.scope === 'aip');
+  const freshUsername = accountNetwork !== undefined && accountNetwork.failures === 0;
+  return keys.filter((key) => key.remainingMs > 0 && !(key.scope === 'ip' && freshUsername));
 }
 
 /** Of several paused keys, the one to report: the longest wait, ties to the most specific scope. */

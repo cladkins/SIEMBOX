@@ -939,8 +939,10 @@ Failed sign-ins pause further attempts instead of locking accounts (details:
 DEPLOYMENT.md, "Sign-in protection"):
 
 - **Keys.** Each wrong password counts against the account from that network
-  (pauses after 5), the network for any username (20) and the account from
-  every network (20, `LOGIN_MAX_FAILURES_PER_ACCOUNT=0` turns it off); wrong
+  (pauses after 5), the network for any username (20; while paused it holds
+  back only usernames that already failed from it, so one attacker on a shared
+  address can't lock out everyone behind it) and the account from every
+  network (20, `LOGIN_MAX_FAILURES_PER_ACCOUNT=0` turns it off); wrong
   MFA codes against the user's MFA key (5), wrong current passwords on a
   password change against their own key (5). A pause starts at 30 seconds and
   doubles with every further failure, up to 15, 30 or 60 minutes; a streak ends
@@ -1157,7 +1159,11 @@ the default minimum severity is high):
 | More than 100 failed checks in 10 minutes, across everything | high (at most once an hour) |
 
 Each is raised once per streak of failures (its `event_id` names the trigger,
-a hash of the key and when the streak started), and at most 20 an hour.
+a hash of the key and when the streak started). The network-pause and
+success-after-failures alerts, which anyone can set off cheaply (a new network,
+or their own wrong-then-right sign-ins), are capped at 20 an hour together; the
+others need an existing account or browser and are never capped, so a flood of
+cheap alerts can't hide an attack on an admin.
 
 ### Health Checks
 

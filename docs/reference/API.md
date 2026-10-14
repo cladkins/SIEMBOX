@@ -173,7 +173,7 @@ last failure. Nothing is ever locked for good.
 | Key | Counts | T (default) | Longest pause | A full sign-in |
 |-----|--------|-------------|---------------|----------------|
 | Account + network | Wrong passwords for one username from one network (IPv4 address or IPv6 /64), from browsers SIEMBox doesn't recognize | 5 (`LOGIN_MAX_FAILURES`) | 15 min | resets it |
-| Network | Wrong passwords from one network, for any username | 20 (`LOGIN_MAX_FAILURES_PER_ADDRESS`) | 30 min | refunds its own attempt only |
+| Network | Wrong passwords from one network, for any username; while paused it refuses only usernames that already failed from that network in their streak | 20 (`LOGIN_MAX_FAILURES_PER_ADDRESS`) | 30 min | refunds its own attempt only |
 | Account | Wrong passwords for one username from every network, from new browsers | 20 (`LOGIN_MAX_FAILURES_PER_ACCOUNT`; `0` turns it off) | 60 min | refunds its own attempt only |
 | Recognized browser | Wrong passwords and MFA codes from one browser that signed in before; it replaces every key above | 10 | 15 min | resets it |
 | MFA | Wrong MFA codes for one user (sign-in from new browsers, and `POST /me/mfa/disable`) | 5 | 60 min | resets it |
@@ -184,6 +184,12 @@ last failure. Nothing is ever locked for good.
   However many requests arrive at once, a key lets exactly T checks through;
   attempts while it is paused are refused without a check (the right password
   included).
+- **Shared networks.** A paused network key doesn't refuse a username whose
+  account + network key has no failures in its current streak: that attempt is
+  checked (and charged) as usual. So one attacker behind a NAT or an outer proxy
+  SIEMBox doesn't trust can't lock out everyone behind it, and a sprayer gets at
+  most one guess per username per network per streak. The decision uses that
+  key alone, so it is the same for usernames that exist and those that don't.
 - **Recognized browsers.** Every successful sign-in returns a `browserToken`;
   the web UI keeps it per username and sends it back. A sign-in with a valid
   token for that username counts against that browser's key only, so failed
@@ -344,9 +350,16 @@ Get current authenticated user's profile.
   "role": "admin",
   "enabled": true,
   "last_login": "2025-11-30T12:00:00Z",
-  "created_at": "2025-01-01T00:00:00Z"
+  "created_at": "2025-01-01T00:00:00Z",
+  "mfa_enabled": false,
+  "password_changed_at": "2025-11-30T11:58:00Z"
 }
 ```
+
+`password_changed_at` is when the user last changed their own password with
+[`PUT /api/auth/me/password`](#put-apiauthmepassword) (`null` if never; an
+admin's reset or the recovery command line doesn't set it). Getting Started's
+"Secure your account" step reads it.
 
 ---
 
@@ -375,9 +388,10 @@ Change current user's password.
 - The new password must be 8 to 1024 characters and differ from the current one
 - On success every session of the user is revoked (this one included), their
   recognized browsers are forgotten and their sign-in counters cleared: sign in
-  again with the new password
+  again with the new password. `password_changed_at` (`GET /api/auth/me`) is set
 - Wrong current passwords are counted ([Sign-in Protection](#sign-in-protection),
-  "Current password"): the 5th in a row pauses further attempts
+  "Current password"): the 5th in a row pauses further attempts. A right one is
+  never counted, even if saving the new password then fails (`500`)
 
 **Errors:**
 - `400` - Missing passwords, a new password that is too short, too long or
@@ -406,8 +420,8 @@ until `/me/mfa/enable` confirms a code.
 
 Finish enrollment with a code from the authenticator app: enables MFA and
 returns 10 one-time recovery codes, shown only this once. That code can't then
-also be used to sign in. Not throttled (the code is checked against a secret
-the caller was just given).
+also be used to sign in. Not throttled: the code is only ever checked against
+the pending secret `/me/mfa/setup` just returned, never once MFA is on.
 
 **Authentication:** Required
 
@@ -415,7 +429,11 @@ the caller was just given).
 
 **Response (200):** `{ "enabled": true, "recoveryCodes": ["abcde-fghij", "..."] }`
 
-**Errors:** `400` - `code is required`, `Invalid code`, or no pending enrollment
+**Errors:**
+- `400` - `code is required`, `Invalid code`, or no pending enrollment
+- `409` - `MFA is already enabled; disable it first to re-enroll` (whatever the
+  code), or the pending enrollment changed while it was being enabled (start
+  setup again)
 
 ---
 
@@ -1596,15 +1614,19 @@ Get all users (admin only).
     "last_login": "2025-11-30T10:00:00Z",
     "created_at": "2025-01-15T00:00:00Z",
     "signin_paused_until": "2025-11-30T12:12:00.000Z",
-    "signin_pause_scopes": ["acct"]
+    "signin_pause_scopes": ["acct"],
+    "password_change_paused_until": null
   }
 ]
 ```
 
 `signin_paused_until` is when the account's last sign-in pause ends (`null`
 when none is running), and `signin_pause_scopes` which of its keys are paused:
-`aip` (from one network), `acct` (from new browsers on every network), `br` (a
-recognized browser), `mfa`, `pwc` (current password). See
+`aip` (from one network), `acct` (from new browsers on every network), `br`
+(one of its recognized browsers, after that browser's own failures), `mfa`.
+`password_change_paused_until` is when the pause on changing their own
+password (`pwc`, wrong current passwords) ends: it doesn't stop them signing
+in, so it is not a sign-in pause. See
 [Sign-in Protection](#sign-in-protection) and
 [`POST /api/users/:id/unlock`](#post-apiusersidunlock).
 

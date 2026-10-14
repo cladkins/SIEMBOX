@@ -18,8 +18,16 @@
  * Deduplicated: event_id is siembox-auth:<trigger>:<sha256(key), 16 hex>:<epoch
  * of the streak's first failure>, so a streak raises its alert once however
  * many pauses it goes through (the alerts table's unique index on event_id
- * drops the rest), and the spike alert's is siembox-auth:spike:<UTC hour>. At
- * most 20 are raised an hour. Raising never blocks or fails a sign-in.
+ * drops the rest), and the spike alert's is siembox-auth:spike:<UTC hour>.
+ *
+ * Capped: at most 20 network-pause and success-after-failures alerts an hour,
+ * together. Those are cheap to set off (a new network or IPv6 /64 each, or a
+ * user's own wrong-then-right sign-ins), so they must not crowd out the rest:
+ * the account, MFA, browser and during-attack alerts need an existing account
+ * or browser and come once per streak of its key, and the spike alert once an
+ * hour, so they are never capped. A slot is taken before the INSERT (raises
+ * run concurrently) and given back when nothing was inserted. Raising never
+ * blocks or fails a sign-in.
  */
 import crypto from 'node:crypto';
 import { query } from '../../config/database';
@@ -77,36 +85,58 @@ export function authAlertEventId(trigger: AuthAlertTrigger, key: string, streakS
   return `${ALERT_SOURCE}:${trigger}:${keyHash}:${Math.floor(streakStartedAt)}`;
 }
 
-function underHourlyCap(now: number): boolean {
+/** The triggers anyone can set off cheaply: they share the hourly cap. */
+const CAPPED_TRIGGERS: ReadonlySet<AuthAlertTrigger> = new Set(['network-pause', 'success-after-failures']);
+
+/** Take one of the hour's slots, synchronously (before any await), or say the cap is reached. */
+function takeSlot(now: number): boolean {
   state.raised = state.raised.filter((at) => now - at < 60 * 60 * 1000);
-  if (state.raised.length < MAX_ALERTS_PER_HOUR) return true;
+  if (state.raised.length < MAX_ALERTS_PER_HOUR) {
+    state.raised.push(now);
+    return true;
+  }
   if (now - state.capWarnedAt > 60 * 60 * 1000) {
     state.capWarnedAt = now;
-    logger.warn(`Sign-in alerts: ${MAX_ALERTS_PER_HOUR} raised in the last hour; further ones are skipped for now`);
+    logger.warn(
+      `Sign-in alerts: ${MAX_ALERTS_PER_HOUR} network-pause and success-after-failures alerts raised in the last hour; ` +
+        'further ones are skipped for now (account, MFA and browser alerts still are raised)'
+    );
   }
   return false;
 }
 
+/** Give a slot back: its alert was a repeat, or couldn't be inserted. */
+function releaseSlot(at: number): void {
+  const index = state.raised.indexOf(at);
+  if (index >= 0) state.raised.splice(index, 1);
+}
+
 async function insert(alert: AuthAlert, eventId: string): Promise<boolean> {
   const now = Date.now();
-  if (!underHourlyCap(now)) return false;
-  const res = await query(
-    `INSERT INTO alerts (rule_id, parsed_log_id, severity, title, description, matched_data, status, source, event_id)
-     VALUES (NULL, NULL, $1, $2, $3, $4, 'new', $5, $6)
-     ON CONFLICT (event_id) WHERE event_id IS NOT NULL DO NOTHING
-     RETURNING id`,
-    [alert.severity, alert.title.slice(0, 255), alert.description, JSON.stringify(alert.matched), ALERT_SOURCE, eventId]
-  );
-  if ((res.rowCount ?? 0) === 0) return false;
-  state.raised.push(now);
-  logger.warn('Sign-in alert raised', { trigger: alert.trigger, severity: alert.severity, alertId: res.rows[0].id });
+  const capped = CAPPED_TRIGGERS.has(alert.trigger);
+  if (capped && !takeSlot(now)) return false;
+  let alertId: number | null = null;
+  try {
+    const res = await query(
+      `INSERT INTO alerts (rule_id, parsed_log_id, severity, title, description, matched_data, status, source, event_id)
+       VALUES (NULL, NULL, $1, $2, $3, $4, 'new', $5, $6)
+       ON CONFLICT (event_id) WHERE event_id IS NOT NULL DO NOTHING
+       RETURNING id`,
+      [alert.severity, alert.title.slice(0, 255), alert.description, JSON.stringify(alert.matched), ALERT_SOURCE, eventId]
+    );
+    alertId = (res.rowCount ?? 0) > 0 ? res.rows[0].id : null;
+  } finally {
+    if (capped && alertId === null) releaseSlot(now);
+  }
+  if (alertId === null) return false;
+  logger.warn('Sign-in alert raised', { trigger: alert.trigger, severity: alert.severity, alertId });
   void NotificationService.notifyAlert({
     severity: alert.severity,
     ruleName: RULE_NAME,
     title: alert.title,
     description: alert.description,
   });
-  maybeTriageAlert({ id: res.rows[0].id, severity: alert.severity, source: ALERT_SOURCE });
+  maybeTriageAlert({ id: alertId, severity: alert.severity, source: ALERT_SOURCE });
   return true;
 }
 

@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { UserModel } from '../models/User';
-import { LoginThrottleModel } from '../models/LoginThrottle';
+import { LoginThrottleModel, type UserPauseSummary } from '../models/LoginThrottle';
 import { ApiError } from '../middleware/errorHandler';
 import { authenticate, requireAdmin } from '../middleware/auth';
 import { logger } from '../utils/logger';
@@ -21,12 +21,14 @@ function passwordProblem(password: unknown): string | null {
   return null;
 }
 
-// Get all users (admin only), with any sign-in pause on their account: when
-// the last one ends (signin_paused_until) and which scopes are paused.
+// Get all users (admin only), with any pause on their account: when the last
+// sign-in pause ends (signin_paused_until) and which scopes are paused, and
+// apart from those a pause on changing their own password (which doesn't stop
+// them signing in).
 router.get('/', requireAdmin, async (_req: Request, res: Response) => {
   try {
     const users = await UserModel.findAll();
-    let paused = new Map<number, { pausedUntil: string; scopes: string[] }>();
+    let paused = new Map<number, UserPauseSummary>();
     try {
       paused = await LoginThrottleModel.pausedSummaryForUsers();
     } catch (error) {
@@ -35,8 +37,9 @@ router.get('/', requireAdmin, async (_req: Request, res: Response) => {
     res.json(
       users.map((user) => ({
         ...user,
-        signin_paused_until: paused.get(user.id)?.pausedUntil ?? null,
+        signin_paused_until: paused.get(user.id)?.signInPausedUntil ?? null,
         signin_pause_scopes: paused.get(user.id)?.scopes ?? [],
+        password_change_paused_until: paused.get(user.id)?.passwordChangePausedUntil ?? null,
       }))
     );
   } catch {

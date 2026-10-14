@@ -1267,6 +1267,9 @@ from.
    docker exec siembox-backend node dist/scripts/auth-admin.js status admin
    docker exec siembox-backend node dist/scripts/auth-admin.js unlock admin
    docker exec siembox-backend node dist/scripts/auth-admin.js unlock --network 192.168.1.50
+   # an IPv6 network as status prints it, or requests that had no address:
+   docker exec siembox-backend node dist/scripts/auth-admin.js unlock --network 2001:db8:1:2::/64
+   docker exec siembox-backend node dist/scripts/auth-admin.js unlock --network unknown
    docker exec siembox-backend node dist/scripts/auth-admin.js unlock --all
    # Forgot the password: sets a random 20-character one, printed once, and
    # signs the account out everywhere
@@ -1317,9 +1320,11 @@ docker exec siembox-postgres psql -U siembox -d siembox -c \
 docker exec siembox-backend node dist/scripts/auth-admin.js reset-password admin
 ```
 
-**"MFA code required" and no working code:** check the device's clock (codes
-are valid for about a minute either side, and each one works once), use a
-recovery code, or run `auth-admin.js disable-mfa <username>` (above).
+**"MFA code required" and no working code:** check the device's clock: codes
+are accepted only within about 30 seconds of the server's clock (one 30-second
+step either side), and each one works once. Check that both the device and the
+Docker host keep time (NTP). Otherwise use a recovery code, or run
+`auth-admin.js disable-mfa <username>` (above).
 
 **Account Disabled:**
 ```bash
@@ -1732,9 +1737,10 @@ docker compose exec postgres psql -U siembox -d siembox \
   every user.
 - Users who aren't doing much get `429 Too Many Requests` together: they all
   share one budget of `API_RATE_LIMIT_MAX` (default 1000) requests per 15
-  minutes, and one network for sign-in protection (20 failed sign-ins from
-  anyone pause sign-in from new browsers for everyone; browsers that signed in
-  before are not affected).
+  minutes, and one network for sign-in protection: 20 failed sign-ins from
+  anyone pause it, and while it is paused anyone who then gets a password wrong
+  from a new browser waits out the pause (users who haven't failed are still
+  checked, and browsers that signed in before are not affected).
 - The backend log has hourly `Ignored X-Forwarded-For from <address> ...`
   warnings: a proxy in front of the web UI, or a caller of port 8421, whose
   `X-Forwarded-For` has been ignored for more than 45 s. Only proxies on

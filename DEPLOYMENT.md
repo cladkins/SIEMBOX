@@ -708,7 +708,8 @@ Without any configuration a reverse proxy in front of SIEMBox makes every user
 look like the proxy, as before: one shared address that can't be forged. It
 shares the general limit of `API_RATE_LIMIT_MAX` (default 1000) requests per 15
 minutes, and one network for [sign-in protection](#sign-in-protection) (20
-failures from anyone pause sign-in from new browsers for everyone), so set
+failures from anyone pause it; then each user gets one checked attempt from new
+browsers, and after a wrong one waits out the pause), so set
 `TRUSTED_PROXIES` (or raise the general limit). Until you do, a proxy on a
 private, carrier-grade NAT, loopback, ULA or link-local address gets an hourly
 `Ignored X-Forwarded-For from <proxy>` warning in the backend log, and
@@ -769,7 +770,7 @@ doesn't reset them and the recovery command line can clear them.
 | Counter | Counts | Pauses after | Longest pause |
 |---|---|---|---|
 | Account from one network | Wrong passwords for one username from one network (an IPv4 address or an IPv6 /64) | 5 (`LOGIN_MAX_FAILURES`) | 15 min |
-| Network | Wrong passwords from one network, any username | 20 (`LOGIN_MAX_FAILURES_PER_ADDRESS`) | 30 min |
+| Network | Wrong passwords from one network, any username. While paused, it holds back only usernames that already failed from that network | 20 (`LOGIN_MAX_FAILURES_PER_ADDRESS`) | 30 min |
 | Account from new browsers | Wrong passwords for one username from every network | 20 (`LOGIN_MAX_FAILURES_PER_ACCOUNT`, `0` = off) | 60 min |
 | Recognized browser | Wrong passwords and MFA codes from one browser that signed in before | 10 | 15 min |
 | MFA codes | Wrong codes for one user | 5 | 60 min |
@@ -807,16 +808,22 @@ default):
 | `AUTH_FAILURE_AUDIT_RETENTION_DAYS` | `90` | How long `auth.login.failure` audit rows are kept; `0` keeps them |
 
 These depend on correct client addresses: behind a reverse proxy SIEMBox
-doesn't trust, everyone shares one network, so 20 failures from anyone pause
-sign-in from new browsers for everyone. Set `TRUSTED_PROXIES` (see [Client
-addresses and reverse proxies](#client-addresses-and-reverse-proxies)).
+doesn't trust, everyone shares one network. A paused network only holds back
+usernames that already failed from it, so 20 failures from one person don't
+lock everyone out: a user who hasn't mistyped from that network is still
+checked, but one who does then waits out the network's pause (up to 30
+minutes) unless they use a browser that signed in before. Set
+`TRUSTED_PROXIES` (see [Client addresses and reverse
+proxies](#client-addresses-and-reverse-proxies)).
 
 **Alerts.** Attacks on sign-in raise alerts (source `siembox-auth`): a network
 paused (medium), an existing account paused (high; critical for an admin), MFA
 codes paused after correct passwords (critical), a new browser signing in
 during an attack (high), a success after 5 or more failures (medium), a
 recognized browser forgotten (high), and more than 100 failed checks in 10
-minutes (high). One per streak, at most 20 an hour. They reach your
+minutes (high). One per streak. The network-pause and success-after-failures
+alerts, which anyone can set off cheaply, are capped at 20 an hour together, so
+they can't crowd out the account, MFA and browser alerts. They reach your
 notification channels like any alert (Settings -> Notifications; the default
 minimum severity is high).
 
@@ -829,7 +836,7 @@ account. Without the web UI:
 ```bash
 docker exec siembox-backend node dist/scripts/auth-admin.js status
 docker exec siembox-backend node dist/scripts/auth-admin.js unlock <username>
-docker exec siembox-backend node dist/scripts/auth-admin.js unlock --network <ip>
+docker exec siembox-backend node dist/scripts/auth-admin.js unlock --network <ip, or an IPv6 /64 as status prints it>
 docker exec siembox-backend node dist/scripts/auth-admin.js unlock --all
 docker exec siembox-backend node dist/scripts/auth-admin.js reset-password <username>
 docker exec siembox-backend node dist/scripts/auth-admin.js disable-mfa <username>

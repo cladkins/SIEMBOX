@@ -104,7 +104,9 @@
       <p class="note">
         A counter pauses for {{ data.settings.firstPauseSeconds }} seconds when it reaches its threshold (T failures in a
         row), and every further failure doubles the pause, up to the limit below. A counter starts over {{ data.settings.streakResetHours }} hours
-        after its last failure. A recognized browser is forgotten after {{ data.settings.browserRevokeFailures }} failures in a row.
+        after its last failure. A paused network only holds back usernames that already failed from it in their current
+        streak, so one person guessing from a shared address doesn't lock out everyone behind it. A recognized browser is
+        forgotten after {{ data.settings.browserRevokeFailures }} failures in a row.
       </p>
       <el-table :data="data.settings.scopes" size="small">
         <el-table-column label="Counter" min-width="220">

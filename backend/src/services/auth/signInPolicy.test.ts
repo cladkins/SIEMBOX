@@ -20,6 +20,7 @@ import {
   pauseSeconds,
   pausedBody,
   readSignInSettings,
+  refusingPauses,
   reloadSignInSettings,
   retryAfterSeconds,
   scopeOfKey,
@@ -233,6 +234,42 @@ test('of several paused keys, the longest wait is reported (ties: the most speci
     ])?.scope,
     'aip'
   );
+});
+
+test('a paused network refuses only usernames that already failed from it; every other pause refuses', () => {
+  const scopes = (keys: Parameters<typeof refusingPauses>[0]) => refusingPauses(keys).map((key) => key.scope);
+  // The network is paused, this username has no failures from it: checked.
+  assert.deepEqual(
+    scopes([
+      { scope: 'aip', remainingMs: 0, failures: 0 },
+      { scope: 'ip', remainingMs: 60_000, failures: 25 },
+      { scope: 'acct', remainingMs: 0, failures: 3 },
+    ]),
+    []
+  );
+  // One failure from this network in the streak: the network pause refuses it.
+  assert.deepEqual(
+    scopes([
+      { scope: 'aip', remainingMs: 0, failures: 1 },
+      { scope: 'ip', remainingMs: 60_000, failures: 25 },
+    ]),
+    ['ip']
+  );
+  // The account pauses refuse either way.
+  assert.deepEqual(
+    scopes([
+      { scope: 'aip', remainingMs: 0, failures: 0 },
+      { scope: 'ip', remainingMs: 60_000, failures: 25 },
+      { scope: 'acct', remainingMs: 120_000, failures: 21 },
+    ]),
+    ['acct']
+  );
+  assert.deepEqual(scopes([{ scope: 'aip', remainingMs: 30_000, failures: 5 }]), ['aip']);
+  // Without an account+network key in the attempt, a paused network refuses.
+  assert.deepEqual(scopes([{ scope: 'ip', remainingMs: 60_000, failures: 25 }]), ['ip']);
+  for (const scope of ['br', 'mfa', 'pwc'] as const) {
+    assert.deepEqual(scopes([{ scope, remainingMs: 1, failures: 10 }]), [scope]);
+  }
 });
 
 test('parseLoginBody: strings of the right length only; code and browserToken optional', () => {

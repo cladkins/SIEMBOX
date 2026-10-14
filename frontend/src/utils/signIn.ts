@@ -49,7 +49,7 @@ export const SCOPE_WORDS: Record<string, string> = {
   aip: 'this account from one network',
   ip: 'a network, any username',
   acct: 'this account from new browsers',
-  br: 'a recognized browser',
+  br: 'one of their recognized browsers (its own failures)',
   mfa: 'MFA codes',
   pwc: 'current password (password change)',
 };

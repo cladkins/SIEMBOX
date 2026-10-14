@@ -261,7 +261,9 @@ const digitalRiskCounts = computed(() => {
 });
 
 const steps = computed(() => ({
-  // "account" is satisfied by enabling MFA or changing the password this session.
+  // "account" is satisfied by enabling MFA or by having changed your own
+  // password (GET /auth/me password_changed_at: the change signs you out, so
+  // only the server can remember it).
   account: mfaEnabled.value || passwordChanged.value,
   ingestion: shipperCount.value > 0,
   content: parserCount.value > 0 || ruleCount.value > 0,
@@ -317,7 +319,10 @@ async function refresh() {
       exposureService.getStatus(),
       exposureService.listIdentities(),
     ]);
-    if (profile.status === 'fulfilled') mfaEnabled.value = !!profile.value.data.mfa_enabled;
+    if (profile.status === 'fulfilled') {
+      mfaEnabled.value = !!profile.value.data.mfa_enabled;
+      passwordChanged.value = !!profile.value.data.password_changed_at;
+    }
     if (shippers.status === 'fulfilled') shipperCount.value = (shippers.value.data || []).length;
     if (parsers.status === 'fulfilled') parserCount.value = (parsers.value.data || []).length;
     if (rules.status === 'fulfilled') ruleCount.value = (rules.value.data || []).length;

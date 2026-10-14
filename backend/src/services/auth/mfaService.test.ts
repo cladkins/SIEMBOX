@@ -164,9 +164,10 @@ test('no MFA enrolled: every code fails', async () => {
 });
 
 test('enable() records the step of the code that proved the enrollment', async () => {
-  const enabled: Array<[number, number, number]> = [];
-  const stub = mock.method(UserModel, 'enableMfa', async (id: number, hashes: string[], step: number) => {
-    enabled.push([id, hashes.length, step]);
+  const enabled: Array<[number, number, number, string]> = [];
+  const stub = mock.method(UserModel, 'enableMfa', async (id: number, hashes: string[], step: number, pending: string) => {
+    enabled.push([id, hashes.length, step, pending]);
+    return true;
   });
   restore.push(() => stub.mock.restore());
   user.mfa_enabled = false;
@@ -177,7 +178,28 @@ test('enable() records the step of the code that proved the enrollment', async (
   assert.equal(enabled.length, 1);
   assert.equal(enabled[0][1], 10);
   assert.ok(Math.abs(enabled[0][2] - Math.floor(now / 30_000)) <= 1);
+  assert.equal(enabled[0][3], user.mfa_secret, 'only for the pending secret the code was checked against');
   await assert.rejects(MfaService.enable(user, wrongCode()), /Invalid code/);
+});
+
+test('enable() never runs once MFA is on, nor saves over an enrollment that changed meanwhile', async () => {
+  let saves = 0;
+  let saved = true;
+  const stub = mock.method(UserModel, 'enableMfa', async () => {
+    saves++;
+    return saved;
+  });
+  restore.push(() => stub.mock.restore());
+  // MFA on: refused before the code is even checked against the active secret.
+  for (const code of [totp.totp(SECRET), wrongCode()]) {
+    await assert.rejects(MfaService.enable(user, code), (error: unknown) => error instanceof MfaService.MfaEnrollmentConflict);
+  }
+  assert.equal(saves, 0);
+  // Pending, but enabled (or set up again) by another request in between: nothing is enabled.
+  user.mfa_enabled = false;
+  saved = false;
+  await assert.rejects(MfaService.enable(user, totp.totp(SECRET)), (error: unknown) => error instanceof MfaService.MfaEnrollmentConflict);
+  assert.equal(saves, 1);
 });
 
 test('disable() claims the code like a sign-in, and disables only when it checks out', async () => {

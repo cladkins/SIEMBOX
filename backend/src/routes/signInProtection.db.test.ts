@@ -10,18 +10,30 @@
  *   bcrypt calls (the reservation is atomic);
  * - spoofed X-Forwarded-For on TCP is ignored: 20 usernames pause the network
  *   127.0.0.1, and no row for the spoofed addresses appears;
+ * - a paused network still checks usernames that haven't failed from it (one
+ *   guess each per streak; a password change clears the user's own), and a
+ *   right password that would have been its 20th failure leaves it unpaused;
+ * - the counters themselves: a refund racing a wrong attempt keeps that
+ *   streak's start, a right password after a streak ended refunds to an empty
+ *   one, a streak 24 h old starts over even with a pause recorded; tokens
+ *   unused for 90 days aren't recognized, and a user keeps at most 20;
  * - the account pause from 20 networks, which a recognized browser walks past
  *   (a token for another user doesn't), and a browser forgotten after 20
  *   failures; tokens are stored only as sha256;
  * - MFA: 5 wrong codes pause it (mfaRequired kept), a recognized browser isn't
  *   affected, a replayed TOTP is refused, one recovery code used twice at once
- *   signs in once, and /me/mfa/disable answers 400 then 429, never 401;
- * - the password change (400, never 401; paused after 5; success revokes
- *   sessions, browsers and counters) and an admin's password reset;
+ *   signs in once, a code check that throws isn't counted, the right code isn't
+ *   counted in "signed in after N failed attempts", /me/mfa/disable answers 400
+ *   then 429, never 401, and /me/mfa/enable is refused (409) once MFA is on;
+ * - the password change (400, never 401; paused after 5; a right current
+ *   password is never counted, even when saving fails; success revokes
+ *   sessions, browsers and counters; the Users page lists its pause apart from
+ *   sign-in pauses) and an admin's password reset;
  * - the admin API (viewers get 403; clear by user, network and all; unlock),
  *   audit rows (addresses, unknown usernames as a hash, one row per pause, none
  *   per refusal), alerts (one per streak, one notification), housekeeping, the
- *   recovery CLI, failing open when the throttle can't be reached,
+ *   recovery CLI (an IPv6 /64 as status prints it, and 'unknown'), failing open
+ *   when the throttle can't be reached,
  *   LOGIN_PROTECTION=off, and 5xx answers that are never counted.
  *
  * Skips itself when Postgres (with migration 038) isn't reachable. The users
@@ -45,7 +57,7 @@ process.env.CREDENTIAL_ENCRYPTION_KEY ||= crypto.randomBytes(32).toString('hex')
 const SKIP = 'Postgres with migration 038 (login_throttle) is not reachable';
 const tag = crypto.randomBytes(5).toString('hex');
 const PASSWORD = `pw-${crypto.randomBytes(9).toString('hex')}`;
-const TEST_NETS = ['192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24'];
+const TEST_NETS = ['192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24', '2001:db8::/32'];
 const startedAt = new Date();
 
 type Mod<T> = T extends Promise<infer U> ? U : never;
@@ -441,8 +453,15 @@ test('spoofed X-Forwarded-For on TCP is ignored: 20 usernames pause 127.0.0.1, f
   assert.equal(twentieth!.body.reason, 'network');
   assert.match(twentieth!.body.message, /^Incorrect username or password\. Too many failed sign-in attempts from your network\./);
   const network = await row('ip:127.0.0.1');
-  assert.equal(network.failures, 20);
+  // The 21st to 25th were new usernames from this network: one checked guess each (refusingPauses).
+  assert.equal(network.failures, 25);
   assert.equal(network.paused, true);
+  const compares = countCompares();
+  const repeat = await login({ username: `sip-${tag}-nobody-spoof-1`, password: 'guess' }, { via: 'tcp', xff: '198.51.100.200' });
+  assert.equal(compares.count(), 0, 'a username that already failed from it is refused before bcrypt');
+  compares.stop();
+  assert.equal(repeat.status, 429);
+  assert.equal(repeat.body.reason, 'network');
   const spoofed = await pool.query(`SELECT COUNT(*)::int AS n FROM login_throttle WHERE network <<= '198.51.100.0/24'`);
   assert.equal(spoofed.rows[0].n, 0, 'no row for a spoofed address');
   const audited = await auditRows(`action = 'auth.login.failure' AND details->>'usernameHash' = ANY($2)`, [probeHashes]);
@@ -788,6 +807,291 @@ test('LOGIN_PROTECTION=off counts nothing', async (t) => {
   }
 });
 
+// --- Shared networks, refunds and streaks ---------------------------------------
+
+test('a paused network still checks a username that has not failed from it: one guess per username per streak', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const bob = await createUser('shared-bob');
+  const alice = await createUser('shared-alice');
+  // 203.0.113.177 stands for a NAT, or an outer proxy SIEMBox doesn't trust: everyone behind it shares one key.
+  const xff = '203.0.113.177';
+  const sprayed: string[] = [];
+  for (let i = 1; i <= 20; i++) {
+    sprayed.push(probe(`spray-${i}`));
+    await login({ username: sprayed[i - 1], password: 'guess' }, { xff });
+  }
+  assert.equal((await row(`ip:${xff}`)).paused, true, 'the sprayer paused the network');
+
+  // A username that already failed from this network in this streak: refused, before bcrypt.
+  let compares = countCompares();
+  const again = await login({ username: sprayed[0], password: 'guess' }, { xff });
+  assert.equal(compares.count(), 0, 'no bcrypt for a username that already failed here');
+  compares.stop();
+  assert.equal(again.status, 429);
+  assert.equal(again.body.reason, 'network');
+
+  // Bob never failed from it: his right password is checked and signs him in, and the pause stays.
+  const ok = await login({ username: bob.username, password: PASSWORD }, { xff });
+  assert.equal(ok.status, 200);
+  const network = await row(`ip:${xff}`);
+  assert.equal(network.paused, true, 'his success does not lift the network pause');
+  assert.equal(network.failures, 20, 'and his attempt was refunded');
+
+  // A fresh username gets one checked guess, the same way whether it exists or not.
+  for (const username of [alice.username, probe('spray-fresh')]) {
+    compares = countCompares();
+    const guess = await login({ username, password: 'guess' }, { xff });
+    assert.equal(compares.count(), 1, `${username}: one bcrypt compare`);
+    compares.stop();
+    assert.equal(guess.status, 429);
+    assert.equal(guess.body.reason, 'network');
+    assert.match(guess.body.message, /^Incorrect username or password\. Too many failed sign-in attempts from your network\./);
+    // ... and only one: after it, that username is refused here too.
+    compares = countCompares();
+    assert.equal((await login({ username, password: PASSWORD }, { xff })).status, 429);
+    assert.equal(compares.count(), 0);
+    compares.stop();
+  }
+
+  // A password change clears Alice's own counters, so she is checked again from the paused network.
+  const session = await SessionModel.create(alice.id, 1);
+  const changed = await call('PUT', '/api/auth/me/password', {
+    body: { currentPassword: PASSWORD, newPassword: `${PASSWORD}-new` },
+    token: session.token,
+  });
+  assert.equal(changed.status, 200);
+  assert.equal((await login({ username: alice.username, password: `${PASSWORD}-new` }, { xff })).status, 200);
+});
+
+test('a right password that is the 20th attempt on a network leaves it unpaused: the refund undoes the pause it started', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const user = await createUser('ip-refund');
+  const xff = '203.0.113.178';
+  for (let i = 1; i <= 19; i++) await login({ username: probe(`ip-refund-${i}`), password: 'guess' }, { xff });
+  assert.equal((await row(`ip:${xff}`)).failures, 19);
+  assert.equal((await login({ username: user.username, password: PASSWORD }, { xff })).status, 200);
+  const network = await row(`ip:${xff}`);
+  assert.equal(network.failures, 19);
+  assert.equal(network.pauses, 0);
+  assert.equal(network.paused, false, 'not paused by the right password');
+  // The next wrong one is the 20th failure.
+  const twentieth = await login({ username: probe('ip-refund-20'), password: 'guess' }, { xff });
+  assert.equal(twentieth.status, 429);
+  assert.equal(twentieth.body.reason, 'network');
+});
+
+test('a right and a wrong attempt at once: the refund leaves the wrong one\'s streak with a start', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const { LoginThrottleModel } = await import('../models/LoginThrottle');
+  const key = 'ip:192.0.2.150';
+  const keys = [{ key, scope: 'ip' as const, userId: null, network: '192.0.2.150' }];
+  const right = await LoginThrottleModel.reserve(keys, null); // starts the streak
+  const wrong = await LoginThrottleModel.reserve(keys, null); // lands before the right one's refund
+  assert.equal(right.outcome, 'charged');
+  assert.equal(wrong.outcome, 'charged');
+  await LoginThrottleModel.refund(right);
+  const state = (
+    await pool.query(
+      `SELECT failures, first_failure_at::text AS first, last_failure_at::text AS last FROM login_throttle WHERE key = $1`,
+      [key]
+    )
+  ).rows[0];
+  assert.equal(state.failures, 1, 'the wrong one stands');
+  assert.ok(state.first, 'its streak keeps a start');
+  assert.equal(state.last, wrong.outcome === 'charged' ? wrong.charges[0].after.lastFailureAt : null);
+  // So the streak's alerts carry a real start, not 0.
+  const next = await LoginThrottleModel.reserve(keys, null);
+  assert.ok(next.outcome === 'charged' && next.charges[0].streakStartedAt > 1_600_000_000, 'a real epoch');
+});
+
+test('a right password after a streak ended refunds to an empty streak', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const user = await createUser('fresh-refund');
+  const key = acctKey(user.username);
+  await pool.query(
+    `INSERT INTO login_throttle (key, scope, user_id, failures, pauses, paused_until, first_failure_at, last_failure_at)
+     VALUES ($1, 'acct', $2, 27, 8, NOW() - INTERVAL '24 hours', NOW() - INTERVAL '30 hours', NOW() - INTERVAL '25 hours')`,
+    [key, user.id]
+  );
+  assert.equal((await login({ username: user.username, password: PASSWORD }, { xff: '192.0.2.151' })).status, 200);
+  const state = (
+    await pool.query(
+      `SELECT failures, pauses, paused_until, first_failure_at, last_failure_at < NOW() - INTERVAL '24 hours' AS old_last
+         FROM login_throttle WHERE key = $1`,
+      [key]
+    )
+  ).rows[0];
+  assert.deepEqual(
+    { ...state },
+    { failures: 0, pauses: 0, paused_until: null, first_failure_at: null, old_last: true },
+    'nothing of the old streak or of this attempt is left'
+  );
+});
+
+test('a streak 24 hours old starts over, even with a pause still recorded', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const user = await createUser('decay');
+  const key = aipKey(user.username, '192.0.2.152');
+  await pool.query(
+    `INSERT INTO login_throttle (key, scope, user_id, network, failures, pauses, paused_until, first_failure_at, last_failure_at)
+     VALUES ($1, 'aip', $2, '192.0.2.152', 9, 4, NOW() + INTERVAL '10 minutes', NOW() - INTERVAL '30 hours', NOW() - INTERVAL '25 hours')`,
+    [key, user.id]
+  );
+  const answer = await login({ username: user.username, password: 'nope' }, { xff: '192.0.2.152' });
+  assert.equal(answer.status, 401, 'not refused, and the failure starts no pause');
+  const state = (
+    await pool.query(
+      `SELECT failures, pauses, paused_until, first_failure_at > NOW() - INTERVAL '1 minute' AS new_start
+         FROM login_throttle WHERE key = $1`,
+      [key]
+    )
+  ).rows[0];
+  assert.deepEqual({ ...state }, { failures: 1, pauses: 0, paused_until: null, new_start: true });
+});
+
+test('a browser token unused for 91 days is not recognized; a 21st browser drops the least recently used', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const user = await createUser('br-age');
+  const xff = '192.0.2.153';
+  const token: string = (await login({ username: user.username, password: PASSWORD }, { xff })).body.browserToken;
+  await pool.query(`UPDATE recognized_browsers SET last_used_at = NOW() - INTERVAL '91 days' WHERE user_id = $1`, [user.id]);
+  assert.equal((await login({ username: user.username, password: 'nope', browserToken: token }, { xff })).status, 401);
+  assert.equal((await row(aipKey(user.username, xff))).failures, 1, 'counted as a new browser');
+  const fresh = await login({ username: user.username, password: PASSWORD, browserToken: token }, { xff });
+  assert.equal(fresh.status, 200);
+  assert.notEqual(fresh.body.browserToken, token, 'a new token');
+
+  await pool.query(`DELETE FROM recognized_browsers WHERE user_id = $1`, [user.id]);
+  await pool.query(
+    `INSERT INTO recognized_browsers (user_id, token_hash, last_used_at)
+     SELECT $1, encode(sha256(($2 || g::text)::bytea), 'hex'), NOW() - g * INTERVAL '1 day' FROM generate_series(1, 20) g`,
+    [user.id, `${tag}-br-age-`]
+  );
+  const oldest = (await pool.query(`SELECT id FROM recognized_browsers WHERE user_id = $1 ORDER BY last_used_at LIMIT 1`, [user.id])).rows[0].id;
+  assert.equal((await login({ username: user.username, password: PASSWORD }, { xff })).status, 200);
+  const left = await pool.query(`SELECT id FROM recognized_browsers WHERE user_id = $1`, [user.id]);
+  assert.equal(left.rows.length, 20);
+  assert.ok(!left.rows.some((r) => r.id === oldest), 'the least recently used one went');
+});
+
+// --- MFA counts -------------------------------------------------------------------
+
+test('MFA: a code check that throws is refunded; the right code is not counted as a failure', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const user = await createUser('mfa-count');
+  const { secret } = await enrollMfa(user.id);
+  const xff = '192.0.2.155';
+  const { ErrorLogService } = await import('../services/errors/errorLogService');
+  const logError = mock.method(ErrorLogService, 'logError', async () => null);
+  const failing = mock.method(UserModel, 'claimTotpStep', async () => {
+    throw new Error('database on fire');
+  });
+  try {
+    for (let i = 0; i < 6; i++) {
+      assert.equal((await login({ username: user.username, password: PASSWORD, code: totp.totp(secret) }, { xff })).status, 500);
+    }
+  } finally {
+    failing.mock.restore();
+    logError.mock.restore();
+  }
+  assert.equal((await row(`mfa:${user.id}`))?.failures ?? 0, 0, 'no 5xx counted at the code');
+
+  // 4 wrong codes and the right one: 4 failures, no "signed in after failures" alert (that needs 5).
+  for (let i = 0; i < 4; i++) {
+    assert.equal((await login({ username: user.username, password: PASSWORD, code: wrongCode(secret) }, { xff })).status, 401);
+  }
+  assert.equal((await login({ username: user.username, password: PASSWORD, code: totp.totp(secret) }, { xff })).status, 200);
+  const afterFailures = () =>
+    pool.query(
+      `SELECT title, matched_data FROM alerts WHERE source = 'siembox-auth' AND created_at >= $1
+          AND event_id LIKE 'siembox-auth:success-after-failures:%' AND matched_data->>'user_id' = $2`,
+      [startedAt, String(user.id)]
+    );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal((await afterFailures()).rows.length, 0, '4 failures are not 5');
+
+  // 5 wrong codes (the 5th pauses), then the right one: "after 5 failed attempts".
+  for (let i = 0; i < 5; i++) await login({ username: user.username, password: PASSWORD, code: wrongCode(secret) }, { xff });
+  await unpause(`mfa:${user.id}`);
+  await pool.query('UPDATE users SET mfa_last_totp_step = NULL WHERE id = $1', [user.id]);
+  assert.equal((await login({ username: user.username, password: PASSWORD, code: totp.totp(secret) }, { xff })).status, 200);
+  const alerts = await eventually(afterFailures, (res) => res.rows.length > 0);
+  assert.equal(alerts.rows.length, 1);
+  assert.equal(alerts.rows[0].matched_data.failures, 5);
+  assert.match(alerts.rows[0].title, /signed in after 5 failed attempts$/);
+});
+
+test('/me/mfa/enable is refused once MFA is on (409), whatever the code, and changes nothing', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const user = await createUser('mfa-enable');
+  const { secret } = await enrollMfa(user.id);
+  const session = (await SessionModel.create(user.id, 1)).token;
+  const stored = () =>
+    pool.query(`SELECT mfa_enabled, mfa_secret, mfa_recovery_codes, mfa_last_totp_step FROM users WHERE id = $1`, [user.id]);
+  const before = (await stored()).rows[0];
+  for (const code of [wrongCode(secret), totp.totp(secret)]) {
+    const answer = await call('POST', '/api/auth/me/mfa/enable', { body: { code }, token: session });
+    assert.equal(answer.status, 409, `code ${code}`);
+    assert.equal(answer.body.message, 'MFA is already enabled; disable it first to re-enroll');
+  }
+  assert.deepEqual((await stored()).rows[0], before, 'recovery codes and the TOTP step are untouched');
+
+  // Enrolling from scratch still works: setup, then enable with a code for the pending secret.
+  const other = await createUser('mfa-enroll');
+  const otherSession = (await SessionModel.create(other.id, 1)).token;
+  const setup = await call('POST', '/api/auth/me/mfa/setup', { token: otherSession });
+  assert.equal(setup.status, 200);
+  const code = totp.totp(setup.body.secret);
+  const enabled = await call('POST', '/api/auth/me/mfa/enable', { body: { code }, token: otherSession });
+  assert.equal(enabled.status, 200);
+  assert.equal(enabled.body.recoveryCodes.length, 10);
+  assert.equal((await call('POST', '/api/auth/me/mfa/enable', { body: { code }, token: otherSession })).status, 409);
+  // The code that proved the enrollment can't sign in too.
+  const replay = await login({ username: other.username, password: PASSWORD, code }, { xff: '192.0.2.156' });
+  assert.equal(replay.status, 401);
+  assert.equal(replay.body.message, 'Invalid MFA code');
+});
+
+test('password change: a right current password whose save fails (5xx) is not counted', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const user = await createUser('pwc-5xx');
+  const session = (await SessionModel.create(user.id, 1)).token;
+  const change = () =>
+    call('PUT', '/api/auth/me/password', { body: { currentPassword: PASSWORD, newPassword: `${PASSWORD}-new` }, token: session });
+  const { ErrorLogService } = await import('../services/errors/errorLogService');
+  const logError = mock.method(ErrorLogService, 'logError', async () => null);
+  const failing = mock.method(UserModel, 'changeOwnPassword', async () => {
+    throw new Error('database on fire');
+  });
+  try {
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) statuses.push((await change()).status);
+    assert.deepEqual(statuses, Array(6).fill(500));
+  } finally {
+    failing.mock.restore();
+    logError.mock.restore();
+  }
+  assert.equal((await row(`pwc:${user.id}`))?.failures ?? 0, 0, 'the right current password is never a failure');
+  assert.equal((await change()).status, 200);
+});
+
+test('Users page: a password-change pause is not a sign-in pause', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const admin = await createUser('users-admin', 'admin');
+  const user = await createUser('users-pwc');
+  const adminSession = (await SessionModel.create(admin.id, 1)).token;
+  const session = (await SessionModel.create(user.id, 1)).token;
+  for (let i = 0; i < 5; i++) {
+    await call('PUT', '/api/auth/me/password', { body: { currentPassword: 'wrong', newPassword: `${PASSWORD}-new` }, token: session });
+  }
+  assert.equal((await row(`pwc:${user.id}`)).paused, true);
+  const listed = (await call('GET', '/api/users', { token: adminSession })).body.find((u: { id: number }) => u.id === user.id);
+  assert.equal(listed.signin_paused_until, null, 'signing in is not paused');
+  assert.deepEqual(listed.signin_pause_scopes, []);
+  assert.ok(listed.password_change_paused_until, 'the password change is');
+  assert.equal((await login({ username: user.username, password: PASSWORD }, { xff: '192.0.2.157' })).status, 200);
+});
+
 // --- Housekeeping and the CLI ---------------------------------------------------
 
 test('housekeeping removes idle counters, unused browsers, expired sessions and old failure rows only', async (t) => {
@@ -850,6 +1154,17 @@ test('the recovery CLI: status, unlock (user, network, all), reset-password and 
   assert.equal((await run('unlock', user.username)).out, 'Cleared 2 sign-in counter(s).');
   await pause();
   assert.equal((await run('unlock', '--network', '203.0.113.90')).out, 'Cleared 2 sign-in counter(s).');
+  // An IPv6 network, exactly as status prints it (its /64), and the bare address.
+  for (const typed of ['2001:db8:1:2::/64', '2001:db8:1:2::77']) {
+    for (let i = 0; i < 3; i++) await login({ username: user.username, password: 'nope' }, { xff: '2001:db8:1:2::5' });
+    const v6 = await run('status', user.username);
+    assert.match(v6.out, /2001:db8:1:2::\/64\s+failures\s+3/);
+    const unlocked = await run('unlock', '--network', typed);
+    assert.equal(unlocked.code, 0, unlocked.err);
+    assert.equal(unlocked.out, 'Cleared 2 sign-in counter(s).', typed);
+  }
+  assert.equal((await run('unlock', '--network', 'unknown')).code, 0, 'requests that had no address');
+  assert.equal((await run('unlock', '--network', '192.0.2.1/64')).code, 1, 'a /64 is IPv6 only');
   await pause();
   assert.equal((await run('unlock', '--all')).code, 0);
   assert.equal((await row(aipKey(user.username, '203.0.113.90'))), null);

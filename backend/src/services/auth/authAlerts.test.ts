@@ -1,8 +1,10 @@
 /**
- * Sign-in alerts (authAlerts.ts): at most 20 raised an hour, one per event_id
- * (a repeat that the unique index drops is neither counted nor notified), the
- * spike alert after more than 100 checked failures in 10 minutes at most once
- * an hour, and AUTH_ALERTS=off. Hermetic: the pool is a recorded stub (the
+ * Sign-in alerts (authAlerts.ts): one per event_id (a repeat that the unique
+ * index drops is neither counted nor notified), at most 20 network-pause and
+ * success-after-failures alerts an hour (held under concurrency, and never
+ * keeping the account, MFA, browser or spike alerts out), the spike alert after
+ * more than 100 checked failures in 10 minutes at most once an hour, and
+ * AUTH_ALERTS=off. Hermetic: the pool is a recorded stub (the
  * real INSERT ... ON CONFLICT runs against Postgres in
  * routes/signInProtection.db.test.ts). Run with `npm test` (tsx --test).
  */
@@ -84,6 +86,46 @@ test('at most 20 alerts are raised an hour', async () => {
   assert.equal(results.filter(Boolean).length, 20);
   assert.equal(inserted.length, 20);
   assert.equal(notified, 20);
+});
+
+test('the cap is held under concurrency: 40 raises at once create 20', async () => {
+  const results = await Promise.all(
+    Array.from({ length: 40 }, (_, i) => authAlerts.raiseAuthAlert(alert(`ip:198.51.100.${i}`)))
+  );
+  assert.equal(results.filter(Boolean).length, 20);
+  assert.equal(inserted.length, 20);
+  assert.equal(notified, 20);
+});
+
+test('a repeat (dropped by the unique index) does not use up the cap', async () => {
+  for (let i = 0; i < 19; i++) assert.equal(await authAlerts.raiseAuthAlert(alert(`ip:192.0.2.${i}`)), true);
+  for (let i = 0; i < 5; i++) assert.equal(await authAlerts.raiseAuthAlert(alert('ip:192.0.2.0')), false);
+  assert.equal(await authAlerts.raiseAuthAlert(alert('ip:192.0.2.200')), true, 'the 20th new one');
+  assert.equal(await authAlerts.raiseAuthAlert(alert('ip:192.0.2.201')), false, 'the 21st is capped');
+});
+
+test('the cheap alerts cannot use up the important ones: critical and high alerts still raise after the cap', async () => {
+  for (let i = 0; i < 20; i++) {
+    await authAlerts.raiseAuthAlert(alert(`ip:203.0.113.${i}`));
+    await authAlerts.raiseAuthAlert({ ...alert(`aip:x:203.0.113.${i}`), trigger: 'success-after-failures' });
+  }
+  assert.equal(inserted.length, 20, 'network pauses and successes after failures share the 20');
+  const important = [
+    { trigger: 'account-pause', severity: 'critical', key: 'acct:admin' },
+    { trigger: 'mfa-pause', severity: 'critical', key: 'mfa:1' },
+    { trigger: 'browser-revoked', severity: 'high', key: 'br:7' },
+    { trigger: 'success-during-attack', severity: 'high', key: 'acct:admin' },
+  ] as const;
+  for (const extra of important) {
+    assert.equal(await authAlerts.raiseAuthAlert({ ...alert(extra.key), ...extra }), true, extra.trigger);
+  }
+  assert.equal(inserted.length, 24);
+  // The spike alert has its own once-an-hour limit and is not capped either.
+  const now = Date.now();
+  let spike = false;
+  for (let i = 0; i < 101; i++) spike = (await authAlerts.noteCheckedFailure(now + i)) || spike;
+  assert.equal(spike, true);
+  assert.equal(await authAlerts.raiseAuthAlert(alert('ip:203.0.113.250')), false, 'the cheap ones stay capped');
 });
 
 test('the spike alert: more than 100 checked failures in 10 minutes, once an hour', async () => {

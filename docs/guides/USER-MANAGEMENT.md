@@ -104,8 +104,10 @@ The User Management page displays a table with all users:
 - **Created**: Account creation timestamp
 - **Sign-in**: "Sign-in paused · 12 min" while failed sign-in attempts hold the
   account back (the tooltip says which: from one network, from new browsers on
-  every network, a recognized browser, MFA codes, password change)
-- **Actions**: Unlock (only while paused), Edit and Delete buttons
+  every network, one of their recognized browsers, MFA codes), and "Password
+  change paused" while wrong current passwords hold back changing their own
+  password (signing in is not affected)
+- **Actions**: Unlock (only while something is paused), Edit and Delete buttons
 
 ### Create New User
 

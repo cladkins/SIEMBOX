@@ -27,21 +27,27 @@
         </el-table-column>
         <el-table-column label="Sign-in" min-width="170">
           <template #default="{ row }">
-            <el-tooltip v-if="pausedMinutes(row) > 0" placement="top">
+            <el-tooltip v-if="pausedMinutes(row.signin_paused_until) > 0" placement="top">
               <template #content>
                 Paused after failed attempts:
                 <div v-for="scope in row.signin_pause_scopes" :key="scope">· {{ scopeWords(scope) }}</div>
-                Browsers that signed in before are not affected.
+                <template v-if="pausesNewBrowsers(row)">Browsers that signed in before are not affected.</template>
               </template>
-              <el-tag type="warning" effect="light">Sign-in paused · {{ pausedMinutes(row) }} min</el-tag>
+              <el-tag type="warning" effect="light">Sign-in paused · {{ pausedMinutes(row.signin_paused_until) }} min</el-tag>
             </el-tooltip>
-            <el-text v-else type="info" size="small">—</el-text>
+            <el-tooltip v-if="pausedMinutes(row.password_change_paused_until) > 0" placement="top">
+              <template #content>
+                Too many wrong current passwords when changing their own password. Signing in is not affected.
+              </template>
+              <el-tag type="info" effect="light">Password change paused · {{ pausedMinutes(row.password_change_paused_until) }} min</el-tag>
+            </el-tooltip>
+            <el-text v-if="!anyPause(row)" type="info" size="small">—</el-text>
           </template>
         </el-table-column>
         <el-table-column label="Actions" width="270" align="center" fixed="right">
           <template #default="{ row }">
             <el-button
-              v-if="pausedMinutes(row) > 0"
+              v-if="anyPause(row)"
               size="small"
               type="warning"
               @click="unlockUserConfirm(row)"
@@ -287,14 +293,32 @@ async function fetchUsers() {
   }
 }
 
-// Sign-in pauses (signin_paused_until from GET /users): minutes left, rounded up.
+// Pauses from GET /users (signin_paused_until, password_change_paused_until):
+// minutes left, rounded up.
 const now = ref(Date.now());
 let clock: ReturnType<typeof setInterval> | null = null;
 
-function pausedMinutes(user: any): number {
-  if (!user.signin_paused_until) return 0;
-  const ms = new Date(user.signin_paused_until).getTime() - now.value;
+function pausedMinutes(until: string | null | undefined): number {
+  if (!until) return 0;
+  const ms = new Date(until).getTime() - now.value;
   return ms > 0 ? Math.ceil(ms / 60000) : 0;
+}
+
+/** The pause fields GET /users adds to each user. */
+interface UserPauses {
+  signin_paused_until?: string | null;
+  signin_pause_scopes?: string[];
+  password_change_paused_until?: string | null;
+}
+
+function anyPause(user: UserPauses): boolean {
+  return pausedMinutes(user.signin_paused_until) > 0 || pausedMinutes(user.password_change_paused_until) > 0;
+}
+
+// Account, network and MFA pauses hold back new browsers only; a paused
+// recognized browser (br) is one of the browsers that signed in before.
+function pausesNewBrowsers(user: UserPauses): boolean {
+  return (user.signin_pause_scopes || []).some((scope) => ['aip', 'acct', 'mfa'].includes(scope));
 }
 
 function scopeWords(scope: string): string {

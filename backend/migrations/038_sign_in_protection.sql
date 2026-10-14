@@ -16,7 +16,10 @@
 -- the account or the network doesn't lock its owner out.
 --
 -- users.mfa_last_totp_step is the last TOTP time step accepted for the user,
--- which makes each code single-use.
+-- which makes each code single-use. users.password_changed_at is when the
+-- user last changed their own password (Getting Started's "Secure your
+-- account" step; a password change signs everyone out, so the browser can't
+-- remember it).
 --
 -- Idempotent (CREATE ... IF NOT EXISTS, ADD COLUMN IF NOT EXISTS): migrations
 -- run on every start. No backfill.
@@ -51,3 +54,5 @@ CREATE TABLE IF NOT EXISTS recognized_browsers (
 CREATE INDEX IF NOT EXISTS idx_recognized_browsers_user ON recognized_browsers (user_id, last_used_at DESC);
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_last_totp_step BIGINT;
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ;

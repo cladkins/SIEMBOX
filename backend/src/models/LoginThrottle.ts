@@ -13,14 +13,19 @@
  *   and locks every row in key order (the DO UPDATE takes the lock, so a
  *   concurrent DELETE cannot slip in between, and two attempts sharing keys
  *   always lock them in the same order, so they cannot deadlock);
- *   if any key is still paused: ROLLBACK, refuse with the longest wait;
+ *   if a key that refuses this attempt is paused: ROLLBACK, refuse with the
+ *   longest wait (a paused network key refuses only usernames that already
+ *   failed from it: signInPolicy.ts refusingPauses);
  *   otherwise charge each key (a streak 24 h old starts over, the threshold-th
  *   failure starts a pause) and COMMIT.
  *
  * refund() undoes one charge: failures - 1, and the pause and timestamps go
  * back to what they were only if they still hold exactly what this attempt
- * wrote. Timestamps are compared as text: a round trip through a JS Date
- * loses the microseconds and the compare would silently never match.
+ * wrote. The streak's start goes back only if no other attempt was charged
+ * since (last_failure_at is still this one's): a wrong attempt that landed in
+ * between keeps the streak this one started. Timestamps are compared as text:
+ * a round trip through a JS Date loses the microseconds and the compare would
+ * silently never match.
  *
  * Every decision uses the database's NOW() (as differences computed in SQL),
  * never Node's clock. Statements that touch several rows outside reserve()
@@ -41,6 +46,7 @@ import { ErrorLogService } from '../services/errors/errorLogService';
 import {
   longestPause,
   pauseSeconds,
+  refusingPauses,
   retryAfterSeconds,
   signInSettings,
   streakEnded,
@@ -85,6 +91,16 @@ export interface ResetKey {
   failures: number;
   pauses: number;
   streakStartedAt: number | null;
+}
+
+/** A user's paused keys, for the Users page. */
+export interface UserPauseSummary {
+  /** When the last sign-in pause (any scope but pwc) ends, or null. */
+  signInPausedUntil: string | null;
+  /** The paused sign-in scopes (never pwc). */
+  scopes: SignInScope[];
+  /** When the pause on changing their own password ends, or null. */
+  passwordChangePausedUntil: string | null;
 }
 
 /** One row of the admin page's table (and the CLI's status). */
@@ -180,14 +196,17 @@ async function reserveOnce(keys: ThrottleKeySpec[], userAgent: string | null, se
     );
     const rows = new Map(locked.rows.map((row) => [row.key, row]));
 
-    const paused = sorted
-      .map((spec) => {
-        const row = rows.get(spec.key)!;
-        const remainingMs = streakEnded(row.since_last_failure_s) ? 0 : Number(row.paused_ms ?? 0);
-        return { key: spec.key, scope: spec.scope, remainingMs };
-      })
-      .filter((entry) => entry.remainingMs > 0);
-    const longest = longestPause(paused);
+    const states = sorted.map((spec) => {
+      const row = rows.get(spec.key)!;
+      const ended = streakEnded(row.since_last_failure_s);
+      return {
+        key: spec.key,
+        scope: spec.scope,
+        remainingMs: ended ? 0 : Math.max(0, Number(row.paused_ms ?? 0)),
+        failures: ended ? 0 : Number(row.failures),
+      };
+    });
+    const longest = longestPause(refusingPauses(states));
     if (longest) {
       await client.query('ROLLBACK');
       return { outcome: 'paused', key: longest.key, scope: longest.scope, retryAfter: retryAfterSeconds(longest.remainingMs) };
@@ -208,7 +227,7 @@ async function reserveOnce(keys: ThrottleKeySpec[], userAgent: string | null, se
            pauses = $3,
            paused_until = CASE WHEN $4::int > 0 THEN NOW() + $4::int * INTERVAL '1 second'
                                WHEN $5::boolean THEN NULL ELSE paused_until END,
-           first_failure_at = CASE WHEN $6::boolean THEN NOW() ELSE first_failure_at END,
+           first_failure_at = CASE WHEN $6::boolean OR first_failure_at IS NULL THEN NOW() ELSE first_failure_at END,
            last_failure_at = NOW(),
            last_user_agent = $7,
            updated_at = NOW()
@@ -245,8 +264,8 @@ async function reserveOnce(keys: ThrottleKeySpec[], userAgent: string | null, se
 
 export const LoginThrottleModel = {
   /**
-   * Charge one failure to every key, unless one of them is paused (then
-   * nothing changes and the answer is the longest wait). With
+   * Charge one failure to every key, unless one that refuses this attempt is
+   * paused (then nothing changes and the answer is the longest wait). With
    * LOGIN_PROTECTION=off nothing is counted. A broken throttle statement lets
    * the attempt through; the database being unreachable or out of connections
    * throws (see the file comment).
@@ -283,7 +302,9 @@ export const LoginThrottleModel = {
              failures = GREATEST(failures - 1, 0),
              pauses = CASE WHEN paused_until::text IS NOT DISTINCT FROM $2 THEN $3 ELSE pauses END,
              paused_until = CASE WHEN paused_until::text IS NOT DISTINCT FROM $2 THEN $4::timestamptz ELSE paused_until END,
-             first_failure_at = CASE WHEN first_failure_at::text IS NOT DISTINCT FROM $5 THEN $6::timestamptz ELSE first_failure_at END,
+             first_failure_at = CASE WHEN first_failure_at::text IS NOT DISTINCT FROM $5
+                                      AND last_failure_at::text IS NOT DISTINCT FROM $7
+                                     THEN $6::timestamptz ELSE first_failure_at END,
              last_failure_at = CASE WHEN last_failure_at::text IS NOT DISTINCT FROM $7 THEN $8::timestamptz ELSE last_failure_at END,
              updated_at = NOW()
            WHERE key = $1`,
@@ -390,18 +411,30 @@ export const LoginThrottleModel = {
     return res.rows.map((row) => ({ ...row, paused_seconds: Number(row.paused_seconds ?? 0) }));
   },
 
-  /** For the Users page: each user with a paused key, when the last pause ends and which scopes are paused. */
-  async pausedSummaryForUsers(): Promise<Map<number, { pausedUntil: string; scopes: SignInScope[] }>> {
+  /**
+   * For the Users page: each user with a paused key. Sign-in pauses (when the
+   * last ends, and which scopes) are kept apart from a paused password change
+   * (pwc), which doesn't stop anyone signing in.
+   */
+  async pausedSummaryForUsers(): Promise<Map<number, UserPauseSummary>> {
     const res = await query(
-      `SELECT user_id, MAX(paused_until) AS paused_until, array_agg(DISTINCT scope ORDER BY scope) AS scopes
+      `SELECT user_id,
+              MAX(paused_until) FILTER (WHERE scope <> 'pwc') AS signin_until,
+              COALESCE(array_agg(DISTINCT scope ORDER BY scope) FILTER (WHERE scope <> 'pwc'), '{}') AS scopes,
+              MAX(paused_until) FILTER (WHERE scope = 'pwc') AS password_change_until
          FROM login_throttle
         WHERE user_id IS NOT NULL AND paused_until > NOW()
         GROUP BY user_id`
     );
+    const iso = (value: unknown) => (value ? new Date(value as string).toISOString() : null);
     return new Map(
       res.rows.map((row) => [
         Number(row.user_id),
-        { pausedUntil: new Date(row.paused_until).toISOString(), scopes: row.scopes as SignInScope[] },
+        {
+          signInPausedUntil: iso(row.signin_until),
+          scopes: row.scopes as SignInScope[],
+          passwordChangePausedUntil: iso(row.password_change_until),
+        },
       ])
     );
   },

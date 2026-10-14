@@ -82,12 +82,20 @@ export async function startEnrollment(user: User): Promise<{ secret: string; otp
   return { secret, otpauthUrl: otpauthUrl({ issuer: ISSUER, account: user.username, secret }) };
 }
 
+/** enable() can't go ahead: MFA is already on, or the pending enrollment changed meanwhile (409). */
+export class MfaEnrollmentConflict extends Error {}
+
 /**
- * Finish enrollment: verify a TOTP code against the pending secret, then enable
+ * Finish enrollment: verify a TOTP code against the PENDING secret, then enable
  * MFA and return one-time recovery codes (shown once). The code's time step is
  * recorded, so the same code can't then be used to sign in.
+ *
+ * Never once MFA is on: the code would then be checked against the active
+ * secret with no throttle (the caller of enable only ever needs the secret
+ * setup just handed them), and a hit would replace the recovery codes.
  */
 export async function enable(user: User, code: string): Promise<{ recoveryCodes: string[] }> {
+  if (user.mfa_enabled) throw new MfaEnrollmentConflict('MFA is already enabled; disable it first to re-enroll');
   if (!user.mfa_secret) throw new Error('No pending MFA enrollment — start setup first');
   const secret = decryptSecret(user.mfa_secret);
   const match = matchTotpStep(secret, code);
@@ -95,7 +103,9 @@ export async function enable(user: User, code: string): Promise<{ recoveryCodes:
 
   const recoveryCodes = generateRecoveryCodes();
   const hashes = await Promise.all(recoveryCodes.map((c) => bcrypt.hash(normalizeRecovery(c), 10)));
-  await UserModel.enableMfa(user.id, hashes, match.step);
+  if (!(await UserModel.enableMfa(user.id, hashes, match.step, user.mfa_secret))) {
+    throw new MfaEnrollmentConflict('MFA setup changed while it was being enabled; start setup again');
+  }
   return { recoveryCodes };
 }
 

@@ -148,7 +148,8 @@ export async function recordFailedCheck(params: {
         title: `Sign-in paused for network ${charge.network ?? 'unknown'}`,
         description:
           `${charge.after.failures} failed sign-ins from ${charge.network ?? 'an unknown address'} for any username. ` +
-          `Sign-in from new browsers on that network is paused for ${wait}; browsers that signed in before are not affected.`,
+          `For ${wait}, new browsers on that network can't sign in to usernames that already failed from it ` +
+          '(others still get their password checked); browsers that signed in before are not affected.',
         matched: { ...matched, trigger: 'network-pause' },
       });
     } else if (charge.scope === 'acct' && user) {

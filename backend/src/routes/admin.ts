@@ -6,7 +6,6 @@
  * All endpoints require admin authentication.
  */
 
-import net from 'node:net';
 import { Router, Request, Response } from 'express';
 import { authenticate, requireAdmin } from '../middleware/auth';
 import { ApiError } from '../middleware/errorHandler';
@@ -14,7 +13,7 @@ import { query } from '../config/database';
 import { ErrorLogService } from '../services/errors/errorLogService';
 import { listRecurringJobs } from '../services/jobs/jobRegistry';
 import { clientAddressReport } from '../net/diagnostics';
-import { normalizeIp, signInNetworkKey } from '../net/clientAddress';
+import { parseSignInNetwork } from '../net/clientAddress';
 import { logger } from '../utils/logger';
 import { UserModel } from '../models/User';
 import { LoginThrottleModel } from '../models/LoginThrottle';
@@ -552,10 +551,10 @@ router.post('/sign-in-protection/clear', async (req: Request, res: Response) => 
     cleared = await LoginThrottleModel.clearByUser(user.id, usernameHash(user.username));
     target = { target: 'user', userId: user.id };
   } else if (network !== undefined) {
-    const net = parseNetwork(network);
-    if (!net) throw new ApiError(400, 'network must be an IP address or an IPv6 /64');
-    cleared = await LoginThrottleModel.clearByNetwork(net);
-    target = { target: 'network', network: net };
+    const parsed = parseSignInNetwork(network);
+    if (!parsed) throw new ApiError(400, 'network must be an IP address or an IPv6 /64');
+    cleared = await LoginThrottleModel.clearByNetwork(parsed);
+    target = { target: 'network', network: parsed };
   } else {
     if (all !== true) throw new ApiError(400, 'all must be true');
     cleared = await LoginThrottleModel.clearAll();
@@ -570,16 +569,5 @@ router.post('/sign-in-protection/clear', async (req: Request, res: Response) => 
   });
   res.json({ cleared });
 });
-
-/** A network to clear: an address (as its sign-in network) or an IPv6 /64; 'unknown' for requests without one. */
-function parseNetwork(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const text = value.trim();
-  if (text === 'unknown') return 'unknown';
-  const slash64 = text.endsWith('/64');
-  const address = normalizeIp(slash64 ? text.slice(0, -3) : text);
-  if (!address || (slash64 && net.isIP(address) !== 6)) return null;
-  return signInNetworkKey(address);
-}
 
 export default router;

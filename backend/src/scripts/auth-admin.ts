@@ -9,7 +9,9 @@
  * Commands:
  *   status [username]          paused and recently failing sign-in counters
  *   unlock <username>          clear every counter of an account
- *   unlock --network <ip>      clear every counter of a network (IPv6: its /64)
+ *   unlock --network <ip>      clear every counter of a network: an address
+ *                              (IPv6: its /64), an IPv6 /64 as status prints
+ *                              it, or 'unknown'
  *   unlock --all               clear every counter
  *   reset-password <username>  set a random 20-character password (printed
  *                              once), sign the account out everywhere, forget
@@ -28,7 +30,7 @@ import { auditAuth } from '../services/auth/authEvents';
 import { revokeAccountAccess } from '../services/auth/signInService';
 import { countBrowsers } from '../services/auth/recognizedBrowsers';
 import { signInSettings, usernameHash } from '../services/auth/signInPolicy';
-import { normalizeIp, signInNetworkKey } from '../net/clientAddress';
+import { parseSignInNetwork } from '../net/clientAddress';
 import { closePools } from '../config/database';
 
 export interface Io {
@@ -45,7 +47,8 @@ const USAGE = [
   'Usage: auth-admin <command>',
   '  status [username]          paused and recently failing sign-in counters',
   '  unlock <username>          clear every sign-in counter of an account',
-  '  unlock --network <ip>      clear every counter of a network (IPv6: its /64)',
+  '  unlock --network <net>     clear every counter of a network: an IP address, an IPv6 /64',
+  "                             as status prints it, or 'unknown' (requests without an address)",
   '  unlock --all               clear every counter',
   '  reset-password <username>  set a random password (printed once), sign out everywhere',
   '  disable-mfa <username>     turn MFA off for an account',
@@ -109,12 +112,11 @@ export async function main(argv: string[], io: Io = defaultIo): Promise<number> 
         cleared = await LoginThrottleModel.clearAll();
         details = { target: 'all' };
       } else if (args[0] === '--network') {
-        const address = normalizeIp(args[1]);
-        if (!address) {
-          io.err('unlock --network needs an IP address.');
+        const network = parseSignInNetwork(args[1]);
+        if (!network) {
+          io.err("unlock --network needs an IP address, an IPv6 /64 (2001:db8:1:2::/64) or 'unknown'.");
           return 1;
         }
-        const network = signInNetworkKey(address);
         cleared = await LoginThrottleModel.clearByNetwork(network);
         details = { target: 'network', network };
       } else {

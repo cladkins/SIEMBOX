@@ -20,7 +20,8 @@
  *     not the account exists or is disabled.
  *  8. Right password: refund the charges. A disabled account gets 403 now,
  *     and only now.
- *  9. MFA: the code is charged to the MFA key (or the browser's) the same way.
+ *  9. MFA: the code is charged to the MFA key (or the browser's) the same way,
+ *     and refunded when it is right.
  * 10. Success: reset the keys that reset, issue or touch the browser token,
  *     create the session.
  *
@@ -200,6 +201,9 @@ router.post('/login', async (req: Request, res: Response) => {
         else sendError(res, 401, 'Invalid MFA code', { mfaRequired: true });
         return;
       }
+      // The code is right: take its charge back before the reset, so the
+      // "signed in after N failed attempts" count is only the failures.
+      await LoginThrottleModel.refund(codeReservation);
       mfaMethod = result.method;
       if (result.method === 'recovery') {
         await auditAuth('auth.mfa.recovery_used', ctx, { userId: user.id, status: 200 });
@@ -390,7 +394,10 @@ router.put('/me/password', authenticate, async (req: Request, res: Response) => 
       return;
     }
 
-    await UserModel.update(user.id, { password: newPassword });
+    // The current password is right: take its charge back now, so a failure
+    // to save the new one (a 5xx) is never counted.
+    await LoginThrottleModel.refund(reservation);
+    await UserModel.changeOwnPassword(user.id, newPassword);
     const revoked = await revokeAccountAccess(user);
 
     logger.info('User changed password', { userId: user.id, ip: ctx.ip });
@@ -428,19 +435,23 @@ router.post('/me/mfa/setup', authenticate, async (req: Request, res: Response) =
 
 // Finish enrollment: verify a code against the pending secret, enable MFA, and
 // return one-time recovery codes (shown once — the client must save them).
-// Not throttled: the code is checked against a secret the caller was just given.
+// Not throttled: the code is checked against a secret the caller was just
+// given. So never once MFA is on (409, like setup): the code would be checked
+// against the active secret instead, unthrottled.
 router.post('/me/mfa/enable', authenticate, async (req: Request, res: Response) => {
   try {
     const code = parseCode(req.body?.code);
     if (!code) throw new ApiError(400, 'code is required');
     const user = await UserModel.findById(req.user!.id);
     if (!user) throw new ApiError(404, 'User not found');
+    if (user.mfa_enabled) throw new ApiError(409, 'MFA is already enabled; disable it first to re-enroll');
     const { recoveryCodes } = await MfaService.enable(user, code);
     logger.info('User enabled MFA', { userId: user.id });
     await auditAuth('auth.mfa.enabled', authContext(req), { userId: user.id, status: 200 });
     res.json({ enabled: true, recoveryCodes });
   } catch (error) {
     if (error instanceof ApiError) throw error;
+    if (error instanceof MfaService.MfaEnrollmentConflict) throw new ApiError(409, error.message);
     const msg = error instanceof Error ? error.message : 'Failed to enable MFA';
     throw new ApiError(/invalid code|pending/i.test(msg) ? 400 : 500, msg);
   }

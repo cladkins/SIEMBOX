@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Request } from 'express';
-import { clientAddress, normalizeIp, PROXY_SOCKET_PEER, requestVia, signInNetworkKey } from './clientAddress';
+import { clientAddress, normalizeIp, parseSignInNetwork, PROXY_SOCKET_PEER, requestVia, signInNetworkKey } from './clientAddress';
 import { requestLimitKey, signInLimitKey, formatWait } from './requestLimits';
 
 /** What Express would expose for a request: req.ip, req.ips and the socket. */
@@ -47,6 +47,27 @@ test('signInNetworkKey: IPv4 as it is, IPv6 as its /64, unknown without an addre
   assert.equal(signInNetworkKey('64:ff9b::192.0.2.1'), '64:ff9b::/64');
   assert.equal(signInNetworkKey(null), 'unknown');
   assert.equal(signInNetworkKey('junk'), 'unknown');
+});
+
+test('parseSignInNetwork: an address, an IPv6 /64 as the counters list it, or unknown', () => {
+  const cases: Array<[unknown, string | null]> = [
+    ['203.0.113.9', '203.0.113.9'],
+    [' 203.0.113.9 ', '203.0.113.9'],
+    ['2001:db8:1:2:3:4:5:6', '2001:db8:1:2::/64'],
+    ['2001:db8:1:2::/64', '2001:db8:1:2::/64'],
+    ['2001:DB8:1:2::77/64', '2001:db8:1:2::/64'],
+    ['unknown', 'unknown'],
+    ['203.0.113.9/64', null],
+    ['2001:db8::/48', null],
+    ['203.0.113.0/24', null],
+    ['nonsense', null],
+    ['', null],
+    [undefined, null],
+    [42, null],
+  ];
+  for (const [input, expected] of cases) assert.equal(parseSignInNetwork(input), expected, JSON.stringify(input));
+  // Whatever status prints parses back to itself.
+  assert.equal(parseSignInNetwork(signInNetworkKey('2001:db8:aa:bb::1')), signInNetworkKey('2001:db8:aa:bb::1'));
 });
 
 test('clientAddress: req.ip, normalized', () => {

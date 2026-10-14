@@ -32,7 +32,7 @@ Failed sign-ins pause further attempts (30 seconds, doubling with each further f
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `LOGIN_MAX_FAILURES` | `5` | Failed sign-ins for an account from one network (IPv4 address or IPv6 /64) before it pauses (15 min at most). |
-| `LOGIN_MAX_FAILURES_PER_ADDRESS` | `20` | Failed sign-ins from one network for any username (30 min at most). |
+| `LOGIN_MAX_FAILURES_PER_ADDRESS` | `20` | Failed sign-ins from one network for any username (30 min at most). While paused, only usernames that already failed from that network are held back. |
 | `LOGIN_MAX_FAILURES_PER_ACCOUNT` | `20` | Failed sign-ins for an account from new browsers on every network (60 min at most). `0` turns this one off. |
 | `LOGIN_PROTECTION` | on | `off` stops all counting. Only to get back in after a lockout; every start logs a warning while it is set. |
 | `AUTH_ALERTS` | on | `off` stops the sign-in alerts (source `siembox-auth`). |

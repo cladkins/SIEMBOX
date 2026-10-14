@@ -122,3 +122,19 @@ export function signInNetworkKey(ip: string | null): string {
   const prefix = normalizeIp(`${groups.map((group) => group.toString(16)).join(':')}::`);
   return `${prefix}/64`;
 }
+
+/**
+ * A sign-in network as an admin types it (the admin API, the recovery CLI):
+ * an address (taken as its network: IPv6 as its /64), an IPv6 /64 exactly as
+ * the counters list it ('2001:db8:1:2::/64'), or 'unknown' for requests that
+ * had no address. The signInNetworkKey form, or null for anything else.
+ */
+export function parseSignInNetwork(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (text === 'unknown') return 'unknown';
+  const slash64 = text.endsWith('/64');
+  const address = normalizeIp(slash64 ? text.slice(0, -3) : text);
+  if (!address || (slash64 && net.isIP(address) !== 6)) return null;
+  return signInNetworkKey(address);
+}

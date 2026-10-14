@@ -16,7 +16,8 @@ import { matchHost } from './matcher';
 import { rankSources, RankableItem } from './ranker';
 import { renderOnboardInstructions, SiemboxSyslogSettings } from './onboarder';
 import { effectivePollUrl } from './apiPoll/pollTarget';
-import { DiscoveredSignals, LogAccessMethod, ProbePlan, RankedResult, RuntimeSource } from './types';
+import { normalizeTlsSubject } from './tlsSubject';
+import { DiscoveredSignals, FingerprintEntry, LogAccessMethod, ProbePlan, RankedResult, RuntimeSource, TlsProbeResult } from './types';
 
 // ---------------------------------------------------------------------------
 // Cancellation + watchdog. The worker is an in-memory promise chained off a job
@@ -71,6 +72,34 @@ async function executeScan(scanId: number, mode: DiscoveryScanMode, cidrs: strin
   await ingestSignals(scanId, signals, library);
 }
 
+/** Match one host's signals and upsert its discovery_sources row. Returns whether a fingerprint matched. */
+async function ingestHost(scanId: number, signals: DiscoveredSignals, library: FingerprintEntry[]): Promise<boolean> {
+  const best = matchHost(signals, library)[0] || null;
+  await DiscoverySourceModel.upsert({
+    ip_address: signals.ip,
+    mac_address: signals.mac || null,
+    hostname: signals.hostname || null,
+    open_ports: signals.open_ports,
+    matched_fingerprint_id: best?.fingerprint.id ?? null,
+    confidence: best?.confidence ?? 0,
+    is_guess: best?.is_guess ?? true,
+    security_value: best?.fingerprint.security_value ?? null,
+    evidence: {
+      discovery_methods: signals.discovery_methods,
+      matched_signals: best?.matched_signals ?? [],
+      http_responses: signals.http_responses.map((r) => ({ port: r.port, path: r.path, status: r.status })),
+      tls_subjects: signals.tls_subjects,
+      mdns_services: signals.mdns_services,
+      ssdp_services: signals.ssdp_services,
+    },
+    last_scan_id: scanId,
+  });
+  return best !== null;
+}
+
+/** How many per-host failures a scan's results_summary lists (hosts_failed always has the full count). */
+const MAX_RECORDED_HOST_ERRORS = 20;
+
 /**
  * Match a batch of observed host signals against the fingerprint library, upsert
  * each into discovery_sources, and complete the scan. Shared by the in-process
@@ -78,6 +107,11 @@ async function executeScan(scanId: number, mode: DiscoveryScanMode, cidrs: strin
  * so a shipper-run discovery scan produces the same discovery_sources rows as a
  * backend-run one. The fingerprint library lives only here -- the shipper just
  * returns raw signals.
+ *
+ * A host that can't be matched or saved (signals in a shape the matcher didn't
+ * expect, a row the database rejects) is recorded in the scan's results_summary
+ * (hosts_failed, host_errors) and the dashboard error log, and the rest of the
+ * scan carries on: one bad host must not fail the whole scan.
  */
 export async function ingestSignals(
   scanId: number,
@@ -85,32 +119,37 @@ export async function ingestSignals(
   library = loadFingerprintLibrary()
 ): Promise<void> {
   let hostsMatched = 0;
+  let hostsFailed = 0;
+  const hostErrors: Array<{ ip: string; error: string }> = [];
   for (const signals of signalsList) {
     throwIfCancelled(scanId);
-    const best = matchHost(signals, library)[0] || null;
-    await DiscoverySourceModel.upsert({
-      ip_address: signals.ip,
-      mac_address: signals.mac || null,
-      hostname: signals.hostname || null,
-      open_ports: signals.open_ports,
-      matched_fingerprint_id: best?.fingerprint.id ?? null,
-      confidence: best?.confidence ?? 0,
-      is_guess: best?.is_guess ?? true,
-      security_value: best?.fingerprint.security_value ?? null,
-      evidence: {
-        discovery_methods: signals.discovery_methods,
-        matched_signals: best?.matched_signals ?? [],
-        http_responses: signals.http_responses.map((r) => ({ port: r.port, path: r.path, status: r.status })),
-        tls_subjects: signals.tls_subjects,
-        mdns_services: signals.mdns_services,
-        ssdp_services: signals.ssdp_services,
-      },
-      last_scan_id: scanId,
-    });
-    if (best) hostsMatched++;
+    try {
+      if (await ingestHost(scanId, signals, library)) hostsMatched++;
+    } catch (err) {
+      hostsFailed++;
+      const ip = String(signals?.ip ?? '');
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn(`[logDiscovery] scan ${scanId}: could not record host ${ip}: ${message}`);
+      if (hostErrors.length < MAX_RECORDED_HOST_ERRORS) hostErrors.push({ ip, error: message.slice(0, 300) });
+    }
   }
 
-  await DiscoveryScanModel.complete(scanId, { hosts_seen: signalsList.length, hosts_matched: hostsMatched });
+  if (hostsFailed > 0) {
+    // The scan still completes, so report the fault where scan failures go.
+    const first = hostErrors[0];
+    ErrorLogService.logBackgroundError(
+      'log-discovery',
+      new Error(`Discovery scan ${scanId}: ${hostsFailed} host(s) could not be recorded (first: ${first.ip}: ${first.error})`),
+      { dedupeKey: `scan-${scanId}-hosts`, scanId, hostsFailed, hostErrors }
+    );
+  }
+
+  await DiscoveryScanModel.complete(scanId, {
+    hosts_seen: signalsList.length,
+    hosts_matched: hostsMatched,
+    hosts_failed: hostsFailed,
+    ...(hostErrors.length > 0 ? { host_errors: hostErrors } : {}),
+  });
 }
 
 /**
@@ -295,7 +334,12 @@ export function normalizeDiscoveredSignals(raw: unknown): DiscoveredSignals[] {
       hostname: (h as any).hostname ? String((h as any).hostname) : undefined,
       open_ports: Array.isArray((h as any).open_ports) ? (h as any).open_ports.filter((n: any) => Number.isInteger(n)) : [],
       http_responses: Array.isArray((h as any).http_responses) ? (h as any).http_responses : [],
-      tls_subjects: Array.isArray((h as any).tls_subjects) ? (h as any).tls_subjects : [],
+      // Same normalizer the probe uses, so a shipper on an older agent (which
+      // posts a repeated CN as Node's raw array) or a malformed entry can't
+      // reach the matcher in a shape it doesn't expect.
+      tls_subjects: Array.isArray((h as any).tls_subjects)
+        ? (h as any).tls_subjects.map(normalizeTlsSubject).filter((t: TlsProbeResult | null): t is TlsProbeResult => t !== null)
+        : [],
       banners: Array.isArray((h as any).banners) ? (h as any).banners : [],
       mdns_services: Array.isArray((h as any).mdns_services) ? (h as any).mdns_services.map(String) : [],
       ssdp_services: Array.isArray((h as any).ssdp_services) ? (h as any).ssdp_services : [],

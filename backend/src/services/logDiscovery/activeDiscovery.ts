@@ -9,6 +9,7 @@ import * as https from 'https';
 import * as tls from 'tls';
 import { DiscoveredSignals, BannerResult, FingerprintEntry, HttpProbeResult, TlsProbeResult } from './types';
 import { cidrHosts } from './scope';
+import { normalizeTlsSubject } from './tlsSubject';
 
 const MAX_BODY_BYTES = 8192;
 const MAX_BANNER_BYTES = 512;
@@ -224,7 +225,9 @@ export function tlsProbe(ip: string, port: number, opts: ActiveProbeOptions = {}
         socket.destroy();
         if (!cert || !cert.subject) return finish(null);
         const san = cert.subjectaltname ? cert.subjectaltname.split(',').map((s) => s.trim()) : undefined;
-        finish({ port, subject_cn: cert.subject.CN, san });
+        // subject.CN is an array when the cert repeats CN (typed string, but
+        // isn't always); normalizeTlsSubject settles the shape.
+        finish(normalizeTlsSubject({ port, subject_cn: cert.subject.CN, san }));
       }
     );
     socket.once('timeout', () => {

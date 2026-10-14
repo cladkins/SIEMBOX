@@ -12,7 +12,6 @@
         :background-color="themeStore.isDark ? '#1d1d1d' : '#304156'"
         text-color="#bfcbd9"
         active-text-color="#409EFF"
-        :default-openeds="['siem']"
         class="sidebar-menu"
       >
         <el-menu-item index="/">

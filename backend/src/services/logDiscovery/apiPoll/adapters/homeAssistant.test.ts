@@ -23,6 +23,7 @@ import {
   MAX_RECORD_LINES,
   MAX_RECORD_CHARS,
   SUPERVISOR_LOG_ENTRIES_WIDE,
+  LEGACY_CUT_CHARS,
   windowReach,
   windowReadBytes,
 } from './homeAssistant';
@@ -870,28 +871,144 @@ test('selectNewLines with onMiss "all": a text that starts inside the window ski
   assert.deepEqual(selectNewLines([...window.slice(1), ...after].join('\n'), cursor, 1).newLines, [LINE4]);
 });
 
-test('a cursor whose last line is cut (stored before this version: the first 5 MB of a longer log, or a line still being written) is found', async () => {
-  // The previous reader kept the first 5,242,880 characters of the file and stored its last three
-  // lines, the last one cut at that point, as the cursor; it then found nothing new every poll.
+/**
+ * The cursor the reader before this version stored for a log longer than 5 MB: it kept the first
+ * 5,242,880 characters of the file and stored their last three lines, the last one cut at that
+ * point unless it fell at a line's end, as the cursor (it then found nothing new every poll).
+ * Also the index, among the file's lines, of the first line it did not store whole: the one it
+ * cut (it stored only the start of it), or the one after the cursor.
+ */
+function legacyCursor(text: string): { cursor: string; resumeAt: number; atLineEnd: boolean } {
+  const head = text.slice(0, LEGACY_CUT_CHARS).split('\n').filter(Boolean);
+  const atLineEnd = text[LEGACY_CUT_CHARS] === '\n' || text[LEGACY_CUT_CHARS - 1] === '\n';
+  return { cursor: head.slice(-3).join('\n'), resumeAt: atLineEnd ? head.length : head.length - 1, atLineEnd };
+}
+
+/** True for a cursor of bare traceback lines only (no timestamped header): found in every copy of the traceback. */
+function bare(cursor: string): boolean {
+  return cursor.split('\n').every((line) => parseLineTimestamp(line) === null);
+}
+
+/** deepEqual for tens of thousands of lines, failing with their counts and first difference instead of a diff of them all. */
+function assertLines(actual: string[], expected: string[], message: string) {
+  const at = actual.findIndex((line, i) => line !== expected[i]);
+  if (at === -1 && actual.length === expected.length) return;
+  const i = at === -1 ? Math.min(actual.length, expected.length) : at;
+  assert.fail(`${message}: ${actual.length} lines, expected ${expected.length}; line ${i} is ${JSON.stringify(actual[i])}, expected ${JSON.stringify(expected[i])}`);
+}
+
+test('a cursor whose last line is cut (stored before this version: the first 5 MB of a longer log, or a line still being written): the poll resumes at that line, collecting it whole', async () => {
   const lines = bruteForceBurst(0, 5.3 * 1024 * 1024);
   const log = { text: lines.join('\n') + '\n' };
-  const firstFiveMb = log.text.slice(0, 5 * 1024 * 1024);
-  const oldCursor = firstFiveMb.split('\n').filter(Boolean).slice(-3).join('\n');
-  const cutAt = firstFiveMb.split('\n').filter(Boolean).length - 1; // the index of the cut line
-  assert.notEqual(oldCursor.split('\n')[2], lines[cutAt], 'the cursor ends in a cut line');
+  const { cursor: oldCursor, resumeAt: cutAt, atLineEnd } = legacyCursor(log.text);
+  assert.ok(!atLineEnd && lines[cutAt] !== oldCursor.split('\n')[2], 'the cursor ends in a cut line');
+  assert.ok(lines[cutAt].startsWith(oldCursor.split('\n')[2]));
 
   const result = await adapterAt(T0, fakeLogFile(log)).fetchEvents(target(), CRED, oldCursor);
-  assert.deepEqual(messages(result), lines.slice(cutAt + 1), 'only the lines after it: none of the 5 MB already stored');
+  assertLines(messages(result), lines.slice(cutAt), 'the cut line whole, then the lines after it: none of the 5 MB already stored');
   assert.equal(result.warning, undefined);
 
   // A last line caught while it was written, in a whole file.
   const whole = lines.slice(0, 400);
   const partial = [whole[297], whole[298], whole[299].slice(0, 40)].join('\n');
   const resumed = await adapterAt(T0, fakeHomeAssistant({ [FILE]: { status: 200, body: whole.join('\n') } })).fetchEvents(target(), CRED, partial);
-  assert.deepEqual(messages(resumed), whole.slice(300), 'not the 200-line bound');
+  assert.deepEqual(messages(resumed), whole.slice(299), 'from the line it caught part of, not the 200-line bound');
 
   // Only the last line may be cut: the lines before it must match whole.
   assert.equal(selectNewLines(whole.join('\n'), [whole[297].slice(0, 40), whole[298], whole[299]].join('\n')).gap, true);
+});
+
+/** A log of `bytes` or more: a first line, then copies of a 26-line traceback, each with its own header line. */
+function repeatingTracebackLog(firstLine: string, bytes: number): string[] {
+  const lines = [firstLine];
+  for (let copy = 0, size = Buffer.byteLength(firstLine) + 1; size < bytes; copy++) {
+    for (const line of longError(copy, 26)) {
+      lines.push(line);
+      size += Buffer.byteLength(line) + 1;
+    }
+  }
+  return lines;
+}
+
+test('a cursor stored at 5 MB inside a traceback logged again and again: the poll resumes where the old reader stopped, not at the first copy read', async () => {
+  // Each first line moves the 5 MB mark to another line of the traceback, or another place in one;
+  // with 3 and 4 it falls at a line's end (before and after its newline), so no line is cut.
+  for (const pad of [0, 37, 211, 977, 1234, 2048, 3, 4]) {
+    const lines = repeatingTracebackLog(`2026-10-12 12:59:59.999 INFO (MainThread) [homeassistant.core] ${'x'.repeat(pad)}`, 5.3 * 1024 * 1024);
+    const log = { text: lines.join('\n') + '\n' };
+    const { cursor, resumeAt, atLineEnd } = legacyCursor(log.text);
+    assert.ok(bare(cursor), `pad ${pad}: the cursor is bare traceback lines, found in every copy`);
+    assert.equal(atLineEnd, pad === 3 || pad === 4, `pad ${pad}: where the mark falls`);
+    assert.equal(cursor.split('\n')[2] === lines[resumeAt - 1], atLineEnd, `pad ${pad}: its last line is cut unless the mark is at a line's end`);
+
+    const result = await adapterAt(T0, fakeLogFile(log)).fetchEvents(target(), CRED, cursor);
+    assertLines(messages(result), lines.slice(resumeAt), `pad ${pad}: any cut line whole and the lines after it, none collected already`);
+    assert.equal(result.warning, undefined, `pad ${pad}`);
+  }
+});
+
+test('a cursor cut at 5 MB in a log since grown more than one read past it: all of the answer is new and the gap is reported', async () => {
+  // The old reader never read past the 5 MB mark; the last 5 MB of an 11 MB log start well after
+  // it, so a copy of the traceback found in them is a later one: none of the answer was collected.
+  for (const pad of [0, 3]) {
+    const lines = repeatingTracebackLog(`2026-10-12 12:59:59.999 INFO (MainThread) [homeassistant.core] ${'x'.repeat(pad)}`, 11 * 1024 * 1024);
+    const log = { text: lines.join('\n') + '\n' };
+    const { cursor, atLineEnd } = legacyCursor(log.text);
+    assert.ok(bare(cursor), `pad ${pad}: bare traceback lines, found in every copy`);
+    assert.equal(atLineEnd, pad === 3, `pad ${pad}: a cut line, or whole lines`);
+
+    const ha = fakeLogFile(log);
+    const result = await adapterAt(T0, ha).fetchEvents(target(), CRED, cursor);
+    const asked = Number(/^bytes=-(\d+)$/.exec(ha.calls[0].headers.Range)![1]);
+    const answer = log.text.slice(log.text.length - asked);
+    const whole = answer.slice(answer.indexOf('\n') + 1).split('\n').filter(Boolean);
+    assertLines(messages(result), whole, `pad ${pad}: every whole line of the answer`);
+    assert.match(result.warning ?? '', /^Home Assistant logged more than 5 MB since the last poll.*: the lines before them were not collected\.$/, `pad ${pad}`);
+  }
+});
+
+test('a cursor cut at 5 MB where the mark cannot be placed exactly: the first copy read, so that no line is skipped', async () => {
+  const infoLine = (name: string) => `2026-10-12 12:59:59.999 INFO (MainThread) [homeassistant.core] Turned on ${name}`;
+  /** /api/error_log for a log with characters outside ASCII: the Range counts its bytes, not its characters. */
+  const fakeLogBytes = (log: string, ignoresRange = false) => {
+    const buf = Buffer.from(log, 'utf8');
+    return fakeHomeAssistant({
+      [FILE]: (headers) => {
+        const n = Number(/^bytes=-(\d+)$/.exec(headers.Range ?? '')![1]);
+        const start = Math.max(0, buf.length - n);
+        const body = buf.subarray(start).toString('utf8');
+        // A server that ignores the Range: the whole file, which httpFetch cuts to its end.
+        if (ignoresRange) return { status: 200, body, truncated: true };
+        return { status: 206, body, headers: { 'content-range': `bytes ${start}-${buf.length - 1}/${buf.length}` } };
+      },
+    });
+  };
+
+  // A character outside ASCII in the part read counts as the old reader counted it: exact.
+  const inRead = repeatingTracebackLog(infoLine('the porch light'), 5.3 * 1024 * 1024);
+  inRead.splice(inRead.length - 30_000, 0, infoLine('the Küche light'));
+  const inReadLog = inRead.join('\n') + '\n';
+  const placed = legacyCursor(inReadLog);
+  assert.ok(bare(placed.cursor), 'bare traceback lines, found in every copy');
+  assert.ok(inRead.indexOf(infoLine('the Küche light')) < placed.resumeAt, 'before the cut');
+  const exact = await adapterAt(T0, fakeLogBytes(inReadLog)).fetchEvents(target(), CRED, placed.cursor);
+  assertLines(messages(exact), inRead.slice(placed.resumeAt), 'the cut line whole and the lines after it');
+
+  // One before the part read puts the mark elsewhere; and a server that ignores the Range gives no
+  // position at all. The poll then resumes at the first copy of the cursor's lines in the answer:
+  // lines collected already are collected again, once, but none is skipped.
+  const before = repeatingTracebackLog(infoLine('the Küche light'), 5.3 * 1024 * 1024);
+  const beforeLog = before.join('\n') + '\n';
+  const unplaced = legacyCursor(beforeLog);
+  assert.ok(bare(unplaced.cursor), 'bare traceback lines, found in every copy');
+  const due = before.slice(unplaced.resumeAt);
+  for (const ignoresRange of [false, true]) {
+    const result = await adapterAt(T0, fakeLogBytes(beforeLog, ignoresRange)).fetchEvents(target(), CRED, unplaced.cursor);
+    const events = messages(result);
+    assert.ok(events.length > due.length, `ignoresRange ${ignoresRange}: some lines again`);
+    assertLines(events.slice(-due.length), due, `ignoresRange ${ignoresRange}: every line from the cut one on`);
+    assert.equal(result.warning, undefined);
+  }
 });
 
 test('a new file after a restart: read whole, the 200-line bound and no warning; read past its start (over 5 MB), all of the answer and the warning', async () => {

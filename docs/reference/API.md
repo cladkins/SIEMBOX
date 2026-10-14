@@ -2907,8 +2907,18 @@ before them were not collected, or, when the answer may have begun inside the
 last record collected, may not have been. (When the whole file was read and lacks
 those lines, it is a new file, started by a restart: its last 200 lines are
 collected, as on a first poll.) A cursor stored by an earlier version, which read
-only the first 5 MB of a longer log, can end in a cut line; it is still found, so
-the first poll after an upgrade collects only the lines after it. A poll resumes
+only the first 5 MB (5,242,880 characters) of a longer log, ends where that read
+ended, usually in a cut line. The first poll after an upgrade resumes exactly
+there: it collects that line whole (the earlier version stored only its start)
+and every line after it, and none that the earlier version collected. In a
+traceback that repeats, every copy has the cursor's lines, so the copy at the
+5 MB mark is told from the others by where the answer starts in the file (its
+`Content-Range`); if the log has grown more than 5 MB past the mark, the copies
+in the answer are all later ones, so all of it is collected and the warning is
+logged. The bytes before the answer are counted as characters to place the mark,
+which holds for an ASCII log; with any other character there, or a server that
+ignores the range, the poll resumes at the first copy in the answer instead,
+collecting the lines between that copy and the mark again, once. A poll resumes
 after the last record it saw, matched from that record's timestamped first line
 to its end, so a traceback that repeats is not collected again; this holds for a
 record of up to 2000 lines and about 256 KB (a longer one is matched by its last

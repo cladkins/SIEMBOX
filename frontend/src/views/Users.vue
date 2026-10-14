@@ -25,8 +25,29 @@
             {{ formatDate(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="Actions" width="200" align="center" fixed="right">
+        <el-table-column label="Sign-in" min-width="170">
           <template #default="{ row }">
+            <el-tooltip v-if="pausedMinutes(row) > 0" placement="top">
+              <template #content>
+                Paused after failed attempts:
+                <div v-for="scope in row.signin_pause_scopes" :key="scope">· {{ scopeWords(scope) }}</div>
+                Browsers that signed in before are not affected.
+              </template>
+              <el-tag type="warning" effect="light">Sign-in paused · {{ pausedMinutes(row) }} min</el-tag>
+            </el-tooltip>
+            <el-text v-else type="info" size="small">—</el-text>
+          </template>
+        </el-table-column>
+        <el-table-column label="Actions" width="270" align="center" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              v-if="pausedMinutes(row) > 0"
+              size="small"
+              type="warning"
+              @click="unlockUserConfirm(row)"
+            >
+              Unlock
+            </el-button>
             <el-button
               size="small"
               @click="editUser(row)"
@@ -167,12 +188,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue';
 import { api } from '@/services/api';
 import { useAuthStore } from '@/stores/auth';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
 import { Plus, Lock } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
+import { SCOPE_WORDS } from '@/utils/signIn';
 
 const authStore = useAuthStore();
 
@@ -262,6 +284,40 @@ async function fetchUsers() {
     ElMessage.error('Failed to fetch users');
   } finally {
     loading.value = false;
+  }
+}
+
+// Sign-in pauses (signin_paused_until from GET /users): minutes left, rounded up.
+const now = ref(Date.now());
+let clock: ReturnType<typeof setInterval> | null = null;
+
+function pausedMinutes(user: any): number {
+  if (!user.signin_paused_until) return 0;
+  const ms = new Date(user.signin_paused_until).getTime() - now.value;
+  return ms > 0 ? Math.ceil(ms / 60000) : 0;
+}
+
+function scopeWords(scope: string): string {
+  return SCOPE_WORDS[scope] || scope;
+}
+
+async function unlockUserConfirm(user: any) {
+  try {
+    await ElMessageBox.confirm(
+      `Clear every sign-in pause and failed-attempt counter for "${user.username}"? ` +
+        'Do this once you know the failed attempts were theirs, or after you have dealt with whoever made them.',
+      'Unlock sign-in',
+      { confirmButtonText: 'Unlock', cancelButtonText: 'Cancel', type: 'warning' }
+    );
+  } catch {
+    return;
+  }
+  try {
+    const { data } = await api.unlockUser(user.id);
+    ElMessage.success(`Sign-in unlocked for ${user.username} (${data.cleared} counter${data.cleared === 1 ? '' : 's'} cleared)`);
+    fetchUsers();
+  } catch {
+    // The API client has shown the error.
   }
 }
 
@@ -371,8 +427,15 @@ async function changePassword() {
       await api.updateUser(selectedUserId.value!, {
         password: passwordForm.newPassword,
       });
-      ElMessage.success('Password changed successfully');
       passwordDialogVisible.value = false;
+      if (selectedUserId.value === currentUserId.value) {
+        // A reset signs the account out everywhere, this session included.
+        ElMessage.success('Password changed. Sign in again.');
+        authStore.logout();
+        return;
+      }
+      ElMessage.success('Password changed. The user is signed out everywhere and signs in with the new password.');
+      fetchUsers();
     } catch (error: any) {
       const message = error.response?.data?.message || 'Failed to change password';
       ElMessage.error(message);
@@ -417,6 +480,11 @@ function formatDate(date: string): string {
 onMounted(() => {
   currentUserId.value = authStore.user?.id || null;
   fetchUsers();
+  clock = setInterval(() => (now.value = Date.now()), 30_000);
+});
+
+onBeforeUnmount(() => {
+  if (clock) clearInterval(clock);
 });
 </script>
 

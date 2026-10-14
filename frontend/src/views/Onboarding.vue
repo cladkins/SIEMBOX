@@ -44,6 +44,14 @@
           <template #description>
             <div class="step-body">
               <p>Change the default <code>admin</code> password and turn on two-factor authentication.</p>
+              <el-alert
+                v-if="pwError"
+                type="error"
+                :title="pwError"
+                :closable="false"
+                show-icon
+                class="pw-error"
+              />
               <el-form :model="pw" inline @submit.prevent>
                 <el-form-item>
                   <el-input v-model="pw.current" type="password" placeholder="Current password" show-password style="width: 180px" />
@@ -199,6 +207,7 @@ import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth';
 import DigitalRiskQuickSetup from '@/components/DigitalRiskQuickSetup.vue';
+import { errorBody, isUnavailable } from '@/utils/signIn';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -216,6 +225,7 @@ const identityRows = ref<MonitoredIdentity[] | null>(null);
 
 const pw = reactive({ current: '', next: '' });
 const pwSaving = ref(false);
+const pwError = ref('');
 const passwordChanged = ref(false);
 
 // Getting Started completion (server-side, install-wide); null until loaded.
@@ -335,16 +345,23 @@ async function refreshDigitalRisk() {
 }
 
 async function changePassword() {
-  if (!pw.current || pw.next.length < 8) return;
+  if (!pw.current || pw.next.length < 8 || pwSaving.value) return;
   pwSaving.value = true;
+  pwError.value = '';
   try {
     await api.changeOwnPassword(pw.current, pw.next);
     passwordChanged.value = true;
     pw.current = '';
     pw.next = '';
-    ElMessage.success('Password updated. Use it next time you log in.');
-  } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || 'Could not change password');
+    // A password change ends every session, this one included.
+    ElMessage.success('Password changed. Sign in again.');
+    authStore.logout();
+  } catch (error) {
+    // 400 (wrong current password, a new one that is too short or the same)
+    // and 429 (too many wrong current passwords) carry their own message.
+    pwError.value = isUnavailable(error)
+      ? 'Could not change the password right now. Please try again shortly.'
+      : errorBody(error).message || 'Could not change password';
   } finally {
     pwSaving.value = false;
   }
@@ -410,6 +427,10 @@ onMounted(() => {
   margin: 0 0 8px;
   color: var(--el-text-color-regular);
   font-size: 13px;
+}
+.pw-error {
+  max-width: 560px;
+  margin-bottom: 10px;
 }
 .finish-row {
   margin-top: 16px;

@@ -1231,36 +1231,95 @@ curl -X POST http://localhost:8421/api/settings/retention/cleanup \
 
 ## Authentication Problems
 
+### Issue: Locked out of SIEMBox
+
+**Symptoms:**
+- The login page says "Too many failed sign-in attempts ..." or "Sign-in to
+  this account from new browsers is paused ..." and the button counts down
+  ("Try again in 1:43").
+- `POST /api/auth/login` answers `429` with `code: "SIGNIN_PAUSED"` and a
+  `Retry-After` header.
+
+**Cause:** sign-in protection (DEPLOYMENT.md, "Sign-in protection"). Failed
+sign-ins pause further attempts: 5 for an account from one network, 20 from
+one network for any username, 20 for an account from new browsers on every
+network, 5 wrong MFA codes. A pause lasts 30 seconds and doubles with every
+further failure, up to 15, 30 or 60 minutes. The `reason` in the answer says
+which (`account_network`, `network`, `account`, `browser`, `mfa`). If you did
+not cause the failures yourself, someone else is guessing: check Alerts for
+`siembox-auth` alerts and Settings -> Sign-in protection for where they came
+from.
+
+**Ways back in, from the least to the most effort:**
+
+1. **Wait.** Every pause ends on its own; the message and the countdown say
+   when.
+2. **Use a browser you signed in with before.** It has its own counter, so a
+   network or account pause doesn't apply to it (it still needs the password
+   and MFA code).
+3. **Another admin unlocks you**: Users -> **Unlock** on the account, or
+   Settings -> **Sign-in protection** -> Clear (one row, a whole network, or
+   everything). Audited as `auth.unlock`.
+4. **The command line** (works without the web UI; changes take effect at
+   once, the counters live in Postgres; each command is audited with
+   `details.by = 'cli'`):
+   ```bash
+   docker exec siembox-backend node dist/scripts/auth-admin.js status admin
+   docker exec siembox-backend node dist/scripts/auth-admin.js unlock admin
+   docker exec siembox-backend node dist/scripts/auth-admin.js unlock --network 192.168.1.50
+   docker exec siembox-backend node dist/scripts/auth-admin.js unlock --all
+   # Forgot the password: sets a random 20-character one, printed once, and
+   # signs the account out everywhere
+   docker exec siembox-backend node dist/scripts/auth-admin.js reset-password admin
+   # Lost the authenticator app and the recovery codes
+   docker exec siembox-backend node dist/scripts/auth-admin.js disable-mfa admin
+   ```
+5. **SQL**, if the backend container isn't usable:
+   ```bash
+   docker exec siembox-postgres psql -U siembox -d siembox -c \
+     "DELETE FROM login_throttle WHERE user_id = (SELECT id FROM users WHERE username = 'admin');"
+   # every counter:
+   docker exec siembox-postgres psql -U siembox -d siembox -c "DELETE FROM login_throttle;"
+   ```
+6. **Turn sign-in protection off for a moment**: set `LOGIN_PROTECTION=off` in
+   `.env`, run `docker compose up -d` (a plain `restart` keeps the old
+   environment), sign in, then remove it and run `docker compose up -d` again.
+   Every start logs a warning while it is off.
+
+---
+
 ### Issue: Unable to Login
 
 **Symptoms:**
 - "Invalid username or password" error
+- "Sign-in is temporarily unavailable" (the backend or its database is down)
 - Login form doesn't respond
 
 **Diagnosis:**
 ```bash
 # Check if backend is running
-docker-compose ps backend
+docker compose ps backend
 
-# Check backend logs for auth errors
-docker-compose logs backend | grep -i "auth\|login"
+# Failed sign-ins, with the address and the reason (unknown_user,
+# bad_password, disabled, mfa_invalid, mfa_replay)
+docker compose logs backend | grep -E "Login failed|Sign-in paused"
 
 # Verify user exists
 docker exec siembox-postgres psql -U siembox -d siembox -c \
-  "SELECT id, username, email, enabled FROM users;"
+  "SELECT id, username, email, enabled, mfa_enabled FROM users;"
 ```
 
 **Solutions:**
 
 **Wrong Password:**
 ```bash
-# Reset admin password (requires database access)
-docker exec siembox-postgres psql -U siembox -d siembox
-
-# Generate new password hash (use bcrypt online tool or Node.js)
-# Then update:
-UPDATE users SET password_hash = '$2b$10$NEW_HASH_HERE' WHERE username = 'admin';
+# Set a new random password (printed once) and sign the account out everywhere
+docker exec siembox-backend node dist/scripts/auth-admin.js reset-password admin
 ```
+
+**"MFA code required" and no working code:** check the device's clock (codes
+are valid for about a minute either side, and each one works once), use a
+recovery code, or run `auth-admin.js disable-mfa <username>` (above).
 
 **Account Disabled:**
 ```bash
@@ -1673,8 +1732,9 @@ docker compose exec postgres psql -U siembox -d siembox \
   every user.
 - Users who aren't doing much get `429 Too Many Requests` together: they all
   share one budget of `API_RATE_LIMIT_MAX` (default 1000) requests per 15
-  minutes, and one budget of 100 failed sign-ins (each account still has its
-  own 10).
+  minutes, and one network for sign-in protection (20 failed sign-ins from
+  anyone pause sign-in from new browsers for everyone; browsers that signed in
+  before are not affected).
 - The backend log has hourly `Ignored X-Forwarded-For from <address> ...`
   warnings: a proxy in front of the web UI, or a caller of port 8421, whose
   `X-Forwarded-For` has been ignored for more than 45 s. Only proxies on
@@ -1753,19 +1813,18 @@ nginx worker use the fallback for 30 s, followed by the same
 `docker compose up -d`. Then check `GET /api/admin/client-address`:
 `proxySocket.state` should be `listening` and `you.via` `proxy-socket`.
 
-### Issue: `429 Too Many Requests` or "Too many failed sign-in attempts ..."
+### Issue: `429 Too Many Requests` ("Too many requests from your address")
 
-**Cause:** a rate limit (DEPLOYMENT.md and API.md, "Rate Limiting"): more than
+**Cause:** a request limit (API.md, "Rate Limiting"): more than
 `API_RATE_LIMIT_MAX` (default 1000) API requests in 15 minutes from one
-address; 10 failed sign-ins in 15 minutes for one account from one address
-("... for this account from your address"); or, after 100 failed sign-ins
-from one address, another try for an account that already failed from it in
-its own 15-minute window ("... from your address"). The message says how long
-to wait; the counters are kept in memory.
+address (`code: "RATE_LIMITED"`). The message says how long to wait; these
+counters are kept in memory. A sign-in pause ("Too many failed sign-in
+attempts ...", `code: "SIGNIN_PAUSED"`) is something else: see
+"Locked out of SIEMBox" under Authentication Problems.
 
 **Solution:**
 - Wait for the time in the message, or restart the backend to clear every
-  counter at once.
+  request counter at once.
 - If many people share one address (an office NAT, a reverse proxy SIEMBox
   doesn't trust), see "Everyone shows the same IP address" above, or raise
   `API_RATE_LIMIT_MAX`.

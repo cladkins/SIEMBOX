@@ -17,6 +17,8 @@ export interface User {
   mfa_secret?: string | null;
   /** bcrypt hashes of one-time recovery codes, or null. */
   mfa_recovery_codes?: string[] | null;
+  /** The last TOTP time step accepted (each code works once), or null. */
+  mfa_last_totp_step?: string | number | null;
 }
 
 export interface UserSafe {
@@ -156,7 +158,7 @@ export class UserModel {
     // Strip the password hash AND the MFA secret/recovery hashes; keep the
     // mfa_enabled flag so the UI can show MFA state.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars -- destructured only to omit them from safeUser
-    const { password_hash, mfa_secret, mfa_recovery_codes, ...safeUser } = user;
+    const { password_hash, mfa_secret, mfa_recovery_codes, mfa_last_totp_step, ...safeUser } = user;
     return safeUser as UserSafe;
   }
 
@@ -165,32 +167,57 @@ export class UserModel {
   /** Store the (encrypted) TOTP secret as a PENDING enrollment (not yet enabled). */
   static async setMfaPending(id: number, encryptedSecret: string): Promise<void> {
     await query(
-      `UPDATE users SET mfa_secret = $1, mfa_enabled = FALSE, mfa_recovery_codes = NULL, updated_at = NOW()
+      `UPDATE users SET mfa_secret = $1, mfa_enabled = FALSE, mfa_recovery_codes = NULL,
+              mfa_last_totp_step = NULL, updated_at = NOW()
        WHERE id = $2`,
       [encryptedSecret, id]
     );
   }
 
-  /** Activate MFA and store the recovery-code hashes. */
-  static async enableMfa(id: number, recoveryHashes: string[]): Promise<void> {
+  /**
+   * Activate MFA and store the recovery-code hashes. `totpStep` is the step
+   * of the code that proved the enrollment, so that code can't sign in too.
+   */
+  static async enableMfa(id: number, recoveryHashes: string[], totpStep: number): Promise<void> {
     await query(
-      `UPDATE users SET mfa_enabled = TRUE, mfa_recovery_codes = $1, updated_at = NOW() WHERE id = $2`,
-      [JSON.stringify(recoveryHashes), id]
+      `UPDATE users SET mfa_enabled = TRUE, mfa_recovery_codes = $1, mfa_last_totp_step = $3, updated_at = NOW()
+       WHERE id = $2`,
+      [JSON.stringify(recoveryHashes), id, totpStep]
     );
   }
 
-  /** Replace the stored recovery-code hashes (e.g. after consuming one). */
-  static async setRecoveryCodes(id: number, recoveryHashes: string[]): Promise<void> {
-    await query(`UPDATE users SET mfa_recovery_codes = $1, updated_at = NOW() WHERE id = $2`, [
-      JSON.stringify(recoveryHashes),
-      id,
-    ]);
+  /**
+   * Accept TOTP time step `step` for the user, once: true only if no step at
+   * or after it was accepted before. Two requests with the same code race on
+   * this one UPDATE, and only one wins.
+   */
+  static async claimTotpStep(id: number, step: number): Promise<boolean> {
+    const result = await query(
+      `UPDATE users SET mfa_last_totp_step = $2
+       WHERE id = $1 AND (mfa_last_totp_step IS NULL OR mfa_last_totp_step < $2)`,
+      [id, step]
+    );
+    return (result.rowCount || 0) > 0;
+  }
+
+  /**
+   * Remove one recovery-code hash, by value, in one statement: true only for
+   * the request that removed it, so a code can't be used twice at once.
+   */
+  static async consumeRecoveryCode(id: number, recoveryHash: string): Promise<boolean> {
+    const result = await query(
+      `UPDATE users SET mfa_recovery_codes = mfa_recovery_codes - $2::text, updated_at = NOW()
+       WHERE id = $1 AND mfa_recovery_codes ? $2::text`,
+      [id, recoveryHash]
+    );
+    return (result.rowCount || 0) > 0;
   }
 
   /** Fully disable MFA and clear all secrets/recovery codes. */
   static async disableMfa(id: number): Promise<void> {
     await query(
-      `UPDATE users SET mfa_enabled = FALSE, mfa_secret = NULL, mfa_recovery_codes = NULL, updated_at = NOW()
+      `UPDATE users SET mfa_enabled = FALSE, mfa_secret = NULL, mfa_recovery_codes = NULL,
+              mfa_last_totp_step = NULL, updated_at = NOW()
        WHERE id = $1`,
       [id]
     );

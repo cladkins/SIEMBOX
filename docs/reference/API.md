@@ -126,17 +126,17 @@ runs. These rejections are never logged with the body's contents.
 
 ## Rate Limiting
 
-Limits count per **client address** (IPv6 sign-in limits: per /64). Requests
-through the web UI's nginx (port 8420) carry the browser's real address. A
-direct caller on port 8421 is its TCP address: `X-Forwarded-For` and
-`X-Real-IP` from it are ignored unless it is listed in `TRUSTED_PROXIES` (see
-DEPLOYMENT.md, "Client addresses and reverse proxies"). Counters are kept in
-memory and reset when the backend restarts.
+Limits count per **client address**. Requests through the web UI's nginx
+(port 8420) carry the browser's real address. A direct caller on port 8421 is
+its TCP address: `X-Forwarded-For` and `X-Real-IP` from it are ignored unless it
+is listed in `TRUSTED_PROXIES` (see DEPLOYMENT.md, "Client addresses and reverse
+proxies"). These request counters are kept in memory and reset when the backend
+restarts. Failed sign-ins are counted separately, in the database: see
+[Sign-in Protection](#sign-in-protection).
 
 | Limit | Default (per 15 minutes) | Applies to | Headers |
 |-------|--------------------------|------------|---------|
 | General | 1000 requests (`API_RATE_LIMIT_MAX`) | Every `/api` request, except the two exemptions below | `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` |
-| Sign-in (interim) | 10 failed sign-ins per account, 100 per address across all accounts | `POST /api/auth/login`, per username (as typed, ignoring case and surrounding spaces) and address. Past 100 failures from an address, only accounts that already failed from it in their own current 15-minute window are refused, so people sharing an address don't lock each other out. Successful sign-ins, the "MFA code required" step and `5xx` answers are not counted | `RateLimit-*` (the per-account limit) |
 | EDR agents | 30000 requests (`EDR_AGENT_RATE_MAX`) | Agent-key routes, which skip the general limit when they carry `X-Agent-ID` and use the route's own method: `POST` heartbeat, `GET` (or `HEAD`) config and YARA, `POST` inventory, events and vulnerabilities. Any other method, and enrollment, is under the general limit. | `RateLimit-*` |
 | HTTP log push | 6000 requests (`SHIPPER_LOG_PUSH_MAX`) | `POST /api/shippers/logs`, which skips the general limit when it carries `X-Shipper-ID` (other methods on that path don't) | `RateLimit-*` |
 | Password check | 30 requests | `POST /api/exposure/password-check` | `RateLimit-*` |
@@ -162,13 +162,93 @@ does not decompress gets `400` (`"Invalid request body"`).
 
 ---
 
+## Sign-in Protection
+
+Failed password and MFA-code checks are counted in the database (table
+`login_throttle`), per **key**. A key's T-th failure in a row **pauses** it for
+30 seconds, and each further failure doubles the pause (1, 2, 4, 8, 16, 32
+minutes) up to the key's cap. A key's streak starts over 24 hours after its
+last failure. Nothing is ever locked for good.
+
+| Key | Counts | T (default) | Longest pause | A full sign-in |
+|-----|--------|-------------|---------------|----------------|
+| Account + network | Wrong passwords for one username from one network (IPv4 address or IPv6 /64), from browsers SIEMBox doesn't recognize | 5 (`LOGIN_MAX_FAILURES`) | 15 min | resets it |
+| Network | Wrong passwords from one network, for any username | 20 (`LOGIN_MAX_FAILURES_PER_ADDRESS`) | 30 min | refunds its own attempt only |
+| Account | Wrong passwords for one username from every network, from new browsers | 20 (`LOGIN_MAX_FAILURES_PER_ACCOUNT`; `0` turns it off) | 60 min | refunds its own attempt only |
+| Recognized browser | Wrong passwords and MFA codes from one browser that signed in before; it replaces every key above | 10 | 15 min | resets it |
+| MFA | Wrong MFA codes for one user (sign-in from new browsers, and `POST /me/mfa/disable`) | 5 | 60 min | resets it |
+| Current password | Wrong current passwords on `PUT /me/password` | 5 | 60 min | resets it |
+
+- **Checked before bcrypt.** Each attempt is charged to its keys before its
+  password or code is checked, under row locks, and refunded when it was right.
+  However many requests arrive at once, a key lets exactly T checks through;
+  attempts while it is paused are refused without a check (the right password
+  included).
+- **Recognized browsers.** Every successful sign-in returns a `browserToken`;
+  the web UI keeps it per username and sends it back. A sign-in with a valid
+  token for that username counts against that browser's key only, so failed
+  attempts from elsewhere never pause the owner's own browsers. The token never
+  skips the password or MFA. It is valid for 90 days from its last use, and is
+  forgotten after 20 failures in a row from it, on a password change or reset,
+  and with the user (at most 20 per user). Only its sha256 is stored.
+- **No enumeration.** An unknown username, a wrong password and a disabled
+  account with a wrong password get the same `401` after the same work (one
+  bcrypt compare, against a dummy hash for unknown usernames, which are counted
+  under the same kind of keys). `"Account is disabled"` and `mfaRequired` are
+  only answered after a correct password.
+- **Codes.** A 6-digit code is only tried as a TOTP code (each one works once:
+  a replay is refused), a 10-character code (`xxxxx-xxxxx`) only as a recovery
+  code (used up in one statement, so a code can't be used twice at once).
+- **Not counted:** a `5xx` (an attempt that couldn't be checked is refunded),
+  the "MFA code required" step, and anything with `LOGIN_PROTECTION=off`. If
+  the counter table is broken, sign-in goes ahead uncounted (fails open) and
+  says so in the log and on the Admin dashboard; if the database can't be
+  reached at all, sign-in answers `500`.
+
+A paused attempt gets `429` with a `Retry-After` header (whole seconds, rounded
+up) and:
+
+```json
+{
+  "status": "error",
+  "statusCode": 429,
+  "code": "SIGNIN_PAUSED",
+  "reason": "account_network",
+  "message": "Too many failed sign-in attempts for this account from your network. Try again in 2 minutes.",
+  "retryAfter": 102
+}
+```
+
+`reason` is one of:
+
+| `reason` | `message` |
+|----------|-----------|
+| `account_network` | Too many failed sign-in attempts for this account from your network. Try again in … |
+| `network` | Too many failed sign-in attempts from your network. Try again in … |
+| `account` | Sign-in to this account from new browsers is paused after many failed attempts. Try again in …, or use a browser you have signed in with before. |
+| `browser` | Too many failed sign-in attempts from this browser. Try again in … |
+| `mfa` | Too many incorrect codes. Try again in … (with `mfaRequired: true` on sign-in) |
+| `current_password` | Too many incorrect current passwords. Try again in … |
+
+On the failed attempt that starts a pause, the message begins with what was
+wrong: `"Incorrect username or password. "`, `"Incorrect code. "` or
+`"Current password is incorrect. "`. Several paused keys report the longest
+wait. Admins see and clear the counters on Settings -> Sign-in protection (or
+with [`POST /api/admin/sign-in-protection/clear`](#post-apiadminsign-in-protectionclear)
+and [`POST /api/users/:id/unlock`](#post-apiusersidunlock)); see
+TROUBLESHOOTING.md, "Locked out of SIEMBox", for the command line.
+
+---
+
 ## API Endpoints
 
 ## Authentication Endpoints
 
 ### POST /api/auth/login
 
-Authenticate user and receive JWT token.
+Sign in and receive a session token (valid for 24 hours). Counted by
+[Sign-in Protection](#sign-in-protection). Every answer is sent with
+`Cache-Control: no-store` (as is everything under `/api/auth`).
 
 **Authentication:** None required
 
@@ -176,32 +256,59 @@ Authenticate user and receive JWT token.
 ```json
 {
   "username": "admin",
-  "password": "changeme"
+  "password": "changeme",
+  "code": "123456",
+  "browserToken": "dGhlLWJyb3dzZXItdG9rZW4tZnJvbS1hLXNpZ24taW4"
 }
 ```
+
+- `username`: a string of 1 to 255 characters (exact, case-sensitive).
+- `password`: a string of 1 to 1024 characters.
+- `code` (optional): the MFA code (a 6-digit TOTP code or a recovery code),
+  for users with MFA. A string or number of at most 64 characters.
+- `browserToken` (optional): the `browserToken` an earlier successful sign-in
+  of this username returned to this browser. Anything not shaped like one is
+  ignored.
 
 **Response (200):**
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token": "4f9c2e...64 hex characters",
   "user": {
     "id": 1,
     "username": "admin",
     "email": "admin@example.com",
     "role": "admin",
     "enabled": true,
+    "mfa_enabled": false,
     "last_login": "2025-11-30T12:00:00Z"
   },
-  "expiresAt": "2025-12-01T12:00:00Z"
+  "expiresAt": "2025-12-01T12:00:00Z",
+  "browserToken": "dGhlLWJyb3dzZXItdG9rZW4tZnJvbS1hLXNpZ24taW4"
 }
 ```
 
-**Errors:**
-- `400` - Missing username or password
-- `401` - Invalid credentials
-- `403` - Account is disabled
+`browserToken` is the presented token when it was valid (it is not rotated),
+otherwise a new one. Keep it for this username and send it with later sign-ins.
+
+**Errors** (all in the `{status, statusCode, message}` envelope):
+- `400` - `"Username and password are required"`: a field is missing or isn't
+  what is described above (no database access, nothing counted)
+- `401` - `"Invalid username or password"`: wrong password, unknown username,
+  or a disabled account with a wrong password
+- `401` - `{ "message": "MFA code required", "mfaRequired": true }`: the
+  password is right and the user has MFA; send the same request with `code`
+  (not counted as a failure)
+- `401` - `{ "message": "Invalid MFA code", "mfaRequired": true }`: wrong or
+  already used code
+- `403` - `"Account is disabled"`, only after a correct password
 - `413` - Request body larger than 16 kB
-- `429` - Too many failed sign-ins: 10 per 15 minutes for this username from this address ("Too many failed sign-in attempts for this account from your address"), or, past 100 failures from this address across all usernames, this username already failed from it in its own 15-minute window ("Too many failed sign-in attempts from your address"; `retryAfter` is when that window or the address's ends, whichever is first, unless the username also reached its own 10). An IPv6 client's /64 counts as one address. Successful sign-ins and `5xx` answers don't count. JSON body with `code: "RATE_LIMITED"`, `message` and `retryAfter`, plus a `Retry-After` header; see [Rate Limiting](#rate-limiting)
+- `429` - `code: "SIGNIN_PAUSED"`, with `reason`, `message`, `retryAfter` and a
+  `Retry-After` header (and `mfaRequired: true` for `reason: "mfa"`, or a
+  paused recognized browser at the code step); see
+  [Sign-in Protection](#sign-in-protection). The general limit's `429`
+  (`code: "RATE_LIMITED"`) also applies.
+- `500` - The sign-in couldn't be checked (database unavailable); not counted
 
 ---
 
@@ -260,24 +367,80 @@ Change current user's password.
 **Response (200):**
 ```json
 {
-  "message": "Password updated successfully. Please login again."
+  "message": "Password updated. Sign in again with the new password."
 }
 ```
 
 **Notes:**
-- New password must be at least 8 characters
-- All user sessions are invalidated after password change
-- User must login again with new password
+- The new password must be 8 to 1024 characters and differ from the current one
+- On success every session of the user is revoked (this one included), their
+  recognized browsers are forgotten and their sign-in counters cleared: sign in
+  again with the new password
+- Wrong current passwords are counted ([Sign-in Protection](#sign-in-protection),
+  "Current password"): the 5th in a row pauses further attempts
 
 **Errors:**
-- `400` - Missing passwords or password too short
-- `401` - Current password is incorrect
+- `400` - Missing passwords, a new password that is too short, too long or
+  unchanged, or `"Current password is incorrect"` (a `400`, not a `401`: the
+  session stays valid)
+- `429` - `code: "SIGNIN_PAUSED"`, `reason: "current_password"`, with
+  `Retry-After`
+
+---
+
+### POST /api/auth/me/mfa/setup
+
+Start enrolling the caller in MFA (TOTP): stores a new secret as pending and
+returns it with the `otpauth://` URI for an authenticator app. MFA stays off
+until `/me/mfa/enable` confirms a code.
+
+**Authentication:** Required
+
+**Response (200):** `{ "secret": "JBSWY3DPEHPK3PXP...", "otpauthUrl": "otpauth://totp/SIEMBox:admin?..." }`
+
+**Errors:** `400` - `CREDENTIAL_ENCRYPTION_KEY` is not usable; `409` - MFA is already enabled
+
+---
+
+### POST /api/auth/me/mfa/enable
+
+Finish enrollment with a code from the authenticator app: enables MFA and
+returns 10 one-time recovery codes, shown only this once. That code can't then
+also be used to sign in. Not throttled (the code is checked against a secret
+the caller was just given).
+
+**Authentication:** Required
+
+**Request Body:** `{ "code": "123456" }`
+
+**Response (200):** `{ "enabled": true, "recoveryCodes": ["abcde-fghij", "..."] }`
+
+**Errors:** `400` - `code is required`, `Invalid code`, or no pending enrollment
+
+---
+
+### POST /api/auth/me/mfa/disable
+
+Turn the caller's MFA off with a current code (TOTP or recovery, used up as at
+sign-in). Wrong codes count against the same MFA key as sign-in.
+
+**Authentication:** Required
+
+**Request Body:** `{ "code": "123456" }`
+
+**Response (200):** `{ "enabled": false }` (also when MFA was already off)
+
+**Errors:**
+- `400` - `code is required` or `Invalid code` (never `401`: the session stays valid)
+- `429` - `code: "SIGNIN_PAUSED"`, `reason: "mfa"`, with `Retry-After`
 
 ---
 
 ### POST /api/auth/cleanup
 
-Cleanup expired sessions (admin only).
+Cleanup expired sessions (admin only). The hourly sign-in housekeeping job
+(`sign-in-housekeeping` in [`GET /api/admin/jobs`](#get-apiadminjobs)) does this
+too.
 
 **Authentication:** Required (Admin role; other roles get `403 Access denied. Required role: admin`)
 
@@ -1431,10 +1594,19 @@ Get all users (admin only).
     "role": "analyst",
     "enabled": true,
     "last_login": "2025-11-30T10:00:00Z",
-    "created_at": "2025-01-15T00:00:00Z"
+    "created_at": "2025-01-15T00:00:00Z",
+    "signin_paused_until": "2025-11-30T12:12:00.000Z",
+    "signin_pause_scopes": ["acct"]
   }
 ]
 ```
+
+`signin_paused_until` is when the account's last sign-in pause ends (`null`
+when none is running), and `signin_pause_scopes` which of its keys are paused:
+`aip` (from one network), `acct` (from new browsers on every network), `br` (a
+recognized browser), `mfa`, `pwc` (current password). See
+[Sign-in Protection](#sign-in-protection) and
+[`POST /api/users/:id/unlock`](#post-apiusersidunlock).
 
 **User Roles** (each includes the ones before it; see [Roles](#roles) and the
 [permission table](../guides/USER-MANAGEMENT.md#permission-table)):
@@ -1536,10 +1708,31 @@ Update user (admin only).
 }
 ```
 
+**Notes:**
+- Setting `password` is a reset: the user is signed out everywhere, their
+  recognized browsers are forgotten and their sign-in counters cleared.
+  Audited as `user.password_reset`; other changes as `user.updated`.
+
 **Errors:**
-- `400` - Password too short
+- `400` - Password not 8 to 1024 characters
 - `404` - User not found
 - `409` - Email or username already taken
+
+---
+
+### POST /api/users/:id/unlock
+
+Clear every sign-in counter of the account (admin only): its pauses from every
+network, from new browsers, of its recognized browsers, its MFA codes and its
+password changes end at once. A network-wide pause is not the account's:
+clear it with [`POST /api/admin/sign-in-protection/clear`](#post-apiadminsign-in-protectionclear).
+Audited as `auth.unlock`.
+
+**Authentication:** Required (Admin)
+
+**Response (200):** `{ "cleared": 2 }` (how many counters were removed)
+
+**Errors:** `404` - User not found
 
 ---
 
@@ -1558,7 +1751,7 @@ Delete user (admin only).
 
 **Notes:**
 - Cannot delete your own account
-- All user's sessions are invalidated
+- All user's sessions, recognized browsers and sign-in counters are removed
 
 **Errors:**
 - `400` - Attempting to delete own account
@@ -5629,6 +5822,80 @@ reverse proxies"). Sent with `Cache-Control: no-store`.
   carried `X-Forwarded-For`, or a request that came through a proxy that isn't
   trusted). A proxy on a public address is never listed for its own sake (any
   client could get its address counted), so check `you.address` through it.
+
+### GET /api/admin/sign-in-protection
+
+Everything Settings -> Sign-in protection shows (see
+[Sign-in Protection](#sign-in-protection)). Sent with `Cache-Control: no-store`.
+
+**Authentication:** Required (Admin)
+
+**Response (200):**
+```json
+{
+  "clientAddress": { "you": { "address": "192.168.1.50", "via": "proxy-socket", "signInKey": "192.168.1.50" }, "warnings": [] },
+  "counters": [
+    {
+      "key": "acct:9f86d0...",
+      "scope": "acct",
+      "scopeLabel": "Account from new browsers (all networks)",
+      "user_id": 1,
+      "username": "admin",
+      "network": null,
+      "failures": 21,
+      "pauses": 2,
+      "paused_until": "2025-11-30T12:12:00.000Z",
+      "paused_seconds": 95,
+      "first_failure_at": "2025-11-30T11:40:00.000Z",
+      "last_failure_at": "2025-11-30T12:11:00.000Z",
+      "last_user_agent": "python-requests/2.31",
+      "refusedSinceStart": 340
+    }
+  ],
+  "last24h": { "failures": 412, "unknownUsernames": 380 },
+  "refused": { "sinceStart": 1290, "byReason": { "account": 340, "network": 950 } },
+  "settings": {
+    "protection": true,
+    "alerts": true,
+    "failureAuditRetentionDays": 90,
+    "firstPauseSeconds": 30,
+    "streakResetHours": 24,
+    "browserRevokeFailures": 20,
+    "scopes": [{ "scope": "aip", "label": "Account from one network", "threshold": 5, "capSeconds": 900, "resetOnSuccess": true }]
+  }
+}
+```
+
+- `clientAddress`: the whole [`GET /api/admin/client-address`](#get-apiadminclient-address) report.
+- `counters`: keys that are paused or failed in the last 24 hours, paused ones
+  first (at most 500). `username` is `null` for a username that doesn't exist
+  (stored only as a hash) and for network keys. `refusedSinceStart` counts the
+  attempts turned away while paused since the backend started.
+- `last24h`: `auth.login.failure` audit rows in the last 24 hours, and how many
+  of them were for usernames that don't exist.
+- `settings`: in effect, from the environment (read-only).
+
+### POST /api/admin/sign-in-protection/clear
+
+Delete sign-in counters, which ends their pauses at once. Audited as `auth.unlock`.
+
+**Authentication:** Required (Admin)
+
+**Request Body:** exactly one of
+
+```json
+{ "key": "ip:203.0.113.7" }
+{ "userId": 2 }
+{ "network": "203.0.113.7" }
+{ "all": true }
+```
+
+`network` is an address (an IPv6 address stands for its /64), an IPv6 `/64`,
+or `unknown` (requests that had no address).
+
+**Response (200):** `{ "cleared": 3 }`
+
+**Errors:** `400` - not exactly one target, or an invalid key or network; `404` - no such user
 
 ---
 

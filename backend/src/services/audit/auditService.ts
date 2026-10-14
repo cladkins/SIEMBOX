@@ -6,13 +6,15 @@ import { batchedDelete } from '../../utils/batchDelete';
  * Audit log entry interface
  */
 export interface AuditLogEntry {
-  userId: number;
+  /** The acting user, or null (a failed sign-in for a username that doesn't exist, the auth-admin CLI). */
+  userId: number | null;
   action: string;
   resourceType?: string;
   resourceId?: number;
   /** Client address. Anything that is not an IP address is stored as NULL (see toInet). */
   ipAddress: string | null;
-  userAgent: string;
+  /** Stored truncated to 256 characters. */
+  userAgent: string | null;
   requestBody?: any;
   responseStatus: number;
   details?: any;
@@ -60,6 +62,9 @@ export function toInet(value: unknown): string | null {
   }
 }
 
+/** Longest user agent stored. */
+const MAX_USER_AGENT = 256;
+
 /**
  * Audit Service for logging security-sensitive operations
  *
@@ -87,7 +92,7 @@ export class AuditService {
           entry.resourceType || null,
           entry.resourceId || null,
           toInet(entry.ipAddress),
-          entry.userAgent,
+          entry.userAgent ? entry.userAgent.slice(0, MAX_USER_AGENT) : null,
           sanitizedBody ? JSON.stringify(sanitizedBody) : null,
           entry.responseStatus,
           entry.details ? JSON.stringify(entry.details) : null,
@@ -313,12 +318,16 @@ export class AuditService {
       'authorization',
       'passphrase',
     ];
+    // Redacted only under exactly this name: as a substring, 'code' would also
+    // hide statusCode, country_code, ... An MFA code (and browserToken, which
+    // 'token' covers) must never be stored.
+    const sensitiveExactFields = ['code', 'otp', 'mfa_code'];
 
     for (const [key, value] of Object.entries(obj)) {
       const lowerKey = key.toLowerCase();
 
       // Check if field should be redacted
-      if (sensitiveFields.some((field) => lowerKey.includes(field))) {
+      if (sensitiveFields.some((field) => lowerKey.includes(field)) || sensitiveExactFields.includes(lowerKey)) {
         redacted[key] = '[REDACTED]';
       } else if (typeof value === 'object' && value !== null) {
         // Recursively redact nested objects

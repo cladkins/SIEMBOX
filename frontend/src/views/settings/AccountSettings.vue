@@ -1,5 +1,50 @@
 <template>
   <div class="account-settings">
+    <el-card class="password-card">
+      <template #header>
+        <span>Password <HelpTip text="Changing your password signs you out everywhere, including here, and makes every browser you used start over as a new one for sign-in protection." /></span>
+      </template>
+      <el-alert
+        v-if="pwError"
+        type="error"
+        :title="pwError"
+        :closable="false"
+        show-icon
+        class="inline-error"
+      />
+      <el-form :model="pw" label-width="170px" class="password-form" @submit.prevent="changePassword">
+        <el-form-item label="Current password">
+          <el-input v-model="pw.current" type="password" show-password autocomplete="current-password" />
+        </el-form-item>
+        <el-form-item label="New password">
+          <el-input
+            v-model="pw.next"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            placeholder="At least 8 characters"
+          />
+        </el-form-item>
+        <el-form-item label="Confirm new password">
+          <el-input
+            v-model="pw.confirm"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            @keyup.enter="changePassword"
+          />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :loading="pwSaving" :disabled="!pwReady" @click="changePassword">
+            Change password
+          </el-button>
+          <el-text v-if="pw.confirm && pw.confirm !== pw.next" type="danger" size="small" class="pw-mismatch">
+            The new passwords don't match.
+          </el-text>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
     <el-card>
       <template #header>
         <span>Security — Two-Factor Authentication (MFA) <HelpTip text="Adds a time-based one-time code (TOTP) from an authenticator app to your login. Applies to your own account; each user enables MFA for themselves." /></span>
@@ -48,6 +93,14 @@
         </li>
         <li>
           Enter the 6-digit code it shows:
+          <el-alert
+            v-if="mfaEnableError"
+            type="error"
+            :title="mfaEnableError"
+            :closable="false"
+            show-icon
+            class="inline-error dialog-error"
+          />
           <el-input
             v-model="mfaCode"
             placeholder="123456"
@@ -86,6 +139,14 @@
     <!-- Disable MFA dialog -->
     <el-dialog v-model="mfaDisableVisible" title="Disable MFA" width="460px">
       <p class="mfa-note">Enter a current code (or a recovery code) to turn MFA off.</p>
+      <el-alert
+        v-if="mfaDisableError"
+        type="error"
+        :title="mfaDisableError"
+        :closable="false"
+        show-icon
+        class="inline-error"
+      />
       <el-input v-model="mfaDisableCode" placeholder="6-digit or recovery code" @keyup.enter="confirmMfaDisable" />
       <template #footer>
         <el-button @click="mfaDisableVisible = false">Cancel</el-button>
@@ -98,12 +159,48 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { api } from '@/services/api';
 import { ElMessage } from 'element-plus';
 import { Key } from '@element-plus/icons-vue';
 import HelpTip from '@/components/HelpTip.vue';
 import QrcodeVue from 'qrcode.vue';
+import { useAuthStore } from '@/stores/auth';
+import { errorBody, isUnavailable } from '@/utils/signIn';
+
+const authStore = useAuthStore();
+
+/** An error's message for an inline alert: the API's own words, or `fallback` when the server failed. */
+function inlineError(error: unknown, fallback: string): string {
+  return isUnavailable(error) ? `${fallback} Please try again shortly.` : errorBody(error).message || fallback;
+}
+
+// --- Password --------------------------------------------------------------
+const pw = reactive({ current: '', next: '', confirm: '' });
+const pwSaving = ref(false);
+const pwError = ref('');
+const pwReady = computed(() => !!pw.current && pw.next.length >= 8 && pw.next === pw.confirm);
+
+async function changePassword() {
+  if (!pwReady.value || pwSaving.value) return;
+  pwSaving.value = true;
+  pwError.value = '';
+  try {
+    await api.changeOwnPassword(pw.current, pw.next);
+    pw.current = '';
+    pw.next = '';
+    pw.confirm = '';
+    // A password change ends every session, this one included.
+    ElMessage.success('Password changed. Sign in again.');
+    authStore.logout();
+  } catch (error) {
+    // 400: wrong current password, or a new one that is too short or unchanged.
+    // 429: too many wrong current passwords; the message says how long to wait.
+    pwError.value = inlineError(error, 'Could not change the password.');
+  } finally {
+    pwSaving.value = false;
+  }
+}
 
 // --- MFA (two-factor) ------------------------------------------------------
 const mfaLoading = ref(false);
@@ -114,11 +211,13 @@ const mfaSecret = ref('');
 const mfaOtpauthUrl = ref('');
 const mfaCode = ref('');
 const mfaEnabling = ref(false);
+const mfaEnableError = ref('');
 const mfaRecoveryVisible = ref(false);
 const mfaRecoveryCodes = ref<string[]>([]);
 const mfaDisableVisible = ref(false);
 const mfaDisableCode = ref('');
 const mfaDisabling = ref(false);
+const mfaDisableError = ref('');
 
 async function loadMfaStatus() {
   mfaLoading.value = true;
@@ -139,6 +238,7 @@ async function startMfaSetup() {
     mfaSecret.value = data.secret;
     mfaOtpauthUrl.value = data.otpauthUrl;
     mfaCode.value = '';
+    mfaEnableError.value = '';
     mfaSetupVisible.value = true;
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || 'Could not start MFA setup');
@@ -148,8 +248,9 @@ async function startMfaSetup() {
 }
 
 async function confirmMfaEnable() {
-  if (!mfaCode.value.trim()) return;
+  if (!mfaCode.value.trim() || mfaEnabling.value) return;
   mfaEnabling.value = true;
+  mfaEnableError.value = '';
   try {
     const { data } = await api.mfaEnable(mfaCode.value.trim());
     mfaRecoveryCodes.value = data.recoveryCodes || [];
@@ -157,8 +258,8 @@ async function confirmMfaEnable() {
     mfaRecoveryVisible.value = true;
     mfaEnabled.value = true;
     ElMessage.success('MFA enabled');
-  } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || 'Invalid code');
+  } catch (error) {
+    mfaEnableError.value = inlineError(error, 'Could not enable MFA.');
   } finally {
     mfaEnabling.value = false;
   }
@@ -166,19 +267,23 @@ async function confirmMfaEnable() {
 
 function openMfaDisable() {
   mfaDisableCode.value = '';
+  mfaDisableError.value = '';
   mfaDisableVisible.value = true;
 }
 
 async function confirmMfaDisable() {
-  if (!mfaDisableCode.value.trim()) return;
+  if (!mfaDisableCode.value.trim() || mfaDisabling.value) return;
   mfaDisabling.value = true;
+  mfaDisableError.value = '';
   try {
     await api.mfaDisable(mfaDisableCode.value.trim());
     mfaEnabled.value = false;
     mfaDisableVisible.value = false;
     ElMessage.success('MFA disabled');
-  } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || 'Invalid code');
+  } catch (error) {
+    // 400 'Invalid code', or 429 after too many wrong codes (with the wait).
+    mfaDisableCode.value = '';
+    mfaDisableError.value = inlineError(error, 'Could not disable MFA.');
   } finally {
     mfaDisabling.value = false;
   }
@@ -208,6 +313,21 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.password-card {
+  margin-bottom: 20px;
+}
+.password-form {
+  max-width: 520px;
+}
+.pw-mismatch {
+  margin-left: 12px;
+}
+.inline-error {
+  margin-bottom: 12px;
+}
+.dialog-error {
+  margin-top: 6px;
+}
 .mfa-note {
   font-size: 13px;
   color: var(--el-text-color-secondary);

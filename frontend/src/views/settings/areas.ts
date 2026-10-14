@@ -1,6 +1,6 @@
 import type { Component } from 'vue';
 import type { RouteRecordSingleView } from 'vue-router';
-import { Bell, Clock, Download, Filter, MagicStick, Odometer, Search, User, View } from '@element-plus/icons-vue';
+import { Bell, Clock, Download, Filter, Lock, MagicStick, Odometer, Search, User, View } from '@element-plus/icons-vue';
 
 /**
  * One functional area of the Settings hub.
@@ -36,9 +36,19 @@ export const settingsAreas: SettingsArea[] = [
     path: 'account',
     title: 'Account',
     icon: User,
-    description: 'Sign-in security for your own account, such as two-factor authentication.',
+    description: 'Sign-in security for your own account: your password and two-factor authentication.',
     adminOnly: false,
     component: () => import('./AccountSettings.vue'),
+  },
+  {
+    key: 'sign-in-protection',
+    path: 'sign-in-protection',
+    title: 'Sign-in protection',
+    icon: Lock,
+    description:
+      'Paused sign-ins and failed-attempt counters (clear them here), how SIEMBox sees your address, and the limits in effect.',
+    adminOnly: true,
+    component: () => import('./SignInProtectionSettings.vue'),
   },
   {
     key: 'retention',

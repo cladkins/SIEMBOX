@@ -106,17 +106,25 @@ export default apiClient;
 // API service methods
 export const api = {
   // Auth. The Login view shows every failure itself (wrong password, MFA step,
-  // disabled account, too many attempts), so the generic toast is skipped.
-  login: (username: string, password: string, code?: string) =>
-    apiClient.post('/auth/login', { username, password, ...(code ? { code } : {}) }, { skipErrorToast: true }),
+  // disabled account, a sign-in pause), so the generic toast is skipped.
+  // browserToken is this browser's token for the username, if it signed in
+  // before (stores/auth.ts): it lets the browser sign in while the account or
+  // network is paused.
+  login: (username: string, password: string, code?: string, browserToken?: string) =>
+    apiClient.post(
+      '/auth/login',
+      { username, password, ...(code ? { code } : {}), ...(browserToken ? { browserToken } : {}) },
+      { skipErrorToast: true }
+    ),
   logout: () => apiClient.post('/auth/logout'),
   getProfile: () => apiClient.get('/auth/me'),
+  // A wrong current password is a 400 (429 once paused); the caller shows it.
   changeOwnPassword: (currentPassword: string, newPassword: string) =>
-    apiClient.put('/auth/me/password', { currentPassword, newPassword }),
+    apiClient.put('/auth/me/password', { currentPassword, newPassword }, { skipErrorToast: true }),
   // MFA (TOTP) — the logged-in user manages their own
   mfaSetup: () => apiClient.post('/auth/me/mfa/setup'),
-  mfaEnable: (code: string) => apiClient.post('/auth/me/mfa/enable', { code }),
-  mfaDisable: (code: string) => apiClient.post('/auth/me/mfa/disable', { code }),
+  mfaEnable: (code: string) => apiClient.post('/auth/me/mfa/enable', { code }, { skipErrorToast: true }),
+  mfaDisable: (code: string) => apiClient.post('/auth/me/mfa/disable', { code }, { skipErrorToast: true }),
 
   // Logs
   getRawLogs: (params?: any) => apiClient.get('/logs/raw', { params }),
@@ -240,6 +248,8 @@ export const api = {
   createUser: (data: any) => apiClient.post('/users', data),
   updateUser: (id: number, data: any) => apiClient.put(`/users/${id}`, data),
   deleteUser: (id: number) => apiClient.delete(`/users/${id}`),
+  // Clear every sign-in counter and pause of an account.
+  unlockUser: (id: number) => apiClient.post(`/users/${id}/unlock`),
 
   // Settings - Retention
   getRetentionSettings: () => apiClient.get('/settings/retention'),
@@ -354,6 +364,10 @@ export const api = {
     apiClient.get('/admin/errors', { params: { hours, limit, offset } }),
   getAdminJobs: (status?: string, limit?: number, offset?: number) =>
     apiClient.get('/admin/jobs', { params: { status, limit, offset } }),
+  // Settings -> Sign-in protection
+  getSignInProtection: () => apiClient.get('/admin/sign-in-protection'),
+  clearSignInCounters: (target: { key: string } | { userId: number } | { network: string } | { all: true }) =>
+    apiClient.post('/admin/sign-in-protection/clear', target),
 
   // SIEMBOX Endpoint agents
   getEndpoints: () => apiClient.get('/edr/agents'),

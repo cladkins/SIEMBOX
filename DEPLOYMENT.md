@@ -233,7 +233,11 @@ Review your deployment platform's logs for the specific error message. Common is
 1. Verify DEFAULT_ADMIN_PASSWORD is set correctly
 2. Wait for first-run initialization to complete
 3. Check database is running and initialized
-4. Review backend logs for authentication errors
+4. Review backend logs for authentication errors (`Login failed` lines carry
+   the reason and address)
+5. "Too many failed sign-in attempts" with a countdown: sign-in is paused after
+   failed attempts. Wait, use a browser you signed in with before, or unlock it
+   (see [Sign-in protection](#sign-in-protection))
 
 ### Need Help?
 
@@ -281,13 +285,29 @@ Other changes in that release:
   proxy on a public address (such as Cloudflare's) with
   `GET /api/admin/client-address` through it.
 - A `429` from the general limit is JSON with `Retry-After`.
-- Failed sign-ins are limited: 10 per account per address, and 100 per address
-  across all accounts, per 15 minutes. People who share an address (behind an
-  office NAT, or a reverse proxy SIEMBox doesn't trust) don't lock each other
-  out: past the 100, only accounts that already failed from that address in
-  their own 15-minute window are refused.
+- Failed sign-ins were limited by an interim in-memory limit (10 per account
+  per address, 100 per address per 15 minutes); the next release replaces it
+  with sign-in protection (below).
 - EDR agent enrollment counts toward the general limit, even with an
   `X-Agent-ID` header.
+
+**Updating to the release with sign-in protection** (migration
+`038_sign_in_protection.sql` runs on its own):
+- Failed sign-ins pause further attempts per account and network, per network
+  and per account, in Postgres, with recognized browsers exempt from the
+  account and network pauses (see [Sign-in protection](#sign-in-protection)).
+  The compose files pass the new `LOGIN_*` and `AUTH_*` settings from `.env`;
+  an older compose file runs with the defaults.
+- A paused sign-in is a `429` with `code: "SIGNIN_PAUSED"`, `reason`,
+  `retryAfter` and a `Retry-After` header.
+- `PUT /api/auth/me/password` answers a wrong current password with `400`
+  instead of `401`.
+- TOTP codes work once each: two sign-ins within the same 30 seconds need two
+  different codes.
+- The login page no longer shows "Default credentials: admin / changeme".
+- An admin's password reset signs the user out everywhere.
+- Recovery without the web UI: `docker exec siembox-backend node
+  dist/scripts/auth-admin.js ...` (unlock, reset-password, disable-mfa).
 
 ## Database Migrations and Seeding
 
@@ -687,7 +707,8 @@ client's address. It works that address out like this:
 Without any configuration a reverse proxy in front of SIEMBox makes every user
 look like the proxy, as before: one shared address that can't be forged. It
 shares the general limit of `API_RATE_LIMIT_MAX` (default 1000) requests per 15
-minutes and the sign-in limit's 100 failures per address, so set
+minutes, and one network for [sign-in protection](#sign-in-protection) (20
+failures from anyone pause sign-in from new browsers for everyone), so set
 `TRUSTED_PROXIES` (or raise the general limit). Until you do, a proxy on a
 private, carrier-grade NAT, loopback, ULA or link-local address gets an hourly
 `Ignored X-Forwarded-For from <proxy>` warning in the backend log, and
@@ -738,6 +759,103 @@ your own address.
    backend restart or a request that timed out, while nginx uses its TCP
    fallback. Each such window counts on its own once the socket has served
    requests again, so separate windows don't add up and are not reported.
+
+## Sign-in protection
+
+Failed sign-ins pause further attempts for a while; nothing is ever locked for
+good. The counters live in Postgres (table `login_throttle`), so a restart
+doesn't reset them and the recovery command line can clear them.
+
+| Counter | Counts | Pauses after | Longest pause |
+|---|---|---|---|
+| Account from one network | Wrong passwords for one username from one network (an IPv4 address or an IPv6 /64) | 5 (`LOGIN_MAX_FAILURES`) | 15 min |
+| Network | Wrong passwords from one network, any username | 20 (`LOGIN_MAX_FAILURES_PER_ADDRESS`) | 30 min |
+| Account from new browsers | Wrong passwords for one username from every network | 20 (`LOGIN_MAX_FAILURES_PER_ACCOUNT`, `0` = off) | 60 min |
+| Recognized browser | Wrong passwords and MFA codes from one browser that signed in before | 10 | 15 min |
+| MFA codes | Wrong codes for one user | 5 | 60 min |
+| Current password | Wrong current passwords when changing your own password | 5 | 60 min |
+
+The first pause is 30 seconds, and each further failure doubles it (1, 2, 4,
+8, 16, 32 minutes) up to the limit; a counter starts over 24 hours after its
+last failure. A successful sign-in clears the account's counter for that
+network (the network and account-wide counters only take back that one
+attempt, so a run of guesses can't be hidden between two good sign-ins).
+
+**Recognized browsers.** Every successful sign-in gives the browser a token
+(kept per username in the browser's local storage, only its hash on the
+server). A browser with one signs in through its own counter, so someone else
+guessing an account's password, from anywhere, pauses sign-in from new
+browsers only: the owner keeps signing in from the browsers they used before.
+Tokens last 90 days from their last use and are forgotten after 20 failures
+in a row, on a password change or reset, or with the user.
+
+**What the user sees.** The login page shows why and for how long, and its
+button counts down ("Try again in 1:43"). Usernames that don't exist get the
+same answers as real ones, so the login page doesn't reveal which accounts
+exist.
+
+**Settings** (in `.env`; both compose files pass them on; empty means the
+default):
+
+| Variable | Default | |
+|---|---|---|
+| `LOGIN_MAX_FAILURES` | `5` | Failures for an account from one network before it pauses |
+| `LOGIN_MAX_FAILURES_PER_ADDRESS` | `20` | Failures from one network, any username |
+| `LOGIN_MAX_FAILURES_PER_ACCOUNT` | `20` | Failures for an account from new browsers on every network; `0` turns this counter off |
+| `LOGIN_PROTECTION` | on | `off` stops all counting and pausing. Only to get back in after a lockout: every start logs a warning while it is set |
+| `AUTH_ALERTS` | on | `off` stops the sign-in alerts below |
+| `AUTH_FAILURE_AUDIT_RETENTION_DAYS` | `90` | How long `auth.login.failure` audit rows are kept; `0` keeps them |
+
+These depend on correct client addresses: behind a reverse proxy SIEMBox
+doesn't trust, everyone shares one network, so 20 failures from anyone pause
+sign-in from new browsers for everyone. Set `TRUSTED_PROXIES` (see [Client
+addresses and reverse proxies](#client-addresses-and-reverse-proxies)).
+
+**Alerts.** Attacks on sign-in raise alerts (source `siembox-auth`): a network
+paused (medium), an existing account paused (high; critical for an admin), MFA
+codes paused after correct passwords (critical), a new browser signing in
+during an attack (high), a success after 5 or more failures (medium), a
+recognized browser forgotten (high), and more than 100 failed checks in 10
+minutes (high). One per streak, at most 20 an hour. They reach your
+notification channels like any alert (Settings -> Notifications; the default
+minimum severity is high).
+
+**Seeing and clearing pauses.** Settings -> **Sign-in protection** (admins)
+lists every counter that is paused or failed in the last 24 hours, with the
+network and user agent, and clears one, a whole network or everything; it
+also shows how SIEMBox sees your own address. Users -> **Unlock** clears one
+account. Without the web UI:
+
+```bash
+docker exec siembox-backend node dist/scripts/auth-admin.js status
+docker exec siembox-backend node dist/scripts/auth-admin.js unlock <username>
+docker exec siembox-backend node dist/scripts/auth-admin.js unlock --network <ip>
+docker exec siembox-backend node dist/scripts/auth-admin.js unlock --all
+docker exec siembox-backend node dist/scripts/auth-admin.js reset-password <username>
+docker exec siembox-backend node dist/scripts/auth-admin.js disable-mfa <username>
+```
+
+See [TROUBLESHOOTING.md, "Locked out of SIEMBox"](docs/operations/TROUBLESHOOTING.md#issue-locked-out-of-siembox)
+for every way back in. An hourly job (`sign-in-housekeeping` on the Admin
+dashboard) removes idle counters, unused browsers, expired sessions and old
+failed sign-in audit rows.
+
+**Check it** (from another machine, against the published API port; the
+usernames don't need to exist):
+
+```bash
+# Different usernames with a forged X-Forwarded-For: 401 nineteen times, then
+# 429 from the 20th (the forged header is ignored, so they all count against
+# your one address)
+for i in $(seq 1 25); do
+  curl -s -o /dev/null -w '%{http_code} ' -X POST http://<host>:8421/api/auth/login \
+    -H 'Content-Type: application/json' -H "X-Forwarded-For: 198.51.100.$i" \
+    -d "{\"username\":\"probe-$i\",\"password\":\"x\"}"
+done; echo
+```
+
+Then clear it on Settings -> Sign-in protection ("Clear network") or with
+`auth-admin.js unlock --network <your IP>`.
 
 ## Monitoring
 

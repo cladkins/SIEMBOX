@@ -88,6 +88,7 @@ const INVENTORY: Row[] = [
   ['POST', '/api/users', ADMIN_ONLY],
   ['PUT', '/api/users/:id', ADMIN_ONLY],
   ['DELETE', '/api/users/:id', ADMIN_ONLY],
+  ['POST', '/api/users/:id/unlock', ADMIN_ONLY],
 
   // routes/logs.ts
   ['GET', '/api/logs/parse-coverage', ANY_ROLE],
@@ -247,6 +248,8 @@ const INVENTORY: Row[] = [
   ['GET', '/api/admin/errors', ADMIN_ONLY],
   ['GET', '/api/admin/jobs', ADMIN_ONLY],
   ['GET', '/api/admin/client-address', ADMIN_ONLY],
+  ['GET', '/api/admin/sign-in-protection', ADMIN_ONLY],
+  ['POST', '/api/admin/sign-in-protection/clear', ADMIN_ONLY],
 
   // routes/scheduledScans.ts: Scheduled Scans page
   ['GET', '/api/scheduled-scans', ANY_ROLE],
@@ -471,7 +474,8 @@ function mountPathOf(layer: Layer): string {
  * Middleware mounted with app.use() or router.use() that only passes a request
  * on, or ends it with an error, so it needs no INVENTORY line: the address
  * tracker, CORS, the body parsers and their {} default, the timeout logger, the
- * login check, the role gates (middleware/auth.ts authorize(), scanPermissions.ts
+ * Cache-Control header on /api/auth (routes/auth.ts noStore), the login check,
+ * the role gates (middleware/auth.ts authorize(), scanPermissions.ts
  * requireScanPermission()) and the closing 404 and error handlers. (Express 5
  * mounts no middleware of its own.) Rate limiters are recognized by their
  * resetKey(). walk() refuses any other non-route layer.
@@ -483,6 +487,7 @@ const PASS_THROUGH = new Set([
   'urlencodedParser',
   'emptyBodyDefault',
   'logClientTimeouts',
+  'noStore',
   'authenticate',
   'authorizeRoles',
   'requireRole',

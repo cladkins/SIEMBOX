@@ -1253,7 +1253,9 @@ from.
 **Ways back in, from the least to the most effort:**
 
 1. **Wait.** Every pause ends on its own; the message and the countdown say
-   when.
+   when. On a network someone else's failures keep pausing (`reason:
+   "network"`), the countdown can be followed by another one, but never for
+   more than 15 minutes after your own failed attempt from there.
 2. **Use a browser you signed in with before.** It has its own counter, so a
    network or account pause doesn't apply to it (it still needs the password
    and MFA code).
@@ -1262,7 +1264,11 @@ from.
    everything). Audited as `auth.unlock`.
 4. **The command line** (works without the web UI; changes take effect at
    once, the counters live in Postgres; each command is audited with
-   `details.by = 'cli'`):
+   `details.by = 'cli'`). `status <username>` lists the account's counters
+   and any paused network that holds it back because it failed from there in
+   the last 15 minutes (its own counters then read "not paused"); `unlock
+   <username>` lets it in from that network too, while the network stays
+   paused:
    ```bash
    docker exec siembox-backend node dist/scripts/auth-admin.js status admin
    docker exec siembox-backend node dist/scripts/auth-admin.js unlock admin
@@ -1739,10 +1745,12 @@ docker compose exec postgres psql -U siembox -d siembox \
   share one budget of `API_RATE_LIMIT_MAX` (default 1000) requests per 15
   minutes, and one network for sign-in protection: 20 failed sign-ins from
   anyone pause it, and while it is paused anyone who then gets a password wrong
-  from a new browser waits until that pause ends or 15 minutes have passed,
-  whichever comes first (users who haven't failed are still checked, browsers
-  that signed in before are not affected, and Users -> **Unlock** lets them in
-  at once).
+  from a new browser is refused while it stays paused, for at most 15 minutes
+  after that mistake (the countdown runs to the end of the current pause; if
+  more failures pause it again, their next attempt gets another countdown,
+  until the 15 minutes are up). Users who haven't failed are still checked,
+  browsers that signed in before are not affected, and Users -> **Unlock**
+  lets them in at once.
 - The backend log has hourly `Ignored X-Forwarded-For from <address> ...`
   warnings: a proxy in front of the web UI, or a caller of port 8421, whose
   `X-Forwarded-For` has been ignored for more than 45 s. Only proxies on

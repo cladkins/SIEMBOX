@@ -188,16 +188,21 @@ last failure. Nothing is ever locked for good.
   minutes after its account + network key last failed; any other attempt is
   checked (and charged) as usual. So one attacker behind a NAT or an outer
   proxy SIEMBox doesn't trust can't lock out everyone behind it: a user who
-  mistypes there is refused until the network's current pause ends or those 15
-  minutes pass, whichever comes first (`retryAfter` says which), however long
-  the attack goes on, and a sprayer gets at most one guess per username per
-  network every 15 minutes (the account + network key's own slowest rate; the
-  account key still bounds it across networks). The guesses a paused network
-  lets through are counted but never start, extend or lengthen its pause, so
-  there is one `auth.login.paused` row per pause; a wrong one is answered with
-  a 429 (`reason: "network"`) for the rest of that pause or 15 minutes,
-  whichever is shorter. The decision uses the account + network key alone, so
-  it is the same for usernames that exist and those that don't.
+  mistypes there is refused while the network stays paused, for at most 15
+  minutes after that failure, however long the attack goes on, and a sprayer
+  gets at most one guess per username per network every 15 minutes (the
+  account + network key's own slowest rate; the account key still bounds it
+  across networks). Such a user's `retryAfter` is the earliest they might get
+  in: the end of the network's current pause, or of their 15 minutes if that
+  comes first. It is not a promise: the first failure from that network after
+  its pause ends (an attacker's next guess) pauses it again, and their next
+  attempt is then refused again with a new `retryAfter`, until the 15 minutes
+  are up. The guesses a paused network lets through are counted but never
+  start, extend or lengthen its pause, so there is one `auth.login.paused` row
+  per pause; a wrong one is answered with a 429 (`reason: "network"`) for the
+  rest of that pause or 15 minutes, whichever is shorter. The decision uses the
+  account + network key alone, so it is the same for usernames that exist and
+  those that don't.
 - **Recognized browsers.** Every successful sign-in returns a `browserToken`;
   the web UI keeps it per username and sends it back. A sign-in with a valid
   token for that username counts against that browser's key only, so failed
@@ -1633,8 +1638,9 @@ when none is running), and `signin_pause_scopes` which of its keys are paused:
 `aip` (from one network), `acct` (from new browsers on every network), `br`
 (one of its recognized browsers, after that browser's own failures), `mfa`,
 and `ip` when a paused network holds them back because they failed from it in
-the last 15 minutes (until then, or until the network's pause ends if that is
-sooner; Unlock clears their own counters, which lets them in).
+the last 15 minutes (until then, or until the network's current pause ends if
+that is sooner; if it is paused again within those 15 minutes, they are listed
+again; Unlock clears their own counters, which lets them in).
 `password_change_paused_until` is when the pause on changing their own
 password (`pwc`, wrong current passwords) ends: it doesn't stop them signing
 in, so it is not a sign-in pause. See

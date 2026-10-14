@@ -20,11 +20,11 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="Created" width="180">
-          <template #default="{ row }">
-            {{ formatDate(row.created_at) }}
-          </template>
-        </el-table-column>
+        <!-- Sign-in comes before Created: when the table is wider than the
+             card (at 1280 px and below), the last scrolling column slides
+             under the fixed Actions column, and that must not be the one
+             saying how many minutes a pause has left. Actions is as wide as
+             Unlock, Edit and Delete on one line need, with some room. -->
         <el-table-column label="Sign-in" min-width="170">
           <template #default="{ row }">
             <div v-if="anyPause(row)" class="pause-tags">
@@ -46,7 +46,12 @@
             <el-text v-else type="info" size="small">—</el-text>
           </template>
         </el-table-column>
-        <el-table-column label="Actions" width="270" align="center" fixed="right">
+        <el-table-column label="Created" width="180">
+          <template #default="{ row }">
+            {{ formatDate(row.created_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="Actions" width="240" align="center" fixed="right">
           <template #default="{ row }">
             <el-button
               v-if="anyPause(row)"

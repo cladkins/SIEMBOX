@@ -8,6 +8,8 @@
  *
  * Commands:
  *   status [username]          paused and recently failing sign-in counters
+ *                              (for a user, also the paused networks holding
+ *                              them back)
  *   unlock <username>          clear every counter of an account
  *   unlock --network <ip>      clear every counter of a network: an address
  *                              (IPv6: its /64), an IPv6 /64 as status prints
@@ -25,7 +27,7 @@
 import './cliLogLevel';
 import crypto from 'node:crypto';
 import { UserModel, type User } from '../models/User';
-import { LoginThrottleModel, type ThrottleRow } from '../models/LoginThrottle';
+import { LoginThrottleModel, type NetworkHold, type ThrottleRow } from '../models/LoginThrottle';
 import { auditAuth } from '../services/auth/authEvents';
 import { revokeAccountAccess } from '../services/auth/signInService';
 import { countBrowsers } from '../services/auth/recognizedBrowsers';
@@ -46,6 +48,7 @@ const defaultIo: Io = {
 const USAGE = [
   'Usage: auth-admin <command>',
   '  status [username]          paused and recently failing sign-in counters',
+  '                             (for a user, also the paused networks holding them back)',
   '  unlock <username>          clear every sign-in counter of an account',
   '  unlock --network <net>     clear every counter of a network: an IP address, an IPv6 /64',
   "                             as status prints it, or 'unknown' (requests without an address)",
@@ -70,6 +73,19 @@ function describeRow(row: ThrottleRow): string {
   return `${label.padEnd(42)} ${account.padEnd(20)} ${(row.network ?? '-').padEnd(24)} failures ${String(row.failures).padStart(3)}  ${pause}`;
 }
 
+/**
+ * A paused network holding the user back: its row, then why their own
+ * counters read "not paused" while they are refused (signInPolicy.ts
+ * refusingPauses), and what lets them in.
+ */
+function describeHold(hold: NetworkHold, username: string): string[] {
+  return [
+    describeRow(hold),
+    `  holds ${username} back for ${hold.held_seconds}s more (they failed from this network ` +
+      `${hold.since_failure_seconds}s ago); 'unlock ${username}' lets them in, the network stays paused`,
+  ];
+}
+
 async function findUser(username: string | undefined, io: Io): Promise<User | null> {
   if (!username) {
     io.err(USAGE);
@@ -88,6 +104,9 @@ export async function main(argv: string[], io: Io = defaultIo): Promise<number> 
       const user = args[0] ? await findUser(args[0], io) : null;
       if (args[0] && !user) return 1;
       const rows = await LoginThrottleModel.listActive({ limit: 500, userId: user?.id });
+      // A network row has no user, so listActive({ userId }) leaves out the
+      // paused networks that refuse this user (as the Users page lists them).
+      const holds = user ? await LoginThrottleModel.networkHoldsForUser(user.id) : [];
       const settings = signInSettings();
       io.out(`Sign-in protection: ${settings.protection ? 'on' : 'OFF (LOGIN_PROTECTION=off)'}`);
       if (user) {
@@ -96,10 +115,11 @@ export async function main(argv: string[], io: Io = defaultIo): Promise<number> 
             `${await countBrowsers(user.id)} recognized browser(s)`
         );
       }
-      if (rows.length === 0) {
+      if (rows.length === 0 && holds.length === 0) {
         io.out('No paused or recently failing sign-in counters.');
       } else {
         for (const row of rows) io.out(describeRow(row));
+        for (const hold of holds) for (const line of describeHold(hold, user?.username ?? '')) io.out(line);
       }
       return 0;
     }

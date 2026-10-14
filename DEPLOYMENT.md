@@ -811,12 +811,14 @@ These depend on correct client addresses: behind a reverse proxy SIEMBox
 doesn't trust, everyone shares one network. A paused network only holds back
 usernames that failed from it in the last 15 minutes, so 20 failures from one
 person don't lock everyone out: a user who hasn't mistyped from that network
-is still checked, and one who does waits until the network's current pause
-ends or 15 minutes have passed, whichever comes first, however long an
-attacker keeps the network paused (a browser that signed in before isn't held
-back at all, and an admin's Unlock on the Users page lets them in at once).
-The guesses a paused network lets through are counted, but don't extend its
-pause. Set
+is still checked, and one who does is refused while the network stays paused,
+for at most 15 minutes after that mistake, however long an attacker keeps the
+network paused. The login page counts down to the end of the network's current
+pause; if an attacker pauses it again by then, the next attempt gets another
+countdown, never past those 15 minutes. A browser that signed in before isn't
+held back at all, and an admin's Unlock on the Users page lets them in at
+once. The guesses a paused network lets through are counted, but don't extend
+its pause. Set
 `TRUSTED_PROXIES` (see [Client addresses and reverse
 proxies](#client-addresses-and-reverse-proxies)).
 

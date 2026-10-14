@@ -13,7 +13,9 @@
  * - a paused network still checks usernames that haven't failed from it in
  *   the last 15 minutes (one guess each in that time, however long the
  *   network stays paused; a password change or Unlock clears the user's own,
- *   and the Users page lists who it holds back); the guesses it lets through
+ *   and the Users page lists who it holds back); a held user's retryAfter is
+ *   the earliest they might get in, and a network paused again refuses them
+ *   again, never past those 15 minutes; the guesses it lets through
  *   neither restart, extend nor re-audit its pause; and a right password that
  *   would have been its 20th failure leaves it unpaused;
  * - the counters themselves: a refund racing a wrong attempt keeps that
@@ -35,7 +37,8 @@
  * - the admin API (viewers get 403; clear by user, network and all; unlock),
  *   audit rows (addresses, unknown usernames as a hash, one row per pause, none
  *   per refusal), alerts (one per streak, one notification), housekeeping, the
- *   recovery CLI (an IPv6 /64 as status prints it, and 'unknown'), failing open
+ *   recovery CLI (an IPv6 /64 as status prints it, and 'unknown'; status
+ *   <user> shows a paused network that holds them back), failing open
  *   when the throttle can't be reached,
  *   LOGIN_PROTECTION=off, and 5xx answers that are never counted.
  *
@@ -893,6 +896,43 @@ test('a paused network holds back a username for 15 minutes after it failed from
   assert.equal(held.headers['retry-after'], String(held.body.retryAfter));
 });
 
+test('a held user is told the earliest they might get in; a network paused again refuses them again, never past 15 minutes after their failure', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const dave = await createUser('rearm-dave');
+  const xff = '203.0.113.184';
+  const spray = (name: string) => login({ username: probe(`rearm-${name}`), password: 'guess' }, { xff });
+  for (let i = 1; i <= 20; i++) await spray(String(i));
+  // Dave mistypes once while the network is paused: told when its current pause ends.
+  const typo = await login({ username: dave.username, password: 'typo' }, { xff });
+  assert.equal(typo.status, 429);
+  assert.equal(typo.body.reason, 'network');
+  assert.ok(typo.body.retryAfter <= 30, `the network's current pause (${typo.body.retryAfter})`);
+
+  // As if 10 minutes had passed with the sprayer still at it: the pause ran
+  // out, and its next guess starts the next one (30 minutes at this streak).
+  await pool.query(`UPDATE login_throttle SET last_failure_at = NOW() - INTERVAL '10 minutes' WHERE key = $1`, [
+    aipKey(dave.username, xff),
+  ]);
+  await pool.query(`UPDATE login_throttle SET failures = 30, paused_until = NOW() - INTERVAL '1 second' WHERE key = $1`, [`ip:${xff}`]);
+  assert.equal((await spray('next')).status, 429);
+  const network = await row(`ip:${xff}`);
+  assert.equal(network.paused, true, 'paused again');
+
+  // So when his countdown ends, his right password is refused again, for
+  // what is left of his 15 minutes (about 5), not for the new 30-minute pause.
+  const again = await login({ username: dave.username, password: PASSWORD }, { xff });
+  assert.equal(again.status, 429);
+  assert.equal(again.body.reason, 'network');
+  assert.ok(again.body.retryAfter > 4 * 60 && again.body.retryAfter <= 5 * 60, `retryAfter ${again.body.retryAfter}`);
+
+  // Once his failure is 15 minutes old he gets in, though the network is still paused.
+  await pool.query(`UPDATE login_throttle SET last_failure_at = NOW() - INTERVAL '15 minutes 1 second' WHERE key = $1`, [
+    aipKey(dave.username, xff),
+  ]);
+  assert.equal((await login({ username: dave.username, password: PASSWORD }, { xff })).status, 200);
+  assert.equal((await row(`ip:${xff}`)).paused, true);
+});
+
 test('guesses let through a paused network neither restart, extend nor re-audit its pause', async (t) => {
   if (!dbReady) return t.skip(SKIP);
   const xff = '203.0.113.182';
@@ -1217,17 +1257,20 @@ test('housekeeping removes idle counters, unused browsers, expired sessions and 
   await pool.query(`DELETE FROM audit_logs WHERE user_id = $1`, [user.id]);
 });
 
+/** Run the recovery CLI in this process, collecting what it prints. */
+async function runCli(...argv: string[]) {
+  const { main } = await import('../scripts/auth-admin');
+  const out: string[] = [];
+  const err: string[] = [];
+  const code = await main(argv, { out: (l) => out.push(l), err: (l) => err.push(l) });
+  return { code, out: out.join('\n'), err: err.join('\n') };
+}
+
 test('the recovery CLI: status, unlock (user, network, all), reset-password and disable-mfa, each audited as the CLI', async (t) => {
   if (!dbReady) return t.skip(SKIP);
   const user = await createUser('cli');
   await enrollMfa(user.id);
-  const { main } = await import('../scripts/auth-admin');
-  const run = async (...argv: string[]) => {
-    const out: string[] = [];
-    const err: string[] = [];
-    const code = await main(argv, { out: (l) => out.push(l), err: (l) => err.push(l) });
-    return { code, out: out.join('\n'), err: err.join('\n') };
-  };
+  const run = runCli;
   const pause = async () => {
     for (let i = 0; i < 5; i++) await login({ username: user.username, password: 'nope' }, { xff: '203.0.113.90' });
   };
@@ -1275,4 +1318,40 @@ test('the recovery CLI: status, unlock (user, network, all), reset-password and 
 
   assert.equal((await run('unlock', 'no-such-user')).code, 1);
   assert.equal((await run('bogus')).code, 1);
+});
+
+test('the recovery CLI: status <user> shows a paused network that holds them back, as the Users page does', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const carol = await createUser('cli-held');
+  const bob = await createUser('cli-free');
+  const xff = '203.0.113.92';
+  for (let i = 1; i <= 20; i++) await login({ username: probe(`cli-held-${i}`), password: 'guess' }, { xff });
+  assert.equal((await login({ username: carol.username, password: 'typo' }, { xff })).status, 429);
+  const refused = await login({ username: carol.username, password: PASSWORD }, { xff });
+  assert.equal(refused.status, 429);
+  assert.equal(refused.body.reason, 'network');
+
+  const status = await runCli('status', carol.username);
+  assert.equal(status.code, 0, status.err);
+  // Her own counters aren't paused: the network's row says why she is refused.
+  assert.match(status.out, /Account from one network\s+sip-\S+-cli-held\s+203\.0\.113\.92\s+failures\s+1\s+not paused/);
+  assert.match(status.out, /Network \(any username\)\s+-\s+203\.0\.113\.92\s+failures\s+21\s+paused \d+s/);
+  const held = /holds (\S+) back for (\d+)s more \(they failed from this network (\d+)s ago\); 'unlock (\S+)' lets them in/.exec(status.out);
+  assert.ok(held, status.out);
+  assert.equal(held[1], carol.username);
+  assert.equal(held[4], carol.username);
+  assert.ok(Number(held[2]) >= 1 && Number(held[2]) <= refused.body.retryAfter + 1, `${held[2]} s, the answer said ${refused.body.retryAfter} s`);
+  assert.ok(Number(held[3]) <= 5);
+  const { LoginThrottleModel } = await import('../models/LoginThrottle');
+  const listed = await LoginThrottleModel.pausedSummaryForUsers();
+  assert.deepEqual(listed.get(carol.id)?.scopes, ['ip'], 'the Users page lists the same hold');
+
+  // Someone who hasn't failed from there isn't held back, and isn't shown it.
+  assert.doesNotMatch((await runCli('status', bob.username)).out, /Network \(any username\)|holds /);
+
+  // Unlock lets her in, and status shows the network no longer holds her.
+  assert.equal((await runCli('unlock', carol.username)).code, 0);
+  assert.doesNotMatch((await runCli('status', carol.username)).out, /holds /);
+  assert.equal((await login({ username: carol.username, password: PASSWORD }, { xff })).status, 200);
+  assert.equal((await row(`ip:${xff}`)).paused, true, 'the network stays paused');
 });

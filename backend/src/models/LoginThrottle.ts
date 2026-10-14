@@ -132,6 +132,30 @@ export interface ThrottleRow {
   last_user_agent: string | null;
 }
 
+/** A paused network holding a user back (the CLI's status <user>). */
+export interface NetworkHold extends ThrottleRow {
+  /** Seconds it still refuses the user: what is left of the hold or of the network's pause, whichever ends first. */
+  held_seconds: number;
+  /** Seconds since the user last failed from that network. */
+  since_failure_seconds: number;
+}
+
+/**
+ * Who a paused network holds back (signInPolicy.ts refusingPauses): one row
+ * per account+network key (a) linked to a user, with a failure in the last
+ * NETWORK_HOLD_SECONDS ($1), whose network key (n) is paused. held_until is
+ * when the network stops refusing that user: the end of the hold or of the
+ * network's current pause, whichever comes first. The Users page and the
+ * CLI's status both read it, so they agree.
+ */
+const NETWORK_HOLDS_SQL = `
+  SELECT a.user_id, n.key AS network_key, a.last_failure_at,
+         LEAST(n.paused_until, a.last_failure_at + $1 * INTERVAL '1 second') AS held_until
+    FROM login_throttle a
+    JOIN login_throttle n ON n.scope = 'ip' AND n.network IS NOT DISTINCT FROM a.network AND n.paused_until > NOW()
+   WHERE a.scope = 'aip' AND a.user_id IS NOT NULL AND a.failures > 0
+     AND a.last_failure_at > NOW() - $1 * INTERVAL '1 second'`;
+
 interface LockedRow {
   key: string;
   scope: SignInScope;
@@ -461,11 +485,7 @@ export const LoginThrottleModel = {
            FROM login_throttle
           WHERE user_id IS NOT NULL AND paused_until > NOW()
          UNION ALL
-         SELECT a.user_id, 'ip' AS scope, LEAST(n.paused_until, a.last_failure_at + $1 * INTERVAL '1 second') AS paused_until
-           FROM login_throttle a
-           JOIN login_throttle n ON n.scope = 'ip' AND n.network IS NOT DISTINCT FROM a.network AND n.paused_until > NOW()
-          WHERE a.scope = 'aip' AND a.user_id IS NOT NULL AND a.failures > 0
-            AND a.last_failure_at > NOW() - $1 * INTERVAL '1 second'
+         SELECT user_id, 'ip' AS scope, held_until AS paused_until FROM (${NETWORK_HOLDS_SQL}) holds
        )
        SELECT user_id,
               MAX(paused_until) FILTER (WHERE scope <> 'pwc') AS signin_until,
@@ -486,6 +506,34 @@ export const LoginThrottleModel = {
         },
       ])
     );
+  },
+
+  /**
+   * The paused networks holding one user back (the rule the Users page
+   * lists them by): each network key's row, with how long it still refuses
+   * them and how long ago they failed from there. Their own account+network
+   * key isn't paused then, so listActive alone shows nothing paused.
+   */
+  async networkHoldsForUser(userId: number): Promise<NetworkHold[]> {
+    const res = await query(
+      `SELECT n.key, n.scope, n.user_id, NULL::text AS username,
+              abbrev(n.network) AS network,
+              n.failures, n.pauses,
+              n.paused_until, GREATEST(CEIL(EXTRACT(EPOCH FROM (n.paused_until - NOW()))), 0)::int AS paused_seconds,
+              n.first_failure_at, n.last_failure_at, n.last_user_agent,
+              GREATEST(CEIL(EXTRACT(EPOCH FROM (h.held_until - NOW()))), 0)::int AS held_seconds,
+              GREATEST(FLOOR(EXTRACT(EPOCH FROM (NOW() - h.last_failure_at))), 0)::int AS since_failure_seconds
+         FROM (${NETWORK_HOLDS_SQL} AND a.user_id = $2) h
+         JOIN login_throttle n ON n.key = h.network_key
+        ORDER BY held_seconds DESC, n.key`,
+      [NETWORK_HOLD_SECONDS, userId]
+    );
+    return res.rows.map((row) => ({
+      ...row,
+      paused_seconds: Number(row.paused_seconds ?? 0),
+      held_seconds: Number(row.held_seconds ?? 0),
+      since_failure_seconds: Number(row.since_failure_seconds ?? 0),
+    }));
   },
 
   /** Delete the rows a condition selects, locking them in key order first. Returns how many went. */

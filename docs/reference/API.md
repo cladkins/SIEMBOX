@@ -3252,13 +3252,33 @@ began inside that record), and a warning is logged to the error log: the lines
 before them were not collected, or, when the answer may have begun inside the
 last record collected, may not have been. (When the whole file was read and lacks
 those lines, it is a new file, started by a restart: its last 200 lines are
-collected, as on a first poll.) A cursor stored by an earlier version, which read
-only the first 5 MB of a longer log, can end in a cut line; it is still found, so
-the first poll after an upgrade collects only the lines after it. A poll resumes
-after the last record it saw, matched from that record's timestamped first line
-to its end, so a traceback that repeats is not collected again; this holds for a
-record of up to 2000 lines and about 256 KB (a longer one is matched by its last
-100 lines only). A last
+collected, as on a first poll.) A cursor stored by an earlier version, which
+read only the first 5 MB (5,242,880 characters) of a longer log, ends where that
+read ended, usually in a cut line. The first poll after an upgrade resumes
+there: it collects that line whole (the earlier version stored only its start)
+and every line after it. A cursor that holds a record's timestamped first line
+is found wherever it is. In a traceback that repeats, every copy has the
+cursor's lines, so the copy at the 5 MB mark is told from the others by where
+the answer starts in the file (its `Content-Range`); if the log has grown more
+than 5 MB past the mark, the copies in the answer are all later ones, so all of
+it is collected and the warning is logged. This is exact for a log that is ASCII
+up to the mark. The earlier version decoded the log in the pieces the network
+delivered, so a character outside ASCII that fell across two of them counted as
+two or three, and its mark fell up to that much earlier: with such characters in
+the answer before the mark, the poll resumes at the earliest copy of the cut
+line within that distance of the mark (a character for each UTF-8 byte beyond a
+character's first), collecting the lines from there to the mark again, once. The
+bytes before the answer are counted as characters to place the mark, so a
+character outside ASCII there puts the real mark later than counted. When the
+mark can't be placed (such a character before the answer, a split one when the
+mark fell at a line's end, or a server that ignores the range), the poll resumes
+at the first copy in the answer instead, or, when the mark seems to be before
+the answer, collects all of it and logs the warning; lines from there to the
+mark are collected again, once. None of these skips a line of the answer. A poll
+resumes after the last record it saw, matched from that record's timestamped
+first line to its end, so a traceback that repeats is not collected again; this
+holds for a record of up to 2000 lines and about 256 KB (a longer one is matched
+by its last 100 lines only). A last
 line without its newline, which Home Assistant is still writing, is left for the
 next poll. The Supervisor is asked for 500 new journal entries plus the lines the
 poll resumes after (at least three: `Range: entries=:-502:503` after short

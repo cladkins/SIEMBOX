@@ -63,6 +63,15 @@ export const SUPERVISOR_LOG_ENTRIES_WIDE = 5000;
 export const LOG_MAX_BYTES = 5 * 1024 * 1024;
 /** While on the Supervisor fallback, try /api/error_log again this often. */
 export const ERROR_LOG_REPROBE_MS = 6 * 60 * 60 * 1000;
+/**
+ * Where the reader before this adapter read the end of the file stopped in a
+ * longer log: it fetched the whole file and kept its first 5,242,880
+ * characters (httpFetch's default maxBytes, applied to the decoded text), then
+ * stored the last three lines of those as the cursor, the last one cut at this
+ * mark unless it fell at a line's end, and found nothing new after it on every
+ * later poll. See oldReaderStop.
+ */
+export const LEGACY_CUT_CHARS = 5 * 1024 * 1024;
 
 const TAIL_WINDOW_LINES = 3;
 /**
@@ -140,11 +149,7 @@ export function windowReadBytes(prevTail: string | null): number {
 
 /**
  * The index just after the first place `window` appears in `lines` as
- * consecutive whole lines, or -1. Failing that, a window whose last line is
- * only the start of the line in `lines` is accepted: a cursor stored before
- * this adapter read the end of the file can end in a cut line (the old reader
- * kept the first 5 MB of a longer log, and took a last line still being
- * written). Cursors written now hold whole lines only (logText).
+ * consecutive whole lines, or -1.
  */
 function indexAfterWindow(lines: string[], window: string[]): number {
   if (window.length === 0) return -1;
@@ -153,11 +158,142 @@ function indexAfterWindow(lines: string[], window: string[]): number {
     while (j < window.length && lines[i + j] === window[j]) j++;
     if (j === window.length) return i + window.length;
   }
+  return -1;
+}
+
+/**
+ * True for a window of at most TAIL_WINDOW_LINES lines, none of them a
+ * record's timestamped header: the shape of a cursor stored inside a traceback
+ * by the reader before this one (cursors written now start at the record's
+ * header, see tailWindow), and one that every copy of a traceback logged again
+ * and again matches.
+ */
+function bareShortWindow(window: string[]): boolean {
+  return window.length <= TAIL_WINDOW_LINES && !window.some((line) => LINE_TIMESTAMP_RE.test(line));
+}
+
+/**
+ * Where a log file answer's text (logText) starts in the file, for
+ * oldReaderStop (see logTextStart).
+ */
+export interface LogTextStart {
+  /** The characters before the text, counted as the reader before this one counted them. */
+  at: number;
+  /** How many more of them that reader may have counted in the cut line logText drops (see oldReaderStop). */
+  slack: number;
+}
+
+/**
+ * Where each of splitLines(text)'s lines starts and ends (before its line
+ * ending), up to the first line that starts after `until`.
+ */
+function lineSpans(text: string, until: number): { starts: number[]; ends: number[] } {
+  const starts: number[] = [];
+  const ends: number[] = [];
+  const separator = /\r?\n/g;
+  for (let from = 0; ; ) {
+    const m = separator.exec(text);
+    const end = m ? m.index : text.length;
+    if (end > from) {
+      starts.push(from);
+      ends.push(end);
+      if (from > until) break;
+    }
+    if (!m) break;
+    from = m.index + m[0].length;
+  }
+  return { starts, ends };
+}
+
+/**
+ * Where the reader before this adapter read the end of the file stopped, when
+ * `text` shows it. That reader kept the first LEGACY_CUT_CHARS characters of a
+ * longer log and stored their last lines as the cursor, the last one cut at
+ * the mark unless the mark fell at a line's end; it stored the start of a cut
+ * line as an event, never the whole of it. With where `text` starts in the
+ * file (see logTextStart), the cut is replayed on `text`: at a copy of
+ * `window` that the lines up to the mark end with (or, for a text that starts
+ * inside the window, the window's end), the poll resumes AT the cut line (it
+ * is collected whole now), or after the window when the mark fell at a line's
+ * end. In a traceback logged again and again this tells the copy that reader
+ * stopped at from the others, which the window matches just as well.
+ *
+ * That reader decoded each piece of the answer the socket gave it on its own,
+ * so a character outside ASCII split between two pieces counted as two or
+ * three U+FFFD: more than its length by at most its UTF-8 bytes beyond it,
+ * never less. Its mark then fell up to that much earlier in the file. So a
+ * cut line is looked for from the mark back by the UTF-8 bytes beyond the
+ * length of what precedes the mark in the answer (`earliest`; none for an
+ * ASCII answer, so the mark alone), and the EARLIEST copy there is used: the
+ * one that reader stopped at, or an earlier one. No line is skipped, and lines
+ * are collected again only within that distance. A whole last line is placed
+ * by the mark alone: it is also what that reader stored when it read all of a
+ * log then shorter than the mark (its end then, before the mark), and a copy
+ * found back from the mark could be a later one. A cut line can come from such
+ * a read too, when Home Assistant was writing it then; a later copy within
+ * that distance would be taken for it, which takes a write caught part-way and
+ * an upgrade soon after the log passed the mark.
+ *
+ * 'before' for a bare window (bareShortWindow) when `earliest` is not past the
+ * start of `text`'s first line (the log has grown more than one read past the
+ * mark, or about that): the copy that reader stopped at is not in the text, or
+ * may not be, and a copy found there may be a later one, so all of it is new.
+ * Not for a window with a header line: its timestamp makes it unique, so where
+ * it is found is where that reader stopped, whatever this places (see
+ * logTextStart). null when this can't be told: no position, a log shorter than
+ * the mark (that reader read all of it, and stopped where it ended then), or
+ * no copy of the window there (a cursor written since, or a mark that is later
+ * than placed, see logTextStart).
+ */
+function oldReaderStop(text: string, lines: string[], window: string[], textStart: LogTextStart | null): number | 'before' | null {
+  if (textStart === null || window.length === 0) return null;
+  const mark = LEGACY_CUT_CHARS - textStart.at;
+  if (mark > text.length) return null;
+  const head = mark > 0 ? text.slice(0, mark) : '';
+  const earliest = mark - textStart.slack - (Buffer.byteLength(head, 'utf8') - head.length);
+  const { starts, ends } = lineSpans(text, mark);
+  if (starts.length === 0) return null;
+  if (earliest <= starts[0]) return bareShortWindow(window) ? 'before' : null;
   const last = window.length - 1;
-  for (let i = 0; i + window.length <= lines.length; i++) {
-    let j = 0;
-    while (j < last && lines[i + j] === window[j]) j++;
-    if (j === last && lines[i + last].startsWith(window[last])) return i + window.length;
+  const cut = window[last];
+  for (let i = 0; i < starts.length && starts[i] <= mark; i++) {
+    const next = i + 1 < starts.length ? starts[i + 1] : text.length;
+    if (next < earliest) continue;
+    let fits = true;
+    for (let j = 1; j <= Math.min(i, last) && fits; j++) fits = lines[i - j] === window[last - j];
+    if (!fits) continue;
+    // The window's last line is this whole line (a mark between a CRLF's two
+    // characters leaves the CR on it), placed by the mark alone, or its start.
+    const whole = cut === lines[i] || cut === `${lines[i]}\r`;
+    const lowest = whole ? mark : earliest;
+    if (text.startsWith(cut, starts[i])) {
+      const at = starts[i] + cut.length;
+      if (at >= lowest && at <= mark) return whole ? i + 1 : i;
+    }
+    // The mark after the line's ending, or a blank line after it.
+    if (cut === lines[i]) {
+      const newline = text.indexOf('\n', Math.max(lowest - 1, ends[i]));
+      if (newline !== -1 && newline + 1 <= Math.min(mark, next)) return i + 1;
+    }
+  }
+  return null;
+}
+
+/**
+ * For a window that is not in `lines` as whole lines: the index of the first
+ * line that starts with the window's last line and comes just after its other
+ * lines, or -1. A window ending in a cut line is a cursor the reader before
+ * this one stored (oldReaderStop) with a line it stored only the start of, so
+ * the poll resumes AT that line. Taking the first such place skips no line
+ * when where that reader stopped can't be told (a line still being written
+ * when it read the file, or no position); lines after it may be collected
+ * again, once.
+ */
+function cutLineIndex(lines: string[], window: string[]): number {
+  const last = window.length - 1;
+  if (last < 0) return -1;
+  for (let i = last; i < lines.length; i++) {
+    if (lines[i].startsWith(window[last]) && window.every((line, j) => j === last || lines[i - last + j] === line)) return i;
   }
   return -1;
 }
@@ -210,16 +346,31 @@ export interface NewLines {
  * platform limitation of this best-effort approach, not a bug to chase further
  * -- neither endpoint gives us anything more precise to key off. Both endpoints
  * carry the same lines, so a window found on one is found on the other after a
- * switch.
+ * switch. A cursor stored before this adapter read the end of the file can
+ * end in a cut line, or be bare lines of a repeated traceback; `textStart`
+ * (where the text starts in the log file, when it is known: see logTextStart)
+ * places it (oldReaderStop): exactly in a log that is ASCII up to that
+ * reader's mark, and otherwise at the copy it stopped at or an earlier one.
  */
-export function selectNewLines(fullText: string, cursor: string | null, onMiss: number | 'all' = FIRST_POLL_FALLBACK_LINES): NewLines {
+export function selectNewLines(
+  fullText: string,
+  cursor: string | null,
+  onMiss: number | 'all' = FIRST_POLL_FALLBACK_LINES,
+  textStart: LogTextStart | null = null
+): NewLines {
   const lines = splitLines(fullText);
   if (lines.length === 0) return { newLines: [], nextCursor: cursor, gap: false, overlap: 0 };
   const nextCursor = tailWindow(lines).join('\n');
 
   if (cursor) {
     const window = splitLines(cursor);
-    const after = indexAfterWindow(lines, window);
+    let after = indexAfterWindow(lines, window);
+    if (after === -1 || bareShortWindow(window)) {
+      const stop = oldReaderStop(fullText, lines, window, textStart);
+      if (stop === 'before') after = -1;
+      else if (stop !== null) after = stop;
+      else if (after === -1) after = cutLineIndex(lines, window);
+    }
     if (after !== -1) return { newLines: lines.slice(after), nextCursor, gap: false, overlap: 0 };
     if (onMiss !== 'all') return { newLines: lines.slice(-onMiss), nextCursor, gap: true, overlap: 0 };
     // The text may start inside the window (it began within the window's
@@ -355,6 +506,12 @@ function isWebPage(r: LogResponse): boolean {
   return /^\s*text\/html/i.test(String(r.res.headers['content-type'] || ''));
 }
 
+/** The first byte of a 206's Content-Range ("bytes N-.../..."), or null. */
+function rangeStart(r: LogResponse): number | null {
+  const range = /^bytes\s+(\d+)-/i.exec(String(r.res.headers['content-range'] || '').trim());
+  return range ? Number(range[1]) : null;
+}
+
 /**
  * True when the answer starts part-way through a line: the server sent a byte
  * range from past the start of the file (206, Content-Range "bytes N-.../..."
@@ -363,8 +520,31 @@ function isWebPage(r: LogResponse): boolean {
 function startsMidLine(r: LogResponse): boolean {
   if (r.res.truncated) return true;
   if (r.supervisor || r.res.status !== 206) return false;
-  const range = /^bytes\s+(\d+)-/i.exec(String(r.res.headers['content-range'] || '').trim());
-  return !range || Number(range[1]) > 0;
+  const start = rangeStart(r);
+  return start === null || start > 0;
+}
+
+/**
+ * Where a log file answer's text (logText) starts in the file, counted as the
+ * reader before this one counted (in characters, see LEGACY_CUT_CHARS) for
+ * oldReaderStop: the answer's first byte (0 for the whole file, a 206's
+ * Content-Range start) plus the characters of the cut line logText drops, and
+ * that line's UTF-8 bytes beyond its length as the slack (that reader may have
+ * counted them, see oldReaderStop). The file's bytes before the answer count
+ * as one character each, which they are in a log that is ASCII up to there, as
+ * Home Assistant's usually is; a character outside ASCII there takes more than
+ * one byte, so that reader's mark may be further into the text than this
+ * places it: an earlier copy of a bare window, or the first, is used then.
+ * Null when unknown: a Supervisor answer, or one httpFetch cut to its end (a
+ * server that ignored the Range).
+ */
+function logTextStart(r: LogResponse): LogTextStart | null {
+  if (r.supervisor || r.res.truncated) return null;
+  const start = r.res.status === 206 ? rangeStart(r) : 0;
+  if (start === null) return null;
+  if (!startsMidLine(r)) return { at: start, slack: 0 };
+  const dropped = r.res.body.slice(0, r.res.body.indexOf('\n') + 1);
+  return { at: start + dropped.length, slack: Buffer.byteLength(dropped, 'utf8') - dropped.length };
 }
 
 /**
@@ -567,7 +747,7 @@ export function makeHomeAssistantAdapter(deps: HomeAssistantAdapterDeps = {}): A
     //   changed): the bounded tail of selectNewLines.
     const fileOverflow = !r.supervisor && startsMidLine(r) && !tailFromSupervisor;
     const onMiss = r.supervisor ? r.newEntries : fileOverflow ? 'all' : undefined;
-    const { newLines, nextCursor: tail, gap, overlap } = selectNewLines(logText(r), prevTail, onMiss);
+    const { newLines, nextCursor: tail, gap, overlap } = selectNewLines(logText(r), prevTail, onMiss, logTextStart(r));
     const events: PolledEvent[] = newLines.map((line) => ({
       message: line,
       timestamp: parseLineTimestamp(line),

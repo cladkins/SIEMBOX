@@ -115,6 +115,11 @@ export const READABLE_SETTING_KEYS: ReadonlySet<string> = new Set([
   'exposure_domain_expiry_warning_days',
   'exposure_lookalike_max_candidates',
   'exposure_dns_secondary_resolver',
+  // The HIBP key's verified domains: a JSON snapshot bound to the stored key by
+  // a hash of its envelope, never the key (services/exposure/hibpDomains.ts).
+  'exposure_hibp_domains',
+  // Getting Started completion: {at, by} or '' (services/onboarding/onboardingState.ts)
+  'onboarding_completed',
   // Log Discovery scan scope (services/logDiscovery/discoveryScanService.ts)
   'log_discovery_manual_cidrs',
 ]);

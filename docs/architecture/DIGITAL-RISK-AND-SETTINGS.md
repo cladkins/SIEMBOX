@@ -1,7 +1,7 @@
 # Digital Risk Monitoring, Per-Area Settings & Onboarding
 
 **Status:** design agreed; build in progress (see [Roadmap](#roadmap))
-**Last updated:** 2026-10-10
+**Last updated:** 2026-10-13
 
 This document covers three connected changes:
 
@@ -68,7 +68,7 @@ Exposure Monitoring is a **sibling subsystem** next to Threat Intel and Threat F
 |---|---|---|---|
 | **HIBP Pwned Passwords** (k-anonymity range API) | Free, no key | Whether a given password appears in known breaches, and how often | ✅ Stateless, on-demand check |
 | **HIBP v3 `breachedaccount`** | Paid API key | The breaches a specific email address appears in | ✅ Turns on once a key is added |
-| **HIBP v3 `breacheddomain`** | Paid API key, plus the domain verified in the HIBP dashboard | Every breached alias on a domain the org owns | ✅ Turns on once a key is added and the domain is verified |
+| **HIBP v3 `breacheddomain`** | Paid API key, plus the domain verified in the HIBP dashboard | Every breached alias on a domain the org owns | ✅ Turns on once a key is added and the domain is verified. SIEMBox reads the key's verified domains (`subscribeddomains`) and skips the others, instead of collecting a 403 for each |
 | Commercial stealer-log / credential feeds (SpyCloud, Hudson Rock, Flare, DeHashed, …) | Priced by quote | Infostealer-captured credentials | Later, as another source behind the same interface |
 
 > **Decision:** Pwned Passwords is an **on-demand check only**. A password is never stored as something to keep watching, because re-checking it later would mean keeping its hash, and that breaks the privacy rule below. A useful follow-up is checking SIEMBox users' *own* passwords when they're set or changed.
@@ -80,7 +80,7 @@ Exposure Monitoring is a **sibling subsystem** next to Threat Intel and Threat F
 - **`system_settings` seeds**: `notify_exposure_enabled=false`, `notify_exposure_min_severity=medium`, `exposure_leaked_creds_enabled=true`, `exposure_hibp_enabled=false`. The HIBP key itself is stored encrypted as `exposure_hibp_key`.
 
 ### Job
-A `leaked-creds` job is registered in the job registry. It ticks every 15 minutes, and each identity's own `interval_minutes` decides whether it's actually polled. The job is skipped, with the reason shown on the Admin dashboard, when the feature is off or no key is configured. Identities are checked one at a time, and the cycle stops on an HTTP 429 instead of hammering the API.
+A `leaked-creds` job is registered in the job registry. It ticks every 15 minutes, and each identity's own `interval_minutes` decides whether it's actually polled. The job is skipped, with the reason shown on the Admin dashboard, when the feature is off or no key is configured. Identities are checked one at a time, and the cycle stops on an HTTP 429 instead of hammering the API. Before searching a due email domain, a run makes sure it knows the key's verified domains (HIBP's `subscribeddomains` list, kept as one `system_settings` snapshot bound to the stored key and re-read at most every few hours, or on an admin's re-check). A domain a complete list doesn't include is skipped with `last_status = 'unverified'`: no HIBP call, and not a failure. When the list can't be read, the domain is searched as before.
 
 ### How findings become alerts
 `recordFinding()` upserts the finding by `(source, fingerprint)`. Only a **new** finding creates an alert (one alert, with a stable `event_id`) and calls `notifyExposure`, so re-polling never re-alerts.
@@ -94,8 +94,8 @@ A `leaked-creds` job is registered in the job registry. It ticks every 15 minute
 ### Privacy and terms-of-use guardrails (enforced in code)
 1. Plaintext passwords, password hashes, and API keys are **never stored or logged**. `sanitizeDetail()` strips secret-like keys from every finding before it's written.
 2. Pwned Passwords is called **only through k-anonymity**: just the first 5 characters of the SHA-1 hash leave the box, and response padding is on.
-3. Only accounts and domains the org **owns** are monitored. HIBP domain search requires verified ownership.
-4. HIBP is credited (its data is CC BY 4.0) wherever breach data is shown.
+3. Only accounts and domains the org **owns** are monitored. HIBP domain search requires verified ownership: SIEMBox lists the key's verified domains, skips the unverified ones, and only offers "Monitor" for domains HIBP lists as verified.
+4. HIBP is credited (its data is CC BY 4.0) wherever breach data is shown: the Findings card, the verified-domain list, the alert lists (Alerts, SOC Triage, Dashboard → Recent Alerts) and the alert details whenever leaked-credential alerts are shown, and the plain-text licence line in new alert descriptions and notifications. A breach's own designated credit (HIBP's per-breach `Attribution`) is kept as plain text. The password check credits Pwned Passwords, which asks for no attribution but welcomes it.
 5. Requests send a descriptive User-Agent, honor 429 `retry-after`, and time out. Jobs are best-effort and never crash the process.
 6. `POST /api/exposure/password-check` is stateless, never logged, and rate-limited per IP.
 
@@ -161,7 +161,7 @@ A status banner at the top says which state the feature is in: *no API key*, *ne
 
 ## Part 5 — Onboarding
 
-**Today:** onboarding is a live checklist at `/getting-started` (`Onboarding.vue`). The only thing it collects directly is a new password; the other steps link out to other pages. "Done" is remembered by a `localStorage` flag in the browser.
+**Today:** onboarding is a live checklist at `/getting-started` (`Onboarding.vue`). The only thing it collects directly is a new password; the other steps link out to other pages. "Done" is stored server-side and install-wide (`system_settings.onboarding_completed`, PR-6): once an admin finishes or hides the checklist, the Dashboard reminder is off for every admin, and only admins see it at all. An admin can bring it back from the checklist. (v1 used a per-browser `localStorage` flag, which an admin's browser migrates once.)
 
 **Change:** add an optional **Digital Risk** step that collects inputs right on the checklist: owned domains, email domains or addresses, brand domains, and an optional HIBP key. It submits to the **same `/api/exposure/*` endpoints** as the settings page, so there's one source of truth: anything entered during onboarding shows up on `/settings/digital-risk`, and vice versa. The step counts as done once at least one domain or identity is being watched. The existing step links are repointed to the specific `/settings/<area>` pages.
 
@@ -173,7 +173,7 @@ A status banner at the top says which state the feature is in: *no API key*, *ne
 |---|---|---|
 | 1 | Where MFA and password settings live | A per-user **My Account** area (`/settings/account`), separate from admin-only system settings |
 | 2 | Auto-discovery and IP whitelist settings | Main editors live in `/settings/discovery` and `/settings/detections`; links from the Assets and Rules pages can be added later |
-| 3 | Onboarding model | Extend the existing checklist; keep `localStorage` dismissal in v1 (storing completion server-side is a follow-up) |
+| 3 | Onboarding model | Extend the existing checklist; completion is stored server-side, install-wide (PR-6); v1 used a per-browser `localStorage` flag |
 | 4 | Digital Risk onboarding step | Collects inputs directly, rather than just linking to settings |
 | 5 | Other onboarding steps | No new ones in v1 beyond Digital Risk |
 | 6 | HIBP | The paid-key integration is built and switches on when a key is added; nothing needs to be bought to ship |
@@ -189,12 +189,12 @@ A status banner at the top says which state the feature is in: *no API key*, *ne
 
 | PR | Scope | Depends on | Status |
 |---|---|---|---|
-| 1 | This design doc | — | In review |
-| 2 | Settings hub (frontend reorganization, role-gated areas) | — | Building |
-| 3 | Exposure backend foundation: migration 034, `/api/exposure`, encrypted HIBP key, leaked-credential job, Pwned Passwords check, `notifyExposure` | — | Building |
-| 4 | Digital Risk settings page + onboarding Digital Risk step | 2, 3 | Next |
-| 5 | Domain monitoring collectors + `domain-monitor` job (migration 035) | 3 | Planned |
-| 6 | HIBP domain-search polish (verified-domain status, attribution) + storing onboarding completion server-side | 3, 4 | Planned |
+| 1 | This design doc | — | Done (#263) |
+| 2 | Settings hub (frontend reorganization, role-gated areas) | — | Done (#264) |
+| 3 | Exposure backend foundation: migration 034, `/api/exposure`, encrypted HIBP key, leaked-credential job, Pwned Passwords check, `notifyExposure` | — | Done (#266) |
+| 4 | Digital Risk settings page + onboarding Digital Risk step | 2, 3 | Done (#268) |
+| 5 | Domain monitoring collectors + `domain-monitor` job (migration 035) | 3 | Done (#269) |
+| 6 | HIBP domain-search polish (verified-domain status, attribution) + storing onboarding completion server-side | 3, 4 | Done (#304) |
 
 ---
 
@@ -213,6 +213,10 @@ A status banner at the top says which state the feature is in: *no API key*, *ne
 
 ## References
 - HIBP API v3 — https://haveibeenpwned.com/API/v3
+- HIBP verified domains (`subscribeddomains`) — https://haveibeenpwned.com/API/v3#SubscribedDomains
+- HIBP domain search (`breacheddomain`) — https://haveibeenpwned.com/API/v3#BreachesForDomain
+- HIBP licence (CC BY 4.0) — https://haveibeenpwned.com/API/v3#License
+- HIBP plans — https://haveibeenpwned.com/Subscription
 - Pwned Passwords (k-anonymity) — https://haveibeenpwned.com/API/v3#PwnedPasswords
 - crt.sh — https://crt.sh
 - IANA RDAP bootstrap — https://data.iana.org/rdap/dns.json

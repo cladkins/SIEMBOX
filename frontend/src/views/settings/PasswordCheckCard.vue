@@ -50,7 +50,7 @@
     />
 
     <el-text size="small" type="info">Limited to 30 checks per 15 minutes from one address.</el-text>
-    <HibpAttribution />
+    <HibpAttribution variant="passwords" />
   </el-card>
 </template>
 

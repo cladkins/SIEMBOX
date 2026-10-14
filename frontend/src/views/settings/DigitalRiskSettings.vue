@@ -32,9 +32,10 @@
       ref="identitiesCard"
       class="section"
       :status="status"
-      @changed="refreshStatus"
+      @changed="onIdentitiesCardChanged"
       @deleted="reloadFindings"
       @loaded="identityRows = $event"
+      @domains-refreshed="onDomainsRefreshed('identities')"
     />
     <ExposureDomainsCard
       ref="brandDomainsCard"
@@ -48,8 +49,10 @@
       ref="providerCard"
       class="section"
       :encryption-error="encryptionError"
-      @changed="refreshStatus"
+      @changed="onProviderChanged"
       @encryption-error="encryptionError = $event"
+      @domains-refreshed="onDomainsRefreshed('provider')"
+      @identities-changed="onIdentitiesChanged"
     />
     <ExposureChecksCard class="section" @changed="refreshStatus" @ran="onCheckRan" />
     <ExposureFindingsCard ref="findingsCard" class="section" :domain-monitor="domainMonitor" @changed="refreshStatus" />
@@ -64,7 +67,13 @@ import exposureService, {
   type ExposureStatus,
   type MonitoredIdentity,
 } from '@/services/exposureService';
-import { apiErrorMessage, describeExposureStatus, domainMonitorState, pluralize } from '@/utils/exposure';
+import {
+  apiErrorMessage,
+  describeExposureStatus,
+  domainMonitorState,
+  domainVerificationCounts,
+  pluralize,
+} from '@/utils/exposure';
 import ExposureChecksCard from './ExposureChecksCard.vue';
 import ExposureDomainsCard from './ExposureDomainsCard.vue';
 import ExposureFindingsCard from './ExposureFindingsCard.vue';
@@ -98,6 +107,8 @@ const banner = computed(() =>
     ? describeExposureStatus(status.value, {
         encryptionKeyError: encryptionError.value,
         failingIdentities: identityRows.value?.filter((i) => i.enabled && i.last_status === 'error').length,
+        // Email domains HIBP skips (not verified, no domain search) or may only partly search.
+        ...(identityRows.value ? domainVerificationCounts(identityRows.value) : {}),
       })
     : null
 );
@@ -150,11 +161,40 @@ async function refreshBanner() {
   ]);
 }
 
-// A manual run changes identities' last-check state and may add findings.
+// A manual run changes identities' last-check state and may add findings; a
+// run with a due email domain may also have re-listed the verified domains.
 function onCheckRan() {
   void refreshStatus();
   void identitiesCard.value?.reload();
+  void providerCard.value?.reloadDomains();
   void reloadFindings();
+}
+
+// The HIBP key was saved, replaced or removed (or the provider toggled): each
+// email domain's verification line belongs to the key, so it is re-read too.
+function onProviderChanged() {
+  void refreshStatus();
+  void identitiesCard.value?.reload();
+}
+
+// HIBP was asked which domains are verified (from either card): the identities'
+// verification lines, the other card's view and the banner change with it.
+function onDomainsRefreshed(from: 'identities' | 'provider') {
+  void refreshStatus();
+  void identitiesCard.value?.reload();
+  if (from === 'identities') void providerCard.value?.reloadDomains();
+}
+
+// An identity was added, changed or deleted: the HIBP card's "In SIEMBox" column follows.
+function onIdentitiesCardChanged() {
+  void refreshStatus();
+  void providerCard.value?.reloadDomains();
+}
+
+// The HIBP card added a verified domain as a monitored identity.
+function onIdentitiesChanged() {
+  void refreshStatus();
+  void identitiesCard.value?.reload();
 }
 
 // Deleting an identity or a domain also deletes its findings (ON DELETE CASCADE).

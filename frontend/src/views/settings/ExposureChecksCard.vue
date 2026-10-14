@@ -148,6 +148,7 @@ function describeRun(s: LeakedCredentialRunSummary) {
     pluralize(s.newFindings, 'new finding'),
   ];
   if (s.failed) parts.push(`${s.failed} failed (see their status above)`);
+  if (s.unverified) parts.push(`${pluralize(s.unverified, 'email domain')} skipped: not verified on HIBP`);
   if (s.remaining) parts.push(`${s.remaining} still due`);
   let description = parts.join(' · ');
   if (s.error) {

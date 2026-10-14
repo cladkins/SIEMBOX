@@ -170,6 +170,10 @@ const INVENTORY: Row[] = [
   ['GET', '/api/settings/auto-discovery', ADMIN_ONLY],
   ['PUT', '/api/settings/auto-discovery', ADMIN_ONLY],
   ['GET', '/api/settings/auto-discovery/stats', ADMIN_ONLY],
+  // Getting Started: every role reads whether setup is done; only admins mark
+  // it done or reopen it
+  ['GET', '/api/settings/onboarding', ANY_ROLE],
+  ['PUT', '/api/settings/onboarding', ADMIN_ONLY],
 
   // routes/shippers.ts: Shippers page, then the shipper agent's own endpoints
   ['GET', '/api/shippers', ANY_ROLE],
@@ -346,6 +350,8 @@ const INVENTORY: Row[] = [
   ['GET', '/api/exposure/providers', ANY_ROLE],
   ['PUT', '/api/exposure/providers/hibp', ADMIN_ONLY],
   ['POST', '/api/exposure/providers/hibp/test', ADMIN_ONLY],
+  ['GET', '/api/exposure/providers/hibp/verified-domains', ADMIN_ONLY],
+  ['POST', '/api/exposure/providers/hibp/verified-domains/refresh', ADMIN_ONLY],
   ['GET', '/api/exposure/domains', ANY_ROLE],
   ['POST', '/api/exposure/domains', ADMIN_ONLY],
   ['PUT', '/api/exposure/domains/:id', ADMIN_ONLY],

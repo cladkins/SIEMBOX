@@ -66,6 +66,11 @@ export interface MonitoredIdentity {
   enabled: boolean;
   interval_minutes: number;
   last_checked_at: string | null;
+  /**
+   * 'ok', 'error', or 'unverified' (an email domain skipped because it isn't
+   * verified on the HIBP account, or refused with a 403 while that was
+   * unknown: not a failure); null before the first check.
+   */
   last_status: string | null;
   last_error: string | null;
   created_at: string;
@@ -360,7 +365,8 @@ export const MonitoredIdentityModel = {
   /**
    * Record a failed check. `advance` stamps last_checked_at so the identity
    * waits a full interval before the next try (for failures that retrying soon
-   * won't fix, e.g. an unverified domain); otherwise it stays due.
+   * won't fix, e.g. a domain HIBP refused although it is listed as verified);
+   * otherwise it stays due.
    */
   async markFailed(id: number, error: string, advance: boolean): Promise<void> {
     await query(
@@ -371,6 +377,46 @@ export const MonitoredIdentityModel = {
         WHERE id = $1`,
       [id, error.slice(0, MAX_ERROR_LENGTH), advance]
     );
+  },
+
+  /**
+   * An email domain HIBP won't search for this key (not verified on the
+   * account, or no domain search on the plan): skipped, not failed. It waits a
+   * full interval, unless a re-check lists it as verified (requeueVerified).
+   */
+  async markUnverified(id: number, note: string): Promise<void> {
+    await query(
+      `UPDATE monitored_identities
+          SET last_status = 'unverified', last_error = $2, last_checked_at = NOW()
+        WHERE id = $1`,
+      [id, note.slice(0, MAX_ERROR_LENGTH)]
+    );
+  },
+
+  /**
+   * Email domains among `values` that were skipped as unverified and are now
+   * listed as verified: due again straight away, and back to "not checked yet"
+   * rather than reading "Not verified" next to "Verified on HIBP". Disabled ones
+   * are reset too, so re-enabling one doesn't show a stale status.
+   */
+  async requeueVerified(values: readonly string[]): Promise<Array<{ id: number; enabled: boolean }>> {
+    if (values.length === 0) return [];
+    const r = await query(
+      `UPDATE monitored_identities
+          SET last_checked_at = NULL, last_status = NULL, last_error = NULL
+        WHERE kind = 'email_domain' AND last_status = 'unverified' AND value = ANY($1::text[])
+        RETURNING id, enabled`,
+      [values]
+    );
+    return r.rows.map((row) => ({ id: Number(row.id), enabled: row.enabled === true }));
+  },
+
+  /** Every monitored email domain (enabled or not). */
+  async listEmailDomains(): Promise<Array<{ id: number; value: string; enabled: boolean }>> {
+    const r = await query(
+      `SELECT id, value, enabled FROM monitored_identities WHERE kind = 'email_domain' ORDER BY value`
+    );
+    return r.rows.map((row) => ({ id: Number(row.id), value: row.value, enabled: row.enabled === true }));
   },
 };
 

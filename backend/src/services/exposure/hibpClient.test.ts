@@ -8,10 +8,14 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 import {
   DEFAULT_RETRY_AFTER_SECONDS,
   HibpClient,
   HibpError,
+  MAX_SUBSCRIBED_DOMAINS_PARSED,
   parseRetryAfter,
   type FetchFn,
   type HibpErrorKind,
@@ -197,4 +201,196 @@ test('parseRetryAfter reads seconds or an HTTP date, and defaults otherwise', ()
   assert.equal(parseRetryAfter('Sat, 10 Oct 2026 11:00:00 GMT', now), 0);
   assert.equal(parseRetryAfter(null, now), DEFAULT_RETRY_AFTER_SECONDS);
   assert.equal(parseRetryAfter('soon', now), DEFAULT_RETRY_AFTER_SECONDS);
+});
+
+// ---- subscribeddomains (the key's verified domains) ---------------------------------
+
+const subscribed = (name: unknown, extra: Record<string, unknown> = {}) => ({
+  DomainName: name,
+  PwnCount: 40,
+  PwnCountExcludingSpamLists: 38,
+  PwnCountExcludingSpamListsAtLastSubscriptionRenewal: 35,
+  NextSubscriptionRenewal: '2027-01-01T00:00:00',
+  ...extra,
+});
+
+test('subscribedDomains: constant host, keyed, no redirects; reads the documented fields', async () => {
+  const { fetchImpl, calls } = fakeFetch(() => json([subscribed('Example.com')]));
+  const result = await new HibpClient({ apiKey: KEY, fetchImpl }).subscribedDomains();
+
+  assert.deepEqual(result, {
+    domains: [
+      {
+        DomainName: 'Example.com',
+        PwnCount: 40,
+        PwnCountExcludingSpamLists: 38,
+        PwnCountExcludingSpamListsAtLastSubscriptionRenewal: 35,
+        NextSubscriptionRenewal: '2027-01-01T00:00:00',
+      },
+    ],
+    unreadable: 0,
+    overLimit: 0,
+  });
+  const { url, init } = calls[0];
+  assert.equal(url.origin, 'https://haveibeenpwned.com');
+  assert.equal(url.pathname, '/api/v3/subscribeddomains');
+  assert.equal(url.search, '');
+  const headers = new Headers(init.headers);
+  assert.equal(headers.get('hibp-api-key'), KEY);
+  assert.match(headers.get('user-agent') ?? '', /^SIEMBox-ExposureMonitor\//);
+  assert.equal(init.redirect, 'manual');
+});
+
+test('subscribedDomains: drops entries without a string DomainName and sanitizes the numbers', async () => {
+  const { fetchImpl } = fakeFetch(() =>
+    json([
+      subscribed('a.example', { PwnCount: null, PwnCountExcludingSpamLists: -1 }),
+      subscribed('b.example', {
+        PwnCount: 'many',
+        PwnCountExcludingSpamListsAtLastSubscriptionRenewal: Infinity,
+        NextSubscriptionRenewal: 'not a date',
+      }),
+      subscribed(42),
+      null,
+      'c.example',
+      { PwnCount: 3 },
+    ])
+  );
+  const result = await new HibpClient({ apiKey: KEY, fetchImpl }).subscribedDomains();
+  assert.equal(result.unreadable, 4);
+  assert.deepEqual(
+    result.domains.map((d) => [d.DomainName, d.PwnCount, d.PwnCountExcludingSpamLists]),
+    [
+      ['a.example', null, null],
+      ['b.example', null, 38],
+    ]
+  );
+  assert.equal(result.domains[1].PwnCountExcludingSpamListsAtLastSubscriptionRenewal, null);
+  assert.equal(result.domains[1].NextSubscriptionRenewal, null);
+});
+
+test('subscribedDomains: reads at most MAX_SUBSCRIBED_DOMAINS_PARSED entries and counts the rest', async () => {
+  const body = Array.from({ length: MAX_SUBSCRIBED_DOMAINS_PARSED + 7 }, (_, i) => subscribed(`d${i}.example`));
+  const { fetchImpl } = fakeFetch(() => json(body));
+  const result = await new HibpClient({ apiKey: KEY, fetchImpl }).subscribedDomains();
+  assert.equal(result.domains.length, MAX_SUBSCRIBED_DOMAINS_PARSED);
+  assert.equal(result.overLimit, 7);
+  assert.equal(result.unreadable, 0);
+});
+
+test('subscribedDomains: an empty array is an answer; 404 and a non-array are errors, never "no domains"', async () => {
+  const empty = fakeFetch(() => json([]));
+  assert.deepEqual(await new HibpClient({ apiKey: KEY, fetchImpl: empty.fetchImpl }).subscribedDomains(), {
+    domains: [],
+    unreadable: 0,
+    overLimit: 0,
+  });
+
+  const notFound = fakeFetch(() => new Response(null, { status: 404 }));
+  await expectHibpError(
+    new HibpClient({ apiKey: KEY, fetchImpl: notFound.fetchImpl }).subscribedDomains(),
+    'transient',
+    404
+  );
+  const notArray = fakeFetch(() => json({ DomainName: 'example.com' }));
+  await expectHibpError(
+    new HibpClient({ apiKey: KEY, fetchImpl: notArray.fetchImpl }).subscribedDomains(),
+    'transient',
+    200
+  );
+  const notJson = fakeFetch(() => new Response('<html>', { status: 200 }));
+  await expectHibpError(
+    new HibpClient({ apiKey: KEY, fetchImpl: notJson.fetchImpl }).subscribedDomains(),
+    'transient',
+    200
+  );
+});
+
+test('subscribedDomains: 401, 403, 429, 503 and network failures map like every keyed call', async () => {
+  for (const [status, kind] of [
+    [401, 'auth'],
+    [403, 'auth'],
+    [503, 'transient'],
+  ] as const) {
+    const { fetchImpl } = fakeFetch(() => new Response('denied', { status }));
+    await expectHibpError(new HibpClient({ apiKey: KEY, fetchImpl }).subscribedDomains(), kind, status);
+  }
+  const limited = fakeFetch(() => new Response(null, { status: 429, headers: { 'retry-after': '9' } }));
+  await assert.rejects(
+    new HibpClient({ apiKey: KEY, fetchImpl: limited.fetchImpl }).subscribedDomains(),
+    (err: unknown) =>
+      err instanceof HibpError && err.kind === 'rate_limited' && err.status === 429 && err.retryAfterSeconds === 9
+  );
+  const down: FetchFn = async () => {
+    throw new TypeError('fetch failed');
+  };
+  await expectHibpError(new HibpClient({ apiKey: KEY, fetchImpl: down }).subscribedDomains(), 'transient', null);
+});
+
+test('subscribedDomains without a key is an auth error and makes no request', async () => {
+  const { fetchImpl, calls } = fakeFetch(() => json([]));
+  await expectHibpError(new HibpClient({ fetchImpl }).subscribedDomains(), 'auth', null);
+  assert.equal(calls.length, 0);
+});
+
+test('breach models keep HIBP’s per-breach Attribution field', async () => {
+  const breach = { Name: 'Combo', Attribution: '@someone' };
+  const { fetchImpl } = fakeFetch(() => json([breach]));
+  const [model] = await new HibpClient({ apiKey: KEY, fetchImpl }).breachedAccount('a@example.com');
+  assert.equal(model.Attribution, '@someone');
+});
+
+// The same client against a real HTTP server on 127.0.0.1. The only seam is
+// fetchImpl: the client still builds https://haveibeenpwned.com/... (asserted),
+// and the seam forwards that path to the local server.
+test('against a local fake HIBP server: headers arrive, answers and errors are read', async () => {
+  const seen: Array<{ path: string; key: string | undefined; ua: string | undefined }> = [];
+  const server = http.createServer((req, res) => {
+    seen.push({
+      path: req.url ?? '',
+      key: req.headers['hibp-api-key'] as string | undefined,
+      ua: req.headers['user-agent'],
+    });
+    if (req.url === '/api/v3/subscribeddomains') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify([subscribed('verified.example'), subscribed('Sub.Verified.Example.')]));
+    } else if (req.url === '/api/v3/subscription/status') {
+      res.writeHead(429, { 'retry-after': '4' });
+      res.end();
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const local = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const requested: URL[] = [];
+  const fetchImpl: FetchFn = (url, init) => {
+    requested.push(url);
+    return fetch(new URL(url.pathname + url.search, local), init);
+  };
+  try {
+    const client = new HibpClient({ apiKey: KEY, fetchImpl });
+    const list = await client.subscribedDomains();
+    assert.deepEqual(
+      list.domains.map((d) => d.DomainName),
+      ['verified.example', 'Sub.Verified.Example.']
+    );
+    await assert.rejects(client.subscriptionStatus(), (err: unknown) => {
+      assert.ok(err instanceof HibpError && err.kind === 'rate_limited' && err.retryAfterSeconds === 4);
+      return true;
+    });
+    assert.ok(requested.every((u) => u.origin === 'https://haveibeenpwned.com'));
+    assert.deepEqual(
+      seen.map((s) => s.path),
+      ['/api/v3/subscribeddomains', '/api/v3/subscription/status']
+    );
+    for (const s of seen) {
+      assert.equal(s.key, KEY);
+      assert.match(s.ua ?? '', /^SIEMBox-ExposureMonitor\/1\.0 \(\+https:\/\/github\.com\/cladkins\/siembox\)$/);
+    }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

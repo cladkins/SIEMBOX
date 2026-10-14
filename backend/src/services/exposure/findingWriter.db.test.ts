@@ -11,6 +11,7 @@ import crypto from 'crypto';
 import pool, { closePools } from '../../config/database';
 import { findingEventId, recordFinding, type FindingInput } from './findingWriter';
 import { MonitoredIdentityModel, type MonitoredIdentity } from '../../models/Exposure';
+import { AlertModel } from '../../models/Alert';
 
 let dbReady = false;
 const createdIdentityIds: number[] = [];
@@ -139,4 +140,24 @@ test('a finding that comes back after its identity was deleted re-links its old 
   assert.equal(result.alertCreated, false, 'but the operator was already alerted');
   assert.equal(result.alertId, first.alertId);
   assert.equal(await countAlerts(fingerprint), 1);
+});
+
+test('the grouped alert list carries the alert source, so HIBP alerts can be credited', async (t) => {
+  if (!dbReady) return t.skip('Postgres with migration 034 is not reachable');
+  const marker = `db-test-${unique()}`;
+  const identity = await makeIdentity(`${marker}@siembox.invalid`);
+  const input = makeInput(identity.id, marker);
+  input.title = `${marker}@siembox.invalid found in Test breach`;
+  input.detail = { account: `${marker}@siembox.invalid`, source: 'hibp', attribution: 'https://haveibeenpwned.com' };
+  const result = await recordFinding(input, { notify: false });
+
+  const grouped = await AlertModel.findAllGrouped({ search: marker });
+  assert.equal(grouped.alerts.length, 1);
+  const [alert] = grouped.alerts;
+  assert.equal(alert.id, result.alertId);
+  assert.equal(alert.source, 'leaked-creds');
+  assert.equal(alert.matched_data.source, 'hibp');
+
+  const flat = await AlertModel.findAll({ search: marker });
+  assert.equal(flat.alerts[0].source, 'leaked-creds');
 });

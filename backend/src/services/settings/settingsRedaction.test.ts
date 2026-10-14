@@ -79,6 +79,22 @@ const PLAIN_SETTINGS: Array<[key: string, value: string]> = [
   ['exposure_domain_expiry_warning_days', '30'],
   ['exposure_lookalike_max_candidates', '300'],
   ['exposure_dns_secondary_resolver', '9.9.9.9'],
+  [
+    'exposure_hibp_domains',
+    JSON.stringify({
+      v: 1,
+      key_ref: '9c1f0a2b7d3e4f50',
+      checked_at: '2026-10-12T09:41:07.000Z',
+      listed_at: '2026-10-12T09:41:07.000Z',
+      stale: false,
+      error: null,
+      plan: { name: 'Core 2', domain_search_max_breached_accounts: 100, max_breached_domains: 3, subscribed_until: null },
+      domains: [{ domain: 'example.com', pwn_count: 40, pwn_count_excluding_spam_lists: 38 }],
+      truncated: false,
+      skipped_entries: 0,
+    }),
+  ],
+  ['onboarding_completed', '{"at":"2026-10-12T09:30:00.000Z","by":"admin"}'],
   ['log_discovery_manual_cidrs', '192.168.1.0/24,10.0.0.0/24'],
 ];
 
@@ -150,8 +166,9 @@ test('new credential-like keys are withheld without being listed anywhere', () =
 });
 
 test('a key that is not on the readable list is withheld (fails closed)', () => {
-  assert.deepEqual(settingRowForAdmin('onboarding_completed', 'true'), {
-    setting_key: 'onboarding_completed',
+  // A plain-looking setting nobody has classified yet.
+  assert.deepEqual(settingRowForAdmin('dashboard_default_view', 'true'), {
+    setting_key: 'dashboard_default_view',
     setting_value: REDACTED_VALUE,
     redacted: true,
     configured: true,

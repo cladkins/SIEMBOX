@@ -1510,8 +1510,9 @@ Delete user (admin only).
 
 Every `/api/settings` route requires a login. The routes in this section and
 under [AI Settings](#ai-settings) also require the **admin** role, except
-`GET /api/settings/syslog` (the syslog host and port that shippers send to).
-Other roles get `403 Access denied. Required role: admin`.
+`GET /api/settings/syslog` (the syslog host and port that shippers send to) and
+[`GET /api/settings/onboarding`](#get-apisettingsonboarding) (whether Getting
+Started setup is done). Other roles get `403 Access denied. Required role: admin`.
 
 ### GET /api/settings
 
@@ -1750,6 +1751,57 @@ Get syslog server status and health information (admin only).
 - `error` - Port mismatch with no logs
 
 **Note:** Used by the Settings UI to display syslog receiver health and activity.
+
+### GET /api/settings/onboarding
+
+Whether an administrator has marked the Getting Started setup done. It is
+install-wide, stored in the `onboarding_completed` row of `system_settings`
+(created on the first write). While it isn't done, administrators get a
+reminder on the Dashboard; the Getting Started checklist itself stays in the
+sidebar for everyone.
+
+**Authentication:** Required (any role)
+
+**Response (200):**
+```json
+{ "completed": true, "completed_at": "2026-10-12T09:30:00.000Z", "completed_by": "admin" }
+```
+- `completed_at` is when it was first marked done (`null` when not completed).
+- `completed_by` is the admin who did, for admins only: it is `null` for every
+  other role (it would reveal an admin's username), and for a completion
+  migrated from a browser that couldn't say who.
+
+### PUT /api/settings/onboarding
+
+Mark setup done, or bring the Dashboard reminder back for every administrator.
+
+**Authentication:** Required (Admin)
+
+**Request Body:** `{ "completed": true }`, `{ "completed": false }` or
+`{ "completed": true, "legacy": true }`. Unknown keys are ignored.
+- `{ "completed": true }` is atomic and idempotent: the first completion's
+  `completed_at` and `completed_by` are kept, whatever later or concurrent
+  requests do.
+- `{ "completed": false }` reopens it: the reminder is back for every admin, in
+  every browser.
+- `{ "completed": true, "legacy": true }` migrates a browser's pre-server-side
+  dismissal (the `onboarding_dismissed` localStorage flag). It applies only when
+  nothing was ever recorded, so a stale browser can never undo an admin's
+  reopen; otherwise it changes nothing. It is recorded with `completed_by:
+  null`: the flag doesn't say who dismissed the reminder, so the admin whose
+  browser carried it over isn't credited. The web UI sends it once, from an
+  admin's browser that still holds the flag.
+
+**Response (200):** the state, as `GET` returns it to an admin.
+
+**Errors:**
+- `400` - not a JSON object (`"Expected a JSON object such as {\"completed\": true}"`),
+  `completed` not a boolean, `legacy` not a boolean, or `legacy` with
+  `"completed": false` (`"legacy applies only to {\"completed\": true}"`)
+- `403` - not an admin; nothing changes
+
+To bring the reminder back as if setup had never been recorded, delete the row:
+`DELETE FROM system_settings WHERE key = 'onboarding_completed';`
 
 ---
 
@@ -4147,13 +4199,23 @@ HIBP is **bring-your-own-key** (an HIBP subscription; see
 [HIBP API keys](https://haveibeenpwned.com/API/Key)). Nothing is checked until a
 key is saved and the provider is enabled. The backend needs outbound HTTPS to
 `haveibeenpwned.com` (breach searches) and `api.pwnedpasswords.com` (password
-check; no key needed). Breach data is licensed CC BY 4.0:
-every finding carries `detail.attribution = "https://haveibeenpwned.com"` and its
-alert description names HIBP as the source — keep that attribution wherever the
-data is shown.
+check; no key needed). HIBP's breach data is licensed
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): every finding carries
+`detail.source = "hibp"` and `detail.attribution = "https://haveibeenpwned.com"`,
+and its alert description ends with
+`Source: Have I Been Pwned (https://haveibeenpwned.com), licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).`
+(findings recorded before this licence line was added say
+`Source: Have I Been Pwned (https://haveibeenpwned.com).`). When HIBP passes on
+a credit the breach's provider asked for, the finding also carries it as
+`detail.breach_attribution` (plain text: a handle, an address or a URL). Keep
+that attribution wherever the data is shown; the UI credits HIBP on every
+surface that lists leaked-credential alerts or findings. Pwned Passwords needs
+no attribution, but the password check credits it anyway.
 
 **Authentication:** every endpoint requires a session. Reads (and the password
-check) are open to any authenticated user; **all writes require the admin role**.
+check) are open to any authenticated user, except the HIBP account's own data
+(its verified domains and plan, `GET /providers/hibp/verified-domains`), which,
+like the key test, is admin-only; **all writes require the admin role**.
 
 ### How leaked-credential checks run
 
@@ -4162,15 +4224,58 @@ check) are open to any authenticated user; **all writes require the admin role**
   checked, or last checked more than their own `interval_minutes` ago (daily by
   default) — one at a time.
 - `email` identities use HIBP's breached-account search. `email_domain`
-  identities use the domain search, which only works for domains you have
-  **verified in your HIBP domain dashboard**; it yields one finding per
-  alias + breach. An unverified domain is marked `last_status: "error"` with an
-  explanation and retried after its interval.
+  identities use the domain search, which only works for domains **verified on
+  the key's HIBP account** (in the
+  [HIBP dashboard](https://haveibeenpwned.com/Dashboard/Redirect/Domains)); it
+  yields one finding per alias + breach.
+- **Verified domains.** Before searching a due email domain, a run makes sure
+  it knows which domains the key's account has verified: HIBP's
+  [`subscribeddomains`](https://haveibeenpwned.com/API/v3#SubscribedDomains)
+  list (plus the plan from `subscription/status`), kept as one snapshot. It is
+  re-read only by a run with a due email domain, when there is no list for the
+  saved key, the last success is 6 hours old (1 hour when a due domain would be
+  skipped, or after HIBP refused a listed domain), or the last attempt failed 30
+  minutes ago (6 hours after a `401`; after a `429`, once its `retry-after` has
+  passed); and by an admin's re-check
+  ([`POST /providers/hibp/verified-domains/refresh`](#post-apiexposureprovidershibpverified-domainsrefresh),
+  at most once a minute). **No page load or `GET` ever calls HIBP.**
+- **Unverified domains are skipped, not failed.** A domain a complete list
+  doesn't include is not searched (HIBP would refuse it with a `403`): it gets
+  `last_status: "unverified"` with an explanation in `last_error`, waits its
+  interval, and counts in the run summary's `unverified`, never in `failed`.
+  When a re-check lists it as verified it is due again straight away. If the
+  list couldn't be read (a `401`, `5xx`, network error, or an unexpected answer
+  such as a `404`), or is incomplete (more than 2,000 domains, or unreadable
+  entries) and doesn't include the domain, the domain is searched as before, and
+  a `403` on that search also reads as `unverified`. A `403` from the
+  `subscribeddomains` call itself means the plan has no domain search (High RPM
+  plans): email domains are then skipped and email addresses still checked. A
+  `403` for a domain the list shows **as verified** is recorded as an error
+  (`last_status: "error"`): the plan may not cover that many domains, or the
+  domain was just removed from the dashboard.
+- **Plan size.** A verified domain larger than the plan covers is not refused:
+  HIBP answers with only its subscription-free breaches. SIEMBox compares the
+  domain's breached-address count (at the last renewal, else the current one)
+  with the plan's `DomainSearchMaxBreachedAccounts` and reports the domain as
+  `verified_limited` ("may be limited"; the count includes breaches HIBP
+  doesn't charge for, so this can over-warn near the limit).
+- **Names.** Matching is exact: each subdomain is a separate HIBP domain in both
+  directions (`example.com` verified doesn't cover `mail.example.com`, nor the
+  other way round), and internationalized names are matched in punycode.
+- HIBP asks that domain searches be made "infrequently, usually only after a new
+  breach is loaded": the default daily interval is fine, while an hourly
+  `interval_minutes` on an email domain works against that guidance.
 - Calls are paced to the key's plan (requests per minute from HIBP's
-  subscription status; 10/min until known). A `429` pauses all checks until
-  HIBP's `retry-after` has passed; a rejected key (`401`) pauses them for an
-  hour or until the key is changed. Neither retries in a loop; unchecked
-  identities simply stay due.
+  subscription status; 10/min until known), and a run and an admin's re-check
+  share one pacer, so they never burst. A `429` (from any keyed call, the
+  verified-domain list included) pauses all checks until HIBP's `retry-after`
+  has passed, a run already in progress included. HIBP's limit belongs to the
+  key: saving the same key again doesn't lift the wait, nor does removing it and
+  saving it back; a different key does (until the limited key is saved again).
+  A rejected key (`401`) pauses them
+  for an hour or until the key is saved again (a successful verified-domain
+  listing also lifts that pause: the key just worked). Neither retries in a
+  loop; unchecked identities simply stay due.
 - Findings are deduplicated on `sha256(kind:value:[alias:]breach)`: re-checks
   only update `last_seen`, never raise a second alert, and never reopen a
   resolved finding.
@@ -4350,6 +4455,8 @@ Feature flags, provider state (never the key), counts and the last run.
       "docsUrl": "https://haveibeenpwned.com/API/v3",
       "signupUrl": "https://haveibeenpwned.com/API/Key",
       "attribution": "https://haveibeenpwned.com",
+      "license": "CC BY 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
       "configured": true,
       "enabled": true,
       "usable": true
@@ -4373,7 +4480,7 @@ Feature flags, provider state (never the key), counts and the last run.
     "last_run": {
       "at": "2026-10-10T09:15:02Z",
       "trigger": "schedule",
-      "summary": { "checked": 1, "newFindings": 2, "failed": 0, "remaining": 0, "skipped": false }
+      "summary": { "checked": 1, "newFindings": 2, "failed": 0, "unverified": 1, "remaining": 0, "skipped": false }
     },
     "job": {
       "status": "ok",
@@ -4403,7 +4510,9 @@ Feature flags, provider state (never the key), counts and the last run.
 ```
 `last_run` and `job` describe this backend process only (they reset on restart);
 `paused_until`/`pause_reason` are set while HIBP has asked us to back off or has
-rejected the key. `domain_monitor.last_run` is the last scheduled cycle (a
+rejected the key. `leaked_creds.last_run.summary.unverified` counts the email
+domains skipped because they aren't verified on the HIBP account (or that HIBP
+refused with a `403` while that was unknown); they are not failures. `domain_monitor.last_run` is the last scheduled cycle (a
 manual `run-now` returns its own result instead): `failed` counts the domains
 checked with at least one collector error, `down` those on which no collector
 worked (`unsupported` doesn't count as working: it needs no network), and
@@ -4463,8 +4572,9 @@ severity, or a resolver that is not an IP address
 
 ### GET /api/exposure/providers
 
-The breach-data providers, without keys: `[{ "name": "hibp", ..., "configured": true, "enabled": true, "usable": true }]`
-(same objects as `providers` in `GET /status`). `configured` means a key is
+The breach-data providers, without keys: `[{ "name": "hibp", ..., "license": "CC BY 4.0", "licenseUrl": "https://creativecommons.org/licenses/by/4.0/", "configured": true, "enabled": true, "usable": true }]`
+(same objects as `providers` in `GET /status`). `license` / `licenseUrl` are the
+licence the provider's data must be credited under wherever it is shown. `configured` means a key is
 saved; `usable` means this backend can also decrypt it. A saved key that isn't
 usable (`CREDENTIAL_ENCRYPTION_KEY` missing, or changed since the key was saved)
 makes every leaked-credential check skip: put the original
@@ -4474,8 +4584,23 @@ makes every leaked-credential check skip: put the original
 
 ### PUT /api/exposure/providers/hibp
 
-Save the HIBP API key and/or enable the provider. Saving (or re-enabling) also
-lifts any rate-limit or rejected-key pause.
+Save the HIBP API key and/or enable the provider. Saving a different key (or
+clearing it) resets the verified-domain list (it belongs to the old key's
+account):
+[`GET /providers/hibp/verified-domains`](#get-apiexposureprovidershibpverified-domains)
+reads `not_checked` until the next run or re-check lists the new key's domains.
+Both lift a rejected-key pause. A rate-limit pause belongs to the key HIBP
+answered `429` to: clearing the key keeps it (nothing is sent without a key),
+and a different key starts afresh, but saving the limited key again, after
+clearing it or after another key, brings the pause back until HIBP's
+`retry-after` has passed. The list then reads `error` with `kind:
+"rate_limited"` and that `retry_after`. Re-entering the key that is already
+saved, or only changing `enabled`, keeps the stored key and its list and lifts
+only a rejected-key pause: after a `429`, checks and re-checks stay paused
+until HIBP's `retry-after` has passed. (The wait of a key that was replaced or
+cleared is remembered in memory only, by an HMAC of the key under a
+per-process secret: a restart after the key was replaced or cleared forgets
+it.)
 
 **Authentication:** Required (Admin)
 
@@ -4508,15 +4633,18 @@ saved), otherwise the stored key. Nothing is saved.
 {
   "ok": true,
   "subscription": {
-    "name": "Pwned 1",
+    "name": "Core 1",
     "description": "…",
     "subscribed_until": "2027-01-01T00:00:00",
     "rpm": 10,
     "domain_search_max_breached_accounts": 25,
+    "max_breached_domains": 1,
     "includes_stealer_logs": false
   }
 }
 ```
+`max_breached_domains` is how many domains the plan can verify (`null`: no
+maximum).
 
 **Errors:**
 - `400` - no key given or saved, a malformed key, or HIBP rejected the key
@@ -4524,6 +4652,100 @@ saved), otherwise the stored key. Nothing is saved.
   although the breach searches accept it for HIBP's test accounts)
 - `429` - HIBP rate-limited the test
 - `502` - HIBP could not be reached
+
+### GET /api/exposure/providers/hibp/verified-domains
+
+The domains verified on the saved key's HIBP account (HIBP's
+`subscribeddomains`), the plan, and how the latest listing went: the account
+view behind the Digital Risk page's Domain search section. Read from the
+snapshot the leaked-credential job and the re-check keep; **never calls HIBP**.
+The snapshot is bound to the saved key, so a list fetched for another key is
+never shown.
+
+**Authentication:** Required (Admin)
+
+**Response (200):**
+```json
+{
+  "state": "listed",
+  "checked_at": "2026-10-12T09:41:07Z",
+  "listed_at": "2026-10-12T09:41:07Z",
+  "stale": false,
+  "error": null,
+  "plan": { "name": "Core 2", "domain_search_max_breached_accounts": 100, "max_breached_domains": 3,
+            "subscribed_until": "2027-01-01T00:00:00" },
+  "domains": [
+    { "domain": "example.com", "pwn_count": 40, "pwn_count_excluding_spam_lists": 38,
+      "pwn_count_excluding_spam_lists_at_last_subscription_renewal": 35,
+      "next_subscription_renewal": "2027-01-01T00:00:00",
+      "within_plan": true, "identity_id": 12 }
+  ],
+  "truncated": false,
+  "skipped_entries": 0,
+  "next_refresh_allowed_at": null,
+  "attribution": "https://haveibeenpwned.com"
+}
+```
+- `state` is `no_key` (no usable key; `domains` is `null`), `not_checked` (never
+  listed for the saved key), `listed` (`domains` is set; `error` may describe a
+  later failed attempt, and the list is the last good one, as of `listed_at`)
+  or `error` (no list for this key yet; see `error.kind`).
+- `checked_at` is the latest attempt, `listed_at` the latest success. `stale`
+  means HIBP refused a domain search (`403`) since the list was fetched; the
+  next run re-reads it.
+- `error` is `{ kind, status, message, retry_after }`. `kind` is `auth` (`401`:
+  HIBP's public test key always gets it here), `forbidden` (`403`: the plan has
+  no domain search, so email domains are skipped), `rate_limited` (`429`; no
+  listing before `retry_after`), `network` (haveibeenpwned.com unreachable),
+  `hibp_unavailable` (`5xx`) or `bad_response` (anything else, a `404`
+  included: only a `200` with a JSON array counts as an answer).
+- Domain names are normalized (lowercase punycode, no trailing dot). The counts
+  are HIBP's (`null` before HIBP's first search of the domain). `within_plan`
+  compares the at-renewal count (else the current one) with the plan's
+  `domain_search_max_breached_accounts`; `null` when either is unknown.
+  `identity_id` is the monitored `email_domain` identity, or `null`.
+- `truncated` (more than 2,000 domains are listed; monitored ones are kept
+  first) or `skipped_entries > 0` (entries that couldn't be read) make the list
+  incomplete: a domain it doesn't include is then searched, not skipped.
+- `next_refresh_allowed_at` is the earliest time a re-check will call HIBP (the
+  end of the one-minute cooldown, or of a rate-limit pause); `null` means now.
+- `attribution`: the counts are HIBP data; credit HIBP where they are shown.
+
+**Errors:** `403` - not an admin
+
+### POST /api/exposure/providers/hibp/verified-domains/refresh
+
+Re-check with HIBP now: reads `subscription/status` (so a plan change shows at
+once) and `subscribeddomains`, paced with every other HIBP call. At most once a
+minute install-wide; concurrent re-checks share one call. Identities skipped as
+`unverified` that are now listed become due straight away (their
+`last_checked_at`, `last_status` and `last_error` are cleared), including while
+a check runs: the run decides each skip on the list as it is at that moment, so
+it searches such a domain instead of marking it `unverified` again. The
+provider's `enabled` flag is not required, as for the key test.
+
+**Authentication:** Required (Admin)
+
+**Request Body:** none
+
+**Response (200):** the view above, plus:
+```json
+{ "refreshed": true, "became_due": [12] }
+```
+- `refreshed: false` means HIBP was asked less than a minute ago: the cached
+  view comes back and nothing is sent.
+- A failed attempt still answers `200`, with the failure in `error`. A `429`
+  from HIBP is recorded there and pauses every breach check until its
+  `retry-after` has passed, a run in progress included.
+- `became_due` lists the enabled identities that turned verified and were made
+  due again.
+
+**Errors:**
+- `400` - no usable HIBP key is saved (`"No usable HIBP API key is saved; save one first"`)
+- `403` - not an admin
+- `429` - a rate-limit pause is active; nothing is sent to HIBP. Comes with a
+  `Retry-After` header (seconds) and the message
+  `"HIBP rate limit reached; try again after <ISO time>"`.
 
 ---
 
@@ -4690,7 +4912,9 @@ that did not stop a collector (e.g. one DNS record type timing out).
 
 ### GET /api/exposure/identities
 
-All monitored identities.
+All monitored identities. Each email domain carries `hibp_domain`: whether HIBP
+will search it for the saved key, from the stored verified-domain list (never a
+call to HIBP).
 
 **Authentication:** Required
 
@@ -4706,13 +4930,45 @@ All monitored identities.
     "last_checked_at": "2026-10-10T09:15:01Z",
     "last_status": "ok",
     "last_error": null,
+    "hibp_domain": null,
+    "created_at": "2026-10-09T18:00:00Z",
+    "updated_at": "2026-10-09T18:00:00Z"
+  },
+  {
+    "id": 4,
+    "kind": "email_domain",
+    "value": "example.org",
+    "enabled": true,
+    "interval_minutes": 1440,
+    "last_checked_at": "2026-10-12T09:41:09Z",
+    "last_status": "unverified",
+    "last_error": "Skipped: example.org isn't verified on your HIBP account (as of 2026-10-12T09:41:07Z). Verify it in the HIBP dashboard, then re-check verification.",
+    "hibp_domain": {
+      "state": "not_verified",
+      "reason": null,
+      "verified_parent": null,
+      "listed_at": "2026-10-12T09:41:07Z",
+      "message": "Not verified on your HIBP account, so HIBP won't search it and SIEMBox skips it. Verify it in the HIBP dashboard (https://haveibeenpwned.com/Dashboard/Redirect/Domains), then re-check verification."
+    },
     "created_at": "2026-10-09T18:00:00Z",
     "updated_at": "2026-10-09T18:00:00Z"
   }
 ]
 ```
-`last_status` is `ok` or `error` (with `last_error` saying why, e.g. an unverified
-domain).
+- `last_status` is `ok`, `error` (with `last_error` saying why) or
+  `unverified`; `null` means not checked yet. **`unverified`** means the email
+  domain was skipped, not failed: it isn't verified on the HIBP account (or
+  HIBP refused it with a `403` while that was unknown). Scripts that treat
+  anything but `ok` as a failure should read it as "needs verifying at HIBP".
+- `hibp_domain` is `null` for an `email`. Its `state` is `verified`,
+  `verified_limited` (verified, but it may be larger than the plan covers: HIBP
+  then returns only subscription-free breaches), `not_verified` (skipped;
+  `verified_parent` names a listed parent domain, since HIBP verifies each
+  subdomain separately), `unavailable` (the plan has no domain search: skipped)
+  or `unknown` (searched as before). `reason` is set only for `unknown`:
+  `no_key`, `not_checked`, `auth`, `rate_limited`, `network`,
+  `hibp_unavailable`, `bad_response` or `list_incomplete`. `listed_at` is when
+  the list used was fetched, and `message` explains the state in a sentence.
 
 ### POST /api/exposure/identities
 
@@ -4729,8 +4985,10 @@ domain).
 - `enabled` (optional) - boolean, default `true`
 - `interval_minutes` (optional) - whole minutes, `60`-`43200`, default `1440`
 
-**Response (201):** the created identity. It is due immediately, so the next job
-tick (or `POST /run-now`) checks it.
+**Response (201):** the created identity, with `hibp_domain` as in
+`GET /identities`. It is due immediately, so the next job tick (or
+`POST /run-now`) checks it (or skips it, if it is an email domain HIBP won't
+search).
 
 **Errors:** `400` - invalid kind or value; `409` - already monitored
 
@@ -4741,7 +4999,7 @@ Update `enabled` and/or `interval_minutes`. `kind` and `value` can't be changed
 
 **Authentication:** Required (Admin)
 
-**Response (200):** the updated identity · **Errors:** `400`, `404`
+**Response (200):** the updated identity (with `hibp_domain`) · **Errors:** `400`, `404`
 
 ### DELETE /api/exposure/identities/:id
 
@@ -4815,7 +5073,10 @@ Findings, newest first.
 }
 ```
 Findings from an `email_domain` identity also carry `detail.alias` (the local part
-that was found).
+that was found). A breach whose provider asked HIBP to credit them also carries
+`detail.breach_attribution` (plain text, at most 300 characters, control
+characters removed; show it as text, never as a link or HTML). New findings'
+alert descriptions end with the licence line quoted at the top of this section.
 
 Domain-monitor findings have `source: "domain-monitor"`, `domain_id` set, an
 `event_type` of `new_cert`, `unexpected_ca`, `lookalike_registered`,
@@ -4875,7 +5136,8 @@ Run the leaked-credential check now instead of waiting for the job.
 **Authentication:** Required (Admin)
 
 **Request Body:** `{ "force": true }` (optional) - check every enabled identity,
-not just the due ones.
+not just the due ones. With `force`, a due email domain also re-reads the
+verified-domain list if it is more than a minute old.
 
 Stops starting new checks after ~90 seconds (HIBP calls are paced to the key's
 plan, about 6 s apart on the smallest one); anything left stays due for the
@@ -4883,11 +5145,17 @@ scheduled job. Allow a client timeout of a couple of minutes.
 
 **Response (200):**
 ```json
-{ "checked": 3, "newFindings": 2, "failed": 0, "remaining": 0, "skipped": false }
+{ "checked": 3, "newFindings": 2, "failed": 0, "unverified": 1, "remaining": 0, "skipped": false }
 ```
+- `unverified` - email domains skipped because they aren't verified on the HIBP
+  account (or refused with a `403` while that was unknown); not part of `failed`
 - `skipped: true` with a `reason` when nothing ran (checks disabled, no provider
   configured, paused, or nothing due)
-- `error` (and `rateLimitedUntil` for a `429`) when the run stopped early
+- `error` (and `rateLimitedUntil` for a `429`) when the run stopped early. For
+  a `429`, when checks resume is given by `rateLimitedUntil` (ISO) only, not in
+  `error`, e.g.
+  `"Have I Been Pwned rate limit reached (it answered 429 to another request)"`
+  when an admin's re-check drew it while the run was going
 - `remaining` - identities still due afterwards
 
 **Errors:** `409` - a check is already running

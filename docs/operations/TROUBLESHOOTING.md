@@ -1569,6 +1569,88 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 - `lookalike: DNS lookups failed for every lookalike candidate` — DNS from the
   backend is down or blocked; retried automatically.
 
+### Issue: Digital Risk skips an email domain ("Not verified on HIBP") or can't check verification
+
+HIBP only searches an email domain that is verified on the key's HIBP account
+(in the [HIBP dashboard](https://haveibeenpwned.com/Dashboard/Redirect/Domains)).
+SIEMBox reads the account's verified-domain list and skips the domains it
+doesn't include: they get `last_status: "unverified"`, with no error and no
+HIBP call, until they are verified and re-checked.
+
+```bash
+# Each email domain's status and how SIEMBox reads its HIBP verification
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8421/api/exposure/identities \
+  | jq '.[] | select(.kind=="email_domain") | {value, last_status, last_error, hibp_domain}'
+
+# The key's verified domains, plan and the latest listing (admin; never calls HIBP)
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8421/api/exposure/providers/hibp/verified-domains | jq .
+
+# Ask HIBP again now (admin; at most once a minute)
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8421/api/exposure/providers/hibp/verified-domains/refresh \
+  | jq '{state, error, refreshed, became_due}'
+```
+
+**What `hibp_domain.state` means:**
+- `verified` — listed on the account; searched as usual.
+- `verified_limited` — listed, but its breached-address count (at the last
+  renewal) is above what the plan searches (`plan.domain_search_max_breached_accounts`).
+  HIBP doesn't refuse it: it returns only subscription-free breaches until the
+  plan is upgraded. The count includes breaches HIBP doesn't charge for, so this
+  can warn just below the real limit.
+- `not_verified` — absent from a complete list: skipped. Verify it in the HIBP
+  dashboard, then click **Re-check HIBP verification** (or wait for the next
+  due check, which re-reads the list when it is over an hour old). With
+  `verified_parent` set, a parent domain is verified but this one isn't: **each
+  subdomain must be verified separately**, in both directions
+  (`example.com` doesn't cover `mail.example.com`).
+- `unavailable` — HIBP refused to list verified domains (`403`): the plan has no
+  domain search (HIBP's High RPM plans don't; Core and Pro plans do). Email
+  domains are skipped, email addresses are still checked. After changing the
+  plan on the same key, click **Re-check with HIBP** on the Have I Been Pwned
+  card (it is offered for a `401` too, once the key works again).
+- `unknown` — verification couldn't be read, so the domain is **searched as
+  before**. `reason`: `no_key` (no usable key), `not_checked` (not listed yet for
+  this key), `auth` (`401`: HIBP's public test key `000…0` always gets this
+  here, as it does on *Test key*; a real key is wrong or expired), `rate_limited`,
+  `network` (see below), `hibp_unavailable` (`5xx`), `bad_response` (HIBP
+  answered something other than a JSON list, a `404` included), or
+  `list_incomplete` (more than 2,000 verified domains, or entries SIEMBox
+  couldn't read, and this one wasn't among those read).
+
+**Other signs:**
+- `last_status: "error"` with *"HIBP refused the domain search (HTTP 403)
+  although the domain is listed as verified"* — the plan may not cover that many
+  domains (`plan.max_breached_domains`), or the domain was just removed from the
+  dashboard. SIEMBox re-reads the list before the next search.
+- An email domain that showed the old red *HTTP 403* error before this release
+  reads **Not verified** after its next check (or right away with **Run check
+  now** and *Re-check every enabled identity*).
+- Internationalized domain names are matched in punycode (`xn--…`), the form
+  HIBP lists them in.
+- **Network:** `error.kind: "network"` means the backend couldn't reach
+  `haveibeenpwned.com` over HTTPS: allow egress to it (breach checks need it too).
+- **Timing:** a re-check within a minute of the last one returns the cached
+  answer (`refreshed: false`). After HIBP answers `429`, every breach check is
+  paused until its `retry-after` has passed (a run already in progress stops
+  too), and a re-check meanwhile gets `429` with a `Retry-After` header.
+  Re-entering the same key, switching the provider off and on, or removing the
+  key and pasting it back doesn't lift that wait: HIBP's limit belongs to the
+  key. Saving a different key clears the list and starts afresh; the next due
+  check or a re-check reads the new key's. Switching back to the limited key
+  before its `retry-after` brings the wait back.
+
+**Getting Started reminder:** the Dashboard reminder is shown to admins until
+one of them finishes or hides it, for every admin of the install (stored
+server-side; *Show the reminder again* on the Getting Started page reopens it).
+To reset it as if it had never been recorded:
+
+```bash
+docker compose exec postgres psql -U siembox -d siembox \
+  -c "DELETE FROM system_settings WHERE key = 'onboarding_completed';"
+```
+
 ### Issue: Everyone shows the same IP address
 
 **Symptoms:**

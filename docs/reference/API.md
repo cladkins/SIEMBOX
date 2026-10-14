@@ -2604,6 +2604,8 @@ The args/targets (or, for discovery, the probe plan) are **built and validated b
                  "discovery_methods": ["arp","active_probe"] } ] }
 ```
 
+Each `tls_subjects` entry is `{ "port": 8006, "subject_cn": "pve", "san": ["DNS:pve"] }`. `subject_cn` is an array of strings when the certificate's subject repeats CN (`["proxmox.local", "pve"]`); a fingerprint's TLS signal matches if any of them contains its text. Entries without an integer `port` are dropped.
+
 **Request Body — failure:**
 ```json
 { "api_key": "<shipper api key>", "scan_id": 7, "error": "node runtime not available on the shipper" }
@@ -2614,7 +2616,7 @@ The args/targets (or, for discovery, the probe plan) are **built and validated b
 **Errors:**
 - `400` - Missing `api_key`, non-positive `scan_id`, or neither `signals` (array) nor `error`
 - `404` - Invalid API key, or the discovery scan isn't assigned to this shipper
-- `422` - signals could not be ingested (the scan is marked `failed`)
+- `422` - the signals could not be ingested at all (the scan is marked `failed`). One host that can't be matched or saved doesn't cause this: it is skipped, the scan completes, and the host is counted in the scan's `results_summary.hosts_failed`.
 
 ---
 
@@ -3068,12 +3070,18 @@ A single scan job's status.
   "started_at": "2025-12-17T10:00:00Z",
   "completed_at": "2025-12-17T10:00:42Z",
   "error_message": null,
-  "results_summary": { "hosts_seen": 24, "hosts_matched": 9 },
+  "results_summary": {
+    "hosts_seen": 24,
+    "hosts_matched": 9,
+    "hosts_failed": 1,
+    "host_errors": [{ "ip": "192.168.1.20", "error": "..." }]
+  },
   "assigned_shipper_id": null,
   "assigned_shipper_name": null
 }
 ```
 - `status` - `queued` (dispatched to a shipper, awaiting claim), `running`, `completed`, or `failed`. An in-process scan starts straight at `running`.
+- `results_summary.hosts_failed` - hosts the scan saw but couldn't match or save. They are skipped and the rest of the scan completes; `host_errors` (present only when some failed) lists the first 20 with their error. Scans from before this field have no `hosts_failed`.
 - `assigned_shipper_id` / `assigned_shipper_name` - the shipper the scan ran on, or `null`/absent when it ran on the backend (the name is joined for display).
 
 ---

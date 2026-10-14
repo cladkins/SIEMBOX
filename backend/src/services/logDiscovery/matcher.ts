@@ -4,6 +4,7 @@
 // Pure functions only -- no I/O -- so this stays unit-testable without a
 // live network or database.
 import { DiscoveredSignals, FingerprintEntry, FingerprintMatch } from './types';
+import { commonNames } from './tlsSubject';
 
 function macOuiOf(mac: string): string {
   return mac.toUpperCase().split(':').slice(0, 3).join(':');
@@ -50,9 +51,11 @@ export function scoreSource(source: DiscoveredSignals, fp: FingerprintEntry): { 
   }
 
   for (const s of signals.tls) {
-    const hit = source.tls_subjects.find(
-      (t) => s.subject_cn && t.subject_cn?.toLowerCase().includes(s.subject_cn.toLowerCase())
-    );
+    // A cert can carry several CNs (see tlsSubject.ts); any one containing the
+    // fingerprint's needle counts, case-insensitively.
+    const needle = typeof s.subject_cn === 'string' ? s.subject_cn.toLowerCase() : '';
+    if (!needle) continue;
+    const hit = source.tls_subjects.some((t) => commonNames(t.subject_cn).some((cn) => cn.toLowerCase().includes(needle)));
     if (hit) {
       weight += s.weight;
       matched.push(`tls cn~"${s.subject_cn}"`);

@@ -148,3 +148,57 @@ test('pickBestMatch returns null when nothing matched', () => {
   const source = fixture();
   assert.equal(pickBestMatch(source, LIBRARY), null);
 });
+
+// TLS subject CN matching. A cert's CN arrives as a string (one CN -- also the
+// shape stored in existing evidence rows) or as an array (a subject that
+// repeats CN, e.g. openssl's -subj "/CN=proxmox.local/CN=pve").
+const PROXMOX: FingerprintEntry = {
+  ...PIHOLE,
+  id: 'proxmox-ve',
+  name: 'Proxmox VE',
+  signals: { ports: [], http: [], mdns: [], ssdp: [], tls: [{ subject_cn: 'pve', weight: 20 }], mac_oui: [] },
+};
+
+test('tls signal matches a single-string CN by case-insensitive substring, as before', () => {
+  for (const cn of ['pve', 'PVE', 'pve.example.lan']) {
+    const { weight, matched } = scoreSource(fixture({ tls_subjects: [{ port: 8006, subject_cn: cn }] }), PROXMOX);
+    assert.equal(weight, 20, `CN ${cn}`);
+    assert.deepEqual(matched, ['tls cn~"pve"']);
+  }
+  assert.equal(scoreSource(fixture({ tls_subjects: [{ port: 8006, subject_cn: 'unifi' }] }), PROXMOX).weight, 0);
+});
+
+test('tls signal matches when any CN of a multi-CN cert matches, without throwing', () => {
+  const twoCn = fixture({ tls_subjects: [{ port: 8006, subject_cn: ['proxmox.local', 'PVE'] }] });
+  const { weight, matched } = scoreSource(twoCn, PROXMOX);
+  assert.equal(weight, 20);
+  assert.deepEqual(matched, ['tls cn~"pve"']);
+
+  const noneMatch = fixture({ tls_subjects: [{ port: 8006, subject_cn: ['proxmox.local', 'nas.local'] }] });
+  assert.equal(scoreSource(noneMatch, PROXMOX).weight, 0);
+});
+
+test('tls signal checks every probed port and counts its weight once', () => {
+  const source = fixture({
+    tls_subjects: [
+      { port: 443, subject_cn: 'nginx' },
+      { port: 8006, subject_cn: ['proxmox.local', 'pve'] },
+      { port: 8443, subject_cn: 'pve' },
+    ],
+  });
+  assert.equal(scoreSource(source, PROXMOX).weight, 20);
+});
+
+test('a missing or malformed CN never matches and never throws (old rows, older shippers)', () => {
+  const odd = [undefined, '', 42, null, { CN: 'pve' }, [7, null]] as unknown as Array<string | string[] | undefined>;
+  for (const subject_cn of odd) {
+    const source = fixture({ tls_subjects: [{ port: 8006, subject_cn }] });
+    assert.doesNotThrow(() => matchHost(source, [PROXMOX]));
+    assert.equal(scoreSource(source, PROXMOX).weight, 0, `CN ${JSON.stringify(subject_cn)}`);
+  }
+});
+
+test('a tls signal without a subject_cn never matches', () => {
+  const noNeedle: FingerprintEntry = { ...PROXMOX, signals: { ...PROXMOX.signals, tls: [{ weight: 20 }] } };
+  assert.equal(scoreSource(fixture({ tls_subjects: [{ port: 8006, subject_cn: 'pve' }] }), noNeedle).weight, 0);
+});

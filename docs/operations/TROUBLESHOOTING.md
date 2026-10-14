@@ -57,6 +57,7 @@ curl http://localhost:8421/api/health
 | `Error: connect ECONNREFUSED 127.0.0.1:5432` | `DB_HOST` is a loopback address, so the backend is dialing its own container (Postgres can be perfectly healthy) | Set `DB_HOST=postgres` and **redeploy** the stack — see [below](#issue-backend-cant-reach-postgres-on-127001) |
 | `timeout exceeded when trying to connect` | The backend ran out of free database connections (a heavy query or scan was holding them) | See [Logs are dropped or ingestion is slow](#issue-logs-are-dropped-or-ingestion-is-slow) |
 | `[DiscoveryApiPoller] source N (home-assistant) poll failed: ...` | An API-polled source can't be read: wrong port/endpoint, a non-admin token, or (before the Supervisor fallback) Home Assistant OS answering 404 for `/api/error_log` | See [An API-polled source keeps failing](#issue-an-api-polled-source-keeps-failing-home-assistant-http-404-from-error_log) |
+| `t.subject_cn?.toLowerCase is not a function` (a failed discovery scan) | Older versions failed the whole scan on a TLS certificate with more than one CN | Upgrade; see [A discovery scan failed with `t.subject_cn?.toLowerCase is not a function`](#issue-a-discovery-scan-failed-with-tsubject_cntolowercase-is-not-a-function-or-shows-not-recorded-hosts) |
 | `401 Unauthorized` | Invalid/expired token | Login again |
 | `Port 514: Permission denied` | Insufficient privileges | Run backend as root or use authbind |
 | `FATAL: password authentication failed` | Wrong database password | Check .env DB_PASSWORD |
@@ -710,6 +711,20 @@ curl -X PUT http://localhost:8421/api/shippers/sources/<source-id> \
 ---
 
 ## Log Discovery & API-Polled Sources
+
+### Issue: A discovery scan failed with `t.subject_cn?.toLowerCase is not a function`, or shows "not recorded" hosts
+
+**Symptoms:**
+- Older versions: a discovery scan ends **failed** with `t.subject_cn?.toLowerCase is not a function` when it reaches a TLS service whose certificate names more than one CN, for example one made with `openssl req -subj "/CN=proxmox.local/CN=pve"`. Scans run by the backend and by a shipper both failed, and hosts after that one weren't saved.
+- Current versions: such a certificate matches on any of its CNs. If one host still can't be matched or saved, the scan completes without it and the **Hosts** column says **· N not recorded**. Hover it to see each host's address and error.
+
+**Where to look:** the backend log (`[logDiscovery] scan 12: could not record host 192.168.1.20: ...`), the dashboard error log (source `log-discovery`), or the scan from the API:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8421/api/log-discovery/scans/12 | jq .results_summary
+```
+
+**Fix:** upgrade the backend. Shippers don't need updating for this: the backend also accepts the certificate data that older shipper discovery agents send. A host that is still not recorded is a SIEMBox bug or a database problem, and its error says which. Report it with that error; the scan's other hosts are saved.
 
 ### Issue: An API-polled source keeps failing (Home Assistant: HTTP 404 from error_log)
 

@@ -118,7 +118,14 @@ export interface DiscoveryScan {
   started_at: string;
   completed_at: string | null;
   error_message: string | null;
-  results_summary: { hosts_seen: number; hosts_matched: number } | null;
+  results_summary: {
+    hosts_seen: number;
+    hosts_matched: number;
+    /** Hosts that couldn't be matched or saved; the rest of the scan still completed. Absent on older scans. */
+    hosts_failed?: number;
+    /** The first few of those failures. */
+    host_errors?: Array<{ ip: string; error: string }>;
+  } | null;
   /** Shipper the scan ran on (null/absent = ran on the SIEMBox backend). */
   assigned_shipper_id?: number | null;
   assigned_shipper_name?: string | null;

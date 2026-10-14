@@ -113,6 +113,12 @@
               <template #default="{ row }">
                 <span v-if="row.results_summary">
                   {{ row.results_summary.hosts_matched }} matched / {{ row.results_summary.hosts_seen }} seen
+                  <el-tooltip v-if="row.results_summary.hosts_failed" placement="top">
+                    <template #content>
+                      <div v-for="(e, i) in row.results_summary.host_errors || []" :key="i">{{ e.ip }}: {{ e.error }}</div>
+                    </template>
+                    <span class="hosts-failed">· {{ row.results_summary.hosts_failed }} not recorded</span>
+                  </el-tooltip>
                 </span>
                 <span v-else>-</span>
               </template>
@@ -918,6 +924,10 @@ onMounted(async () => {
 .scope-empty {
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+.hosts-failed {
+  color: var(--el-color-warning);
+  cursor: help;
 }
 .scope-label {
   font-weight: 600;

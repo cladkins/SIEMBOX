@@ -46,7 +46,7 @@ const router = Router();
 const requireDiscoveryScan = requireScanPermission(UserRole.Operator, 'discovery_scan');
 
 function parseSourceId(req: Request): number {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (!Number.isInteger(id)) throw new ApiError(400, 'Invalid source id');
   return id;
 }
@@ -407,7 +407,7 @@ router.get('/scans', async (_req: Request, res: Response) => {
 
 // GET /scans/:id - one scan job's status
 router.get('/scans/:id', async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (!Number.isInteger(id)) throw new ApiError(400, 'Invalid scan id');
   const scan = await DiscoveryScanModel.findById(id);
   if (!scan) throw new ApiError(404, 'Scan not found');
@@ -420,7 +420,7 @@ router.get('/scans/:id', async (req: Request, res: Response) => {
 // never came back to claim it. In every case the status flips to failed; there
 // may just be nothing to interrupt.
 router.post('/scans/:id/cancel', requireDiscoveryScan, async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (!Number.isInteger(id)) throw new ApiError(400, 'Invalid scan id');
   const scan = await DiscoveryScanModel.findById(id);
   if (!scan) throw new ApiError(404, 'Scan not found');

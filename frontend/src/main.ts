@@ -1,3 +1,4 @@
+import './polyfills'; // first: built-ins marked and Pinia need on older browsers
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import ElementPlus from 'element-plus';

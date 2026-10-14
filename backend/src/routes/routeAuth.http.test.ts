@@ -2,7 +2,8 @@
  * HTTP-level check against the real Express app (app.ts with every router and
  * middleware) on an ephemeral port. Without a login, shipper management, asset,
  * vulnerability, settings and scan routes answer 401, and the shipper agent's
- * key-authenticated endpoints still do not ask for one.
+ * key-authenticated endpoints still do not ask for one. Also checks how the app
+ * reads bodies (size limits, undecodable compressed bodies) and query strings.
  *
  * Hermetic: before app.ts (and so config/database.ts) is loaded, DB_HOST and
  * DB_PORT are pointed at a local port nothing listens on, and before() checks
@@ -12,10 +13,11 @@
  * fails instead of writing to the developer's database.
  * Run with `npm test` (tsx --test).
  */
-import { test, before, after } from 'node:test';
+import { test, before, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import net from 'node:net';
+import zlib from 'node:zlib';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Application } from 'express';
@@ -199,14 +201,53 @@ test('the 16 kB cap is only for /api/auth: other routes keep the general limit',
   assert.equal(r.message, 'API key is required');
 });
 
+test('a compressed body that does not decompress is a 400, not a 500 written to application_errors', async () => {
+  const { ErrorLogService } = await import('../services/errors/errorLogService');
+  const logError = mock.method(ErrorLogService, 'logError', async () => undefined);
+  try {
+    const body = JSON.stringify({ username: 'admin', password: 'x' });
+    // /api/auth reads bodies with its own 16 kB parsers; /api/rules with the
+    // general ones, which run before authenticate.
+    for (const path of ['/api/auth/login', '/api/rules']) {
+      for (const [encoding, data] of [
+        ['br', Buffer.from('not brotli at all')],
+        ['br', zlib.brotliCompressSync(body).subarray(0, 5)],
+        ['gzip', Buffer.from('not gzip at all')],
+        ['gzip', zlib.gzipSync(body).subarray(0, 12)],
+        ['deflate', Buffer.from('not deflate at all')],
+      ] as const) {
+        const res = await fetch(base + path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Content-Encoding': encoding },
+          body: data,
+        });
+        assert.equal(res.status, 400, `${path} ${encoding}`);
+        assert.equal(((await res.json()) as { message?: string }).message, 'Invalid request body');
+      }
+    }
+    assert.equal(logError.mock.callCount(), 0, 'no application_errors row');
+  } finally {
+    logError.mock.restore();
+  }
+});
+
+test('query strings parse with qs as under Express 4, arrays of more than 20 entries included', () => {
+  const parse = app.get('query parser fn') as (str: string) => Record<string, unknown>;
+  const values = Array.from({ length: 25 }, (_, i) => String(i));
+  assert.deepEqual(parse(values.map((v) => `limit=${v}`).join('&')).limit, values);
+  assert.deepEqual(parse(values.map((v) => `search[]=${v}`).join('&')).search, values);
+  assert.deepEqual(parse('a[21]=x').a, ['x']);
+  assert.deepEqual(parse('filter[severity]=high&filter[status]=open').filter, { severity: 'high', status: 'open' });
+  assert.equal(parse('q=a%20b').q, 'a b');
+});
+
 /**
  * Names of the middleware app.ts mounts for `path` (path-less global middleware
- * excluded). Compared by name because express-async-errors, which app.ts loads,
- * wraps every layer's handle, so the function objects differ.
+ * excluded).
  */
 function mountNames(path: string): string[] {
-  return (app as any)._router.stack
-    .filter((l: any) => !l.regexp.fast_slash && l.regexp.test(path))
+  return (app as any).router.stack
+    .filter((l: any) => !l.slash && l.match(path))
     .map((l: any) => l.name);
 }
 

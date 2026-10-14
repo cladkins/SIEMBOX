@@ -108,7 +108,7 @@ router.get('/chat/sessions', async (req: Request, res: Response) => {
 // Get one thread's messages (scoped to the owner).
 router.get('/chat/sessions/:id', async (req: Request, res: Response) => {
   if (!req.user) throw new ApiError(401, 'Authentication required');
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (!Number.isFinite(id)) throw new ApiError(400, 'invalid session id');
   const session = await ChatThreadModel.getSession(id, req.user.id);
   if (!session) throw new ApiError(404, 'Chat session not found');
@@ -119,7 +119,7 @@ router.get('/chat/sessions/:id', async (req: Request, res: Response) => {
 // Rename a thread.
 router.patch('/chat/sessions/:id', requireAnalystChat, async (req: Request, res: Response) => {
   if (!req.user) throw new ApiError(401, 'Authentication required');
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   const { title } = req.body ?? {};
   if (!Number.isFinite(id)) throw new ApiError(400, 'invalid session id');
   if (typeof title !== 'string' || !title.trim()) throw new ApiError(400, 'title is required');
@@ -131,7 +131,7 @@ router.patch('/chat/sessions/:id', requireAnalystChat, async (req: Request, res:
 // Delete a thread (and its messages, via cascade).
 router.delete('/chat/sessions/:id', requireAnalystChat, async (req: Request, res: Response) => {
   if (!req.user) throw new ApiError(401, 'Authentication required');
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (!Number.isFinite(id)) throw new ApiError(400, 'invalid session id');
   const ok = await ChatThreadModel.deleteSession(id, req.user.id);
   if (!ok) throw new ApiError(404, 'Chat session not found');

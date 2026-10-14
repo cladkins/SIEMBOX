@@ -19,7 +19,7 @@ router.get('/', async (_req: Request, res: Response) => {
 // Install (or update) every parser + detection a pack references. Admin only.
 router.post('/:id/install', authorize('admin'), async (req: Request, res: Response) => {
   try {
-    const result = await installPack(req.params.id);
+    const result = await installPack(req.params.id as string);
     res.json(result);
   } catch (error) {
     if (error instanceof Error && /Unknown content pack/.test(error.message)) {

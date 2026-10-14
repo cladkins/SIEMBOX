@@ -156,7 +156,9 @@ body in the usual error envelope:
 
 `retryAfter` matches the `Retry-After` header. Request bodies sent to
 `/api/auth/*` are limited to 16 kB (a larger one gets `413`); other routes
-accept up to 10 MB.
+accept up to 10 MB. A body may be compressed (`Content-Encoding: gzip`,
+`deflate` or `br`); the limits apply to its decompressed size, and one that
+does not decompress gets `400` (`"Invalid request body"`).
 
 ---
 

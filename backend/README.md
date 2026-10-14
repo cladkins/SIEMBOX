@@ -12,7 +12,7 @@ The SIEMBox backend is a Node.js/TypeScript application that provides the core S
 
 - **Node.js 20** - Runtime environment
 - **TypeScript 5.3.3** - Type-safe JavaScript
-- **Express 4.18.2** - Web framework
+- **Express 5** - Web framework
 - **PostgreSQL 15** - Database
 - **node-postgres (pg) 8.11.3** - Database client
 - **Winston 3.11.0** - Logging

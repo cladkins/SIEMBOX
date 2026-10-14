@@ -29,8 +29,27 @@ const BODY_PARSER_ERROR_TYPES = new Set([
 ]);
 
 /**
- * Answer body-parser rejections (malformed JSON, oversized body, ...) with
- * their own 4xx status — and without logging them.
+ * A body sent with Content-Encoding gzip, deflate or br that does not
+ * decompress. body-parser passes zlib's error on as a 400 (exposed, no `type`):
+ * codes Z_DATA_ERROR, Z_BUF_ERROR, Z_NEED_DICT, ... from gzip and deflate, and
+ * ERR__ERROR_* (ERR__ERROR_FORMAT_PADDING_2, ...) from brotli. It is the
+ * client's fault: errorHandler would answer 500 and add an application_errors
+ * row for every such request. Requiring the exposed 400 keeps a zlib error
+ * thrown inside a route handler on the 500 path.
+ */
+function isUndecodableBody(err: unknown): err is { code: string } {
+  const e = err as { status?: unknown; expose?: unknown; code?: unknown } | null;
+  return (
+    e?.status === 400 &&
+    e.expose === true &&
+    typeof e.code === 'string' &&
+    (e.code.startsWith('Z_') || e.code.startsWith('ERR__ERROR_'))
+  );
+}
+
+/**
+ * Answer body-parser rejections (malformed JSON, oversized body, a body that
+ * does not decompress, ...) with their own 4xx status — and without logging them.
  *
  * Why not just let errorHandler log them: a JSON parse error's message quotes
  * part of the raw body (V8: `Unexpected token 'h', ..."assword": hunter2}" is
@@ -46,6 +65,10 @@ export const bodyParserErrorHandler = (
   res: Response,
   next: NextFunction
 ) => {
+  if (isUndecodableBody(err)) {
+    logger.warn('Rejected request body', { code: err.code, status: 400, path: req.path, method: req.method });
+    return res.status(400).json({ status: 'error', statusCode: 400, message: 'Invalid request body' });
+  }
   const e = err as { type?: unknown; status?: unknown };
   if (
     typeof e?.type !== 'string' ||

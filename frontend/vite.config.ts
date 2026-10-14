@@ -1,6 +1,9 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
+import { createRequire } from 'node:module';
 import path from 'path';
+
+const { version: jsYamlVersion } = createRequire(import.meta.url)('js-yaml/package.json');
 
 export default defineConfig({
   plugins: [vue()],
@@ -34,6 +37,13 @@ export default defineConfig({
         // Apache-2.0 code we ship (Vue, Chart.js, DOMPurify, ...) must carry
         // its notice. scripts/check-legal-comments.mjs fails CI without them.
         comments: { legal: true },
+        // js-yaml's v4-legacy releases (4.3.x) ship their ESM build without the
+        // license header 4.2.0 had, so put the same header on the chunk that
+        // bundles it (after minification, so nothing can strip it).
+        postBanner: (chunk) =>
+          chunk.moduleIds.some((id) => /[\\/]node_modules[\\/]js-yaml[\\/]/.test(id))
+            ? `/*! js-yaml ${jsYamlVersion} https://github.com/nodeca/js-yaml @license MIT */`
+            : '',
         // The vendor chunks of Vite 5's manualChunks object, which Rolldown no
         // longer accepts. Like manualChunks, a group also takes in the
         // dependencies of the modules it matches (Vue, lodash-es, dayjs,

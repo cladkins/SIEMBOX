@@ -22,6 +22,9 @@ export const EXPOSURE_SETTING_DEFAULTS = {
   exposure_leaked_creds_enabled: 'true',
   exposure_hibp_enabled: 'false',
   exposure_hibp_key: '',
+  // The verified domains on the HIBP key's account, as one JSON snapshot bound
+  // to the stored key (see hibpDomains.ts); '' = not listed yet.
+  exposure_hibp_domains: '',
   // Domain monitoring (migration 035).
   exposure_domain_monitor_enabled: 'true',
   exposure_domain_expiry_warning_days: '30',
@@ -178,6 +181,9 @@ export const HIBP_PROVIDER = {
   docsUrl: 'https://haveibeenpwned.com/API/v3',
   signupUrl: 'https://haveibeenpwned.com/API/Key',
   attribution: 'https://haveibeenpwned.com',
+  /** HIBP's breach data is licensed CC BY 4.0: credit it wherever it is shown. */
+  license: 'CC BY 4.0',
+  licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
 } as const;
 
 /** HIBP keys are 32 hex characters (https://haveibeenpwned.com/API/v3#Authorisation). */
@@ -189,6 +195,9 @@ export interface ExposureProviderPublic {
   docsUrl: string;
   signupUrl: string;
   attribution: string;
+  /** The data's licence, e.g. "CC BY 4.0". */
+  license: string;
+  licenseUrl: string;
   configured: boolean;
   enabled: boolean;
   /**
@@ -250,6 +259,25 @@ export async function saveHibpProvider(input: {
   if (typeof input.enabled === 'boolean') {
     await setExposureSetting('exposure_hibp_enabled', String(input.enabled));
   }
+}
+
+/**
+ * Whether `stored` (the exposure_hibp_key setting) holds exactly `apiKey`
+ * (null or '': whether it holds no key at all). A value this backend can't
+ * decrypt matches no key, so saving over it (or clearing it) is a change.
+ */
+export function storedHibpKeyMatches(stored: string, apiKey: string | null): boolean {
+  if (!apiKey) return stored === '';
+  const saved = decryptStoredHibpKey(stored, false);
+  if (saved === undefined) return false;
+  const a = Buffer.from(saved);
+  const b = Buffer.from(apiKey);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/** Whether `apiKey` is the key already saved (see storedHibpKeyMatches). */
+export async function isSavedHibpKey(apiKey: string | null): Promise<boolean> {
+  return storedHibpKeyMatches(await getExposureSetting('exposure_hibp_key'), apiKey);
 }
 
 export async function isHibpEnabled(): Promise<boolean> {

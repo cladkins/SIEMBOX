@@ -7,13 +7,19 @@
  * there, and its 400 message is always shown as-is.
  */
 import { format, formatDistanceToNow } from 'date-fns';
-import type {
-  DomainCollectorName,
-  DomainScope,
-  ExposureFinding,
-  ExposureStatus,
-  IdentityKind,
-  WatchedDomain,
+import {
+  CLIENT_TIMEOUT_CODE,
+  type DomainCollectorName,
+  type DomainScope,
+  type ExposureFinding,
+  type ExposureStatus,
+  type HibpDomainListError,
+  type HibpVerifiedDomainsRefreshResult,
+  type HibpVerifiedDomainsView,
+  type IdentityHibpDomain,
+  type IdentityKind,
+  type MonitoredIdentity,
+  type WatchedDomain,
 } from '@/services/exposureService';
 
 // ---- Validation (mirrors the backend) ----------------------------------------
@@ -154,7 +160,10 @@ export function isEncryptionKeyError(error: unknown): boolean {
 
 export const HIBP_HOME_URL = 'https://haveibeenpwned.com';
 export const HIBP_API_KEY_URL = 'https://haveibeenpwned.com/API/Key';
-export const HIBP_DOMAIN_SEARCH_URL = 'https://haveibeenpwned.com/DomainSearch';
+/** Where an HIBP account owner adds and verifies domains (a link for people; never fetched). */
+export const HIBP_DOMAINS_DASHBOARD_URL = 'https://haveibeenpwned.com/Dashboard/Redirect/Domains';
+export const HIBP_PRICING_URL = 'https://haveibeenpwned.com/Subscription';
+export const HIBP_PASSWORDS_URL = 'https://haveibeenpwned.com/Passwords';
 export const CC_BY_4_URL = 'https://creativecommons.org/licenses/by/4.0/';
 
 /** Check intervals offered in the UI (the API accepts any whole minutes, 60-43200). */
@@ -240,6 +249,8 @@ export function checkStatusTag(row: {
   if (!row.enabled) return { type: 'info', label: 'Disabled' };
   if (row.last_status === 'ok') return { type: 'success', label: 'OK' };
   if (row.last_status === 'error') return { type: 'danger', label: 'Error' };
+  // An email domain skipped because HIBP won't search it for this account: not a failure.
+  if (row.last_status === 'unverified') return { type: 'warning', label: 'Not verified' };
   if (!row.last_status) return { type: 'info', label: 'Not checked yet' };
   return { type: 'info', label: row.last_status };
 }
@@ -282,13 +293,255 @@ export function breachChecksReady(status: ExposureStatus): boolean {
   return status.features.leaked_creds_enabled && !!hibp?.configured && hibp.enabled && hibp.usable !== false;
 }
 
-/** Toast after adding an identity; `status` null (not loaded) is taken as ready. */
-export function identityAddedMessage(value: string, status: ExposureStatus | null): string {
-  if (!status || breachChecksReady(status)) return `Now monitoring ${value} for breaches`;
-  if (!status.features.leaked_creds_enabled) {
+/**
+ * Toast after adding an identity; `status` null (not loaded) is taken as
+ * ready. `hibpDomain` is the new email domain's standing with HIBP (from the
+ * POST response): one HIBP won't search is only saved.
+ */
+export function identityAddedMessage(
+  value: string,
+  status: ExposureStatus | null,
+  hibpDomain?: IdentityHibpDomain | null
+): string {
+  if (status && !status.features.leaked_creds_enabled) {
     return `Saved ${value}; it will be checked once leaked-credential checks are switched on`;
   }
-  return `Saved ${value}; it will be checked once a usable HIBP API key is saved and enabled`;
+  if (status && !breachChecksReady(status)) {
+    return `Saved ${value}; it will be checked once a usable HIBP API key is saved and enabled`;
+  }
+  if (hibpDomain && isSkippedHibpState(hibpDomain.state)) {
+    return `Saved ${value}; it isn't verified on your HIBP account, so it's skipped until you verify it`;
+  }
+  return `Now monitoring ${value} for breaches`;
+}
+
+// ---- Verified HIBP domains --------------------------------------------------------
+
+/** The states the leaked-credential job skips (HIBP would refuse the search). */
+export function isSkippedHibpState(state: string): boolean {
+  return state === 'not_verified' || state === 'unavailable';
+}
+
+/** How the line under an email domain's status reads (null: no line). */
+export interface HibpDomainLine {
+  type: 'success' | 'warning' | 'info';
+  text: string;
+  /** What to offer next to the text: HIBP's plans, or "verify, then re-check". */
+  action: 'none' | 'plans' | 'verify';
+  /** not_verified with a listed parent: said first. */
+  parentNote: string;
+}
+
+/**
+ * The line under an email domain's status, from `hibp_domain`. Exhaustive at
+ * compile time (a new state without copy fails vue-tsc); at run time an
+ * unknown state shows the server's message, so a newer backend can't break
+ * this page.
+ */
+export function hibpDomainLine(identity: Pick<MonitoredIdentity, 'kind' | 'hibp_domain'>): HibpDomainLine | null {
+  const domain = identity.hibp_domain;
+  if (identity.kind !== 'email_domain' || !domain) return null;
+  const line = (type: HibpDomainLine['type'], text: string, action: HibpDomainLine['action'] = 'none', parentNote = '') => ({
+    type,
+    text,
+    action,
+    parentNote,
+  });
+  const state = domain.state;
+  switch (state) {
+    case 'verified':
+      return line('success', 'Verified on HIBP');
+    case 'verified_limited':
+      return line(
+        'warning',
+        'Verified on HIBP, but it may be bigger than your plan covers: only subscription-free breaches are returned',
+        'plans'
+      );
+    case 'not_verified':
+      return line(
+        'warning',
+        'Not verified on HIBP:',
+        'verify',
+        domain.verified_parent ? `HIBP verifies each domain separately (${domain.verified_parent} is verified).` : ''
+      );
+    case 'unavailable':
+      return line('warning', "Your HIBP plan doesn't include domain search");
+    case 'unknown':
+      return line('info', domain.message);
+    default: {
+      const unhandled: never = state;
+      return line('info', domain.message || String(unhandled));
+    }
+  }
+}
+
+/** Enabled email domains HIBP skips or may limit, counted from GET /identities (for the status banner). */
+export function domainVerificationCounts(identities: ReadonlyArray<Pick<MonitoredIdentity, 'kind' | 'enabled' | 'hibp_domain'>>): {
+  notVerifiedDomains: number;
+  noDomainSearchDomains: number;
+  limitedDomains: number;
+} {
+  const count = (state: string) =>
+    identities.filter((i) => i.enabled && i.kind === 'email_domain' && i.hibp_domain?.state === state).length;
+  return {
+    notVerifiedDomains: count('not_verified'),
+    noDomainSearchDomains: count('unavailable'),
+    limitedDomains: count('verified_limited'),
+  };
+}
+
+export type VerifiedDomainsAction = 'recheck' | 'dashboard' | 'plans' | 'test_key';
+
+/** The alert at the top of the HIBP card's Domain search section (null: none, the table speaks). */
+export interface VerifiedDomainsAlert {
+  type: 'success' | 'info' | 'warning' | 'error';
+  text: string;
+  actions: VerifiedDomainsAction[];
+}
+
+function listErrorAlert(error: HibpDomainListError): VerifiedDomainsAlert {
+  const kind = error.kind;
+  switch (kind) {
+    case 'auth':
+      return {
+        type: 'error',
+        text:
+          "HIBP rejected the key when listing verified domains (HTTP 401). HIBP's public test key always gets this " +
+          'answer; for a real key, check it with Test key or replace it.',
+        // Re-check once the key works again (e.g. a lapsed subscription renewed on the same key).
+        actions: ['test_key', 'recheck'],
+      };
+    case 'forbidden':
+      return {
+        type: 'warning',
+        text:
+          "HIBP refused to list verified domains (HTTP 403): this key's plan doesn't include domain search (Core and " +
+          "Pro plans do; High RPM plans don't). Email addresses are still checked; email domains are skipped.",
+        // Re-check after upgrading the plan on the same key.
+        actions: ['plans', 'recheck'],
+      };
+    case 'rate_limited':
+      return {
+        type: 'warning',
+        text: `HIBP's rate limit was reached; SIEMBox won't ask again before ${formatWhen(error.retry_after, 'it says so')}.`,
+        // Shown disabled until then (next_refresh_allowed_at covers the pause).
+        actions: ['recheck'],
+      };
+    case 'network':
+      return {
+        type: 'warning',
+        text:
+          "Couldn't reach haveibeenpwned.com from the SIEMBox backend. If outbound HTTPS is blocked by a firewall or " +
+          "proxy, breach checks can't run either (see Troubleshooting → Digital Risk).",
+        actions: ['recheck'],
+      };
+    case 'hibp_unavailable':
+      return {
+        type: 'warning',
+        text: `HIBP is temporarily unavailable (HTTP ${error.status ?? 'error'}); SIEMBox tries again before the next email-domain check.`,
+        actions: ['recheck'],
+      };
+    case 'bad_response':
+      return {
+        type: 'warning',
+        text: "HIBP's answer wasn't in the expected format; SIEMBox searches each domain directly until a re-check succeeds.",
+        actions: ['recheck'],
+      };
+    default: {
+      const unhandled: never = kind;
+      return { type: 'warning', text: error.message || String(unhandled), actions: ['recheck'] };
+    }
+  }
+}
+
+/**
+ * The Domain search section's alert for the account view. A failed latest
+ * attempt shows even when an older list is kept (the list then follows, "as
+ * of" its time).
+ */
+export function verifiedDomainsAlert(view: HibpVerifiedDomainsView): VerifiedDomainsAlert | null {
+  const state = view.state;
+  switch (state) {
+    case 'no_key':
+      return { type: 'info', text: 'Save an HIBP API key to see which of your email domains HIBP can search.', actions: [] };
+    case 'not_checked':
+      return {
+        type: 'info',
+        text: "SIEMBox hasn't asked HIBP which domains are verified yet. It does before the next email-domain check, or now with Re-check.",
+        actions: ['recheck'],
+      };
+    case 'error':
+    case 'listed':
+      if (view.error) return listErrorAlert(view.error);
+      if (state === 'listed' && (view.domains?.length ?? 0) === 0) {
+        return {
+          type: 'warning',
+          text:
+            'No domains are verified on this HIBP account. HIBP only searches a domain after you prove you control ' +
+            'it: add and verify your email domains in the HIBP dashboard, then re-check.',
+          actions: ['dashboard', 'recheck'],
+        };
+      }
+      return null;
+    default: {
+      const unhandled: never = state;
+      return { type: 'info', text: `Unknown verified-domain state: ${String(unhandled)}`, actions: ['recheck'] };
+    }
+  }
+}
+
+/** The "May be limited" tooltip for a verified domain. */
+export function planLimitTooltip(
+  domain: { pwn_count_excluding_spam_lists: number | null; pwn_count_excluding_spam_lists_at_last_subscription_renewal: number | null },
+  plan: { name: string | null; domain_search_max_breached_accounts: number | null } | null
+): string {
+  const atRenewal = domain.pwn_count_excluding_spam_lists_at_last_subscription_renewal;
+  const n = atRenewal ?? domain.pwn_count_excluding_spam_lists ?? 0;
+  const when = atRenewal !== null ? ' (at your last renewal)' : '';
+  const max = plan?.domain_search_max_breached_accounts ?? 0;
+  return (
+    `HIBP counts ${n.toLocaleString()} breached addresses here${when}; your ${plan?.name ?? 'HIBP'} plan searches ` +
+    `domains up to ${max.toLocaleString()}. Above that, HIBP returns only subscription-free breaches.`
+  );
+}
+
+/** The toast after a re-check that got an answer from the server. */
+export function refreshOutcomeMessage(result: HibpVerifiedDomainsRefreshResult): {
+  type: 'success' | 'info' | 'warning';
+  message: string;
+} {
+  if (!result.refreshed) return { type: 'info', message: 'HIBP was asked less than a minute ago; showing that answer.' };
+  if (result.error) return { type: 'warning', message: `Couldn't re-check with HIBP: ${sentence(result.error.message)}` };
+  const became = result.became_due?.length ?? 0;
+  if (became > 0) {
+    return { type: 'success', message: `Verification re-checked with HIBP: ${became} domain(s) became searchable.` };
+  }
+  return { type: 'success', message: 'Verification re-checked with HIBP.' };
+}
+
+/** The toast when a re-check request failed (400, 429, a timeout, ...). */
+export function refreshFailureMessage(error: unknown): string {
+  if ((error as { code?: unknown } | null)?.code === CLIENT_TIMEOUT_CODE) {
+    return 'The re-check is taking longer than expected; reload this section in a minute.';
+  }
+  return apiErrorMessage(error, "Couldn't re-check with HIBP");
+}
+
+// ---- HIBP attribution -------------------------------------------------------------
+
+/**
+ * A finding with HIBP breach data: a leaked-credential finding whose detail
+ * names HIBP as its source (or names none: every one to date came from HIBP).
+ */
+export function isHibpFinding(finding: Pick<ExposureFinding, 'source' | 'detail'>): boolean {
+  const source = (finding.detail as Record<string, unknown> | null | undefined)?.source;
+  return finding.source === 'leaked-creds' && (typeof source !== 'string' || source === 'hibp');
+}
+
+/** An alert raised from HIBP breach data (same rule, on the alert's matched_data). */
+export function isHibpAlert(alert: { source?: string | null; matched_data?: Record<string, unknown> | null }): boolean {
+  const source = alert.matched_data?.source;
+  return alert.source === 'leaked-creds' && (typeof source !== 'string' || source === 'hibp');
 }
 
 // ---- Status banner ------------------------------------------------------------
@@ -318,14 +571,21 @@ export interface ExposureStatusContext {
    * count stands in for it.
    */
   failingIdentities?: number | null;
+  /** Enabled email domains not verified on the HIBP account (hibp_domain.state 'not_verified'). */
+  notVerifiedDomains?: number | null;
+  /** Enabled email domains skipped because the plan has no domain search ('unavailable'). */
+  noDomainSearchDomains?: number | null;
+  /** Enabled email domains that may be larger than the plan covers ('verified_limited'). */
+  limitedDomains?: number | null;
 }
 
 /**
  * The state of the leaked-credential (breach) checks, most urgent first: the
  * server can't store keys → checks switched off → no HIBP key → saved key
  * unusable → HIBP disabled → paused (rate limit or rejected key) → last run
- * failed → nothing to check → identities failing → healthy. Domain monitoring
- * reports per domain, in the domain cards.
+ * failed → nothing to check → identities failing → no domain search on the
+ * plan → domains not verified → domains possibly over the plan's size →
+ * healthy. Domain monitoring reports per domain, in the domain cards.
  */
 export function describeExposureStatus(status: ExposureStatus, context: ExposureStatusContext = {}): StatusBanner {
   const provider = status.providers.find((p) => p.name === 'hibp') ?? null;
@@ -436,9 +696,42 @@ export function describeExposureStatus(status: ExposureStatus, context: Exposure
       type: 'warning',
       title: `${failing} of ${of} failed ${failing === 1 ? 'its' : 'their'} last check`,
       detail:
-        'See the Status column under Breach-monitored identities for the error. An email domain must first be ' +
-        'verified in your HIBP domain dashboard; other errors (HIBP unreachable, outbound network access blocked) ' +
-        'are retried on the next check.',
+        'See the Status column under Breach-monitored identities for the error. Most errors (HIBP unreachable, ' +
+        'outbound network access blocked) are retried on the next check.',
+    };
+  }
+
+  // Email domains HIBP won't search (or may only partly search) for this key.
+  const noSearch = context.noDomainSearchDomains ?? 0;
+  if (noSearch > 0) {
+    return {
+      type: 'warning',
+      title: "Your HIBP plan doesn't include domain search",
+      detail:
+        `${pluralize(noSearch, 'monitored email domain')} ${noSearch === 1 ? 'is' : 'are'} skipped; email addresses ` +
+        "are still checked. Core and Pro plans include domain search; High RPM plans don't.",
+    };
+  }
+  const notVerified = context.notVerifiedDomains ?? 0;
+  if (notVerified > 0) {
+    const them = notVerified === 1 ? 'it' : 'them';
+    return {
+      type: 'warning',
+      title: `${pluralize(notVerified, 'monitored email domain')} ${notVerified === 1 ? "isn't" : "aren't"} verified on your HIBP account`,
+      detail:
+        `HIBP's domain search only works for domains you've verified in its dashboard, so SIEMBox skips ${them} ` +
+        `(no errors, no HIBP calls). Verify ${them} at haveibeenpwned.com, then click Re-check HIBP verification ` +
+        'under Breach-monitored identities.',
+    };
+  }
+  const limited = context.limitedDomains ?? 0;
+  if (limited > 0) {
+    return {
+      type: 'warning',
+      title: `${pluralize(limited, 'verified email domain')} may be larger than your HIBP plan covers`,
+      detail:
+        `HIBP then returns only subscription-free breaches for ${limited === 1 ? 'it' : 'them'} until the plan is ` +
+        'upgraded. See Have I Been Pwned below for the numbers.',
     };
   }
 

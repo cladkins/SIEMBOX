@@ -63,6 +63,9 @@ const ROUTES: Array<[method: string, path: string, allowed: Role[]]> = [
   ['get', '/auto-discovery', ADMIN_ONLY],
   ['put', '/auto-discovery', ADMIN_ONLY],
   ['get', '/auto-discovery/stats', ADMIN_ONLY],
+  // Getting Started completion: every role reads it (admins also see who); admins change it.
+  ['get', '/onboarding', ANY_ROLE],
+  ['put', '/onboarding', ADMIN_ONLY],
 ];
 
 type Handler = (req: unknown, res: unknown, next: (err?: unknown) => void) => unknown;

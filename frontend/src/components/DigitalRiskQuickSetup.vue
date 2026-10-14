@@ -41,12 +41,20 @@
           </el-button>
         </div>
         <div class="qs-hint">
-          Checked against Have I Been Pwned. A whole email domain must first be verified in your
-          <a :href="HIBP_DOMAIN_SEARCH_URL" target="_blank" rel="noopener noreferrer">HIBP domain dashboard</a>.
+          Checked against Have I Been Pwned. SIEMBox checks which domains are verified on your HIBP account and
+          skips the others until you verify them in the
+          <a :href="HIBP_DOMAINS_DASHBOARD_URL" target="_blank" rel="noopener noreferrer">HIBP dashboard ↗</a>.
         </div>
         <div v-if="identities.length" class="qs-tags">
-          <el-tag v-for="i in identities.slice(0, MAX_TAGS)" :key="i.id" size="small" effect="plain">
-            {{ i.value }}<template v-if="i.kind === 'email_domain'"> (domain)</template>
+          <el-tag
+            v-for="i in identities.slice(0, MAX_TAGS)"
+            :key="i.id"
+            size="small"
+            effect="plain"
+            :type="skippedByHibp(i) ? 'warning' : undefined"
+          >
+            {{ i.value
+            }}<template v-if="i.kind === 'email_domain'"> (domain{{ skippedByHibp(i) ? ' · not verified' : '' }})</template>
           </el-tag>
           <span v-if="identities.length > MAX_TAGS" class="qs-more">+{{ identities.length - MAX_TAGS }} more</span>
         </div>
@@ -135,12 +143,13 @@ import exposureService, {
 } from '@/services/exposureService';
 import {
   HIBP_API_KEY_URL,
-  HIBP_DOMAIN_SEARCH_URL,
+  HIBP_DOMAINS_DASHBOARD_URL,
   apiErrorMessage,
   apiErrorStatus,
   domainAddedMessage,
   domainMonitorState,
   identityAddedMessage,
+  isSkippedHibpState,
   normalizeDomain,
   normalizeHibpKey,
   parseIdentityInput,
@@ -173,6 +182,9 @@ const domains = ref<WatchedDomain[]>([]);
 const identities = ref<MonitoredIdentity[]>([]);
 const hibp = ref<ExposureProvider | null>(null);
 const ownDomains = computed(() => domains.value.filter((d) => d.scope === 'own'));
+/** An email domain HIBP won't search for the saved key (not verified, or no domain search on the plan). */
+const skippedByHibp = (i: MonitoredIdentity) =>
+  i.kind === 'email_domain' && !!i.hibp_domain && isSkippedHibpState(i.hibp_domain.state);
 const brandDomains = computed(() => domains.value.filter((d) => d.scope === 'brand'));
 
 async function load(showLoading = false) {
@@ -225,8 +237,8 @@ function addIdentity() {
   if (saving.value !== null || !inputs.identity.trim()) return;
   const { kind, checked } = parseIdentityInput(inputs.identity);
   return submit('identity', checked, async (value) => {
-    await exposureService.addIdentity({ kind, value });
-    return identityAddedMessage(value, props.status);
+    const created = await exposureService.addIdentity({ kind, value });
+    return identityAddedMessage(value, props.status, created.hibp_domain);
   });
 }
 
@@ -235,6 +247,15 @@ function saveKey() {
   return submit('key', normalizeHibpKey(inputs.key), async (key) => {
     // Entering a key here means "use it": save it and switch the provider on.
     await exposureService.saveHibpKey(key, true);
+    // Ask HIBP once which domains this key may search: in the background, best
+    // effort and quiet (the save itself succeeded); the tags follow when it answers.
+    void exposureService
+      .refreshHibpVerifiedDomains()
+      .then(async () => {
+        await load();
+        emit('changed');
+      })
+      .catch(() => undefined);
     return 'HIBP key saved and the provider enabled';
   });
 }

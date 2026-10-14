@@ -96,7 +96,12 @@ export interface HttpProbeResult {
 
 export interface TlsProbeResult {
   port: number;
-  subject_cn?: string;
+  /**
+   * A string for a certificate with one CN (the shape stored before multi-CN
+   * support), an array for one whose subject repeats CN. Read it with
+   * tlsSubject.ts's commonNames(), never directly.
+   */
+  subject_cn?: string | string[];
   san?: string[];
 }
 

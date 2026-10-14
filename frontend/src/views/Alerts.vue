@@ -175,6 +175,8 @@
           </template>
         </el-table-column>
       </el-table>
+      <!-- Leaked-credential alerts carry HIBP breach data (CC BY 4.0): credit it when any is listed. -->
+      <HibpAttribution v-if="showsHibpAlerts" />
 
       <el-pagination
         v-model:current-page="currentPage"
@@ -222,7 +224,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAlertsStore, type Alert } from '@/stores/alerts';
 import { useTriageStore } from '@/stores/triage';
@@ -232,10 +234,14 @@ import { format } from 'date-fns';
 import { Search, Download, ArrowDown, Loading } from '@element-plus/icons-vue';
 import { api } from '@/services/api';
 import AlertDetailDialog from '@/components/AlertDetailDialog.vue';
+import HibpAttribution from '@/components/HibpAttribution.vue';
+import { isHibpAlert } from '@/utils/exposure';
 
 const route = useRoute();
 const alertsStore = useAlertsStore();
 const triageStore = useTriageStore();
+// HIBP's breach data must be credited wherever it is shown.
+const showsHibpAlerts = computed(() => alertsStore.alerts.some(isHibpAlert));
 const authStore = useAuthStore();
 
 const filters = ref({

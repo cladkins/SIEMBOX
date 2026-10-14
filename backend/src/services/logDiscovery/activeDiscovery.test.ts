@@ -1,8 +1,16 @@
 import { test } from 'node:test';
+import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import * as net from 'net';
 import * as http from 'http';
-import { selectPortsToScan, selectHttpProbes, flattenHeaders, tcpConnectScan, httpProbe, bannerGrab, probeLiveness, sweepCidr } from './activeDiscovery';
+import * as tls from 'tls';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { execFileSync } from 'child_process';
+import { selectPortsToScan, selectHttpProbes, flattenHeaders, tcpConnectScan, httpProbe, bannerGrab, probeLiveness, sweepCidr, tlsProbe } from './activeDiscovery';
+import { loadFingerprintLibrary } from './fingerprintLoader';
+import { matchHost } from './matcher';
 import { FingerprintEntry } from './types';
 
 function fp(overrides: Partial<FingerprintEntry> = {}): FingerprintEntry {
@@ -132,4 +140,80 @@ test('sweepCidr enumerates every host in the CIDR and probes each one', async ()
   // alive/dead discrimination itself (covered by the probeLiveness tests above).
   const alive = await sweepCidr('127.0.0.0/30', { portTimeoutMs: 500 });
   assert.deepEqual(alive.sort(), ['127.0.0.1', '127.0.0.2']);
+});
+
+/**
+ * A real self-signed certificate made by openssl, the way the reported Proxmox
+ * cert was. Returns null (the caller skips) when openssl isn't installed.
+ */
+function makeCertificate(subject: string, san?: string): { key: Buffer; cert: Buffer } | null {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'siembox-tlsprobe-'));
+  const keyPath = path.join(dir, 'key.pem');
+  const certPath = path.join(dir, 'cert.pem');
+  try {
+    const args = ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes'];
+    args.push('-keyout', keyPath, '-out', certPath, '-days', '1', '-subj', subject);
+    if (san) args.push('-addext', `subjectAltName=${san}`);
+    execFileSync('openssl', args, { stdio: 'ignore' });
+    return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
+  } catch {
+    return null;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Probe a loopback TLS server presenting the given certificate with the real tlsProbe. */
+async function probeCertificate(t: TestContext, subject: string, san?: string) {
+  const credentials = makeCertificate(subject, san);
+  if (!credentials) {
+    t.skip('openssl is not available to make a test certificate');
+    return null;
+  }
+  const server = tls.createServer(credentials, (socket) => socket.end());
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as net.AddressInfo).port;
+  try {
+    const result = await tlsProbe('127.0.0.1', port, { tlsTimeoutMs: 2000 });
+    assert.ok(result, 'the probe read the certificate');
+    return { port, result };
+  } finally {
+    server.close();
+  }
+}
+
+test('tlsProbe reads every CN of a certificate whose subject repeats CN, and the shipped library matches it', async (t) => {
+  const probed = await probeCertificate(t, '/CN=proxmox.local/CN=pve', 'DNS:proxmox.local,DNS:pve,IP:127.0.0.1');
+  if (!probed) return;
+  const { port, result } = probed;
+
+  assert.deepEqual(result.subject_cn, ['proxmox.local', 'pve']);
+  assert.deepEqual(result.san, ['DNS:proxmox.local', 'DNS:pve', 'IP Address:127.0.0.1']);
+
+  // What used to throw "t.subject_cn?.toLowerCase is not a function" and fail the scan.
+  const signals = {
+    ip: '127.0.0.1',
+    open_ports: [port],
+    http_responses: [],
+    tls_subjects: [result],
+    banners: [],
+    mdns_services: [],
+    ssdp_services: [],
+    discovery_methods: ['active_probe'],
+  };
+  const matches = matchHost(signals, loadFingerprintLibrary());
+  const proxmox = matches.find((m) => m.fingerprint.id === 'proxmox-ve');
+  assert.ok(proxmox, 'the proxmox fingerprint matched on the second CN');
+  assert.ok(proxmox.matched_signals.includes('tls cn~"pve"'));
+});
+
+test('tlsProbe reports a single-CN certificate as a plain string, the shape existing evidence has', async (t) => {
+  const probed = await probeCertificate(t, '/O=Homelab/CN=pve');
+  if (!probed) return;
+  assert.equal(probed.result.subject_cn, 'pve');
+  assert.equal(probed.result.san, undefined);
+});
+
+test('tlsProbe returns null against a closed port', async () => {
+  assert.equal(await tlsProbe('127.0.0.1', 1, { tlsTimeoutMs: 400 }), null);
 });

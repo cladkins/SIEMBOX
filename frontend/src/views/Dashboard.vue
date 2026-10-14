@@ -207,6 +207,8 @@
           </template>
         </el-table-column>
       </el-table>
+      <!-- Leaked-credential alerts carry HIBP breach data (CC BY 4.0). -->
+      <HibpAttribution v-if="showsHibpAlerts" />
     </el-card>
   </div>
 </template>
@@ -218,8 +220,13 @@ import { useAlertsStore } from '@/stores/alerts';
 import { api } from '@/services/api';
 import { format } from 'date-fns';
 import { Monitor, CircleCheck, WarningFilled, Hide } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
 import AlertsCountryMap from '@/components/AlertsCountryMap.vue';
+import HibpAttribution from '@/components/HibpAttribution.vue';
 import RankedBarList from '@/components/RankedBarList.vue';
+import { useAuthStore } from '@/stores/auth';
+import onboardingService from '@/services/onboardingService';
+import { apiErrorMessage, isHibpAlert } from '@/utils/exposure';
 
 // Shared 4-tier criticality vocabulary (severity, vuln criticality, and risk
 // rating all use it) so color coding stays consistent across every panel.
@@ -242,13 +249,32 @@ const alertsStore = useAlertsStore();
 
 const alertStats = computed(() => alertsStore.statistics);
 const recentAlerts = computed(() => alertsStore.alerts.slice(0, 10));
+const showsHibpAlerts = computed(() => recentAlerts.value.some(isHibpAlert));
 const loading = ref(false);
+const authStore = useAuthStore();
 
-// Getting Started banner — dismissible, remembered per browser.
-const showGettingStarted = ref(localStorage.getItem('onboarding_dismissed') !== '1');
-function dismissGettingStarted() {
-  localStorage.setItem('onboarding_dismissed', '1');
+// Getting Started reminder: for administrators, until one of them marks setup
+// done (stored server-side, install-wide). Shown only once the server says it
+// isn't done, so it never flashes; non-admins never see it or ask for it.
+const showGettingStarted = ref(false);
+async function loadGettingStarted() {
+  if (!authStore.isAdmin) return;
+  try {
+    const state = await onboardingService.load(true);
+    showGettingStarted.value = !state.completed;
+  } catch {
+    // Unknown: show nothing.
+  }
+}
+async function dismissGettingStarted() {
   showGettingStarted.value = false;
+  try {
+    await onboardingService.setCompleted(true);
+    ElMessage.success('Getting Started reminder hidden for all administrators. Reopen it from Getting Started.');
+  } catch (error) {
+    // Hidden for this page view only.
+    ElMessage.error(apiErrorMessage(error, "Couldn't hide the Getting Started reminder"));
+  }
 }
 
 const assetStats = ref<any>(null);
@@ -307,6 +333,7 @@ const statusItems = computed(() => [
 ]);
 
 onMounted(async () => {
+  void loadGettingStarted();
   await loadData();
 });
 

@@ -1,7 +1,11 @@
 /**
  * Exposure monitoring ("Digital Risk") API — mounted at /api/exposure behind
- * `authenticate`. Reads are open to any authenticated user; every write is
- * admin-only.
+ * `authenticate`. Reads are open to any signed-in user, except the HIBP
+ * account's own data (verified domains and plan), which, like the key test, is
+ * admin-only. Every write is admin-only.
+ *
+ * No GET calls HIBP: the verified-domain list is read from the snapshot the
+ * leaked-credential job and the admin's re-check keep (hibpDomains.ts).
  *
  * Privacy: the HIBP API key is write-only (stored encrypted, never echoed), and
  * POST /password-check never logs or persists the password — the body is
@@ -34,6 +38,7 @@ import {
   getHibpApiKey,
   getHibpProviderPublic,
   isExposureSeverity,
+  isSavedHibpKey,
   isValidResolverSetting,
   saveHibpProvider,
   updateExposureSettings,
@@ -50,13 +55,19 @@ import {
   normalizeIdentityValue,
 } from '../services/exposure/validation';
 import {
+  HibpDomainsRefreshError,
   LEAKED_CREDS_ALREADY_RUNNING,
   LEAKED_CREDS_JOB_KEY,
   MANUAL_RUN_BUDGET_MS,
+  applyHibpKeyChange,
+  getHibpVerifiedDomainsView,
   getLeakedCredentialRunState,
-  resetLeakedCredentialPause,
+  liftLeakedCredentialAuthPause,
+  refreshHibpVerifiedDomains,
+  rememberRateLimitForSavedKey,
   runLeakedCredentialChecks,
 } from '../services/exposure/leakedCredentialService';
+import { clearHibpDomainSnapshot, withHibpDomainStatus } from '../services/exposure/hibpDomains';
 import { HibpClient, HibpError } from '../services/exposure/hibpClient';
 import { checkPassword, type PwnedPasswordResult } from '../services/exposure/pwnedPasswords';
 
@@ -300,9 +311,17 @@ router.put('/providers/hibp', adminOnly, async (req: Request, res: Response) => 
     }
   }
   const enabled = optionalBoolean(body, 'enabled');
+  // Re-entering the key that is already saved changes nothing at HIBP (same
+  // rate limit, same verified domains), so the stored envelope is left alone:
+  // the snapshot bound to it, and any retry-after it records, still apply.
+  const keyChanged = apiKey !== undefined && !(await isSavedHibpKey(apiKey));
+  // HIBP's rate limit belongs to the key, not to the stored envelope: a 429's
+  // wait still running for the key being replaced or removed is kept for that
+  // key, so removing it and saving it again doesn't lift the wait.
+  if (keyChanged) await rememberRateLimitForSavedKey();
 
   try {
-    await saveHibpProvider({ apiKey, enabled });
+    await saveHibpProvider({ apiKey: keyChanged ? apiKey : undefined, enabled });
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     if (message.includes('CREDENTIAL_ENCRYPTION_KEY')) {
@@ -313,9 +332,18 @@ router.put('/providers/hibp', adminOnly, async (req: Request, res: Response) => 
     }
     throw new ApiError(500, 'Failed to save the HIBP provider settings');
   }
-  // A new key (or re-enabling) deserves a fresh start: lift any rate-limit or
-  // rejected-key pause and re-read the plan's rate limit.
-  resetLeakedCredentialPause();
+  if (keyChanged) {
+    // The verified-domain list belongs to the old key's account. (A list written
+    // for another key is ignored anyway: it is bound to the stored envelope.)
+    await clearHibpDomainSnapshot();
+    // A different key has its own rate limit and plan: a fresh start, unless it
+    // is a key whose 429 wait is still running. Removing the key keeps the wait.
+    await applyHibpKeyChange(apiKey || null);
+  } else {
+    // The same key (or only the enabled flag): retry a rejected key, but keep
+    // honouring a 429's retry-after.
+    liftLeakedCredentialAuthPause();
+  }
   res.json(await getHibpProviderPublic());
 });
 
@@ -346,6 +374,8 @@ router.post('/providers/hibp/test', adminOnly, async (req: Request, res: Respons
         subscribed_until: status.SubscribedUntil ?? null,
         rpm: typeof status.Rpm === 'number' ? status.Rpm : null,
         domain_search_max_breached_accounts: status.DomainSearchMaxBreachedAccounts ?? null,
+        max_breached_domains:
+          typeof status.MaxBreachedDomains === 'number' ? status.MaxBreachedDomains : null,
         includes_stealer_logs: status.IncludesStealerLogs ?? null,
       },
     });
@@ -358,6 +388,35 @@ router.post('/providers/hibp/test', adminOnly, async (req: Request, res: Respons
     throw new ApiError(400, `HIBP key test failed: ${error.message}`);
   }
 });
+
+// The domains verified on the HIBP key's account, its plan, and the latest
+// listing's outcome: account data, so admin-only. Never calls HIBP.
+router.get('/providers/hibp/verified-domains', adminOnly, async (_req: Request, res: Response) => {
+  res.json(await getHibpVerifiedDomainsView());
+});
+
+// Re-check with HIBP now (subscription/status + subscribeddomains). At most
+// once a minute install-wide (else the cached answer, refreshed: false);
+// concurrent re-checks share one call. A failed listing still answers 200 with
+// the failure in `error`; a 429 from HIBP is recorded there and pauses checks.
+router.post(
+  '/providers/hibp/verified-domains/refresh',
+  adminOnly,
+  async (_req: Request, res: Response) => {
+    try {
+      const result = await refreshHibpVerifiedDomains();
+      res.json({ ...result.view, refreshed: result.refreshed, became_due: result.becameDue });
+    } catch (error) {
+      if (!(error instanceof HibpDomainsRefreshError)) throw error;
+      if (error.kind === 'rate_limited' && error.retryAt) {
+        const seconds = Math.max(1, Math.ceil((Date.parse(error.retryAt) - Date.now()) / 1000));
+        res.set('Retry-After', String(seconds));
+        throw new ApiError(429, error.message);
+      }
+      throw new ApiError(400, error.message);
+    }
+  }
+);
 
 // ---- Watched domains ---------------------------------------------------------------
 
@@ -437,8 +496,10 @@ router.post('/domains/:id/run-now', adminOnly, async (req: Request, res: Respons
 
 // ---- Monitored identities ----------------------------------------------------------
 
+// Each email domain carries `hibp_domain`: whether HIBP will search it for the
+// saved key (from the stored verified-domain list; never a call to HIBP).
 router.get('/identities', async (_req: Request, res: Response) => {
-  res.json(await MonitoredIdentityModel.findAll());
+  res.json(await withHibpDomainStatus(await MonitoredIdentityModel.findAll()));
 });
 
 router.post('/identities', adminOnly, async (req: Request, res: Response) => {
@@ -453,7 +514,8 @@ router.post('/identities', adminOnly, async (req: Request, res: Response) => {
     interval_minutes: optionalInterval(body),
   };
   try {
-    res.status(201).json(await MonitoredIdentityModel.create(input));
+    const [created] = await withHibpDomainStatus([await MonitoredIdentityModel.create(input)]);
+    res.status(201).json(created);
   } catch (error) {
     if (isUniqueViolation(error))
       throw new ApiError(409, `${value.value} is already being monitored`);
@@ -475,7 +537,8 @@ router.put('/identities/:id', adminOnly, async (req: Request, res: Response) => 
     interval_minutes: optionalInterval(body),
   });
   if (!updated) throw new ApiError(404, 'Monitored identity not found');
-  res.json(updated);
+  const [withStatus] = await withHibpDomainStatus([updated]);
+  res.json(withStatus);
 });
 
 router.delete('/identities/:id', adminOnly, async (req: Request, res: Response) => {

@@ -36,6 +36,8 @@
                 <el-tag v-for="c in row.breach.dataClasses" :key="c" size="small" effect="plain" class="data-class">{{ c }}</el-tag>
               </p>
               <p v-if="row.breach.flags.length"><strong>Flags:</strong> {{ row.breach.flags.join(', ') }}</p>
+              <!-- The breach provider's own credit, as HIBP passes it on: plain text, never a link. -->
+              <p v-if="row.breach.attribution"><strong>Attribution:</strong> {{ row.breach.attribution }}</p>
             </template>
             <template v-else-if="row.domainLines">
               <div v-for="line in row.domainLines" :key="line.label" class="detail-line">
@@ -158,6 +160,7 @@ import {
   domainFindingDetail,
   formatWhen,
   identityKindLabel,
+  isHibpFinding,
   type DetailItem,
   type DetailLine,
   type DomainMonitorState,
@@ -196,12 +199,15 @@ interface BreachView {
   date: string;
   dataClasses: string[];
   flags: string[];
+  /** The breach provider's credit (HIBP's Attribution field), shown as plain text. */
+  attribution: string;
 }
 type FindingRow = ExposureFinding & { breach: BreachView | null; domainLines: DetailLine[] | null };
 
 const findings = ref<FindingRow[]>([]);
-// HIBP's data must be attributed wherever it is shown, and only there.
-const showsBreachData = computed(() => findings.value.some((f) => f.source === 'leaked-creds'));
+// HIBP's data must be attributed wherever it is shown, and only there (a
+// future non-HIBP provider's findings are not credited to HIBP).
+const showsBreachData = computed(() => findings.value.some(isHibpFinding));
 // Rows whose raw detail JSON is shown under the readable one.
 const rawShown = ref(new Set<number>());
 
@@ -284,6 +290,7 @@ function breachOf(row: ExposureFinding): BreachView | null {
     date: str(d.breach_date),
     dataClasses: Array.isArray(d.data_classes) ? d.data_classes.filter((c): c is string => typeof c === 'string') : [],
     flags,
+    attribution: str(d.breach_attribution),
   };
 }
 

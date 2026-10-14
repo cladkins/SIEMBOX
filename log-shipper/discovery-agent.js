@@ -240,6 +240,27 @@ function cidrHosts(cidr) {
   return hosts;
 }
 
+// backend/src/services/logDiscovery/tlsSubject.ts
+function commonNames(value) {
+  const values = Array.isArray(value) ? value : [value];
+  return values.filter((v) => typeof v === "string" && v.length > 0);
+}
+function storedCommonName(value) {
+  const names = commonNames(value);
+  if (names.length === 0) return void 0;
+  return names.length === 1 ? names[0] : names;
+}
+function normalizeTlsSubject(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw;
+  if (!Number.isInteger(r.port)) return null;
+  const result = { port: r.port };
+  const subjectCn = storedCommonName(r.subject_cn);
+  if (subjectCn !== void 0) result.subject_cn = subjectCn;
+  if (Array.isArray(r.san)) result.san = r.san.filter((s) => typeof s === "string");
+  return result;
+}
+
 // backend/src/services/logDiscovery/activeDiscovery.ts
 var MAX_BODY_BYTES = 8192;
 var MAX_BANNER_BYTES = 512;
@@ -375,7 +396,7 @@ function tlsProbe(ip, port, opts = {}) {
         socket.destroy();
         if (!cert || !cert.subject) return finish(null);
         const san = cert.subjectaltname ? cert.subjectaltname.split(",").map((s) => s.trim()) : void 0;
-        finish({ port, subject_cn: cert.subject.CN, san });
+        finish(normalizeTlsSubject({ port, subject_cn: cert.subject.CN, san }));
       }
     );
     socket.once("timeout", () => {

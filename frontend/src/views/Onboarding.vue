@@ -16,6 +16,17 @@
         </div>
       </template>
 
+      <!-- Completion is install-wide and recorded server-side; only admins see who and can reopen it. -->
+      <template v-if="onboarding?.completed">
+        <el-alert v-if="authStore.isAdmin" type="success" show-icon :closable="false" class="completion-line">
+          <template #title>
+            {{ completionText }}
+            <el-button link type="primary" size="small" :loading="saving" @click="reopen">Show the reminder again</el-button>
+          </template>
+        </el-alert>
+        <el-alert v-else type="info" show-icon :closable="false" class="completion-line" :title="completionText" />
+      </template>
+
       <el-progress
         :percentage="percent"
         :status="percent === 100 ? 'success' : undefined"
@@ -145,10 +156,24 @@
       </el-steps>
 
       <div class="finish-row">
-        <el-button type="primary" @click="finish">
-          {{ percent === 100 ? 'All set — finish' : 'Dismiss for now' }}
-        </el-button>
-        <span class="finish-hint">You can reopen this any time from the sidebar.</span>
+        <template v-if="authStore.isAdmin && !onboarding?.completed">
+          <el-button type="primary" :loading="saving" @click="finish">
+            {{ percent === 100 ? 'All set — finish' : 'Hide setup reminder' }}
+          </el-button>
+          <span class="finish-hint">
+            Turns off the Dashboard reminder for every administrator. This checklist stays in the sidebar.
+          </span>
+        </template>
+        <template v-else>
+          <el-button type="primary" @click="go('/')">Back to Dashboard</el-button>
+          <span class="finish-hint">
+            {{
+              authStore.isAdmin
+                ? 'This checklist stays in the sidebar.'
+                : 'An administrator marks setup done for everyone. This checklist stays in the sidebar.'
+            }}
+          </span>
+        </template>
       </div>
     </el-card>
   </div>
@@ -159,7 +184,17 @@ import { ref, reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '@/services/api';
 import exposureService, { type ExposureStatus, type MonitoredIdentity } from '@/services/exposureService';
-import { breachChecksReady, describeExposureStatus, domainMonitorState, pluralize } from '@/utils/exposure';
+import onboardingService, { type OnboardingState } from '@/services/onboardingService';
+import {
+  apiErrorMessage,
+  breachChecksReady,
+  describeExposureStatus,
+  domainMonitorState,
+  domainVerificationCounts,
+  formatWhen,
+  isSkippedHibpState,
+  pluralize,
+} from '@/utils/exposure';
 import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth';
@@ -183,6 +218,18 @@ const pw = reactive({ current: '', next: '' });
 const pwSaving = ref(false);
 const passwordChanged = ref(false);
 
+// Getting Started completion (server-side, install-wide); null until loaded.
+const onboarding = ref<OnboardingState | null>(null);
+const saving = ref(false);
+const completionText = computed(() => {
+  const state = onboarding.value;
+  if (!state?.completed) return '';
+  const on = state.completed_at ? ` on ${formatWhen(state.completed_at, '')}` : '';
+  if (!authStore.isAdmin) return `An administrator marked setup done${on}.`;
+  const by = state.completed_by ? ` by ${state.completed_by}` : '';
+  return `Marked done${by}${on}: the Dashboard reminder is off for administrators.`;
+});
+
 // What Digital Risk actually watches: enabled identities while breach checks
 // can run, and enabled domains while domain monitoring is on. Anything else is
 // only saved.
@@ -190,9 +237,14 @@ const digitalRiskCounts = computed(() => {
   const s = exposureStatus.value;
   const identities = s?.counts.identities_enabled ?? 0;
   const domains = s?.counts.domains_enabled ?? 0;
+  // Email domains HIBP won't search for this key are saved, not watched.
+  const skipped =
+    identityRows.value?.filter(
+      (i) => i.enabled && i.kind === 'email_domain' && !!i.hibp_domain && isSkippedHibpState(i.hibp_domain.state)
+    ).length ?? 0;
   return {
     identities,
-    identitiesWatched: s && breachChecksReady(s) ? identities : 0,
+    identitiesWatched: s && breachChecksReady(s) ? Math.max(0, identities - skipped) : 0,
     domains,
     domainsWatched: s && domainMonitorState(s) === 'on' ? domains : 0,
   };
@@ -224,6 +276,7 @@ const digitalRiskProblem = computed(() => {
   if (!exposureStatus.value || digitalRiskCounts.value.identities === 0) return null;
   const banner = describeExposureStatus(exposureStatus.value, {
     failingIdentities: identityRows.value?.filter((i) => i.enabled && i.last_status === 'error').length,
+    ...(identityRows.value ? domainVerificationCounts(identityRows.value) : {}),
   });
   return banner.type === 'success' ? null : banner;
 });
@@ -297,13 +350,45 @@ async function changePassword() {
   }
 }
 
-function finish() {
-  localStorage.setItem('onboarding_dismissed', '1');
-  ElMessage.success('Setup checklist dismissed');
-  router.push('/');
+// Every role reads the state (the completion line); an admin's browser also
+// migrates its old localStorage dismissal here (onboardingService).
+async function loadOnboarding() {
+  try {
+    onboarding.value = await onboardingService.load(authStore.isAdmin);
+  } catch {
+    // Unknown: no completion line; an admin can still mark setup done.
+  }
 }
 
-onMounted(refresh);
+async function finish() {
+  saving.value = true;
+  try {
+    onboarding.value = await onboardingService.setCompleted(true);
+    ElMessage.success('Setup marked done; the Dashboard reminder is off for administrators.');
+    router.push('/');
+  } catch (error) {
+    ElMessage.error(apiErrorMessage(error, "Couldn't mark setup done"));
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function reopen() {
+  saving.value = true;
+  try {
+    onboarding.value = await onboardingService.setCompleted(false);
+    ElMessage.success('The Getting Started reminder is back on the Dashboard for administrators.');
+  } catch (error) {
+    ElMessage.error(apiErrorMessage(error, "Couldn't bring the reminder back"));
+  } finally {
+    saving.value = false;
+  }
+}
+
+onMounted(() => {
+  void loadOnboarding();
+  void refresh();
+});
 </script>
 
 <style scoped>
@@ -335,5 +420,8 @@ onMounted(refresh);
 .finish-hint {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+.completion-line {
+  margin-bottom: 16px;
 }
 </style>

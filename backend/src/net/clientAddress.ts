@@ -94,10 +94,12 @@ export function requestVia(req: Request): RequestVia {
 /** The eight 16-bit groups of a valid IPv6 address. */
 function ipv6Groups(ip: string): number[] {
   let text = ip;
-  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
-  if (dotted) {
-    const [a, b, c, d] = dotted.slice(1).map(Number);
-    text = `${text.slice(0, dotted.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  // An embedded IPv4 tail ('::ffff:192.0.2.1') becomes its two 16-bit groups.
+  const lastColon = text.lastIndexOf(':');
+  const dotted = text.slice(lastColon + 1);
+  if (dotted.includes('.')) {
+    const [a, b, c, d] = dotted.split('.').map(Number);
+    text = `${text.slice(0, lastColon + 1)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
   }
   const [head, tail] = text.split('::');
   const left = head ? head.split(':') : [];

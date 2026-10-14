@@ -7,7 +7,7 @@
  * return the best attempt. So the output is always checked against the real
  * engine, never trusted blind.
  */
-import { query } from '../../config/database';
+import { query, getClient } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { CredentialEncryption } from '../credentials/credentialEncryption';
 import {
@@ -43,184 +43,419 @@ async function getSetting(key: string): Promise<string | undefined> {
   const r = await query('SELECT value FROM system_settings WHERE key = $1', [key]);
   return r.rows[0]?.value;
 }
-async function setSetting(key: string, value: string): Promise<void> {
-  await query(
-    `INSERT INTO system_settings (key, value) VALUES ($1, $2)
-     ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
-    [key, value]
-  );
-}
 
-/** Resolve the API key: the stored (encrypted) key, else a provider env var. */
+/** The provider's API key from its environment variable, if set. */
 function envKeyFor(provider: AiProvider): string | undefined {
   if (provider === 'anthropic') return process.env.ANTHROPIC_API_KEY;
   if (provider === 'openai') return process.env.OPENAI_API_KEY;
   return undefined; // ollama needs none
 }
 
-/** Full config incl. the resolved API key — server-side use only. */
-export async function getAiConfig(): Promise<AiConfig> {
-  const provider = ((await getSetting('ai_provider')) as AiProvider) || 'anthropic';
-  const model = (await getSetting('ai_model')) || DEFAULT_MODELS[provider] || '';
-  const baseUrl = (await getSetting('ai_base_url')) || DEFAULT_BASE_URLS[provider];
+// ---- The three model configs -------------------------------------------------
+// The AI Builder ("main": explain/generate), the AI Analyst ("chat") and AI
+// Triage each have a provider, model, base URL and key. The analyst inherits
+// from main and triage from the analyst: with no provider of its own a config
+// takes its parent's, and a model or base URL left blank is the parent's when
+// the provider is the same (else the provider's default). All three are read
+// from one snapshot of their settings, so a request never pairs one moment's
+// key with another moment's address.
 
-  let apiKey: string | undefined;
-  const stored = await getSetting('ai_api_key');
-  if (stored) {
-    try {
-      const { encrypted, iv, authTag } = JSON.parse(stored);
-      apiKey = CredentialEncryption.decrypt(encrypted, iv, authTag);
-    } catch (e) {
-      logger.warn('AI: stored api key could not be decrypted; falling back to env', {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-  }
-  if (!apiKey) apiKey = envKeyFor(provider);
-  return { provider, model, baseUrl, apiKey };
+/** Which of the three configs. */
+export type AiScope = 'main' | 'chat' | 'triage';
+const SCOPES: AiScope[] = ['main', 'chat', 'triage'];
+
+const SCOPE_SETTINGS: Record<
+  AiScope,
+  { provider: string; model: string; baseUrl: string; apiKey: string }
+> = {
+  main: {
+    provider: 'ai_provider',
+    model: 'ai_model',
+    baseUrl: 'ai_base_url',
+    apiKey: 'ai_api_key',
+  },
+  chat: {
+    provider: 'ai_chat_provider',
+    model: 'ai_chat_model',
+    baseUrl: 'ai_chat_base_url',
+    apiKey: 'ai_chat_api_key',
+  },
+  triage: {
+    provider: 'ai_triage_provider',
+    model: 'ai_triage_model',
+    baseUrl: 'ai_triage_base_url',
+    apiKey: 'ai_triage_api_key',
+  },
+};
+const SCOPE_LABELS: Record<AiScope, string> = {
+  main: 'AI Builder',
+  chat: 'AI Analyst',
+  triage: 'AI Triage',
+};
+const MODEL_SETTING_KEYS = SCOPES.flatMap((scope) => Object.values(SCOPE_SETTINGS[scope]));
+
+/** The model settings of all three configs as stored (key -> value). */
+export type AiSettings = Record<string, string>;
+
+interface Queryable {
+  query: (
+    text: string,
+    params?: unknown[]
+  ) => Promise<{ rows: Array<{ key: string; value: string | null }> }>;
 }
 
-/** Config safe to expose to the UI (no key, just whether one is configured). */
-export async function getAiPublicConfig(): Promise<{
+/** All three configs' settings, in one statement. */
+async function readAiSettings(db: Queryable = { query }): Promise<AiSettings> {
+  const r = await db.query('SELECT key, value FROM system_settings WHERE key = ANY($1)', [
+    MODEL_SETTING_KEYS,
+  ]);
+  const settings: AiSettings = {};
+  for (const row of r.rows) settings[row.key] = row.value ?? '';
+  return settings;
+}
+
+// ---- Where a key is sent -----------------------------------------------------
+
+/** Anthropic is always called here; SIEMBox doesn't use the base URL setting for it. */
+const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
+
+/** The base URL a provider's requests, and so its API key, go to. */
+function requestBaseUrl(provider: AiProvider, baseUrl?: string): string {
+  if (provider === 'anthropic') return ANTHROPIC_BASE_URL;
+  return baseUrl || DEFAULT_BASE_URLS[provider] || '';
+}
+
+/**
+ * A base URL in comparable form, so that a value sent back unchanged, or with a
+ * trailing slash, an upper-case host or the default port spelled out, is not a
+ * change: trimmed; scheme and host lower case; default port, fragment and
+ * trailing slashes dropped. A value that isn't a URL only loses surrounding
+ * space and trailing slashes.
+ */
+export function normalizeBaseUrl(raw: string): string {
+  const s = raw.trim();
+  try {
+    const u = new URL(s);
+    const auth =
+      u.username || u.password ? `${u.username}${u.password ? `:${u.password}` : ''}@` : '';
+    return `${u.protocol}//${auth}${u.host}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+  } catch {
+    return s.replace(/\/+$/, '');
+  }
+}
+
+/** Where a config's API key is sent: its provider and the base URL its requests go to. */
+export function keyTarget(provider: AiProvider, baseUrl?: string): string {
+  return `${provider} ${normalizeBaseUrl(requestBaseUrl(provider, baseUrl))}`;
+}
+
+// ---- Saved keys --------------------------------------------------------------
+// A key saved from the UI is encrypted together with the target it was saved
+// for, and is only ever sent there. After a change of provider or base URL,
+// of its own config or of the config it inherits from, it is not sent rather
+// than sent to the new address. A key saved before targets were recorded holds
+// only the key: it counts as saved for its config's current target, and the
+// first save of any of the three configs records that target (planAiSave)
+// before changing anything.
+
+interface SavedKey {
+  apiKey: string;
+  /** null: saved before targets were recorded. */
+  target: string | null;
+}
+
+function sealKey(apiKey: string, target: string): string {
+  // CredentialEncryption.encrypt throws if CREDENTIAL_ENCRYPTION_KEY is unset.
+  return JSON.stringify(CredentialEncryption.encrypt(JSON.stringify({ apiKey, target })));
+}
+
+function openKey(stored: string | undefined, setting: string): SavedKey | null {
+  if (!stored) return null;
+  let plain: string;
+  try {
+    const { encrypted, iv, authTag } = JSON.parse(stored);
+    plain = CredentialEncryption.decrypt(encrypted, iv, authTag);
+  } catch (e) {
+    logger.warn(`AI: stored ${setting} could not be decrypted; not using it`, {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return null;
+  }
+  if (plain.startsWith('{')) {
+    try {
+      const sealed = JSON.parse(plain);
+      if (typeof sealed?.apiKey === 'string' && typeof sealed?.target === 'string') {
+        return { apiKey: sealed.apiKey, target: sealed.target };
+      }
+    } catch {
+      // not a sealed key: a key saved before targets were recorded
+    }
+  }
+  return { apiKey: plain, target: null };
+}
+
+// ---- Resolving a config ------------------------------------------------------
+
+export interface ResolvedModel {
+  provider: AiProvider;
+  model: string;
+  baseUrl?: string;
+  /** Where its key is sent (keyTarget). */
+  target: string;
+}
+
+/** Provider, model, base URL and target of each config (the inheritance described above). */
+function resolveModels(s: AiSettings): Record<AiScope, ResolvedModel> {
+  const out = {} as Record<AiScope, ResolvedModel>;
+  let parent: ResolvedModel | undefined;
+  for (const scope of SCOPES) {
+    const names = SCOPE_SETTINGS[scope];
+    const provider = ((s[names.provider] as AiProvider) ||
+      parent?.provider ||
+      'anthropic') as AiProvider;
+    const same = !!parent && provider === parent.provider;
+    const model = s[names.model] || (same ? parent!.model : DEFAULT_MODELS[provider]) || '';
+    const baseUrl = s[names.baseUrl] || (same ? parent!.baseUrl : DEFAULT_BASE_URLS[provider]);
+    parent = out[scope] = { provider, model, baseUrl, target: keyTarget(provider, baseUrl) };
+  }
+  return out;
+}
+
+/** A config with the key it sends. Server-side only. */
+export interface ResolvedAiConfig extends ResolvedModel {
+  apiKey?: string;
+  /** Where that key comes from: a saved key (its own or its parent's), an environment variable, or none. */
+  keySource: 'stored' | 'env' | 'none';
+  /** It has a key of its own saved. */
+  keySaved: boolean;
+  /** That key was saved for another provider or base URL, so it is not sent. */
+  keyMismatch: boolean;
+}
+
+/**
+ * The key each config sends: its own saved key when that was saved for where
+ * it now sends requests; else its parent's saved key, but only to the
+ * parent's own target; else the provider's environment variable (sent to
+ * wherever the config points).
+ */
+export function resolveAiSettings(s: AiSettings): Record<AiScope, ResolvedAiConfig> {
+  const models = resolveModels(s);
+  const out = {} as Record<AiScope, ResolvedAiConfig>;
+  let parent: ResolvedAiConfig | undefined;
+  for (const scope of SCOPES) {
+    const m = models[scope];
+    const setting = SCOPE_SETTINGS[scope].apiKey;
+    const saved = openKey(s[setting], setting);
+    const savedHere = !!saved?.apiKey && (saved.target ?? m.target) === m.target;
+    let apiKey: string | undefined;
+    let keySource: ResolvedAiConfig['keySource'];
+    if (savedHere) {
+      apiKey = saved!.apiKey;
+      keySource = 'stored';
+    } else if (parent?.keySource === 'stored' && parent.target === m.target) {
+      apiKey = parent.apiKey;
+      keySource = 'stored';
+    } else {
+      apiKey = envKeyFor(m.provider);
+      keySource = apiKey ? 'env' : 'none';
+    }
+    parent = out[scope] = {
+      ...m,
+      apiKey,
+      keySource,
+      keySaved: !!s[setting],
+      keyMismatch: !!saved && !savedHere,
+    };
+  }
+  return out;
+}
+
+function asAiConfig(r: ResolvedAiConfig): AiConfig {
+  return { provider: r.provider, model: r.model, baseUrl: r.baseUrl, apiKey: r.apiKey };
+}
+
+/** What the settings pages see of a config: no key, only whether and where one is configured. */
+export interface AiPublicConfig {
   provider: AiProvider;
   model: string;
   baseUrl?: string;
   configured: boolean;
   keySource: 'stored' | 'env' | 'none';
-}> {
-  const cfg = await getAiConfig();
-  const hasStored = !!(await getSetting('ai_api_key'));
-  const keySource = hasStored ? 'stored' : cfg.apiKey ? 'env' : 'none';
+  /** This config has a key of its own saved: a change of its provider or base URL needs `apiKey`. */
+  keySaved: boolean;
+  /** That saved key was saved for another provider or base URL, so it is not sent. */
+  keyMismatch: boolean;
+}
+
+function publicView(r: ResolvedAiConfig): AiPublicConfig {
   return {
-    provider: cfg.provider,
-    model: cfg.model,
-    baseUrl: cfg.baseUrl,
-    configured: cfg.provider === 'ollama' ? true : !!cfg.apiKey,
-    keySource,
+    provider: r.provider,
+    model: r.model,
+    baseUrl: r.baseUrl,
+    configured: r.provider === 'ollama' ? true : !!r.apiKey,
+    keySource: r.keySource,
+    keySaved: r.keySaved,
+    keyMismatch: r.keyMismatch,
   };
 }
 
-/** Persist provider/model/base_url; encrypt+store the key when provided. */
+/** Full AI Builder config incl. the resolved API key — server-side use only. */
+export async function getAiConfig(): Promise<AiConfig> {
+  return asAiConfig(resolveAiSettings(await readAiSettings()).main);
+}
+
+/** AI Builder config safe to expose to the UI (no key, just whether one is configured). */
+export async function getAiPublicConfig(): Promise<AiPublicConfig> {
+  return publicView(resolveAiSettings(await readAiSettings()).main);
+}
+
+/** Full AI Analyst (chat) config incl. resolved key — server-side use only. */
+export async function getChatAiConfig(): Promise<AiConfig> {
+  return asAiConfig(resolveAiSettings(await readAiSettings()).chat);
+}
+
+/** AI Analyst config safe for the UI (no key); `inheritsFrom` tells if it uses the main config's provider. */
+export async function getChatAiPublicConfig(): Promise<
+  AiPublicConfig & { inheritsFrom: 'chat' | 'main' }
+> {
+  const s = await readAiSettings();
+  return {
+    ...publicView(resolveAiSettings(s).chat),
+    inheritsFrom: s.ai_chat_provider ? 'chat' : 'main',
+  };
+}
+
+/** Full AI Triage config incl. resolved key — server-side use only. */
+export async function getTriageAiConfig(): Promise<AiConfig> {
+  return asAiConfig(resolveAiSettings(await readAiSettings()).triage);
+}
+
+// ---- Saving ------------------------------------------------------------------
+
+/** A save that changes where a config's saved key would be sent without a new key (or "" to remove it). */
+export class AiKeyRequiredError extends Error {
+  constructor(readonly scope: AiScope) {
+    super(
+      `apiKey is required: this changes the ${SCOPE_LABELS[scope]} provider or base URL, and its saved API key is ` +
+        'only sent to the provider and base URL it was saved for. Send the API key for the new one as apiKey, or ' +
+        'apiKey "" to remove the saved key (the ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable is then ' +
+        'used, if set).'
+    );
+    this.name = 'AiKeyRequiredError';
+  }
+}
+
+export interface AiModelInput {
+  /** '' (chat and triage only) reverts to inheriting the parent's provider; main ignores ''. */
+  provider?: AiProvider | '';
+  model?: string;
+  baseUrl?: string;
+  /** A new key; '' or null removes the saved one; absent keeps it. */
+  apiKey?: string | null;
+}
+
+/**
+ * The rows one save of `scope` writes, given the settings it read (pure: the
+ * caller writes them in the same transaction it read them in). Throws
+ * AiKeyRequiredError when the change moves the config's target (keyTarget:
+ * provider, or the base URL its requests go to, compared normalized) while it
+ * has a key of its own saved and the input has no apiKey; the one exception is
+ * a move back to the target that key was saved for. A model-only change, or a
+ * base URL sent back unchanged, keeps the key. A config without a saved key of
+ * its own can move freely: its key comes from its parent (only to the
+ * parent's target) or an environment variable.
+ */
+export function planAiSave(
+  scope: AiScope,
+  before: AiSettings,
+  input: AiModelInput,
+  extra: AiSettings = {}
+): AiSettings {
+  const writes: AiSettings = {};
+  const was = resolveModels(before);
+  const opened = {} as Record<AiScope, SavedKey | null>;
+  // Record the target of keys saved before targets were, before anything moves.
+  for (const sc of SCOPES) {
+    const setting = SCOPE_SETTINGS[sc].apiKey;
+    opened[sc] = openKey(before[setting], setting);
+    if (opened[sc] && opened[sc]!.target === null)
+      writes[setting] = sealKey(opened[sc]!.apiKey, was[sc].target);
+  }
+
+  const names = SCOPE_SETTINGS[scope];
+  if (scope === 'main' ? !!input.provider : input.provider !== undefined)
+    writes[names.provider] = input.provider || '';
+  if (input.model !== undefined) writes[names.model] = input.model;
+  if (input.baseUrl !== undefined) writes[names.baseUrl] = input.baseUrl;
+  const target = resolveModels({ ...before, ...writes })[scope].target;
+
+  if (input.apiKey === null || input.apiKey === '') {
+    writes[names.apiKey] = ''; // removed: the env var (or the parent's key) applies
+  } else if (typeof input.apiKey === 'string') {
+    writes[names.apiKey] = sealKey(input.apiKey, target);
+  } else if (before[names.apiKey] && target !== was[scope].target) {
+    const savedFor = opened[scope] ? (opened[scope]!.target ?? was[scope].target) : null;
+    if (savedFor !== target) throw new AiKeyRequiredError(scope);
+  }
+  return { ...writes, ...extra };
+}
+
+/** Save one config: read, decide and write in one transaction, one AI settings save at a time. */
+async function saveAiScope(
+  scope: AiScope,
+  input: AiModelInput,
+  extra: AiSettings = {}
+): Promise<void> {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    // Saves of the three configs depend on each other's settings, so they queue
+    // here: a save never decides on settings another save is changing.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('siembox:ai-settings'))");
+    const writes = planAiSave(scope, await readAiSettings(client), input, extra);
+    for (const [key, value] of Object.entries(writes)) {
+      await client.query(
+        `INSERT INTO system_settings (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+        [key, value]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/** Persist the AI Builder's provider/model/base_url; encrypt+store the key when provided. */
 export async function saveAiConfig(input: {
   provider?: AiProvider;
   model?: string;
   baseUrl?: string;
   apiKey?: string | null;
 }): Promise<void> {
-  if (input.provider) await setSetting('ai_provider', input.provider);
-  if (input.model !== undefined) await setSetting('ai_model', input.model);
-  if (input.baseUrl !== undefined) await setSetting('ai_base_url', input.baseUrl);
-
-  if (input.apiKey === null || input.apiKey === '') {
-    await setSetting('ai_api_key', ''); // clear -> fall back to env
-  } else if (typeof input.apiKey === 'string') {
-    const enc = CredentialEncryption.encrypt(input.apiKey); // throws if CREDENTIAL_ENCRYPTION_KEY unset
-    await setSetting('ai_api_key', JSON.stringify(enc));
-  }
+  await saveAiScope('main', input);
 }
 
-// ---- Separate "AI Analyst" (chat) model config ------------------------------
-// The conversational analyst can use its own provider/model, independent of the
-// explain/generate config above. Resolution rule: if `ai_chat_provider` is unset,
-// the chat inherits the main config and individual fields (model/base_url/key) may
-// still be overridden; if it IS set to a DIFFERENT provider, a fresh config is
-// built for that provider (main's model/key are for the wrong provider).
-
-/** Full chat config incl. resolved key — server-side use only. */
-export async function getChatAiConfig(): Promise<AiConfig> {
-  const main = await getAiConfig();
-  const chatProvider = (await getSetting('ai_chat_provider')) as AiProvider | undefined;
-  const provider = (chatProvider as AiProvider) || main.provider;
-  const sameAsMain = provider === main.provider;
-
-  const model =
-    (await getSetting('ai_chat_model')) || (sameAsMain ? main.model : DEFAULT_MODELS[provider]) || '';
-  const baseUrl =
-    (await getSetting('ai_chat_base_url')) || (sameAsMain ? main.baseUrl : DEFAULT_BASE_URLS[provider]);
-
-  let apiKey: string | undefined;
-  const stored = await getSetting('ai_chat_api_key');
-  if (stored) {
-    try {
-      const { encrypted, iv, authTag } = JSON.parse(stored);
-      apiKey = CredentialEncryption.decrypt(encrypted, iv, authTag);
-    } catch (e) {
-      logger.warn('AI: stored ai_chat api key could not be decrypted; falling back', {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-  }
-  if (!apiKey) apiKey = sameAsMain ? main.apiKey : envKeyFor(provider);
-  return { provider, model, baseUrl, apiKey };
-}
-
-/** Chat config safe for the UI (no key); `inheritsFrom` tells if it uses main config. */
-export async function getChatAiPublicConfig(): Promise<{
-  provider: AiProvider;
-  model: string;
-  baseUrl?: string;
-  configured: boolean;
-  keySource: 'stored' | 'env' | 'none';
-  inheritsFrom: 'chat' | 'main';
-}> {
-  const hasChatProvider = !!(await getSetting('ai_chat_provider'));
-  const inheritsFrom: 'chat' | 'main' = hasChatProvider ? 'chat' : 'main';
-  const cfg = await getChatAiConfig();
-  let keySource: 'stored' | 'env' | 'none';
-  if (inheritsFrom === 'main') {
-    keySource = (await getAiPublicConfig()).keySource;
-  } else {
-    const hasStored = !!(await getSetting('ai_chat_api_key'));
-    if (hasStored) {
-      keySource = 'stored';
-    } else {
-      // No analyst-specific key. When the analyst uses the SAME provider as the
-      // main config, getChatAiConfig resolves the key from main — so its true
-      // source is main's (typically the UI-stored key), NOT an env var.
-      // Reporting 'env' here was the bug: it claimed a key came from an
-      // environment variable that isn't set. Only a different-provider fallback
-      // can legitimately originate from env.
-      const main = await getAiPublicConfig();
-      keySource = cfg.provider === main.provider ? main.keySource : cfg.apiKey ? 'env' : 'none';
-    }
-  }
-  return {
-    provider: cfg.provider,
-    model: cfg.model,
-    baseUrl: cfg.baseUrl,
-    configured: cfg.provider === 'ollama' ? true : !!cfg.apiKey,
-    keySource,
-    inheritsFrom,
-  };
-}
-
-/** Persist chat provider/model/base_url; encrypt+store the key. Empty provider reverts to inheriting main. */
+/** Persist the analyst's provider/model/base_url; encrypt+store the key. Empty provider reverts to inheriting main. */
 export async function saveChatAiConfig(input: {
   provider?: AiProvider | '';
   model?: string;
   baseUrl?: string;
   apiKey?: string | null;
 }): Promise<void> {
-  if (input.provider !== undefined) await setSetting('ai_chat_provider', input.provider || '');
-  if (input.model !== undefined) await setSetting('ai_chat_model', input.model);
-  if (input.baseUrl !== undefined) await setSetting('ai_chat_base_url', input.baseUrl);
-
-  if (input.apiKey === null || input.apiKey === '') {
-    await setSetting('ai_chat_api_key', '');
-  } else if (typeof input.apiKey === 'string') {
-    const enc = CredentialEncryption.encrypt(input.apiKey); // throws if CREDENTIAL_ENCRYPTION_KEY unset
-    await setSetting('ai_chat_api_key', JSON.stringify(enc));
-  }
+  await saveAiScope('chat', input);
 }
 
 // ---- Agentic SOC triage config ----------------------------------------------
-// A THIRD independent model selection, for the unattended per-alert triage
-// agent (triageAgent.ts). Inheritance chain is triage -> chat -> main (not
-// straight to main): triage shares the chat analyst's JSON-tool-protocol
-// requirement, so it makes more sense to inherit a model already known to
-// follow that protocol. Also carries triage's operational knobs (enabled,
-// severity gate, cost caps) alongside the model config, since the UI edits
-// them together.
+// The THIRD model selection, for the unattended per-alert triage agent
+// (triageAgent.ts). Inheritance chain is triage -> chat -> main (not straight
+// to main): triage shares the chat analyst's JSON-tool-protocol requirement, so
+// it makes more sense to inherit a model already known to follow that
+// protocol. Also carries triage's operational knobs (enabled, severity gate,
+// cost caps) alongside the model config, since the UI edits them together.
 
 export interface TriageOperationalConfig {
   enabled: boolean;
@@ -234,34 +469,6 @@ export interface TriageOperationalConfig {
   wallBudgetSeconds: number;
 }
 
-/** Full triage config incl. resolved key — server-side use only. */
-export async function getTriageAiConfig(): Promise<AiConfig> {
-  const chat = await getChatAiConfig();
-  const triageProvider = (await getSetting('ai_triage_provider')) as AiProvider | undefined;
-  const provider = (triageProvider as AiProvider) || chat.provider;
-  const sameAsChat = provider === chat.provider;
-
-  const model =
-    (await getSetting('ai_triage_model')) || (sameAsChat ? chat.model : DEFAULT_MODELS[provider]) || '';
-  const baseUrl =
-    (await getSetting('ai_triage_base_url')) || (sameAsChat ? chat.baseUrl : DEFAULT_BASE_URLS[provider]);
-
-  let apiKey: string | undefined;
-  const stored = await getSetting('ai_triage_api_key');
-  if (stored) {
-    try {
-      const { encrypted, iv, authTag } = JSON.parse(stored);
-      apiKey = CredentialEncryption.decrypt(encrypted, iv, authTag);
-    } catch (e) {
-      logger.warn('AI: stored ai_triage api key could not be decrypted; falling back', {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-  }
-  if (!apiKey) apiKey = sameAsChat ? chat.apiKey : envKeyFor(provider);
-  return { provider, model, baseUrl, apiKey };
-}
-
 /** Cheap operational-only read (no key decryption) — safe for the hot ingest path. */
 export async function getTriageOperationalConfig(): Promise<TriageOperationalConfig> {
   const enabled = (await getSetting('ai_triage_enabled')) === 'true';
@@ -271,7 +478,10 @@ export async function getTriageOperationalConfig(): Promise<TriageOperationalCon
   const maxConcurrent = parseInt((await getSetting('ai_triage_max_concurrent')) || '2', 10);
   const dedupeHours = parseInt((await getSetting('ai_triage_dedupe_hours')) || '6', 10);
   const maxToolCalls = parseInt((await getSetting('ai_triage_max_tool_calls')) || '6', 10);
-  const wallBudgetSeconds = parseInt((await getSetting('ai_triage_wall_budget_seconds')) || '110', 10);
+  const wallBudgetSeconds = parseInt(
+    (await getSetting('ai_triage_wall_budget_seconds')) || '110',
+    10
+  );
   return {
     enabled,
     minSeverity,
@@ -283,46 +493,20 @@ export async function getTriageOperationalConfig(): Promise<TriageOperationalCon
   };
 }
 
-/** Triage config safe for the UI (no key); `inheritsFrom` tells if it uses chat's config. */
+/** Triage config safe for the UI (no key); `inheritsFrom` tells if it uses the analyst's provider. */
 export async function getTriagePublicConfig(): Promise<
-  {
-    provider: AiProvider;
-    model: string;
-    baseUrl?: string;
-    configured: boolean;
-    keySource: 'stored' | 'env' | 'none';
-    inheritsFrom: 'triage' | 'chat';
-  } & TriageOperationalConfig
+  AiPublicConfig & { inheritsFrom: 'triage' | 'chat' } & TriageOperationalConfig
 > {
-  const hasTriageProvider = !!(await getSetting('ai_triage_provider'));
-  const inheritsFrom: 'triage' | 'chat' = hasTriageProvider ? 'triage' : 'chat';
-  const cfg = await getTriageAiConfig();
-  let keySource: 'stored' | 'env' | 'none';
-  if (inheritsFrom === 'chat') {
-    keySource = (await getChatAiPublicConfig()).keySource;
-  } else {
-    const hasStored = !!(await getSetting('ai_triage_api_key'));
-    if (hasStored) {
-      keySource = 'stored';
-    } else {
-      // Same "don't misreport an inherited key as env" fix as getChatAiPublicConfig.
-      const chat = await getChatAiPublicConfig();
-      keySource = cfg.provider === chat.provider ? chat.keySource : cfg.apiKey ? 'env' : 'none';
-    }
-  }
+  const s = await readAiSettings();
   const op = await getTriageOperationalConfig();
   return {
-    provider: cfg.provider,
-    model: cfg.model,
-    baseUrl: cfg.baseUrl,
-    configured: cfg.provider === 'ollama' ? true : !!cfg.apiKey,
-    keySource,
-    inheritsFrom,
+    ...publicView(resolveAiSettings(s).triage),
+    inheritsFrom: s.ai_triage_provider ? 'triage' : 'chat',
     ...op,
   };
 }
 
-/** Persist triage provider/model/base_url/key plus the operational knobs. Empty provider reverts to inheriting chat. */
+/** Persist triage provider/model/base_url/key plus the operational knobs, in one transaction. Empty provider reverts to inheriting chat. */
 export async function saveTriageConfig(input: {
   provider?: AiProvider | '';
   model?: string;
@@ -336,25 +520,17 @@ export async function saveTriageConfig(input: {
   maxToolCalls?: number;
   wallBudgetSeconds?: number;
 }): Promise<void> {
-  if (input.provider !== undefined) await setSetting('ai_triage_provider', input.provider || '');
-  if (input.model !== undefined) await setSetting('ai_triage_model', input.model);
-  if (input.baseUrl !== undefined) await setSetting('ai_triage_base_url', input.baseUrl);
-
-  if (input.apiKey === null || input.apiKey === '') {
-    await setSetting('ai_triage_api_key', '');
-  } else if (typeof input.apiKey === 'string') {
-    const enc = CredentialEncryption.encrypt(input.apiKey); // throws if CREDENTIAL_ENCRYPTION_KEY unset
-    await setSetting('ai_triage_api_key', JSON.stringify(enc));
-  }
-
-  if (input.enabled !== undefined) await setSetting('ai_triage_enabled', input.enabled ? 'true' : 'false');
-  if (input.minSeverity !== undefined) await setSetting('ai_triage_min_severity', input.minSeverity);
-  if (input.dailyCap !== undefined) await setSetting('ai_triage_daily_cap', String(input.dailyCap));
-  if (input.maxConcurrent !== undefined) await setSetting('ai_triage_max_concurrent', String(input.maxConcurrent));
-  if (input.dedupeHours !== undefined) await setSetting('ai_triage_dedupe_hours', String(input.dedupeHours));
-  if (input.maxToolCalls !== undefined) await setSetting('ai_triage_max_tool_calls', String(input.maxToolCalls));
+  const extra: AiSettings = {};
+  if (input.enabled !== undefined) extra.ai_triage_enabled = input.enabled ? 'true' : 'false';
+  if (input.minSeverity !== undefined) extra.ai_triage_min_severity = input.minSeverity;
+  if (input.dailyCap !== undefined) extra.ai_triage_daily_cap = String(input.dailyCap);
+  if (input.maxConcurrent !== undefined)
+    extra.ai_triage_max_concurrent = String(input.maxConcurrent);
+  if (input.dedupeHours !== undefined) extra.ai_triage_dedupe_hours = String(input.dedupeHours);
+  if (input.maxToolCalls !== undefined) extra.ai_triage_max_tool_calls = String(input.maxToolCalls);
   if (input.wallBudgetSeconds !== undefined)
-    await setSetting('ai_triage_wall_budget_seconds', String(input.wallBudgetSeconds));
+    extra.ai_triage_wall_budget_seconds = String(input.wallBudgetSeconds);
+  await saveAiScope('triage', input, extra);
 }
 
 // ---- LLM call (provider-specific) -------------------------------------------
@@ -428,7 +604,7 @@ export async function callProviderChat(
       if (last && last.role === m.role) last.content += '\n\n' + m.content;
       else convo.push({ role: m.role as 'user' | 'assistant', content: m.content });
     }
-    const res = await llmFetch('https://api.anthropic.com/v1/messages', {
+    const res = await llmFetch(`${requestBaseUrl('anthropic')}/messages`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -449,8 +625,7 @@ export async function callProviderChat(
 
   if (cfg.provider === 'openai') {
     if (!cfg.apiKey) throw new Error('No OpenAI API key configured');
-    const base = cfg.baseUrl || DEFAULT_BASE_URLS.openai;
-    const res = await llmFetch(`${base}/chat/completions`, {
+    const res = await llmFetch(`${requestBaseUrl('openai', cfg.baseUrl)}/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` },
       body: JSON.stringify({
@@ -466,8 +641,7 @@ export async function callProviderChat(
   }
 
   // ollama
-  const base = cfg.baseUrl || DEFAULT_BASE_URLS.ollama;
-  const res = await llmFetch(`${base}/api/chat`, {
+  const res = await llmFetch(`${requestBaseUrl('ollama', cfg.baseUrl)}/api/chat`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({

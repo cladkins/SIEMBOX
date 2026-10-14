@@ -1349,6 +1349,16 @@ SELECT a.created_at, u.username, a.resource_type, a.details->>'method' AS method
 ```
 `path` is relative to the route family (`resource_type`), for example `/12` for `PUT /api/parsers/12`.
 
+### Issue: Saving AI Settings Asks for the API Key Again, or the AI Analyst Has No Key After Upgrading
+
+**Symptoms:**
+- Settings → AI asks for the API key when you change the provider or base URL, and a script's `PUT /api/settings/ai`, `/ai-chat` or `/ai-triage` gets `400 apiKey is required: ...`
+- The AI Analyst or AI Triage card says "No API key configured" or "Saved key not used", and chat answers `No OpenAI API key configured`
+
+**Cause:** a saved AI key is only sent to the provider and base URL it was saved for. Earlier versions kept it when either changed and sent it to the new address. An AI Analyst (or AI Triage) config without a key of its own now uses the AI Builder's (or the analyst's) saved key only while it sends requests to the same provider and base URL; one set to the same provider at another base URL no longer gets it. A config's own key also stops being used when its address moves with the config it inherits from (same provider, no base URL of its own). See [A saved key only goes where it was saved for](../reference/API.md#a-saved-key-only-goes-where-it-was-saved-for).
+
+**Solution:** enter the key for the new provider or base URL in the same save (from a script, send `apiKey`), or tick *Remove the saved key instead* (`"apiKey": ""`) to use the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` environment variable. For an analyst or triage card that should share the AI Builder's model, choose *Inherit*: that saves it without a model, base URL or key of its own.
+
 ---
 
 ## Performance Issues

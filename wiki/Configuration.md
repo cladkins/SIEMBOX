@@ -59,6 +59,8 @@ The AI parser/detection builders are bring-your-own-key. Set a provider key here
 | `OPENAI_API_KEY` | For the OpenAI provider. |
 | *(Ollama)* | Local Ollama needs no key — set the base URL in *Settings → AI Builder*. |
 
+A key entered in the UI is only sent to the provider and base URL it was saved for, in all three AI settings (AI Builder, AI Analyst, AI Triage). Changing the provider or base URL asks for the key again: enter the key for the new one, or remove the saved key to use the environment variable. A key set with `OPENAI_API_KEY` goes to whichever OpenAI base URL is set.
+
 See [Parsers → AI builder](Parsers#ai-builder) and [Detection Rules](Detection-Rules).
 
 ## AI Security Analyst (optional)

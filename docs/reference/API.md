@@ -1086,12 +1086,60 @@ Generate a detection rule from a natural-language description.
 
 | Method & Path | Purpose |
 |---|---|
-| `GET /api/settings/ai` | Current AI config (provider, model, base URL, and whether a key is set — the key itself is never returned). |
-| `PUT /api/settings/ai` | Update AI config. Body: `{ "provider": "anthropic" \| "openai" \| "ollama", "model": "…", "baseUrl": "…", "apiKey": "…" }`. Pass `apiKey` to set it (encrypted at rest via `CREDENTIAL_ENCRYPTION_KEY`), or `""` to clear it. |
+| `GET /api/settings/ai` | Current AI Builder config: `provider`, `model`, `baseUrl`, `configured`, `keySource` (`stored`, `env` or `none`: where the key it sends comes from), `keySaved` (a key is saved for this config) and `keyMismatch` (that key was saved for another provider or base URL, so it isn't sent). The key itself is never returned. |
+| `PUT /api/settings/ai` | Update the AI Builder config. Body (all optional): `{ "provider": "anthropic" \| "openai" \| "ollama", "model": "…", "baseUrl": "…", "apiKey": "…" }`. Pass `apiKey` to set it (encrypted at rest via `CREDENTIAL_ENCRYPTION_KEY`), or `""` (or `null`) to clear it. A change of `provider` or `baseUrl` while a key is saved needs `apiKey` in the same request, see [below](#a-saved-key-only-goes-where-it-was-saved-for). Answers with the same fields as the `GET`. |
+| `GET /api/settings/ai-chat` | Current AI Analyst config: the fields of `GET /api/settings/ai`, plus `inheritsFrom` (`main` while it has no provider of its own). |
+| `PUT /api/settings/ai-chat` | Update the AI Analyst config. Body as for `PUT /api/settings/ai`; `"provider": ""` reverts to inheriting the AI Builder's provider. A model or base URL left blank is the AI Builder's when the provider is the same, else the provider's default. The Settings page sends `"model": ""` and `"baseUrl": ""` with `"provider": ""` (and `"apiKey": ""` when the analyst has a key of its own), so that inheriting takes everything from the AI Builder. |
 
 > Storing a key from the UI requires `CREDENTIAL_ENCRYPTION_KEY` to be set;
 > alternatively provide the key via the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`
 > environment variable.
+
+#### A saved key only goes where it was saved for
+
+A key saved through these routes, and through `PUT /api/settings/ai-triage`
+below, is encrypted together with its target: the provider and the base URL
+requests go to (for Anthropic always `https://api.anthropic.com`, which doesn't
+use the base URL). SIEMBox only sends it there.
+
+- A `PUT` that changes the config's provider or base URL while it has a key
+  saved needs `apiKey` in the same request: the key for the new provider or
+  base URL, or `""` to remove the saved one (the `ANTHROPIC_API_KEY` or
+  `OPENAI_API_KEY` environment variable is then used, if set). Without it the
+  answer is `400` and nothing in the request is saved:
+
+  ```json
+  { "status": "error", "statusCode": 400, "message": "apiKey is required: this changes the AI Builder provider or base URL, and its saved API key is only sent to the provider and base URL it was saved for. Send the API key for the new one as apiKey, or apiKey \"\" to remove the saved key (the ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable is then used, if set)." }
+  ```
+
+  Switching to Ollama, which uses no key, needs `"apiKey": ""` too; so does a
+  move back to inheriting (`"provider": ""`) that changes where the config sends
+  requests. A move back to the target the saved key was saved for needs nothing.
+- Base URLs are compared normalized, so a value sent back unchanged is not a
+  change, and neither are a trailing slash, the host's letter case or the
+  default port written out. An empty base URL is the provider's default (or the
+  parent's, see above). Changing only the model, or the Anthropic base URL,
+  keeps the key.
+- A config with no key of its own can change freely: the key it sends then
+  comes from its parent or an environment variable. A parent's saved key (the
+  AI Builder's for the AI Analyst, the AI Analyst's for AI Triage) is only used
+  while the config sends requests where the parent does. The AI Analyst set to
+  OpenAI at another base URL doesn't get the AI Builder's OpenAI key.
+- An environment variable key is not bound: `OPENAI_API_KEY` is sent to
+  whichever OpenAI base URL is configured.
+- When the target of a config's own key moves with its parent (an AI Analyst
+  on the same provider as the AI Builder, with no base URL of its own, after the
+  AI Builder's base URL changes), the key stays saved but isn't sent:
+  `keyMismatch` is `true` and the config uses its parent's key or the
+  environment variable. Enter its key again, or point it back.
+- A key saved by an earlier version (without its target) counts as saved for
+  where its config sends requests; the next save of any of the three configs
+  records that target before it changes anything.
+- Each save is one transaction, and saves of the three configs run one at a
+  time, so no request is ever sent with a key and an address from different
+  saves.
+- `model` and `baseUrl` must be strings when sent, `apiKey` a string or `null`
+  (`400` otherwise).
 
 ### AI Triage Settings
 
@@ -1101,8 +1149,8 @@ Automatic, agentic per-alert analysis — see [AI Security Analyst → Automated
 
 | Method & Path | Purpose |
 |---|---|
-| `GET /api/settings/ai-triage` | Current triage config: provider/model/baseUrl (inherits AI Analyst if unset), whether a key is configured, plus operational settings (`enabled`, `minSeverity`, `dailyCap`, `maxConcurrent`, `dedupeHours`, `maxToolCalls`, `wallBudgetSeconds`). Key itself is never returned. |
-| `PUT /api/settings/ai-triage` | Update triage config. Body (all optional): `{ "provider": "anthropic" \| "openai" \| "ollama" \| "", "model": "…", "baseUrl": "…", "apiKey": "…", "enabled": true, "minSeverity": "medium", "dailyCap": 200, "maxConcurrent": 2, "dedupeHours": 6, "maxToolCalls": 6, "wallBudgetSeconds": 110 }`. Empty `provider` reverts to inheriting the AI Analyst config. `maxToolCalls` (1-12) and `wallBudgetSeconds` (20-280) bound how deep/long a single alert's analysis can go before it's forced to synthesize a verdict from whatever it has. |
+| `GET /api/settings/ai-triage` | Current triage config: provider/model/baseUrl (inherits AI Analyst if unset), `configured`, `keySource`, `keySaved`, `keyMismatch` and `inheritsFrom` as for `GET /api/settings/ai-chat`, plus operational settings (`enabled`, `minSeverity`, `dailyCap`, `maxConcurrent`, `dedupeHours`, `maxToolCalls`, `wallBudgetSeconds`). Key itself is never returned. |
+| `PUT /api/settings/ai-triage` | Update triage config. Body (all optional): `{ "provider": "anthropic" \| "openai" \| "ollama" \| "", "model": "…", "baseUrl": "…", "apiKey": "…", "enabled": true, "minSeverity": "medium", "dailyCap": 200, "maxConcurrent": 2, "dedupeHours": 6, "maxToolCalls": 6, "wallBudgetSeconds": 110 }`. Empty `provider` reverts to inheriting the AI Analyst config. A change of provider or base URL while a key is saved needs `apiKey` in the same request ([A saved key only goes where it was saved for](#a-saved-key-only-goes-where-it-was-saved-for)); a refused request saves none of its fields, the operational ones included. `maxToolCalls` (1-12) and `wallBudgetSeconds` (20-280) bound how deep/long a single alert's analysis can go before it's forced to synthesize a verdict from whatever it has. |
 | `GET /api/ai/triage/health` | `{ "configured": bool, "enabled": bool, "minSeverity": "…" }` — lets the Alerts/SOC Triage UI know whether to render triage state. |
 
 ---

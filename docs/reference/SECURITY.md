@@ -116,13 +116,21 @@ CREDENTIAL_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(3
   configured or not, and `GET /api/settings` (admin-only) withholds them. An
   encrypted key together with `CREDENTIAL_ENCRYPTION_KEY` gives back the
   plaintext, so protect database backups like the `.env` file.
-- An admin can still make the backend send an AI key somewhere else. Changing
+- A stored AI key only goes to the provider and base URL it was saved for: it
+  is encrypted together with them, and SIEMBox sends it nowhere else. Changing
   the provider or base URL of the AI builder, AI Analyst or AI Triage settings
-  keeps the stored key, and the next AI request sends it to the new endpoint.
-  That includes an Anthropic key, which goes out as a Bearer token once the
-  provider is switched to OpenAI, and a key set with `OPENAI_API_KEY`. Treat
-  admin access as able to use and redirect the AI keys. The AbuseIPDB, OTX and
-  Have I Been Pwned keys only go to those services' own hosts.
+  while a key is stored needs the key again in the same request (the API
+  answers `400` otherwise and saves nothing), or removes the stored key. A key
+  one of these configs inherits (the analyst uses the AI builder's, triage the
+  analyst's) is only sent where the config it comes from sends it. So an admin,
+  or a stolen admin session, can use the stored keys and replace them, but
+  can't make the backend send them to another host. See
+  [A saved key only goes where it was saved for](API.md#a-saved-key-only-goes-where-it-was-saved-for).
+- A key set with `OPENAI_API_KEY` is not stored, so it isn't bound: it goes to
+  whichever OpenAI base URL the settings name, and an admin can point that at
+  another host. Store the OpenAI key in the UI instead if that matters. A key
+  set with `ANTHROPIC_API_KEY` only goes to `api.anthropic.com`. The AbuseIPDB,
+  OTX and Have I Been Pwned keys only go to those services' own hosts.
 
 ### AI Builder & Catalog Trust (v2)
 
@@ -405,7 +413,9 @@ configured; its provider, model and base URL are in the admin-only
 `GET /api/settings/ai-chat`.
 
 No route returns a stored provider API key (AI, AbuseIPDB, OTX, Have I Been
-Pwned) to anyone, though an admin can redirect the AI keys (see
+Pwned) to anyone, and a stored AI key is only sent to the provider and base URL
+it was saved for; an admin can still point a key set with `OPENAI_API_KEY` at
+another host (see
 [Secrets & Credential Encryption](#secrets--credential-encryption-v2)). Two other
 kinds of stored secret are shown to the roles that manage them:
 - Each shipper's syslog API key, to admins and operators (`GET /api/shippers`

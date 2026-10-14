@@ -16,9 +16,45 @@ import {
   saveChatAiConfig,
   getTriagePublicConfig,
   saveTriageConfig,
+  AiKeyRequiredError,
 } from '../services/ai/aiService';
 
 const router = Router();
+
+/**
+ * The model fields of an AI settings body: model and baseUrl must be strings
+ * when sent, apiKey a string or null. Anything else used to be ignored (an
+ * apiKey of 5 kept the saved key) or stored as text.
+ */
+function aiModelFields(body: unknown): {
+  model?: string;
+  baseUrl?: string;
+  apiKey?: string | null;
+} {
+  const { model, baseUrl, apiKey } = (body ?? {}) as Record<string, unknown>;
+  for (const [field, value] of [
+    ['model', model],
+    ['baseUrl', baseUrl],
+  ] as const) {
+    if (value !== undefined && typeof value !== 'string')
+      throw new ApiError(400, `${field} must be a string`);
+  }
+  if (apiKey !== undefined && apiKey !== null && typeof apiKey !== 'string') {
+    throw new ApiError(400, 'apiKey must be a string, or "" to remove the saved key');
+  }
+  return {
+    model: model as string | undefined,
+    baseUrl: baseUrl as string | undefined,
+    apiKey: apiKey as string | null | undefined,
+  };
+}
+
+/** The client error to answer with: an ApiError as is, a change that needs apiKey as a 400; else null. */
+function aiSaveRefusal(error: unknown): ApiError | null {
+  if (error instanceof ApiError) return error;
+  if (error instanceof AiKeyRequiredError) return new ApiError(400, error.message);
+  return null;
+}
 
 // ===========================
 // AI builder configuration
@@ -34,16 +70,19 @@ router.get('/ai', authorize('admin'), async (_req: Request, res: Response) => {
 });
 
 // Update AI config. Pass apiKey to set it (encrypted at rest), '' to clear it.
+// A change of provider or base URL while a key is saved needs apiKey too: the
+// saved key is only sent to the provider and base URL it was saved for (400).
 router.put('/ai', authorize('admin'), async (req: Request, res: Response) => {
   try {
-    const { provider, model, baseUrl, apiKey } = req.body ?? {};
+    const { provider } = req.body ?? {};
     if (provider && !['anthropic', 'openai', 'ollama'].includes(provider)) {
       throw new ApiError(400, 'provider must be anthropic, openai, or ollama');
     }
-    await saveAiConfig({ provider: provider as AiProvider, model, baseUrl, apiKey });
+    await saveAiConfig({ provider: provider as AiProvider, ...aiModelFields(req.body) });
     res.json(await getAiPublicConfig());
   } catch (error: any) {
-    if (error instanceof ApiError) throw error;
+    const refusal = aiSaveRefusal(error);
+    if (refusal) throw refusal;
     // Most likely CREDENTIAL_ENCRYPTION_KEY is unset when storing a key.
     throw new ApiError(500, error?.message?.includes('CREDENTIAL_ENCRYPTION_KEY')
       ? 'Set CREDENTIAL_ENCRYPTION_KEY to store an API key, or use the ANTHROPIC_API_KEY/OPENAI_API_KEY env var instead.'
@@ -62,17 +101,19 @@ router.get('/ai-chat', authorize('admin'), async (_req: Request, res: Response) 
 });
 
 // Update the analyst chat config. Empty provider ('') reverts to inheriting the
-// main AI config. Pass apiKey to set it (encrypted at rest), '' to clear it.
+// main AI config. Pass apiKey to set it (encrypted at rest), '' to clear it. As
+// for PUT /ai, a provider or base URL change while a key is saved needs apiKey.
 router.put('/ai-chat', authorize('admin'), async (req: Request, res: Response) => {
   try {
-    const { provider, model, baseUrl, apiKey } = req.body ?? {};
+    const { provider } = req.body ?? {};
     if (provider && provider !== '' && !['anthropic', 'openai', 'ollama'].includes(provider)) {
       throw new ApiError(400, "provider must be anthropic, openai, ollama, or '' to inherit");
     }
-    await saveChatAiConfig({ provider: provider as AiProvider | '', model, baseUrl, apiKey });
+    await saveChatAiConfig({ provider: provider as AiProvider | '', ...aiModelFields(req.body) });
     res.json(await getChatAiPublicConfig());
   } catch (error: any) {
-    if (error instanceof ApiError) throw error;
+    const refusal = aiSaveRefusal(error);
+    if (refusal) throw refusal;
     throw new ApiError(500, error?.message?.includes('CREDENTIAL_ENCRYPTION_KEY')
       ? 'Set CREDENTIAL_ENCRYPTION_KEY to store an API key, or use the ANTHROPIC_API_KEY/OPENAI_API_KEY env var instead.'
       : 'Failed to update AI analyst settings');
@@ -92,14 +133,12 @@ router.get('/ai-triage', authorize('admin'), async (_req: Request, res: Response
 });
 
 // Update the triage config. Empty provider ('') reverts to inheriting the chat
-// analyst config. Pass apiKey to set it (encrypted at rest), '' to clear it.
+// analyst config. Pass apiKey to set it (encrypted at rest), '' to clear it. As
+// for PUT /ai, a provider or base URL change while a key is saved needs apiKey.
 router.put('/ai-triage', authorize('admin'), async (req: Request, res: Response) => {
   try {
     const {
       provider,
-      model,
-      baseUrl,
-      apiKey,
       enabled,
       minSeverity,
       dailyCap,
@@ -137,9 +176,7 @@ router.put('/ai-triage', authorize('admin'), async (req: Request, res: Response)
     }
     await saveTriageConfig({
       provider: provider as AiProvider | '',
-      model,
-      baseUrl,
-      apiKey,
+      ...aiModelFields(req.body),
       enabled,
       minSeverity,
       dailyCap,
@@ -150,7 +187,8 @@ router.put('/ai-triage', authorize('admin'), async (req: Request, res: Response)
     });
     res.json(await getTriagePublicConfig());
   } catch (error: any) {
-    if (error instanceof ApiError) throw error;
+    const refusal = aiSaveRefusal(error);
+    if (refusal) throw refusal;
     throw new ApiError(500, error?.message?.includes('CREDENTIAL_ENCRYPTION_KEY')
       ? 'Set CREDENTIAL_ENCRYPTION_KEY to store an API key, or use the ANTHROPIC_API_KEY/OPENAI_API_KEY env var instead.'
       : 'Failed to update AI triage settings');

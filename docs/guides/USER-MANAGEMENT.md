@@ -104,9 +104,10 @@ The User Management page displays a table with all users:
 - **Created**: Account creation timestamp
 - **Sign-in**: "Sign-in paused · 12 min" while failed sign-in attempts hold the
   account back (the tooltip says which: from one network, from new browsers on
-  every network, one of their recognized browsers, MFA codes), and "Password
-  change paused" while wrong current passwords hold back changing their own
-  password (signing in is not affected)
+  every network, one of their recognized browsers, MFA codes, or a network
+  paused by failures for any username that they mistyped from in the last 15
+  minutes), and "Password change paused" while wrong current passwords hold
+  back changing their own password (signing in is not affected)
 - **Actions**: Unlock (only while something is paused), Edit and Delete buttons
 
 ### Create New User
@@ -168,7 +169,10 @@ account (30 seconds, doubling with each further failure; DEPLOYMENT.md,
 2. Click **Unlock** on the user and confirm
 
 This clears every sign-in counter of the account; a pause of a whole network
-is cleared on Settings -> Sign-in protection. The user can also simply wait,
+is cleared on Settings -> Sign-in protection. A user who mistyped from a
+network someone else's failures have paused (a shared address: an office NAT,
+a reverse proxy SIEMBox doesn't trust) is listed too, for 15 minutes at most:
+Unlock lets them in while the network stays paused. The user can also simply wait,
 or sign in from a browser they used before, which is never held back by
 someone else's failed attempts. Without access to the web UI, see
 TROUBLESHOOTING.md, "Locked out of SIEMBox" (the `auth-admin` command line).

@@ -1739,8 +1739,10 @@ docker compose exec postgres psql -U siembox -d siembox \
   share one budget of `API_RATE_LIMIT_MAX` (default 1000) requests per 15
   minutes, and one network for sign-in protection: 20 failed sign-ins from
   anyone pause it, and while it is paused anyone who then gets a password wrong
-  from a new browser waits out the pause (users who haven't failed are still
-  checked, and browsers that signed in before are not affected).
+  from a new browser waits until that pause ends or 15 minutes have passed,
+  whichever comes first (users who haven't failed are still checked, browsers
+  that signed in before are not affected, and Users -> **Unlock** lets them in
+  at once).
 - The backend log has hourly `Ignored X-Forwarded-For from <address> ...`
   warnings: a proxy in front of the web UI, or a caller of port 8421, whose
   `X-Forwarded-For` has been ignored for more than 45 s. Only proxies on

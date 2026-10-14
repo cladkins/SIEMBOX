@@ -709,7 +709,7 @@ look like the proxy, as before: one shared address that can't be forged. It
 shares the general limit of `API_RATE_LIMIT_MAX` (default 1000) requests per 15
 minutes, and one network for [sign-in protection](#sign-in-protection) (20
 failures from anyone pause it; then each user gets one checked attempt from new
-browsers, and after a wrong one waits out the pause), so set
+browsers, and after a wrong one waits up to 15 minutes), so set
 `TRUSTED_PROXIES` (or raise the general limit). Until you do, a proxy on a
 private, carrier-grade NAT, loopback, ULA or link-local address gets an hourly
 `Ignored X-Forwarded-For from <proxy>` warning in the backend log, and
@@ -770,7 +770,7 @@ doesn't reset them and the recovery command line can clear them.
 | Counter | Counts | Pauses after | Longest pause |
 |---|---|---|---|
 | Account from one network | Wrong passwords for one username from one network (an IPv4 address or an IPv6 /64) | 5 (`LOGIN_MAX_FAILURES`) | 15 min |
-| Network | Wrong passwords from one network, any username. While paused, it holds back only usernames that already failed from that network | 20 (`LOGIN_MAX_FAILURES_PER_ADDRESS`) | 30 min |
+| Network | Wrong passwords from one network, any username. While paused, it holds back only usernames that failed from that network in the last 15 minutes | 20 (`LOGIN_MAX_FAILURES_PER_ADDRESS`) | 30 min |
 | Account from new browsers | Wrong passwords for one username from every network | 20 (`LOGIN_MAX_FAILURES_PER_ACCOUNT`, `0` = off) | 60 min |
 | Recognized browser | Wrong passwords and MFA codes from one browser that signed in before | 10 | 15 min |
 | MFA codes | Wrong codes for one user | 5 | 60 min |
@@ -809,10 +809,14 @@ default):
 
 These depend on correct client addresses: behind a reverse proxy SIEMBox
 doesn't trust, everyone shares one network. A paused network only holds back
-usernames that already failed from it, so 20 failures from one person don't
-lock everyone out: a user who hasn't mistyped from that network is still
-checked, but one who does then waits out the network's pause (up to 30
-minutes) unless they use a browser that signed in before. Set
+usernames that failed from it in the last 15 minutes, so 20 failures from one
+person don't lock everyone out: a user who hasn't mistyped from that network
+is still checked, and one who does waits until the network's current pause
+ends or 15 minutes have passed, whichever comes first, however long an
+attacker keeps the network paused (a browser that signed in before isn't held
+back at all, and an admin's Unlock on the Users page lets them in at once).
+The guesses a paused network lets through are counted, but don't extend its
+pause. Set
 `TRUSTED_PROXIES` (see [Client addresses and reverse
 proxies](#client-addresses-and-reverse-proxies)).
 

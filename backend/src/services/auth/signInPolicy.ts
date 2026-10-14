@@ -21,8 +21,10 @@
  * | mfa   | mfa:<user id>          | wrong codes (sign-in from new browsers, disabling) | 5  | 60 min | reset             |
  * | pwc   | pwc:<user id>          | wrong current passwords on a password change       | 5  | 60 min | reset             |
  *
- * (*) While paused, the network key refuses only usernames that already
- * failed from that network in their current streak (refusingPauses).
+ * (*) While paused, the network key refuses only usernames that failed from
+ * that network in the last 15 minutes, and only until then (refusingPauses).
+ * The guesses it lets through are counted, but never start, extend or
+ * lengthen the pause it is in.
  *
  * h(user) hashes the username exactly as typed, so a username that doesn't
  * exist gets the same keys, thresholds and messages as one that does, and no
@@ -199,22 +201,54 @@ export interface KeyState {
   remainingMs: number;
   /** Failures in its current streak (0 once the streak has ended). */
   failures: number;
+  /** Seconds since its last failure; null when it has none in its current streak. */
+  sinceLastFailureS: number | null;
 }
 
 /**
- * Which of an attempt's paused keys refuse it. A paused network key only
- * refuses a username that already failed from that network in its current
- * streak (its account+network key has failures): one attacker on a shared
+ * How long a paused network key holds back a username after it failed from
+ * that network: the account+network key's own longest pause (and the window
+ * of the stopgap this replaced). A sprayer gets one guess per username per
+ * network in that time, never more than the account+network key allows at
+ * its cap; someone who mistyped while an attacker keeps the network paused
+ * waits at most this long, however long the attack goes on.
+ */
+export const NETWORK_HOLD_SECONDS = 15 * 60;
+
+/**
+ * Milliseconds a paused network key still holds back this attempt's
+ * username: what is left of NETWORK_HOLD_SECONDS since its account+network
+ * key last failed, 0 when that key has no failure in the window, or Infinity
+ * when the attempt has no account+network key (the network then refuses
+ * whoever it is). It reads the account+network key alone, which looks the
+ * same for a username that exists and one that doesn't.
+ */
+export function networkHoldMs(keys: KeyState[]): number {
+  const accountNetwork = keys.find((key) => key.scope === 'aip');
+  if (!accountNetwork) return Infinity;
+  if (accountNetwork.failures <= 0 || accountNetwork.sinceLastFailureS === null) return 0;
+  return Math.max(0, (NETWORK_HOLD_SECONDS - Math.max(0, accountNetwork.sinceLastFailureS)) * 1000);
+}
+
+/**
+ * Which of an attempt's paused keys refuse it, each with how long it still
+ * does. A paused network key refuses a username only for
+ * NETWORK_HOLD_SECONDS after it failed from that network (networkHoldMs), so
+ * its remainingMs becomes the shorter of the two: one attacker on a shared
  * address (a NAT, an outer proxy SIEMBox doesn't trust) must not lock out
- * everyone behind it, so someone who hasn't failed from there still gets
- * their password checked, and a sprayer gets at most one guess per username
- * per network per streak. It is decided from the account+network key alone,
- * which looks the same for a username that exists and one that doesn't.
+ * everyone behind it, so someone who hasn't failed from there lately still
+ * gets their password checked. Every other paused key refuses until its
+ * pause ends.
  */
 export function refusingPauses<T extends KeyState>(keys: T[]): T[] {
-  const accountNetwork = keys.find((key) => key.scope === 'aip');
-  const freshUsername = accountNetwork !== undefined && accountNetwork.failures === 0;
-  return keys.filter((key) => key.remainingMs > 0 && !(key.scope === 'ip' && freshUsername));
+  const holdMs = networkHoldMs(keys);
+  const refusing: T[] = [];
+  for (const key of keys) {
+    if (key.remainingMs <= 0) continue;
+    const remainingMs = key.scope === 'ip' ? Math.min(key.remainingMs, holdMs) : key.remainingMs;
+    if (remainingMs > 0) refusing.push(remainingMs === key.remainingMs ? key : { ...key, remainingMs });
+  }
+  return refusing;
 }
 
 /** Of several paused keys, the one to report: the longest wait, ties to the most specific scope. */

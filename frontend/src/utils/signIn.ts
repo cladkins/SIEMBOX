@@ -44,10 +44,10 @@ export function isUnavailable(error: unknown): boolean {
   return status === null || status >= 500;
 }
 
-/** What a throttle scope counts, in plain words (Users page, Settings -> Sign-in protection). */
+/** What holds a user's sign-in back, per throttle scope, in plain words (the Users page). */
 export const SCOPE_WORDS: Record<string, string> = {
   aip: 'this account from one network',
-  ip: 'a network, any username',
+  ip: 'a network they failed from, paused by failures for any username',
   acct: 'this account from new browsers',
   br: 'one of their recognized browsers (its own failures)',
   mfa: 'MFA codes',

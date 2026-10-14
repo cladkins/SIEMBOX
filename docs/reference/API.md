@@ -173,7 +173,7 @@ last failure. Nothing is ever locked for good.
 | Key | Counts | T (default) | Longest pause | A full sign-in |
 |-----|--------|-------------|---------------|----------------|
 | Account + network | Wrong passwords for one username from one network (IPv4 address or IPv6 /64), from browsers SIEMBox doesn't recognize | 5 (`LOGIN_MAX_FAILURES`) | 15 min | resets it |
-| Network | Wrong passwords from one network, for any username; while paused it refuses only usernames that already failed from that network in their streak | 20 (`LOGIN_MAX_FAILURES_PER_ADDRESS`) | 30 min | refunds its own attempt only |
+| Network | Wrong passwords from one network, for any username; while paused it refuses only usernames that failed from that network in the last 15 minutes | 20 (`LOGIN_MAX_FAILURES_PER_ADDRESS`) | 30 min | refunds its own attempt only |
 | Account | Wrong passwords for one username from every network, from new browsers | 20 (`LOGIN_MAX_FAILURES_PER_ACCOUNT`; `0` turns it off) | 60 min | refunds its own attempt only |
 | Recognized browser | Wrong passwords and MFA codes from one browser that signed in before; it replaces every key above | 10 | 15 min | resets it |
 | MFA | Wrong MFA codes for one user (sign-in from new browsers, and `POST /me/mfa/disable`) | 5 | 60 min | resets it |
@@ -184,12 +184,20 @@ last failure. Nothing is ever locked for good.
   However many requests arrive at once, a key lets exactly T checks through;
   attempts while it is paused are refused without a check (the right password
   included).
-- **Shared networks.** A paused network key doesn't refuse a username whose
-  account + network key has no failures in its current streak: that attempt is
-  checked (and charged) as usual. So one attacker behind a NAT or an outer proxy
-  SIEMBox doesn't trust can't lock out everyone behind it, and a sprayer gets at
-  most one guess per username per network per streak. The decision uses that
-  key alone, so it is the same for usernames that exist and those that don't.
+- **Shared networks.** A paused network key refuses a username only for 15
+  minutes after its account + network key last failed; any other attempt is
+  checked (and charged) as usual. So one attacker behind a NAT or an outer
+  proxy SIEMBox doesn't trust can't lock out everyone behind it: a user who
+  mistypes there is refused until the network's current pause ends or those 15
+  minutes pass, whichever comes first (`retryAfter` says which), however long
+  the attack goes on, and a sprayer gets at most one guess per username per
+  network every 15 minutes (the account + network key's own slowest rate; the
+  account key still bounds it across networks). The guesses a paused network
+  lets through are counted but never start, extend or lengthen its pause, so
+  there is one `auth.login.paused` row per pause; a wrong one is answered with
+  a 429 (`reason: "network"`) for the rest of that pause or 15 minutes,
+  whichever is shorter. The decision uses the account + network key alone, so
+  it is the same for usernames that exist and those that don't.
 - **Recognized browsers.** Every successful sign-in returns a `browserToken`;
   the web UI keeps it per username and sends it back. A sign-in with a valid
   token for that username counts against that browser's key only, so failed
@@ -1623,7 +1631,10 @@ Get all users (admin only).
 `signin_paused_until` is when the account's last sign-in pause ends (`null`
 when none is running), and `signin_pause_scopes` which of its keys are paused:
 `aip` (from one network), `acct` (from new browsers on every network), `br`
-(one of its recognized browsers, after that browser's own failures), `mfa`.
+(one of its recognized browsers, after that browser's own failures), `mfa`,
+and `ip` when a paused network holds them back because they failed from it in
+the last 15 minutes (until then, or until the network's pause ends if that is
+sooner; Unlock clears their own counters, which lets them in).
 `password_change_paused_until` is when the pause on changing their own
 password (`pwc`, wrong current passwords) ends: it doesn't stop them signing
 in, so it is not a sign-in pause. See

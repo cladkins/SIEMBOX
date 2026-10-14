@@ -1,6 +1,8 @@
 /**
  * The sign-in protection policy (signInPolicy.ts): the pause schedule of every
  * scope, the 24-hour streak decay, which keys an attempt counts against,
+ * which paused keys refuse it (a paused network only for 15 minutes after the
+ * username failed from it),
  * messages and Retry-After rounding, the settings read from the environment
  * (LOGIN_MAX_FAILURES_PER_ACCOUNT=0 turns the account scope off,
  * LOGIN_PROTECTION=off turns counting off), and request validation.
@@ -10,9 +12,11 @@ import { test, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   BROWSER_TOKEN_SHAPE,
+  NETWORK_HOLD_SECONDS,
   STREAK_DECAY_SECONDS,
   auditUsernameHash,
   longestPause,
+  networkHoldMs,
   parseCode,
   parseLoginBody,
   passwordKeys,
@@ -236,40 +240,73 @@ test('of several paused keys, the longest wait is reported (ties: the most speci
   );
 });
 
-test('a paused network refuses only usernames that already failed from it; every other pause refuses', () => {
-  const scopes = (keys: Parameters<typeof refusingPauses>[0]) => refusingPauses(keys).map((key) => key.scope);
+test('a paused network refuses only usernames that failed from it in the last 15 minutes; every other pause refuses', () => {
+  const refusing = (keys: Parameters<typeof refusingPauses>[0]) =>
+    refusingPauses(keys).map((key) => [key.scope, key.remainingMs]);
+  const MIN = 60_000;
+  assert.equal(NETWORK_HOLD_SECONDS, 15 * 60);
   // The network is paused, this username has no failures from it: checked.
   assert.deepEqual(
-    scopes([
-      { scope: 'aip', remainingMs: 0, failures: 0 },
-      { scope: 'ip', remainingMs: 60_000, failures: 25 },
-      { scope: 'acct', remainingMs: 0, failures: 3 },
+    refusing([
+      { scope: 'aip', remainingMs: 0, failures: 0, sinceLastFailureS: null },
+      { scope: 'ip', remainingMs: 25 * MIN, failures: 25, sinceLastFailureS: 1 },
+      { scope: 'acct', remainingMs: 0, failures: 3, sinceLastFailureS: 60 },
     ]),
     []
   );
-  // One failure from this network in the streak: the network pause refuses it.
+  // One failure from this network 5 minutes ago: refused for the 10 minutes left of its hold, not the network's 25.
   assert.deepEqual(
-    scopes([
-      { scope: 'aip', remainingMs: 0, failures: 1 },
-      { scope: 'ip', remainingMs: 60_000, failures: 25 },
+    refusing([
+      { scope: 'aip', remainingMs: 0, failures: 1, sinceLastFailureS: 5 * 60 },
+      { scope: 'ip', remainingMs: 25 * MIN, failures: 25, sinceLastFailureS: 1 },
     ]),
-    ['ip']
+    [['ip', 10 * MIN]]
   );
-  // The account pauses refuse either way.
+  // ... or for the network's pause, when that ends first.
   assert.deepEqual(
-    scopes([
-      { scope: 'aip', remainingMs: 0, failures: 0 },
-      { scope: 'ip', remainingMs: 60_000, failures: 25 },
-      { scope: 'acct', remainingMs: 120_000, failures: 21 },
+    refusing([
+      { scope: 'aip', remainingMs: 0, failures: 1, sinceLastFailureS: 5 * 60 },
+      { scope: 'ip', remainingMs: 30_000, failures: 20, sinceLastFailureS: 1 },
     ]),
-    ['acct']
+    [['ip', 30_000]]
   );
-  assert.deepEqual(scopes([{ scope: 'aip', remainingMs: 30_000, failures: 5 }]), ['aip']);
-  // Without an account+network key in the attempt, a paused network refuses.
-  assert.deepEqual(scopes([{ scope: 'ip', remainingMs: 60_000, failures: 25 }]), ['ip']);
-  for (const scope of ['br', 'mfa', 'pwc'] as const) {
-    assert.deepEqual(scopes([{ scope, remainingMs: 1, failures: 10 }]), [scope]);
+  // A failure from this network 15 minutes ago or more (still in its 24 h streak) no longer holds it back.
+  for (const since of [15 * 60, 20 * 60, 6 * 60 * 60]) {
+    assert.deepEqual(
+      refusing([
+        { scope: 'aip', remainingMs: 0, failures: 1, sinceLastFailureS: since },
+        { scope: 'ip', remainingMs: 25 * MIN, failures: 25, sinceLastFailureS: 1 },
+      ]),
+      [],
+      `${since} s`
+    );
   }
+  // The account pauses refuse either way, for as long as they last.
+  assert.deepEqual(
+    refusing([
+      { scope: 'aip', remainingMs: 0, failures: 0, sinceLastFailureS: null },
+      { scope: 'ip', remainingMs: MIN, failures: 25, sinceLastFailureS: 1 },
+      { scope: 'acct', remainingMs: 120 * MIN, failures: 30, sinceLastFailureS: 1 },
+    ]),
+    [['acct', 120 * MIN]]
+  );
+  assert.deepEqual(refusing([{ scope: 'aip', remainingMs: 30_000, failures: 5, sinceLastFailureS: 1 }]), [['aip', 30_000]]);
+  // Without an account+network key in the attempt, a paused network refuses until its pause ends.
+  assert.deepEqual(refusing([{ scope: 'ip', remainingMs: 25 * MIN, failures: 25, sinceLastFailureS: 1 }]), [['ip', 25 * MIN]]);
+  for (const scope of ['br', 'mfa', 'pwc'] as const) {
+    assert.deepEqual(refusing([{ scope, remainingMs: 1, failures: 10, sinceLastFailureS: 1 }]), [[scope, 1]]);
+  }
+});
+
+test('networkHoldMs: what is left of 15 minutes since the account+network key last failed', () => {
+  const ip = { scope: 'ip' as const, remainingMs: 60_000, failures: 25, sinceLastFailureS: 1 };
+  assert.equal(networkHoldMs([{ scope: 'aip', remainingMs: 0, failures: 0, sinceLastFailureS: null }, ip]), 0);
+  assert.equal(networkHoldMs([{ scope: 'aip', remainingMs: 0, failures: 2, sinceLastFailureS: 0 }, ip]), 15 * 60_000);
+  assert.equal(networkHoldMs([{ scope: 'aip', remainingMs: 0, failures: 2, sinceLastFailureS: 14 * 60 }, ip]), 60_000);
+  assert.equal(networkHoldMs([{ scope: 'aip', remainingMs: 0, failures: 2, sinceLastFailureS: 16 * 60 }, ip]), 0);
+  // A clock a little behind the row's (another transaction's NOW()) never makes it longer.
+  assert.equal(networkHoldMs([{ scope: 'aip', remainingMs: 0, failures: 2, sinceLastFailureS: -0.5 }, ip]), 15 * 60_000);
+  assert.equal(networkHoldMs([ip]), Infinity);
 });
 
 test('parseLoginBody: strings of the right length only; code and browserToken optional', () => {

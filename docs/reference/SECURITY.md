@@ -940,8 +940,9 @@ DEPLOYMENT.md, "Sign-in protection"):
 
 - **Keys.** Each wrong password counts against the account from that network
   (pauses after 5), the network for any username (20; while paused it holds
-  back only usernames that already failed from it, so one attacker on a shared
-  address can't lock out everyone behind it) and the account from every
+  back a username only for 15 minutes after it failed from there, so one
+  attacker on a shared address can't lock out everyone behind it, and the
+  guesses it lets through never extend its pause) and the account from every
   network (20, `LOGIN_MAX_FAILURES_PER_ACCOUNT=0` turns it off); wrong
   MFA codes against the user's MFA key (5), wrong current passwords on a
   password change against their own key (5). A pause starts at 30 seconds and

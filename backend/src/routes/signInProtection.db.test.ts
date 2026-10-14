@@ -10,9 +10,12 @@
  *   bcrypt calls (the reservation is atomic);
  * - spoofed X-Forwarded-For on TCP is ignored: 20 usernames pause the network
  *   127.0.0.1, and no row for the spoofed addresses appears;
- * - a paused network still checks usernames that haven't failed from it (one
- *   guess each per streak; a password change clears the user's own), and a
- *   right password that would have been its 20th failure leaves it unpaused;
+ * - a paused network still checks usernames that haven't failed from it in
+ *   the last 15 minutes (one guess each in that time, however long the
+ *   network stays paused; a password change or Unlock clears the user's own,
+ *   and the Users page lists who it holds back); the guesses it lets through
+ *   neither restart, extend nor re-audit its pause; and a right password that
+ *   would have been its 20th failure leaves it unpaused;
  * - the counters themselves: a refund racing a wrong attempt keeps that
  *   streak's start, a right password after a streak ended refunds to an empty
  *   one, a streak 24 h old starts over even with a pause recorded; tokens
@@ -809,7 +812,7 @@ test('LOGIN_PROTECTION=off counts nothing', async (t) => {
 
 // --- Shared networks, refunds and streaks ---------------------------------------
 
-test('a paused network still checks a username that has not failed from it: one guess per username per streak', async (t) => {
+test('a paused network still checks a username that has not failed from it: one guess per username per 15 minutes', async (t) => {
   if (!dbReady) return t.skip(SKIP);
   const bob = await createUser('shared-bob');
   const alice = await createUser('shared-alice');
@@ -822,7 +825,7 @@ test('a paused network still checks a username that has not failed from it: one 
   }
   assert.equal((await row(`ip:${xff}`)).paused, true, 'the sprayer paused the network');
 
-  // A username that already failed from this network in this streak: refused, before bcrypt.
+  // A username that failed from this network in the last 15 minutes: refused, before bcrypt.
   let compares = countCompares();
   const again = await login({ username: sprayed[0], password: 'guess' }, { xff });
   assert.equal(compares.count(), 0, 'no bcrypt for a username that already failed here');
@@ -861,6 +864,89 @@ test('a paused network still checks a username that has not failed from it: one 
   });
   assert.equal(changed.status, 200);
   assert.equal((await login({ username: alice.username, password: `${PASSWORD}-new` }, { xff })).status, 200);
+});
+
+test('a paused network holds back a username for 15 minutes after it failed from there, never for the whole streak', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const bob = await createUser('hold-bob');
+  const carol = await createUser('hold-carol');
+  const xff = '203.0.113.181';
+  for (let i = 1; i <= 20; i++) await login({ username: probe(`hold-${i}`), password: 'guess' }, { xff });
+  // As if the sprayer had kept at it: the network's pause is at 25 minutes.
+  await pool.query(`UPDATE login_throttle SET paused_until = NOW() + INTERVAL '25 minutes' WHERE key = $1`, [`ip:${xff}`]);
+  assert.equal((await row(`ip:${xff}`)).paused, true);
+  // Each mistyped once from this network: bob 20 minutes ago, carol 5 minutes ago.
+  for (const [user, minutes] of [[bob, 20], [carol, 5]] as const) {
+    await pool.query(
+      `INSERT INTO login_throttle (key, scope, user_id, network, failures, first_failure_at, last_failure_at)
+       VALUES ($1, 'aip', $2, $3, 1, NOW() - $4 * INTERVAL '1 minute', NOW() - $4 * INTERVAL '1 minute')`,
+      [aipKey(user.username, xff), user.id, xff, minutes]
+    );
+  }
+  assert.equal((await login({ username: bob.username, password: PASSWORD }, { xff })).status, 200, 'an old failure no longer holds him back');
+  assert.equal((await row(`ip:${xff}`)).paused, true, 'and the network stays paused');
+  const held = await login({ username: carol.username, password: PASSWORD }, { xff });
+  assert.equal(held.status, 429);
+  assert.equal(held.body.reason, 'network');
+  // Told when she is checked again: 10 minutes from now, though the network's pause may last longer.
+  assert.ok(held.body.retryAfter > 9 * 60 && held.body.retryAfter <= 10 * 60, `retryAfter ${held.body.retryAfter}`);
+  assert.equal(held.headers['retry-after'], String(held.body.retryAfter));
+});
+
+test('guesses let through a paused network neither restart, extend nor re-audit its pause', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const xff = '203.0.113.182';
+  const pausedRows = () => auditRows(`action = 'auth.login.paused' AND details->>'scope' = 'ip' AND details->>'network' = $2`, [xff]);
+  const pausedUntil = async () =>
+    (await pool.query(`SELECT paused_until::text AS until FROM login_throttle WHERE key = $1`, [`ip:${xff}`])).rows[0].until;
+  for (let i = 1; i <= 20; i++) await login({ username: probe(`spray-once-${i}`), password: 'guess' }, { xff });
+  const until = await pausedUntil();
+  assert.equal((await pausedRows()).length, 1, 'the pause start is audited');
+
+  for (let i = 21; i <= 30; i++) {
+    const guess = await login({ username: probe(`spray-once-${i}`), password: 'guess' }, { xff });
+    assert.equal(guess.status, 429, 'a fresh username is checked, then told about the pause');
+    assert.equal(guess.body.reason, 'network');
+    assert.ok(guess.body.retryAfter <= 30, `the pause it saw, never a longer one (${guess.body.retryAfter})`);
+  }
+  const network = await row(`ip:${xff}`);
+  assert.equal(network.failures, 30, 'each checked guess is still counted');
+  assert.equal(network.pauses, 1, 'but none started a pause');
+  assert.equal(await pausedUntil(), until, 'or moved its end');
+  assert.equal((await pausedRows()).length, 1, 'one auth.login.paused row for the one pause');
+
+  // Once it ends, the next failure starts the next pause, as long as its failures say (capped at 30 minutes).
+  await unpause(`ip:${xff}`);
+  const rearmed = await login({ username: probe('spray-once-31'), password: 'guess' }, { xff });
+  assert.equal(rearmed.status, 429);
+  assert.equal((await row(`ip:${xff}`)).pauses, 2);
+  assert.equal((await pausedRows()).length, 2);
+});
+
+test('Users page: a user held back by a paused network is listed, and Unlock lets them in', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const admin = await createUser('held-admin', 'admin');
+  const carol = await createUser('held-carol');
+  const adminSession = (await SessionModel.create(admin.id, 1)).token;
+  const xff = '203.0.113.183';
+  for (let i = 1; i <= 20; i++) await login({ username: probe(`held-${i}`), password: 'guess' }, { xff });
+  const listedCarol = async () => (await call('GET', '/api/users', { token: adminSession })).body.find((u: { id: number }) => u.id === carol.id);
+  assert.equal((await listedCarol()).signin_paused_until, null, 'not held back before she fails from there');
+
+  assert.equal((await login({ username: carol.username, password: 'typo' }, { xff })).status, 429);
+  const refused = await login({ username: carol.username, password: PASSWORD }, { xff });
+  assert.equal(refused.status, 429);
+  const listed = await listedCarol();
+  assert.deepEqual(listed.signin_pause_scopes, ['ip']);
+  assert.ok(listed.signin_paused_until, 'when she is checked again');
+  const untilMs = Date.parse(listed.signin_paused_until) - Date.now();
+  assert.ok(untilMs > 0 && untilMs <= refused.body.retryAfter * 1000 + 2000, `${untilMs} ms, answer said ${refused.body.retryAfter} s`);
+  assert.equal(listed.password_change_paused_until, null);
+
+  assert.equal((await call('POST', `/api/users/${carol.id}/unlock`, { token: adminSession })).status, 200);
+  assert.equal((await login({ username: carol.username, password: PASSWORD }, { xff })).status, 200);
+  assert.equal((await row(`ip:${xff}`)).paused, true, 'the network stays paused');
+  assert.equal((await listedCarol()).signin_paused_until, null);
 });
 
 test('a right password that is the 20th attempt on a network leaves it unpaused: the refund undoes the pause it started', async (t) => {

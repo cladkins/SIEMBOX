@@ -27,21 +27,23 @@
         </el-table-column>
         <el-table-column label="Sign-in" min-width="170">
           <template #default="{ row }">
-            <el-tooltip v-if="pausedMinutes(row.signin_paused_until) > 0" placement="top">
-              <template #content>
-                Paused after failed attempts:
-                <div v-for="scope in row.signin_pause_scopes" :key="scope">· {{ scopeWords(scope) }}</div>
-                <template v-if="pausesNewBrowsers(row)">Browsers that signed in before are not affected.</template>
-              </template>
-              <el-tag type="warning" effect="light">Sign-in paused · {{ pausedMinutes(row.signin_paused_until) }} min</el-tag>
-            </el-tooltip>
-            <el-tooltip v-if="pausedMinutes(row.password_change_paused_until) > 0" placement="top">
-              <template #content>
-                Too many wrong current passwords when changing their own password. Signing in is not affected.
-              </template>
-              <el-tag type="info" effect="light">Password change paused · {{ pausedMinutes(row.password_change_paused_until) }} min</el-tag>
-            </el-tooltip>
-            <el-text v-if="!anyPause(row)" type="info" size="small">—</el-text>
+            <div v-if="anyPause(row)" class="pause-tags">
+              <el-tooltip v-if="pausedMinutes(row.signin_paused_until) > 0" placement="top">
+                <template #content>
+                  Paused after failed attempts:
+                  <div v-for="scope in row.signin_pause_scopes" :key="scope">· {{ scopeWords(scope) }}</div>
+                  <template v-if="pausesNewBrowsers(row)">Browsers that signed in before are not affected.</template>
+                </template>
+                <el-tag class="pause-tag" type="warning" effect="light">Sign-in paused · {{ pausedMinutes(row.signin_paused_until) }} min</el-tag>
+              </el-tooltip>
+              <el-tooltip v-if="pausedMinutes(row.password_change_paused_until) > 0" placement="top">
+                <template #content>
+                  Too many wrong current passwords when changing their own password. Signing in is not affected.
+                </template>
+                <el-tag class="pause-tag" type="info" effect="light">Password change paused · {{ pausedMinutes(row.password_change_paused_until) }} min</el-tag>
+              </el-tooltip>
+            </div>
+            <el-text v-else type="info" size="small">—</el-text>
           </template>
         </el-table-column>
         <el-table-column label="Actions" width="270" align="center" fixed="right">
@@ -318,7 +320,7 @@ function anyPause(user: UserPauses): boolean {
 // Account, network and MFA pauses hold back new browsers only; a paused
 // recognized browser (br) is one of the browsers that signed in before.
 function pausesNewBrowsers(user: UserPauses): boolean {
-  return (user.signin_pause_scopes || []).some((scope) => ['aip', 'acct', 'mfa'].includes(scope));
+  return (user.signin_pause_scopes || []).some((scope) => ['aip', 'ip', 'acct', 'mfa'].includes(scope));
 }
 
 function scopeWords(scope: string): string {
@@ -521,5 +523,25 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+/* One tag per line, wrapping inside the cell rather than running past it, so
+   the minutes stay visible however narrow the Sign-in column gets. */
+.pause-tags {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.pause-tag {
+  max-width: 100%;
+  height: auto;
+  min-height: 24px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  line-height: 1.4;
+  white-space: normal;
+  text-align: left;
 }
 </style>

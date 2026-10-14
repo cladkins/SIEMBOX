@@ -14,10 +14,11 @@
  *   concurrent DELETE cannot slip in between, and two attempts sharing keys
  *   always lock them in the same order, so they cannot deadlock);
  *   if a key that refuses this attempt is paused: ROLLBACK, refuse with the
- *   longest wait (a paused network key refuses only usernames that already
- *   failed from it: signInPolicy.ts refusingPauses);
+ *   longest wait (a paused network key refuses only usernames that failed
+ *   from it in the last 15 minutes: signInPolicy.ts refusingPauses);
  *   otherwise charge each key (a streak 24 h old starts over, the threshold-th
- *   failure starts a pause) and COMMIT.
+ *   failure starts a pause, a key that is already paused keeps its pause as
+ *   it is) and COMMIT.
  *
  * refund() undoes one charge: failures - 1, and the pause and timestamps go
  * back to what they were only if they still hold exactly what this attempt
@@ -44,12 +45,14 @@ import { getClient, query } from '../config/database';
 import { logger } from '../utils/logger';
 import { ErrorLogService } from '../services/errors/errorLogService';
 import {
+  NETWORK_HOLD_SECONDS,
   longestPause,
   pauseSeconds,
   refusingPauses,
   retryAfterSeconds,
   signInSettings,
   streakEnded,
+  type KeyState,
   type SignInScope,
   type SignInSettings,
   type ThrottleKeySpec,
@@ -72,9 +75,19 @@ export interface Charge extends ThrottleKeySpec {
   streakEnded: boolean;
   /** The row as this attempt left it. */
   after: KeySnapshot;
-  /** This attempt started a pause (of pauseSeconds). */
+  /**
+   * This attempt started a pause (of pauseSeconds): never on a key that was
+   * already paused (a network that let this username through).
+   */
   pauseStarted: boolean;
   pauseSeconds: number;
+  /**
+   * How long this key now holds this attempt's username back, in seconds (0
+   * when it doesn't): the pause it started, or what is left of the network
+   * pause it was let through, a network's at most NETWORK_HOLD_SECONDS. A
+   * failed check with any is answered with a 429 for the longest.
+   */
+  heldSeconds: number;
   /** Epoch seconds of the streak's first failure: one alert per streak (authAlerts.ts). */
   streakStartedAt: number;
 }
@@ -204,6 +217,7 @@ async function reserveOnce(keys: ThrottleKeySpec[], userAgent: string | null, se
         scope: spec.scope,
         remainingMs: ended ? 0 : Math.max(0, Number(row.paused_ms ?? 0)),
         failures: ended ? 0 : Number(row.failures),
+        sinceLastFailureS: ended || row.since_last_failure_s === null ? null : Number(row.since_last_failure_s),
       };
     });
     const longest = longestPause(refusingPauses(states));
@@ -213,14 +227,21 @@ async function reserveOnce(keys: ThrottleKeySpec[], userAgent: string | null, se
     }
 
     const charges: Charge[] = [];
-    for (const spec of sorted) {
+    const chargedStates: Array<KeyState & { key: string }> = [];
+    for (const [index, spec] of sorted.entries()) {
       const row = rows.get(spec.key)!;
       const before = snapshot(row);
       const ended = streakEnded(row.since_last_failure_s);
       const baseFailures = ended ? 0 : before.failures;
       const basePauses = ended ? 0 : before.pauses;
       const failures = baseFailures + 1;
-      const pause = pauseSeconds(settings.scopes[spec.scope], failures);
+      // A key let through while paused (a network, for a username that hasn't
+      // failed from it lately) counts the failure but keeps its pause as it
+      // is: the guesses a paused network lets through must not start a pause,
+      // move its end or lengthen it. The first failure after it ends starts
+      // the next one.
+      const remainingMs = states[index].remainingMs;
+      const pause = remainingMs > 0 ? 0 : pauseSeconds(settings.scopes[spec.scope], failures);
       const updated = await client.query(
         `UPDATE login_throttle SET
            failures = $2,
@@ -247,8 +268,22 @@ async function reserveOnce(keys: ThrottleKeySpec[], userAgent: string | null, se
         after: snapshot(after),
         pauseStarted: pause > 0,
         pauseSeconds: pause,
+        heldSeconds: 0,
         streakStartedAt: Math.floor(Number(after.streak_started_at)),
       });
+      chargedStates.push({
+        key: spec.key,
+        scope: spec.scope,
+        remainingMs: pause > 0 ? pause * 1000 : remainingMs,
+        failures,
+        sinceLastFailureS: 0,
+      });
+    }
+    // How long the keys now hold this attempt's username back: what a failed
+    // check is answered with (a network's pause counts only NETWORK_HOLD_SECONDS of it).
+    for (const held of refusingPauses(chargedStates)) {
+      const charge = charges.find((entry) => entry.key === held.key);
+      if (charge) charge.heldSeconds = retryAfterSeconds(held.remainingMs);
     }
     await client.query('COMMIT');
     return { outcome: 'charged', charges };
@@ -412,19 +447,33 @@ export const LoginThrottleModel = {
   },
 
   /**
-   * For the Users page: each user with a paused key. Sign-in pauses (when the
-   * last ends, and which scopes) are kept apart from a paused password change
-   * (pwc), which doesn't stop anyone signing in.
+   * For the Users page: each user with a paused key, or held back by a paused
+   * network they failed from in the last NETWORK_HOLD_SECONDS (scope 'ip',
+   * until the hold or the network's pause ends, whichever is first: the rule
+   * of signInPolicy.ts refusingPauses). Sign-in pauses (when the last ends,
+   * and which scopes) are kept apart from a paused password change (pwc),
+   * which doesn't stop anyone signing in.
    */
   async pausedSummaryForUsers(): Promise<Map<number, UserPauseSummary>> {
     const res = await query(
-      `SELECT user_id,
+      `WITH paused AS (
+         SELECT user_id, scope::text AS scope, paused_until
+           FROM login_throttle
+          WHERE user_id IS NOT NULL AND paused_until > NOW()
+         UNION ALL
+         SELECT a.user_id, 'ip' AS scope, LEAST(n.paused_until, a.last_failure_at + $1 * INTERVAL '1 second') AS paused_until
+           FROM login_throttle a
+           JOIN login_throttle n ON n.scope = 'ip' AND n.network IS NOT DISTINCT FROM a.network AND n.paused_until > NOW()
+          WHERE a.scope = 'aip' AND a.user_id IS NOT NULL AND a.failures > 0
+            AND a.last_failure_at > NOW() - $1 * INTERVAL '1 second'
+       )
+       SELECT user_id,
               MAX(paused_until) FILTER (WHERE scope <> 'pwc') AS signin_until,
               COALESCE(array_agg(DISTINCT scope ORDER BY scope) FILTER (WHERE scope <> 'pwc'), '{}') AS scopes,
               MAX(paused_until) FILTER (WHERE scope = 'pwc') AS password_change_until
-         FROM login_throttle
-        WHERE user_id IS NOT NULL AND paused_until > NOW()
-        GROUP BY user_id`
+         FROM paused
+        GROUP BY user_id`,
+      [NETWORK_HOLD_SECONDS]
     );
     const iso = (value: unknown) => (value ? new Date(value as string).toISOString() : null);
     return new Map(

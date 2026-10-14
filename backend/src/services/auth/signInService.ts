@@ -74,13 +74,18 @@ function startedPauses(reservation: Reservation): Charge[] {
   return reservation.outcome === 'charged' ? reservation.charges.filter((charge) => charge.pauseStarted) : [];
 }
 
+function holdingCharges(reservation: Reservation): Charge[] {
+  return reservation.outcome === 'charged' ? reservation.charges.filter((charge) => charge.heldSeconds > 0) : [];
+}
+
 /**
  * After a password or code was checked and was wrong (the reservation's
  * charges stand): the audit row and log line, one auth.login.paused row and
  * log line per pause this attempt started, the alerts for those, forgetting a
  * recognized browser at 20 consecutive failures, and the spike counter.
- * Returns the pause to report when this attempt started one (the answer is
- * then a 429).
+ * Returns the pause to report when the keys now hold this attempt's username
+ * back (one it started, or the network pause it was let through, whose start
+ * was audited already): the answer is then a 429 with the longest wait.
  */
 export async function recordFailedCheck(params: {
   ctx: AuthRequestContext;
@@ -97,7 +102,7 @@ export async function recordFailedCheck(params: {
   const settings = signInSettings();
   const usernameKeyHash = user ? undefined : auditUsernameHash(username);
   const pauses = startedPauses(reservation);
-  const reported = longestPause(pauses.map((charge) => ({ ...charge, remainingMs: charge.pauseSeconds * 1000 })));
+  const reported = longestPause(holdingCharges(reservation).map((charge) => ({ ...charge, remainingMs: charge.heldSeconds * 1000 })));
 
   void noteCheckedFailure();
   logLoginFailure({ userId: user?.id ?? null, usernameHash: usernameKeyHash, ctx, reason, message: STAGE_LOG[stage] });
@@ -148,8 +153,9 @@ export async function recordFailedCheck(params: {
         title: `Sign-in paused for network ${charge.network ?? 'unknown'}`,
         description:
           `${charge.after.failures} failed sign-ins from ${charge.network ?? 'an unknown address'} for any username. ` +
-          `For ${wait}, new browsers on that network can't sign in to usernames that already failed from it ` +
-          '(others still get their password checked); browsers that signed in before are not affected.',
+          `While it is paused (${wait}), new browsers on that network can't sign in to a username that failed from ` +
+          'there in the last 15 minutes (others still get their password checked); browsers that signed in before ' +
+          'are not affected.',
         matched: { ...matched, trigger: 'network-pause' },
       });
     } else if (charge.scope === 'acct' && user) {
@@ -222,7 +228,7 @@ export async function recordFailedCheck(params: {
   }
 
   if (!reported || !settings.protection) return null;
-  return { reason: settings.scopes[reported.scope].reason, seconds: reported.pauseSeconds };
+  return { reason: settings.scopes[reported.scope].reason, seconds: reported.heldSeconds };
 }
 
 /**

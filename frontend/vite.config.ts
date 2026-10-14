@@ -15,9 +15,14 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
+    // The UI calls /api on its own origin and this proxies it to the backend,
+    // as nginx does in production, so the API needs no CORS_ORIGIN for
+    // development. API_PROXY_TARGET points it at another backend. Not
+    // VITE_API_URL: that is the UI's own API base (src/services/api.ts), and an
+    // absolute one makes the browser call the API cross-origin.
     proxy: {
       '/api': {
-        target: process.env.VITE_API_URL || 'http://localhost:8421',
+        target: process.env.API_PROXY_TARGET || 'http://localhost:8421',
         changeOrigin: true,
       },
     },

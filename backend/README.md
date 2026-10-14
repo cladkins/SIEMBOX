@@ -195,8 +195,10 @@ CREDENTIAL_ENCRYPTION_KEY=32-character-hex-key-here
 # Logging
 LOG_LEVEL=debug
 
-# CORS
-CORS_ORIGIN=*
+# CORS: leave empty (same-origin only). The web UI and the Vite dev server
+# proxy /api and need none. List exact origins, comma-separated, only for a
+# page of yours on another origin: CORS_ORIGIN=http://localhost:5173
+CORS_ORIGIN=
 
 # Syslog
 SYSLOG_PORT=514
@@ -721,7 +723,7 @@ docker build -t siembox-backend .
 3. ✅ **Validate all user input** (express-validator)
 4. ✅ **Use bcrypt for passwords** (10+ rounds)
 5. ✅ **Implement rate limiting** (already configured)
-6. ✅ **Set secure headers** (CORS, etc.)
+6. ✅ **Set secure headers** (same-origin CORS by default, `src/net/cors.ts`)
 7. ✅ **Use HTTPS in production**
 8. ✅ **Rotate secrets regularly**
 

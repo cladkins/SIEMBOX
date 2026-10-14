@@ -233,7 +233,7 @@ A secret token used by log shippers to authenticate with the SIEMBox API. 64-cha
 An 8-character identifier derived from the API key using SHA256 hashing, used to track which shipper sent each log.
 
 ### CORS (Cross-Origin Resource Sharing)
-A security mechanism that controls which domains can access a web API from the browser.
+A security mechanism that controls which domains can access a web API from the browser. SIEMBox's API is same-origin only by default (`CORS_ORIGIN` empty): the web UI reaches it through its own nginx, and pages on other origins can't call it unless `CORS_ORIGIN` lists them.
 
 ---
 

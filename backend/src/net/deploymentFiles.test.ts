@@ -6,8 +6,10 @@
  *   /run/siembox on the backend, which listens there, read-only on the
  *   frontend, whose nginx connects. The backend gets TRUSTED_PROXIES (default
  *   `frontend`), and API_RATE_LIMIT_MAX, EDR_AGENT_RATE_MAX,
- *   SHIPPER_LOG_PUSH_MAX and SIEMBOX_PROXY_SOCKET from .env (empty: the code
- *   default); BACKEND_UPSTREAM keeps its default.
+ *   SHIPPER_LOG_PUSH_MAX, SIEMBOX_PROXY_SOCKET, the sign-in settings and
+ *   CORS_ORIGIN from .env (empty: the code default; for CORS_ORIGIN that is
+ *   same-origin only, which .env.example keeps); BACKEND_UPSTREAM keeps its
+ *   default.
  * - The nginx template proxies /api to the socket, with BACKEND_UPSTREAM as a
  *   backup that is only used when connecting fails and is never marked down,
  *   and sets X-Forwarded-For with $proxy_add_x_forwarded_for: the backend takes
@@ -57,12 +59,22 @@ for (const file of ['compose.yaml', 'compose.prod.yaml']) {
       'LOGIN_MAX_FAILURES_PER_ACCOUNT',
       'AUTH_ALERTS',
       'AUTH_FAILURE_AUDIT_RETENTION_DAYS',
+      // Same-origin only unless set (net/cors.ts); never `*` by default.
+      'CORS_ORIGIN',
     ]) {
       assert.equal(backend.environment?.[name], `\${${name}:-}`, name);
     }
     assert.equal(frontend.environment?.BACKEND_UPSTREAM, '${BACKEND_UPSTREAM:-backend:8421}');
   });
 }
+
+test('.env.example: CORS_ORIGIN is empty (same-origin only)', () => {
+  const lines = fs.readFileSync(path.join(REPO, '.env.example'), 'utf8').split('\n');
+  assert.deepEqual(
+    lines.filter((line) => line.startsWith('CORS_ORIGIN=')),
+    ['CORS_ORIGIN=']
+  );
+});
 
 /** The `;`-separated directives in an nginx block body, whitespace collapsed. */
 function directives(body: string): string[] {

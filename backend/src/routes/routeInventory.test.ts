@@ -473,7 +473,8 @@ function mountPathOf(layer: Layer): string {
 /**
  * Middleware mounted with app.use() or router.use() that only passes a request
  * on, or ends it with an error, so it needs no INVENTORY line: the address
- * tracker, CORS, the body parsers and their {} default, the timeout logger, the
+ * tracker, CORS (net/cors.ts; it also answers every OPTIONS request itself, with
+ * an empty 204), the body parsers and their {} default, the timeout logger, the
  * Cache-Control header on /api/auth (routes/auth.ts noStore), the login check,
  * the role gates (middleware/auth.ts authorize(), scanPermissions.ts
  * requireScanPermission()) and the closing 404 and error handlers. (Express 5
@@ -482,7 +483,7 @@ function mountPathOf(layer: Layer): string {
  */
 const PASS_THROUGH = new Set([
   'ignoredForwardedForTracker',
-  'corsMiddleware',
+  'corsHeaders',
   'jsonParser',
   'urlencodedParser',
   'emptyBodyDefault',

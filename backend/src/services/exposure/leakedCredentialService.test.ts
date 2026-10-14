@@ -15,6 +15,7 @@ import {
   HibpDomainsRefreshError,
   HibpSource,
   LEAKED_CREDS_ALREADY_RUNNING,
+  applyHibpKeyChange,
   breachFingerprint,
   breachSeverity,
   buildBreachFinding,
@@ -22,6 +23,7 @@ import {
   getLeakedCredentialRunState,
   getLeakedCredentialSkipReason,
   refreshHibpVerifiedDomains,
+  rememberRateLimitForSavedKey,
   resetLeakedCredentialPause,
   runLeakedCredentialChecks,
   spacingForRpm,
@@ -1077,8 +1079,91 @@ test('run: a 429 from a concurrent Re-check stops a run in progress: nothing mor
   assert.deepEqual(source.calls, ['list', 'check:user1@example.com'], 'user2 and user3 are not sent inside retry-after');
   assert.equal(summary.checked, 1);
   assert.match(summary.error ?? '', /rate limit/);
+  // The time travels in rateLimitedUntil only: the UI adds "Checks resume after …" itself.
+  assert.doesNotMatch(summary.error ?? '', /\d{4}-\d{2}-\d{2}T|resume/);
   assert.ok(summary.rateLimitedUntil && Date.parse(summary.rateLimitedUntil) > Date.now() + 100_000);
   assert.deepEqual([...due], [2, 3], 'the rest stay due');
+});
+
+test('run: a call the pacer holds back during a 429 elsewhere stops the run, the time in rateLimitedUntil only', async () => {
+  let pausedUntil = 0;
+  const { client, calls } = fakeHibpClient();
+  const source = new HibpSource({
+    getApiKey: async () => '0123456789abcdef0123456789abcdef',
+    isEnabled: async () => true,
+    createClient: () => client,
+    // A 429 to an admin's re-check while this run's first search waits its turn.
+    sleep: async () => {
+      pausedUntil = Date.now() + 90_000;
+    },
+    pausedUntil: () => pausedUntil,
+  });
+  const { store, due } = memoryStore([identity(1), identity(2)]);
+
+  const summary = await runLeakedCredentialChecks({ source, store });
+  assert.deepEqual(calls, ['subscriptionStatus'], 'no search is sent');
+  assert.equal(summary.checked, 0);
+  assert.match(summary.error ?? '', /rate limit/);
+  assert.doesNotMatch(summary.error ?? '', /\d{4}-\d{2}-\d{2}T|resume/);
+  assert.ok(summary.rateLimitedUntil && Date.parse(summary.rateLimitedUntil) > Date.now() + 80_000);
+  assert.deepEqual([...due], [1, 2], 'both stay due');
+});
+
+test('key change: a 429 wait follows the key that drew it, through a removal and another key', async () => {
+  const keyA = 'a'.repeat(32);
+  const keyB = 'b'.repeat(32);
+  const { store, domains } = memoryStore([], { snapshot: listedSnapshot([], 2 * 60_000) });
+  const source = domainSource(
+    () => new HibpError('rate_limited', 'HIBP rate limit exceeded; retry after 120s', { status: 429, retryAfterSeconds: 120 })
+  );
+  assert.equal((await refreshHibpVerifiedDomains({ source, store })).view.error?.kind, 'rate_limited');
+  const pausedUntil = getLeakedCredentialRunState().paused_until;
+  assert.ok(pausedUntil);
+  // What PUT /providers/hibp does: remember (old key still saved), save, clear the list, apply.
+  const saveKey = async (savedNow: string | undefined, next: string | null, keyRef: string | null) => {
+    await rememberRateLimitForSavedKey({ store, savedKey: async () => savedNow });
+    domains.keyRef = keyRef;
+    domains.snapshot = null;
+    await applyHibpKeyChange(next, { store });
+  };
+
+  await saveKey(keyA, null, null); // removed: nothing can be sent, the wait stays
+  assert.equal(getLeakedCredentialRunState().paused_until, pausedUntil);
+
+  await saveKey(undefined, keyB, 'bbbbbbbbbbbbbbbb'); // another key: its own limit
+  assert.equal(getLeakedCredentialRunState().paused_until, null);
+  assert.equal(domains.snapshot, null);
+
+  await saveKey(keyB, keyA, 'cccccccccccccccc'); // the limited key is back: so is its wait
+  assert.equal(getLeakedCredentialRunState().paused_until, pausedUntil);
+  assert.equal(domains.snapshot?.key_ref, 'cccccccccccccccc', 'recorded for the new envelope');
+  assert.equal(domains.snapshot?.error?.kind, 'rate_limited');
+  assert.equal(domains.snapshot?.error?.retry_after, pausedUntil);
+  const refused = (e: unknown) => e instanceof HibpDomainsRefreshError && e.kind === 'rate_limited';
+  await assert.rejects(refreshHibpVerifiedDomains({ source, store }), refused);
+  resetLeakedCredentialPause(); // a restart: the recorded wait still holds
+  await assert.rejects(refreshHibpVerifiedDomains({ source, store }), refused);
+  assert.deepEqual(source.calls, ['list'], 'nothing more is sent to HIBP');
+});
+
+test('key change: removing the key lifts a rejected-key pause; with no wait running, nothing is remembered', async () => {
+  const { store } = memoryStore([identity(1)]);
+  const source = scriptedSource({
+    'user1@example.com': () => new ExposureSourceError('auth', 'HIBP rejected the API key (HTTP 401)'),
+  });
+  await runLeakedCredentialChecks({ source, store });
+  assert.ok(getLeakedCredentialRunState().paused_until, 'paused for the rejected key');
+  let read = 0;
+  await rememberRateLimitForSavedKey({
+    store,
+    savedKey: async () => {
+      read++;
+      return 'a'.repeat(32);
+    },
+  });
+  assert.equal(read, 0, 'the key is only read while a 429 wait runs');
+  await applyHibpKeyChange(null, { store });
+  assert.equal(getLeakedCredentialRunState().paused_until, null);
 });
 
 test('HibpSource: no keyed call is sent while a rate-limit pause is on, even one already waiting its turn', async () => {

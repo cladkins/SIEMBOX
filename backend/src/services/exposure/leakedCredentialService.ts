@@ -463,11 +463,11 @@ export class HibpSource implements ExposureSource {
       const until = this.pausedUntil();
       const now = this.now();
       if (until > now) {
-        throw new HibpError(
-          'rate_limited',
-          `HIBP rate limit reached; checks resume after ${new Date(until).toISOString()}`,
-          { retryAfterSeconds: Math.ceil((until - now) / 1000) }
-        );
+        // The time travels in retryAfterSeconds (a run's summary carries it
+        // as rateLimitedUntil): the message stays free of it.
+        throw new HibpError('rate_limited', 'HIBP rate limit reached (it answered 429 to another request)', {
+          retryAfterSeconds: Math.ceil((until - now) / 1000),
+        });
       }
       this.lastCallAt = now;
     });
@@ -660,20 +660,118 @@ function rateLimitPauseEnd(): number {
   return pauseKind === 'rate_limited' && pausedUntil > Date.now() ? pausedUntil : 0;
 }
 
+/** End of the retry-after a snapshot records for a 429 (ms since the epoch), or 0. */
+function recordedRateLimitEnd(snapshot: HibpDomainSnapshot | null): number {
+  if (snapshot?.error?.kind !== 'rate_limited') return 0;
+  return Date.parse(snapshot.error.retry_after ?? '') || 0;
+}
+
+// HIBP's rate limit belongs to the key, not to the stored envelope: a 429's
+// wait is remembered for the key it was drawn on when that key is replaced or
+// removed, and applies again if the key comes back. Keys are told apart by an
+// HMAC under a random per-process secret, held in memory only (like the pause
+// itself): never stored, returned or logged, meaningless outside this process.
+const KEY_FINGERPRINT_SECRET = crypto.randomBytes(32);
+const MAX_REMEMBERED_WAITS = 8;
+const rateLimitWaits = new Map<string, number>();
+
+function keyFingerprint(apiKey: string): string {
+  return crypto.createHmac('sha256', KEY_FINGERPRINT_SECRET).update(apiKey).digest('hex');
+}
+
+function rememberedWaitEnd(apiKey: string): number {
+  const until = rateLimitWaits.get(keyFingerprint(apiKey)) ?? 0;
+  return until > Date.now() ? until : 0;
+}
+
+function rememberWait(apiKey: string, untilMs: number): void {
+  const now = Date.now();
+  for (const [fingerprint, until] of rateLimitWaits) {
+    if (until <= now) rateLimitWaits.delete(fingerprint);
+  }
+  const fingerprint = keyFingerprint(apiKey);
+  const until = Math.max(untilMs, rateLimitWaits.get(fingerprint) ?? 0);
+  rateLimitWaits.delete(fingerprint); // re-inserted last: the oldest go first
+  rateLimitWaits.set(fingerprint, until);
+  while (rateLimitWaits.size > MAX_REMEMBERED_WAITS) {
+    rateLimitWaits.delete(rateLimitWaits.keys().next().value as string);
+  }
+}
+
 /**
- * Lift a rate-limit/auth pause and forget the cached plan — call when a
- * different HIBP key is saved (or the key is cleared): HIBP's rate limit and
- * plan belong to the key.
+ * Forget every pause, every remembered 429 wait and the cached plan, as a
+ * restart does (tests use it to start clean).
  */
 export function resetLeakedCredentialPause(): void {
   liftPause();
+  rateLimitWaits.clear();
   hibpSource.reset();
+}
+
+/**
+ * Call before PUT /providers/hibp replaces or removes the saved key. If a 429
+ * wait is still running for it (this process's pause, or the retry-after the
+ * snapshot records, which outlives a restart), it is remembered for that key,
+ * so it applies again should the key be saved again (see applyHibpKeyChange).
+ */
+export async function rememberRateLimitForSavedKey(
+  options: { store?: LeakedCredentialStore; savedKey?: () => Promise<string | undefined> } = {}
+): Promise<void> {
+  const store = options.store ?? dbStore;
+  const state = await store.loadDomainSnapshot();
+  const until = Math.max(rateLimitPauseEnd(), recordedRateLimitEnd(state.snapshot));
+  if (until <= Date.now() || !state.keyUsable) return;
+  const apiKey = await (options.savedKey ?? getHibpApiKey)();
+  if (apiKey) rememberWait(apiKey, until);
+}
+
+/**
+ * Call after PUT /providers/hibp saved a different key (`apiKey`) or removed
+ * it (null), once the old key's verified-domain list is cleared. The cached
+ * plan is forgotten either way.
+ *  - Removed: only a rejected-key pause is lifted. Nothing can be sent without
+ *    a key, and a 429's wait stays remembered for the key that drew it.
+ *  - A key with a 429 wait still running (it drew it before it was replaced or
+ *    removed): the pause stays, and the wait is recorded in a snapshot for the
+ *    new envelope, so a re-check and a run's listing keep refusing, after a
+ *    restart too.
+ *  - Any other key has its own rate limit: a fresh start.
+ */
+export async function applyHibpKeyChange(
+  apiKey: string | null,
+  options: { store?: LeakedCredentialStore } = {}
+): Promise<void> {
+  hibpSource.reset();
+  if (!apiKey) {
+    if (pauseKind === 'auth') liftPause();
+    return;
+  }
+  const until = rememberedWaitEnd(apiKey);
+  if (!until) {
+    liftPause();
+    return;
+  }
+  const at = new Date(until).toISOString();
+  if (rateLimitPauseEnd() !== until) {
+    pause(until, `${HIBP_PROVIDER.label} rate limit reached; checks resume after ${at}`, 'rate_limited');
+  }
+  const store = options.store ?? dbStore;
+  const { keyRef } = await store.loadDomainSnapshot();
+  if (!keyRef) return;
+  const error: HibpDomainListError = {
+    kind: 'rate_limited',
+    status: 429,
+    message: 'HIBP rate limit reached for this key before it was saved again',
+    retry_after: at,
+  };
+  await store.saveDomainSnapshot(keyRef, (previous) => failedSnapshot(previous, error, keyRef, new Date()));
 }
 
 /**
  * Lift only a rejected-key pause (the admin re-saved the same key or toggled
  * the provider, e.g. after renewing the subscription). A rate-limit pause
  * stays until HIBP's retry-after has passed: the same key gets the same limit.
+ * The cached plan is forgotten along with a lifted pause.
  */
 export function liftLeakedCredentialAuthPause(): void {
   if (pauseKind !== 'auth') return;
@@ -877,9 +975,7 @@ export async function refreshHibpVerifiedDomains(
     throw new HibpDomainsRefreshError('no_key', 'No usable HIBP API key is saved; save one first');
   }
   const now = Date.now();
-  const snapshotRetry =
-    state.snapshot?.error?.kind === 'rate_limited' ? Date.parse(state.snapshot.error.retry_after ?? '') || 0 : 0;
-  const pauseEnd = Math.max(rateLimitPauseEnd(), snapshotRetry);
+  const pauseEnd = Math.max(rateLimitPauseEnd(), recordedRateLimitEnd(state.snapshot));
   if (pauseEnd > now) {
     const at = new Date(pauseEnd).toISOString();
     throw new HibpDomainsRefreshError('rate_limited', `HIBP rate limit reached; try again after ${at}`, at);
@@ -975,9 +1071,14 @@ async function executeRun(options: RunOptions): Promise<LeakedCredentialRunSumma
     if (Date.now() - startedAt >= budgetMs) break; // the rest stay due
     if (pausedUntil > Date.now()) {
       // A 429 to a concurrent call (an admin's re-check) pauses every check,
-      // this run's included; the rest stay due.
-      summary.error = pauseReason ?? `paused until ${new Date(pausedUntil).toISOString()}`;
-      if (pauseKind === 'rate_limited') summary.rateLimitedUntil = new Date(pausedUntil).toISOString();
+      // this run's included; the rest stay due. The time goes in
+      // rateLimitedUntil only: the UI adds "checks resume after …" itself.
+      if (pauseKind === 'rate_limited') {
+        summary.error = `${source.label} rate limit reached (it answered 429 to another request)`;
+        summary.rateLimitedUntil = new Date(pausedUntil).toISOString();
+      } else {
+        summary.error = pauseReason ?? `paused until ${new Date(pausedUntil).toISOString()}`;
+      }
       break;
     }
 

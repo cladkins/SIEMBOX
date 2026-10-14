@@ -4259,8 +4259,10 @@ like the key test, is admin-only; **all writes require the admin role**.
   subscription status; 10/min until known), and a run and an admin's re-check
   share one pacer, so they never burst. A `429` (from any keyed call, the
   verified-domain list included) pauses all checks until HIBP's `retry-after`
-  has passed, a run already in progress included (saving the same key again
-  doesn't lift it; a different key does); a rejected key (`401`) pauses them
+  has passed, a run already in progress included. HIBP's limit belongs to the
+  key: saving the same key again doesn't lift the wait, nor does removing it and
+  saving it back; a different key does (until the limited key is saved again).
+  A rejected key (`401`) pauses them
   for an hour or until the key is saved again (a successful verified-domain
   listing also lifts that pause: the key just worked). Neither retries in a
   loop; unchecked identities simply stay due.
@@ -4573,13 +4575,22 @@ makes every leaked-credential check skip: put the original
 ### PUT /api/exposure/providers/hibp
 
 Save the HIBP API key and/or enable the provider. Saving a different key (or
-clearing it) lifts any rate-limit or rejected-key pause and resets the
-verified-domain list (it belongs to the old key's account):
+clearing it) resets the verified-domain list (it belongs to the old key's
+account):
 [`GET /providers/hibp/verified-domains`](#get-apiexposureprovidershibpverified-domains)
 reads `not_checked` until the next run or re-check lists the new key's domains.
-Re-entering the key that is already saved, or only changing `enabled`, keeps
-the stored key and its list and lifts only a rejected-key pause: after a `429`,
-checks and re-checks stay paused until HIBP's `retry-after` has passed.
+Both lift a rejected-key pause. A rate-limit pause belongs to the key HIBP
+answered `429` to: clearing the key keeps it (nothing is sent without a key),
+and a different key starts afresh, but saving the limited key again, after
+clearing it or after another key, brings the pause back until HIBP's
+`retry-after` has passed. The list then reads `error` with `kind:
+"rate_limited"` and that `retry_after`. Re-entering the key that is already
+saved, or only changing `enabled`, keeps the stored key and its list and lifts
+only a rejected-key pause: after a `429`, checks and re-checks stay paused
+until HIBP's `retry-after` has passed. (The wait of a key that was replaced or
+cleared is remembered in memory only, by an HMAC of the key under a
+per-process secret: a restart after the key was replaced or cleared forgets
+it.)
 
 **Authentication:** Required (Admin)
 
@@ -5130,7 +5141,11 @@ scheduled job. Allow a client timeout of a couple of minutes.
   account (or refused with a `403` while that was unknown); not part of `failed`
 - `skipped: true` with a `reason` when nothing ran (checks disabled, no provider
   configured, paused, or nothing due)
-- `error` (and `rateLimitedUntil` for a `429`) when the run stopped early
+- `error` (and `rateLimitedUntil` for a `429`) when the run stopped early. For
+  a `429`, when checks resume is given by `rateLimitedUntil` (ISO) only, not in
+  `error`, e.g.
+  `"Have I Been Pwned rate limit reached (it answered 429 to another request)"`
+  when an admin's re-check drew it while the run was going
 - `remaining` - identities still due afterwards
 
 **Errors:** `409` - a check is already running

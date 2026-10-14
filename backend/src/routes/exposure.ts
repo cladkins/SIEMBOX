@@ -59,11 +59,12 @@ import {
   LEAKED_CREDS_ALREADY_RUNNING,
   LEAKED_CREDS_JOB_KEY,
   MANUAL_RUN_BUDGET_MS,
+  applyHibpKeyChange,
   getHibpVerifiedDomainsView,
   getLeakedCredentialRunState,
   liftLeakedCredentialAuthPause,
   refreshHibpVerifiedDomains,
-  resetLeakedCredentialPause,
+  rememberRateLimitForSavedKey,
   runLeakedCredentialChecks,
 } from '../services/exposure/leakedCredentialService';
 import { clearHibpDomainSnapshot, withHibpDomainStatus } from '../services/exposure/hibpDomains';
@@ -314,6 +315,10 @@ router.put('/providers/hibp', adminOnly, async (req: Request, res: Response) => 
   // rate limit, same verified domains), so the stored envelope is left alone:
   // the snapshot bound to it, and any retry-after it records, still apply.
   const keyChanged = apiKey !== undefined && !(await isSavedHibpKey(apiKey));
+  // HIBP's rate limit belongs to the key, not to the stored envelope: a 429's
+  // wait still running for the key being replaced or removed is kept for that
+  // key, so removing it and saving it again doesn't lift the wait.
+  if (keyChanged) await rememberRateLimitForSavedKey();
 
   try {
     await saveHibpProvider({ apiKey: keyChanged ? apiKey : undefined, enabled });
@@ -331,8 +336,9 @@ router.put('/providers/hibp', adminOnly, async (req: Request, res: Response) => 
     // The verified-domain list belongs to the old key's account. (A list written
     // for another key is ignored anyway: it is bound to the stored envelope.)
     await clearHibpDomainSnapshot();
-    // A different key has its own rate limit and plan: a fresh start.
-    resetLeakedCredentialPause();
+    // A different key has its own rate limit and plan: a fresh start, unless it
+    // is a key whose 429 wait is still running. Removing the key keeps the wait.
+    await applyHibpKeyChange(apiKey || null);
   } else {
     // The same key (or only the enabled flag): retry a rejected key, but keep
     // honouring a 429's retry-after.

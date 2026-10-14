@@ -1620,9 +1620,11 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   answer (`refreshed: false`). After HIBP answers `429`, every breach check is
   paused until its `retry-after` has passed (a run already in progress stops
   too), and a re-check meanwhile gets `429` with a `Retry-After` header.
-  Re-entering the same key or switching the provider off and on doesn't lift
-  that wait: HIBP's limit belongs to the key. Saving a different key clears the
-  list and starts afresh; the next due check or a re-check reads the new key's.
+  Re-entering the same key, switching the provider off and on, or removing the
+  key and pasting it back doesn't lift that wait: HIBP's limit belongs to the
+  key. Saving a different key clears the list and starts afresh; the next due
+  check or a re-check reads the new key's. Switching back to the limited key
+  before its `retry-after` brings the wait back.
 
 **Getting Started reminder:** the Dashboard reminder is shown to admins until
 one of them finishes or hides it, for every admin of the install (stored

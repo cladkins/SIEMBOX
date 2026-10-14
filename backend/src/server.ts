@@ -20,6 +20,10 @@ import { startYaraRulesJob, stopYaraRulesJob } from './jobs/yaraRules';
 import { startTriageReconcilerJob, stopTriageReconcilerJob } from './jobs/triageReconciler';
 import { startLeakedCredsJob, stopLeakedCredsJob } from './jobs/leakedCreds';
 import { startDomainMonitorJob, stopDomainMonitorJob } from './jobs/domainMonitor';
+import { startSignInHousekeepingJob, stopSignInHousekeepingJob } from './jobs/signInHousekeeping';
+import { signInSettings } from './services/auth/signInPolicy';
+import { getDummyHash } from './services/auth/signInService';
+import { stopRefusalSummary } from './services/auth/authEvents';
 import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
 import { TemplateService } from './services/scanner/templateService';
 import { CredentialEncryption } from './services/credentials/credentialEncryption';
@@ -154,6 +158,29 @@ const startServer = async () => {
     // DNS drift). No-ops on each tick until a domain is watched.
     startDomainMonitorJob();
 
+    // Sign-in protection. Every start says so when it is off: it is meant for
+    // recovering from a lockout, not to be left on.
+    const signIn = signInSettings();
+    if (!signIn.protection) {
+      logger.warn(
+        'LOGIN_PROTECTION=off: sign-in attempts are not counted or paused. Remove it once you are signed in ' +
+          '(docs/operations/TROUBLESHOOTING.md, "Locked out of SIEMBox").'
+      );
+    } else {
+      const { aip, ip, acct } = signIn.scopes;
+      logger.info(
+        `Sign-in protection on: pauses after ${aip.threshold} failures per account and network, ` +
+          `${ip.threshold} per network, ` +
+          (acct.threshold > 0 ? `${acct.threshold} per account from new browsers` : 'no account-wide limit') +
+          `; alerts ${signIn.alerts ? 'on' : 'off'}.`
+      );
+    }
+    // The dummy hash unknown usernames are checked against, made before the
+    // first sign-in needs it.
+    await getDummyHash();
+    // Idle counters, unused browsers, expired sessions, old failure audit rows.
+    startSignInHousekeepingJob();
+
     // Warm the Nuclei template cache in the background so the first request to
     // the (heavy) template endpoints hits a populated cache instead of parsing
     // ~10k files inline and tripping the client timeout. Fire-and-forget.
@@ -220,6 +247,8 @@ const shutdown = async (signal: string) => {
   stopTriageReconcilerJob();
   stopLeakedCredsJob();
   stopDomainMonitorJob();
+  stopSignInHousekeepingJob();
+  stopRefusalSummary();
   await closePools();
   logger.info('Database pools closed');
   process.exit(0);

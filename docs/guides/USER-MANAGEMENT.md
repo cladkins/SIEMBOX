@@ -9,6 +9,7 @@ The User Management feature enables administrators to:
 - Create new user accounts
 - Edit existing user details (email, role)
 - Change user passwords
+- Unlock sign-in for an account paused after failed attempts
 - Delete user accounts
 - Manage role-based access control
 
@@ -101,7 +102,13 @@ The User Management page displays a table with all users:
 - **Email**: User's email address
 - **Role**: User's permission level (Admin/Operator/Analyst/Viewer)
 - **Created**: Account creation timestamp
-- **Actions**: Edit and Delete buttons
+- **Sign-in**: "Sign-in paused · 12 min" while failed sign-in attempts hold the
+  account back (the tooltip says which: from one network, from new browsers on
+  every network, one of their recognized browsers, MFA codes, or a network
+  paused by failures for any username that they mistyped from in the last 15
+  minutes), and "Password change paused" while wrong current passwords hold
+  back changing their own password (signing in is not affected)
+- **Actions**: Unlock (only while something is paused), Edit and Delete buttons
 
 ### Create New User
 
@@ -145,8 +152,30 @@ The User Management page displays a table with all users:
 
 **Security Notes**:
 - Admin users can change any user's password without knowing the current password
-- The user will need to log in with the new password
-- This is useful for password resets
+- It is a reset: the user is signed out everywhere at once, the browsers they
+  signed in from are no longer recognized, and their sign-in pauses are cleared.
+  They sign in with the new password (resetting your own signs you out too)
+- Audited as `user.password_reset`
+
+### Unlock Sign-in
+
+Failed sign-ins pause further attempts for a while instead of locking the
+account (30 seconds, doubling with each further failure; DEPLOYMENT.md,
+"Sign-in protection"). A paused account shows "Sign-in paused" in the
+**Sign-in** column.
+
+1. Find out whose attempts they were: Alerts (source `siembox-auth`) and
+   Settings -> **Sign-in protection** show the networks and user agents
+2. Click **Unlock** on the user and confirm
+
+This clears every sign-in counter of the account; a pause of a whole network
+is cleared on Settings -> Sign-in protection. A user who mistyped from a
+network someone else's failures have paused (a shared address: an office NAT,
+a reverse proxy SIEMBox doesn't trust) is listed too, for 15 minutes at most:
+Unlock lets them in while the network stays paused. The user can also simply wait,
+or sign in from a browser they used before, which is never held back by
+someone else's failed attempts. Without access to the web UI, see
+TROUBLESHOOTING.md, "Locked out of SIEMBox" (the `auth-admin` command line).
 
 ### Delete User
 
@@ -158,7 +187,7 @@ The User Management page displays a table with all users:
 - You cannot delete your own account
 - The Delete button is disabled for the currently logged-in user
 - Deletion is permanent and cannot be undone
-- All user sessions are invalidated upon deletion
+- All user sessions, recognized browsers and sign-in counters are removed upon deletion
 
 ## Security Considerations
 
@@ -169,19 +198,26 @@ The User Management page displays a table with all users:
 
 ### Password Security
 - Passwords are hashed using bcrypt with salt rounds
-- Minimum password length: 8 characters
+- Passwords are 8 to 1024 characters; changing your own requires the current
+  one, and the new one must differ from it
 - Passwords are never displayed in the UI
 - Passwords are not returned by the API
+- Failed sign-ins pause further attempts (sign-in protection); see
+  [Unlock Sign-in](#unlock-sign-in)
 
 ### Session Management
-- When an admin changes a user's password, existing sessions remain active
+- When an admin changes a user's password, or users change their own, every
+  session of that user ends at once and their browsers are no longer recognized
 - Users should be notified out-of-band when passwords are changed
-- Consider logging out the user after password change for security
 
 ### Audit Logging
-- All user management actions are logged in the backend
-- Logs include: username, action type, timestamp, and admin who performed the action
-- Review backend logs for user management audit trail
+- User management actions are written to `audit_logs`: `user.created`,
+  `user.updated` (with the fields changed), `user.deleted`,
+  `user.password_reset` and `auth.unlock`, with the admin who did it and their
+  address
+- Sign-in events too: `auth.login.success`, `auth.login.failure`,
+  `auth.login.paused`, `auth.logout`, `auth.password.changed`,
+  `auth.mfa.enabled` / `disabled` (see SECURITY.md, "Audit Logging")
 
 ## API Endpoints
 
@@ -191,7 +227,8 @@ User management operations use the following REST API endpoints:
 GET    /api/users           - List all users (admin only)
 GET    /api/users/:id       - Get user details (admin only)
 POST   /api/users           - Create new user (admin only)
-PUT    /api/users/:id       - Update user (admin only)
+PUT    /api/users/:id       - Update user (admin only; a password is a reset)
+POST   /api/users/:id/unlock - Clear the account's sign-in pauses (admin only)
 DELETE /api/users/:id       - Delete user (admin only)
 ```
 
@@ -279,7 +316,8 @@ curl -X DELETE http://localhost:5000/api/users/2 \
 **Solution**:
 - Verify the new password was entered correctly
 - Check that password meets minimum length (8 characters)
-- Clear browser cache and try again
+- If the login page counts down ("Try again in ..."), earlier failed attempts
+  paused sign-in: wait, or **Unlock** the user
 - Have admin reset password again if needed
 
 ### Cannot Delete User

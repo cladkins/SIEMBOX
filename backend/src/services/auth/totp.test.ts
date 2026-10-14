@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { base32Encode, base32Decode, hotp, totp, verifyTotp, otpauthUrl } from './totp';
+import { base32Encode, base32Decode, hotp, totp, verifyTotp, matchTotpStep, otpauthUrl } from './totp';
 
 // RFC 4226 / 6238 reference secret is the ASCII string "12345678901234567890".
 const RFC_SECRET_ASCII = Buffer.from('12345678901234567890');
@@ -58,6 +58,26 @@ test('verifyTotp honors the drift window', () => {
   assert.equal(verifyTotp(RFC_SECRET_B32, prevCode, { now: base, window: 1 }), true);
   // ...but not with window=0.
   assert.equal(verifyTotp(RFC_SECRET_B32, prevCode, { now: base, window: 0 }), false);
+});
+
+test('matchTotpStep says which step a code is for: -1, 0 or +1 from now (RFC 6238 vectors)', () => {
+  // t = 1234567890 s is step 41152263, whose code is 005924 (RFC 6238).
+  const now = 1234567890 * 1000;
+  const step = Math.floor(1234567890 / 30);
+  assert.deepEqual(matchTotpStep(RFC_SECRET_B32, '005924', { now }), { step, offset: 0 });
+  // The same code a step later is the previous step's; a step earlier, the next one's.
+  assert.deepEqual(matchTotpStep(RFC_SECRET_B32, '005924', { now: now + 30_000 }), { step, offset: -1 });
+  assert.deepEqual(matchTotpStep(RFC_SECRET_B32, '005924', { now: now - 30_000 }), { step, offset: 1 });
+  // Two steps away is outside the window.
+  assert.equal(matchTotpStep(RFC_SECRET_B32, '005924', { now: now + 60_000 }), null);
+  // RFC 6238 t = 59 s is step 1 (code 287082), t = 1111111109 s is step 37037036 (081804).
+  assert.deepEqual(matchTotpStep(RFC_SECRET_B32, '287082', { now: 59_000 }), { step: 1, offset: 0 });
+  assert.deepEqual(matchTotpStep(RFC_SECRET_B32, '081804', { now: 1111111109_000 }), { step: 37037036, offset: 0 });
+  // Wrong, too short, or not digits.
+  assert.equal(matchTotpStep(RFC_SECRET_B32, '000000', { now }), null);
+  assert.equal(matchTotpStep(RFC_SECRET_B32, '05924', { now }), null);
+  assert.equal(matchTotpStep(RFC_SECRET_B32, 'abcdef', { now }), null);
+  assert.deepEqual(matchTotpStep(RFC_SECRET_B32, '005 924', { now }), { step, offset: 0 });
 });
 
 test('otpauthUrl builds a scannable URI', () => {

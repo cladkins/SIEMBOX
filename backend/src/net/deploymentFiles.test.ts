@@ -45,7 +45,19 @@ for (const file of ['compose.yaml', 'compose.prod.yaml']) {
     assert.deepEqual(compose.volumes?.['api-socket'], { driver: 'local' });
     assert.equal(backend.environment?.TRUSTED_PROXIES, `\${TRUSTED_PROXIES:-${DEFAULT_TRUSTED_PROXIES}}`);
     // Passed through from .env; empty means the code default.
-    for (const name of ['API_RATE_LIMIT_MAX', 'EDR_AGENT_RATE_MAX', 'SHIPPER_LOG_PUSH_MAX', 'SIEMBOX_PROXY_SOCKET']) {
+    for (const name of [
+      'API_RATE_LIMIT_MAX',
+      'EDR_AGENT_RATE_MAX',
+      'SHIPPER_LOG_PUSH_MAX',
+      'SIEMBOX_PROXY_SOCKET',
+      // Sign-in protection (services/auth/signInPolicy.ts)
+      'LOGIN_PROTECTION',
+      'LOGIN_MAX_FAILURES',
+      'LOGIN_MAX_FAILURES_PER_ADDRESS',
+      'LOGIN_MAX_FAILURES_PER_ACCOUNT',
+      'AUTH_ALERTS',
+      'AUTH_FAILURE_AUDIT_RETENTION_DAYS',
+    ]) {
       assert.equal(backend.environment?.[name], `\${${name}:-}`, name);
     }
     assert.equal(frontend.environment?.BACKEND_UPSTREAM, '${BACKEND_UPSTREAM:-backend:8421}');

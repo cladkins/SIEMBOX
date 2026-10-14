@@ -25,7 +25,20 @@ Rate limits, audit rows and shipper records use each client's address. The web U
 | `SHIPPER_LOG_PUSH_MAX` | `6000` | Requests per 15 minutes per address on `POST /api/shippers/logs`, which skips the general limit. |
 | `SIEMBOX_PROXY_SOCKET` | `/run/siembox/api.sock` | Where the backend listens for the frontend's nginx. Leave it unset, or set `off` to run without the socket: the bundled nginx only connects to `/run/siembox/api.sock`, so another path leaves the web UI on TCP (only a proxy of your own could use it). It only listens when the directory exists (the volume is mounted). |
 
-POST `/api/auth/login` also allows at most **10 failed sign-ins per account per 15 minutes per address** (IPv6: per /64), and 100 per address across all accounts; past those, only accounts that already failed from that address are refused, so users who share an address don't lock each other out. Successful sign-ins don't count. Counters are in memory and reset when the backend restarts.
+## Sign-in protection
+
+Failed sign-ins pause further attempts (30 seconds, doubling with each further failure up to 15, 30 or 60 minutes; a streak ends 24 hours after its last failure). Nothing is locked for good, and a browser that signed in before has a counter of its own, so the account and network pauses never hold its owner back. Counters are in Postgres (they survive restarts). See [DEPLOYMENT.md, "Sign-in protection"](https://github.com/cladkins/SIEMBOX/blob/main/DEPLOYMENT.md#sign-in-protection).
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `LOGIN_MAX_FAILURES` | `5` | Failed sign-ins for an account from one network (IPv4 address or IPv6 /64) before it pauses (15 min at most). |
+| `LOGIN_MAX_FAILURES_PER_ADDRESS` | `20` | Failed sign-ins from one network for any username (30 min at most). While paused, a username is held back only for 15 minutes after it failed from that network. |
+| `LOGIN_MAX_FAILURES_PER_ACCOUNT` | `20` | Failed sign-ins for an account from new browsers on every network (60 min at most). `0` turns this one off. |
+| `LOGIN_PROTECTION` | on | `off` stops all counting. Only to get back in after a lockout; every start logs a warning while it is set. |
+| `AUTH_ALERTS` | on | `off` stops the sign-in alerts (source `siembox-auth`). |
+| `AUTH_FAILURE_AUDIT_RETENTION_DAYS` | `90` | Days `auth.login.failure` audit rows are kept; `0` keeps them. |
+
+Wrong MFA codes (5) and wrong current passwords on a password change (5) pause too (60 min at most). Admins see and clear pauses on Settings → Sign-in protection and Users → Unlock; without the web UI, `docker exec siembox-backend node dist/scripts/auth-admin.js unlock <username>` (also `--network <ip>`, `--all`, `reset-password`, `disable-mfa`).
 
 ## Database
 
@@ -47,7 +60,7 @@ POST `/api/auth/login` also allows at most **10 failed sign-ins per account per 
 
 ### Two-factor authentication (MFA)
 
-Per-account **TOTP** MFA for local users — **Settings → Account**. It's optional and opt-in: enabling it for one account doesn't affect anyone else's login, and accounts without it log in with just a password as before (recommended for admins). Enroll by scanning the key into an authenticator app (Google Authenticator, Authy, 1Password, …) and confirming a 6-digit code; you're then shown **one-time recovery codes** — save them. At login, MFA-enabled accounts are prompted for a code (or a recovery code). The TOTP secret is stored encrypted with `CREDENTIAL_ENCRYPTION_KEY`. To turn it off, use **Settings → Account → Disable MFA** with a current code; if you've lost both your authenticator and recovery codes, an admin can clear `mfa_enabled`/`mfa_secret` for the row in the `users` table.
+Per-account **TOTP** MFA for local users — **Settings → Account**. It's optional and opt-in: enabling it for one account doesn't affect anyone else's login, and accounts without it log in with just a password as before (recommended for admins). Enroll by scanning the key into an authenticator app (Google Authenticator, Authy, 1Password, …) and confirming a 6-digit code; you're then shown **one-time recovery codes** — save them. At login, MFA-enabled accounts are prompted for a code (or a recovery code). The TOTP secret is stored encrypted with `CREDENTIAL_ENCRYPTION_KEY`. Each code works once (two sign-ins in the same 30 seconds need two codes), and 5 wrong codes in a row pause MFA sign-in for the account. To turn it off, use **Settings → Account → Disable MFA** with a current code; if you've lost both your authenticator and recovery codes, run `docker exec siembox-backend node dist/scripts/auth-admin.js disable-mfa <username>`.
 
 ## AI builder (optional)
 

@@ -83,27 +83,51 @@ export function totp(secretBase32: string, opts: TotpOptions = {}): string {
   return hotp(base32Decode(secretBase32), counter, digits, algorithm);
 }
 
+/** A TOTP code that matched: its time step (the HOTP counter) and how far that is from now's. */
+export interface TotpMatch {
+  step: number;
+  /** -window .. +window; 0 for the current step. */
+  offset: number;
+}
+
+/**
+ * The time step a token is valid for against a base32 secret, allowing
+ * +/- `window` steps of clock drift (default 1 = +/-30s), or null when it
+ * matches none. Every candidate is computed and compared in constant time.
+ * The step lets the caller accept each code only once (mfaService.ts claims
+ * it in users.mfa_last_totp_step).
+ */
+export function matchTotpStep(
+  secretBase32: string,
+  token: string,
+  opts: TotpOptions & { window?: number } = {}
+): TotpMatch | null {
+  const { now = Date.now(), step = 30, digits = 6, algorithm = 'sha1', window = 1 } = opts;
+  const cleaned = String(token).replace(/\s/g, '');
+  if (!/^\d+$/.test(cleaned) || cleaned.length !== digits) return null;
+  const secret = base32Decode(secretBase32);
+  const counter = Math.floor(now / 1000 / step);
+  let match: TotpMatch | null = null;
+  for (let offset = -window; offset <= window; offset++) {
+    const candidate = hotp(secret, counter + offset, digits, algorithm);
+    const equal =
+      candidate.length === cleaned.length && crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(cleaned));
+    if (equal && match === null) match = { step: counter + offset, offset };
+  }
+  return match;
+}
+
 /**
  * Verify a token against a base32 secret, allowing +/- `window` steps of clock
  * drift (default 1 = +/-30s). Uses a constant-time compare per candidate.
+ * Says nothing about reuse: sign-in goes through matchTotpStep.
  */
 export function verifyTotp(
   secretBase32: string,
   token: string,
   opts: TotpOptions & { window?: number } = {}
 ): boolean {
-  const { now = Date.now(), step = 30, digits = 6, algorithm = 'sha1', window = 1 } = opts;
-  const cleaned = String(token).replace(/\s/g, '');
-  if (!/^\d+$/.test(cleaned) || cleaned.length !== digits) return false;
-  const secret = base32Decode(secretBase32);
-  const counter = Math.floor(now / 1000 / step);
-  for (let errorWindow = -window; errorWindow <= window; errorWindow++) {
-    const candidate = hotp(secret, counter + errorWindow, digits, algorithm);
-    if (candidate.length === cleaned.length && crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(cleaned))) {
-      return true;
-    }
-  }
-  return false;
+  return matchTotpStep(secretBase32, token, opts) !== null;
 }
 
 /** Build the otpauth:// URI an authenticator app scans / imports. */

@@ -182,6 +182,38 @@ test('login and the health check stay reachable without a login', async () => {
   assert.equal(login.message, 'Username and password are required');
 });
 
+test('sign-in fields that are not what the SPA sends are a 400 before any database access, never a 500', async () => {
+  // A non-string password used to reach bcrypt, which threw: a 500 and an
+  // application_errors row per request.
+  for (const body of [
+    { username: 'admin', password: 123 },
+    { username: 'admin', password: true },
+    { username: ['admin'], password: 'x' },
+    { username: 'admin', password: { $gt: '' } },
+    { username: 'admin', password: 'x', code: true },
+    { username: 'admin', password: 'x'.repeat(1025) },
+    { username: 'a'.repeat(256), password: 'x' },
+  ]) {
+    const r = await call('POST', '/api/auth/login', body);
+    assert.equal(r.status, 400, JSON.stringify(body).slice(0, 80));
+    assert.equal(r.message, 'Username and password are required');
+  }
+});
+
+test('/api/auth answers are never cached', async () => {
+  for (const [method, path, body] of [
+    ['POST', '/api/auth/login', {}],
+    ['GET', '/api/auth/me', undefined],
+  ] as const) {
+    const res = await fetch(base + path, {
+      method,
+      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    assert.equal(res.headers.get('cache-control'), 'no-store', path);
+  }
+});
+
 test('a /api/auth body over 16 kB is refused with 413, JSON or form-encoded', async () => {
   const password = 'x'.repeat(20 * 1024);
   for (const [type, body] of [

@@ -76,6 +76,21 @@ services:
       # (/run/siembox/api.sock on the api-socket volume below, the only path
       # the bundled nginx connects to); `off` runs without the socket.
       SIEMBOX_PROXY_SOCKET: ${SIEMBOX_PROXY_SOCKET:-}
+      # Sign-in protection (DEPLOYMENT.md, "Sign-in protection"). Empty = the
+      # defaults: a pause after 5 failed sign-ins for an account from one
+      # network, 20 from one network for any username, and 20 for an account
+      # from new browsers on all networks (0 turns that last one off). Browsers
+      # that signed in before are never paused by the last two.
+      # LOGIN_PROTECTION=off stops all counting: only for getting back in
+      # after a lockout (TROUBLESHOOTING.md, "Locked out of SIEMBox").
+      LOGIN_PROTECTION: ${LOGIN_PROTECTION:-}
+      LOGIN_MAX_FAILURES: ${LOGIN_MAX_FAILURES:-}
+      LOGIN_MAX_FAILURES_PER_ADDRESS: ${LOGIN_MAX_FAILURES_PER_ADDRESS:-}
+      LOGIN_MAX_FAILURES_PER_ACCOUNT: ${LOGIN_MAX_FAILURES_PER_ACCOUNT:-}
+      # Alerts about attacks on sign-in (empty = on; `off`), and how many days
+      # failed sign-in audit rows are kept (empty = 90; 0 keeps them).
+      AUTH_ALERTS: ${AUTH_ALERTS:-}
+      AUTH_FAILURE_AUDIT_RETENTION_DAYS: ${AUTH_FAILURE_AUDIT_RETENTION_DAYS:-}
       # EDR YARA rule packs (optional). Built-in starter bundle ships by default;
       # set EDR_YARA_FORGE_ENABLED=true to auto-import YARA-Forge Extended daily.
       EDR_YARA_FORGE_ENABLED: ${EDR_YARA_FORGE_ENABLED:-}

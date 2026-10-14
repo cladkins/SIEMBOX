@@ -20,13 +20,47 @@
             </el-tag>
           </template>
         </el-table-column>
+        <!-- Sign-in comes before Created: when the table is wider than the
+             card (at 1280 px and below), the last scrolling column slides
+             under the fixed Actions column, and that must not be the one
+             saying how many minutes a pause has left. Actions is as wide as
+             Unlock, Edit and Delete on one line need, with some room. -->
+        <el-table-column label="Sign-in" min-width="170">
+          <template #default="{ row }">
+            <div v-if="anyPause(row)" class="pause-tags">
+              <el-tooltip v-if="pausedMinutes(row.signin_paused_until) > 0" placement="top">
+                <template #content>
+                  Paused after failed attempts:
+                  <div v-for="scope in row.signin_pause_scopes" :key="scope">· {{ scopeWords(scope) }}</div>
+                  <template v-if="pausesNewBrowsers(row)">Browsers that signed in before are not affected.</template>
+                </template>
+                <el-tag class="pause-tag" type="warning" effect="light">Sign-in paused · {{ pausedMinutes(row.signin_paused_until) }} min</el-tag>
+              </el-tooltip>
+              <el-tooltip v-if="pausedMinutes(row.password_change_paused_until) > 0" placement="top">
+                <template #content>
+                  Too many wrong current passwords when changing their own password. Signing in is not affected.
+                </template>
+                <el-tag class="pause-tag" type="info" effect="light">Password change paused · {{ pausedMinutes(row.password_change_paused_until) }} min</el-tag>
+              </el-tooltip>
+            </div>
+            <el-text v-else type="info" size="small">—</el-text>
+          </template>
+        </el-table-column>
         <el-table-column label="Created" width="180">
           <template #default="{ row }">
             {{ formatDate(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="Actions" width="200" align="center" fixed="right">
+        <el-table-column label="Actions" width="240" align="center" fixed="right">
           <template #default="{ row }">
+            <el-button
+              v-if="anyPause(row)"
+              size="small"
+              type="warning"
+              @click="unlockUserConfirm(row)"
+            >
+              Unlock
+            </el-button>
             <el-button
               size="small"
               @click="editUser(row)"
@@ -167,12 +201,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue';
 import { api } from '@/services/api';
 import { useAuthStore } from '@/stores/auth';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
 import { Plus, Lock } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
+import { SCOPE_WORDS } from '@/utils/signIn';
 
 const authStore = useAuthStore();
 
@@ -262,6 +297,58 @@ async function fetchUsers() {
     ElMessage.error('Failed to fetch users');
   } finally {
     loading.value = false;
+  }
+}
+
+// Pauses from GET /users (signin_paused_until, password_change_paused_until):
+// minutes left, rounded up.
+const now = ref(Date.now());
+let clock: ReturnType<typeof setInterval> | null = null;
+
+function pausedMinutes(until: string | null | undefined): number {
+  if (!until) return 0;
+  const ms = new Date(until).getTime() - now.value;
+  return ms > 0 ? Math.ceil(ms / 60000) : 0;
+}
+
+/** The pause fields GET /users adds to each user. */
+interface UserPauses {
+  signin_paused_until?: string | null;
+  signin_pause_scopes?: string[];
+  password_change_paused_until?: string | null;
+}
+
+function anyPause(user: UserPauses): boolean {
+  return pausedMinutes(user.signin_paused_until) > 0 || pausedMinutes(user.password_change_paused_until) > 0;
+}
+
+// Account, network and MFA pauses hold back new browsers only; a paused
+// recognized browser (br) is one of the browsers that signed in before.
+function pausesNewBrowsers(user: UserPauses): boolean {
+  return (user.signin_pause_scopes || []).some((scope) => ['aip', 'ip', 'acct', 'mfa'].includes(scope));
+}
+
+function scopeWords(scope: string): string {
+  return SCOPE_WORDS[scope] || scope;
+}
+
+async function unlockUserConfirm(user: any) {
+  try {
+    await ElMessageBox.confirm(
+      `Clear every sign-in pause and failed-attempt counter for "${user.username}"? ` +
+        'Do this once you know the failed attempts were theirs, or after you have dealt with whoever made them.',
+      'Unlock sign-in',
+      { confirmButtonText: 'Unlock', cancelButtonText: 'Cancel', type: 'warning' }
+    );
+  } catch {
+    return;
+  }
+  try {
+    const { data } = await api.unlockUser(user.id);
+    ElMessage.success(`Sign-in unlocked for ${user.username} (${data.cleared} counter${data.cleared === 1 ? '' : 's'} cleared)`);
+    fetchUsers();
+  } catch {
+    // The API client has shown the error.
   }
 }
 
@@ -371,8 +458,15 @@ async function changePassword() {
       await api.updateUser(selectedUserId.value!, {
         password: passwordForm.newPassword,
       });
-      ElMessage.success('Password changed successfully');
       passwordDialogVisible.value = false;
+      if (selectedUserId.value === currentUserId.value) {
+        // A reset signs the account out everywhere, this session included.
+        ElMessage.success('Password changed. Sign in again.');
+        authStore.logout();
+        return;
+      }
+      ElMessage.success('Password changed. The user is signed out everywhere and signs in with the new password.');
+      fetchUsers();
     } catch (error: any) {
       const message = error.response?.data?.message || 'Failed to change password';
       ElMessage.error(message);
@@ -417,6 +511,11 @@ function formatDate(date: string): string {
 onMounted(() => {
   currentUserId.value = authStore.user?.id || null;
   fetchUsers();
+  clock = setInterval(() => (now.value = Date.now()), 30_000);
+});
+
+onBeforeUnmount(() => {
+  if (clock) clearInterval(clock);
 });
 </script>
 
@@ -429,5 +528,25 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+/* One tag per line, wrapping inside the cell rather than running past it, so
+   the minutes stay visible however narrow the Sign-in column gets. */
+.pause-tags {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.pause-tag {
+  max-width: 100%;
+  height: auto;
+  min-height: 24px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  line-height: 1.4;
+  white-space: normal;
+  text-align: left;
 }
 </style>

@@ -8,11 +8,24 @@
 
 import { Router, Request, Response } from 'express';
 import { authenticate, requireAdmin } from '../middleware/auth';
+import { ApiError } from '../middleware/errorHandler';
 import { query } from '../config/database';
 import { ErrorLogService } from '../services/errors/errorLogService';
 import { listRecurringJobs } from '../services/jobs/jobRegistry';
 import { clientAddressReport } from '../net/diagnostics';
+import { parseSignInNetwork } from '../net/clientAddress';
 import { logger } from '../utils/logger';
+import { UserModel } from '../models/User';
+import { LoginThrottleModel } from '../models/LoginThrottle';
+import {
+  BROWSER_REVOKE_FAILURES,
+  FIRST_PAUSE_SECONDS,
+  STREAK_DECAY_SECONDS,
+  scopeOfKey,
+  signInSettings,
+  usernameHash,
+} from '../services/auth/signInPolicy';
+import { auditAuth, authContext, refusalStats, refusalsForKey } from '../services/auth/authEvents';
 
 const router = Router();
 
@@ -461,6 +474,100 @@ router.get('/jobs', async (req: Request, res: Response) => {
 router.get('/client-address', (req: Request, res: Response) => {
   res.set('Cache-Control', 'no-store');
   res.json(clientAddressReport(req));
+});
+
+/**
+ * GET /api/admin/sign-in-protection
+ * The Settings -> Sign-in protection page: how the API sees the caller (the
+ * client-address report above), the keys that are paused or failed in the
+ * last 24 hours (at most 500, paused first), failed sign-ins in the last 24
+ * hours, attempts refused since the backend started, and the settings in
+ * effect (read-only: they come from the environment).
+ */
+router.get('/sign-in-protection', async (req: Request, res: Response) => {
+  res.set('Cache-Control', 'no-store');
+  const settings = signInSettings();
+  const [rows, failures] = await Promise.all([
+    LoginThrottleModel.listActive({ limit: 500 }),
+    query(
+      `SELECT COUNT(*)::int AS failures,
+              COUNT(*) FILTER (WHERE user_id IS NULL)::int AS unknown_usernames
+         FROM audit_logs
+        WHERE action = 'auth.login.failure' AND timestamp > NOW() - INTERVAL '24 hours'`
+    ),
+  ]);
+  res.json({
+    clientAddress: clientAddressReport(req),
+    counters: rows.map((row) => ({
+      ...row,
+      scopeLabel: settings.scopes[row.scope]?.label ?? row.scope,
+      refusedSinceStart: refusalsForKey(row.key),
+    })),
+    last24h: {
+      failures: Number(failures.rows[0]?.failures ?? 0),
+      unknownUsernames: Number(failures.rows[0]?.unknown_usernames ?? 0),
+    },
+    refused: refusalStats(),
+    settings: {
+      protection: settings.protection,
+      alerts: settings.alerts,
+      failureAuditRetentionDays: settings.failureAuditRetentionDays,
+      firstPauseSeconds: FIRST_PAUSE_SECONDS,
+      streakResetHours: STREAK_DECAY_SECONDS / 3600,
+      browserRevokeFailures: BROWSER_REVOKE_FAILURES,
+      scopes: Object.values(settings.scopes).map(({ scope, label, threshold, capSeconds, resetOnSuccess }) => ({
+        scope,
+        label,
+        threshold,
+        capSeconds,
+        resetOnSuccess,
+      })),
+    },
+  });
+});
+
+/**
+ * POST /api/admin/sign-in-protection/clear
+ * Body: exactly one of {key}, {userId}, {network} (an address, or an IPv6 /64)
+ * or {all: true}. Deletes the matching counters (pauses end at once) and
+ * answers {cleared}. Audited as auth.unlock.
+ */
+router.post('/sign-in-protection/clear', async (req: Request, res: Response) => {
+  const { key, userId, network, all } = req.body ?? {};
+  const given = [key !== undefined, userId !== undefined, network !== undefined, all !== undefined].filter(Boolean).length;
+  if (given !== 1) {
+    throw new ApiError(400, 'Send exactly one of key, userId, network or all');
+  }
+  let cleared: number;
+  let target: Record<string, unknown>;
+  if (key !== undefined) {
+    if (typeof key !== 'string' || !scopeOfKey(key) || key.length > 300) throw new ApiError(400, 'Invalid key');
+    cleared = await LoginThrottleModel.clearByKey(key);
+    target = { target: 'key', scope: scopeOfKey(key) };
+  } else if (userId !== undefined) {
+    const id = Number(userId);
+    const user = Number.isInteger(id) ? await UserModel.findByIdSafe(id) : null;
+    if (!user) throw new ApiError(404, 'User not found');
+    cleared = await LoginThrottleModel.clearByUser(user.id, usernameHash(user.username));
+    target = { target: 'user', userId: user.id };
+  } else if (network !== undefined) {
+    const parsed = parseSignInNetwork(network);
+    if (!parsed) throw new ApiError(400, 'network must be an IP address or an IPv6 /64');
+    cleared = await LoginThrottleModel.clearByNetwork(parsed);
+    target = { target: 'network', network: parsed };
+  } else {
+    if (all !== true) throw new ApiError(400, 'all must be true');
+    cleared = await LoginThrottleModel.clearAll();
+    target = { target: 'all' };
+  }
+  logger.info('Sign-in counters cleared', { by: req.user?.username, ...target, cleared });
+  await auditAuth('auth.unlock', authContext(req), {
+    userId: req.user!.id,
+    targetUserId: typeof target.userId === 'number' ? target.userId : null,
+    status: 200,
+    details: { by: 'admin', ...target, cleared },
+  });
+  res.json({ cleared });
 });
 
 export default router;

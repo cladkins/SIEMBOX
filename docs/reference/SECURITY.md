@@ -438,14 +438,18 @@ kinds of stored secret are shown to the roles that manage them:
 
 **Session Settings:**
 - Session duration: 24 hours (configurable in code)
-- Automatic session cleanup of expired tokens
-- Password change invalidates all sessions
+- Expired sessions are removed hourly (the `sign-in-housekeeping` job)
+- A password change, or an admin's password reset, signs the account out
+  everywhere and forgets its recognized browsers
 
 **Session Management:**
 ```bash
-# Force logout all users (admin only)
+# Remove expired sessions now (admin only; the hourly job does this too)
 curl -X POST http://localhost:8421/api/auth/cleanup \
   -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# Sign one user out everywhere: reset their password on the Users page, or
+docker exec siembox-backend node dist/scripts/auth-admin.js reset-password <username>
 
 # Monitor active sessions (check database)
 docker exec siembox-postgres psql -U siembox -d siembox -c \
@@ -914,26 +918,57 @@ CORS_ORIGIN=https://siembox.company.com
 
 ### Rate Limiting
 
-**Current Implementation** (in memory, per client address; reset when the
-backend restarts):
+**Current Implementation** (request limits in memory, per client address;
+reset when the backend restarts):
 - General: `API_RATE_LIMIT_MAX` (default 1000) requests per 15 minutes per
   address across `/api`. A `429` is JSON (`code: "RATE_LIMITED"`) with
   `Retry-After`.
-- Sign-in: 10 failed `POST /api/auth/login` attempts per account per 15
-  minutes per address (an IPv6 client's /64), and 100 per address across all
-  accounts; past those 100, only accounts that already failed from that
-  address in their own 15-minute window are refused. So someone sharing your
-  address (an office NAT, a reverse proxy SIEMBox doesn't trust) can't lock
-  every user out, but can still pause one account they know the name of, from
-  that address, 15 minutes at a time (one failure for it once the address is
-  past 100). This interim limit goes away with per-account sign-in
-  protection. Successful sign-ins and `5xx` answers don't count.
+- Sign-in: not a request limit but [sign-in protection](#sign-in-protection)
+  (below), counted in Postgres.
 - EDR agent routes (30000, `EDR_AGENT_RATE_MAX`) and HTTP log pushes (6000,
   `SHIPPER_LOG_PUSH_MAX`) have their own limits and skip the general one when
   they carry `X-Agent-ID` / `X-Shipper-ID` with the route's own method. Agent
   enrollment counts toward the general limit. The Pwned Passwords check allows
   30 per 15 minutes.
 - Bodies sent to `/api/auth/*` are capped at 16 kB (`413` above that).
+
+### Sign-in Protection
+
+Failed sign-ins pause further attempts instead of locking accounts (details:
+[API.md, "Sign-in Protection"](API.md#sign-in-protection); settings:
+DEPLOYMENT.md, "Sign-in protection"):
+
+- **Keys.** Each wrong password counts against the account from that network
+  (pauses after 5), the network for any username (20; while paused it holds
+  back a username only for 15 minutes after it failed from there, so one
+  attacker on a shared address can't lock out everyone behind it, and the
+  guesses it lets through never extend its pause) and the account from every
+  network (20, `LOGIN_MAX_FAILURES_PER_ACCOUNT=0` turns it off); wrong
+  MFA codes against the user's MFA key (5), wrong current passwords on a
+  password change against their own key (5). A pause starts at 30 seconds and
+  doubles with every further failure, up to 15, 30 or 60 minutes; a streak ends
+  24 hours after its last failure.
+- **Recognized browsers** sign in through a key of their own, so an attacker
+  can slow down sign-in from new browsers but cannot lock an account's owner
+  out of a browser they used before. A token only chooses the counter; it never
+  skips the password or MFA. Only its sha256 is stored.
+- **Checked before bcrypt, atomically**: a burst of parallel guesses gets
+  exactly the threshold of password checks, and an attempt while paused is
+  refused without one.
+- **No enumeration**: unknown usernames, wrong passwords and disabled accounts
+  with a wrong password get the same answer after the same work (one bcrypt
+  compare, against a dummy hash when the user doesn't exist). Unknown usernames
+  are stored only as a hash.
+- **MFA**: a 6-digit code is only tried as TOTP and each works once; recovery
+  codes are consumed in one statement. Roughly 35 guesses a day get through
+  the MFA key, about a 1-in-10,000 chance of a hit per day.
+- **Recovery**: wait; use a browser that signed in before; Users -> Unlock or
+  Settings -> Sign-in protection; the `auth-admin` command line
+  (TROUBLESHOOTING.md, "Locked out of SIEMBox"); or `LOGIN_PROTECTION=off`
+  briefly.
+
+Not covered yet: a correct first guess of the default `admin` / `changeme`
+password (change it right after installing), and `CORS_ORIGIN=*`.
 
 The address can't be forged: the web UI's nginx reaches the backend over a
 unix socket on a volume only those two containers mount, and a direct caller
@@ -1030,15 +1065,31 @@ alert:
 **Log All Administrative Actions:**
 
 SIEMBox automatically logs:
-- User login/logout (via Winston logger)
-- User creation/deletion
+- Sign-in, in `audit_logs` with the client address and how the request
+  arrived (`details.via`): `auth.login.success`, `auth.login.failure` (reason
+  `unknown_user`, `bad_password`, `disabled`, `mfa_invalid`, `mfa_replay`; an
+  unknown username is a NULL user plus `details.usernameHash`),
+  `auth.login.paused` (once per pause, never per refused attempt),
+  `auth.logout`, `auth.unlock`, `auth.browser.revoked`
+- Account changes: `auth.password.changed`, `auth.password.change_failed`,
+  `auth.mfa.enabled`, `auth.mfa.disabled`, `auth.mfa.recovery_used`,
+  `user.created`, `user.updated`, `user.deleted`, `user.password_reset`
 - Parser/rule changes
 - Shipper configuration updates
 
+`auth.login.failure` rows are kept `AUTH_FAILURE_AUDIT_RETENTION_DAYS` (default
+90; `0` keeps them). Refused attempts are summed up in one backend log line
+every 5 minutes ("Sign-in attempts refused while paused").
+
 **Review Audit Logs:**
 ```bash
-# Backend logs (JSON format)
-docker logs siembox-backend | grep -E "User (logged in|created|deleted)"
+# Sign-in events of the last day
+docker exec siembox-postgres psql -U siembox -d siembox -c \
+  "SELECT timestamp, action, user_id, ip_address, details FROM audit_logs
+   WHERE action LIKE 'auth.%' AND timestamp > NOW() - INTERVAL '1 day' ORDER BY id DESC LIMIT 100;"
+
+# Backend logs
+docker logs siembox-backend | grep -E "User logged in|Login failed|Sign-in paused|User (created|deleted)"
 
 # Database audit trail
 docker exec siembox-postgres psql -U siembox -d siembox -c \
@@ -1062,8 +1113,8 @@ df -h /var/lib/docker/volumes/
 # Network connections
 netstat -tuln | grep -E "514|8420|8421|5432"
 
-# Failed login attempts
-docker logs siembox-backend | grep "Invalid username or password" | wc -l
+# Failed sign-ins (log lines carry the client address and the reason)
+docker logs siembox-backend | grep "Login failed" | wc -l
 ```
 
 **Automated Monitoring with Prometheus:**
@@ -1093,27 +1144,27 @@ services:
 
 ### Security Event Detection
 
-**Monitor for Security Events:**
+**Attacks on SIEMBox's own sign-in raise alerts** (source `siembox-auth`, no
+rule needed; `AUTH_ALERTS=off` turns them off). They appear on the Alerts page
+and go to the notification channels like any alert (Settings -> Notifications:
+the default minimum severity is high):
 
-Create detection rules for SIEMBox itself:
+| Alert | Severity |
+|-------|----------|
+| A network's sign-in pause starts | medium |
+| An existing account's pause from new browsers starts | high (critical for an admin) |
+| A user's MFA codes are paused (their password was right each time) | critical |
+| A new browser signs in while the account is being paused | high |
+| A sign-in succeeds after 5 or more failures in a row | medium |
+| A recognized browser is forgotten after 20 failures | high |
+| More than 100 failed checks in 10 minutes, across everything | high (at most once an hour) |
 
-```yaml
-# Detect brute force against SIEMBox
-name: SIEMBox Brute Force Attack
-description: Multiple failed login attempts to SIEMBox
-severity: critical
-conditions:
-  - field: message
-    operator: contains
-    value: "Invalid username or password"
-aggregation:
-  field: source_ip
-  timeframe: 5m
-  threshold: 5
-alert:
-  title: "Brute force attack on SIEMBox from {source_ip}"
-  description: "{count} failed logins in 5 minutes"
-```
+Each is raised once per streak of failures (its `event_id` names the trigger,
+a hash of the key and when the streak started). The network-pause and
+success-after-failures alerts, which anyone can set off cheaply (a new network,
+or their own wrong-then-right sign-ins), are capped at 20 an hour together; the
+others need an existing account or browser and are never capped, so a flood of
+cheap alerts can't hide an attack on an admin.
 
 ### Health Checks
 

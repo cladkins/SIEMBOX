@@ -94,10 +94,12 @@ export function requestVia(req: Request): RequestVia {
 /** The eight 16-bit groups of a valid IPv6 address. */
 function ipv6Groups(ip: string): number[] {
   let text = ip;
-  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
-  if (dotted) {
-    const [a, b, c, d] = dotted.slice(1).map(Number);
-    text = `${text.slice(0, dotted.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  // An embedded IPv4 tail ('::ffff:192.0.2.1') becomes its two 16-bit groups.
+  const lastColon = text.lastIndexOf(':');
+  const dotted = text.slice(lastColon + 1);
+  if (dotted.includes('.')) {
+    const [a, b, c, d] = dotted.split('.').map(Number);
+    text = `${text.slice(0, lastColon + 1)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
   }
   const [head, tail] = text.split('::');
   const left = head ? head.split(':') : [];
@@ -119,4 +121,20 @@ export function signInNetworkKey(ip: string | null): string {
   const groups = ipv6Groups(address).slice(0, 4);
   const prefix = normalizeIp(`${groups.map((group) => group.toString(16)).join(':')}::`);
   return `${prefix}/64`;
+}
+
+/**
+ * A sign-in network as an admin types it (the admin API, the recovery CLI):
+ * an address (taken as its network: IPv6 as its /64), an IPv6 /64 exactly as
+ * the counters list it ('2001:db8:1:2::/64'), or 'unknown' for requests that
+ * had no address. The signInNetworkKey form, or null for anything else.
+ */
+export function parseSignInNetwork(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (text === 'unknown') return 'unknown';
+  const slash64 = text.endsWith('/64');
+  const address = normalizeIp(slash64 ? text.slice(0, -3) : text);
+  if (!address || (slash64 && net.isIP(address) !== 6)) return null;
+  return signInNetworkKey(address);
 }

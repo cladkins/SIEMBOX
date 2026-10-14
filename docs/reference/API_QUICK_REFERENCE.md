@@ -29,15 +29,23 @@ Content-Type: application/json
 
 # Response
 {
-  "message": "Login successful",
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token": "4f9c2e...",
   "user": {
     "id": 1,
     "username": "admin",
     "role": "admin"
-  }
+  },
+  "expiresAt": "2025-12-01T12:00:00Z",
+  "browserToken": "dGhlLWJyb3dzZXItdG9rZW4..."
 }
 ```
+
+Users with MFA send `"code"` too (the first answer without it is
+`401 {"mfaRequired": true}`). Send the `browserToken` back with later sign-ins
+of that username from the same client, as the web UI does: failed attempts
+from elsewhere then never pause it. Failed sign-ins pause further ones (`429`,
+`code: "SIGNIN_PAUSED"`, `Retry-After`): see
+[API.md, "Sign-in Protection"](API.md#sign-in-protection).
 
 ---
 
@@ -187,11 +195,22 @@ curl -X POST http://localhost:8421/api/users \
     "role": "analyst"
   }'
 
-# Update user (admin only)
+# Update user (admin only). With "password", it is a reset: the user is
+# signed out everywhere and their recognized browsers are forgotten.
 curl -X PUT http://localhost:8421/api/users/2 \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"role": "viewer"}'
+
+# Unlock sign-in for an account (admin only): clears its sign-in pauses
+curl -X POST http://localhost:8421/api/users/2/unlock \
+  -H "Authorization: Bearer $TOKEN"
+
+# Paused and failing sign-in counters, and clearing them (admin only)
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8421/api/admin/sign-in-protection"
+curl -X POST http://localhost:8421/api/admin/sign-in-protection/clear \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"network": "203.0.113.7"}'
 ```
 
 ### Log Shippers
@@ -332,11 +351,11 @@ Performs case-insensitive search across relevant fields.
 |------|---------|
 | 200 | Success |
 | 201 | Created |
-| 400 | Bad Request (invalid input) |
-| 401 | Unauthorized (missing/invalid token) |
+| 400 | Bad Request (invalid input; also a wrong current password on `PUT /api/auth/me/password`) |
+| 401 | Unauthorized (missing/invalid token, or a failed sign-in) |
 | 403 | Forbidden (insufficient permissions) |
 | 404 | Not Found |
-| 429 | Too Many Requests (rate limited) |
+| 429 | Too Many Requests: rate limited (`RATE_LIMITED`) or sign-in paused (`SIGNIN_PAUSED`) |
 | 500 | Internal Server Error |
 
 ---
@@ -349,7 +368,7 @@ address; its `X-Forwarded-For` is ignored (see [API.md](API.md#rate-limiting)).
 | Endpoint | Limit |
 |----------|-------|
 | General API (`/api/*`) | 1000 requests (`API_RATE_LIMIT_MAX`) |
-| `POST /api/auth/login` | 10 failed sign-ins per account; 100 per address across accounts, after which only accounts that already failed are refused (successful ones don't count) |
+| `POST /api/auth/login` | Not a request limit: failed sign-ins pause further ones per account and network (5 failures), network (20) and account from new browsers (20), 30 s and doubling. See [Sign-in Protection](API.md#sign-in-protection) |
 | EDR agent routes with `X-Agent-ID`, with the route's own method (not enrollment) | 30000 requests (`EDR_AGENT_RATE_MAX`) |
 | `POST /api/shippers/logs` with `X-Shipper-ID` | 6000 requests (`SHIPPER_LOG_PUSH_MAX`) |
 | `POST /api/exposure/password-check` | 30 requests |

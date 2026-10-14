@@ -265,11 +265,12 @@ import { api } from '@/services/api';
 import { ElMessage } from 'element-plus';
 import { Check } from '@element-plus/icons-vue';
 import HelpTip from '@/components/HelpTip.vue';
-import { ENV_KEY_VARS, blankBaseUrl, keyTargetOf, type AiEndpoint } from './aiKeyTarget';
+import { ENV_KEY_VARS, blankBaseUrl, keyNeeded, type AiEndpoint } from './aiKeyTarget';
 
 // A saved key is only sent to the provider and base URL it was saved for (the
 // API answers 400 to a change of either without apiKey), so each form asks for
-// the key again when an edit changes where its key would go.
+// the key again when an edit changes where its key would go, unless it goes
+// back to where the key was saved for (keySavedFor).
 const NEW_KEY_PLACEHOLDER = 'API key for the new provider or base URL';
 const KEY_NEEDED_TEXT =
   'You changed the provider or base URL. The saved key is only sent to the provider and base URL it was ' +
@@ -278,11 +279,17 @@ const OLLAMA_REMOVES_KEY_TEXT = 'Ollama uses no API key: saving removes the save
 const INHERIT_REMOVES_KEY_TEXT =
   'This config has a key of its own saved; inheriting removes it, along with its own model and base URL.';
 const MISMATCH_STATUS = 'Saved key not used: it was saved for another provider or base URL';
+const PROVIDER_LABELS: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI', ollama: 'Ollama' };
 const ENTER_KEY_WARNING = 'Enter the API key for the new provider or base URL, or choose to remove the saved key.';
 
 type KeySource = 'stored' | 'env' | 'none';
 
-function keyStatus(configured: boolean, source: KeySource, mismatch: boolean): string {
+function keyStatus(configured: boolean, source: KeySource, mismatch: boolean, savedFor: AiEndpoint | null): string {
+  if (mismatch && savedFor) {
+    // Say where, so the form can be pointed back there (that needs no key).
+    const label = PROVIDER_LABELS[savedFor.provider] || savedFor.provider;
+    return `Saved key not used: it was saved for ${savedFor.provider === 'anthropic' ? label : `${label} at ${savedFor.baseUrl}`}`;
+  }
   if (mismatch) return MISMATCH_STATUS;
   if (!configured) return 'No API key configured';
   return source === 'env' ? 'Configured via environment variable' : 'Key configured';
@@ -302,6 +309,8 @@ const aiConfigured = ref(false);
 const aiKeySource = ref<KeySource>('none');
 const aiKeySaved = ref(false);
 const aiKeyMismatch = ref(false);
+/** Where its saved key was saved for (keySavedFor); null when none can be read. */
+const aiKeySavedFor = ref<AiEndpoint | null>(null);
 /** The saved config: where its key goes now. The analyst inherits from it. */
 const aiSaved = reactive<AiEndpoint>({ provider: 'anthropic', baseUrl: '' });
 const aiForm = reactive({ provider: 'anthropic', model: '', baseUrl: '', apiKey: '', removeKey: false });
@@ -310,13 +319,13 @@ const aiModelPlaceholder = computed(() =>
   ({ anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', ollama: 'llama3.1' } as Record<string, string>)[aiForm.provider] || ''
 );
 const aiKeyPlaceholder = computed(() => keyPlaceholder(aiKeySource.value, aiKeyMismatch.value));
-const aiKeyStatus = computed(() => keyStatus(aiConfigured.value, aiKeySource.value, aiKeyMismatch.value));
+const aiKeyStatus = computed(() =>
+  keyStatus(aiConfigured.value, aiKeySource.value, aiKeyMismatch.value, aiKeySavedFor.value)
+);
 const aiKeyStatusType = computed(() => (aiConfigured.value && !aiKeyMismatch.value ? 'success' : 'warning'));
-/** The edit moves the saved key's provider or base URL: a new key (or removing it) is needed. */
-const aiKeyNeeded = computed(
-  () =>
-    aiKeySaved.value &&
-    keyTargetOf(aiForm.provider, aiForm.baseUrl) !== keyTargetOf(aiSaved.provider, aiSaved.baseUrl)
+/** The edit moves the saved key's provider or base URL, not back to its own: a new key (or removing it) is needed. */
+const aiKeyNeeded = computed(() =>
+  keyNeeded(aiForm, aiSaved, { keySaved: aiKeySaved.value, keySavedFor: aiKeySavedFor.value })
 );
 
 async function fetchAiSettings() {
@@ -334,6 +343,7 @@ async function fetchAiSettings() {
     aiKeySource.value = data.keySource || 'none';
     aiKeySaved.value = !!data.keySaved;
     aiKeyMismatch.value = !!data.keyMismatch;
+    aiKeySavedFor.value = data.keySavedFor ?? null;
   } catch (error) {
     // non-admins / not configured — leave defaults
   } finally {
@@ -371,6 +381,7 @@ const chatConfigured = ref(false);
 const chatKeySource = ref<KeySource>('none');
 const chatKeySaved = ref(false);
 const chatKeyMismatch = ref(false);
+const chatKeySavedFor = ref<AiEndpoint | null>(null);
 const chatInheritsFrom = ref<'chat' | 'main'>('main');
 /** Where the analyst sends requests now (inherited or its own). Triage inherits from it. */
 const chatSaved = reactive<AiEndpoint>({ provider: '', baseUrl: '' });
@@ -382,19 +393,19 @@ const chatModelPlaceholder = computed(() =>
   ] || 'inherits main config'
 );
 const chatKeyPlaceholder = computed(() => keyPlaceholder(chatKeySource.value, chatKeyMismatch.value));
-const chatKeyStatus = computed(() => keyStatus(chatConfigured.value, chatKeySource.value, chatKeyMismatch.value));
+const chatKeyStatus = computed(() =>
+  keyStatus(chatConfigured.value, chatKeySource.value, chatKeyMismatch.value, chatKeySavedFor.value)
+);
 const chatKeyStatusType = computed(() => (chatConfigured.value && !chatKeyMismatch.value ? 'success' : 'warning'));
-const chatKeyNeeded = computed(
-  () =>
-    chatKeySaved.value &&
-    keyTargetOf(chatForm.provider, chatForm.baseUrl, aiSaved) !== keyTargetOf(chatSaved.provider, chatSaved.baseUrl)
+const chatKeyNeeded = computed(() =>
+  keyNeeded(chatForm, chatSaved, { keySaved: chatKeySaved.value, keySavedFor: chatKeySavedFor.value }, aiSaved)
 );
 
 /**
  * Load the analyst config; `resetForm` false keeps the form's edits and refreshes only what it reports.
  * The form holds the analyst's own base URL setting (ownBaseUrl), not the one it resolves to: a blank
  * one stays blank and keeps following the AI Builder, and an untouched form still points where the
- * analyst does after the AI Builder moves (keyTargetOf resolves it against aiSaved).
+ * analyst does after the AI Builder moves (keyNeeded resolves it against aiSaved).
  */
 async function fetchChatSettings(resetForm = true) {
   chatLoading.value = true;
@@ -415,6 +426,7 @@ async function fetchChatSettings(resetForm = true) {
     chatKeySource.value = data.keySource || 'none';
     chatKeySaved.value = !!data.keySaved;
     chatKeyMismatch.value = !!data.keyMismatch;
+    chatKeySavedFor.value = data.keySavedFor ?? null;
   } catch (error) {
     // non-admins / not configured — leave defaults
   } finally {
@@ -461,6 +473,7 @@ const triageConfigured = ref(false);
 const triageKeySource = ref<KeySource>('none');
 const triageKeySaved = ref(false);
 const triageKeyMismatch = ref(false);
+const triageKeySavedFor = ref<AiEndpoint | null>(null);
 const triageInheritsFrom = ref<'triage' | 'chat'>('chat');
 const triageSaved = reactive<AiEndpoint>({ provider: '', baseUrl: '' });
 const triageForm = reactive({
@@ -484,16 +497,18 @@ const triageModelPlaceholder = computed(() =>
 );
 const triageKeyPlaceholder = computed(() => keyPlaceholder(triageKeySource.value, triageKeyMismatch.value));
 const triageKeyStatus = computed(() =>
-  keyStatus(triageConfigured.value, triageKeySource.value, triageKeyMismatch.value)
+  keyStatus(triageConfigured.value, triageKeySource.value, triageKeyMismatch.value, triageKeySavedFor.value)
 );
 const triageKeyStatusType = computed(() =>
   triageConfigured.value && !triageKeyMismatch.value ? 'success' : 'warning'
 );
-const triageKeyNeeded = computed(
-  () =>
-    triageKeySaved.value &&
-    keyTargetOf(triageForm.provider, triageForm.baseUrl, chatSaved) !==
-      keyTargetOf(triageSaved.provider, triageSaved.baseUrl)
+const triageKeyNeeded = computed(() =>
+  keyNeeded(
+    triageForm,
+    triageSaved,
+    { keySaved: triageKeySaved.value, keySavedFor: triageKeySavedFor.value },
+    chatSaved
+  )
 );
 
 /**
@@ -525,6 +540,7 @@ async function fetchTriageSettings(resetForm = true) {
     triageKeySource.value = data.keySource || 'none';
     triageKeySaved.value = !!data.keySaved;
     triageKeyMismatch.value = !!data.keyMismatch;
+    triageKeySavedFor.value = data.keySavedFor ?? null;
   } catch (error) {
     // non-admins — leave defaults
   } finally {

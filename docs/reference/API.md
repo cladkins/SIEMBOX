@@ -1086,8 +1086,8 @@ Generate a detection rule from a natural-language description.
 
 | Method & Path | Purpose |
 |---|---|
-| `GET /api/settings/ai` | Current AI Builder config: `provider`, `model`, `baseUrl`, `configured`, `keySource` (`stored`, `env` or `none`: where the key it sends comes from), `keySaved` (a key is saved for this config) and `keyMismatch` (that key was saved for another provider or base URL, so it isn't sent). The key itself is never returned. |
-| `PUT /api/settings/ai` | Update the AI Builder config. Body (all optional): `{ "provider": "anthropic" \| "openai" \| "ollama", "model": "…", "baseUrl": "…", "apiKey": "…" }`. Pass `apiKey` to set it (encrypted at rest via `CREDENTIAL_ENCRYPTION_KEY`), or `""` (or `null`) to clear it. A change of `provider` or `baseUrl` while a key is saved needs `apiKey` in the same request, see [below](#a-saved-key-only-goes-where-it-was-saved-for). Answers with the same fields as the `GET`. |
+| `GET /api/settings/ai` | Current AI Builder config: `provider`, `model`, `baseUrl`, `configured`, `keySource` (`stored`, `env` or `none`: where the key it sends comes from), `keySaved` (a key is saved for this config), `keyMismatch` (that key was saved for another provider or base URL, so it isn't sent) and `keySavedFor`: `{ "provider": "…", "baseUrl": "…" }`, the provider and base URL (normalized) that saved key was saved for, or `null` when no key of its own is saved or it can't be read. A change of provider or base URL back to `keySavedFor` needs no `apiKey`. The key itself is never returned. |
+| `PUT /api/settings/ai` | Update the AI Builder config. Body (all optional): `{ "provider": "anthropic" \| "openai" \| "ollama", "model": "…", "baseUrl": "…", "apiKey": "…" }`. Pass `apiKey` to set it (encrypted at rest via `CREDENTIAL_ENCRYPTION_KEY`), or `""` (or `null`) to clear it. `baseUrl` is at most 2048 characters (`400` otherwise). A change of `provider` or `baseUrl` while a key is saved needs `apiKey` in the same request, see [below](#a-saved-key-only-goes-where-it-was-saved-for). Answers with the same fields as the `GET`. |
 | `GET /api/settings/ai-chat` | Current AI Analyst config: the fields of `GET /api/settings/ai`, plus `inheritsFrom` (`main` while it has no provider of its own) and `ownBaseUrl`: its own base URL setting, `""` when it has none (it then uses the AI Builder's on the same provider, else the provider's default). `baseUrl` is the one it uses. A form that edits the config sends `ownBaseUrl` back, so a blank one keeps following the AI Builder. |
 | `PUT /api/settings/ai-chat` | Update the AI Analyst config. Body as for `PUT /api/settings/ai`; `"provider": ""` reverts to inheriting the AI Builder's provider. A model or base URL left blank is the AI Builder's when the provider is the same, else the provider's default. The Settings page sends `"model": ""` and `"baseUrl": ""` with `"provider": ""` (and `"apiKey": ""` when the analyst has a key of its own), so that inheriting takes everything from the AI Builder. |
 
@@ -1132,7 +1132,9 @@ URL). SIEMBox only sends it there.
   on the same provider as the AI Builder, with no base URL of its own, after the
   AI Builder's base URL changes), the key stays saved but isn't sent:
   `keyMismatch` is `true` and the config uses its parent's key or the
-  environment variable. Enter its key again, or point it back.
+  environment variable. Enter its key again, or point it back: `keySavedFor`
+  says where (the Settings page shows it on the card), and a `PUT` with that
+  provider and base URL needs no `apiKey`.
 - The key itself is stored as earlier versions store it (`ai_api_key`,
   `ai_chat_api_key`, `ai_triage_api_key`, each encrypted on its own), and its
   target in a row next to it (`ai_api_key_target`, ...), encrypted together
@@ -1147,8 +1149,9 @@ URL). SIEMBox only sends it there.
 - Each save is one transaction, and saves of the three configs run one at a
   time, so no request is ever sent with a key and an address from different
   saves.
-- `model` and `baseUrl` must be strings when sent, `apiKey` a string or `null`
-  (`400` otherwise).
+- `model` and `baseUrl` must be strings when sent, `apiKey` a string or `null`,
+  and `baseUrl` at most 2048 characters (`400` otherwise; nothing in the
+  request is saved).
 
 ### AI Triage Settings
 
@@ -1158,7 +1161,7 @@ Automatic, agentic per-alert analysis — see [AI Security Analyst → Automated
 
 | Method & Path | Purpose |
 |---|---|
-| `GET /api/settings/ai-triage` | Current triage config: provider/model/baseUrl (inherits AI Analyst if unset), `configured`, `keySource`, `keySaved`, `keyMismatch`, `inheritsFrom` and `ownBaseUrl` as for `GET /api/settings/ai-chat` (the parent being the AI Analyst), plus operational settings (`enabled`, `minSeverity`, `dailyCap`, `maxConcurrent`, `dedupeHours`, `maxToolCalls`, `wallBudgetSeconds`). Key itself is never returned. |
+| `GET /api/settings/ai-triage` | Current triage config: provider/model/baseUrl (inherits AI Analyst if unset), `configured`, `keySource`, `keySaved`, `keyMismatch`, `keySavedFor`, `inheritsFrom` and `ownBaseUrl` as for `GET /api/settings/ai-chat` (the parent being the AI Analyst), plus operational settings (`enabled`, `minSeverity`, `dailyCap`, `maxConcurrent`, `dedupeHours`, `maxToolCalls`, `wallBudgetSeconds`). Key itself is never returned. |
 | `PUT /api/settings/ai-triage` | Update triage config. Body (all optional): `{ "provider": "anthropic" \| "openai" \| "ollama" \| "", "model": "…", "baseUrl": "…", "apiKey": "…", "enabled": true, "minSeverity": "medium", "dailyCap": 200, "maxConcurrent": 2, "dedupeHours": 6, "maxToolCalls": 6, "wallBudgetSeconds": 110 }`. Empty `provider` reverts to inheriting the AI Analyst config. A change of provider or base URL while a key is saved needs `apiKey` in the same request ([A saved key only goes where it was saved for](#a-saved-key-only-goes-where-it-was-saved-for)); a refused request saves none of its fields, the operational ones included. `maxToolCalls` (1-12) and `wallBudgetSeconds` (20-280) bound how deep/long a single alert's analysis can go before it's forced to synthesize a verdict from whatever it has. |
 | `GET /api/ai/triage/health` | `{ "configured": bool, "enabled": bool, "minSeverity": "…" }` — lets the Alerts/SOC Triage UI know whether to render triage state. |
 

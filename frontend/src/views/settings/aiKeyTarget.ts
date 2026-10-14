@@ -15,15 +15,22 @@ export const ENV_KEY_VARS: Record<string, string> = {
   openai: 'OPENAI_API_KEY',
 };
 
-/** Trimmed; scheme and host lower case; default port, fragment and trailing slashes dropped. */
+/** `s` without its trailing slashes, in one pass from the end (no regex: no backtracking on a run of slashes). */
+function stripTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 0x2f /* / */) end--;
+  return s.slice(0, end);
+}
+
+/** Trimmed; scheme and host lower case; default port, fragment and trailing slashes dropped. Linear. */
 export function normalizeBaseUrl(raw: string): string {
   const s = raw.trim();
   try {
     const u = new URL(s);
     const auth = u.username || u.password ? `${u.username}${u.password ? `:${u.password}` : ''}@` : '';
-    return `${u.protocol}//${auth}${u.host}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+    return `${u.protocol}//${auth}${u.host}${stripTrailingSlashes(u.pathname)}${u.search}`;
   } catch {
-    return s.replace(/\/+$/, '');
+    return stripTrailingSlashes(s);
   }
 }
 
@@ -52,4 +59,33 @@ export function keyTargetOf(provider: string, baseUrl: string, parent?: AiEndpoi
   const p = provider || parent?.provider || 'anthropic';
   if (p === 'anthropic') return 'anthropic';
   return `${p} ${normalizeBaseUrl(baseUrl.trim() || blankBaseUrl(p, parent))}`;
+}
+
+/** What the API reports of a config's saved key (GET /api/settings/ai, /ai-chat, /ai-triage). */
+export interface SavedKeyState {
+  /** The config has a key of its own saved. */
+  keySaved: boolean;
+  /** The provider and base URL that key was saved for; null when it can't be read. */
+  keySavedFor?: AiEndpoint | null;
+}
+
+/**
+ * Saving the form needs the API key (or removing the saved one), as the
+ * backend decides it (planAiSave): the config has a key of its own saved and
+ * the form changes where its requests go, other than back to where that key
+ * was saved for. `current` is where the config sends requests now (provider
+ * and base URL as the API reports them); `parent` is what a blank base URL or
+ * an empty provider stands for (see keyTargetOf).
+ */
+export function keyNeeded(
+  form: AiEndpoint,
+  current: AiEndpoint,
+  saved: SavedKeyState,
+  parent?: AiEndpoint
+): boolean {
+  if (!saved.keySaved) return false;
+  const target = keyTargetOf(form.provider, form.baseUrl, parent);
+  if (target === keyTargetOf(current.provider, current.baseUrl)) return false;
+  const savedFor = saved.keySavedFor;
+  return !savedFor || target !== keyTargetOf(savedFor.provider, savedFor.baseUrl);
 }

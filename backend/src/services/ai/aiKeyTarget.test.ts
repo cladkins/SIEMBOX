@@ -21,7 +21,11 @@ import {
   resolveAiSettings,
 } from './aiService';
 // The Settings page's copy of the comparison, checked against this one below.
-import { keyTargetOf } from '../../../../frontend/src/views/settings/aiKeyTarget';
+import {
+  keyNeeded,
+  keyTargetOf,
+  normalizeBaseUrl as pageNormalizeBaseUrl,
+} from '../../../../frontend/src/views/settings/aiKeyTarget';
 
 // A throwaway key for this test process.
 process.env.CREDENTIAL_ENCRYPTION_KEY = crypto.randomBytes(32).toString('hex');
@@ -463,11 +467,19 @@ test('the Settings page compares targets the way the backend does (frontend aiKe
     for (const mu of urls) {
       const main: AiSettings = { ai_provider: mp, ai_base_url: mu };
       const r = resolveAiSettings(main).main;
-      states.push({ label: `main ${mp} ${JSON.stringify(mu)}`, backend: r.target, page: keyTargetOf(mp, mu) });
+      states.push({
+        label: `main ${mp} ${JSON.stringify(mu)}`,
+        backend: r.target,
+        page: keyTargetOf(mp, mu),
+      });
       const parent = { provider: r.provider, baseUrl: r.baseUrl || '' };
       for (const cp of ['', ...providers]) {
         for (const cu of urls) {
-          const chat = resolveAiSettings({ ...main, ai_chat_provider: cp, ai_chat_base_url: cu }).chat;
+          const chat = resolveAiSettings({
+            ...main,
+            ai_chat_provider: cp,
+            ai_chat_base_url: cu,
+          }).chat;
           states.push({
             label: `main ${mp} ${JSON.stringify(mu)}, analyst ${cp || 'inherit'} ${JSON.stringify(cu)}`,
             backend: chat.target,
@@ -484,7 +496,368 @@ test('the Settings page compares targets the way the backend does (frontend aiKe
     if (seenPage) assert.equal(st.page, seenPage.page, `${st.label} vs ${seenPage.label}`);
     else pageFor.set(st.backend, st);
     const seenBackend = backendFor.get(st.page);
-    if (seenBackend) assert.equal(st.backend, seenBackend.backend, `${st.label} vs ${seenBackend.label}`);
+    if (seenBackend)
+      assert.equal(st.backend, seenBackend.backend, `${st.label} vs ${seenBackend.label}`);
     else backendFor.set(st.page, st);
   }
+});
+
+// ---- Base URL normalization: linear, and the same results as before ----------
+
+/**
+ * normalizeBaseUrl as it was, with the regex CodeQL flagged (js/polynomial-redos:
+ * quadratic on a long run of slashes that doesn't end the string). Kept here
+ * only as the reference the linear version must match, on fixed inputs.
+ */
+function regexNormalizeBaseUrl(raw: string): string {
+  const s = raw.trim();
+  try {
+    const u = new URL(s);
+    const auth =
+      u.username || u.password ? `${u.username}${u.password ? `:${u.password}` : ''}@` : '';
+    return `${u.protocol}//${auth}${u.host}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+  } catch {
+    return s.replace(/\/+$/, '');
+  }
+}
+
+/** Base URLs, real and odd: every combination of the parts below, and some that aren't URLs. */
+function baseUrlCorpus(): string[] {
+  const out: string[] = [];
+  const schemes = ['http://', 'https://', 'HTTPS://', 'HtTp://'];
+  const hosts = [
+    'api.openai.com',
+    'API.OpenAI.COM',
+    '127.0.0.1',
+    '[::1]',
+    'user:pw@Host.Example.test',
+    'bücher.example',
+    'host.docker.internal',
+  ];
+  const ports = ['', ':80', ':443', ':8001', ':011434'];
+  const paths = [
+    '',
+    '/',
+    '//',
+    '///',
+    '/v1',
+    '/v1/',
+    '/v1//',
+    '//v1',
+    '/a//b/',
+    '/%7Ex/',
+    '/a b/',
+    '/v1/./x/../',
+  ];
+  const tails = ['', '?x=1', '?x=1/', '#frag', '#/', '?a=b#c/'];
+  const pads: Array<[string, string]> = [
+    ['', ''],
+    [' ', ' '],
+    ['\t', '\n '],
+  ];
+  for (const scheme of schemes)
+    for (const host of hosts)
+      for (const port of ports)
+        for (const path of paths)
+          for (const tail of tails)
+            for (const [l, r] of pads) out.push(`${l}${scheme}${host}${port}${path}${tail}${r}`);
+  // Not URLs: only surrounding space and trailing slashes go.
+  out.push(
+    '',
+    '   ',
+    '/',
+    '//',
+    '///',
+    'not a url',
+    ' not a url/ ',
+    'not a url//',
+    'localhost:11434/',
+    ' host/path// ',
+    'a/b/c///',
+    '///x',
+    'x///y',
+    '/\t/',
+    'http//missing-colon.test/v1/',
+    'http://',
+    'http:// space.test/'
+  );
+  return out;
+}
+
+test("normalizeBaseUrl gives the regex version's result for every base URL tried (backend and page)", () => {
+  const corpus = baseUrlCorpus();
+  assert.ok(corpus.length > 10000, `${corpus.length} inputs`);
+  for (const u of corpus) {
+    const want = regexNormalizeBaseUrl(u);
+    assert.equal(normalizeBaseUrl(u), want, JSON.stringify(u));
+    assert.equal(pageNormalizeBaseUrl(u), want, `page: ${JSON.stringify(u)}`);
+  }
+  // The cases the comparison relies on, spelled out.
+  const pinned: Array<[string, string]> = [
+    ['https://api.openai.com/v1/', 'https://api.openai.com/v1'], // a trailing slash
+    ['https://api.openai.com/v1//', 'https://api.openai.com/v1'], // several
+    ['https://api.openai.com//', 'https://api.openai.com'], // a path of only slashes
+    ['https://api.openai.com/a//b/', 'https://api.openai.com/a//b'], // inner ones stay
+    ['HTTPS://API.OpenAI.com/V1', 'https://api.openai.com/V1'], // scheme and host case, not the path's
+    ['https://api.openai.com:443/v1', 'https://api.openai.com/v1'], // the default port
+    ['http://h.test:80/v1', 'http://h.test/v1'],
+    ['http://h.test:443/v1', 'http://h.test:443/v1'], // not http's default
+    [' \thttps://api.openai.com/v1 \n', 'https://api.openai.com/v1'], // surrounding space
+    ['https://api.openai.com/v1/?x=1#f', 'https://api.openai.com/v1?x=1'], // query kept, fragment dropped
+    ['  not a url// ', 'not a url'],
+    ['///', ''],
+  ];
+  for (const [input, want] of pinned) {
+    assert.equal(normalizeBaseUrl(input), want, JSON.stringify(input));
+    assert.equal(pageNormalizeBaseUrl(input), want, `page: ${JSON.stringify(input)}`);
+  }
+});
+
+test('normalizeBaseUrl is linear: long runs of slashes take no time', () => {
+  // The regex version takes seconds on the first of these (quadratic in the
+  // run of slashes); the loop, well under a millisecond each.
+  const run = '/'.repeat(100_000);
+  const inputs: Array<[string, string]> = [
+    [`${run}x`, `${run}x`],
+    [`x${run}`, 'x'],
+    [`http://h.test${run}x`, `http://h.test${run}x`],
+    [`http://h.test/v1${run}`, 'http://h.test/v1'],
+    [` ${run}x${run} `, `${run}x`],
+  ];
+  for (const normalize of [normalizeBaseUrl, pageNormalizeBaseUrl]) {
+    const started = process.hrtime.bigint();
+    for (const [input, want] of inputs) assert.equal(normalize(input), want);
+    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(ms < 1000, `${inputs.length} long inputs normalized in ${ms.toFixed(1)} ms`);
+  }
+});
+
+// ---- keySavedFor, and the page's "key needed" ---------------------------------
+
+test('keySavedFor: where the saved key goes; null without one, or when it cannot be read', () => {
+  let s = mainAtA();
+  assert.deepEqual(resolveAiSettings(s).main.keySavedFor, { provider: 'openai', baseUrl: A });
+  assert.equal(
+    resolveAiSettings(s).chat.keySavedFor,
+    null,
+    "no key of its own (main's is inherited)"
+  );
+  // Saved with trailing slashes: reported normalized.
+  s = save(s, 'chat', { provider: 'openai', baseUrl: `${B}//`, apiKey: 'sk-chat-B' });
+  assert.deepEqual(resolveAiSettings(s).chat.keySavedFor, { provider: 'openai', baseUrl: B });
+  // Anthropic: its fixed address. OpenAI with no base URL: the default.
+  const ant = save({}, 'main', { provider: 'anthropic', apiKey: 'sk-ant' });
+  assert.deepEqual(resolveAiSettings(ant).main.keySavedFor, {
+    provider: 'anthropic',
+    baseUrl: 'https://api.anthropic.com/v1',
+  });
+  const def = save({}, 'main', { provider: 'openai', apiKey: 'sk-def' });
+  assert.deepEqual(resolveAiSettings(def).main.keySavedFor, {
+    provider: 'openai',
+    baseUrl: 'https://api.openai.com/v1',
+  });
+
+  // It stays where it was saved for when the target moves with the parent.
+  let f = mainAtA();
+  f = save(f, 'chat', { provider: 'openai', baseUrl: '', apiKey: 'sk-chat-A' });
+  f = save(f, 'triage', { provider: 'openai', baseUrl: '', apiKey: 'sk-tri-A' });
+  f = save(f, 'main', { baseUrl: B, apiKey: 'sk-main-B' });
+  const r = resolveAiSettings(f);
+  const atA = { provider: 'openai', baseUrl: A };
+  assert.deepEqual([r.chat.baseUrl, r.chat.keyMismatch, r.chat.keySavedFor], [B, true, atA]);
+  assert.deepEqual([r.triage.baseUrl, r.triage.keyMismatch, r.triage.keySavedFor], [B, true, atA]);
+  assert.deepEqual(r.main.keySavedFor, { provider: 'openai', baseUrl: B });
+
+  // A key with no target recorded counts as saved for where its config points.
+  const legacy = resolveAiSettings({
+    ai_provider: 'openai',
+    ai_base_url: A,
+    ai_api_key: legacyEnvelope('sk-legacy'),
+  }).main;
+  assert.deepEqual(legacy.keySavedFor, atA);
+  // An unreadable key: unknown, so any move needs a key.
+  const broken = resolveAiSettings({
+    ...s,
+    [KEY_SETTING.chat]: JSON.stringify({ encrypted: 'x', iv: 'y', authTag: 'z' }),
+  }).chat;
+  assert.equal(broken.keySaved, true);
+  assert.equal(broken.keySavedFor, null);
+});
+
+test('keyNeeded (the page): pointing a card back where its key was saved for needs no key, as for the API', () => {
+  // The verifier's case. The Builder on OpenAI at A with its key; the analyst
+  // on OpenAI with no base URL of its own and its own key (saved for A); the
+  // Builder moves to B. The analyst card reads "Saved key not used".
+  let s = mainAtA();
+  s = save(s, 'chat', { provider: 'openai', model: 'gpt-4o', baseUrl: '', apiKey: 'sk-chat-A' });
+  s = save(s, 'main', { provider: 'openai', model: 'gpt-4o', baseUrl: B, apiKey: 'sk-main-B' });
+  const r = resolveAiSettings(s);
+  assert.equal(r.chat.keyMismatch, true);
+  // What the page holds after GET /api/settings/ai and /ai-chat.
+  const aiSaved = { provider: r.main.provider, baseUrl: r.main.baseUrl || '' };
+  const chatSaved = { provider: r.chat.provider, baseUrl: r.chat.baseUrl || '' };
+  const reported = { keySaved: r.chat.keySaved, keySavedFor: r.chat.keySavedFor };
+  const needed = (baseUrl: string, provider = 'openai') =>
+    keyNeeded({ provider, baseUrl }, chatSaved, reported, aiSaved);
+
+  // A typed back (any spelling of it): no key asked for, and the API takes it without one.
+  for (const back of [A, `${A}/`, ` ${A} `, 'HTTP://A.Example.TEST:8001/v1']) {
+    assert.equal(needed(back), false, JSON.stringify(back));
+    const writes = planAiSave('chat', s, { provider: 'openai', model: 'gpt-4o', baseUrl: back });
+    assert.equal(writes.ai_chat_api_key, undefined, 'the key row is kept');
+  }
+  const back = save(s, 'chat', { provider: 'openai', model: 'gpt-4o', baseUrl: A });
+  assert.deepEqual(sends(back).chat, { key: 'sk-chat-A', target: keyTarget('openai', A) });
+  assert.equal(resolveAiSettings(back).chat.keyMismatch, false);
+  // Untouched (blank, following the Builder to B): no move, no key.
+  assert.equal(needed(''), false);
+  // Anywhere else: a key, as the API says.
+  for (const [url, provider] of [
+    ['http://c.example.test/v1', 'openai'],
+    [A, 'ollama'],
+    ['', 'anthropic'],
+  ] as const) {
+    assert.equal(needed(url, provider), true, `${provider} ${url}`);
+    assertKeyRequired(() => planAiSave('chat', s, { provider, baseUrl: url }), 'chat');
+  }
+  // Without keySavedFor (an unreadable key, or the comparison before this fix)
+  // the page can only compare with where the card points now: a key for A.
+  assert.equal(
+    keyNeeded({ provider: 'openai', baseUrl: A }, chatSaved, { keySaved: true }, aiSaved),
+    true
+  );
+});
+
+test('keyNeeded (the page) asks for a key exactly when the API would refuse the save', () => {
+  // Each card after saves that leave its key saved for where it points, for
+  // where it pointed before its parent moved, with no target recorded, or
+  // unreadable; then every provider and base URL a form can hold, saved
+  // without a key. The page lets the save through iff the API takes it.
+  const C = 'http://c.example.test/v1';
+  type Step = [AiScope, AiModelInput];
+  const histories: Array<{ label: string; steps: Step[]; raw?: AiSettings }> = [
+    { label: 'main at A', steps: [['main', { provider: 'openai', baseUrl: A, apiKey: 'k-m' }]] },
+    {
+      label: 'chat and triage follow main, then main moves',
+      steps: [
+        ['main', { provider: 'openai', baseUrl: A, apiKey: 'k-m' }],
+        ['chat', { provider: 'openai', baseUrl: '', apiKey: 'k-c' }],
+        ['triage', { provider: 'openai', baseUrl: '', apiKey: 'k-t' }],
+        ['main', { provider: 'openai', baseUrl: B, apiKey: 'k-m2' }],
+      ],
+    },
+    {
+      label: 'chat at B of its own, triage follows chat, then chat moves',
+      steps: [
+        ['main', { provider: 'openai', baseUrl: A, apiKey: 'k-m' }],
+        ['chat', { provider: 'openai', baseUrl: B, apiKey: 'k-c' }],
+        ['triage', { provider: 'openai', baseUrl: '', apiKey: 'k-t' }],
+        ['chat', { provider: 'openai', baseUrl: C, apiKey: 'k-c2' }],
+      ],
+    },
+    {
+      label: 'main changes provider under a following chat',
+      steps: [
+        ['main', { provider: 'openai', baseUrl: A }],
+        ['chat', { provider: 'openai', baseUrl: '', apiKey: 'k-c' }],
+        ['main', { provider: 'ollama', baseUrl: 'http://localhost:11434' }],
+      ],
+    },
+    {
+      label: 'anthropic keys',
+      steps: [
+        ['main', { provider: 'anthropic', apiKey: 'k-a' }],
+        ['chat', { provider: 'openai', baseUrl: B, apiKey: 'k-c' }],
+        ['triage', { provider: 'anthropic', apiKey: 'k-t' }],
+      ],
+    },
+    {
+      label: 'an older version moved main and chat, keeping their keys',
+      steps: [
+        ['main', { provider: 'openai', baseUrl: A, apiKey: 'k-m' }],
+        ['chat', { provider: 'openai', baseUrl: B, apiKey: 'k-c' }],
+      ],
+      raw: { ai_base_url: B, ai_chat_base_url: C },
+    },
+    {
+      label: 'keys with no target recorded',
+      steps: [],
+      raw: {
+        ai_provider: 'openai',
+        ai_base_url: A,
+        ai_api_key: legacyEnvelope('k-legacy-m'),
+        ai_chat_provider: 'openai',
+        ai_chat_api_key: legacyEnvelope('k-legacy-c'),
+      },
+    },
+    {
+      label: 'an unreadable analyst key',
+      steps: [['main', { provider: 'openai', baseUrl: A, apiKey: 'k-m' }]],
+      raw: {
+        ai_chat_provider: 'openai',
+        ai_chat_api_key: JSON.stringify({ encrypted: 'x', iv: 'y', authTag: 'z' }),
+      },
+    },
+  ];
+  const urls = [
+    '',
+    '  ',
+    A,
+    `${A}/`,
+    'HTTP://A.Example.TEST:8001/v1',
+    B,
+    ` ${B} `,
+    C,
+    'https://api.openai.com/v1',
+    'http://localhost:11434/',
+  ];
+  const forms = ['anthropic', 'openai', 'ollama'].flatMap((provider) =>
+    urls.map((baseUrl) => ({ provider, baseUrl }))
+  );
+
+  let checked = 0;
+  let pointedBack = 0;
+  for (const h of histories) {
+    let s: AiSettings = {};
+    for (const [scope, input] of h.steps) s = save(s, scope, input);
+    s = { ...s, ...(h.raw || {}) };
+    const r = resolveAiSettings(s);
+    // What GET reports, as the page keeps it (aiSaved, chatSaved, triageSaved).
+    const endpoint = (scope: AiScope) => ({
+      provider: r[scope].provider as string,
+      baseUrl: r[scope].baseUrl || '',
+    });
+    const parents: Record<AiScope, { provider: string; baseUrl: string } | undefined> = {
+      main: undefined,
+      chat: endpoint('main'),
+      triage: endpoint('chat'),
+    };
+    for (const scope of ['main', 'chat', 'triage'] as AiScope[]) {
+      const reported = { keySaved: r[scope].keySaved, keySavedFor: r[scope].keySavedFor };
+      for (const form of forms) {
+        const page = keyNeeded(form, endpoint(scope), reported, parents[scope]);
+        let refused = false;
+        try {
+          planAiSave(scope, s, {
+            provider: form.provider as 'openai',
+            model: 'm',
+            baseUrl: form.baseUrl,
+          });
+        } catch (e) {
+          if (!(e instanceof AiKeyRequiredError)) throw e;
+          refused = true;
+        }
+        const label = `${h.label}: ${scope} -> ${form.provider} ${JSON.stringify(form.baseUrl)}`;
+        assert.equal(page, refused, label);
+        checked++;
+        if (r[scope].keyMismatch && !refused && endpoint(scope).baseUrl !== form.baseUrl.trim())
+          pointedBack++;
+      }
+    }
+  }
+  assert.ok(checked > 500, `${checked} saves compared`);
+  assert.ok(
+    pointedBack > 0,
+    'some saves point a card with an unused key back where it was saved for'
+  );
 });

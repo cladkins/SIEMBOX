@@ -1359,7 +1359,9 @@ SELECT a.created_at, u.username, a.resource_type, a.details->>'method' AS method
 
 **Solution:** enter the key for the new provider or base URL in the same save (from a script, send `apiKey`), or tick *Remove the saved key instead* (`"apiKey": ""`) to use the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` environment variable. For an analyst or triage card that should share the AI Builder's model, choose *Inherit*: that saves it without a model, base URL or key of its own.
 
-**After a rollback:** an earlier version (pinned with `SIEMBOX_VERSION`) still uses the saved keys; nothing needs re-entering. Back on this version, a key the earlier version kept while you changed that card's provider or base URL shows *Saved key not used*: enter it again for the new address.
+A card that says *Saved key not used: it was saved for OpenAI at http://…* has a key saved for that address (its address moved with the AI Builder or the analyst it follows, for example). Either enter the key for where it points now, or set its Base URL back to the address shown: that save needs no key (from a script, a `PUT` with the provider and base URL in `keySavedFor`, without `apiKey`).
+
+**After a rollback:** an earlier version (pinned with `SIEMBOX_VERSION`) still uses the saved keys; nothing needs re-entering. Back on this version, a key the earlier version kept while you changed that card's provider or base URL shows *Saved key not used*: enter it again for the new address, or point the card back to the address shown.
 
 ---
 

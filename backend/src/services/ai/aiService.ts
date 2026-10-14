@@ -130,11 +130,24 @@ function requestBaseUrl(provider: AiProvider, baseUrl?: string): string {
 }
 
 /**
+ * The longest base URL a save accepts (PUT /api/settings/ai, /ai-chat and
+ * /ai-triage answer 400 to a longer one): far beyond any real endpoint.
+ */
+export const MAX_BASE_URL_LENGTH = 2048;
+
+/** `s` without its trailing slashes, in one pass from the end (no regex: no backtracking on a run of slashes). */
+function stripTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 0x2f /* / */) end--;
+  return s.slice(0, end);
+}
+
+/**
  * A base URL in comparable form, so that a value sent back unchanged, or with a
  * trailing slash, an upper-case host or the default port spelled out, is not a
  * change: trimmed; scheme and host lower case; default port, fragment and
  * trailing slashes dropped. A value that isn't a URL only loses surrounding
- * space and trailing slashes.
+ * space and trailing slashes. Linear in the length of `raw`.
  */
 export function normalizeBaseUrl(raw: string): string {
   const s = raw.trim();
@@ -142,15 +155,29 @@ export function normalizeBaseUrl(raw: string): string {
     const u = new URL(s);
     const auth =
       u.username || u.password ? `${u.username}${u.password ? `:${u.password}` : ''}@` : '';
-    return `${u.protocol}//${auth}${u.host}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+    return `${u.protocol}//${auth}${u.host}${stripTrailingSlashes(u.pathname)}${u.search}`;
   } catch {
-    return s.replace(/\/+$/, '');
+    return stripTrailingSlashes(s);
   }
 }
 
 /** Where a config's API key is sent: its provider and the base URL its requests go to. */
 export function keyTarget(provider: AiProvider, baseUrl?: string): string {
   return `${provider} ${normalizeBaseUrl(requestBaseUrl(provider, baseUrl))}`;
+}
+
+/** A provider and the base URL its requests go to, as the settings pages see a target. */
+export interface AiEndpoint {
+  provider: AiProvider;
+  baseUrl: string;
+}
+
+/** A keyTarget split back into its provider and (normalized) base URL; null if it isn't one. */
+function endpointOf(target: string): AiEndpoint | null {
+  const space = target.indexOf(' ');
+  const provider = target.slice(0, space) as AiProvider;
+  if (space < 0 || !Object.prototype.hasOwnProperty.call(DEFAULT_MODELS, provider)) return null;
+  return { provider, baseUrl: target.slice(space + 1) };
 }
 
 // ---- Saved keys --------------------------------------------------------------
@@ -270,6 +297,8 @@ export interface ResolvedAiConfig extends ResolvedModel {
   keySaved: boolean;
   /** That key was saved for another provider or base URL, so it is not sent. */
   keyMismatch: boolean;
+  /** Where that key is sent: the target it was saved for; null when none is saved or it can't be read. */
+  keySavedFor: AiEndpoint | null;
 }
 
 /**
@@ -286,7 +315,9 @@ export function resolveAiSettings(s: AiSettings): Record<AiScope, ResolvedAiConf
     const m = models[scope];
     const setting = SCOPE_SETTINGS[scope].apiKey;
     const saved = openKey(s, scope);
-    const savedHere = !!saved?.apiKey && (saved.target ?? m.target) === m.target;
+    // A key with no target recorded counts as saved for the current one (planAiSave records it).
+    const savedFor = saved ? (saved.target ?? m.target) : null;
+    const savedHere = !!saved?.apiKey && savedFor === m.target;
     let apiKey: string | undefined;
     let keySource: ResolvedAiConfig['keySource'];
     if (savedHere) {
@@ -305,6 +336,7 @@ export function resolveAiSettings(s: AiSettings): Record<AiScope, ResolvedAiConf
       keySource,
       keySaved: !!s[setting],
       keyMismatch: !!saved && !savedHere,
+      keySavedFor: savedFor === null ? null : endpointOf(savedFor),
     };
   }
   return out;
@@ -325,6 +357,13 @@ export interface AiPublicConfig {
   keySaved: boolean;
   /** That saved key was saved for another provider or base URL, so it is not sent. */
   keyMismatch: boolean;
+  /**
+   * The provider and base URL that saved key was saved for (base URL
+   * normalized), null when none is saved or it can't be read. A change of
+   * provider or base URL back to it needs no `apiKey`. Only addresses: they are
+   * returned as `baseUrl` too, and the key itself never is.
+   */
+  keySavedFor: AiEndpoint | null;
 }
 
 function publicView(r: ResolvedAiConfig): AiPublicConfig {
@@ -336,6 +375,7 @@ function publicView(r: ResolvedAiConfig): AiPublicConfig {
     keySource: r.keySource,
     keySaved: r.keySaved,
     keyMismatch: r.keyMismatch,
+    keySavedFor: r.keySavedFor,
   };
 }
 

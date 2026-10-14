@@ -17,6 +17,7 @@ import {
   getTriagePublicConfig,
   saveTriageConfig,
   AiKeyRequiredError,
+  MAX_BASE_URL_LENGTH,
 } from '../services/ai/aiService';
 
 const router = Router();
@@ -24,7 +25,8 @@ const router = Router();
 /**
  * The model fields of an AI settings body: model and baseUrl must be strings
  * when sent, apiKey a string or null. Anything else used to be ignored (an
- * apiKey of 5 kept the saved key) or stored as text.
+ * apiKey of 5 kept the saved key) or stored as text. A base URL longer than
+ * MAX_BASE_URL_LENGTH is refused before anything reads it.
  */
 function aiModelFields(body: unknown): {
   model?: string;
@@ -38,6 +40,9 @@ function aiModelFields(body: unknown): {
   ] as const) {
     if (value !== undefined && typeof value !== 'string')
       throw new ApiError(400, `${field} must be a string`);
+  }
+  if (typeof baseUrl === 'string' && baseUrl.length > MAX_BASE_URL_LENGTH) {
+    throw new ApiError(400, `baseUrl must be at most ${MAX_BASE_URL_LENGTH} characters`);
   }
   if (apiKey !== undefined && apiKey !== null && typeof apiKey !== 'string') {
     throw new ApiError(400, 'apiKey must be a string, or "" to remove the saved key');

@@ -88,7 +88,7 @@
             <el-input
               v-model="chatForm.baseUrl"
               style="width: 320px"
-              :placeholder="chatForm.provider === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com/v1'"
+              :placeholder="blankBaseUrl(chatForm.provider, aiSaved)"
             />
           </el-form-item>
 
@@ -206,7 +206,7 @@
             <el-input
               v-model="triageForm.baseUrl"
               style="width: 320px"
-              :placeholder="triageForm.provider === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com/v1'"
+              :placeholder="blankBaseUrl(triageForm.provider, chatSaved)"
             />
           </el-form-item>
 
@@ -265,7 +265,7 @@ import { api } from '@/services/api';
 import { ElMessage } from 'element-plus';
 import { Check } from '@element-plus/icons-vue';
 import HelpTip from '@/components/HelpTip.vue';
-import { ENV_KEY_VARS, keyTargetOf, type AiEndpoint } from './aiKeyTarget';
+import { ENV_KEY_VARS, blankBaseUrl, keyTargetOf, type AiEndpoint } from './aiKeyTarget';
 
 // A saved key is only sent to the provider and base URL it was saved for (the
 // API answers 400 to a change of either without apiKey), so each form asks for
@@ -390,7 +390,12 @@ const chatKeyNeeded = computed(
     keyTargetOf(chatForm.provider, chatForm.baseUrl, aiSaved) !== keyTargetOf(chatSaved.provider, chatSaved.baseUrl)
 );
 
-/** Load the analyst config; `resetForm` false keeps the form's edits and refreshes only what it reports. */
+/**
+ * Load the analyst config; `resetForm` false keeps the form's edits and refreshes only what it reports.
+ * The form holds the analyst's own base URL setting (ownBaseUrl), not the one it resolves to: a blank
+ * one stays blank and keeps following the AI Builder, and an untouched form still points where the
+ * analyst does after the AI Builder moves (keyTargetOf resolves it against aiSaved).
+ */
 async function fetchChatSettings(resetForm = true) {
   chatLoading.value = true;
   try {
@@ -400,7 +405,7 @@ async function fetchChatSettings(resetForm = true) {
       const own = data.inheritsFrom === 'chat';
       chatForm.provider = own ? data.provider || '' : '';
       chatForm.model = own ? data.model || '' : '';
-      chatForm.baseUrl = own ? data.baseUrl || '' : '';
+      chatForm.baseUrl = own ? data.ownBaseUrl || '' : '';
       chatForm.apiKey = '';
       chatForm.removeKey = false;
     }
@@ -491,7 +496,10 @@ const triageKeyNeeded = computed(
       keyTargetOf(triageSaved.provider, triageSaved.baseUrl)
 );
 
-/** Load the triage config; `resetForm` false keeps the form's edits and refreshes only what it reports. */
+/**
+ * Load the triage config; `resetForm` false keeps the form's edits and refreshes only what it reports.
+ * As for the analyst, the form holds triage's own base URL setting (ownBaseUrl), resolved against chatSaved.
+ */
 async function fetchTriageSettings(resetForm = true) {
   triageLoading.value = true;
   try {
@@ -501,7 +509,7 @@ async function fetchTriageSettings(resetForm = true) {
       const own = data.inheritsFrom === 'triage';
       triageForm.provider = own ? data.provider || '' : '';
       triageForm.model = own ? data.model || '' : '';
-      triageForm.baseUrl = own ? data.baseUrl || '' : '';
+      triageForm.baseUrl = own ? data.ownBaseUrl || '' : '';
       triageForm.apiKey = '';
       triageForm.removeKey = false;
       triageForm.enabled = !!data.enabled;

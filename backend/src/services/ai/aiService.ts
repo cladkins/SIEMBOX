@@ -7,6 +7,7 @@
  * return the best attempt. So the output is always checked against the real
  * engine, never trusted blind.
  */
+import crypto from 'crypto';
 import { query, getClient } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { CredentialEncryption } from '../credentials/credentialEncryption';
@@ -66,25 +67,28 @@ const SCOPES: AiScope[] = ['main', 'chat', 'triage'];
 
 const SCOPE_SETTINGS: Record<
   AiScope,
-  { provider: string; model: string; baseUrl: string; apiKey: string }
+  { provider: string; model: string; baseUrl: string; apiKey: string; keyTarget: string }
 > = {
   main: {
     provider: 'ai_provider',
     model: 'ai_model',
     baseUrl: 'ai_base_url',
     apiKey: 'ai_api_key',
+    keyTarget: 'ai_api_key_target',
   },
   chat: {
     provider: 'ai_chat_provider',
     model: 'ai_chat_model',
     baseUrl: 'ai_chat_base_url',
     apiKey: 'ai_chat_api_key',
+    keyTarget: 'ai_chat_api_key_target',
   },
   triage: {
     provider: 'ai_triage_provider',
     model: 'ai_triage_model',
     baseUrl: 'ai_triage_base_url',
     apiKey: 'ai_triage_api_key',
+    keyTarget: 'ai_triage_api_key_target',
   },
 };
 const SCOPE_LABELS: Record<AiScope, string> = {
@@ -150,48 +154,81 @@ export function keyTarget(provider: AiProvider, baseUrl?: string): string {
 }
 
 // ---- Saved keys --------------------------------------------------------------
-// A key saved from the UI is encrypted together with the target it was saved
-// for, and is only ever sent there. After a change of provider or base URL,
-// of its own config or of the config it inherits from, it is not sent rather
-// than sent to the new address. A key saved before targets were recorded holds
-// only the key: it counts as saved for its config's current target, and the
+// A key saved from the UI is only ever sent to the target it was saved for.
+// After a change of provider or base URL, of its own config or of the config
+// it inherits from, it is not sent rather than sent to the new address.
+//
+// The key row (ai_api_key, ...) holds the bare key, encrypted, as it always
+// has, so a version from before targets were recorded still reads it after a
+// rollback. Its target is a second encrypted row next to it (ai_api_key_target,
+// ...): the target and a hash of the key, so it only applies to that key. A key
+// with no target row, or one recorded for another key (an older version
+// replaced the key), counts as saved for its config's current target, and the
 // first save of any of the three configs records that target (planAiSave)
-// before changing anything.
+// before changing anything. A key an older version kept while it moved the
+// config keeps its recorded target, so it is not sent to the new address.
 
 interface SavedKey {
   apiKey: string;
-  /** null: saved before targets were recorded. */
+  /** null: no target recorded for this key. */
   target: string | null;
 }
 
-function sealKey(apiKey: string, target: string): string {
+function encryptSetting(plain: string): string {
   // CredentialEncryption.encrypt throws if CREDENTIAL_ENCRYPTION_KEY is unset.
-  return JSON.stringify(CredentialEncryption.encrypt(JSON.stringify({ apiKey, target })));
+  return JSON.stringify(CredentialEncryption.encrypt(plain));
 }
 
-function openKey(stored: string | undefined, setting: string): SavedKey | null {
-  if (!stored) return null;
-  let plain: string;
+function decryptSetting(stored: string, setting: string): string | null {
   try {
     const { encrypted, iv, authTag } = JSON.parse(stored);
-    plain = CredentialEncryption.decrypt(encrypted, iv, authTag);
+    return CredentialEncryption.decrypt(encrypted, iv, authTag);
   } catch (e) {
     logger.warn(`AI: stored ${setting} could not be decrypted; not using it`, {
       error: e instanceof Error ? e.message : String(e),
     });
     return null;
   }
-  if (plain.startsWith('{')) {
+}
+
+function keyHash(apiKey: string): string {
+  return crypto.createHash('sha256').update(apiKey).digest('hex');
+}
+
+/** The row recording that `scope`'s saved key `apiKey` is for `target`. */
+function bindKey(scope: AiScope, apiKey: string, target: string): AiSettings {
+  return {
+    [SCOPE_SETTINGS[scope].keyTarget]: encryptSetting(
+      JSON.stringify({ target, keyHash: keyHash(apiKey) })
+    ),
+  };
+}
+
+/** The rows that save `apiKey` as `scope`'s key, for `target`. */
+function sealKey(scope: AiScope, apiKey: string, target: string): AiSettings {
+  return {
+    [SCOPE_SETTINGS[scope].apiKey]: encryptSetting(apiKey),
+    ...bindKey(scope, apiKey, target),
+  };
+}
+
+/** `scope`'s saved key and the target recorded for it; null when none is saved or it can't be read. */
+function openKey(s: AiSettings, scope: AiScope): SavedKey | null {
+  const names = SCOPE_SETTINGS[scope];
+  if (!s[names.apiKey]) return null;
+  const apiKey = decryptSetting(s[names.apiKey], names.apiKey);
+  if (apiKey === null) return null;
+  let target: string | null = null;
+  const bound = s[names.keyTarget] ? decryptSetting(s[names.keyTarget], names.keyTarget) : null;
+  if (bound !== null) {
     try {
-      const sealed = JSON.parse(plain);
-      if (typeof sealed?.apiKey === 'string' && typeof sealed?.target === 'string') {
-        return { apiKey: sealed.apiKey, target: sealed.target };
-      }
+      const b = JSON.parse(bound);
+      if (typeof b?.target === 'string' && b.keyHash === keyHash(apiKey)) target = b.target;
     } catch {
-      // not a sealed key: a key saved before targets were recorded
+      // unreadable: no target recorded
     }
   }
-  return { apiKey: plain, target: null };
+  return { apiKey, target };
 }
 
 // ---- Resolving a config ------------------------------------------------------
@@ -214,8 +251,11 @@ function resolveModels(s: AiSettings): Record<AiScope, ResolvedModel> {
       parent?.provider ||
       'anthropic') as AiProvider;
     const same = !!parent && provider === parent.provider;
-    const model = s[names.model] || (same ? parent!.model : DEFAULT_MODELS[provider]) || '';
-    const baseUrl = s[names.baseUrl] || (same ? parent!.baseUrl : DEFAULT_BASE_URLS[provider]);
+    // Blank or only spaces is unset (saves trim; a value stored before they did may not be).
+    const storedModel = (s[names.model] || '').trim();
+    const storedBaseUrl = (s[names.baseUrl] || '').trim();
+    const model = storedModel || (same ? parent!.model : DEFAULT_MODELS[provider]) || '';
+    const baseUrl = storedBaseUrl || (same ? parent!.baseUrl : DEFAULT_BASE_URLS[provider]);
     parent = out[scope] = { provider, model, baseUrl, target: keyTarget(provider, baseUrl) };
   }
   return out;
@@ -245,7 +285,7 @@ export function resolveAiSettings(s: AiSettings): Record<AiScope, ResolvedAiConf
   for (const scope of SCOPES) {
     const m = models[scope];
     const setting = SCOPE_SETTINGS[scope].apiKey;
-    const saved = openKey(s[setting], setting);
+    const saved = openKey(s, scope);
     const savedHere = !!saved?.apiKey && (saved.target ?? m.target) === m.target;
     let apiKey: string | undefined;
     let keySource: ResolvedAiConfig['keySource'];
@@ -314,13 +354,24 @@ export async function getChatAiConfig(): Promise<AiConfig> {
   return asAiConfig(resolveAiSettings(await readAiSettings()).chat);
 }
 
+/**
+ * A config's own base URL setting, trimmed: '' when it has none, so it uses its
+ * parent's (same provider) or the provider's default. `baseUrl` is the one it
+ * resolves to. A form edits this one: sent back unchanged, a blank one keeps
+ * following the parent.
+ */
+function ownBaseUrl(s: AiSettings, scope: AiScope): string {
+  return (s[SCOPE_SETTINGS[scope].baseUrl] || '').trim();
+}
+
 /** AI Analyst config safe for the UI (no key); `inheritsFrom` tells if it uses the main config's provider. */
 export async function getChatAiPublicConfig(): Promise<
-  AiPublicConfig & { inheritsFrom: 'chat' | 'main' }
+  AiPublicConfig & { inheritsFrom: 'chat' | 'main'; ownBaseUrl: string }
 > {
   const s = await readAiSettings();
   return {
     ...publicView(resolveAiSettings(s).chat),
+    ownBaseUrl: ownBaseUrl(s, 'chat'),
     inheritsFrom: s.ai_chat_provider ? 'chat' : 'main',
   };
 }
@@ -374,25 +425,28 @@ export function planAiSave(
   const writes: AiSettings = {};
   const was = resolveModels(before);
   const opened = {} as Record<AiScope, SavedKey | null>;
-  // Record the target of keys saved before targets were, before anything moves.
+  // Record the target of keys that have none recorded, before anything moves.
+  // Only the target row is written: the key row stays as it is.
   for (const sc of SCOPES) {
-    const setting = SCOPE_SETTINGS[sc].apiKey;
-    opened[sc] = openKey(before[setting], setting);
+    opened[sc] = openKey(before, sc);
     if (opened[sc] && opened[sc]!.target === null)
-      writes[setting] = sealKey(opened[sc]!.apiKey, was[sc].target);
+      Object.assign(writes, bindKey(sc, opened[sc]!.apiKey, was[sc].target));
   }
 
   const names = SCOPE_SETTINGS[scope];
   if (scope === 'main' ? !!input.provider : input.provider !== undefined)
     writes[names.provider] = input.provider || '';
-  if (input.model !== undefined) writes[names.model] = input.model;
-  if (input.baseUrl !== undefined) writes[names.baseUrl] = input.baseUrl;
+  // Stored trimmed: surrounding spaces would end up in the request URL.
+  if (input.model !== undefined) writes[names.model] = input.model.trim();
+  if (input.baseUrl !== undefined) writes[names.baseUrl] = input.baseUrl.trim();
   const target = resolveModels({ ...before, ...writes })[scope].target;
 
   if (input.apiKey === null || input.apiKey === '') {
-    writes[names.apiKey] = ''; // removed: the env var (or the parent's key) applies
+    // removed: the env var (or the parent's key) applies
+    writes[names.apiKey] = '';
+    writes[names.keyTarget] = '';
   } else if (typeof input.apiKey === 'string') {
-    writes[names.apiKey] = sealKey(input.apiKey, target);
+    Object.assign(writes, sealKey(scope, input.apiKey, target));
   } else if (before[names.apiKey] && target !== was[scope].target) {
     const savedFor = opened[scope] ? (opened[scope]!.target ?? was[scope].target) : null;
     if (savedFor !== target) throw new AiKeyRequiredError(scope);
@@ -495,12 +549,13 @@ export async function getTriageOperationalConfig(): Promise<TriageOperationalCon
 
 /** Triage config safe for the UI (no key); `inheritsFrom` tells if it uses the analyst's provider. */
 export async function getTriagePublicConfig(): Promise<
-  AiPublicConfig & { inheritsFrom: 'triage' | 'chat' } & TriageOperationalConfig
+  AiPublicConfig & { inheritsFrom: 'triage' | 'chat'; ownBaseUrl: string } & TriageOperationalConfig
 > {
   const s = await readAiSettings();
   const op = await getTriageOperationalConfig();
   return {
     ...publicView(resolveAiSettings(s).triage),
+    ownBaseUrl: ownBaseUrl(s, 'triage'),
     inheritsFrom: s.ai_triage_provider ? 'triage' : 'chat',
     ...op,
   };

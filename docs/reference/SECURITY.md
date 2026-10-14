@@ -116,11 +116,12 @@ CREDENTIAL_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(3
   configured or not, and `GET /api/settings` (admin-only) withholds them. An
   encrypted key together with `CREDENTIAL_ENCRYPTION_KEY` gives back the
   plaintext, so protect database backups like the `.env` file.
-- A stored AI key only goes to the provider and base URL it was saved for: it
-  is encrypted together with them, and SIEMBox sends it nowhere else. Changing
-  the provider or base URL of the AI builder, AI Analyst or AI Triage settings
-  while a key is stored needs the key again in the same request (the API
-  answers `400` otherwise and saves nothing), or removes the stored key. A key
+- A stored AI key only goes to the provider and base URL it was saved for: they
+  are stored next to it, encrypted together with a hash of the key, and SIEMBox
+  sends it nowhere else. Changing the provider or base URL of the AI builder,
+  AI Analyst or AI Triage settings while a key is stored needs the key again
+  in the same request (the API answers `400` otherwise and saves nothing), or
+  removes the stored key. A key
   one of these configs inherits (the analyst uses the AI builder's, triage the
   analyst's) is only sent where the config it comes from sends it. So an admin,
   or a stolen admin session, can use the stored keys and replace them, but

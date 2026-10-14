@@ -34,14 +34,22 @@ export interface AiEndpoint {
 }
 
 /**
- * The target of a form's provider and base URL. An empty provider inherits
- * the parent's; a blank base URL is the parent's when the provider is the same,
- * else the provider's default. Anthropic is always called at
- * api.anthropic.com, so its base URL doesn't count.
+ * The base URL a blank (or only spaces) Base URL field stands for: the
+ * parent's when the provider is the same, else the provider's default. An
+ * empty provider inherits the parent's.
+ */
+export function blankBaseUrl(provider: string, parent?: AiEndpoint): string {
+  const p = provider || parent?.provider || 'anthropic';
+  return (parent && parent.provider === p ? parent.baseUrl : '') || DEFAULT_BASE_URLS[p] || '';
+}
+
+/**
+ * The target of a form's provider and base URL (see blankBaseUrl for a blank
+ * one). Anthropic is always called at api.anthropic.com, so its base URL
+ * doesn't count.
  */
 export function keyTargetOf(provider: string, baseUrl: string, parent?: AiEndpoint): string {
   const p = provider || parent?.provider || 'anthropic';
   if (p === 'anthropic') return 'anthropic';
-  const inherited = parent && parent.provider === p ? parent.baseUrl : '';
-  return `${p} ${normalizeBaseUrl(baseUrl.trim() || inherited || DEFAULT_BASE_URLS[p] || '')}`;
+  return `${p} ${normalizeBaseUrl(baseUrl.trim() || blankBaseUrl(p, parent))}`;
 }

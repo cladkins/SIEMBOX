@@ -20,6 +20,8 @@ import {
   planAiSave,
   resolveAiSettings,
 } from './aiService';
+// The Settings page's copy of the comparison, checked against this one below.
+import { keyTargetOf } from '../../../../frontend/src/views/settings/aiKeyTarget';
 
 // A throwaway key for this test process.
 process.env.CREDENTIAL_ENCRYPTION_KEY = crypto.randomBytes(32).toString('hex');
@@ -48,6 +50,12 @@ const KEY_SETTING: Record<AiScope, string> = {
 /** A key as saves before this change stored it: the bare key, encrypted. */
 function legacyEnvelope(apiKey: string): string {
   return JSON.stringify(CredentialEncryption.encrypt(apiKey));
+}
+
+/** The key a version from before targets were recorded reads from a key row (and sends). */
+function keyAsOlderVersionsRead(stored: string): string {
+  const { encrypted, iv, authTag } = JSON.parse(stored);
+  return CredentialEncryption.decrypt(encrypted, iv, authTag);
 }
 
 /** Apply one save to `s` the way saveAiScope does (plan, then write every planned row). */
@@ -312,13 +320,14 @@ test('a key saved before targets were recorded is bound to its current target by
   assert.deepEqual(sends(s).chat, { key: 'sk-legacy-chat', target: keyTarget('openai', A) });
   // Its own config moving needs a key, as for any saved key.
   assertKeyRequired(() => planAiSave('main', s, { baseUrl: B }), 'main');
-  // Any save records both keys' current targets first (here a model-only one) ...
+  // Any save records both keys' current targets first (here a model-only one),
+  // in rows of their own: the key rows stay as they are.
   const writes = planAiSave('triage', s, { model: 'gpt-4.1' });
-  assert.ok(
-    writes.ai_api_key && writes.ai_api_key !== s.ai_api_key,
-    "main's key is re-sealed with its target"
-  );
-  assert.ok(writes.ai_chat_api_key && writes.ai_chat_api_key !== s.ai_chat_api_key);
+  assert.ok(writes.ai_api_key_target, "main's key gets its target recorded");
+  assert.ok(writes.ai_chat_api_key_target);
+  assert.equal(writes.ai_api_key, undefined, "main's key row is not rewritten");
+  assert.equal(writes.ai_chat_api_key, undefined);
+  assert.equal(writes.ai_triage_api_key_target, undefined, 'triage has no key to bind');
   // ... so main moving to B with another key leaves the analyst's key at A, unused.
   const after = save(save(s, 'triage', { model: 'gpt-4.1' }), 'main', {
     baseUrl: B,
@@ -349,4 +358,133 @@ test("public flags: keySaved is the config's own key, keyMismatch a key saved fo
   assert.equal(r.keySaved, true);
   // ... and moving it still needs apiKey (its target is unknown).
   assertKeyRequired(() => planAiSave('chat', broken, { baseUrl: A }), 'chat');
+});
+
+test('the key rows stay what older versions read, so a rollback keeps the saved keys working', () => {
+  let s = mainAtA();
+  s = save(s, 'chat', { provider: 'openai', baseUrl: B, apiKey: 'sk-chat-B' });
+  s = save(s, 'triage', { provider: 'openai', baseUrl: A, apiKey: 'sk-tri-A' });
+  // A version from before targets were recorded decrypts the key row and sends that.
+  assert.equal(keyAsOlderVersionsRead(s.ai_api_key), 'sk-main-A');
+  assert.equal(keyAsOlderVersionsRead(s.ai_chat_api_key), 'sk-chat-B');
+  assert.equal(keyAsOlderVersionsRead(s.ai_triage_api_key), 'sk-tri-A');
+  // The targets are rows of their own, encrypted too.
+  for (const row of ['ai_api_key_target', 'ai_chat_api_key_target', 'ai_triage_api_key_target']) {
+    assert.deepEqual(Object.keys(JSON.parse(s[row])).sort(), ['authTag', 'encrypted', 'iv'], row);
+  }
+  // Removing a key removes its target.
+  const cleared = save(s, 'chat', { apiKey: '' });
+  assert.equal(cleared.ai_chat_api_key, '');
+  assert.equal(cleared.ai_chat_api_key_target, '');
+
+  // Back on this version after the older one ran for a while:
+  // - it replaced main's key (it records no target): the new key counts as
+  //   saved for where main points, and the next save binds it there;
+  const replacedRow = legacyEnvelope('sk-main-A2');
+  let old = { ...s, ai_api_key: replacedRow };
+  assert.deepEqual(sends(old).main, { key: 'sk-main-A2', target: keyTarget('openai', A) });
+  assert.equal(resolveAiSettings(old).main.keyMismatch, false);
+  old = save(old, 'main', { model: 'gpt-4.1' });
+  assertKeyRequired(() => planAiSave('main', old, { baseUrl: B }), 'main');
+  assert.equal(old.ai_api_key, replacedRow, 'binding leaves the key row as it is');
+  assert.equal(
+    resolveAiSettings({ ...old, ai_base_url: B }).main.keyMismatch,
+    true,
+    'bound to A: an older version moving main later does not take it along'
+  );
+  // - it moved the analyst to A and kept its key (as it allowed): that key
+  //   stays bound to B, so it is not sent to A;
+  const moved = { ...s, ai_chat_base_url: A };
+  assert.equal(resolveAiSettings(moved).chat.keyMismatch, true);
+  assert.deepEqual(sends(moved).chat, { key: 'sk-main-A', target: keyTarget('openai', A) });
+  // - it moved triage to B with a new key: the new key, at B.
+  const rekeyed = { ...s, ai_triage_base_url: B, ai_triage_api_key: legacyEnvelope('sk-tri-B') };
+  assert.deepEqual(sends(rekeyed).triage, { key: 'sk-tri-B', target: keyTarget('openai', B) });
+  assert.equal(resolveAiSettings(rekeyed).triage.keyMismatch, false);
+});
+
+test('model and base URL are saved trimmed; a base URL of only spaces is blank', () => {
+  // The review's case: OpenAI at its default address with a saved key, and
+  // spaces typed into Base URL. The page sees no change and asks for no key.
+  let s = save({}, 'main', { provider: 'openai', model: 'gpt-4o', apiKey: 'sk-default' });
+  const writes = planAiSave('main', s, { provider: 'openai', model: 'gpt-4o', baseUrl: '   ' });
+  assert.equal(writes.ai_base_url, '');
+  s = { ...s, ...writes };
+  assert.deepEqual(sends(s).main, { key: 'sk-default', target: keyTarget('openai') });
+  // Surrounding spaces are not stored (they would end up in the request URL).
+  s = save(s, 'main', {
+    provider: 'openai',
+    model: ' gpt-4.1 ',
+    baseUrl: ' https://api.openai.com/v1 ',
+  });
+  assert.equal(s.ai_base_url, 'https://api.openai.com/v1');
+  assert.equal(s.ai_model, 'gpt-4.1');
+  assert.equal(sends(s).main.key, 'sk-default');
+  // Another address with spaces around it is still another address.
+  assertKeyRequired(() => planAiSave('main', s, { baseUrl: ` ${B} ` }), 'main');
+  // Values stored padded before saves trimmed resolve without the spaces.
+  const padded = resolveAiSettings({
+    ai_provider: 'openai',
+    ai_model: ' gpt-4o ',
+    ai_base_url: ` ${A} `,
+  }).main;
+  assert.equal(padded.baseUrl, A);
+  assert.equal(padded.model, 'gpt-4o');
+  const blank = resolveAiSettings({
+    ai_provider: 'openai',
+    ai_base_url: '   ',
+    ai_chat_provider: 'ollama',
+    ai_chat_base_url: '  ',
+  });
+  assert.equal(blank.main.baseUrl, 'https://api.openai.com/v1');
+  assert.equal(blank.chat.baseUrl, 'http://localhost:11434');
+});
+
+test('the Settings page compares targets the way the backend does (frontend aiKeyTarget.ts)', () => {
+  // Every combination of a provider and base URL setting for the AI Builder,
+  // and for the analyst under it. The page knows the form's provider and base
+  // URL, and the parent's provider and base URL as GET /api/settings/ai reports
+  // them. It must ask for the key exactly when the backend would refuse the
+  // save: two states have the same target for the page iff for the backend.
+  const providers = ['anthropic', 'openai', 'ollama'];
+  const urls = [
+    '',
+    '   ',
+    A,
+    ` ${A} `,
+    `${A}/`,
+    'HTTP://A.Example.TEST:8001/v1',
+    B,
+    'https://api.openai.com/v1',
+    'http://localhost:11434/',
+  ];
+  const states: Array<{ label: string; backend: string; page: string }> = [];
+  for (const mp of providers) {
+    for (const mu of urls) {
+      const main: AiSettings = { ai_provider: mp, ai_base_url: mu };
+      const r = resolveAiSettings(main).main;
+      states.push({ label: `main ${mp} ${JSON.stringify(mu)}`, backend: r.target, page: keyTargetOf(mp, mu) });
+      const parent = { provider: r.provider, baseUrl: r.baseUrl || '' };
+      for (const cp of ['', ...providers]) {
+        for (const cu of urls) {
+          const chat = resolveAiSettings({ ...main, ai_chat_provider: cp, ai_chat_base_url: cu }).chat;
+          states.push({
+            label: `main ${mp} ${JSON.stringify(mu)}, analyst ${cp || 'inherit'} ${JSON.stringify(cu)}`,
+            backend: chat.target,
+            page: keyTargetOf(cp, cu, parent),
+          });
+        }
+      }
+    }
+  }
+  const pageFor = new Map<string, { page: string; label: string }>();
+  const backendFor = new Map<string, { backend: string; label: string }>();
+  for (const st of states) {
+    const seenPage = pageFor.get(st.backend);
+    if (seenPage) assert.equal(st.page, seenPage.page, `${st.label} vs ${seenPage.label}`);
+    else pageFor.set(st.backend, st);
+    const seenBackend = backendFor.get(st.page);
+    if (seenBackend) assert.equal(st.backend, seenBackend.backend, `${st.label} vs ${seenBackend.label}`);
+    else backendFor.set(st.page, st);
+  }
 });

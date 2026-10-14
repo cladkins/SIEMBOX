@@ -467,11 +467,88 @@ test('a key saved before this change is bound to where it was used by the next s
   assert.deepEqual(authAt('A'), [bearer('sk-legacy-chat')]);
   await refused('ai', { baseUrl: B });
 
+  const legacyChatRow = await setting('ai_chat_api_key');
   await put('ai', { provider: 'openai', baseUrl: B, apiKey: 'sk-main-B' });
   assert.equal(await chat(), 200);
   assert.deepEqual(authAt('B'), [bearer('sk-main-B')]);
   assertNeverSent('sk-legacy-chat', ['B']);
   assertNeverSent('sk-legacy-main', ['B']);
+
+  // The key rows keep the earlier format (a rollback reads them as before):
+  // the analyst's is untouched, its target is a row of its own, and main's new
+  // key decrypts to the bare key.
+  assert.equal(await setting('ai_chat_api_key'), legacyChatRow);
+  assert.ok(await setting('ai_chat_api_key_target'));
+  const { encrypted, iv, authTag } = JSON.parse((await setting('ai_api_key'))!);
+  assert.equal(CredentialEncryption.decrypt(encrypted, iv, authTag), 'sk-main-B');
+});
+
+test('GET /ai-chat and /ai-triage report their own base URL, so a blank one is sent back blank', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const A = fakes.A.url;
+  const B = fakes.B.url;
+  await put('ai', { provider: 'openai', model: 'gpt-4o', baseUrl: A, apiKey: 'sk-main-A' });
+  // Both on the AI Builder's provider with no base URL of their own (spaces count as none).
+  await put('ai-chat', { provider: 'openai', model: 'gpt-4o', baseUrl: '', apiKey: 'sk-chat-own' });
+  await put('ai-triage', { provider: 'openai', model: 'gpt-4o', baseUrl: '  ', apiKey: 'sk-tri-own' });
+  for (const area of ['ai-chat', 'ai-triage']) {
+    const got = (await call('GET', `/api/settings/${area}`)).json;
+    assert.equal(got.ownBaseUrl, '', `${area}: no base URL of its own`);
+    assert.equal(got.baseUrl, A, `${area}: follows the AI Builder's`);
+  }
+
+  // The review's case: the AI Builder moves to B. Both follow it; their own keys stay at A, unused.
+  await put('ai', { provider: 'openai', model: 'gpt-4o', baseUrl: B, apiKey: 'sk-main-B' });
+  const chatNow = (await call('GET', '/api/settings/ai-chat')).json;
+  const triageNow = (await call('GET', '/api/settings/ai-triage')).json;
+  assert.deepEqual(
+    [chatNow.baseUrl, chatNow.ownBaseUrl, chatNow.keyMismatch],
+    [B, '', true],
+    'the analyst'
+  );
+  assert.deepEqual([triageNow.baseUrl, triageNow.ownBaseUrl, triageNow.keyMismatch], [B, '', true]);
+
+  // What the Settings page sends for a model-only or knob-only save, its form
+  // holding ownBaseUrl: no key asked for, and both keep following the AI Builder.
+  await put('ai-chat', { provider: 'openai', model: 'gpt-4.1', baseUrl: chatNow.ownBaseUrl });
+  await put('ai-triage', {
+    provider: 'openai',
+    model: 'gpt-4o',
+    baseUrl: triageNow.ownBaseUrl,
+    enabled: true,
+  });
+  assert.equal(await setting('ai_chat_base_url'), '');
+  assert.equal(await setting('ai_triage_base_url'), '');
+  assert.equal(await setting('ai_triage_enabled'), 'true');
+
+  // Pointing the analyst back at A, where its key was saved for: a base URL of its own.
+  const back = await put('ai-chat', { provider: 'openai', model: 'gpt-4.1', baseUrl: A });
+  assert.deepEqual([back.ownBaseUrl, back.baseUrl, back.keyMismatch], [A, A, false]);
+  assert.equal(await chat(), 200);
+  assert.deepEqual(authAt('A'), [bearer('sk-chat-own')]);
+  assertNeverSent('sk-chat-own', ['B']);
+  assertNeverSent('sk-tri-own', ['B']);
+});
+
+test('a base URL of only spaces is blank, and model and base URL are stored trimmed', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const A = fakes.A.url;
+  await put('ai', { provider: 'openai', model: 'gpt-4o', apiKey: 'sk-default' });
+  // Was a 400 asking for apiKey: the page treats spaces as blank and asks for nothing.
+  const blank = await put('ai', { provider: 'openai', model: 'gpt-4o', baseUrl: '   ' });
+  assert.equal(blank.baseUrl, 'https://api.openai.com/v1');
+  assert.equal(blank.keySource, 'stored');
+  assert.equal(await setting('ai_base_url'), '');
+
+  // Padded values: stored without the spaces, so the request URL has none.
+  await put('ai', { provider: 'openai', model: ' gpt-4o ', baseUrl: ` ${A} `, apiKey: 'sk-main-A' });
+  assert.equal(await setting('ai_base_url'), A);
+  assert.equal(await setting('ai_model'), 'gpt-4o');
+  assert.equal(await explain(), 200);
+  assert.deepEqual(
+    seen.map((r) => [r.path, r.model, r.authorization]),
+    [['/v1/chat/completions', 'gpt-4o', bearer('sk-main-A')]]
+  );
 });
 
 test('saves queue: a base URL change waiting behind a key save sees the key and is refused', async (t) => {

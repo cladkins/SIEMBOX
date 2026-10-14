@@ -31,6 +31,10 @@ const STORED_SECRETS: Array<[key: string, writer: string]> = [
   ['ai_api_key', 'services/ai/aiService.ts saveAiConfig'],
   ['ai_chat_api_key', 'services/ai/aiService.ts saveChatAiConfig'],
   ['ai_triage_api_key', 'services/ai/aiService.ts saveTriageConfig'],
+  // Where each saved AI key may be sent, encrypted with a hash of the key.
+  ['ai_api_key_target', 'services/ai/aiService.ts saveAiConfig'],
+  ['ai_chat_api_key_target', 'services/ai/aiService.ts saveChatAiConfig'],
+  ['ai_triage_api_key_target', 'services/ai/aiService.ts saveTriageConfig'],
   ['ti_abuseipdb_key', 'services/threatintel/reputationService.ts saveProvider'],
   ['ti_otx_key', 'services/threatintel/reputationService.ts saveProvider'],
   ['exposure_hibp_key', 'services/exposure/settings.ts saveHibpProvider'],

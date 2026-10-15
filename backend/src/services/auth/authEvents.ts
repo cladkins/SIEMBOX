@@ -49,6 +49,8 @@ export type AuthAuditAction =
   | 'auth.mfa.recovery_used'
   | 'auth.password.changed'
   | 'auth.password.change_failed'
+  /** An account is now required to change its password, outside a reset: found on the default password. */
+  | 'auth.password.change_required'
   | 'auth.browser.revoked'
   | 'auth.unlock'
   | 'user.created'

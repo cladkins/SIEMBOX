@@ -140,7 +140,7 @@ The compose file defines these services:
 
 The database migrations run automatically when the backend container starts. This includes:
 - Running all database migrations
-- Creating the default admin user
+- Creating the `admin` account, when the database has no users yet
 
 A fresh install is **catalog-only**: no parsers or detection rules are seeded, so
 the deployment starts empty and you install exactly what you want. The process is
@@ -149,7 +149,7 @@ to verify completion.
 
 On first startup, SIEMBox automatically:
 - Runs all database migrations
-- Creates the default admin user
+- Creates the `admin` account, which must choose a new password at its first sign-in
 
 **No manual steps required to boot.** Once you log in, populate parsers and
 detections from the in-app catalog — open *Parsers → Browse Catalog* and
@@ -163,7 +163,16 @@ Once SIEMBox is running:
 - **Frontend (Web UI):** http://your-server-ip:8420
 - **Backend API:** http://your-server-ip:8421
 - **Syslog Listener:** your-server-ip:514 (UDP and TCP)
-- **Default Credentials:** admin / (password from DEFAULT_ADMIN_PASSWORD environment variable)
+- **First sign-in:** `admin`, with the `DEFAULT_ADMIN_PASSWORD` from `.env`
+  (`changeme` if it is unset). SIEMBox then asks for a new password before
+  anything else works, and signs you out so you sign in again with it. The
+  `.env` value is used only this once: it creates the account on the first
+  start, and changing it later has no effect.
+
+> ⚠️ Until that first sign-in, whoever reaches the web UI first with that
+> password chooses the admin's new password. Keep ports 8420 and 8421 off
+> untrusted networks until you have signed in, or set a `DEFAULT_ADMIN_PASSWORD`
+> only you know before the first start.
 
 ### 6. Send Test Syslog
 
@@ -230,7 +239,9 @@ Review your deployment platform's logs for the specific error message. Common is
 **Problem:** Can't log in with admin credentials
 
 **Solution:**
-1. Verify DEFAULT_ADMIN_PASSWORD is set correctly
+1. Verify DEFAULT_ADMIN_PASSWORD is set correctly. It only counts on the very
+   first start, when the account is created; after you changed the password
+   at the first sign-in, use that one
 2. Wait for first-run initialization to complete
 3. Check database is running and initialized
 4. Review backend logs for authentication errors (`Login failed` lines carry
@@ -238,6 +249,15 @@ Review your deployment platform's logs for the specific error message. Common is
 5. "Too many failed sign-in attempts" with a countdown: sign-in is paused after
    failed attempts. Wait, use a browser you signed in with before, or unlock it
    (see [Sign-in protection](#sign-in-protection))
+
+**Problem:** Every page sends me to "Choose a new password"
+
+**Solution:** The account signed in with a password it has to replace: the
+initial `admin` password, SIEMBox's default `changeme`, or a temporary one an
+admin (or `auth-admin reset-password`) set. Enter the password you just signed
+in with and a new one; you are signed out, and the new one works everywhere.
+Scripts that sign in get `403` with `code: "PASSWORD_CHANGE_REQUIRED"` until
+then. See [TROUBLESHOOTING.md](docs/operations/TROUBLESHOOTING.md#issue-every-page-sends-me-to-choose-a-new-password--api-answers-403-password_change_required).
 
 ### Need Help?
 
@@ -329,6 +349,40 @@ access from other origins (CORS)](#browser-access-from-other-origins-cors)).
 - `CORS_ORIGIN` takes a comma-separated list now; an entry that isn't an exact
   origin (a path, a wildcard, no scheme) is ignored with a warning.
 
+**Updating to the release with required password changes** (migration
+`039_password_change_required.sql` runs on its own; no `.env` or compose
+change):
+1. **An admin account still on `changeme` is restricted at the first start.**
+   It can then only change its password or sign out: its open browser tabs
+   land on the "Choose a new password" screen at their next request, the
+   backend log has a `still uses the default password "changeme"` warning,
+   and a critical `siembox-auth` alert reaches your notification channels.
+   Sign in right away and choose a new password: until you do, anyone who
+   reaches the web UI with `changeme` could choose it instead. Other accounts
+   on `changeme` are restricted at their next sign-in.
+2. **Log shippers, endpoint agents and their enrollment are not affected**:
+   they use API keys, not sign-in sessions.
+3. **Scripts that sign in with a session** get `403` with
+   `code: "PASSWORD_CHANGE_REQUIRED"` from every route until the account
+   changes its password through `PUT /api/auth/me/password` (which works
+   while restricted) and signs in again. See
+   [API.md](docs/reference/API.md#password-change-required).
+4. **Passwords an admin sets are temporary by default.** A user created on
+   the Users page, or whose password an admin sets, must choose their own at
+   the next sign-in (untick "Require a password change", or send
+   `"mustChangePassword": false`, to opt out). `auth-admin reset-password`
+   always requires a change. `changeme` (in any letter case) is refused as a
+   new password everywhere.
+5. **An admin still on a non-default `DEFAULT_ADMIN_PASSWORD` is not forced**
+   on upgrade, so a scripted install keeps working. That password sits in
+   `.env` and the container environment in plain text: change it under
+   Settings -> Account.
+6. **A deleted or renamed `admin` is no longer re-created.** The account is
+   created only when the database has no users at all; before, a missing
+   `admin` came back with the bootstrap password at the next start (and a
+   renamed one that kept its email stopped every start). To get back into an
+   account, use `auth-admin reset-password <username>`.
+
 ## Database Migrations and Seeding
 
 ### Automatic Initialization
@@ -340,7 +394,16 @@ When the backend container starts, it automatically:
    - Configures retention policies
    - Sets up system tables
 
-2. **Creates the default admin user** with credentials from environment variables
+2. **Creates the `admin` account, only when the database has no users**, after
+   every migration has run: username `admin`, email `admin@siembox.local`,
+   password `DEFAULT_ADMIN_PASSWORD` (`changeme` when unset), already required
+   to choose a new password at its first sign-in. On every later start the
+   account is left alone: changing `DEFAULT_ADMIN_PASSWORD` has no effect, and
+   deleting or renaming `admin` doesn't bring it back (recover an account with
+   `auth-admin reset-password <username>`, see [Sign-in
+   protection](#sign-in-protection)). Each start also checks admin accounts
+   against the default password `changeme` and restricts any that still use
+   it until it is changed.
 
 Migrations are idempotent and run on every startup. A fresh install is
 **catalog-only**: no parsers or detection rules are seeded — you install exactly
@@ -634,7 +697,7 @@ Configure in the UI under **Settings → Data Retention**:
 
 ## Security Recommendations
 
-1. **Change default passwords immediately**
+1. **Sign in as `admin` right after the first start** (SIEMBox makes you choose a new password), and change `DB_PASSWORD` from `changeme`
 2. **Use strong JWT secret** (32+ random characters)
 3. **Run behind reverse proxy** (nginx/traefik) with SSL, and list it in `TRUSTED_PROXIES` (see [Client addresses and reverse proxies](#client-addresses-and-reverse-proxies))
 4. **Leave `CORS_ORIGIN` empty** (same-origin only) unless a page of yours on another origin needs the API, and then list just that origin; avoid `*` (see [Browser access from other origins (CORS)](#browser-access-from-other-origins-cors))
@@ -848,7 +911,9 @@ paused (medium), an existing account paused (high; critical for an admin), MFA
 codes paused after correct passwords (critical), a new browser signing in
 during an attack (high), a success after 5 or more failures (medium), a
 recognized browser forgotten (high), and more than 100 failed checks in 10
-minutes (high). One per streak. The network-pause and success-after-failures
+minutes (high). One per streak. An account found on the default password
+`changeme`, at startup or at a sign-in, raises one alert (critical for an
+admin, high otherwise) for as long as it hasn't changed it. The network-pause and success-after-failures
 alerts, which anyone can set off cheaply, are capped at 20 an hour together, so
 they can't crowd out the account, MFA and browser alerts. They reach your
 notification channels like any alert (Settings -> Notifications; the default
@@ -868,6 +933,10 @@ docker exec siembox-backend node dist/scripts/auth-admin.js unlock --all
 docker exec siembox-backend node dist/scripts/auth-admin.js reset-password <username>
 docker exec siembox-backend node dist/scripts/auth-admin.js disable-mfa <username>
 ```
+
+`reset-password` prints a random temporary password once; the account must
+choose its own at its next sign-in (after its MFA code, if MFA is on).
+`status <username>` says whether a password change is still required.
 
 See [TROUBLESHOOTING.md, "Locked out of SIEMBox"](docs/operations/TROUBLESHOOTING.md#issue-locked-out-of-siembox)
 for every way back in. An hourly job (`sign-in-housekeeping` on the Admin

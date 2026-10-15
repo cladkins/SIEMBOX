@@ -71,6 +71,13 @@ JWT_SECRET=$(openssl rand -base64 64)
 DEFAULT_ADMIN_PASSWORD="YourSecurePasswordHere123!@#"
 ```
 
+`DEFAULT_ADMIN_PASSWORD` is used once: it is the password of the `admin`
+account the first start creates (when the database has no users yet). Changing
+it later has no effect. Whatever it is, even a strong one, the first sign-in
+must replace it (see [Required password changes](#required-password-changes)),
+because the value stays in plain text in `.env`, in the compose environment and
+in `docker inspect`.
+
 **Password Requirements:**
 - Minimum 16 characters (recommended)
 - Mix of uppercase, lowercase, numbers, symbols
@@ -351,8 +358,9 @@ $ActionSendStreamDriverAuthMode x509/name
 
 **Admin Account Security:**
 ```bash
-# 1. Change default admin password on first login
-# Via API:
+# 1. The first sign-in must change the initial admin password: until it does,
+#    the session gets 403 PASSWORD_CHANGE_REQUIRED from every other route.
+#    Via API, with the token of that first sign-in:
 curl -X PUT http://localhost:8421/api/auth/me/password \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
@@ -360,6 +368,7 @@ curl -X PUT http://localhost:8421/api/auth/me/password \
     "currentPassword": "changeme",
     "newPassword": "YourStrongPasswordHere123!@#"
   }'
+# Every session is signed out: sign in again with the new password.
 ```
 
 **Create Least-Privilege Accounts:**
@@ -989,8 +998,9 @@ DEPLOYMENT.md, "Sign-in protection"):
   (TROUBLESHOOTING.md, "Locked out of SIEMBox"); or `LOGIN_PROTECTION=off`
   briefly.
 
-Not covered yet: a correct first guess of the default `admin` / `changeme`
-password (change it right after installing). Pages on other origins can no
+Throttling can't stop a correct first guess of the default `admin` /
+`changeme`; [required password changes](#required-password-changes) (below)
+make the owner replace it at the first sign-in. Pages on other origins can no
 longer try passwords through a user's browser and read the answer:
 `CORS_ORIGIN` is same-origin only unless you set it (see [CORS
 Configuration](#cors-configuration)).
@@ -1000,6 +1010,55 @@ unix socket on a volume only those two containers mount, and a direct caller
 on port 8421 is its TCP address, whatever `X-Forwarded-For` it sends. Only the
 proxies in `TRUSTED_PROXIES` (default `frontend`) may name a client. See
 DEPLOYMENT.md, "Client addresses and reverse proxies".
+
+### Required password changes
+
+An account signed in with a password it didn't choose itself, or with the
+default one everyone knows, can do nothing except change it:
+
+- **When.** The `admin` account the first start creates (with
+  `DEFAULT_ADMIN_PASSWORD`, `changeme` when unset); any account found on the
+  default `changeme` (admin accounts at every start, so an upgrade catches
+  them before anyone signs in; every account at a correct sign-in with it);
+  an account an admin created or whose password an admin set, unless they
+  turned "Require a password change" off; and every `auth-admin
+  reset-password`. `users.must_change_password`, with the reason and since
+  when, holds it.
+- **Enforced by the backend on every route.** `authenticate`, which every
+  route that takes a login runs, answers a restricted session with `403
+  {"code": "PASSWORD_CHANGE_REQUIRED", "reason": ...}` before any role check.
+  Only `GET /api/auth/me`, `PUT /api/auth/me/password` and `POST
+  /api/auth/logout` use the gate that lets it through; the route inventory
+  test (`backend/src/routes/routeInventory.test.ts`) checks that list, and
+  that every other route, including ones added later, refuses. The flag is
+  read from the account on every request, so it restricts the account's
+  existing sessions at once. There is no setting that turns it off.
+- **Not weakened elsewhere.** MFA is still asked at sign-in before the
+  restricted session is issued; MFA can't be enrolled or turned off while
+  restricted (so someone holding a known default password can't bind an
+  authenticator to the account). The change still needs the current password,
+  counts wrong ones against the account's password-change key (5, then a
+  pause), and signs every session out and forgets every recognized browser,
+  so nothing earned with the old password outlives it. `changeme` in any
+  letter case is refused as a new password everywhere.
+- **Not affected:** log shippers, endpoint agents and enrollment tokens. They
+  use API keys, never a sign-in session.
+- **Seen.** A `siembox-auth` alert (critical for an admin) and a startup
+  warning when an account is found on `changeme`; audit rows
+  `auth.password.change_required`, plus `passwordChangeRequired` on
+  `auth.login.success`, `user.created` and `user.password_reset`, and `forced`
+  on `auth.password.changed`. Refused requests are not audited one by one.
+- **Recovery** stays possible through `auth-admin reset-password` (which sets
+  a new temporary password) and, as the database owner's last resort, SQL
+  (TROUBLESHOOTING.md).
+
+**Residual risk.** This makes the *owner* replace the default at their next
+sign-in; it does not stop someone who gets there first. Whoever signs in with
+`changeme` first chooses the new password and takes the account. On an upgrade
+the window is short (the account is restricted, the warning and the alert fire
+at the first start); on a fresh install, keep ports 8420 and 8421 off untrusted
+networks until you have signed in, or set a `DEFAULT_ADMIN_PASSWORD` only you
+know before the first start.
 
 **Enhanced Rate Limiting:**
 
@@ -1096,9 +1155,14 @@ SIEMBox automatically logs:
   unknown username is a NULL user plus `details.usernameHash`),
   `auth.login.paused` (once per pause, never per refused attempt),
   `auth.logout`, `auth.unlock`, `auth.browser.revoked`
-- Account changes: `auth.password.changed`, `auth.password.change_failed`,
-  `auth.mfa.enabled`, `auth.mfa.disabled`, `auth.mfa.recovery_used`,
-  `user.created`, `user.updated`, `user.deleted`, `user.password_reset`
+- Account changes: `auth.password.changed` (`forced: true` and the reason for
+  a required change), `auth.password.change_failed`,
+  `auth.password.change_required` (an account found on the default password,
+  `details.by` `startup` or `sign-in`), `auth.mfa.enabled`,
+  `auth.mfa.disabled`, `auth.mfa.recovery_used`, `user.created`,
+  `user.updated`, `user.deleted`, `user.password_reset` (`user.created` and
+  `user.password_reset` carry `passwordChangeRequired`, as does
+  `auth.login.success` for a restricted session)
 - Parser/rule changes
 - Shipper configuration updates
 
@@ -1320,7 +1384,7 @@ journalctl -u docker > docker-journal-$(date +%Y%m%d).log
 
 ### Pre-Deployment Checklist
 
-- [ ] Changed default admin password
+- [ ] Set a `DEFAULT_ADMIN_PASSWORD` only you know, or kept 8420/8421 off untrusted networks until the first sign-in
 - [ ] Generated strong random JWT_SECRET (64+ characters)
 - [ ] Generated strong random DB_PASSWORD (32+ characters)
 - [ ] Verified .env file has 600 permissions
@@ -1335,7 +1399,7 @@ journalctl -u docker > docker-journal-$(date +%Y%m%d).log
 
 ### Post-Deployment Checklist
 
-- [ ] Removed default admin account or changed password
+- [ ] Signed in as `admin` and chose a new password (required at the first sign-in)
 - [ ] Created least-privilege user accounts
 - [ ] Tested firewall rules
 - [ ] Verified TLS is working (SSL Labs test)

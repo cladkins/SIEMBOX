@@ -19,11 +19,15 @@
  *     attempt started a pause. The same answer, and the same work, whether or
  *     not the account exists or is disabled.
  *  8. Right password: refund the charges. A disabled account gets 403 now,
- *     and only now.
+ *     and only now. An account whose password is the shipped default
+ *     ("changeme") is required to change it (services/auth/passwordChange.ts),
+ *     which restricts its other sessions at once too.
  *  9. MFA: the code is charged to the MFA key (or the browser's) the same way,
  *     and refunded when it is right.
  * 10. Success: reset the keys that reset, issue or touch the browser token,
- *     create the session.
+ *     create the session. An account that must change its password gets a
+ *     session too, with passwordChangeRequired: true; that session can only
+ *     read /me, change the password or sign out (middleware/auth.ts).
  *
  * Each outcome is answered here, in the standard error envelope, rather than
  * thrown to errorHandler: no "API Error" line or application_errors row for
@@ -35,12 +39,11 @@ import { UserModel, type User } from '../models/User';
 import { SessionModel } from '../models/Session';
 import { LoginThrottleModel, type Reservation } from '../models/LoginThrottle';
 import { ApiError } from '../middleware/errorHandler';
-import { authenticate, requireAdmin } from '../middleware/auth';
+import { authenticate, authenticateAllowingPasswordChange, requireAdmin } from '../middleware/auth';
 import { logger } from '../utils/logger';
 import * as MfaService from '../services/auth/mfaService';
 import {
   MAX_PASSWORD_LENGTH,
-  MIN_PASSWORD_LENGTH,
   browserKey,
   mfaKey,
   parseCode,
@@ -56,6 +59,8 @@ import {
 } from '../services/auth/signInPolicy';
 import { auditAuth, authContext, noteRefusal } from '../services/auth/authEvents';
 import { raiseAuthAlert } from '../services/auth/authAlerts';
+import { isShippedDefaultPassword, newPasswordProblem } from '../services/auth/passwordChange';
+import { raiseDefaultPasswordAlert } from '../services/auth/defaultPasswordAlerts';
 import { checkPassword, recordFailedCheck, revokeAccountAccess } from '../services/auth/signInService';
 import {
   findRecognizedBrowser,
@@ -163,6 +168,27 @@ router.post('/login', async (req: Request, res: Response) => {
       sendError(res, 403, 'Account is disabled');
       return;
     }
+    // Still on the shipped default: anyone could look it up, whatever happens
+    // at the code step, so flag it before MFA. Only the boolean leaves here.
+    if (!user.must_change_password && isShippedDefaultPassword(input.password)) {
+      const since = await UserModel.requirePasswordChange(user.id, 'default');
+      if (since) {
+        user.must_change_password = true;
+        user.must_change_password_reason = 'default';
+        user.must_change_password_since = since;
+        logger.warn('Account found on the default password; it must choose a new one', {
+          userId: user.id,
+          ip: ctx.ip,
+          via: ctx.via,
+        });
+        await auditAuth('auth.password.change_required', ctx, {
+          userId: user.id,
+          status: 200,
+          details: { by: 'sign-in', reason: 'default' },
+        });
+        void raiseDefaultPasswordAlert(user, since, ctx);
+      }
+    }
 
     // 9. MFA, only for users who enrolled.
     let mfaMethod: 'totp' | 'recovery' | null = null;
@@ -245,6 +271,9 @@ async function completeSignIn(
 
   const session = await SessionModel.create(user.id, 24); // 24 hour session
   await UserModel.updateLastLogin(user.id);
+  // Why this session is restricted (middleware/auth.ts), when it is.
+  const restricted = user.must_change_password === true;
+  const changeReason = restricted ? { passwordChangeRequired: user.must_change_password_reason ?? null } : {};
 
   logger.info('User logged in', {
     username: user.username,
@@ -252,11 +281,17 @@ async function completeSignIn(
     ip: ctx.ip,
     via: ctx.via,
     browser: browser ? 'recognized' : 'new',
+    ...changeReason,
   });
   await auditAuth('auth.login.success', ctx, {
     userId: user.id,
     status: 200,
-    details: { recognizedBrowser: browser !== null, mfa: params.mfaMethod !== null, method: params.mfaMethod ?? 'password' },
+    details: {
+      recognizedBrowser: browser !== null,
+      mfa: params.mfaMethod !== null,
+      method: params.mfaMethod ?? 'password',
+      ...changeReason,
+    },
   });
 
   // Alerts: a new browser got in while the account was under attack, or after
@@ -298,11 +333,12 @@ async function completeSignIn(
     user: UserModel.removeSensitiveData(user),
     expiresAt: session.expires_at,
     ...(browserToken ? { browserToken } : {}),
+    ...(restricted ? { passwordChangeRequired: true } : {}),
   });
 }
 
-// Logout
-router.post('/logout', authenticate, async (req: Request, res: Response) => {
+// Logout. Open to a session that must change its password (giving up).
+router.post('/logout', authenticateAllowingPasswordChange, async (req: Request, res: Response) => {
   try {
     const authHeader = req.headers.authorization;
     let token: string | undefined;
@@ -324,8 +360,9 @@ router.post('/logout', authenticate, async (req: Request, res: Response) => {
   }
 });
 
-// Get current user profile
-router.get('/me', authenticate, async (req: Request, res: Response) => {
+// Get current user profile. Open to a session that must change its password:
+// the UI reads why (must_change_password_reason) here.
+router.get('/me', authenticateAllowingPasswordChange, async (req: Request, res: Response) => {
   try {
     const user = await UserModel.findByIdSafe(req.user!.id);
 
@@ -343,10 +380,13 @@ router.get('/me', authenticate, async (req: Request, res: Response) => {
 /**
  * Change the caller's own password. A wrong current password is a 400, never a
  * 401 (the SPA signs out on a 401), and is counted against the pwc key: 5 in a
- * row pause it. Success signs the account out everywhere and forgets its
- * browsers and counters.
+ * row pause it. The new one is 8 to 1024 characters, not the current one and
+ * not the default password. Success clears any requirement to change it (in
+ * the same UPDATE), signs the account out everywhere and forgets its browsers
+ * and counters. Open to a session that must change its password: this is how
+ * it does.
  */
-router.put('/me/password', authenticate, async (req: Request, res: Response) => {
+router.put('/me/password', authenticateAllowingPasswordChange, async (req: Request, res: Response) => {
   const { currentPassword, newPassword } = req.body ?? {};
   if (
     typeof currentPassword !== 'string' ||
@@ -358,12 +398,9 @@ router.put('/me/password', authenticate, async (req: Request, res: Response) => 
     sendError(res, 400, 'Current password and new password are required');
     return;
   }
-  if (newPassword.length < MIN_PASSWORD_LENGTH || newPassword.length > MAX_PASSWORD_LENGTH) {
-    sendError(res, 400, `New password must be ${MIN_PASSWORD_LENGTH} to ${MAX_PASSWORD_LENGTH} characters`);
-    return;
-  }
-  if (newPassword === currentPassword) {
-    sendError(res, 400, 'New password must be different from the current one');
+  const problem = newPasswordProblem(newPassword, currentPassword);
+  if (problem) {
+    sendError(res, 400, problem);
     return;
   }
   const ctx = authContext(req);
@@ -399,12 +436,17 @@ router.put('/me/password', authenticate, async (req: Request, res: Response) => 
     await LoginThrottleModel.refund(reservation);
     await UserModel.changeOwnPassword(user.id, newPassword);
     const revoked = await revokeAccountAccess(user);
+    const forced = user.must_change_password === true;
 
-    logger.info('User changed password', { userId: user.id, ip: ctx.ip });
+    logger.info('User changed password', { userId: user.id, ip: ctx.ip, forced });
     await auditAuth('auth.password.changed', ctx, {
       userId: user.id,
       status: 200,
-      details: { sessionsRevoked: revoked.sessions, browsersRevoked: revoked.browsers },
+      details: {
+        sessionsRevoked: revoked.sessions,
+        browsersRevoked: revoked.browsers,
+        ...(forced ? { forced: true, reason: user.must_change_password_reason ?? null } : {}),
+      },
     });
 
     res.json({ message: 'Password updated. Sign in again with the new password.' });

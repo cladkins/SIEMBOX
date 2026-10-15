@@ -189,6 +189,9 @@ DB_PASSWORD=changeme
 
 # Security (CHANGE THESE!)
 JWT_SECRET=change-this-to-a-random-secret-key
+# Initial password of the admin account, created on the first start only (when
+# the database has no users); the first sign-in asks for a new one. Changing it
+# later has no effect.
 DEFAULT_ADMIN_PASSWORD=changeme
 CREDENTIAL_ENCRYPTION_KEY=32-character-hex-key-here
 

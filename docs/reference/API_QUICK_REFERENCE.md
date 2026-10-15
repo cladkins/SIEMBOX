@@ -47,6 +47,23 @@ from elsewhere then never pause it. Failed sign-ins pause further ones (`429`,
 `code: "SIGNIN_PAUSED"`, `Retry-After`): see
 [API.md, "Sign-in Protection"](API.md#sign-in-protection).
 
+**First sign-in: change the password.** The examples sign in as `admin` /
+`changeme`, the initial password of a fresh install. That first sign-in (and
+any with a temporary password an admin set) answers
+`"passwordChangeRequired": true`, and until the password is changed every
+other route answers `403` with `code: "PASSWORD_CHANGE_REQUIRED"`. Change it
+with that token, then sign in again with the new password:
+
+```bash
+curl -X PUT http://localhost:8421/api/auth/me/password \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"currentPassword":"changeme","newPassword":"<your new password>"}'
+# {"message":"Password updated. Sign in again with the new password."}
+```
+
+See [API.md, "Password change required"](API.md#password-change-required).
+Below, `changeme` stands for whatever your password is by then.
+
 ---
 
 ## Quick Command Reference
@@ -58,6 +75,12 @@ from elsewhere then never pause it. Failed sign-ins pause further ones (`429`,
 curl -X POST http://localhost:8421/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"changeme"}'
+
+# First sign-in only ("passwordChangeRequired": true): choose a new password,
+# then log in again with it
+curl -X PUT http://localhost:8421/api/auth/me/password \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"currentPassword":"changeme","newPassword":"<your new password>"}'
 
 # Logout
 curl -X POST http://localhost:8421/api/auth/logout \
@@ -478,7 +501,9 @@ const loginResponse = await fetch('http://localhost:8421/api/auth/login', {
     password: 'changeme'
   })
 });
-const { token } = await loginResponse.json();
+const { token, passwordChangeRequired } = await loginResponse.json();
+// passwordChangeRequired: every other route answers 403 PASSWORD_CHANGE_REQUIRED
+// until PUT /api/auth/me/password (then log in again with the new password).
 
 // Get logs
 const logsResponse = await fetch('http://localhost:8421/api/logs/parsed?limit=100', {
@@ -504,6 +529,8 @@ response = requests.post(f'{base_url}/auth/login', json={
     'password': 'changeme'
 })
 token = response.json()['token']
+# On a first sign-in (response.json().get('passwordChangeRequired')), change the
+# password with PUT /auth/me/password and log in again before anything else.
 
 # Set headers
 headers = {'Authorization': f'Bearer {token}'}
@@ -542,6 +569,7 @@ TOKEN=$(curl -s -X POST "$BASE_URL/auth/login" \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"changeme"}' \
   | jq -r '.token')
+# (A first sign-in must change the password first: see "First sign-in" above.)
 
 # Get logs
 curl -s -H "Authorization: Bearer $TOKEN" \

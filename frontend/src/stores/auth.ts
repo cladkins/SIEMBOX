@@ -3,6 +3,9 @@ import { ref, computed } from 'vue';
 import { api } from '@/services/api';
 import router from '@/router';
 
+/** Why the account must change its password (backend services/auth/passwordChange.ts). */
+export type PasswordChangeReason = 'initial' | 'default' | 'admin' | 'cli';
+
 /**
  * Recognized-browser tokens, by username: the API hands one out on every
  * successful sign-in, and a sign-in that sends it back counts against this
@@ -53,6 +56,14 @@ export const useAuthStore = defineStore('auth', () => {
   // requires this role for parser and rule changes, alert triage and the AI
   // Analyst, so controls for those hide or disable themselves with this check.
   const canAnalyst = computed(() => ['admin', 'operator', 'analyst'].includes(user.value?.role));
+  // The account must choose a new password before anything else (the API
+  // answers every other request with 403 PASSWORD_CHANGE_REQUIRED): its
+  // initial or a temporary password, or SIEMBox's default. The router keeps
+  // it on the ChangePassword view until it does.
+  const mustChangePassword = computed(() => !!user.value?.must_change_password);
+  const passwordChangeReason = computed<PasswordChangeReason | null>(() =>
+    mustChangePassword.value ? (user.value?.must_change_password_reason ?? null) : null
+  );
 
   const login = async (username: string, password: string, code?: string) => {
     const response = await api.login(username, password, code, readBrowserTokens()[username]);
@@ -61,7 +72,31 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = response.data.user;
     localStorage.setItem('token', token.value!);
     localStorage.setItem('user', JSON.stringify(user.value));
-    router.push('/');
+    router.push(response.data.passwordChangeRequired ? { name: 'ChangePassword' } : '/');
+  };
+
+  /**
+   * The API refused a request because the account must change its password
+   * (services/api.ts): flagged since this tab signed in (an upgrade, an
+   * admin's reset, or a sign-in elsewhere with the default password).
+   */
+  const requirePasswordChange = (reason: string | null) => {
+    if (!token.value) return;
+    user.value = {
+      ...(user.value ?? {}),
+      must_change_password: true,
+      must_change_password_reason: reason,
+    };
+    localStorage.setItem('user', JSON.stringify(user.value));
+    if (router.currentRoute.value.name !== 'ChangePassword') void router.replace({ name: 'ChangePassword' });
+  };
+
+  /** The profile from GET /auth/me: kept, and off the change screen once no change is required. */
+  const setProfile = (profile: unknown) => {
+    if (!token.value || !profile || typeof profile !== 'object') return;
+    user.value = { ...(user.value ?? {}), ...profile };
+    localStorage.setItem('user', JSON.stringify(user.value));
+    if (!mustChangePassword.value && router.currentRoute.value.name === 'ChangePassword') void router.replace('/');
   };
 
   const logout = () => {
@@ -72,13 +107,24 @@ export const useAuthStore = defineStore('auth', () => {
     router.push('/login');
   };
 
+  /** Sign out on the server too (best effort, no toasts), then here. */
+  const signOut = async () => {
+    if (token.value) await api.logout().catch(() => undefined);
+    logout();
+  };
+
   return {
     token,
     user,
     isAuthenticated,
     isAdmin,
     canAnalyst,
+    mustChangePassword,
+    passwordChangeReason,
     login,
+    requirePasswordChange,
+    setProfile,
     logout,
+    signOut,
   };
 });

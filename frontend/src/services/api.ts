@@ -62,6 +62,15 @@ function rateLimitMessage(error: AxiosError): string {
 apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
+    // The account must choose a new password first (backend middleware/auth.ts):
+    // every route but /auth/me, /auth/me/password and /auth/logout answers this.
+    // Checked before skipErrorToast, so calls that show their own errors still
+    // land on the change screen, and with no toast: the screen says why.
+    const refusal = error.response?.data as { code?: unknown; reason?: unknown } | undefined;
+    if (error.response?.status === 403 && refusal?.code === 'PASSWORD_CHANGE_REQUIRED') {
+      useAuthStore().requirePasswordChange(typeof refusal.reason === 'string' ? refusal.reason : null);
+      return Promise.reject(error);
+    }
     if (error.response && error.response.status !== 401 && error.config?.skipErrorToast) {
       return Promise.reject(error);
     }
@@ -128,7 +137,8 @@ export const api = {
       { username, password, ...(code ? { code } : {}), ...(browserToken ? { browserToken } : {}) },
       SHOWN_INLINE
     ),
-  logout: () => apiClient.post('/auth/logout'),
+  // Best effort (stores/auth.ts signOut): the caller signs out locally whatever happens.
+  logout: () => apiClient.post('/auth/logout', undefined, SHOWN_INLINE),
   getProfile: () => apiClient.get('/auth/me'),
   // A wrong current password is a 400 (429 once paused); the caller shows it,
   // and "unavailable" when no answer came.

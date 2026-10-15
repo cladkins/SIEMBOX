@@ -55,7 +55,7 @@ Wrong MFA codes (5) and wrong current passwords on a password change (5) pause t
 | Variable | Required | Notes |
 |----------|----------|-------|
 | `JWT_SECRET` | ✅ | Signs session tokens; use a long random string (32+ chars). Tokens are valid 24h. |
-| `DEFAULT_ADMIN_PASSWORD` | ✅ | Initial password for the `admin` user. |
+| `DEFAULT_ADMIN_PASSWORD` | ✅ | Initial password for the `admin` user, created on the first start only (when there are no users); the first sign-in must change it. Changing it later has no effect. |
 | `CREDENTIAL_ENCRYPTION_KEY` | ✅ | **64-char hex** key (AES-256-GCM) used to encrypt scanner credentials, the AI builder and Have I Been Pwned API keys, *and* per-user MFA secrets at rest. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. **If you lose/rotate this, stored encrypted credentials can't be decrypted.** |
 
 ### Two-factor authentication (MFA)

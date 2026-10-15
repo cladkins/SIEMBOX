@@ -86,7 +86,7 @@ curl http://localhost:8421/api/health
 - Check that all required variables are set:
   - `DB_PASSWORD` - Database password
   - `JWT_SECRET` - JWT signing key
-  - `DEFAULT_ADMIN_PASSWORD` - Admin credentials
+  - `DEFAULT_ADMIN_PASSWORD` - Initial password of the `admin` account (used on the first start only)
 - Use `.env.example` as a template
 - Invalid values (e.g., empty passwords) will cause startup failures
 
@@ -214,13 +214,20 @@ docker ps -a --filter name=siembox-postgres --format '{{.Status}}   {{.Ports}}'
    - Verify database user has CREATE TABLE, INSERT, UPDATE permissions
    - May need to run migrations as database superuser
 
+5. **`DEFAULT_ADMIN_PASSWORD is ... characters long`** - on a fresh database
+   the admin account is created with `DEFAULT_ADMIN_PASSWORD`, and sign-in
+   accepts at most 1024 characters
+   - Solution: set a shorter `DEFAULT_ADMIN_PASSWORD` and start again
+
 **How Initialization Works:**
 
 On first start, the backend automatically:
 1. Checks if database is ready
 2. Runs all pending migrations (in order)
-3. Imports seed data (parsers, rules)
-4. Creates indexes and constraints
+3. Creates indexes and constraints
+4. Creates the `admin` account, only when the database has no users (it must
+   choose a new password at its first sign-in), and restricts any admin
+   account still on the default password `changeme`
 
 This should complete in 30-60 seconds. If not:
 - Check backend container logs for specific error message
@@ -1278,7 +1285,8 @@ from.
    docker exec siembox-backend node dist/scripts/auth-admin.js unlock --network unknown
    docker exec siembox-backend node dist/scripts/auth-admin.js unlock --all
    # Forgot the password: sets a random 20-character one, printed once, and
-   # signs the account out everywhere
+   # signs the account out everywhere. It is temporary: the account must
+   # choose its own at its next sign-in (after its MFA code, if MFA is on)
    docker exec siembox-backend node dist/scripts/auth-admin.js reset-password admin
    # Lost the authenticator app and the recovery codes
    docker exec siembox-backend node dist/scripts/auth-admin.js disable-mfa admin
@@ -1322,9 +1330,13 @@ docker exec siembox-postgres psql -U siembox -d siembox -c \
 
 **Wrong Password:**
 ```bash
-# Set a new random password (printed once) and sign the account out everywhere
+# Set a new random password (printed once) and sign the account out everywhere;
+# the account must choose its own at its next sign-in
 docker exec siembox-backend node dist/scripts/auth-admin.js reset-password admin
 ```
+
+**Signed in, but every page sends you to "Choose a new password":** see
+[the next issue](#issue-every-page-sends-me-to-choose-a-new-password--api-answers-403-password_change_required).
 
 **"MFA code required" and no working code:** check the device's clock: codes
 are accepted only within about 30 seconds of the server's clock (one 30-second
@@ -1342,6 +1354,70 @@ docker exec siembox-postgres psql -U siembox -d siembox -c \
 **CORS error in the browser console** ("blocked by CORS policy"): see
 [CORS error in the browser console](#issue-cors-error-in-the-browser-console)
 under Frontend Issues.
+
+---
+
+### Issue: Every page sends me to "Choose a new password" / API answers 403 PASSWORD_CHANGE_REQUIRED
+
+**Symptoms:**
+- After signing in, the web UI shows only **Choose a new password**; typing
+  another address brings you back to it. A tab that was already open jumps
+  there at its next request.
+- With a session token, every API route answers `403` with
+  `{"code": "PASSWORD_CHANGE_REQUIRED", "reason": "..."}`.
+- A browser still running an older copy of the web UI shows "You do not have
+  permission to perform this action." on every page instead.
+
+**Cause:** the account must replace its password before it can do anything
+else (`users.must_change_password`, migration 039). `reason` says why:
+- `initial`: the `admin` account the first start created, with
+  `DEFAULT_ADMIN_PASSWORD` (`changeme` when unset);
+- `default`: it was found on SIEMBox's default password `changeme`, at a
+  start (admin accounts, for example right after an upgrade) or at a sign-in
+  (any account). A `siembox-auth` alert says when and from where;
+- `admin`: an admin created the account, or set its password, with "Require a
+  password change" on (the default);
+- `cli`: `auth-admin reset-password` set it.
+
+Until then each of its sessions may only read its profile (`GET
+/api/auth/me`), change its password (`PUT /api/auth/me/password`) or sign out
+(`POST /api/auth/logout`). Log shippers and endpoint agents use API keys, not
+sessions, and are not affected.
+
+**What to do:**
+1. **Change it.** Enter the password you just signed in with, then a new one:
+   8 to 1024 characters, not the current one, and not `changeme` in any letter
+   case. You are signed out everywhere; sign in again with the new password.
+2. **A script** signs in, changes the password with the token it got, then
+   signs in again:
+   ```bash
+   TOKEN=$(curl -s -X POST http://<host>:8421/api/auth/login -H 'Content-Type: application/json' \
+     -d '{"username":"admin","password":"changeme"}' | jq -r .token)
+   curl -s -X PUT http://<host>:8421/api/auth/me/password -H "Authorization: Bearer $TOKEN" \
+     -H 'Content-Type: application/json' \
+     -d '{"currentPassword":"changeme","newPassword":"<a new password>"}'
+   ```
+3. **An older copy of the web UI** (the permission toasts above): reload the
+   page (Ctrl+Shift+R). Or use **Settings -> Account -> Password**, which works
+   while restricted.
+4. **"Too many wrong current passwords"** (`429`, `reason: "current_password"`):
+   5 wrong current passwords pause the change. Wait for the countdown, or have
+   an admin click Users -> **Unlock**, or run `auth-admin.js unlock <username>`.
+5. **Forgot the temporary password:** `auth-admin.js reset-password
+   <username>` prints a new one (still temporary). `auth-admin.js status
+   <username>` shows whether a change is required, why and since when.
+6. **Lost the authenticator app:** MFA is still asked before the change;
+   `auth-admin.js disable-mfa <username>`, or a recovery code.
+7. **Last resort, SQL** (the database owner's call; it lifts the requirement
+   without changing the password):
+   ```bash
+   docker exec siembox-postgres psql -U siembox -d siembox -c \
+     "UPDATE users SET must_change_password = FALSE, must_change_password_reason = NULL, must_change_password_since = NULL WHERE username = 'admin';"
+   ```
+   An admin account still on `changeme` is restricted again at the next
+   start, and any account at its next sign-in with `changeme`.
+
+There is no setting that turns this off.
 
 ---
 

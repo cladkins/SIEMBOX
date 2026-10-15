@@ -6,19 +6,24 @@ import { authenticate, requireAdmin } from '../middleware/auth';
 import { logger } from '../utils/logger';
 import { auditAuth, authContext } from '../services/auth/authEvents';
 import { revokeAccountAccess } from '../services/auth/signInService';
-import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, usernameHash } from '../services/auth/signInPolicy';
+import { usernameHash } from '../services/auth/signInPolicy';
+import { assignedPasswordProblem } from '../services/auth/passwordChange';
 
 const router = Router();
 
 // All user management routes require authentication
 router.use(authenticate);
 
-/** A password an admin sets: a string of 8 to 1024 characters. */
-function passwordProblem(password: unknown): string | null {
-  if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
-    return `Password must be ${MIN_PASSWORD_LENGTH} to ${MAX_PASSWORD_LENGTH} characters`;
-  }
-  return null;
+/**
+ * A password an admin sets is temporary by default: the account must choose
+ * its own at the next sign-in (reason 'admin') unless the request says
+ * mustChangePassword: false. Resolves the field to a boolean, or throws 400.
+ */
+function mustChangePasswordOf(body: Record<string, unknown>): boolean {
+  const value = body.mustChangePassword;
+  if (value === undefined) return true;
+  if (typeof value !== 'boolean') throw new ApiError(400, 'mustChangePassword must be true or false');
+  return value;
 }
 
 // Get all users (admin only), with any pause on their account: when the last
@@ -64,7 +69,8 @@ router.get('/:id', requireAdmin, async (req: Request, res: Response) => {
   }
 });
 
-// Create user (admin only)
+// Create user (admin only). The account must choose its own password at its
+// first sign-in unless mustChangePassword is false.
 router.post('/', requireAdmin, async (req: Request, res: Response) => {
   try {
     const { username, email, password, role, enabled } = req.body;
@@ -73,8 +79,9 @@ router.post('/', requireAdmin, async (req: Request, res: Response) => {
       throw new ApiError(400, 'Username, email, and password are required');
     }
 
-    const problem = passwordProblem(password);
+    const problem = assignedPasswordProblem(password);
     if (problem) throw new ApiError(400, problem);
+    const requirePasswordChange = mustChangePasswordOf(req.body) ? 'admin' : null;
 
     // Check if username already exists
     const existingUser = await UserModel.findByUsername(username);
@@ -94,14 +101,15 @@ router.post('/', requireAdmin, async (req: Request, res: Response) => {
       password,
       role,
       enabled,
+      requirePasswordChange,
     });
 
-    logger.info('User created', { username, createdBy: req.user?.username });
+    logger.info('User created', { username, createdBy: req.user?.username, passwordChangeRequired: requirePasswordChange });
     await auditAuth('user.created', authContext(req), {
       userId: req.user!.id,
       targetUserId: user.id,
       status: 201,
-      details: { username: user.username, role: user.role },
+      details: { username: user.username, role: user.role, passwordChangeRequired: requirePasswordChange },
     });
 
     res.status(201).json(user);
@@ -113,7 +121,10 @@ router.post('/', requireAdmin, async (req: Request, res: Response) => {
 
 // Update user (admin only). Setting a password is a reset: the user is signed
 // out everywhere, their recognized browsers are forgotten and their sign-in
-// counters cleared.
+// counters cleared, and unless mustChangePassword is false they must choose
+// their own password at the next sign-in. mustChangePassword applies only
+// with a password: the requirement can't be cleared without replacing the
+// password it is about, or set without handing over one the user knows.
 router.put('/:id', requireAdmin, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id as string);
@@ -121,9 +132,13 @@ router.put('/:id', requireAdmin, async (req: Request, res: Response) => {
 
     // Validate the password if one is provided
     const resettingPassword = password !== undefined && password !== null && password !== '';
+    let requirePasswordChange: 'admin' | null = null;
     if (resettingPassword) {
-      const problem = passwordProblem(password);
+      const problem = assignedPasswordProblem(password);
       if (problem) throw new ApiError(400, problem);
+      requirePasswordChange = mustChangePasswordOf(req.body) ? 'admin' : null;
+    } else if (req.body.mustChangePassword !== undefined) {
+      throw new ApiError(400, 'mustChangePassword applies only when setting a password');
     }
 
     // Check if username is taken by another user
@@ -143,13 +158,11 @@ router.put('/:id', requireAdmin, async (req: Request, res: Response) => {
     }
 
     const previous = await UserModel.findByIdSafe(id);
-    const user = await UserModel.update(id, {
-      username,
-      email,
-      password: resettingPassword ? password : undefined,
-      role,
-      enabled,
-    });
+    const fieldsToChange = { username, email, role, enabled };
+    const user = await UserModel.update(
+      id,
+      resettingPassword ? { ...fieldsToChange, password: password as string, requirePasswordChange } : fieldsToChange
+    );
 
     if (!user) {
       throw new ApiError(404, 'User not found');
@@ -169,12 +182,17 @@ router.put('/:id', requireAdmin, async (req: Request, res: Response) => {
       if (previous && previous.username !== user.username) {
         await LoginThrottleModel.clearByUser(id, usernameHash(previous.username));
       }
-      logger.info('User password reset', { userId: id, resetBy: req.user?.username });
+      logger.info('User password reset', { userId: id, resetBy: req.user?.username, passwordChangeRequired: requirePasswordChange });
       await auditAuth('user.password_reset', ctx, {
         userId: req.user!.id,
         targetUserId: id,
         status: 200,
-        details: { by: 'admin', sessionsRevoked: revoked.sessions, browsersRevoked: revoked.browsers },
+        details: {
+          by: 'admin',
+          sessionsRevoked: revoked.sessions,
+          browsersRevoked: revoked.browsers,
+          passwordChangeRequired: requirePasswordChange,
+        },
       });
     }
 

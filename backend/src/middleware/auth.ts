@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { SessionModel } from '../models/Session';
-import { UserModel } from '../models/User';
+import { UserModel, type User } from '../models/User';
 import { ApiError } from './errorHandler';
+import { passwordChangeRequiredBody, type PasswordChangeReason } from '../services/auth/passwordChange';
 
 // Extend Express Request to include user
 declare global {
@@ -13,55 +14,84 @@ declare global {
         username: string;
         email: string;
         role: 'admin' | 'analyst' | 'viewer' | 'operator';
+        /** The account must change its password before anything else (migration 039). */
+        mustChangePassword: boolean;
+        passwordChangeReason: PasswordChangeReason | null;
       };
     }
   }
 }
 
 /**
- * Authentication middleware
- * Validates session token and attaches user to request
+ * The session's user, or an ApiError: 401 without a valid session, 403 for a
+ * disabled account. Sessions are opaque tokens in the Authorization header
+ * (Bearer). Cookie-based auth was removed: the app never issued a
+ * session_token cookie, so the fallback was dead code and an unnecessary CSRF
+ * surface.
  */
-export const authenticate = async (req: Request, _res: Response, next: NextFunction) => {
+async function sessionUser(req: Request): Promise<User> {
+  const authHeader = req.headers.authorization;
+  let token: string | undefined;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7);
+  }
+
+  if (!token) {
+    throw new ApiError(401, 'Authentication required');
+  }
+
+  // Validate session
+  const session = await SessionModel.findByToken(token);
+  if (!session) {
+    throw new ApiError(401, 'Invalid or expired session');
+  }
+
+  // Get user
+  const user = await UserModel.findById(session.user_id);
+  if (!user) {
+    throw new ApiError(401, 'User not found');
+  }
+
+  if (!user.enabled) {
+    throw new ApiError(403, 'Account is disabled');
+  }
+  return user;
+}
+
+function attachUser(req: Request, user: User): void {
+  const mustChangePassword = user.must_change_password === true;
+  req.user = {
+    id: user.id,
+    username: user.username,
+    email: user.email,
+    role: user.role,
+    mustChangePassword,
+    passwordChangeReason: mustChangePassword ? (user.must_change_password_reason ?? null) : null,
+  };
+}
+
+/**
+ * Every route that takes a login: validates the session and attaches the user.
+ *
+ * A session whose account must change its password (users.must_change_password:
+ * the initial admin account, an account found on the default password, or a
+ * password an admin or the recovery CLI set) is refused here, before any role
+ * gate, with 403 PASSWORD_CHANGE_REQUIRED. It is answered directly rather than
+ * thrown, so the requests the UI keeps making write no application_errors row
+ * and no "API Error" line. The flag is read from the user row on every request,
+ * so it restricts every session of the account at once, old ones included.
+ * Only the routes in routeInventory.test.ts PASSWORD_CHANGE_ALLOWED use
+ * authenticateAllowingPasswordChange instead.
+ */
+export const authenticate = async function authenticate(req: Request, res: Response, next: NextFunction) {
   try {
-    // Get token from the Authorization header (Bearer). Cookie-based auth was
-    // removed: the app never issued a session_token cookie, so the fallback was
-    // dead code and an unnecessary CSRF surface.
-    const authHeader = req.headers.authorization;
-    let token: string | undefined;
-
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7);
+    const user = await sessionUser(req);
+    attachUser(req, user);
+    if (req.user!.mustChangePassword) {
+      res.status(403).json(passwordChangeRequiredBody(req.user!.passwordChangeReason));
+      return;
     }
-
-    if (!token) {
-      throw new ApiError(401, 'Authentication required');
-    }
-
-    // Validate session
-    const session = await SessionModel.findByToken(token);
-    if (!session) {
-      throw new ApiError(401, 'Invalid or expired session');
-    }
-
-    // Get user
-    const user = await UserModel.findById(session.user_id);
-    if (!user) {
-      throw new ApiError(401, 'User not found');
-    }
-
-    if (!user.enabled) {
-      throw new ApiError(403, 'Account is disabled');
-    }
-
-    // Attach user to request
-    req.user = {
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      role: user.role,
-    };
-
     next();
   } catch (error) {
     next(error);
@@ -69,43 +99,20 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
 };
 
 /**
- * Optional authentication middleware
- * Attaches user if authenticated, but doesn't require it
+ * The same checks as authenticate, without the password-change refusal. Only
+ * for the routes a restricted session may call (routeInventory.test.ts
+ * PASSWORD_CHANGE_ALLOWED): GET /api/auth/me, PUT /api/auth/me/password and
+ * POST /api/auth/logout. A new one needs a reason it can't be used to get
+ * around the change.
  */
-export const optionalAuthenticate = async (
-  req: Request,
-  _res: Response,
-  next: NextFunction
-) => {
+export async function authenticateAllowingPasswordChange(req: Request, _res: Response, next: NextFunction) {
   try {
-    const authHeader = req.headers.authorization;
-    let token: string | undefined;
-
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7);
-    }
-
-    if (token) {
-      const session = await SessionModel.findByToken(token);
-      if (session) {
-        const user = await UserModel.findById(session.user_id);
-        if (user && user.enabled) {
-          req.user = {
-            id: user.id,
-            username: user.username,
-            email: user.email,
-            role: user.role,
-          };
-        }
-      }
-    }
-
+    attachUser(req, await sessionUser(req));
     next();
-  } catch {
-    // On error, just continue without user
-    next();
+  } catch (error) {
+    next(error);
   }
-};
+}
 
 /**
  * Role-based authorization middleware

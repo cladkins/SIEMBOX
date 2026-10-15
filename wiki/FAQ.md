@@ -4,7 +4,8 @@
 `8420` (web UI), `8421` (API + shipper ingest), and `514` UDP/TCP (syslog). See [Installation](Installation).
 
 **What's the default login?**
-User `admin`, password = the `DEFAULT_ADMIN_PASSWORD` you set in `.env`.
+User `admin`, password = the `DEFAULT_ADMIN_PASSWORD` you set in `.env` (`changeme` if unset).
+The first sign-in asks you to choose a new password; after that the `.env` value no longer counts.
 
 **I installed SIEMBox but there are no parsers or detection rules — is it broken?**
 No — SIEMBox is **catalog-only by default**. A fresh install ships empty. Go to **Parsers → Browse Catalog** and **Detection Rules → Browse Catalog** and *Install all* (or pick what you need). To opt back into the legacy bundled rules, set `SEED_BUNDLED_CONTENT=true`.

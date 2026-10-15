@@ -19,6 +19,14 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/Login.vue'),
     meta: { requiresAuth: false },
   },
+  // Outside Layout (no navigation): an account that must change its password
+  // can do nothing else, and the guard below keeps it here until it does.
+  {
+    path: '/change-password',
+    name: 'ChangePassword',
+    component: () => import('@/views/ChangePassword.vue'),
+    meta: { requiresAuth: true },
+  },
   {
     path: '/',
     component: () => import('@/views/Layout.vue'),
@@ -178,6 +186,10 @@ router.beforeEach((to) => {
 
   if (requiresAuth && !authStore.isAuthenticated) {
     return '/login';
+  } else if (authStore.isAuthenticated && authStore.mustChangePassword && to.name !== 'ChangePassword') {
+    return { name: 'ChangePassword' }; // /login too: nothing else works until the password is changed
+  } else if (to.name === 'ChangePassword' && !authStore.mustChangePassword) {
+    return '/';
   } else if (to.path === '/login' && authStore.isAuthenticated) {
     return '/';
   } else if (requiresAdmin && authStore.user?.role !== 'admin') {

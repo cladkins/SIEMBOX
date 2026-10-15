@@ -16,9 +16,6 @@ import { collectRuleRegexes, ruleRegexTypeErrors, validateRule } from '../rules/
 import { normalizeUserRegex, testUserRegex, UserRegexError } from '../rules/userRegex';
 import { validateUpdateParserBody } from '../../routes/parsers';
 
-/** 'a' * 26 + '!' takes seconds against ^(a+)+$ if it is ever compiled. */
-const SLOW = 'a'.repeat(26) + '!';
-
 function within(ms: number, run: () => void): number {
   const started = Date.now();
   run();
@@ -27,13 +24,18 @@ function within(ms: number, run: () => void): number {
   return took;
 }
 
+// The array-wrapped regexes below are harmless ones that WOULD match their
+// input if compiled (`new RegExp(["^a+!$"])` is /^a+!$/), so "no match" proves
+// nothing was compiled. (The stall a hidden ^(a+)+$ caused is covered end to
+// end in routes/regexSafety.db.test.ts.)
+
 test('a derivation matcher that is not a string never compiles, and is not collected', () => {
-  const derivations = [{ when: { payload: { matches: ['^(a+)+$'] } }, set: { hit: 'yes' } }];
+  const derivations = [{ when: { payload: { matches: ['^a+!$'] } }, set: { hit: 'yes' } }];
   // The gate's view: nothing to analyze.
   assert.deepEqual(collectParserRegexes({ parser_type: 'json', pattern: '', derivations }), []);
-  // The engine's view: nothing runs either (the matcher fails), and fast.
-  const fields: Record<string, any> = { payload: SLOW };
-  within(200, () => applyDerivations(fields, derivations));
+  // The engine's view: nothing runs either (the matcher fails).
+  const fields: Record<string, any> = { payload: 'aaa!' };
+  applyDerivations(fields, derivations);
   assert.equal(fields.hit, undefined);
   // A string matcher still works.
   const ok: Record<string, any> = { payload: 'ADMIN' };
@@ -42,17 +44,26 @@ test('a derivation matcher that is not a string never compiles, and is not colle
 });
 
 test('an extract pattern that is not a string never compiles, and is not collected', () => {
-  const derivations = [{ extract: { q: { from: 'payload', pattern: ['^(a+)+$'] } } }];
+  const derivations = [{ extract: { q: { from: 'payload', pattern: ['^(a+)!$'] } } }];
   assert.deepEqual(collectParserRegexes({ parser_type: 'json', pattern: '', derivations }), []);
-  const fields: Record<string, any> = { payload: SLOW };
-  within(200, () => applyDerivations(fields, derivations));
+  const fields: Record<string, any> = { payload: 'aaa!' };
+  applyDerivations(fields, derivations);
   assert.equal(fields.q, undefined);
+  const ok: Record<string, any> = { payload: 'aaa!' };
+  applyDerivations(ok, [{ extract: { q: { from: 'payload', pattern: '^(a+)!$' } } }]);
+  assert.equal(ok.q, 'aaa');
 });
 
 test('a parser pattern that is not a string never compiles', () => {
-  const parser = { name: 'x', parser_type: 'regex' as const, pattern: ['^(a+)+$'] as unknown as string, field_mappings: {} };
+  const parser = {
+    name: 'x',
+    parser_type: 'regex' as const,
+    pattern: ['^(?<p>a+)!$'] as unknown as string,
+    field_mappings: { p: 'p' },
+  };
   assert.deepEqual(collectParserRegexes(parser), []);
-  within(200, () => assert.equal(runParser(parser, SLOW), null));
+  assert.equal(runParser(parser, 'aaa!'), null);
+  assert.ok(runParser({ ...parser, pattern: '^(?<p>a+)!$' }, 'aaa!'), 'the string form matches');
 });
 
 test('validateDerivations refuses a non-string `matches` (it used to String() it)', () => {

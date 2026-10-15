@@ -24,15 +24,16 @@
  * 1,000,000 such a line never leaves the backtracking engine, and an
  * exponential match is still cut after 5-10 ms (0.3 ms at 50,000).
  *
- * Results: on Node 22 the fallback's matches and captures were identical to the
- * backtracking engine's in every comparison made (the shipped catalog, and over
- * 100,000 random regex/input pairs with the fallback forced on every match).
- * Node 20 (V8 11.3, the production image's runtime) differs in one corner, in
- * about 0.7% of those pairs: a quantified group whose body can match the empty
- * string, such as (?<x>.*?)? or (x|){0,2}, may capture "" (or pick the empty
- * alternative) where the backtracking engine leaves it unset or captures text.
- * That only happens on a match that has already backtracked a million times;
- * with V8's default threshold it happened on ordinary long lines.
+ * Results: on Node 22 (the images' runtime) the fallback's matches and captures
+ * were identical to the backtracking engine's in every comparison made (the
+ * shipped catalog, and over 100,000 random regex/input pairs with the fallback
+ * forced on every match). Node 20 (V8 11.3), which only a custom build on older
+ * Node still runs, differs in one corner, in about 0.7% of those pairs: a
+ * quantified group whose body can match the empty string, such as (?<x>.*?)?
+ * or (x|){0,2}, may capture "" (or pick the empty alternative) where the
+ * backtracking engine leaves it unset or captures text. That only happens on a
+ * match that has already backtracked a million times; with V8's default
+ * threshold it happened on ordinary long lines.
  *
  * It catches exponential and large-constant blowups, not polynomial ones: an
  * unanchored "X, then later Y" such as curl.*\| rescans the line from every
@@ -43,13 +44,14 @@
  * The bound covers only what the linear engine can run: the flags g, m, s and
  * y (a parser `pattern` and a derivation `extract` regex are compiled with none;
  * a rule regex with none unless its author asked for one), no lookahead, no
- * backreferences, counted repeats up to about 16 in all, and, on Node 22 but
- * not Node 20, lookbehind. Anything else (a case-insensitive rule regex or any
- * derivation `matches`, ^(?:a|a){1,30}$, a backreference, lookbehind on Node 20)
- * backtracks as before and relies on the gate alone. linearFallbackCovers()
- * asks V8 itself, and the gate refuses a regex it could not decide that the
- * fallback does not cover (regexSafety.ts). The flags are process-wide, so the
- * regex worker threads get them too.
+ * backreferences, counted repeats up to about 16 in all, and lookbehind (on
+ * Node 22; Node 20's engine has no lookbehind). Anything else (a
+ * case-insensitive rule regex or any derivation `matches`, ^(?:a|a){1,30}$, a
+ * backreference, lookbehind on a custom build on Node 20) backtracks as before
+ * and relies on the gate alone. linearFallbackCovers() asks V8 itself, and the
+ * gate refuses a regex it could not decide that the fallback does not cover
+ * (regexSafety.ts). The flags are process-wide, so the regex worker threads
+ * get them too.
  *
  * On by default; REGEX_LINEAR_FALLBACK=false turns it off (troubleshooting).
  * server.ts sets it once at startup, before the syslog listeners open.
@@ -133,7 +135,7 @@ export function linearFallbackObstacle(source: string, flags: string, env: NodeJ
   if (flags.includes('i')) what.push('the i flag, which every derivation `matches` has');
   if (flags.includes('u')) what.push('the u flag');
   if (/\(\?[=!]/.test(source)) what.push('lookahead');
-  // Node 22's engine runs lookbehind; Node 20's does not.
+  // Node 22's engine (the images') runs lookbehind; Node 20's does not.
   if (/\(\?<[=!]/.test(source) && !linearEngineRuns('(?<=a)b', '')) {
     what.push(`lookbehind, on Node ${process.versions.node}`);
   }

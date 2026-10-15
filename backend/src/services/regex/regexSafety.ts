@@ -18,7 +18,7 @@
  *     returned to the caller;
  *   - indeterminate because the analyzer cannot read it (a fact about the
  *     regex), and outside that engine (an i or u flag, lookahead, a
- *     backreference, a counted repeat over 16, lookbehind on Node 20) or with
+ *     backreference, a counted repeat over 16, lookbehind on Node 20's V8) or with
  *     the fallback off: refused, 422 REGEX_UNDECIDED. Nothing would bound it
  *     on a log line: ^(a+)+\u{17}$ (Annex B reads \u{17} as seventeen u's)
  *     is one recheck cannot parse, and it backtracks for seconds;

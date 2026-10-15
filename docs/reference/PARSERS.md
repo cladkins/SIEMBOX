@@ -421,13 +421,14 @@ fallback (`REGEX_LINEAR_FALLBACK`, on by default), which abandons a match after
 of 50,000 sent ordinary linear patterns to it on lines over about 50 KB, where,
 on Node 22, it is about 30 times slower.) It stops exponential blowups such as `^(a+)+$` in a
 `pattern` or `extract` regex that uses no lookahead, no backreference, no
-counted repeat over 16 and, on Node 20 (the image's runtime), no lookbehind. It
+counted repeat over 16 and, on a backend built on Node 20, no lookbehind. It
 does not stop polynomial ones (`curl.*\|` still costs about 0.45 s per 64 KB
 line), and it does not cover `when.*.matches` (always case-insensitive), which
-backtracks as before. The result is the same on Node 22. On Node 20, once a
-match has fallen back, a quantified group that can match empty may come out
-different: `^(?<prefix>.*?)?user=…` can set `prefix` to `""` where backtracking
-leaves it unset, so avoid optional groups whose body can match nothing.
+backtracks as before. The result is the same on Node 22, the images' runtime.
+On Node 20 (a custom build), once a match has fallen back, a quantified group
+that can match empty may come out different: `^(?<prefix>.*?)?user=…` can set
+`prefix` to `""` where backtracking leaves it unset, so avoid optional groups
+whose body can match nothing.
 With the fallback on, testing such a covered pattern answers *no match* quickly
 instead of `REGEX_TIMEOUT`; saving it is still refused.
 

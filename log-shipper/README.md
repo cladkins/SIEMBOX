@@ -29,7 +29,7 @@ The log shipper is **managed only** - there is no standalone/unauthenticated mod
 - **Real-Time Updates**: Configuration changes apply automatically (polls every 30s)
 - **Heartbeat Monitoring**: Track shipper health and last-seen status
 - **Network Scanning**: Run nmap (asset), nuclei (vulnerability), and log-source discovery scans SIEMBox dispatches to it, out on the LAN where the SIEMBox backend's own scanners can't reach — see [Network Scanning](#network-scanning-lan-side)
-- **Image**: Debian-slim based; bundles `journalctl` (for the systemd journal), the Docker CLI, `nmap`, `nuclei`, and `nodejs` (for the discovery agent)
+- **Image**: Debian-slim based; bundles `journalctl` (for the systemd journal), the Docker CLI, `nmap`, `nuclei`, and Node.js 22 (for the discovery agent)
 - **Custom Tags**: Tag logs by source for easy filtering in SIEMBox
 
 ## Quick Start
@@ -255,8 +255,8 @@ Where the shipper is on the network decides what it can find:
   link-local — they only see the segment the container is actually on. A bridged
   shipper will fall back to the active CIDR sweep + probes (still useful), but to
   get the full passive signal run the discovery shipper with **`network_mode: host`**.
-  The discovery agent is pure Node stdlib — no extra packages, just the `nodejs`
-  already in the image.
+  The discovery agent is pure Node stdlib — no extra packages, just the Node 22
+  runtime already in the image.
 
 ### nuclei templates
 

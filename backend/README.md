@@ -10,7 +10,7 @@ The SIEMBox backend is a Node.js/TypeScript application that provides the core S
 
 ## Tech Stack
 
-- **Node.js 20** - Runtime environment
+- **Node.js 22** - Runtime environment
 - **TypeScript 5.3.3** - Type-safe JavaScript
 - **Express 5** - Web framework
 - **PostgreSQL 15** - Database
@@ -134,7 +134,7 @@ backend/
 
 ### Prerequisites
 
-- Node.js 22.13+ (what CI uses; ESLint 10 and `npm test` need it)
+- Node.js 22.13+ (what the image and CI run; ESLint 10 and `npm test` need it)
 - PostgreSQL 15+
 - npm or yarn
 - Docker (optional, for containerized development)

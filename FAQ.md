@@ -96,7 +96,7 @@ Basic Docker knowledge is helpful but not required. The deployment guide provide
 
 Yes, but it's more complex. You'll need to:
 1. Install PostgreSQL 15+
-2. Install Node.js 20.19+ or 22.13+ (the frontend's Vite 8 build and ESLint 10 need it)
+2. Install Node.js 22.13+ (what the images and CI run; Node 20 is end-of-life)
 3. Build backend and frontend manually
 4. Configure environment variables
 5. Set up a reverse proxy (Nginx)

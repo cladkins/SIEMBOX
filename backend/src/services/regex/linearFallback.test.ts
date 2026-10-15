@@ -6,8 +6,8 @@
  * and the gate can ask which regexes the fallback covers. The matching cases run
  * in a child process (V8 flags are process-wide, and a child whose fallback does
  * not work is stopped by spawnSync's timeout instead of stalling the test run).
- * DB-free; `npm test`. CI runs this file on Node 20 too (the production image's
- * runtime), where the fallback's engine differs.
+ * DB-free; `npm test` (CI and the images run Node 22). The Node 20 branches
+ * cover a custom build on older Node, whose fallback engine differs.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -143,7 +143,7 @@ test('linearFallbackCovers asks V8 which regexes its linear engine can run', () 
   ]) {
     assert.equal(linearFallbackCovers(source, flags), false, `/${source}/${flags}`);
   }
-  // Lookbehind: inside on Node 22, outside on Node 20 (the production image's runtime).
+  // Lookbehind: inside on Node 22 (the images' runtime), outside on Node 20 (a custom build on older Node).
   const node20 = Number(process.versions.node.split('.')[0]) < 22;
   assert.equal(linearFallbackCovers('(?<=user=)\\S+', ''), !node20);
   if (node20) assert.match(linearFallbackObstacle('(?<=user=)\\S+', ''), /lookbehind, on Node 20\./);

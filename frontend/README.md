@@ -59,8 +59,9 @@ frontend/
 
 ### Prerequisites
 
-- Node.js 20.19+, 22.13+ or 24+ (Vite 8, which `npm run dev` and `npm run build` use,
-  needs 20.19+ or 22.12+; ESLint 10, which `npm run lint` uses, needs 20.19+, 22.13+ or 24+)
+- Node.js 22.13+ (what `frontend/Dockerfile` builds on and CI uses; Node 20 is
+  end-of-life). Vite 8, which `npm run dev` and `npm run build` use, needs 22.12+
+  on Node 22; ESLint 10, which `npm run lint` uses, needs 22.13+ or 24+
 - npm or yarn
 - Backend API running (see `/backend/README.md`)
 

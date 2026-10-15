@@ -49,19 +49,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout catalog
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Checkout validator (SIEMBox)
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: cladkins/SIEMBOX
           ref: ${{ env.SIEMBOX_REF }}
           path: .siembox
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: .siembox/backend/package-lock.json
 

@@ -1,0 +1,261 @@
+# Build the container images on a pull request, without pushing them, and run
+# them. build-containers.yml builds and publishes the images only after a merge
+# (push to main/develop, releases), so a change to a Dockerfile, a base image, a
+# lockfile or a native module would otherwise first be built after it landed.
+#
+# Each platform runs on its own native runner, as build-containers.yml does. It
+# builds the backend, frontend and log-shipper images into the runner's Docker
+# (no registry, no credentials, nothing pushed), then:
+#   backend:     Node version; bcrypt hash/compare (native module); recheck on
+#                its default backend and on RECHECK_BACKEND=pure; the compiled
+#                linear-time regex fallback against a catastrophic pattern; the
+#                regex worker pools (save-time gate and bounded test runs) from
+#                dist/; the image's own CMD (migrations, then dist/server.js)
+#                against Postgres, started twice; a syslog line stored; a dist
+#                CLI; nmap service detection (NSE), nuclei and trivy.
+#   frontend:    nginx serves the UI and proxies /api to that backend over the
+#                api-socket volume.
+#   log-shipper: Node version, and the bundled discovery agent probing that
+#                backend (TCP connect and an HTTP GET) and a self-signed HTTPS
+#                target (TLS handshake, certificate subject and SAN, HTTPS GET).
+#
+# Keep the build contexts, Dockerfiles and build args in step with
+# build-containers.yml. Checks for one image: .github/image-smoke/.
+name: Image check
+
+on:
+  pull_request:
+    branches: [main]
+    # build-containers.yml's push paths (everything it rebuilds and publishes
+    # after a merge, docs excluded), so no change is published without having
+    # been built and run here first; plus this check's own files.
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'log-shipper/**'
+      - '.github/image-smoke/**'
+      - '.github/workflows/image-check.yml'
+      - '.github/workflows/build-containers.yml'
+      - '!**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  images:
+    name: Images (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            pair: linux-amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            pair: linux-arm64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Load into the runner's Docker instead of pushing. The cache is read from
+      # build-containers.yml's scopes (main's builds) and never written.
+      - name: Build backend image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          platforms: ${{ matrix.platform }}
+          tags: siembox-backend:check
+          load: true
+          push: false
+          provenance: false
+          cache-from: type=gha,scope=backend-${{ matrix.pair }}
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            VITE_API_URL=/api
+          tags: siembox-frontend:check
+          load: true
+          push: false
+          provenance: false
+          cache-from: type=gha,scope=frontend-${{ matrix.pair }}
+
+      - name: Build log-shipper image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./log-shipper
+          file: ./log-shipper/Dockerfile
+          platforms: ${{ matrix.platform }}
+          tags: siembox-log-shipper:check
+          load: true
+          push: false
+          provenance: false
+          cache-from: type=gha,scope=log-shipper-${{ matrix.pair }}
+
+      - name: "Backend: Node version"
+        run: docker run --rm -v "$PWD/.github/image-smoke:/smoke:ro" siembox-backend:check node /smoke/backend-runtime.js node
+
+      - name: "Backend: bcrypt"
+        run: docker run --rm -v "$PWD/.github/image-smoke:/smoke:ro" siembox-backend:check node /smoke/backend-runtime.js bcrypt
+
+      - name: "Backend: recheck (default backend)"
+        run: docker run --rm -v "$PWD/.github/image-smoke:/smoke:ro" siembox-backend:check node /smoke/backend-runtime.js recheck
+
+      - name: "Backend: recheck (RECHECK_BACKEND=pure)"
+        run: docker run --rm -v "$PWD/.github/image-smoke:/smoke:ro" -e RECHECK_BACKEND=pure siembox-backend:check node /smoke/backend-runtime.js recheck
+
+      - name: "Backend: linear-time regex fallback"
+        run: |
+          docker run --rm -v "$PWD/.github/image-smoke:/smoke:ro" siembox-backend:check node /smoke/backend-runtime.js linearFallback
+          # The same match with the fallback off, for comparison (not a check).
+          docker run --rm -v "$PWD/.github/image-smoke:/smoke:ro" -e REGEX_LINEAR_FALLBACK=false siembox-backend:check node /smoke/backend-runtime.js linearFallback
+
+      # What a parser or rule save and a Test button run: worker threads started
+      # from dist/services/regex/regexWorker.js (recheck inside them falls back
+      # to a worker of its own here), the linear fallback applying in them.
+      - name: "Backend: regex worker pools (save-time gate, bounded test run)"
+        run: docker run --rm -v "$PWD/.github/image-smoke:/smoke:ro" siembox-backend:check node /smoke/backend-runtime.js regexPools
+
+      - name: "Backend: start against Postgres (migrations, then dist/server.js), twice"
+        run: |
+          wait_for() { # <what> <command...>: up to 3 minutes
+            local what="$1"; shift
+            for _ in $(seq 1 90); do "$@" >/dev/null 2>&1 && { echo "$what: ready"; return 0; }; sleep 2; done
+            echo "$what: not ready after 3 minutes" >&2; return 1
+          }
+          docker network create siembox
+          docker volume create api-socket
+          docker run -d --name postgres --network siembox \
+            -e POSTGRES_DB=siembox -e POSTGRES_USER=siembox -e POSTGRES_PASSWORD=changeme \
+            postgres:15-alpine
+          # Over TCP: the image's first-run init server listens on the unix socket only.
+          wait_for postgres docker exec postgres pg_isready -h 127.0.0.1 -U siembox -d siembox
+          docker run -d --name backend --network siembox \
+            -v api-socket:/run/siembox \
+            -p 127.0.0.1:8421:8421 -p 127.0.0.1:5514:514/udp \
+            -e NODE_ENV=production -e DB_HOST=postgres -e DB_NAME=siembox -e DB_USER=siembox -e DB_PASSWORD=changeme \
+            -e JWT_SECRET=image-check-only -e CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -hex 32)" \
+            siembox-backend:check
+          wait_for backend curl -fsS http://127.0.0.1:8421/health
+          # The CMD runs every migration on every start: a restart runs them again on the migrated database.
+          docker restart backend
+          wait_for "backend after a restart" curl -fsS http://127.0.0.1:8421/health
+          curl -fsS http://127.0.0.1:8421/health; echo
+          curl -fsS http://127.0.0.1:8421/health/database-status; echo
+          runs=$(docker logs backend 2>&1 | grep -c 'All migrations completed successfully!' || true)
+          echo "migration runs that completed: $runs"
+          test "$runs" -eq 2
+          docker logs backend 2>&1 | grep -E 'SIEMBox API server running|Proxy socket listening|Syslog UDP server listening|\[regex-safety\] checked'
+          if docker logs backend 2>&1 | grep -E 'REGEX_LINEAR_FALLBACK is off|startup scan of stored regexes failed'; then
+            echo 'the regex safety startup did not come up as configured' >&2; exit 1
+          fi
+
+      - name: "Backend: syslog line stored, auth-admin CLI"
+        run: |
+          printf '<13>Oct 15 12:00:00 imagecheck smoke: node22 image check %s' "$GITHUB_RUN_ID" > /dev/udp/127.0.0.1/5514
+          for _ in $(seq 1 15); do
+            stored=$(docker exec postgres psql -U siembox -d siembox -Atc \
+              "SELECT hostname || ' ' || app_name || ': ' || raw_message FROM raw_logs WHERE raw_message LIKE '%node22 image check $GITHUB_RUN_ID%'")
+            [ -n "$stored" ] && break
+            sleep 1
+          done
+          echo "stored: ${stored:-nothing}"
+          test -n "$stored"
+          docker exec backend node dist/scripts/auth-admin.js status
+
+      # The scanners come from the Alpine line under node:22-alpine. A packaging
+      # split there (nse_main.lua moving to nmap-nselibs) once made every -sV
+      # and -O scan die with "NSE: failed to initialize the script engine".
+      - name: "Backend: nmap service detection (NSE), nuclei, trivy"
+        run: |
+          docker exec backend nmap -v -sV --version-light -p 8421 127.0.0.1 > nmap.txt 2>&1 || { cat nmap.txt; exit 1; }
+          grep -E 'NSE: Loaded|^8421/tcp|Nmap done' nmap.txt
+          if grep -F 'failed to initialize the script engine' nmap.txt; then exit 1; fi
+          grep -q 'NSE: Loaded [0-9]* scripts' nmap.txt
+          grep -qE '^8421/tcp +open' nmap.txt
+          docker exec backend nuclei -version 2>&1 | tee nuclei.txt
+          grep -qi 'engine version' nuclei.txt
+          docker exec backend trivy --version | tee trivy.txt
+          grep -q '^Version: ' trivy.txt
+
+      - name: "Frontend: UI and /api through nginx"
+        run: |
+          docker run -d --name frontend --network siembox \
+            -v api-socket:/run/siembox:ro -p 127.0.0.1:8420:80 \
+            -e BACKEND_UPSTREAM=backend:8421 \
+            siembox-frontend:check
+          for _ in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8420/ && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8420/ | grep -o '<div id="app"></div>'
+          # Unauthenticated /api answers 401 from the backend, through nginx's socket upstream.
+          code=$(curl -s -o api.json -w '%{http_code}' http://127.0.0.1:8420/api/logs)
+          echo "GET /api/logs via nginx: $code $(cat api.json)"
+          test "$code" = 401
+          grep -q 'Authentication required' api.json
+          if docker logs frontend 2>&1 | grep -F 'api.sock failed'; then echo 'nginx could not reach the api socket' >&2; exit 1; fi
+
+      - name: "Log shipper: Node and the discovery agent"
+        run: |
+          docker run --rm siembox-log-shipper:check node --version | tee node-version.txt
+          grep -q '^v22\.' node-version.txt
+          # An HTTPS target with a self-signed certificate, as homelab admin UIs
+          # serve, so the agent's TLS handshake, certificate read and HTTPS GET
+          # run in the shipper's Node and its bundled OpenSSL. The backend only
+          # serves plain HTTP, where the TLS attempt always fails. Throwaway key,
+          # made readable for whichever user the container runs as.
+          tls_dir="$RUNNER_TEMP/imagecheck-tls"
+          mkdir -p "$tls_dir"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=imagecheck.local \
+            -addext subjectAltName=DNS:imagecheck.local \
+            -keyout "$tls_dir/key.pem" -out "$tls_dir/cert.pem" 2>/dev/null
+          chmod 0644 "$tls_dir/key.pem"
+          docker run -d --name tlsprobe --network siembox -v "$tls_dir:/tls:ro" siembox-backend:check node -e \
+            "const f=require('fs');require('https').createServer({key:f.readFileSync('/tls/key.pem'),cert:f.readFileSync('/tls/cert.pem')},(q,s)=>{s.writeHead(200);s.end('ok')}).listen(8443,()=>console.log('tlsprobe: listening on 8443'))"
+          for _ in $(seq 1 30); do docker logs tlsprobe 2>&1 | grep 'listening on 8443' >/dev/null && break; sleep 1; done
+          docker logs tlsprobe 2>&1 | grep 'listening on 8443'
+          # A dispatched active scan of both: the agent's liveness sweep, TCP
+          # connect scan, TLS attempt and HTTP(S) GET on each open port.
+          ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' backend)
+          tls_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' tlsprobe)
+          echo "{\"mode\":\"active\",\"cidrs\":[\"$ip/32\",\"$tls_ip/32\"],\"probePlan\":{\"ports\":[8421,8443],\"httpPaths\":[\"/health\"],\"mdnsServices\":[]}}" \
+            | docker run --rm -i --network siembox siembox-log-shipper:check node /usr/local/lib/siembox/discovery-agent.js > signals.json
+          echo "discovery agent output for $ip (backend) and $tls_ip (tlsprobe):"
+          jq -c '.[] | {ip, open_ports, tls_subjects, http_responses: [.http_responses[] | {port, path, status}], discovery_methods}' signals.json
+          # Checked with the shipper's own jq, which shipper-managed.sh posts the output with.
+          # One CN is stored as a string (backend/src/services/logDiscovery/tlsSubject.ts).
+          docker run --rm -i siembox-log-shipper:check jq -e --arg ip "$ip" --arg tls_ip "$tls_ip" '
+            any(.[]; .ip == $ip and .open_ports == [8421]
+              and any(.http_responses[]; .port == 8421 and .path == "/health" and .status == 200))
+            and any(.[]; .ip == $tls_ip and .open_ports == [8443]
+              and .tls_subjects == [{port: 8443, subject_cn: "imagecheck.local", san: ["DNS:imagecheck.local"]}]
+              and any(.http_responses[]; .port == 8443 and .path == "/health" and .status == 200 and .body == "ok"))' \
+            < signals.json > /dev/null
+          docker run --rm siembox-log-shipper:check sh -c \
+            'nmap --version | head -1; nuclei -version 2>&1 | grep -i "engine version"; docker --version; journalctl --version | head -1'
+
+      - name: Container logs
+        if: always()
+        run: |
+          for c in backend frontend postgres tlsprobe; do
+            if docker inspect "$c" >/dev/null 2>&1; then
+              echo "::group::$c"
+              docker logs "$c" 2>&1 | tail -200
+              echo "::endgroup::"
+            fi
+          done

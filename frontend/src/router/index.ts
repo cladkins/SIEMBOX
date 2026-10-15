@@ -19,6 +19,14 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/Login.vue'),
     meta: { requiresAuth: false },
   },
+  // Outside Layout (no navigation): an account that must change its password
+  // can do nothing else, and the guard below keeps it here until it does.
+  {
+    path: '/change-password',
+    name: 'ChangePassword',
+    component: () => import('@/views/ChangePassword.vue'),
+    meta: { requiresAuth: true },
+  },
   {
     path: '/',
     component: () => import('@/views/Layout.vue'),
@@ -177,14 +185,27 @@ const router = createRouter({
 // Navigation guard for authentication. It returns where to go instead of
 // calling the third `next` argument, which vue-router 5 deprecates: a returned
 // path redirects, and returning nothing lets the navigation through.
-router.beforeEach((to) => {
+// The page load's first navigation reads the profile once (stores/auth.ts
+// refreshProfile), so the checks below see a password-change requirement the
+// stored profile predates before any page mounts.
+let profileRefreshed = false;
+
+router.beforeEach(async (to) => {
   const authStore = useAuthStore();
+  if (!profileRefreshed) {
+    profileRefreshed = true;
+    await authStore.refreshProfile();
+  }
   const requiresAuth = to.matched.some((record) => record.meta.requiresAuth);
   const requiresAdmin = to.matched.some((record) => record.meta.requiresAdmin);
   const allowedRoles = to.matched.find((record) => record.meta.allowedRoles)?.meta.allowedRoles;
 
   if (requiresAuth && !authStore.isAuthenticated) {
     return '/login';
+  } else if (authStore.isAuthenticated && authStore.mustChangePassword && to.name !== 'ChangePassword') {
+    return { name: 'ChangePassword' }; // /login too: nothing else works until the password is changed
+  } else if (to.name === 'ChangePassword' && !authStore.mustChangePassword) {
+    return '/';
   } else if (to.path === '/login' && authStore.isAuthenticated) {
     return '/';
   } else if (requiresAdmin && authStore.user?.role !== 'admin') {

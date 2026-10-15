@@ -1,7 +1,11 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
+import type { RouteLocationRaw } from 'vue-router';
 import { api } from '@/services/api';
 import router from '@/router';
+
+/** Why the account must change its password (backend services/auth/passwordChange.ts). */
+export type PasswordChangeReason = 'initial' | 'default' | 'admin' | 'cli';
 
 /**
  * Recognized-browser tokens, by username: the API hands one out on every
@@ -40,6 +44,26 @@ function rememberBrowserToken(username: string, token: string): void {
   }
 }
 
+/**
+ * Set once the API client has left a call pending for good (a 403
+ * PASSWORD_CHANGE_REQUIRED, services/api.ts: requirePasswordChange below).
+ * Whatever waited on that call waits forever: a store's loading flag (the AI
+ * Analyst chat's blocks every later send), a poll. So this page load is not
+ * reused once the account can work again: the next sign-in, or leaving the
+ * change screen without one, starts on a freshly loaded page, with every
+ * store and pending call gone.
+ */
+let callsLeftPending = false;
+
+/** Go to `to`: in this page, or on a fresh page load after calls were left pending. */
+function navigate(to: RouteLocationRaw, how: 'push' | 'replace'): void {
+  if (callsLeftPending) {
+    window.location.replace(router.resolve(to).href);
+    return;
+  }
+  void (how === 'push' ? router.push(to) : router.replace(to));
+}
+
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(localStorage.getItem('token'));
   const userJson = localStorage.getItem('user');
@@ -53,6 +77,14 @@ export const useAuthStore = defineStore('auth', () => {
   // requires this role for parser and rule changes, alert triage and the AI
   // Analyst, so controls for those hide or disable themselves with this check.
   const canAnalyst = computed(() => ['admin', 'operator', 'analyst'].includes(user.value?.role));
+  // The account must choose a new password before anything else (the API
+  // answers every other request with 403 PASSWORD_CHANGE_REQUIRED): its
+  // initial or a temporary password, or SIEMBox's default. The router keeps
+  // it on the ChangePassword view until it does.
+  const mustChangePassword = computed(() => !!user.value?.must_change_password);
+  const passwordChangeReason = computed<PasswordChangeReason | null>(() =>
+    mustChangePassword.value ? (user.value?.must_change_password_reason ?? null) : null
+  );
 
   const login = async (username: string, password: string, code?: string) => {
     const response = await api.login(username, password, code, readBrowserTokens()[username]);
@@ -61,7 +93,50 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = response.data.user;
     localStorage.setItem('token', token.value!);
     localStorage.setItem('user', JSON.stringify(user.value));
-    router.push('/');
+    navigate(response.data.passwordChangeRequired ? { name: 'ChangePassword' } : '/', 'push');
+  };
+
+  /**
+   * The API refused a request because the account must change its password
+   * (services/api.ts): flagged since this tab signed in (an upgrade, an
+   * admin's reset, or a sign-in elsewhere with the default password). The
+   * API client leaves that call pending for good (callsLeftPending).
+   */
+  const requirePasswordChange = (reason: string | null) => {
+    callsLeftPending = true;
+    if (!token.value) return;
+    user.value = {
+      ...(user.value ?? {}),
+      must_change_password: true,
+      must_change_password_reason: reason,
+    };
+    localStorage.setItem('user', JSON.stringify(user.value));
+    if (router.currentRoute.value.name !== 'ChangePassword') void router.replace({ name: 'ChangePassword' });
+  };
+
+  /** The profile from GET /auth/me: kept, and off the change screen once no change is required. */
+  const setProfile = (profile: unknown) => {
+    if (!token.value || !profile || typeof profile !== 'object') return;
+    user.value = { ...(user.value ?? {}), ...profile };
+    localStorage.setItem('user', JSON.stringify(user.value));
+    if (!mustChangePassword.value && router.currentRoute.value.name === 'ChangePassword') navigate('/', 'replace');
+  };
+
+  /**
+   * Read the profile again and keep it (best effort: with no answer the stored
+   * one stands; a 401 signs out as usual). The router does this once per page
+   * load, before the first page mounts, so a requirement set since the stored
+   * profile was saved (an upgrade's scan, an admin's reset) sends the user to
+   * the change screen before any page makes calls the API refuses.
+   */
+  const refreshProfile = async () => {
+    if (!token.value) return;
+    try {
+      const { data } = await api.getProfile({ skipErrorToast: true, skipNetworkErrorToast: true, timeout: 5000 });
+      setProfile(data);
+    } catch {
+      // Keep what the store has; the page's own calls still redirect on a refusal.
+    }
   };
 
   const logout = () => {
@@ -72,13 +147,25 @@ export const useAuthStore = defineStore('auth', () => {
     router.push('/login');
   };
 
+  /** Sign out on the server too (best effort, no toasts), then here. */
+  const signOut = async () => {
+    if (token.value) await api.logout().catch(() => undefined);
+    logout();
+  };
+
   return {
     token,
     user,
     isAuthenticated,
     isAdmin,
     canAnalyst,
+    mustChangePassword,
+    passwordChangeReason,
     login,
+    requirePasswordChange,
+    setProfile,
+    refreshProfile,
     logout,
+    signOut,
   };
 });

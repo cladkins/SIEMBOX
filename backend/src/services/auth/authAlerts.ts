@@ -14,18 +14,24 @@
  * | success after the key it resets held 5 or more failures         | medium                          |
  * | a recognized browser is forgotten after 20 failures             | high                            |
  * | more than 100 checked failures in 10 minutes                    | high, at most once an hour      |
+ * | an account is found on the default password "changeme", at     | high (critical for an admin)    |
+ * |   startup, at a sign-in or as it is enabled                     |                                 |
+ * |   (defaultPasswordAlerts.ts)                                    |                                 |
  *
  * Deduplicated: event_id is siembox-auth:<trigger>:<sha256(key), 16 hex>:<epoch
  * of the streak's first failure>, so a streak raises its alert once however
  * many pauses it goes through (the alerts table's unique index on event_id
  * drops the rest), and the spike alert's is siembox-auth:spike:<UTC hour>.
+ * The default-password alert's key is dpw:<user id> and its "streak" starts
+ * when the account was flagged (users.must_change_password_since), so one flag
+ * raises one alert however many restarts or sign-ins see it.
  *
  * Capped: at most 20 network-pause and success-after-failures alerts an hour,
  * together. Those are cheap to set off (a new network or IPv6 /64 each, or a
  * user's own wrong-then-right sign-ins), so they must not crowd out the rest:
- * the account, MFA, browser and during-attack alerts need an existing account
- * or browser and come once per streak of its key, and the spike alert once an
- * hour, so they are never capped. A slot is taken before the INSERT (raises
+ * the account, MFA, browser, during-attack and default-password alerts need an
+ * existing account or browser and come once per streak or flag of its key, and
+ * the spike alert once an hour, so they are never capped. A slot is taken before the INSERT (raises
  * run concurrently) and given back when nothing was inserted. Raising never
  * blocks or fails a sign-in.
  */
@@ -43,7 +49,8 @@ export type AuthAlertTrigger =
   | 'success-during-attack'
   | 'success-after-failures'
   | 'browser-revoked'
-  | 'spike';
+  | 'spike'
+  | 'default-password';
 
 export type AlertSeverity = 'medium' | 'high' | 'critical';
 

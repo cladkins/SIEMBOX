@@ -39,6 +39,47 @@ Authorization: Bearer YOUR_JWT_TOKEN
 
 The only routes that take no login are `POST /api/auth/login`, the `/health` checks, the shipper-facing `/api/shippers` endpoints (authenticated by the shipper's API key or HTTP push key, see [Log Shippers](#log-shippers-endpoints)), and the EDR agent endpoints (enrollment token or per-agent key).
 
+### Password change required
+
+An account that must choose a new password gets a session at sign-in as usual
+(the answer has `"passwordChangeRequired": true`), but that session may call
+only three routes:
+
+- [`GET /api/auth/me`](#get-apiauthme): the profile, with why;
+- [`PUT /api/auth/me/password`](#put-apiauthmepassword): the change itself
+  (the current password is still required);
+- [`POST /api/auth/logout`](#post-apiauthlogout).
+
+Every other route that takes a login answers it with `403`, before any role
+check, until the password is changed:
+
+```json
+{
+  "status": "error",
+  "statusCode": 403,
+  "code": "PASSWORD_CHANGE_REQUIRED",
+  "reason": "default",
+  "message": "Choose a new password before doing anything else (PUT /api/auth/me/password): this account uses SIEMBox's default password."
+}
+```
+
+`reason` is why (`null` only if it can't be told):
+
+| `reason` | When | The end of `message` |
+|---|---|---|
+| `initial` | The `admin` account the first start created, with `DEFAULT_ADMIN_PASSWORD` (`changeme` when unset) | "this is the password the account was created with." |
+| `default` | Found on SIEMBox's default password `changeme`: admin accounts at every start, any account at a correct sign-in with it | "this account uses SIEMBox's default password." |
+| `admin` | An admin created the account or set its password ([`POST /api/users`](#post-apiusers), [`PUT /api/users/:id`](#put-apiusersid)) without `"mustChangePassword": false` | "an administrator set a temporary password for this account." |
+| `cli` | `auth-admin reset-password` set it | "the password was reset from the command line." |
+
+The requirement belongs to the account, not the session: it applies to all of
+its sessions at once, including ones from before it was set. A successful
+`PUT /api/auth/me/password` lifts it and signs every session out; sign in again
+with the new password. MFA is still asked at sign-in first, and MFA can't be
+set up or turned off while restricted. Refused requests are not audited or
+logged one by one. Shipper and agent routes don't take a session and are not
+affected.
+
 ### Calling the API from a browser (CORS)
 
 The web UI calls the API on its own origin (its nginx proxies `/api`), so by default the API sends no CORS headers: a page on another origin can't read its answers, and the preflight a browser sends before a JSON body or an `Authorization` header gets an empty `204` with no `Access-Control-Allow-*` headers, so the request itself is never sent. Every `OPTIONS` request is answered that way, before the rate limit and the routes. Scripts, shippers, agents and `curl` send no preflight and are unaffected.
@@ -118,7 +159,7 @@ A refused scan or asset write is also recorded in `audit_logs` (`action` `access
 | 201 | Created | Resource created successfully |
 | 400 | Bad Request | Invalid request parameters |
 | 401 | Unauthorized | Missing or invalid authentication |
-| 403 | Forbidden | Insufficient permissions |
+| 403 | Forbidden | Insufficient permissions, a disabled account, or `code: "PASSWORD_CHANGE_REQUIRED"` (the account must change its password first, see [Password change required](#password-change-required)) |
 | 404 | Not Found | Resource not found |
 | 409 | Conflict | Resource already exists |
 | 429 | Too Many Requests | Rate limit exceeded |
@@ -306,21 +347,36 @@ Sign in and receive a session token (valid for 24 hours). Counted by
     "role": "admin",
     "enabled": true,
     "mfa_enabled": false,
-    "last_login": "2025-11-30T12:00:00Z"
+    "last_login": "2025-11-30T12:00:00Z",
+    "must_change_password": true,
+    "must_change_password_reason": "initial",
+    "must_change_password_since": "2025-11-30T11:59:00Z"
   },
   "expiresAt": "2025-12-01T12:00:00Z",
-  "browserToken": "dGhlLWJyb3dzZXItdG9rZW4tZnJvbS1hLXNpZ24taW4"
+  "browserToken": "dGhlLWJyb3dzZXItdG9rZW4tZnJvbS1hLXNpZ24taW4",
+  "passwordChangeRequired": true
 }
 ```
 
 `browserToken` is the presented token when it was valid (it is not rotated),
 otherwise a new one. Keep it for this username and send it with later sign-ins.
 
+`passwordChangeRequired: true` (only present then) means the account must
+choose a new password before anything else: the session works only for
+`GET /api/auth/me`, `PUT /api/auth/me/password` and `POST /api/auth/logout`
+(see [Password change required](#password-change-required)). The `user` fields
+`must_change_password`, `must_change_password_reason` and
+`must_change_password_since` say whether, why and since when. A correct
+sign-in with the default password `changeme` sets it (`reason: "default"`),
+before the MFA step.
+
 **Errors** (all in the `{status, statusCode, message}` envelope):
 - `400` - `"Username and password are required"`: a field is missing or isn't
   what is described above (no database access, nothing counted)
 - `401` - `"Invalid username or password"`: wrong password, unknown username,
-  or a disabled account with a wrong password
+  or a disabled account with a wrong password; also a right password that was
+  changed or reset while this sign-in was being checked (no session is ever
+  created for a password that is no longer the account's)
 - `401` - `{ "message": "MFA code required", "mfaRequired": true }`: the
   password is right and the user has MFA; send the same request with `code`
   (not counted as a failure)
@@ -341,7 +397,8 @@ otherwise a new one. Keep it for this username and send it with later sign-ins.
 
 Logout current user and invalidate session token.
 
-**Authentication:** Required
+**Authentication:** Required (also works for a session that must change its
+password)
 
 **Request Body:** None
 
@@ -358,7 +415,8 @@ Logout current user and invalidate session token.
 
 Get current authenticated user's profile.
 
-**Authentication:** Required
+**Authentication:** Required (also works for a session that must change its
+password)
 
 **Response (200):**
 ```json
@@ -371,7 +429,10 @@ Get current authenticated user's profile.
   "last_login": "2025-11-30T12:00:00Z",
   "created_at": "2025-01-01T00:00:00Z",
   "mfa_enabled": false,
-  "password_changed_at": "2025-11-30T11:58:00Z"
+  "password_changed_at": "2025-11-30T11:58:00Z",
+  "must_change_password": false,
+  "must_change_password_reason": null,
+  "must_change_password_since": null
 }
 ```
 
@@ -380,13 +441,20 @@ Get current authenticated user's profile.
 admin's reset or the recovery command line doesn't set it). Getting Started's
 "Secure your account" step reads it.
 
+`must_change_password` is `true` while the account must choose a new password
+before anything else, with `must_change_password_reason` (`initial`,
+`default`, `admin` or `cli`) and `must_change_password_since`; see
+[Password change required](#password-change-required).
+
 ---
 
 ### PUT /api/auth/me/password
 
-Change current user's password.
+Change current user's password. This is how an account that must change its
+password does it.
 
-**Authentication:** Required
+**Authentication:** Required (also works for a session that must change its
+password)
 
 **Request Body:**
 ```json
@@ -404,18 +472,22 @@ Change current user's password.
 ```
 
 **Notes:**
-- The new password must be 8 to 1024 characters and differ from the current one
+- The new password must be 8 to 1024 characters, differ from the current one,
+  and not be the default password `changeme` in any letter case
 - On success every session of the user is revoked (this one included), their
   recognized browsers are forgotten and their sign-in counters cleared: sign in
-  again with the new password. `password_changed_at` (`GET /api/auth/me`) is set
+  again with the new password. `password_changed_at` (`GET /api/auth/me`) is set,
+  and a requirement to change the password is lifted (in the same update)
 - Wrong current passwords are counted ([Sign-in Protection](#sign-in-protection),
   "Current password"): the 5th in a row pauses further attempts. A right one is
   never counted, even if saving the new password then fails (`500`)
 
 **Errors:**
-- `400` - Missing passwords, a new password that is too short, too long or
-  unchanged, or `"Current password is incorrect"` (a `400`, not a `401`: the
-  session stays valid)
+- `400` - `"Current password and new password are required"`,
+  `"New password must be 8 to 1024 characters"`, `"New password must be
+  different from the current one"`, `"The default password can't be used"`,
+  or `"Current password is incorrect"` (a `400`, not a `401`: the session
+  stays valid)
 - `429` - `code: "SIGNIN_PAUSED"`, `reason: "current_password"`, with
   `Retry-After`
 
@@ -1622,7 +1694,10 @@ Get all users (admin only).
     "role": "admin",
     "enabled": true,
     "last_login": "2025-11-30T12:00:00Z",
-    "created_at": "2025-01-01T00:00:00Z"
+    "created_at": "2025-01-01T00:00:00Z",
+    "must_change_password": false,
+    "must_change_password_reason": null,
+    "must_change_password_since": null
   },
   {
     "id": 2,
@@ -1632,6 +1707,9 @@ Get all users (admin only).
     "enabled": true,
     "last_login": "2025-11-30T10:00:00Z",
     "created_at": "2025-01-15T00:00:00Z",
+    "must_change_password": true,
+    "must_change_password_reason": "admin",
+    "must_change_password_since": "2025-11-30T09:55:00.000Z",
     "signin_paused_until": "2025-11-30T12:12:00.000Z",
     "signin_pause_scopes": ["acct"],
     "password_change_paused_until": null
@@ -1652,6 +1730,9 @@ password (`pwc`, wrong current passwords) ends: it doesn't stop them signing
 in, so it is not a sign-in pause. See
 [Sign-in Protection](#sign-in-protection) and
 [`POST /api/users/:id/unlock`](#post-apiusersidunlock).
+`must_change_password` (with `_reason` and `_since`) is `true` while the
+account must choose a new password at its next sign-in before it can do
+anything else (see [Password change required](#password-change-required)).
 
 **User Roles** (each includes the ones before it; see [Roles](#roles) and the
 [permission table](../guides/USER-MANAGEMENT.md#permission-table)):
@@ -1699,7 +1780,8 @@ Create new user (admin only).
   "email": "newuser@example.com",
   "password": "password123",
   "role": "analyst",
-  "enabled": true
+  "enabled": true,
+  "mustChangePassword": true
 }
 ```
 
@@ -1711,16 +1793,27 @@ Create new user (admin only).
   "email": "newuser@example.com",
   "role": "analyst",
   "enabled": true,
+  "must_change_password": true,
+  "must_change_password_reason": "admin",
+  "must_change_password_since": "2025-11-30T12:00:00Z",
   "created_at": "2025-11-30T12:00:00Z"
 }
 ```
 
 **Validation:**
-- Password must be at least 8 characters
+- Password must be 8 to 1024 characters, and not the default password
+  `changeme` in any letter case
 - Username and email must be unique
+- `mustChangePassword` (optional, default `true`): the password you set is
+  temporary, and the user must choose their own at the first sign-in
+  (`reason: "admin"`). `false` lets them keep it.
+
+Audited as `user.created`, with `passwordChangeRequired` (`"admin"` or `null`).
 
 **Errors:**
-- `400` - Missing fields or password too short
+- `400` - Missing fields, `"Password must be 8 to 1024 characters"`,
+  `"Password can't be the default password"`, or `"mustChangePassword must be
+  true or false"`
 - `409` - Username or email already exists
 
 ---
@@ -1737,7 +1830,8 @@ Update user (admin only).
   "email": "updated@example.com",
   "role": "admin",
   "enabled": false,
-  "password": "newpassword123"
+  "password": "newpassword123",
+  "mustChangePassword": true
 }
 ```
 
@@ -1756,10 +1850,25 @@ Update user (admin only).
 **Notes:**
 - Setting `password` is a reset: the user is signed out everywhere, their
   recognized browsers are forgotten and their sign-in counters cleared.
-  Audited as `user.password_reset`; other changes as `user.updated`.
+  Audited as `user.password_reset` (with `passwordChangeRequired`); other
+  changes as `user.updated`.
+- `mustChangePassword` (default `true`) applies only with `password`: the new
+  password is temporary and the user must choose their own at the next
+  sign-in (`reason: "admin"`, replacing any earlier reason). `false` lets them
+  keep it, and lifts any earlier requirement. Without `password` the
+  requirement is left as it is: it can't be lifted without replacing the
+  password it is about, or set without handing over one the user knows.
+- `"enabled": true` for a disabled account still required to change the
+  default password `changeme` (`reason: "default"`, for example an admin the
+  upgrade scan found while it was disabled) raises the default-password
+  `siembox-auth` alert, once per requirement: from now on anyone could sign
+  in as it and choose its password. Send a `password` in the same request to
+  replace it instead.
 
 **Errors:**
-- `400` - Password not 8 to 1024 characters
+- `400` - `"Password must be 8 to 1024 characters"`, `"Password can't be the
+  default password"`, `"mustChangePassword must be true or false"`, or
+  `"mustChangePassword applies only when setting a password"`
 - `404` - User not found
 - `409` - Email or username already taken
 

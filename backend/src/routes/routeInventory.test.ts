@@ -388,10 +388,27 @@ const VIEWER_SAFE_WRITES = new Set([
   'POST /api/exposure/password-check', // k-anonymity lookup; stores nothing
 ]);
 
+/**
+ * The only routes a session that must change its password may call
+ * (middleware/auth.ts authenticateAllowingPasswordChange); every other route
+ * that takes a login answers 403 PASSWORD_CHANGE_REQUIRED. A new entry needs a
+ * reason it can't be used to get around the change.
+ */
+const PASSWORD_CHANGE_ALLOWED = new Set([
+  'GET /api/auth/me', // the profile, with the reason
+  'PUT /api/auth/me/password', // the change itself (current password required)
+  'POST /api/auth/logout', // giving up
+]);
+
 // ---------------------------------------------------------------------------
 
 const TOKENS = Object.fromEntries(ROLES.map((role) => [role, `route-inventory-session-${role}`])) as Record<Role, string>;
 const USER_IDS = Object.fromEntries(ROLES.map((role, i) => [role, 900_001 + i])) as Record<Role, number>;
+/** Sessions of accounts that must change their password (reason 'default'): an admin, and a viewer for one spot check. */
+const RESTRICTED = {
+  admin: { token: 'route-inventory-session-must-change', id: 900_101, role: 'admin' as Role },
+  viewer: { token: 'route-inventory-session-must-change-viewer', id: 900_102, role: 'viewer' as Role },
+};
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any Express middleware or handler
 type Handler = (...args: any[]) => unknown;
@@ -450,6 +467,9 @@ interface Recorder {
 let poolQuery: Recorder | undefined;
 let poolConnect: Recorder | undefined;
 let auditLog: Recorder | undefined;
+let errorLog: Recorder | undefined;
+/** Every layer mounted with use() (app or router), as walkUseLayers() found them. */
+let useLayers: Layer[] = [];
 
 /** A local TCP port that nothing listens on (bound, then released). */
 async function closedPort(): Promise<number> {
@@ -539,6 +559,11 @@ function walk(stack: Layer[], prefix = '', mounts = new Set<string>()): Served[]
   return out;
 }
 
+/** Every non-route layer under `stack`, routers' own included: what use() mounted. */
+function walkUseLayers(stack: Layer[]): Layer[] {
+  return stack.flatMap((layer) => (layer.route ? [] : [layer, ...(layer.handle.stack ? walkUseLayers(layer.handle.stack) : [])]));
+}
+
 /** Every layer under `stack`: middleware, routers, routes and the layers inside routes. */
 function allLayers(stack: Layer[]): Layer[] {
   return stack.flatMap((layer) => [
@@ -573,23 +598,39 @@ before(async () => {
   const { AuditService } = await import('../services/audit/auditService');
   auditLog = mock.method(AuditService, 'log', async () => undefined) as unknown as Recorder;
   const { ErrorLogService } = await import('../services/errors/errorLogService');
-  mock.method(ErrorLogService, 'logError', async () => undefined);
+  errorLog = mock.method(ErrorLogService, 'logError', async () => undefined) as unknown as Recorder;
 
-  // One signed-in user per role: authenticate() looks the token up, then the user.
+  // One signed-in user per role: authenticate() looks the token's session and
+  // user up together (SessionModel.findUserByToken). Plus the restricted
+  // sessions, whose accounts must change their password. UserModel.findById
+  // is what the routes that reload the caller read.
   const { SessionModel } = await import('../models/Session');
   const { UserModel } = await import('../models/User');
-  const roleOfToken = new Map(ROLES.map((role) => [TOKENS[role], role]));
-  const roleOfUser = new Map(ROLES.map((role) => [USER_IDS[role], role]));
-  mock.method(SessionModel, 'findByToken', async (token: string) => {
-    const role = roleOfToken.get(token);
-    return role ? { id: USER_IDS[role], user_id: USER_IDS[role], token, expires_at: new Date(Date.now() + 3_600_000), created_at: new Date() } : null;
+  const userOfToken = new Map<string, { id: number; role: Role; restricted: boolean }>([
+    ...ROLES.map((role) => [TOKENS[role], { id: USER_IDS[role], role, restricted: false }] as const),
+    ...Object.values(RESTRICTED).map(({ token, id, role }) => [token, { id, role, restricted: true }] as const),
+  ]);
+  const userOfId = new Map([...userOfToken.values()].map((user) => [user.id, user]));
+  const userRow = (id: number) => {
+    const user = userOfId.get(id);
+    if (!user) return null;
+    const name = `inventory-${user.role}${user.restricted ? '-must-change' : ''}`;
+    return {
+      id,
+      username: name,
+      email: `${name}@siembox.invalid`,
+      role: user.role,
+      enabled: true,
+      must_change_password: user.restricted,
+      must_change_password_reason: user.restricted ? 'default' : null,
+      must_change_password_since: user.restricted ? new Date() : null,
+    };
+  };
+  mock.method(SessionModel, 'findUserByToken', async (token: string) => {
+    const user = userOfToken.get(token);
+    return user ? userRow(user.id) : null;
   });
-  mock.method(UserModel, 'findById', async (id: number) => {
-    const role = roleOfUser.get(id);
-    return role
-      ? { id, username: `inventory-${role}`, email: `inventory-${role}@siembox.invalid`, role, enabled: true }
-      : null;
-  });
+  mock.method(UserModel, 'findById', async (id: number) => userRow(id));
   // No EDR agent or shipper exists, so no key (a login's included) can pass.
   const { EdrAgentModel } = await import('../models/EdrAgent');
   mock.method(EdrAgentModel, 'findById', async () => null);
@@ -600,6 +641,7 @@ before(async () => {
   const stack = (app.router as unknown as { stack?: Layer[] }).stack;
   assert.ok(stack, 'Express internals changed (no app.router.stack): update walk() and mountPathOf()');
   served = walk(stack, '', mounts);
+  useLayers = walkUseLayers(stack);
 
   // Each route's handler (its method's last layer) answers with the route it belongs to.
   for (const { id, method, route } of served) {
@@ -630,6 +672,8 @@ interface Outcome {
   /** The route whose (stub) handler answered, if one did. */
   reached?: string;
   message?: string;
+  code?: string;
+  reason?: string | null;
 }
 
 async function call(method: string, path: string, headers: Record<string, string> = {}): Promise<Outcome> {
@@ -638,12 +682,15 @@ async function call(method: string, path: string, headers: Record<string, string
     headers: { 'Content-Type': 'application/json', ...headers },
     body: method === 'GET' ? undefined : '{}',
   });
-  // API errors are { status: 'error', statusCode, message } (middleware/errorHandler.ts).
-  const json = (await res.json().catch(() => null)) as { reached?: string; message?: string } | null;
-  return { status: res.status, reached: json?.reached, message: json?.message };
+  // API errors are { status: 'error', statusCode, message } (middleware/errorHandler.ts),
+  // plus code and reason for PASSWORD_CHANGE_REQUIRED (middleware/auth.ts).
+  const json = (await res.json().catch(() => null)) as Omit<Outcome, 'status'> | null;
+  return { status: res.status, reached: json?.reached, message: json?.message, code: json?.code, reason: json?.reason };
 }
 
 const asRole = (role: Role) => ({ Authorization: `Bearer ${TOKENS[role]}` });
+/** A session whose account must change its password. */
+const asRestricted = (who: keyof typeof RESTRICTED = 'admin') => ({ Authorization: `Bearer ${RESTRICTED[who].token}` });
 /** A route's path with every :param filled in. */
 const urlOf = (path: string) => path.replace(/:\w+/g, '1');
 
@@ -734,6 +781,50 @@ test('viewers are read-only: every non-GET route open to them is a known safe on
   assert.deepEqual([...VIEWER_SAFE_WRITES].filter((id) => !viewerWrites.includes(id)), [], 'stale VIEWER_SAFE_WRITES entries');
 });
 
+test('every PASSWORD_CHANGE_ALLOWED entry is a route that takes a login', () => {
+  const sessionRoutes = INVENTORY.filter(([, , who]) => Array.isArray(who)).map(([method, path]) => `${method} ${path}`);
+  assert.deepEqual([...PASSWORD_CHANGE_ALLOWED].filter((id) => !sessionRoutes.includes(id)), [], 'stale PASSWORD_CHANGE_ALLOWED entries');
+});
+
+test('the gate that lets a restricted session through sits on exactly the PASSWORD_CHANGE_ALLOWED routes', () => {
+  const gate = 'authenticateAllowingPasswordChange';
+  const gated = served
+    .filter(({ method, route }) =>
+      route.stack.some((layer) => (layer.method === undefined || layer.method === method.toLowerCase()) && layer.name === gate)
+    )
+    .map(({ id }) => id)
+    .sort();
+  assert.deepEqual(gated, [...PASSWORD_CHANGE_ALLOWED].sort());
+  assert.ok(useLayers.length > 20, `found ${useLayers.length} use() layers`);
+  assert.deepEqual(
+    useLayers.filter((layer) => layer.name === gate).map((layer) => String(layer.mountPath)),
+    [],
+    `${gate} is never mounted with use(): it would open every route under the mount to a restricted session`
+  );
+});
+
+test('a restricted session is refused before any role gate: a viewer on an admin-only route gets PASSWORD_CHANGE_REQUIRED', async () => {
+  for (const [method, path] of [
+    ['GET', '/api/users'],
+    ['POST', '/api/auth/cleanup'],
+    ['GET', '/api/admin/sign-in-protection'],
+  ] as const) {
+    auditLog!.mock.resetCalls();
+    const outcome = await call(method, path, asRestricted('viewer'));
+    assert.deepEqual(
+      { status: outcome.status, code: outcome.code, reason: outcome.reason, reached: outcome.reached },
+      { status: 403, code: 'PASSWORD_CHANGE_REQUIRED', reason: 'default', reached: undefined },
+      `${method} ${path}`
+    );
+    assert.equal(auditLog!.mock.callCount(), 0, 'no access.denied row: the role gate never ran');
+  }
+  // The routes it may call let the viewer through too.
+  for (const id of PASSWORD_CHANGE_ALLOWED) {
+    const [method, path] = id.split(' ');
+    assert.equal((await call(method, path, asRestricted('viewer'))).reached, id);
+  }
+});
+
 test('the rate limiters were found and set aside', () => {
   // The general /api limiter at least; scan, agent and log-push routes have their own.
   assert.ok(swappedLimiters >= 1, 'no express-rate-limit middleware found: did the way limiters are recognized change?');
@@ -746,6 +837,7 @@ for (const [method, path, who, audited = false] of INVENTORY) {
   test(`${id}: ${describeWho(who)}`, async () => {
     if (who === PUBLIC) {
       assert.equal((await call(method, url)).reached, id, 'reachable without a login');
+      assert.equal((await call(method, url, asRestricted())).reached, id, 'and with a session that must change its password');
       return;
     }
 
@@ -767,12 +859,38 @@ for (const [method, path, who, audited = false] of INVENTORY) {
           `${role}'s session neither unlocks nor is refused by role`
         );
       }
+      // Agent keys are not sessions: a session that must change its password
+      // changes nothing here either.
+      const restricted = await call(method, url, { ...agentHeaders, ...asRestricted() });
+      assert.deepEqual(
+        { status: restricted.status, reached: restricted.reached, code: restricted.code },
+        { status: stranger.status, reached: stranger.reached, code: stranger.code },
+        'a restricted session neither unlocks nor is refused'
+      );
       return;
     }
 
     const anonymous = await call(method, url);
     assert.equal(anonymous.status, 401, 'needs a login');
     assert.equal(anonymous.message, 'Authentication required');
+
+    // A session whose account must change its password: only the allowed
+    // routes; everything else, present or added later, is refused before any
+    // role gate, with nothing written to audit_logs or application_errors.
+    auditLog!.mock.resetCalls();
+    errorLog!.mock.resetCalls();
+    const restricted = await call(method, url, asRestricted());
+    if (PASSWORD_CHANGE_ALLOWED.has(id)) {
+      assert.equal(restricted.reached, id, `a restricted session may call this route (status ${restricted.status})`);
+    } else {
+      assert.deepEqual(
+        { status: restricted.status, code: restricted.code, reason: restricted.reason, reached: restricted.reached },
+        { status: 403, code: 'PASSWORD_CHANGE_REQUIRED', reason: 'default', reached: undefined },
+        'a restricted session is refused with PASSWORD_CHANGE_REQUIRED'
+      );
+      assert.equal(auditLog!.mock.callCount(), 0, 'the refusal is not audited');
+      assert.equal(errorLog!.mock.callCount(), 0, 'the refusal writes no application_errors row');
+    }
 
     for (const role of ROLES) {
       auditLog!.mock.resetCalls();

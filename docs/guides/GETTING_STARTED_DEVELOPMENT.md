@@ -45,7 +45,7 @@ docker compose logs -f
 # 5. Access the application
 # Frontend: http://localhost:8420
 # Backend API: http://localhost:8421
-# Default credentials: admin / changeme
+# Default credentials: admin / changeme (the first sign-in asks for a new password)
 ```
 
 That's it! The application is now running.
@@ -167,7 +167,8 @@ npm run dev
 ### Step 5: Verify Installation
 
 1. **Open browser**: Navigate to `http://localhost:5173`
-2. **Login**: Username: `admin`, Password: `changeme`
+2. **Login**: Username: `admin`, Password: `changeme`. The first sign-in on a new database
+   (dev ones too) lands on **Choose a new password**: pick one, then sign in again with it
 3. **Check dashboard**: You should see the main dashboard
 
 ## Project Structure Overview
@@ -500,7 +501,7 @@ When making changes, update relevant documentation:
 | `DB_USER` | Database user | siembox | Yes |
 | `DB_PASSWORD` | Database password | - | Yes |
 | `JWT_SECRET` | JWT signing key | - | Yes |
-| `DEFAULT_ADMIN_PASSWORD` | Initial admin password | changeme | No |
+| `DEFAULT_ADMIN_PASSWORD` | Initial password of the `admin` account, used once when the first migrate creates it; the first sign-in must change it | changeme | No |
 | `CREDENTIAL_ENCRYPTION_KEY` | Encryption key | - | Yes |
 | `LOG_LEVEL` | Winston log level | info | No |
 | `CORS_ORIGIN` | Origins whose pages may call the API from a browser, comma-separated; empty = same-origin only | (empty) | No |

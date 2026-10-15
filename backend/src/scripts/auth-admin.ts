@@ -17,8 +17,14 @@
  *   unlock --all               clear every counter
  *   reset-password <username>  set a random 20-character password (printed
  *                              once), sign the account out everywhere, forget
- *                              its browsers and clear its counters
+ *                              its browsers and clear its counters; the
+ *                              account must choose its own password at the
+ *                              next sign-in (MFA, if on, is still asked first)
  *   disable-mfa <username>     turn MFA off for an account
+ *
+ * There is no command that clears a required password change: only changing
+ * the password does (docs/operations/TROUBLESHOOTING.md has the SQL last
+ * resort).
  *
  * It is a separate process that talks to Postgres, where the counters live,
  * so its changes take effect at once in the running backend. Every change
@@ -53,7 +59,8 @@ const USAGE = [
   '  unlock --network <net>     clear every counter of a network: an IP address, an IPv6 /64',
   "                             as status prints it, or 'unknown' (requests without an address)",
   '  unlock --all               clear every counter',
-  '  reset-password <username>  set a random password (printed once), sign out everywhere',
+  '  reset-password <username>  set a random password (printed once), sign out everywhere;',
+  '                             a new password must be chosen at the next sign-in',
   '  disable-mfa <username>     turn MFA off for an account',
 ].join('\n');
 
@@ -86,6 +93,13 @@ function describeHold(hold: NetworkHold, username: string): string[] {
   ];
 }
 
+/** 'yes (default, since 2026-10-14T09:30:00.000Z)' or 'no'. */
+function describePasswordChange(user: User): string {
+  if (user.must_change_password !== true) return 'no';
+  const since = user.must_change_password_since ? new Date(user.must_change_password_since).toISOString() : 'unknown';
+  return `yes (${user.must_change_password_reason ?? 'unknown reason'}, since ${since})`;
+}
+
 async function findUser(username: string | undefined, io: Io): Promise<User | null> {
   if (!username) {
     io.err(USAGE);
@@ -114,6 +128,7 @@ export async function main(argv: string[], io: Io = defaultIo): Promise<number> 
           `${user.username}: ${user.enabled ? 'enabled' : 'disabled'}, MFA ${user.mfa_enabled ? 'on' : 'off'}, ` +
             `${await countBrowsers(user.id)} recognized browser(s)`
         );
+        io.out(`password change required: ${describePasswordChange(user)}`);
       }
       if (rows.length === 0 && holds.length === 0) {
         io.out('No paused or recently failing sign-in counters.');
@@ -160,18 +175,28 @@ export async function main(argv: string[], io: Io = defaultIo): Promise<number> 
       const user = await findUser(args[0], io);
       if (!user) return 1;
       const password = randomPassword();
-      await UserModel.update(user.id, { password });
+      // Always temporary: whoever runs this is either the user, who changes it
+      // at once, or hands it over.
+      // Signs the account out everywhere in the same transaction; then the
+      // browsers and counters.
+      const { sessionsRevoked } = await UserModel.applyUpdate(user.id, { password, requirePasswordChange: 'cli' });
       const revoked = await revokeAccountAccess(user);
+      const sessions = sessionsRevoked + revoked.sessions;
       await auditAuth('user.password_reset', null, {
         userId: null,
         targetUserId: user.id,
         status: 200,
-        details: { by: 'cli', sessionsRevoked: revoked.sessions, browsersRevoked: revoked.browsers },
+        details: {
+          by: 'cli',
+          sessionsRevoked: sessions,
+          browsersRevoked: revoked.browsers,
+          passwordChangeRequired: 'cli',
+        },
       });
       io.out(`New password for ${user.username} (shown only now): ${password}`);
       io.out(
-        `Signed out ${revoked.sessions} session(s), forgot ${revoked.browsers} browser(s), cleared ${revoked.counters} counter(s). ` +
-          'Change the password after signing in.'
+        `Signed out ${sessions} session(s), forgot ${revoked.browsers} browser(s), cleared ${revoked.counters} counter(s). ` +
+          'They must choose a new password at their next sign-in (MFA, if on, is still asked first).'
       );
       return 0;
     }

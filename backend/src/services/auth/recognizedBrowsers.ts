@@ -75,6 +75,12 @@ export async function issueOrTouchBrowser(params: {
   token?: string;
   ip: string | null;
   userAgent: string | null;
+  /**
+   * The password hash the sign-in checked: a new browser is recorded only
+   * while it is still the account's, so a password change or reset that
+   * landed meanwhile (which forgets every browser) leaves none behind.
+   */
+  passwordHash?: string;
 }): Promise<string | null> {
   const ip = toInet(params.ip);
   const agent = params.userAgent ? params.userAgent.slice(0, 256) : null;
@@ -88,10 +94,12 @@ export async function issueOrTouchBrowser(params: {
       if ((touched.rowCount ?? 0) > 0) return params.token;
     }
     const token = newBrowserToken();
-    await query(
-      `INSERT INTO recognized_browsers (user_id, token_hash, last_ip, user_agent) VALUES ($1, $2, $3, $4)`,
-      [params.userId, hashBrowserToken(token), ip, agent]
+    const inserted = await query(
+      `INSERT INTO recognized_browsers (user_id, token_hash, last_ip, user_agent)
+       SELECT id, $2, $3, $4 FROM users WHERE id = $1 AND ($5::text IS NULL OR password_hash = $5) FOR SHARE`,
+      [params.userId, hashBrowserToken(token), ip, agent, params.passwordHash ?? null]
     );
+    if ((inserted.rowCount ?? 0) === 0) return null;
     await query(
       `DELETE FROM recognized_browsers
         WHERE user_id = $1

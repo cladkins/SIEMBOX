@@ -1,19 +1,21 @@
--- SIEMBox Seed Data — default admin user only.
+-- SIEMBox Seed Data. Nothing is seeded here anymore.
 --
--- Parsers and detection rules are NOT seeded here anymore: a fresh install
--- starts empty and the operator installs exactly what they want from the in-app
--- catalog (Parsers / Detection Rules → Browse Catalog → Install all). The large
--- block of hardcoded "built-in" parsers and sample rules that used to live in
--- this file was removed for that reason.
+-- Parsers and detection rules are NOT seeded: a fresh install starts empty and
+-- the operator installs exactly what they want from the in-app catalog
+-- (Parsers / Detection Rules → Browse Catalog → Install all). The large block
+-- of hardcoded "built-in" parsers and sample rules that used to live in this
+-- file was removed for that reason.
 --
--- Non-destructive for existing installs: their previously-seeded parsers/rules
--- already exist in the database and are left untouched; this migration just
--- stops creating new ones. The migrate runner still substitutes the real admin
--- password hash for the placeholder below.
-
--- Create default admin user
--- Username: admin
--- Password: changeme (MUST be changed after first login)
-INSERT INTO users (username, email, password_hash, role)
-VALUES ('admin', 'admin@siembox.local', '$2b$10$placeholder', 'admin')
-ON CONFLICT (username) DO NOTHING;
+-- The default admin account is not seeded here either. It is created by the
+-- migrate runner (src/scripts/migrate.ts, services/auth/defaultCredentials.ts)
+-- after every migration has run, because it needs migration 039's columns: it
+-- is created already required to choose a new password at its first sign-in.
+-- It is created only when the users table is empty, so deleting or renaming
+-- the account no longer brings it back on the next start (recovery is
+-- `auth-admin reset-password <user>`).
+--
+-- Non-destructive for existing installs: their previously-seeded parsers,
+-- rules and admin account are left untouched. The file stays so the migration
+-- numbering and history keep their meaning; the query below only keeps it
+-- from being an all-comment query.
+SELECT 1;

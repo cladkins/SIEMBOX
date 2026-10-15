@@ -25,7 +25,7 @@ import router, {
   SHIPPER_EDITABLE_FIELDS,
   SOURCE_EDITABLE_FIELDS,
 } from './shippers';
-import { authenticate, optionalAuthenticate, requireAdmin, requireOperator } from '../middleware/auth';
+import { authenticate, authenticateAllowingPasswordChange, requireAdmin, requireOperator } from '../middleware/auth';
 import { LogShipperModel, ShipperSourceModel, type LogShipper, type ShipperSource } from '../models/LogShipper';
 import { ApiError } from '../middleware/errorHandler';
 
@@ -145,7 +145,7 @@ for (const [method, path] of ADMIN_WRITES) {
 for (const [method, path] of SHIPPER_FACING) {
   test(`${method.toUpperCase()} ${path} (shipper-facing) carries no JWT middleware`, () => {
     const handlers = routeHandlers(method, path);
-    assert.ok(!handlers.includes(authenticate) && !handlers.includes(optionalAuthenticate));
+    assert.ok(!handlers.includes(authenticate) && !handlers.includes(authenticateAllowingPasswordChange));
     assert.ok(!handlers.includes(requireOperator) && !handlers.includes(requireAdmin));
   });
 }

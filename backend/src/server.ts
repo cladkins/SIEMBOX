@@ -25,6 +25,7 @@ import { startSignInHousekeepingJob, stopSignInHousekeepingJob } from './jobs/si
 import { signInSettings } from './services/auth/signInPolicy';
 import { getDummyHash } from './services/auth/signInService';
 import { stopRefusalSummary } from './services/auth/authEvents';
+import { raiseDefaultPasswordAlerts } from './services/auth/defaultPasswordAlerts';
 import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
 import { TemplateService } from './services/scanner/templateService';
 import { CredentialEncryption } from './services/credentials/credentialEncryption';
@@ -179,6 +180,10 @@ const startServer = async () => {
     // Which origins' pages may call the API from a browser. Every start warns
     // about CORS_ORIGIN=* and about each entry it ignored.
     logCorsPolicy(corsPolicy);
+    // An account found on the default password "changeme" (flagged by
+    // migrate's scan, or at a sign-in) raises a siembox-auth alert: once per
+    // flag, so restarts add nothing. In the background; never fails the start.
+    void raiseDefaultPasswordAlerts();
     // The dummy hash unknown usernames are checked against, made before the
     // first sign-in needs it.
     await getDummyHash();

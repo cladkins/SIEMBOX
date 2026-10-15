@@ -108,7 +108,12 @@ The User Management page displays a table with all users:
   every network, one of their recognized browsers, MFA codes, or a network
   paused by failures for any username that they mistyped from in the last 15
   minutes), and "Password change paused" while wrong current passwords hold
-  back changing their own password (signing in is not affected)
+  back changing their own password (signing in is not affected). **Must change
+  password** (red when the account was found on the default password
+  `changeme`, orange otherwise) while the account must choose a new password at
+  its next sign-in before it can do anything else; the tooltip says why
+  (initial admin password, default password, set by an administrator, or reset
+  from the command line) and since when
 - **Actions**: Unlock (only while something is paused), Edit and Delete buttons
 
 ### Create New User
@@ -120,6 +125,10 @@ The User Management page displays a table with all users:
    - **Role**: Select from Admin, Operator, Analyst, or Viewer
    - **Password**: Minimum 8 characters
    - **Confirm Password**: Must match password
+   - **Require a password change at first sign-in**: checked by default. The
+     password you chose is then temporary: at their first sign-in the user
+     must choose their own before they can do anything else. Uncheck it only
+     when the user chose this password themselves
 3. Click **Create**
 
 **Validation Rules**:
@@ -127,7 +136,8 @@ The User Management page displays a table with all users:
 - Username must be unique
 - Email must be valid format
 - Email must be unique
-- Password must be at least 8 characters
+- Password must be at least 8 characters, and not the default password
+  `changeme`
 - Passwords must match
 
 ### Edit User
@@ -149,14 +159,20 @@ The User Management page displays a table with all users:
 2. Click **Change Password** button
 3. Enter the new password (minimum 8 characters)
 4. Confirm the password
-5. Click **Change Password**
+5. **Require a password change at next sign-in**: checked by default, so the
+   password you set is temporary and the user must choose their own at their
+   next sign-in. Uncheck it to let them keep it (this also lifts an earlier
+   requirement). The box isn't shown when you change your own password
+6. Click **Change Password**
 
 **Security Notes**:
 - Admin users can change any user's password without knowing the current password
 - It is a reset: the user is signed out everywhere at once, the browsers they
   signed in from are no longer recognized, and their sign-in pauses are cleared.
   They sign in with the new password (resetting your own signs you out too)
-- Audited as `user.password_reset`
+- With the box checked (the default), the user then lands on **Choose a new
+  password** and can do nothing else until they have
+- Audited as `user.password_reset`, with `passwordChangeRequired`
 
 ### Unlock Sign-in
 
@@ -201,6 +217,12 @@ TROUBLESHOOTING.md, "Locked out of SIEMBox" (the `auth-admin` command line).
 - Passwords are hashed using bcrypt with salt rounds
 - Passwords are 8 to 1024 characters; changing your own requires the current
   one, and the new one must differ from it
+- The default password `changeme` (in any letter case) can't be set as
+  anyone's password
+- An account with a password it didn't choose itself (the initial `admin`
+  password, one an admin set, or `auth-admin reset-password`), or found on the
+  default password, must change it at its next sign-in before it can do
+  anything else
 - Passwords are never displayed in the UI
 - Passwords are not returned by the API
 - Failed sign-ins pause further attempts (sign-in protection); see
@@ -209,15 +231,22 @@ TROUBLESHOOTING.md, "Locked out of SIEMBox" (the `auth-admin` command line).
 ### Session Management
 - When an admin changes a user's password, or users change their own, every
   session of that user ends at once and their browsers are no longer recognized
+- A session of an account that must change its password can only read its
+  profile, change the password or sign out; the API answers everything else
+  with `403 PASSWORD_CHANGE_REQUIRED` (API.md, "Password change required")
 - Users should be notified out-of-band when passwords are changed
 
 ### Audit Logging
 - User management actions are written to `audit_logs`: `user.created`,
   `user.updated` (with the fields changed), `user.deleted`,
   `user.password_reset` and `auth.unlock`, with the admin who did it and their
-  address
-- Sign-in events too: `auth.login.success`, `auth.login.failure`,
-  `auth.login.paused`, `auth.logout`, `auth.password.changed`,
+  address. `user.created` and `user.password_reset` carry
+  `passwordChangeRequired` (`admin`, `cli` or `null`)
+- Sign-in events too: `auth.login.success` (with `passwordChangeRequired` when
+  the session is restricted), `auth.login.failure`, `auth.login.paused`,
+  `auth.logout`, `auth.password.changed` (with `forced: true` and the reason
+  when it was a required change), `auth.password.change_required` (an account
+  found on the default password, at startup or at a sign-in),
   `auth.mfa.enabled` / `disabled` (see SECURITY.md, "Audit Logging")
 
 ## API Endpoints
@@ -227,8 +256,8 @@ User management operations use the following REST API endpoints:
 ```
 GET    /api/users           - List all users (admin only)
 GET    /api/users/:id       - Get user details (admin only)
-POST   /api/users           - Create new user (admin only)
-PUT    /api/users/:id       - Update user (admin only; a password is a reset)
+POST   /api/users           - Create new user (admin only; mustChangePassword, default true)
+PUT    /api/users/:id       - Update user (admin only; a password is a reset; mustChangePassword, default true, only with a password)
 POST   /api/users/:id/unlock - Clear the account's sign-in pauses (admin only)
 DELETE /api/users/:id       - Delete user (admin only)
 ```
@@ -246,6 +275,8 @@ curl -X POST http://localhost:5000/api/users \
     "password": "SecurePassword123",
     "role": "analyst"
   }'
+# The user must choose their own password at the first sign-in; add
+# "mustChangePassword": false to let them keep this one.
 ```
 
 **Update User:**
@@ -267,6 +298,8 @@ curl -X PUT http://localhost:5000/api/users/2 \
   -d '{
     "password": "NewSecurePassword123"
   }'
+# Temporary by default: the user must choose their own at the next sign-in.
+# Add "mustChangePassword": false to let them keep it.
 ```
 
 **Delete User:**
@@ -321,6 +354,20 @@ curl -X DELETE http://localhost:5000/api/users/2 \
   paused sign-in: wait, or **Unlock** the user
 - Have admin reset password again if needed
 
+### Asked to Choose a New Password
+**Problem**: After signing in, every page shows "Choose a new password"
+**Solution**: The account signed in with a password it has to replace (the
+initial `admin` password, the default `changeme`, or a temporary one an admin
+or the command line set). Enter the password you just signed in with and a new
+one; you are signed out everywhere, then sign in with the new one. See
+TROUBLESHOOTING.md, "Every page sends me to Choose a new password".
+
+### Forgot the Temporary Password
+**Problem**: The user lost the temporary password before changing it
+**Solution**: Set another one (Edit -> Change Password), or run
+`docker exec siembox-backend node dist/scripts/auth-admin.js reset-password <username>`,
+which prints a new temporary password once.
+
 ### Cannot Delete User
 **Problem**: Delete button is disabled
 **Solution**: You cannot delete your own account. Have another admin delete the account if needed.
@@ -350,6 +397,10 @@ CREATE TABLE users (
   last_login TIMESTAMP
 );
 ```
+
+Later migrations add MFA, `password_changed_at` and (039) the required
+password change: `must_change_password` (boolean), `must_change_password_reason`
+(`initial`, `default`, `admin` or `cli`) and `must_change_password_since`.
 
 ## Related Documentation
 

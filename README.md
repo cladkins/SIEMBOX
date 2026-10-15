@@ -62,7 +62,9 @@ EOF
 docker compose -f compose.prod.yaml up -d
 ```
 
-Then open `http://<your-server-ip>:8420` and log in as `admin` with the password you set.
+Then open `http://<your-server-ip>:8420` and log in as `admin` with the password you set
+(`changeme` if you left `DEFAULT_ADMIN_PASSWORD` out). SIEMBox then asks you to choose a new
+password before anything else; the `.env` value is used only for that first sign-in.
 
 #### Option 2: Build from source
 

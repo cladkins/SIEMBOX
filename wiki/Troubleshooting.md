@@ -9,6 +9,10 @@ Start by checking container health: `docker compose -f compose.prod.yaml ps` and
 - Check `docker compose logs frontend` and `... backend` for startup errors (a missing required secret like `JWT_SECRET` or `CREDENTIAL_ENCRYPTION_KEY` will stop the backend).
 - "Blocked by CORS policy" in the browser console: a page on another origin is calling the API, which answers browsers on its own origin only unless `CORS_ORIGIN` lists that origin. The bundled UI needs no CORS (keep `VITE_API_URL=/api`). See [TROUBLESHOOTING.md, "CORS error in the browser console"](https://github.com/cladkins/SIEMBOX/blob/main/docs/operations/TROUBLESHOOTING.md#issue-cors-error-in-the-browser-console).
 
+## Every page sends me to "Choose a new password"
+
+- The account signed in with a password it must replace: the initial `admin` password, SIEMBox's default `changeme`, or a temporary one an admin or `auth-admin reset-password` set. Enter the password you just signed in with and a new one, then sign in again. Scripts get `403` with `code: "PASSWORD_CHANGE_REQUIRED"` until then. See [TROUBLESHOOTING.md](https://github.com/cladkins/SIEMBOX/blob/main/docs/operations/TROUBLESHOOTING.md#issue-every-page-sends-me-to-choose-a-new-password--api-answers-403-password_change_required).
+
 ## No logs are arriving
 
 - **Syslog sources:** confirm devices target the SIEMBox host on **`514`** (UDP or TCP) and nothing is dropping it in between.

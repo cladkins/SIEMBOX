@@ -27,7 +27,17 @@
              Unlock, Edit and Delete on one line need, with some room. -->
         <el-table-column label="Sign-in" min-width="170">
           <template #default="{ row }">
-            <div v-if="anyPause(row)" class="pause-tags">
+            <div v-if="anyPause(row) || row.must_change_password" class="pause-tags">
+              <el-tooltip v-if="row.must_change_password" placement="top">
+                <template #content>{{ passwordChangeWords(row) }}</template>
+                <el-tag
+                  class="pause-tag"
+                  :type="row.must_change_password_reason === 'default' ? 'danger' : 'warning'"
+                  effect="light"
+                >
+                  Must change password
+                </el-tag>
+              </el-tooltip>
               <el-tooltip v-if="pausedMinutes(row.signin_paused_until) > 0" placement="top">
                 <template #content>
                   Paused after failed attempts:
@@ -148,6 +158,17 @@
           />
         </el-form-item>
 
+        <el-form-item v-if="!editingUser">
+          <el-checkbox v-model="userForm.mustChangePassword">Require a password change at first sign-in</el-checkbox>
+          <el-text size="small" type="info" class="checkbox-hint">
+            {{
+              userForm.mustChangePassword
+                ? 'The password you set here is temporary: until they choose their own, the account can do nothing else.'
+                : 'The user keeps this password. Uncheck only if they chose it themselves.'
+            }}
+          </el-text>
+        </el-form-item>
+
         <el-form-item v-if="editingUser">
           <el-button @click="showChangePassword" type="warning" size="small">
             <el-icon><Lock /></el-icon> Change Password
@@ -188,6 +209,18 @@
             show-password
           />
         </el-form-item>
+
+        <!-- Not for your own password: you chose it yourself. -->
+        <el-form-item v-if="!changingOwnPassword">
+          <el-checkbox v-model="passwordForm.mustChangePassword">Require a password change at next sign-in</el-checkbox>
+          <el-text size="small" type="info" class="checkbox-hint">
+            {{
+              passwordForm.mustChangePassword
+                ? 'Until they choose their own password, the account can do nothing else.'
+                : 'The user keeps this password. Uncheck only if they chose it themselves.'
+            }}
+          </el-text>
+        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -201,7 +234,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import { api } from '@/services/api';
 import { useAuthStore } from '@/stores/auth';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
@@ -220,6 +253,9 @@ const passwordDialogVisible = ref(false);
 const editingUser = ref(false);
 const currentUserId = ref<number | null>(null);
 const selectedUserId = ref<number | null>(null);
+const selectedUsername = ref('');
+// Resetting your own password through this page: no requirement to change it again.
+const changingOwnPassword = computed(() => selectedUserId.value !== null && selectedUserId.value === currentUserId.value);
 
 const formRef = ref<FormInstance>();
 const passwordFormRef = ref<FormInstance>();
@@ -230,11 +266,15 @@ const userForm = reactive({
   role: 'viewer',
   password: '',
   confirmPassword: '',
+  // A password an admin sets is temporary by default (POST /api/users mustChangePassword).
+  mustChangePassword: true,
 });
 
 const passwordForm = reactive({
   newPassword: '',
   confirmPassword: '',
+  // PUT /api/users/:id mustChangePassword, with the password.
+  mustChangePassword: true,
 });
 
 // Validation rules
@@ -332,6 +372,20 @@ function scopeWords(scope: string): string {
   return SCOPE_WORDS[scope] || scope;
 }
 
+// Why an account must change its password (GET /users must_change_password_reason).
+const PASSWORD_CHANGE_WORDS: Record<string, string> = {
+  default: "Still used SIEMBox's default password.",
+  initial: 'Created with the initial admin password.',
+  admin: 'An administrator set a temporary password.',
+  cli: 'Reset from the command line.',
+};
+
+function passwordChangeWords(user: { must_change_password_reason?: string | null; must_change_password_since?: string | null }): string {
+  const why = PASSWORD_CHANGE_WORDS[user.must_change_password_reason ?? ''] ?? '';
+  const since = user.must_change_password_since ? ` Since ${formatDate(user.must_change_password_since)}.` : '';
+  return `${why ? `${why} ` : ''}Must choose a new one at the next sign-in; until then it can do nothing else.${since}`;
+}
+
 async function unlockUserConfirm(user: any) {
   try {
     await ElMessageBox.confirm(
@@ -363,6 +417,7 @@ function showCreateUser() {
 function editUser(user: any) {
   editingUser.value = true;
   selectedUserId.value = user.id;
+  selectedUsername.value = user.username;
 
   userForm.username = user.username;
   userForm.email = user.email;
@@ -396,6 +451,7 @@ async function saveUser() {
           email: userForm.email,
           role: userForm.role,
           password: userForm.password,
+          mustChangePassword: userForm.mustChangePassword,
         });
         ElMessage.success('User created successfully');
       }
@@ -454,18 +510,25 @@ async function changePassword() {
     if (!valid) return;
 
     saving.value = true;
+    const own = changingOwnPassword.value;
+    const requireChange = !own && passwordForm.mustChangePassword;
     try {
       await api.updateUser(selectedUserId.value!, {
         password: passwordForm.newPassword,
+        mustChangePassword: requireChange,
       });
       passwordDialogVisible.value = false;
-      if (selectedUserId.value === currentUserId.value) {
+      if (own) {
         // A reset signs the account out everywhere, this session included.
         ElMessage.success('Password changed. Sign in again.');
         authStore.logout();
         return;
       }
-      ElMessage.success('Password changed. The user is signed out everywhere and signs in with the new password.');
+      ElMessage.success(
+        requireChange
+          ? `Password set. ${selectedUsername.value} is signed out everywhere and must choose a new password at their next sign-in.`
+          : 'Password changed. The user is signed out everywhere and signs in with the new password.'
+      );
       fetchUsers();
     } catch (error: any) {
       const message = error.response?.data?.message || 'Failed to change password';
@@ -483,12 +546,14 @@ function resetForm() {
   userForm.role = 'viewer';
   userForm.password = '';
   userForm.confirmPassword = '';
+  userForm.mustChangePassword = true;
   formRef.value?.clearValidate();
 }
 
 function resetPasswordForm() {
   passwordForm.newPassword = '';
   passwordForm.confirmPassword = '';
+  passwordForm.mustChangePassword = true;
   passwordFormRef.value?.clearValidate();
 }
 
@@ -528,6 +593,13 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+/* Under a checkbox, on its own line. */
+.checkbox-hint {
+  display: block;
+  width: 100%;
+  line-height: 1.4;
 }
 
 /* One tag per line, wrapping inside the cell rather than running past it, so

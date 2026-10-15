@@ -43,7 +43,10 @@
           </template>
           <template #description>
             <div class="step-body">
-              <p>Change the default <code>admin</code> password and turn on two-factor authentication.</p>
+              <p>
+                Use a password only you know, and turn on two-factor authentication. (The admin account's initial
+                password must be changed at its first sign-in.)
+              </p>
               <el-alert
                 v-if="pwError"
                 type="error"

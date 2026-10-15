@@ -61,7 +61,8 @@ docker compose up -d --build
 ## First login
 
 1. Open `http://<your-server-ip>:8420`.
-2. Log in as **`admin`** with the `DEFAULT_ADMIN_PASSWORD` you set.
+2. Log in as **`admin`** with the `DEFAULT_ADMIN_PASSWORD` you set (`changeme` if unset). SIEMBox
+   asks you to choose a new password before anything else, then you sign in again with it.
 3. Follow the **Getting Started** checklist (in the sidebar; admins also get a Dashboard reminder until one of them finishes or hides it, for every admin of the install): it walks you through securing the account (password + [MFA](Configuration#two-factor-authentication-mfa)), log ingestion, installing **[Content Packs](Detection-Rules#content-packs)**, API keys, notifications and, optionally, **[Digital Risk](Configuration#digital-risk-optional)** monitoring (its findings then appear on the **Digital Risk** page in the sidebar) — with live status for each step.
 4. Prefer to do it by hand? SIEMBox starts **empty** (catalog-only): go to **Parsers → Browse Catalog** and **Detection Rules → Browse Catalog** and install the content you want (or *Install all*), then point a log source at it via **syslog** (`udp/tcp 514`) or a **[Log Shipper](Log-Shippers)**.
 

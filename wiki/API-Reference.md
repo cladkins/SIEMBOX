@@ -12,7 +12,7 @@ Most endpoints require a **JWT**. Log in (`POST /api/auth/login`), then send the
 Authorization: Bearer <YOUR_JWT_TOKEN>
 ```
 
-Tokens are valid for **24 hours**. Role-based access applies (Admin / Analyst / Operator / Viewer) — viewers are read-only, changing parsers, detection rules and alerts and using the AI Analyst need **analyst** or higher, and some endpoints (user management, AI builders, threat-feed/provider config, Endpoint fleet, deleting alerts) are **admin-only**. Endpoint agents authenticate separately with a per-agent API key.
+Tokens are valid for **24 hours**. An account signed in with its initial, a temporary or the default password (`passwordChangeRequired: true` in the login answer) can only call `GET /api/auth/me`, `PUT /api/auth/me/password` and `POST /api/auth/logout` until it changes it; everything else answers `403` with `code: "PASSWORD_CHANGE_REQUIRED"` (see [API.md, "Password change required"](https://github.com/cladkins/SIEMBOX/blob/main/docs/reference/API.md#password-change-required)). Role-based access applies (Admin / Analyst / Operator / Viewer) — viewers are read-only, changing parsers, detection rules and alerts and using the AI Analyst need **analyst** or higher, and some endpoints (user management, AI builders, threat-feed/provider config, Endpoint fleet, deleting alerts) are **admin-only**. Endpoint agents authenticate separately with a per-agent API key.
 
 ## Response & error format
 
@@ -29,7 +29,7 @@ Tokens are valid for **24 hours**. Role-based access applies (Admin / Analyst / 
 | 200 / 201 | OK / Created |
 | 400 | Bad request |
 | 401 | Unauthorized (missing/invalid token) |
-| 403 | Forbidden (insufficient role) |
+| 403 | Forbidden (insufficient role), or `code: "PASSWORD_CHANGE_REQUIRED"`: the account must change its password first |
 | 404 | Not found |
 | 409 | Conflict (already exists) |
 | 500 | Server error |

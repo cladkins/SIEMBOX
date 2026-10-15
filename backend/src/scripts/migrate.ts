@@ -1,61 +1,67 @@
+/**
+ * The migrate runner (`npm run migrate`; the image runs it before every server
+ * start). It executes every file in migrations/ in sorted order, with no
+ * tracking table, so each must be idempotent. Then, after every migration:
+ *
+ * - the admin account is created only when the users table is empty, already
+ *   required to choose a new password at its first sign-in;
+ * - admin accounts still on the default password "changeme" are flagged so
+ *   they must change it before anything else (an upgrade's catch);
+ * - the "ADMIN SIGN-IN" banner is printed only while an admin account waits
+ *   for that change.
+ *
+ * See services/auth/defaultCredentials.ts. None of these overwrites a password
+ * or clears a flag, so re-running is harmless.
+ */
 import fs from 'fs';
 import path from 'path';
-import pool from '../config/database';
+import pool, { closePools } from '../config/database';
 import { diagnoseDbConnectionError } from '../config/dbDiagnostics';
 import { logger } from '../utils/logger';
-import bcrypt from 'bcrypt';
+import { defaultPasswordBanner, flagAdminsOnDefaultPassword, seedDefaultAdmin } from '../services/auth/defaultCredentials';
 
-const runMigrations = async () => {
-  try {
-    logger.info('Starting database migrations...');
+/** Run every migration, then the admin seed, the default-password scan and the banner. Throws on failure. */
+export async function runMigrations(): Promise<void> {
+  logger.info('Starting database migrations...');
 
-    const migrationsDir = path.join(__dirname, '../../migrations');
-    const migrationFiles = fs
-      .readdirSync(migrationsDir)
-      .filter((file) => file.endsWith('.sql'))
-      .sort();
+  const migrationsDir = path.join(__dirname, '../../migrations');
+  const migrationFiles = fs
+    .readdirSync(migrationsDir)
+    .filter((file) => file.endsWith('.sql'))
+    .sort();
 
-    for (const file of migrationFiles) {
-      logger.info(`Running migration: ${file}`);
-      const filePath = path.join(migrationsDir, file);
-      let sql = fs.readFileSync(filePath, 'utf8');
-
-      // Replace placeholder password hash with actual hashed password
-      if (file === '002_seed_data.sql') {
-        const defaultPassword = process.env.DEFAULT_ADMIN_PASSWORD || 'changeme';
-        const passwordHash = await bcrypt.hash(defaultPassword, 10);
-        sql = sql.replace('$2b$10$placeholder', passwordHash);
-      }
-
-      await pool.query(sql);
-      logger.info(`Migration completed: ${file}`);
-    }
-
-    logger.info('All migrations completed successfully!');
-
-    // Point the operator at the admin login without logging the secret itself.
-    // A configured DEFAULT_ADMIN_PASSWORD is never echoed; only the well-known
-    // 'changeme' default is named, as a prod to change it.
-    logger.warn('===============================================');
-    logger.warn('ADMIN LOGIN: username "admin"');
-    if (process.env.DEFAULT_ADMIN_PASSWORD) {
-      logger.warn('Password: the DEFAULT_ADMIN_PASSWORD you configured.');
-    } else {
-      logger.warn('Password: "changeme" (DEFAULT_ADMIN_PASSWORD is unset).');
-    }
-    logger.warn('PLEASE CHANGE THE PASSWORD AFTER FIRST LOGIN!');
-    logger.warn('===============================================');
-
-    process.exit(0);
-  } catch (error) {
-    logger.error('Migration failed:', error);
-    // A connection-level failure here is almost always a DB_HOST / networking
-    // mistake, not a database fault -- say so, since the container otherwise
-    // just crash-loops on a bare "connect ECONNREFUSED".
-    const hint = diagnoseDbConnectionError(error);
-    if (hint) logger.error(`Database unreachable -- ${hint}`);
-    process.exit(1);
+  for (const file of migrationFiles) {
+    logger.info(`Running migration: ${file}`);
+    const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+    await pool.query(sql);
+    logger.info(`Migration completed: ${file}`);
   }
-};
 
-runMigrations();
+  logger.info('All migrations completed successfully!');
+
+  // Last, so the account is never created without migration 039's columns.
+  await seedDefaultAdmin();
+  await flagAdminsOnDefaultPassword();
+
+  // Point the operator at the admin sign-in without logging the secret itself.
+  for (const line of await defaultPasswordBanner()) logger.warn(line);
+}
+
+if (require.main === module) {
+  void (async () => {
+    let code = 0;
+    try {
+      await runMigrations();
+    } catch (error) {
+      code = 1;
+      logger.error('Migration failed:', error);
+      // A connection-level failure here is almost always a DB_HOST / networking
+      // mistake, not a database fault -- say so, since the container otherwise
+      // just crash-loops on a bare "connect ECONNREFUSED".
+      const hint = diagnoseDbConnectionError(error);
+      if (hint) logger.error(`Database unreachable -- ${hint}`);
+    }
+    await closePools().catch(() => undefined);
+    process.exit(code);
+  })();
+}

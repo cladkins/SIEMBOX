@@ -153,14 +153,19 @@ Configuration is primarily done through:
 
 ### How do I change the default admin password?
 
-**During installation:**
-Set `DEFAULT_ADMIN_PASSWORD` in `.env` before first startup.
+**You have to, at the first sign-in.** The `admin` account is created on the first start with
+`DEFAULT_ADMIN_PASSWORD` from `.env` (`changeme` if it is unset). When you sign in with it,
+SIEMBox shows **Choose a new password** and nothing else works until you do; then sign in again
+with the new one. Setting `DEFAULT_ADMIN_PASSWORD` before the first start keeps strangers from
+getting there first; changing it later has no effect.
 
-**After installation:**
-1. Log in as admin
-2. Go to User Management
-3. Click on admin user
-4. Change password
+**Later:** Settings -> Account -> Password (your own), or User Management -> Edit -> Change
+Password (another user's; they must choose their own at their next sign-in unless you untick
+"Require a password change"). Locked out: `docker exec siembox-backend node
+dist/scripts/auth-admin.js reset-password admin`.
+
+An existing install whose admin still uses `changeme` is caught when it is upgraded: that account
+must choose a new password at its next sign-in, and a `siembox-auth` alert says so.
 
 ### How do I add more users?
 
@@ -507,7 +512,9 @@ See [SECURITY.md](./SECURITY.md) for comprehensive security guidance.
 
 ### Should I change the default passwords?
 
-**YES!** Always change default credentials before exposing SIEMBox to a network.
+**YES!** Always change default credentials before exposing SIEMBox to a network. (SIEMBox makes
+the admin account choose a new password at its first sign-in, but whoever signs in first chooses
+it: set `DEFAULT_ADMIN_PASSWORD`, or sign in before the UI is reachable from untrusted networks.)
 
 In `.env`:
 ```bash

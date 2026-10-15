@@ -1580,7 +1580,10 @@ sudo tail -f /var/log/nginx/error.log
 ### Issue: Digital Risk domain monitoring shows errors (or never finds anything)
 
 The domain monitor (`domain-monitor` job) needs outbound HTTPS to `crt.sh`,
-`data.iana.org` and the registries' RDAP servers, plus working DNS. Each
+`data.iana.org` and the registries' RDAP servers, plus working DNS. The
+Monitoring card on the **Digital Risk** page (every role) says whether domain
+monitoring as a whole is working and lists the domains that need a look; each
+domain's card under Settings → Digital Risk (admin) shows its own checks. Each
 watched domain records the outcome of its last run per collector:
 
 ```bash
@@ -1653,7 +1656,10 @@ HIBP only searches an email domain that is verified on the key's HIBP account
 (in the [HIBP dashboard](https://haveibeenpwned.com/Dashboard/Redirect/Domains)).
 SIEMBox reads the account's verified-domain list and skips the domains it
 doesn't include: they get `last_status: "unverified"`, with no error and no
-HIBP call, until they are verified and re-checked.
+HIBP call, until they are verified and re-checked. The Monitoring card on the
+**Digital Risk** page lists them under *Needs attention* (as *Skipped*); the
+Breach-monitored identities card under Settings → Digital Risk is where they
+are re-checked.
 
 ```bash
 # Each email domain's status and how SIEMBox reads its HIBP verification
@@ -1728,6 +1734,31 @@ To reset it as if it had never been recorded:
 docker compose exec postgres psql -U siembox -d siembox \
   -c "DELETE FROM system_settings WHERE key = 'onboarding_completed';"
 ```
+
+### Issue: The Digital Risk page says *Waiting for the first check*, or shows no *next check*, right after a restart
+
+The jobs' run state (a check running, the last run, the next tick, an HIBP
+pause) lives in the backend's memory and starts empty after a restart. What
+each identity and domain last did (`last_checked_at`, `next_run_at`,
+`last_status`, `last_error`) is stored, and the Monitoring card reads that:
+it keeps showing the last successful check (the breach headline says *last
+check …* from it rather than *waiting for the first check*), and the next
+breach check reads *within 15 minutes* until the job ticks (it runs every 15
+minutes). The banner on Settings → Digital Risk reads only the run state, so
+it says *waiting for the first check* until the next run. While HIBP pauses
+the checks (its rate limit, or a rejected key) the card shows when they resume
+instead of the next check.
+
+*Waiting for the first check* under Domain monitoring means no enabled domain
+has been checked yet (just added, or monitoring was off); the first check runs
+within 15 minutes. If a domain stays due for longer than half an hour while
+nothing runs, the card says the domains are *overdue*: see
+[the domain monitoring issue](#issue-digital-risk-domain-monitoring-shows-errors-or-never-finds-anything)
+above, and check the job under Admin → Background Jobs (`GET /api/admin/jobs`).
+
+The numbers on the page come from the findings themselves, not from run
+history: deleting an identity or a domain deletes its findings, so they also
+leave the trend's past buckets.
 
 ### Issue: Everyone shows the same IP address
 

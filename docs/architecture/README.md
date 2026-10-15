@@ -39,6 +39,7 @@ Design for Digital Risk / Exposure Monitoring, the per-area settings hub, and on
 - Leaked-credential monitoring (HIBP, Pwned Passwords via k-anonymity) and its privacy guardrails
 - Domain monitoring: Certificate Transparency, lookalike/typosquat detection, RDAP, DNS drift
 - One role-gated settings page per functional area, plus a table mapping each old setting to its new page
+- The Digital Risk page (`/digital-risk`, every role): monitoring health, tiles, trend, accounts, lookalikes and the findings queue
 - An onboarding Digital Risk step that shares its API with the settings page; roadmap and default decisions
 
 ### [VAULTWARDEN-PARSER-IMPLEMENTATION.md](./VAULTWARDEN-PARSER-IMPLEMENTATION.md)

@@ -8,7 +8,25 @@
  * backstop. Findings are written only through services/exposure/findingWriter.ts,
  * which owns dedupe, alerting and the privacy scrub of `detail`.
  */
-import { query } from '../config/database';
+import type { PoolClient } from 'pg';
+import { getClient, query } from '../config/database';
+import type { DomainEventType } from '../services/exposure/domainMonitor/types';
+import {
+  BUCKET_FOR_DAYS,
+  WINDOW_BACK,
+  buildAccounts,
+  buildLookalikeInventory,
+  foldBreakdown,
+  foldTrend,
+  type AccountRow,
+  type BreakdownRow,
+  type ExposureSummary,
+  type LookalikeDomainInput,
+  type LookalikeFindingRow,
+  type RiskCategory,
+  type SummaryDays,
+  type TrendRow,
+} from '../services/exposure/summary';
 
 export type DomainScope = 'own' | 'brand';
 export type IdentityKind = 'email' | 'email_domain';
@@ -16,6 +34,67 @@ export type ExposureSeverity = 'low' | 'medium' | 'high' | 'critical';
 export type ExposureFindingSource = 'leaked-creds' | 'domain-monitor';
 
 export const DEFAULT_COLLECTORS = { ct: true, lookalike: true, rdap: true, dns: true } as const;
+
+/**
+ * Every event type a finding is written with: 'breach' (leaked credentials)
+ * and the domain collectors' DomainEventType. Checked both ways at compile
+ * time, so a new collector event type can't be missing from the filters.
+ */
+export const EXPOSURE_EVENT_TYPES = [
+  'breach',
+  'new_cert',
+  'unexpected_ca',
+  'lookalike_registered',
+  'rdap_change',
+  'dns_drift',
+  'expiry_warning',
+] as const satisfies readonly ('breach' | DomainEventType)[];
+export type ExposureEventType = (typeof EXPOSURE_EVENT_TYPES)[number];
+const EVENT_TYPES_LISTED: [Exclude<'breach' | DomainEventType, ExposureEventType>] extends [never]
+  ? true
+  : never = true;
+void EVENT_TYPES_LISTED;
+
+/**
+ * Data classes that hand an attacker a way into the account. Hashed passwords
+ * count too: leaked hashes get cracked offline. Compared trimmed and
+ * lowercased. One list for breach severity (leakedCredentialService) and the
+ * "accounts to reset" count (credExposedSql).
+ */
+export const CREDENTIAL_DATA_CLASSES: ReadonlySet<string> = new Set([
+  'passwords',
+  'historical passwords',
+  'auth tokens',
+]);
+
+/**
+ * A finding's risk category (alias f; RISK_CATEGORIES in summary.ts): a leaked
+ * account, a lookalike of a watched domain (its registration, or a certificate
+ * issued for it, which names it in detail.lookalike), or a change to the
+ * watched domain itself. Derived from stored data, never stored.
+ */
+export const CATEGORY_SQL = `(CASE
+    WHEN f.event_type = 'breach' THEN 'credentials'
+    WHEN f.event_type = 'lookalike_registered' THEN 'impersonation'
+    WHEN f.event_type IN ('new_cert', 'unexpected_ca') AND jsonb_typeof(f.detail->'lookalike') = 'string'
+      THEN 'impersonation'
+    ELSE 'domain_changes' END)`;
+
+/** Severity as a number, most severe highest (alias f). */
+export const SEV_RANK_SQL = `(CASE f.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END)`;
+
+/**
+ * A breach finding that exposed credential material or came from a stealer
+ * log (alias f). `param` is a text[] parameter holding CREDENTIAL_DATA_CLASSES,
+ * matched trimmed and lowercased as exposesCredentials does.
+ */
+export function credExposedSql(param: string): string {
+  return `(COALESCE(f.detail->'is_stealer_log' = 'true'::jsonb, false)
+    OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(
+                 CASE WHEN jsonb_typeof(f.detail->'data_classes') = 'array'
+                      THEN f.detail->'data_classes' ELSE '[]'::jsonb END) AS dc
+               WHERE lower(btrim(dc)) = ANY(${param}::text[])))`;
+}
 export type DomainCollectors = Record<keyof typeof DEFAULT_COLLECTORS, boolean>;
 
 export interface WatchedDomain {
@@ -97,11 +176,17 @@ export interface ExposureFinding {
   first_seen: string;
   last_seen: string;
   resolved_at: string | null;
+  /** Derived from event_type and detail (CATEGORY_SQL). */
+  category: RiskCategory;
   // Joined for display: what the finding was raised against.
   identity_kind: IdentityKind | null;
   identity_value: string | null;
   domain: string | null;
+  /** The linked alert's status; null when there is no alert (deleted, or removed by retention). */
+  alert_status: string | null;
 }
+
+export type FindingSort = 'newest' | 'severity';
 
 export interface FindingFilters {
   source?: ExposureFindingSource;
@@ -109,6 +194,21 @@ export interface FindingFilters {
   severity?: ExposureSeverity;
   identityId?: number;
   domainId?: number;
+  eventType?: ExposureEventType;
+  category?: RiskCategory;
+  /** First seen in the last N days (NOW() - N days). */
+  sinceDays?: number;
+  /** First seen at or after this time. */
+  since?: Date;
+  alertId?: number;
+  /** Case-insensitive substring of the title, identity, domain, account, lookalike or breach. */
+  search?: string;
+  /** The breached account (detail.account), whole and case-insensitive. */
+  account?: string;
+  /** The lookalike domain a finding is about (detail.lookalike), whole and case-insensitive. */
+  lookalike?: string;
+  /** 'newest' (default): first_seen DESC. 'severity': most severe first, then newest. */
+  sort?: FindingSort;
   limit: number;
   offset: number;
 }
@@ -422,13 +522,20 @@ export const MonitoredIdentityModel = {
 
 const FINDING_COLUMNS = `
   f.id, f.source, f.identity_id, f.domain_id, f.event_type, f.title, f.severity,
-  f.detail, f.alert_id, f.first_seen, f.last_seen, f.resolved_at,
-  i.kind AS identity_kind, i.value AS identity_value, d.domain`;
+  f.detail, f.alert_id, f.first_seen, f.last_seen, f.resolved_at, ${CATEGORY_SQL} AS category,
+  i.kind AS identity_kind, i.value AS identity_value, d.domain, a.status AS alert_status`;
 
+// Every join is on a primary key, so none multiplies rows (the COUNT is unaffected).
 const FINDING_FROM = `
   FROM exposure_findings f
   LEFT JOIN monitored_identities i ON i.id = f.identity_id
-  LEFT JOIN watched_domains d ON d.id = f.domain_id`;
+  LEFT JOIN watched_domains d ON d.id = f.domain_id
+  LEFT JOIN alerts a ON a.id = f.alert_id`;
+
+// What the findings search looks in. strpos, not LIKE or a regex: %, _ and
+// regex characters in the search are literal, and nothing can backtrack.
+const FINDING_SEARCH_TEXT = `lower(concat_ws(' ', f.title, i.value, d.domain, f.detail->>'account',
+  f.detail->>'lookalike', f.detail->>'breach_title', f.detail->>'breach_name'))`;
 
 // node-postgres returns BIGSERIAL (int8) as a string; findings will never get
 // near 2^53, so hand the API a plain number.
@@ -448,13 +555,25 @@ export const ExposureFindingModel = {
     if (filters.severity) add('f.severity = ?', filters.severity);
     if (filters.identityId !== undefined) add('f.identity_id = ?', filters.identityId);
     if (filters.domainId !== undefined) add('f.domain_id = ?', filters.domainId);
+    if (filters.eventType) add('f.event_type = ?', filters.eventType);
+    if (filters.category) add(`${CATEGORY_SQL} = ?`, filters.category);
+    if (filters.sinceDays !== undefined) add('f.first_seen >= NOW() - make_interval(days => ?::int)', filters.sinceDays);
+    if (filters.since !== undefined) add('f.first_seen >= ?::timestamptz', filters.since);
+    if (filters.alertId !== undefined) add('f.alert_id = ?', filters.alertId);
+    if (filters.search) add(`strpos(${FINDING_SEARCH_TEXT}, lower(?::text)) > 0`, filters.search);
+    if (filters.account) add(`lower(f.detail->>'account') = lower(?::text)`, filters.account);
+    if (filters.lookalike) add(`lower(f.detail->>'lookalike') = lower(?::text)`, filters.lookalike);
     if (filters.unresolved) where.push('f.resolved_at IS NULL');
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const orderSql =
+      filters.sort === 'severity'
+        ? `${SEV_RANK_SQL} DESC, f.first_seen DESC, f.id DESC`
+        : 'f.first_seen DESC, f.id DESC';
 
     const total = await query(`SELECT COUNT(*)::int AS n ${FINDING_FROM} ${whereSql}`, params);
     const rows = await query(
       `SELECT ${FINDING_COLUMNS} ${FINDING_FROM} ${whereSql}
-        ORDER BY f.first_seen DESC, f.id DESC
+        ORDER BY ${orderSql}
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, filters.limit, filters.offset]
     );
@@ -514,5 +633,224 @@ export async function getExposureCounts(): Promise<ExposureCounts> {
     identities_due: due,
     domains_due: domainsDue,
     findings_open_by_severity,
+  };
+}
+
+// ---- Digital Risk summary ------------------------------------------------------------
+
+/**
+ * Everything the Digital Risk page aggregates, read in one REPEATABLE READ
+ * snapshot so the tiles, the trend and the lists agree while the jobs write
+ * (NOW() is fixed for the transaction too). Pass `client` to run inside the
+ * caller's transaction instead (the tests shadow the tables with temp tables,
+ * which is why no table name here is schema-qualified). Never calls HIBP,
+ * crt.sh or DNS: it reads findings, identities, domains and baselines only.
+ *
+ * Buckets are UTC (weeks start on Monday) and the window starts on a bucket
+ * boundary, so the trend sums exactly to the window's counts.
+ */
+export async function getExposureSummary(days: SummaryDays, client?: PoolClient): Promise<ExposureSummary> {
+  if (client) return readExposureSummary(client, days);
+  const own = await getClient();
+  let broken = false;
+  try {
+    await own.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const summary = await readExposureSummary(own, days);
+    await own.query('COMMIT');
+    return summary;
+  } catch (err) {
+    try {
+      await own.query('ROLLBACK');
+    } catch {
+      broken = true; // don't hand a dead connection back to the pool
+    }
+    throw err;
+  } finally {
+    own.release(broken || undefined);
+  }
+}
+
+// What tells two breaches apart (alias f): HIBP's breach name, else its title.
+const BREACH_KEY_SQL = `COALESCE(f.detail->>'breach_name', f.detail->>'breach_title')`;
+
+// Open breach findings with an account (alias f).
+const OPEN_BREACH_SQL = `f.source = 'leaked-creds' AND f.event_type = 'breach' AND f.resolved_at IS NULL
+   AND jsonb_typeof(f.detail->'account') = 'string'`;
+
+/**
+ * The summary window at `at` (default: the transaction's NOW()): `since` is
+ * the start of the UTC bucket holding `at` minus WINDOW_BACK, so the window
+ * holds whole buckets (31 days, 13-14 or 26-27 weeks, 13 months). The unit and
+ * the interval come from the whitelists and are bound as text, never
+ * interpolated. Exported for the tests, which pin `at` to awkward dates.
+ */
+export async function summaryWindow(
+  db: Pick<PoolClient, 'query'>,
+  days: SummaryDays,
+  at?: Date | string
+): Promise<{ now: Date; since: Date }> {
+  // timestamptz only: node-pg reads a timestamp without time zone as local time.
+  // The interval is taken off the UTC wall-clock time, so months are calendar
+  // months in UTC whatever the session's TimeZone.
+  const win = await db.query(
+    `SELECT n.now,
+            date_trunc($2::text, (n.now AT TIME ZONE 'UTC') - $3::text::interval) AT TIME ZONE 'UTC' AS since
+       FROM (SELECT COALESCE($1::timestamptz, NOW()) AS now) n`,
+    [at ?? null, BUCKET_FOR_DAYS[days], WINDOW_BACK[days]]
+  );
+  return { now: win.rows[0].now, since: win.rows[0].since };
+}
+
+// The queries run one after another on the snapshot's connection.
+async function readExposureSummary(db: PoolClient, days: SummaryDays): Promise<ExposureSummary> {
+  // The unit comes from the whitelist and is bound as text, never interpolated.
+  const unit = BUCKET_FOR_DAYS[days];
+  const { now, since } = await summaryWindow(db, days);
+
+  // At most 2 sources x 7 types x 2 categories x 4 severities rows.
+  const breakdown = await db.query(
+    `SELECT f.source, f.event_type, ${CATEGORY_SQL} AS category, f.severity,
+            COUNT(*) FILTER (WHERE f.resolved_at IS NULL)::int AS open_n,
+            COUNT(*) FILTER (WHERE f.first_seen >= $1)::int AS new_n,
+            COUNT(*) FILTER (WHERE f.resolved_at >= $1)::int AS resolved_n,
+            COUNT(*) FILTER (WHERE f.first_seen >= $1::timestamptz - (NOW() - $1::timestamptz)
+                               AND f.first_seen < $1)::int AS prev_new_n,
+            MIN(f.first_seen) FILTER (WHERE f.resolved_at IS NULL) AS oldest_open
+       FROM exposure_findings f
+      GROUP BY 1, 2, 3, 4`,
+    [since]
+  );
+
+  const buckets = await db.query(
+    `SELECT gs AT TIME ZONE 'UTC' AS start
+       FROM generate_series($1::timestamptz AT TIME ZONE 'UTC',
+                            date_trunc($2::text, NOW() AT TIME ZONE 'UTC'),
+                            ('1 ' || $2::text)::interval) AS gs
+      ORDER BY gs`,
+    [since, unit]
+  );
+  const trendRows = await db.query(
+    `SELECT 'new' AS kind,
+            date_trunc($2::text, f.first_seen AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS start,
+            ${CATEGORY_SQL} AS category, COUNT(*)::int AS n
+       FROM exposure_findings f WHERE f.first_seen >= $1 GROUP BY 2, 3
+     UNION ALL
+     SELECT 'resolved', date_trunc($2::text, f.resolved_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', NULL, COUNT(*)::int
+       FROM exposure_findings f WHERE f.resolved_at >= $1 GROUP BY 2
+     UNION ALL
+     SELECT 'identities', date_trunc($2::text, created_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', NULL, COUNT(*)::int
+       FROM monitored_identities WHERE created_at >= $1 GROUP BY 2
+     UNION ALL
+     SELECT 'domains', date_trunc($2::text, created_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', NULL, COUNT(*)::int
+       FROM watched_domains WHERE created_at >= $1 GROUP BY 2`,
+    [since, unit]
+  );
+  const openBefore = await db.query(
+    `SELECT (COUNT(*) FILTER (WHERE first_seen < $1) - COUNT(*) FILTER (WHERE resolved_at < $1))::int AS n
+       FROM exposure_findings`,
+    [since]
+  );
+
+  const credentialClasses = [...CREDENTIAL_DATA_CLASSES];
+  const accountTotals = await db.query(
+    `SELECT COUNT(DISTINCT lower(f.detail->>'account'))::int AS total,
+            (COUNT(DISTINCT lower(f.detail->>'account')) FILTER (WHERE ${credExposedSql('$1')}))::int AS to_reset
+       FROM exposure_findings f
+      WHERE ${OPEN_BREACH_SQL}`,
+    [credentialClasses]
+  );
+  // breach_date is 'YYYY-MM-DD' text, so text order is date order. Up to ten
+  // breaches per account come back; buildAccounts keeps three distinct ones.
+  // One breach can be two findings (the account is monitored as an address and
+  // through its email domain), so breaches are told apart, and counted, by
+  // their name: breach_count, not open_n, is how many breaches there are.
+  const accounts = await db.query(
+    `SELECT lower(f.detail->>'account') AS account,
+            MIN(f.identity_id) AS identity_id,
+            COUNT(*)::int AS open_n,
+            (COUNT(*) FILTER (WHERE ${credExposedSql('$1')}))::int AS credential_exposures,
+            bool_or(COALESCE(f.detail->'is_stealer_log' = 'true'::jsonb, false)) AS stealer_log,
+            MAX(${SEV_RANK_SQL}) AS worst_rank,
+            COUNT(DISTINCT ${BREACH_KEY_SQL})::int AS breach_count,
+            to_jsonb((array_agg(jsonb_build_object(
+                'key', ${BREACH_KEY_SQL},
+                'title', COALESCE(f.detail->>'breach_title', f.detail->>'breach_name'),
+                'date', f.detail->>'breach_date')
+              ORDER BY f.detail->>'breach_date' DESC NULLS LAST, f.id DESC))[1:10]) AS breaches,
+            MAX(f.first_seen) AS last_detected
+       FROM exposure_findings f
+      WHERE ${OPEN_BREACH_SQL}
+      GROUP BY 1
+      ORDER BY (COUNT(*) FILTER (WHERE ${credExposedSql('$1')}) > 0) DESC,
+               bool_or(COALESCE(f.detail->'is_stealer_log' = 'true'::jsonb, false)) DESC,
+               worst_rank DESC, open_n DESC, account
+      LIMIT 10`,
+    [credentialClasses]
+  );
+
+  // Two baseline rows per enabled domain at most; parsed with the collectors' own parsers.
+  const domainRows = await db.query(
+    `SELECT d.id AS domain_id, d.domain, d.scope, d.collectors, d.last_summary, b.collector, b.snapshot
+       FROM watched_domains d
+       LEFT JOIN domain_baselines b ON b.domain_id = d.id AND b.collector IN ('lookalike', 'ct')
+      WHERE d.enabled
+      ORDER BY d.id`
+  );
+  const lookalikeFindings = await db.query(
+    `SELECT f.domain_id, f.detail->>'lookalike' AS lookalike, COUNT(*)::int AS n,
+            MAX(${SEV_RANK_SQL}) AS worst_rank
+       FROM exposure_findings f
+      WHERE f.source = 'domain-monitor' AND f.resolved_at IS NULL
+        AND f.domain_id IS NOT NULL AND jsonb_typeof(f.detail->'lookalike') = 'string'
+      GROUP BY 1, 2`
+  );
+
+  const domains = new Map<number, LookalikeDomainInput>();
+  for (const row of domainRows.rows) {
+    const id = Number(row.domain_id);
+    let entry = domains.get(id);
+    if (!entry) {
+      entry = {
+        id,
+        domain: row.domain,
+        scope: row.scope,
+        collectors: row.collectors,
+        last_summary: row.last_summary,
+        lookalike: null,
+        ct: null,
+      };
+      domains.set(id, entry);
+    }
+    if (row.collector === 'lookalike') entry.lookalike = row.snapshot;
+    if (row.collector === 'ct') entry.ct = row.snapshot;
+  }
+
+  const totals = accountTotals.rows[0] ?? { total: 0, to_reset: 0 };
+  return {
+    generated_at: now.toISOString(),
+    window: { days, bucket: unit, since: since.toISOString() },
+    ...foldBreakdown(breakdown.rows as BreakdownRow[]),
+    trend: foldTrend(
+      buckets.rows.map((r) => r.start as Date),
+      trendRows.rows as TrendRow[],
+      Number(openBefore.rows[0]?.n ?? 0)
+    ),
+    accounts: {
+      total: Number(totals.total),
+      to_reset: Number(totals.to_reset),
+      top: buildAccounts(accounts.rows as AccountRow[]),
+    },
+    lookalikes: buildLookalikeInventory(
+      [...domains.values()],
+      lookalikeFindings.rows.map(
+        (r): LookalikeFindingRow => ({
+          domain_id: Number(r.domain_id),
+          lookalike: r.lookalike,
+          n: Number(r.n),
+          worst_rank: Number(r.worst_rank),
+        })
+      ),
+      Math.floor(now.getTime() / 1000)
+    ),
   };
 }

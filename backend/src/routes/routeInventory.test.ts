@@ -348,6 +348,7 @@ const INVENTORY: Row[] = [
 
   // routes/exposure.ts: Digital Risk (readable by every role; configured by admins)
   ['GET', '/api/exposure/status', ANY_ROLE],
+  ['GET', '/api/exposure/summary', ANY_ROLE],
   ['GET', '/api/exposure/settings', ANY_ROLE],
   ['PUT', '/api/exposure/settings', ADMIN_ONLY],
   ['GET', '/api/exposure/providers', ANY_ROLE],

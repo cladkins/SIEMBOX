@@ -227,17 +227,11 @@ import RankedBarList from '@/components/RankedBarList.vue';
 import { useAuthStore } from '@/stores/auth';
 import onboardingService from '@/services/onboardingService';
 import { apiErrorMessage, isHibpAlert } from '@/utils/exposure';
+import { SEVERITY_COLORS, SEVERITY_ORDER } from '@/utils/severity';
 
 // Shared 4-tier criticality vocabulary (severity, vuln criticality, and risk
 // rating all use it) so color coding stays consistent across every panel.
-const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low'] as const;
 const SEVERITY_LABELS = ['Critical', 'High', 'Medium', 'Low'];
-const SEVERITY_COLORS: Record<string, string> = {
-  critical: '#f56c6c',
-  high: '#e6a23c',
-  medium: '#409eff',
-  low: '#67c23a',
-};
 const STATUS_COLORS: Record<string, string> = {
   new: '#409eff',
   investigating: '#e6a23c',

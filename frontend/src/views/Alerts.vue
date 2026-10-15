@@ -260,6 +260,12 @@ const initialStatus = route.query.status;
 if (typeof initialStatus === 'string') {
   filters.value.status = initialStatus;
 }
+// /alerts?alert=<id> (a Digital Risk finding's alert) opens that alert's
+// details; ?id=<id> is what the dashboard's Recent Alerts "View" links to.
+// The list's own filters are left alone.
+const linkedAlertId = [route.query.alert, route.query.id].find(
+  (v): v is string => typeof v === 'string' && /^\d{1,10}$/.test(v)
+);
 
 // One log can satisfy several rules — the engine evaluates all of them with no
 // early exit — so the flat list shows one event as N rows. Grouped is the
@@ -299,6 +305,7 @@ let triagePollTimer: number | null = null;
 
 onMounted(() => {
   fetchAlerts();
+  if (linkedAlertId) void openLinkedAlert(Number(linkedAlertId));
   triageStore.checkHealth();
   // Only refetch the list while some visible row is still being analyzed —
   // mirrors ContainerScanning.vue's self-terminating poll (no websockets in
@@ -385,6 +392,18 @@ const viewAlert = (alert: Alert) => {
   detailInitialTab.value = 'details';
   detailDialogVisible.value = true;
 };
+
+// The deep-linked alert, fetched on its own: it may not be on the list's first page.
+async function openLinkedAlert(id: number) {
+  try {
+    const { data } = await api.getAlert(id, true);
+    viewAlert(data);
+  } catch (error) {
+    const status = (error as { response?: { status?: number } } | null)?.response?.status;
+    if (status === 404) ElMessage.warning('Alert not found (it may have been deleted)');
+    else if (status !== undefined && status !== 401) ElMessage.error('Failed to load alert');
+  }
+}
 
 const updateStatus = (alert: Alert) => {
   onEditStatus(alert);

@@ -260,6 +260,19 @@ curl -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8421/api/assets/scans/1"
 ```
 
+### Digital Risk
+
+```bash
+# The Digital Risk page's summary (any role): open findings, the trend, accounts
+# to reset and registered lookalikes over 30, 90 (default), 180 or 365 days
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8421/api/exposure/summary?days=90"
+
+# Open findings, most severe first, for one kind of finding
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8421/api/exposure/findings?unresolved=true&event_type=dns_drift&sort=severity"
+```
+
 ### Settings
 
 ```bash

@@ -39,6 +39,13 @@
             <pre>{{ JSON.stringify(alert.matched_data, null, 2) }}</pre>
             <!-- A leaked-credential alert carries HIBP breach data (CC BY 4.0): credit it here. -->
             <HibpAttribution v-if="isHibpAlert(alert)" />
+            <!-- Raised by a Digital Risk finding: open that finding (every role can). -->
+            <p v-if="isExposureAlert(alert)" class="finding-link">
+              <router-link
+                :to="{ path: '/digital-risk', query: { alert_id: String(alert.id) } }"
+                @click="emit('update:modelValue', false)"
+              >View finding on the Digital Risk page →</router-link>
+            </p>
           </div>
 
           <div class="alert-explain">
@@ -99,6 +106,9 @@ watch(
   }
 );
 
+// Alerts the exposure jobs raise for their findings (findingWriter.ts sets the source).
+const isExposureAlert = (alert: Alert) => alert.source === 'leaked-creds' || alert.source === 'domain-monitor';
+
 const explainPayload = (alert: Alert) => ({
   severity: alert.severity,
   status: alert.status,
@@ -140,5 +150,16 @@ const formatDate = (date: string) => format(new Date(date), 'MMM dd, yyyy HH:mm:
 }
 .alert-explain {
   margin-top: 16px;
+}
+.finding-link {
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+.finding-link a {
+  color: var(--el-color-primary);
+  text-decoration: none;
+}
+.finding-link a:hover {
+  text-decoration: underline;
 }
 </style>

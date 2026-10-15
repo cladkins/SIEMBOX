@@ -1149,11 +1149,14 @@ What SIEMBox does about it:
   the event loop. Beyond the gate and the startup scan above, the backend turns
   on V8's linear-time fallback (`REGEX_LINEAR_FALLBACK`, on by default): a match
   that backtracks more than 50,000 times is abandoned and finished on V8's
-  non-backtracking engine, with the same result, in time linear in the line.
-  That engine does not support every regex: case-insensitive (`i`) or unicode
-  (`u`) regexes, lookahead, backreferences and bounded repeats over about 16
-  (`{1,30}`) keep backtracking. So a regex of that kind accepted as
-  *indeterminate*, or saved before an upgrade and not yet fixed, can still
+  non-backtracking engine, with the same result. That stops exponential and
+  large-constant blowups (`^(a+)+$`, ten `(?:a|a|…)` groups: milliseconds
+  instead of seconds or hours), not polynomial ones: `curl.*\|` still costs
+  0.45 s per 64 KB line and 6.8 s per 256 KB TCP line, which is why the gate
+  refuses it. And the engine does not support every regex: case-insensitive
+  (`i`) or unicode (`u`) regexes, lookahead, backreferences and bounded repeats
+  over about 16 (`{1,30}`) keep backtracking. So a regex of those kinds accepted
+  as *indeterminate*, or saved before an upgrade and not yet fixed, can still
   stall ingestion, and no static analysis is complete (recheck's fuzz pass is a
   search, not a proof). Watch for the startup `WARN` lines and the tag.
 

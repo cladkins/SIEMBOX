@@ -417,9 +417,11 @@ per line would cost more than the parsing), so the check above is what
 protects ingestion. A second line: the backend turns on V8's linear-time
 fallback (`REGEX_LINEAR_FALLBACK`, on by default), which abandons a match after
 50,000 backtracks and finishes it on a non-backtracking engine, with the same
-result. It covers a `pattern` and `extract` regexes as long as they use no
-lookahead, no backreference and no bounded repeat over about 16; it does not
-cover `when.*.matches` (always case-insensitive), which backtracks as before.
+result. It stops exponential blowups such as `^(a+)+$` in a `pattern` or
+`extract` regex that uses no lookahead, no backreference and no bounded repeat
+over about 16. It does not stop polynomial ones (`curl.*\|` still costs about
+0.45 s per 64 KB line), and it does not cover `when.*.matches` (always
+case-insensitive), which backtracks as before.
 With the fallback on, testing such a covered pattern answers *no match* quickly
 instead of `REGEX_TIMEOUT`; saving it is still refused.
 

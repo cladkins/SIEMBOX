@@ -710,7 +710,7 @@ the default):
 | `REGEX_SAFETY_WORKERS` | `2` | Worker threads for those analyses |
 | `REGEX_TEST_TIMEOUT_MS` | `1000` | Wall-clock limit for one pattern test (Test buttons, import self-tests); past it the run is stopped and answers `422 REGEX_TIMEOUT` |
 | `REGEX_TEST_WORKERS` | `2` | Worker threads for pattern tests |
-| `REGEX_LINEAR_FALLBACK` | on | V8's linear-time fallback for the live log stream: a parser or rule match that backtracks more than 50,000 times is finished on V8's non-backtracking engine (same result, linear time) instead of stalling ingestion. Covers regexes with no `i`/`u` flag, lookahead or backreference ([SECURITY.md](./docs/reference/SECURITY.md#regular-expression-denial-of-service-redos)). `false` turns it off, and every start then logs a `[regex-safety]` WARN |
+| `REGEX_LINEAR_FALLBACK` | on | V8's linear-time fallback for the live log stream: a parser or rule match that backtracks more than 50,000 times is finished on V8's non-backtracking engine (same result) instead of stalling ingestion. Stops exponential blowups, not polynomial ones, in regexes with no `i`/`u` flag, lookahead or backreference ([SECURITY.md](./docs/reference/SECURITY.md#regular-expression-denial-of-service-redos)). `false` turns it off, and every start then logs a `[regex-safety]` WARN |
 
 At every start the backend checks the regexes already stored in the background
 and logs a `[regex-safety]` WARN for each unsafe one (see

@@ -1068,9 +1068,10 @@ the catalog CI's parameters, stricter than recheck's defaults about bounded
 repeats: `^(?:\w|\d){1,29}$` is refused, and, like the CI, runs recheck's fuzz
 backend as well when its automaton says safe, so a large constant blowup such
 as ten `(?:a|a|a|a|a|a|a|a)` groups in a row is refused too (see PARSERS.md,
-Regex Safety). A case-insensitive condition is not covered by the live
-stream's linear-time fallback (`REGEX_LINEAR_FALLBACK`), so for it the check is
-the only protection.
+Regex Safety). The live stream's linear-time fallback (`REGEX_LINEAR_FALLBACK`)
+stops exponential blowups only, and not in a case-insensitive condition, so for
+the usual rule offender below (polynomial) and for any `i` condition the check
+is the only protection.
 
 **The usual offender in a rule is "X, then later Y" written `X.*Y`.** From
 every X the engine rescans the rest of the line looking for Y, which is O(n²)

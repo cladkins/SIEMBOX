@@ -17,6 +17,12 @@
  * such as ^(?:a|a|a|a|a|a|a|a)…$ (ten groups) on 'a'.repeat(10) + '!', 14 s of
  * backtracking, answers in about 2 ms, and so does ^(a+)+$ on any input.
  *
+ * It catches exponential and large-constant blowups, not polynomial ones: an
+ * unanchored "X, then later Y" such as curl.*\| rescans the line from every
+ * start, and V8 counts too few backtracks there to fall back (0.45 s per 64 KB
+ * line, 6.8 s per 256 KB TCP line, with or without it). Those the gate's
+ * automaton pass proves and refuses.
+ *
  * The bound covers what that engine supports, which in Node 20 and 22 is: the
  * flags g, m, s and y (a parser `pattern` and a derivation `extract` regex are
  * compiled with none; a rule regex with none unless its author asked for one),

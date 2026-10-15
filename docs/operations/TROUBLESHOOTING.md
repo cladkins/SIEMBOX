@@ -861,9 +861,9 @@ regex that was safe before can be flagged after. At every start SIEMBox
 analyzes the stored regexes in the background and flags the vulnerable ones.
 It does **not** disable them: that would silently stop parsing (or detecting)
 those logs. On the live stream, V8's linear-time fallback
-(`REGEX_LINEAR_FALLBACK`, on by default) finishes most such matches quickly
-anyway, but not a case-insensitive one, one with lookahead or a
-backreference, or a bounded repeat over about 16.
+(`REGEX_LINEAR_FALLBACK`, on by default) finishes an exponential match quickly
+anyway, but not a polynomial one (`curl.*\|`), a case-insensitive one, one
+with lookahead or a backreference, or a bounded repeat over about 16.
 
 **Fix**, in order of preference:
 1. Edit it and rewrite the regex linear (see the previous issue). Saving a

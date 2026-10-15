@@ -26,17 +26,23 @@ numbered file — see `023_shipper_containers.sql` for the expected style.
 A pattern written for the full syslog line will never fire. Lower `priority`
 numbers match first.
 
-**Catalog content is authored here, not in siembox-catalog.** `catalog/parsers/`
-and `rules/` in this repo are the source of truth; the published
-`cladkins/siembox-catalog` repo is a mirror updated weekly by
-`.github/workflows/sync-catalog.yml` (via PR). Fresh installs ship zero parsers
-and detections — users install from the catalog — so new content belongs in the
-catalog directories, never in migrations. Validate before pushing:
+**Catalog content is authored in siembox-catalog, not here.** The published
+`cladkins/siembox-catalog` repo is the source of truth for parsers and
+detections: users install from it, and its CI validates every PR with this
+repo's validators (built from `main`). `catalog/parsers/` and `rules/` here are
+a mirror: `.github/workflows/sync-catalog.yml` copies the published catalog in
+weekly and opens a PR on drift. The copy is exact, so a file changed or added
+only here is reverted or deleted by the next sync. New or changed content goes
+in as a PR to siembox-catalog; when a change here needs catalog content to
+change with it (a stricter validator, say), land the same content in both
+repos. Fresh installs ship zero parsers and detections (users install from the
+catalog), so content never goes in migrations. Validate with this repo's
+validators before opening either PR:
 
 ```bash
 cd backend && npm run build
-npm run validate-parsers -- ../catalog/parsers
-npm run validate-detections -- ../rules
+npm run validate-parsers -- ../catalog/parsers      # or <siembox-catalog>/parsers
+npm run validate-detections -- ../rules             # or <siembox-catalog>/detections
 ```
 
 **Ghost shippers are intentional.** A shipper whose API key is revoked keeps

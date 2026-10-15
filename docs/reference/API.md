@@ -4644,6 +4644,11 @@ check) are open to any authenticated user, except the HIBP account's own data
 (its verified domains and plan, `GET /providers/hibp/verified-domains`), which,
 like the key test, is admin-only; **all writes require the admin role**.
 
+The UI shows these reads to every role on the **Digital Risk** page
+(`/digital-risk`): monitoring health, [`GET /summary`](#get-apiexposuresummary)'s
+tiles, trend, accounts and lookalikes, the findings queue and the password
+check. Admins configure the feature under Settings → Digital Risk.
+
 ### How leaked-credential checks run
 
 - A background job (`leaked-creds` in [`GET /api/admin/jobs`](#get-apiadminjobs))
@@ -4950,6 +4955,169 @@ worked — no collector worked for any domain checked (e.g. no network or DNS),
 or no domain run completed (e.g. the database). One collector failing (crt.sh
 having a bad day, or a permanent problem with one domain) leaves the job `ok`;
 each domain's own `last_error` says what failed.
+
+---
+
+### GET /api/exposure/summary
+
+What the Digital Risk page aggregates: open findings, what is new in a window,
+the trend, the accounts to act on and the registered lookalikes. Read-only: it
+reads findings, identities, domains and the domain-monitor baselines, and never
+calls HIBP, crt.sh or DNS.
+
+**Authentication:** Required (any role)
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `days` | string | `90` | The window: exactly `30`, `90`, `180` or `365` |
+
+Anything else — `7`, `90abc`, `1e2`, `-90`, a padded value or the key given
+twice — is `400 { "message": "days must be one of 30, 90, 180, 365" }`.
+
+| `days` | Bucket | Buckets returned |
+|---|---|---|
+| `30` | day | 31 |
+| `90` | week | 13-14 |
+| `180` | week | 26-27 |
+| `365` | month | 13 |
+
+All bucketing is **UTC** and weeks start on **Monday**. The window starts on a
+bucket boundary (`window.since` = the start of the bucket holding
+`now − days`; for `365`, `now − 12 months`, so a year is always the current
+month and the 12 before it, leap days included), so it can reach a few days
+(up to a month for `365`) further back than `days`, and the trend sums exactly
+to the window's counts.
+
+Everything is read in **one database snapshot** (a `REPEATABLE READ READ ONLY`
+transaction, with one `NOW()`), so the parts agree with each other while the
+jobs write:
+- Σ `open.by_severity` = `open.total` = the last bucket's `open_at_end`
+- Σ `trend[].new.*` = `in_window.new`; Σ `trend[].resolved` = `in_window.resolved`
+- the buckets are contiguous, oldest first
+
+**Response (200)** (trend shortened):
+```json
+{
+  "generated_at": "2026-10-15T09:00:00.000Z",
+  "window": { "days": 90, "bucket": "week", "since": "2026-07-13T00:00:00.000Z" },
+  "open": {
+    "total": 71,
+    "by_severity": { "critical": 1, "high": 31, "medium": 35, "low": 4 },
+    "by_source": { "leaked-creds": 30, "domain-monitor": 41 },
+    "oldest_critical_high_first_seen": "2026-03-30T02:19:09.893Z"
+  },
+  "in_window": {
+    "new": 59,
+    "new_by_severity": { "critical": 2, "high": 26, "medium": 25, "low": 6 },
+    "resolved": 28,
+    "prev_new": 54
+  },
+  "by_type": [
+    {
+      "source": "leaked-creds", "event_type": "breach", "category": "credentials",
+      "open": 30, "open_by_severity": { "critical": 0, "high": 26, "medium": 3, "low": 1 },
+      "new": 21, "resolved": 9
+    },
+    {
+      "source": "domain-monitor", "event_type": "new_cert", "category": "impersonation",
+      "open": 6, "open_by_severity": { "critical": 0, "high": 2, "medium": 4, "low": 0 },
+      "new": 4, "resolved": 3
+    }
+  ],
+  "trend": [
+    {
+      "start": "2026-07-13T00:00:00.000Z",
+      "new": { "credentials": 1, "impersonation": 1, "domain_changes": 4 },
+      "resolved": 1,
+      "open_at_end": 49,
+      "monitoring_added": { "identities": 0, "domains": 0 }
+    }
+  ],
+  "accounts": {
+    "total": 14,
+    "to_reset": 12,
+    "top": [
+      {
+        "account": "carol@example.com",
+        "identity_id": 4,
+        "open": 5,
+        "credential_exposures": 5,
+        "stealer_log": true,
+        "worst_severity": "high",
+        "breaches": [
+          { "title": "Naz.API", "date": "2023-09-20" },
+          { "title": "Twitter (200M)", "date": "2021-01-01" },
+          { "title": "Dropbox", "date": "2012-07-01" }
+        ],
+        "breach_count": 4,
+        "last_detected": "2026-06-28T02:28:19.000Z"
+      }
+    ]
+  },
+  "lookalikes": {
+    "state": "checked",
+    "candidates_checked": 720,
+    "registered": 32,
+    "with_mx": 8,
+    "with_address": 17,
+    "with_current_cert": 5,
+    "top": [
+      {
+        "lookalike": "examp1e.com",
+        "domain_id": 1,
+        "watched_domain": "example.com",
+        "scope": "own",
+        "technique": "homoglyph",
+        "has_mx": true,
+        "has_address": true,
+        "certs": "current",
+        "reported_at": null,
+        "open_findings": { "count": 1, "worst_severity": "medium" }
+      }
+    ]
+  }
+}
+```
+
+- `open` counts every open finding; `oldest_critical_high_first_seen` is the
+  first-seen time of the oldest open critical or high one (`null` if none).
+- `in_window.new` counts findings **first seen** in the window,
+  `in_window.resolved` those resolved in it, and `prev_new` those first seen in
+  the window of the same length just before it. Detection time, not the
+  breach date: adding an identity whose first check reports all its past
+  breaches puts them all in one bucket, which `monitoring_added` explains.
+- `by_type` has one row per (`source`, `event_type`, `category`); the eight
+  kinds the collectors write are always present (zero-filled), anything else
+  follows them. `category` is derived from the stored finding:
+  `credentials` (a breach), `impersonation` (a lookalike's registration, or a
+  certificate for a lookalike: `detail.lookalike` is set) or `domain_changes`
+  (a change to the watched domain itself).
+- `trend[].open_at_end` is the open backlog when the bucket ended (for the
+  last bucket, now).
+- `accounts` covers **open** breach findings, grouped by account
+  (case-insensitive): `to_reset` counts the accounts with at least one breach
+  that exposed passwords, historical passwords or auth tokens, or came from a
+  stealer log. `top` lists at most 10, those first, then the worst severity;
+  each with at most 3 distinct breaches, newest breach date first. `open`
+  counts the account's open breach findings and `breach_count` its distinct
+  breaches (by HIBP breach name): an account monitored as an address and
+  through its email domain gets one finding per identity for the same breach,
+  so `open` can be larger.
+- `lookalikes` reads the lookalike and CT baselines of every **enabled**
+  domain that runs the lookalike check, so it includes the lookalikes that
+  were already registered at the domain's first check (recorded silently,
+  without a finding: `reported_at` is `null`). `state` is `not_watched` (no
+  such domain), `not_checked` (none checked yet) or `checked`. `has_mx` /
+  `has_address` are `null` while every lookup so far failed; `certs` is
+  `current` (a certificate that hasn't expired), `none` or `not_checked`.
+  `registered`, `with_mx`, `with_address` and `with_current_cert` count
+  **distinct lookalike domains**: one that imitates two watched domains
+  (`acme.co` for both `acme.com` and `acme.net`) counts once, with a flag set
+  when any domain's checks saw it. `top` has one row per (watched domain,
+  lookalike) and lists at most 25: mail first, then a current certificate,
+  then an address, then the worst open finding, then the newest report.
+- No raw `detail` is returned, and no field holds a secret.
 
 ---
 
@@ -5442,7 +5610,7 @@ than raising a new one.
 
 ### GET /api/exposure/findings
 
-Findings, newest first.
+Findings, newest first (or most severe first with `sort=severity`).
 
 **Authentication:** Required
 
@@ -5454,8 +5622,29 @@ Findings, newest first.
 | `severity` | string | - | `low`, `medium`, `high` or `critical` |
 | `identity_id` | integer | - | Findings for one identity |
 | `domain_id` | integer | - | Findings for one watched domain |
+| `event_type` | string | - | `breach`, `new_cert`, `unexpected_ca`, `lookalike_registered`, `rdap_change`, `dns_drift` or `expiry_warning` |
+| `category` | string | - | `credentials`, `impersonation` or `domain_changes` (see [`GET /summary`](#get-apiexposuresummary)); tells a certificate for a lookalike from one for your own domain |
+| `since_days` | integer | - | First seen in the last N days, `1`-`365` |
+| `since` | string | - | First seen at or after this ISO 8601 time (e.g. the summary's `window.since`), such as `2026-07-13T00:00:00.000Z` |
+| `alert_id` | integer | - | The finding that raised this alert |
+| `search` | string | - | Case-insensitive text in the title, identity, watched domain, account, lookalike or breach; at most 200 characters, matched literally (`%`, `_` and regex characters are plain text) |
+| `account` | string | - | One breached account, the whole value (case-insensitive); at most 254 characters |
+| `lookalike` | string | - | One lookalike domain, the whole value (case-insensitive); at most 253 characters |
+| `sort` | string | `newest` | `newest` (`first_seen`, then `id`, descending) or `severity` (most severe first, then newest) |
 | `limit` | integer | 50 | 1-200 |
 | `offset` | integer | 0 | Pagination offset |
+
+Each new parameter is `400` when its value isn't allowed (e.g.
+`"event_type must be one of: breach, new_cert, …"`,
+`"since_days must be a whole number from 1 to 365"`,
+`"search must be at most 200 characters"`, `"Invalid alert id"`) or when it is
+given twice (`"<name> must be given once"`). A call with none of them returns
+the same rows in the same order as before.
+
+Each finding also carries `category` (as above) and `alert_status`: the linked
+alert's status (`new`, `investigating`, `closed`, `false_positive`), or `null`
+when there is no alert any more (deleted, or removed by retention:
+`alert_id` is then `null` too).
 
 **Response (200):**
 ```json
@@ -5489,9 +5678,11 @@ Findings, newest first.
       "first_seen": "2026-10-10T09:15:01Z",
       "last_seen": "2026-10-11T09:15:03Z",
       "resolved_at": null,
+      "category": "credentials",
       "identity_kind": "email",
       "identity_value": "alice@example.com",
-      "domain": null
+      "domain": null,
+      "alert_status": "new"
     }
   ],
   "total": 1,

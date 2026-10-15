@@ -21,15 +21,20 @@ import { rateLimitedHandler, requestLimitKey } from '../net/requestLimits';
 import { listRecurringJobs } from '../services/jobs/jobRegistry';
 import {
   DEFAULT_COLLECTORS,
+  EXPOSURE_EVENT_TYPES,
   ExposureFindingModel,
   MonitoredIdentityModel,
   WatchedDomainModel,
   getExposureCounts,
+  getExposureSummary,
   type DomainCollectors,
   type DomainScope,
+  type ExposureEventType,
   type ExposureFindingSource,
   type ExposureSeverity,
+  type FindingFilters,
 } from '../models/Exposure';
+import { RISK_CATEGORIES, parseSummaryDays, type RiskCategory } from '../services/exposure/summary';
 import {
   EXPIRY_WARNING_DAYS_RANGE,
   HIBP_API_KEY_RE,
@@ -243,6 +248,12 @@ router.get('/status', async (_req: Request, res: Response) => {
       job: jobView(jobs.find((j) => j.key === DOMAIN_MONITOR_JOB_KEY)),
     },
   });
+});
+
+// The Digital Risk page's aggregates over ?days=30|90|180|365 (default 90), in
+// one database snapshot. Read-only, and never calls HIBP, crt.sh or DNS.
+router.get('/summary', async (req: Request, res: Response) => {
+  res.json(await getExposureSummary(parseSummaryDays(req.query.days)));
 });
 
 router.get('/settings', async (_req: Request, res: Response) => {
@@ -557,8 +568,32 @@ function queryInt(value: unknown, fallback: number, min: number, max: number): n
   return Math.min(Math.max(n, min), max);
 }
 
-router.get('/findings', async (req: Request, res: Response) => {
-  const q = req.query;
+const MAX_SEARCH_LENGTH = 200;
+const FINDING_SORTS = ['newest', 'severity'] as const;
+// An ISO 8601 timestamp as toISOString() writes it (or with an offset). Every
+// part is fixed-width, so matching is linear.
+const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * One optional query parameter of the newer /findings filters: undefined when
+ * absent or '', and a 400 when it is repeated (an array) or not a string.
+ */
+function queryString(q: Request['query'], name: string): string | undefined {
+  const value = q[name];
+  if (value === undefined || value === '') return undefined;
+  if (typeof value !== 'string') throw new ApiError(400, `${name} must be given once`);
+  return value;
+}
+
+function oneOf<T extends string>(value: string | undefined, allowed: readonly T[], name: string): T | undefined {
+  if (value === undefined) return undefined;
+  if (!(allowed as readonly string[]).includes(value)) {
+    throw new ApiError(400, `${name} must be one of: ${allowed.join(', ')}`);
+  }
+  return value as T;
+}
+
+function findingFilters(q: Request['query']): Omit<FindingFilters, 'limit' | 'offset'> {
   const source = typeof q.source === 'string' && q.source !== '' ? q.source : undefined;
   if (source !== undefined && !(FINDING_SOURCES as readonly string[]).includes(source)) {
     throw new ApiError(400, `source must be one of: ${FINDING_SOURCES.join(', ')}`);
@@ -567,17 +602,62 @@ router.get('/findings', async (req: Request, res: Response) => {
   if (severity !== undefined && !isExposureSeverity(severity)) {
     throw new ApiError(400, 'severity must be one of: low, medium, high, critical');
   }
-  const limit = queryInt(q.limit, 50, 1, 200);
-  const offset = queryInt(q.offset, 0, 0, 1_000_000);
-  const result = await ExposureFindingModel.list({
+
+  const sinceDaysRaw = queryString(q, 'since_days');
+  let sinceDays: number | undefined;
+  if (sinceDaysRaw !== undefined) {
+    sinceDays = /^\d{1,3}$/.test(sinceDaysRaw) ? Number(sinceDaysRaw) : NaN;
+    if (!(sinceDays >= 1 && sinceDays <= 365)) {
+      throw new ApiError(400, 'since_days must be a whole number from 1 to 365');
+    }
+  }
+  const sinceRaw = queryString(q, 'since');
+  let since: Date | undefined;
+  if (sinceRaw !== undefined) {
+    since = ISO_TIMESTAMP_RE.test(sinceRaw) ? new Date(sinceRaw) : new Date(NaN);
+    if (Number.isNaN(since.getTime())) {
+      throw new ApiError(400, 'since must be an ISO 8601 timestamp such as 2026-07-13T00:00:00.000Z');
+    }
+  }
+  const alertRaw = queryString(q, 'alert_id');
+  const searchRaw = queryString(q, 'search');
+  const search = searchRaw?.trim();
+  if (search !== undefined && search.length > MAX_SEARCH_LENGTH) {
+    throw new ApiError(400, `search must be at most ${MAX_SEARCH_LENGTH} characters`);
+  }
+  // Whole-value matches for the page's account and lookalike click-throughs,
+  // where a substring search would also catch longer names that contain them.
+  const exact = (name: string, max: number): string | undefined => {
+    const value = queryString(q, name)?.trim();
+    if (value !== undefined && value.length > max) throw new ApiError(400, `${name} must be at most ${max} characters`);
+    return value || undefined;
+  };
+  const account = exact('account', 254);
+  const lookalike = exact('lookalike', 253);
+
+  return {
     source: source as ExposureFindingSource | undefined,
     severity: severity as ExposureSeverity | undefined,
     unresolved: q.unresolved === 'true' || q.unresolved === '1',
     identityId: typeof q.identity_id === 'string' ? parseId(q.identity_id, 'identity') : undefined,
     domainId: typeof q.domain_id === 'string' ? parseId(q.domain_id, 'domain') : undefined,
-    limit,
-    offset,
-  });
+    eventType: oneOf<ExposureEventType>(queryString(q, 'event_type'), EXPOSURE_EVENT_TYPES, 'event_type'),
+    category: oneOf<RiskCategory>(queryString(q, 'category'), RISK_CATEGORIES, 'category'),
+    sinceDays,
+    since,
+    alertId: alertRaw === undefined ? undefined : parseId(alertRaw, 'alert'),
+    search: search || undefined,
+    account,
+    lookalike,
+    sort: oneOf(queryString(q, 'sort'), FINDING_SORTS, 'sort'),
+  };
+}
+
+router.get('/findings', async (req: Request, res: Response) => {
+  const filters = findingFilters(req.query);
+  const limit = queryInt(req.query.limit, 50, 1, 200);
+  const offset = queryInt(req.query.offset, 0, 0, 1_000_000);
+  const result = await ExposureFindingModel.list({ ...filters, limit, offset });
   res.json({ ...result, limit, offset });
 });
 

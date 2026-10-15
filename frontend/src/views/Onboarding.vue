@@ -161,6 +161,11 @@
               <el-text v-else size="small" type="info">
                 An administrator can set up Digital Risk monitoring in Settings → Digital Risk.
               </el-text>
+              <p class="dr-page-line">
+                <el-text size="small" type="info">
+                  Findings appear on the <router-link to="/digital-risk">Digital Risk</router-link> page.
+                </el-text>
+              </p>
             </div>
           </template>
         </el-step>
@@ -435,6 +440,13 @@ onMounted(() => {
   margin: 0 0 8px;
   color: var(--el-text-color-regular);
   font-size: 13px;
+}
+.step-body .dr-page-line {
+  margin: 8px 0 0;
+}
+.dr-page-line a {
+  color: var(--el-color-primary);
+  text-decoration: none;
 }
 .pw-error {
   max-width: 560px;

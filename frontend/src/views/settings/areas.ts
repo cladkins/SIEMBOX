@@ -110,7 +110,7 @@ export const settingsAreas: SettingsArea[] = [
     title: 'Digital Risk',
     icon: View,
     description:
-      'Leaked-credential monitoring with Have I Been Pwned, watched and lookalike domains, and an on-demand password breach check.',
+      'Configuration: watched and lookalike domains, breach-monitored identities, the Have I Been Pwned key, notifications and check schedules. Findings and the password check are on the Digital Risk page.',
     adminOnly: true,
     component: () => import('./DigitalRiskSettings.vue'),
   },

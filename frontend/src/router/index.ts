@@ -54,6 +54,13 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/ThreatIntel.vue'),
       },
       {
+        // Every signed-in role: each request it makes is open to all of them,
+        // and the admin-only controls on it are hidden from the rest.
+        path: 'digital-risk',
+        name: 'DigitalRisk',
+        component: () => import('@/views/digital-risk/DigitalRiskDashboard.vue'),
+      },
+      {
         path: 'ai-analyst',
         name: 'AIAnalyst',
         component: () => import('@/views/AIAnalyst.vue'),

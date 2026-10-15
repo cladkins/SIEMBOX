@@ -267,7 +267,9 @@ export const api = {
   saveThreatProvider: (name: string, data: { apiKey?: string | null; enabled?: boolean }) =>
     apiClient.put(`/threat-feeds/providers/${name}`, data),
   lookupThreatIp: (ip: string) => apiClient.get(`/threat-feeds/lookup/${encodeURIComponent(ip)}`),
-  getAlert: (id: number) => apiClient.get(`/alerts/${id}`),
+  /** `handled`: the caller shows its own message for an error response (e.g. a 404 for a deleted alert). */
+  getAlert: (id: number, handled = false) =>
+    apiClient.get(`/alerts/${id}`, handled ? { skipErrorToast: true } : undefined),
   updateAlert: (id: number, data: any) => apiClient.put(`/alerts/${id}`, data),
   deleteAlert: (id: number) => apiClient.delete(`/alerts/${id}`),
 

@@ -20,11 +20,11 @@ SIEMBox has four roles. Each one includes everything the roles before it can do:
 
 ### Viewer
 **Read-only.** A viewer can see the dashboard, logs, alerts, parsers, detection rules,
-Content Packs, shippers and threat intel, but cannot create, edit or delete anything. Besides
-reading, a viewer can only manage their own account (password, MFA), test a saved parser
-against a sample, export or contribute a parser or rule, use "Explain this", and check a
-password against known breaches through the API (`POST /api/exposure/password-check`; the
-check's card in Settings → Digital Risk is admin-only).
+Content Packs, shippers, threat intel and the Digital Risk page, but cannot create, edit or
+delete anything. Besides reading, a viewer can only manage their own account (password, MFA),
+test a saved parser against a sample, export or contribute a parser or rule, use "Explain
+this", and check a password against known breaches (the password check on the Digital Risk
+page, `POST /api/exposure/password-check`).
 
 ### Analyst
 **Detection content and alert triage.** Everything a viewer can do, plus:
@@ -61,7 +61,7 @@ from the API, and the UI hides or disables the matching control.
 | Vulnerability, container, scheduled-scan and Log Discovery pages | no | no | yes | yes |
 | Own account: password, MFA | yes | yes | yes | yes |
 | Test a saved parser, export or contribute a parser or rule, "Explain this" | yes | yes | yes | yes |
-| Password breach check through the API (the Settings → Digital Risk card is admin-only) | yes | yes | yes | yes |
+| Digital Risk page: monitoring status, findings, trends, lookalikes, password breach check | yes | yes | yes | yes |
 | Triage alerts (status, notes, assignee), re-run AI triage | no | yes | yes | yes |
 | AI Analyst chat, SOC Triage page | no | yes | yes | yes |
 | Create, edit, enable/disable, import or delete parsers; test an unsaved parser | no | yes | yes | yes |
@@ -76,11 +76,12 @@ from the API, and the UI hides or disables the matching control.
 | Delete alerts | no | no | no | yes |
 | AI parser and detection builders, Sigma import, Content Pack install | no | no | no | yes |
 | Users, Settings areas (other than Account), Endpoints (EDR), Admin dashboard | no | no | no | yes |
-| Shipper key regeneration and HTTP push keys; Log Discovery scope, manual sources, editing a source's poll target, and poll credentials; threat feed and Digital Risk configuration | no | no | no | yes |
+| Shipper key regeneration and HTTP push keys; Log Discovery scope, manual sources, editing a source's poll target, and poll credentials; threat feed and Digital Risk configuration; resolving Digital Risk findings and running a check now | no | no | no | yes |
 
 The pages a role can't open only hide data from the UI: every signed-in role can read assets,
-vulnerabilities, scans and Digital Risk findings through the API, and no role can change them
-through it without the matching write permission above.
+vulnerabilities and scans through the API, and no role can change them through it without the
+matching write permission above. The Digital Risk page shows every role the breached account
+addresses (and the rest of the findings) that the API already let them read.
 
 A refused parser, rule, alert, AI Analyst, asset or scan change is also recorded in the audit
 log (`audit_logs`, action `access.denied`). The full per-route list lives in

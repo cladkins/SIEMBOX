@@ -136,7 +136,7 @@
                   </button>
                 </div>
               </div>
-              <el-skeleton v-if="!summary" :rows="0" animated class="stat-skeleton" />
+              <el-skeleton v-if="!summary || accountsTile.loading" :rows="0" animated class="stat-skeleton" />
               <template v-else>
                 <div v-if="accountsTile.sub" class="stat-sub">{{ accountsTile.sub }}</div>
                 <div v-if="accountsTile.note" class="stat-sub stat-note">{{ accountsTile.note }}</div>
@@ -200,6 +200,8 @@
             :identities="status.counts.identities"
             :identities-enabled="status.counts.identities_enabled"
             :identities-loaded="!!identities"
+            :identities-error="!!identitiesError"
+            :failing-identities="failingIdentities"
             :last-checked="lastBreachCheck"
             @filter="applyQueueFilters"
           />
@@ -254,7 +256,6 @@ import {
   breachChecksReady,
   describeExposureStatus,
   formatWhen,
-  lastSuccessfulCheck,
   pluralize,
   statusContextFromIdentities,
 } from '@/utils/exposure';
@@ -403,12 +404,17 @@ onMounted(() => {
 // ---- Tiles ---------------------------------------------------------------------------------
 
 const checksReady = computed(() => !!status.value && breachChecksReady(status.value));
+// Empty until GET /identities has answered.
+const identityContext = computed(() => statusContextFromIdentities(identities.value));
 const breachTitle = computed(() =>
-  status.value
-    ? describeExposureStatus(status.value, { ...statusContextFromIdentities(identities.value), place: 'dashboard' }).title
-    : ''
+  status.value ? describeExposureStatus(status.value, { ...identityContext.value, place: 'dashboard' }).title : ''
 );
-const lastBreachCheck = computed(() => (identities.value ? lastSuccessfulCheck(identities.value) : null));
+const lastBreachCheck = computed(() => identityContext.value.lastSuccessfulCheck ?? null);
+// Enabled identities whose latest check failed. A failure doesn't record when the
+// identity last succeeded (it may keep that time, stamp its own, or have none), so
+// with no successful check in view the page says the last check failed, not that
+// none was ever checked.
+const failingIdentities = computed(() => identityContext.value.failingIdentities ?? 0);
 
 const openChips = computed(() =>
   summary.value
@@ -438,8 +444,9 @@ const trendMark = computed(() => {
 
 // A zero only reads as good when a check ran: the checks can run, and some
 // enabled identity has been checked successfully (an email domain HIBP skips
-// as not verified never is). Until the identities have loaded that isn't known.
-const accountsTile = computed((): { value: string; sub: string; note: string } => {
+// as not verified never is). Until the identities have loaded that isn't known,
+// so the tile keeps its skeleton.
+const accountsTile = computed((): { value: string; sub: string; note: string; loading?: boolean } => {
   const a = summary.value?.accounts;
   const s = status.value;
   if (!a || !s) return { value: '—', sub: '', note: '' };
@@ -449,8 +456,14 @@ const accountsTile = computed((): { value: string; sub: string; note: string } =
     if (!checksReady.value) return { value: '—', sub: "Breach checks aren't running", note: '' };
     if (s.counts.identities === 0) return { value: '—', sub: 'No identities are monitored', note: '' };
     if (s.counts.identities_enabled === 0) return { value: '—', sub: 'Every monitored identity is disabled', note: '' };
-    if (!identities.value) return { value: '—', sub: identitiesError.value ? "Couldn't load the identities" : '', note: '' };
-    if (!lastBreachCheck.value) return { value: '—', sub: 'Not checked yet', note: pausedNote };
+    if (!identities.value) {
+      return identitiesError.value
+        ? { value: '—', sub: "Couldn't load the identities", note: '' }
+        : { value: '—', sub: '', note: '', loading: true };
+    }
+    if (!lastBreachCheck.value) {
+      return { value: '—', sub: failingIdentities.value > 0 ? 'Last check failed' : 'Not checked yet', note: pausedNote };
+    }
   }
   return {
     value: a.to_reset.toLocaleString(),

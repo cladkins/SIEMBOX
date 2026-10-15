@@ -78,13 +78,20 @@
       </template>
       <p v-else-if="identities === 0" class="empty-text">No identities are monitored for breaches yet.</p>
       <p v-else-if="identitiesEnabled === 0" class="empty-text">Every monitored identity is disabled, so nothing is checked.</p>
-      <p v-else-if="identitiesLoaded && !lastChecked" class="empty-text">
+      <!-- Until GET /identities answers, when they were last checked isn't known: no verdict. -->
+      <p v-else-if="!identitiesLoaded && identitiesError" class="empty-text">
+        Couldn't load the identities, so the last check isn't known.
+      </p>
+      <el-skeleton v-else-if="!identitiesLoaded" :rows="0" animated class="empty-skeleton" />
+      <p v-else-if="!lastChecked && failingIdentities > 0" class="empty-text">
+        The last breach check failed (see Monitoring above), so breached accounts can't be confirmed.
+      </p>
+      <p v-else-if="!lastChecked" class="empty-text">
         No identity has been checked yet: breached accounts appear here after the first successful check.
       </p>
       <p v-else class="empty-text">
-        No breached accounts among {{ pluralize(identitiesEnabled, 'monitored identity', 'monitored identities') }}<template
-          v-if="lastChecked"
-        > (last checked {{ formatRelative(lastChecked) }})</template>.
+        No breached accounts among {{ pluralize(identitiesEnabled, 'monitored identity', 'monitored identities') }}
+        (last checked {{ formatRelative(lastChecked) }}).
       </p>
     </div>
   </el-card>
@@ -107,8 +114,13 @@ defineProps<{
   breachTitle: string;
   identities: number;
   identitiesEnabled: number;
-  /** GET /identities has answered, so a null lastChecked means none was ever checked successfully. */
+  /** GET /identities has answered, so lastChecked and failingIdentities are known. */
   identitiesLoaded: boolean;
+  /** The last GET /identities failed. */
+  identitiesError: boolean;
+  /** Enabled identities whose latest check failed. */
+  failingIdentities: number;
+  /** The newest successful check of an enabled identity; null when none is in view. */
   lastChecked: string | null;
 }>();
 const emit = defineEmits<{ (e: 'filter', filters: FindingsFilters): void }>();
@@ -207,5 +219,10 @@ defineExpose({ scrollIntoView });
   margin: 0;
   font-size: 13px;
   color: var(--siembox-text-secondary);
+}
+
+.empty-skeleton {
+  max-width: 360px;
+  margin: 0 auto;
 }
 </style>

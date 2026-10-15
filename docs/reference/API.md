@@ -1858,6 +1858,12 @@ Update user (admin only).
   keep it, and lifts any earlier requirement. Without `password` the
   requirement is left as it is: it can't be lifted without replacing the
   password it is about, or set without handing over one the user knows.
+- `"enabled": true` for a disabled account still required to change the
+  default password `changeme` (`reason: "default"`, for example an admin the
+  upgrade scan found while it was disabled) raises the default-password
+  `siembox-auth` alert, once per requirement: from now on anyone could sign
+  in as it and choose its password. Send a `password` in the same request to
+  replace it instead.
 
 **Errors:**
 - `400` - `"Password must be 8 to 1024 characters"`, `"Password can't be the

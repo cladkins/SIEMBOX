@@ -363,8 +363,10 @@ change):
    restricted.) Sign in right away and choose a new password: until you do,
    anyone who reaches the web UI with `changeme` could choose it instead.
    Other accounts on `changeme` are restricted at their next sign-in. A
-   disabled admin account on `changeme` is restricted too, with its own
-   warning and no alert: it must choose a new password if it is ever enabled.
+   disabled admin account on `changeme` is restricted too, with a warning of
+   its own. Its alert is raised when it is enabled again, since from then on
+   anyone could choose its password: sign in as it right away, or send a new
+   `password` in the same `PUT /api/users/:id` that enables it.
 2. **Log shippers, endpoint agents and their enrollment are not affected**:
    they use API keys, not sign-in sessions.
 3. **Scripts that sign in with a session** get `403` with
@@ -918,7 +920,8 @@ during an attack (high), a success after 5 or more failures (medium), a
 recognized browser forgotten (high), and more than 100 failed checks in 10
 minutes (high). One per streak. An account found on the default password
 `changeme`, at startup or at a sign-in, raises one alert (critical for an
-admin, high otherwise) for as long as it hasn't changed it. The network-pause and success-after-failures
+admin, high otherwise) for as long as it hasn't changed it; a disabled one's is
+raised when it is enabled. The network-pause and success-after-failures
 alerts, which anyone can set off cheaply, are capped at 20 an hour together, so
 they can't crowd out the account, MFA and browser alerts. They reach your
 notification channels like any alert (Settings -> Notifications; the default

@@ -69,6 +69,9 @@ apiClient.interceptors.response.use(
     // call never settles, so the caller's own catch ("Failed to fetch ...")
     // doesn't toast over the change screen either: the page that made it is
     // being replaced, and the change screen's own calls never get this answer.
+    // What waited on it (a store's loading flag) is dropped with the page:
+    // the next sign-in in this tab loads the page afresh (stores/auth.ts,
+    // callsLeftPending).
     const refusal = error.response?.data as { code?: unknown; reason?: unknown } | undefined;
     if (error.response?.status === 403 && refusal?.code === 'PASSWORD_CHANGE_REQUIRED') {
       useAuthStore().requirePasswordChange(typeof refusal.reason === 'string' ? refusal.reason : null);

@@ -20,9 +20,10 @@
  *    account waits for its initial or default password to be changed.
  *
  * Neither ever clears a flag or overwrites a password, so re-running migrate
- * is harmless. The server raises the default-password alert at boot
- * (defaultPasswordAlerts.ts) because notifications and AI triage belong to
- * the server process; it dedupes on the flag, so restarts raise nothing new.
+ * is harmless. The server raises the default-password alert at boot, or for a
+ * disabled account when it is enabled (defaultPasswordAlerts.ts), because
+ * notifications and AI triage belong to the server process; it dedupes on the
+ * flag, so restarts raise nothing new.
  */
 import bcrypt from 'bcrypt';
 import { query } from '../../config/database';

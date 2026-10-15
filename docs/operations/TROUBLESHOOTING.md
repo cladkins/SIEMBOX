@@ -1374,7 +1374,8 @@ else (`users.must_change_password`, migration 039). `reason` says why:
   `DEFAULT_ADMIN_PASSWORD` (`changeme` when unset);
 - `default`: it was found on SIEMBox's default password `changeme`, at a
   start (admin accounts, for example right after an upgrade) or at a sign-in
-  (any account). A `siembox-auth` alert says when and from where;
+  (any account). A `siembox-auth` alert says when and from where (for a
+  disabled account, it is raised when it is enabled again);
 - `admin`: an admin created the account, or set its password, with "Require a
   password change" on (the default);
 - `cli`: `auth-admin reset-password` set it.

@@ -21,7 +21,8 @@
  *  8. Right password: refund the charges. A disabled account gets 403 now,
  *     and only now. An account whose password is the shipped default
  *     ("changeme") is required to change it (services/auth/passwordChange.ts),
- *     which restricts its other sessions at once too.
+ *     which restricts its other sessions at once too, and raises the
+ *     default-password alert (once per flag, also when it was flagged before).
  *  9. MFA: the code is charged to the MFA key (or the browser's) the same way,
  *     and refunded when it is right.
  * 10. Success: create the session, only while the password is still the one
@@ -174,7 +175,17 @@ router.post('/login', async (req: Request, res: Response) => {
     // at the code step, so flag it before MFA. Only the boolean leaves here.
     // Compare-and-set on the hash just checked: a password changed since this
     // sign-in read the account is never flagged (and gets no session, step 10).
-    if (!user.must_change_password && isShippedDefaultPassword(input.password)) {
+    // Already flagged 'default': raise the alert in case nothing has yet (an
+    // account enabled outside the API); it is one per flag, so this is
+    // usually a no-op.
+    if (
+      user.must_change_password &&
+      user.must_change_password_reason === 'default' &&
+      user.must_change_password_since &&
+      isShippedDefaultPassword(input.password)
+    ) {
+      void raiseDefaultPasswordAlert(user, user.must_change_password_since, { at: 'sign-in', ctx });
+    } else if (!user.must_change_password && isShippedDefaultPassword(input.password)) {
       const since = await UserModel.requirePasswordChange(user.id, 'default', { ifHash: user.password_hash });
       if (since) {
         user.must_change_password = true;
@@ -190,7 +201,7 @@ router.post('/login', async (req: Request, res: Response) => {
           status: 200,
           details: { by: 'sign-in', reason: 'default' },
         });
-        void raiseDefaultPasswordAlert(user, since, ctx);
+        void raiseDefaultPasswordAlert(user, since, { at: 'sign-in', ctx });
       }
     }
 

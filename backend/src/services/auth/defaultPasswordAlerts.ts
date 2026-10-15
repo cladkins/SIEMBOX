@@ -4,11 +4,16 @@
  * migrate runner's scan (services/auth/defaultCredentials.ts) or at a correct
  * sign-in with it (routes/auth.ts, step 8). Critical for an admin, high
  * otherwise; one per flag (the event id is keyed on the account and when it was
- * flagged), so restarts and repeated sign-ins raise nothing new.
+ * flagged), so restarts, repeated sign-ins and enabling the account again raise
+ * nothing new.
+ *
+ * Raised once the flagged account can be signed in to: at boot for every
+ * enabled one (raiseDefaultPasswordAlerts), when an admin enables a disabled
+ * one (routes/users.ts), and at a sign-in with "changeme" (routes/auth.ts, which
+ * also catches an account enabled outside the API).
  *
  * Kept apart from defaultCredentials.ts so the migrate runner doesn't load the
- * notification and AI triage services: the server raises these at boot
- * (raiseDefaultPasswordAlerts) and at sign-in.
+ * notification and AI triage services.
  */
 import { query } from '../../config/database';
 import { logger } from '../../utils/logger';
@@ -18,15 +23,32 @@ import { raiseAuthAlert } from './authAlerts';
 import { SHIPPED_DEFAULT_PASSWORD } from './passwordChange';
 
 /**
- * The alert for one account. `ctx` is the sign-in's that found it, or null at
- * startup. Never rejects.
+ * Where the flagged account was seen: at server start, at a sign-in with
+ * "changeme" (`ctx` is that request's), or as an admin (`by`) enabled it.
  */
+export type DefaultPasswordFinding =
+  | { at: 'startup' }
+  | { at: 'sign-in'; ctx: AuthRequestContext }
+  | { at: 'enabled'; ctx: AuthRequestContext; by: string };
+
+function whereFound(found: DefaultPasswordFinding): string {
+  switch (found.at) {
+    case 'startup':
+      return 'at startup';
+    case 'sign-in':
+      return `at a sign-in from ${found.ctx.ip ?? 'an unknown address'}`;
+    case 'enabled':
+      return `when ${found.by} enabled it`;
+  }
+}
+
+/** The alert for one account. Never rejects. */
 export function raiseDefaultPasswordAlert(
   user: Pick<User, 'id' | 'username' | 'role'>,
   since: Date,
-  ctx: AuthRequestContext | null
+  found: DefaultPasswordFinding
 ): Promise<boolean> {
-  const where = ctx ? `at a sign-in from ${ctx.ip ?? 'an unknown address'}` : 'at startup';
+  const where = whereFound(found);
   return raiseAuthAlert({
     trigger: 'default-password',
     severity: user.role === 'admin' ? 'critical' : 'high',
@@ -43,8 +65,9 @@ export function raiseDefaultPasswordAlert(
       trigger: 'default-password',
       username: user.username,
       user_id: user.id,
-      found: ctx ? 'sign-in' : 'startup',
-      ...(ctx ? { source_ip: ctx.ip, via: ctx.via } : {}),
+      found: found.at,
+      ...(found.at === 'startup' ? {} : { source_ip: found.ctx.ip, via: found.ctx.via }),
+      ...(found.at === 'enabled' ? { by: found.by } : {}),
     },
   });
 }
@@ -53,8 +76,8 @@ export function raiseDefaultPasswordAlert(
  * At server start: the alert for every enabled account still flagged
  * 'default' (by migrate's scan, or by a sign-in whose alert a restart may have
  * cut short). A disabled one can't sign in, so nobody can choose its password
- * yet: it is alerted at the first start after it is enabled again. Repeats
- * are dropped by the alert's event id. `onlyUserIds` limits it (tests).
+ * yet: it is alerted when an admin enables it (routes/users.ts). Repeats are
+ * dropped by the alert's event id. `onlyUserIds` limits it (tests).
  * Never rejects.
  */
 export async function raiseDefaultPasswordAlerts(opts: { onlyUserIds?: number[] } = {}): Promise<number> {
@@ -74,7 +97,7 @@ export async function raiseDefaultPasswordAlerts(opts: { onlyUserIds?: number[] 
     );
     let raised = 0;
     for (const row of flagged.rows as Array<Pick<User, 'id' | 'username' | 'role'> & { since: Date }>) {
-      if (await raiseDefaultPasswordAlert(row, row.since, null)) raised++;
+      if (await raiseDefaultPasswordAlert(row, row.since, { at: 'startup' })) raised++;
     }
     return raised;
   } catch (error) {

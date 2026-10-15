@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
+import type { RouteLocationRaw } from 'vue-router';
 import { api } from '@/services/api';
 import router from '@/router';
 
@@ -43,6 +44,26 @@ function rememberBrowserToken(username: string, token: string): void {
   }
 }
 
+/**
+ * Set once the API client has left a call pending for good (a 403
+ * PASSWORD_CHANGE_REQUIRED, services/api.ts: requirePasswordChange below).
+ * Whatever waited on that call waits forever: a store's loading flag (the AI
+ * Analyst chat's blocks every later send), a poll. So this page load is not
+ * reused once the account can work again: the next sign-in, or leaving the
+ * change screen without one, starts on a freshly loaded page, with every
+ * store and pending call gone.
+ */
+let callsLeftPending = false;
+
+/** Go to `to`: in this page, or on a fresh page load after calls were left pending. */
+function navigate(to: RouteLocationRaw, how: 'push' | 'replace'): void {
+  if (callsLeftPending) {
+    window.location.replace(router.resolve(to).href);
+    return;
+  }
+  void (how === 'push' ? router.push(to) : router.replace(to));
+}
+
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(localStorage.getItem('token'));
   const userJson = localStorage.getItem('user');
@@ -72,15 +93,17 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = response.data.user;
     localStorage.setItem('token', token.value!);
     localStorage.setItem('user', JSON.stringify(user.value));
-    router.push(response.data.passwordChangeRequired ? { name: 'ChangePassword' } : '/');
+    navigate(response.data.passwordChangeRequired ? { name: 'ChangePassword' } : '/', 'push');
   };
 
   /**
    * The API refused a request because the account must change its password
    * (services/api.ts): flagged since this tab signed in (an upgrade, an
-   * admin's reset, or a sign-in elsewhere with the default password).
+   * admin's reset, or a sign-in elsewhere with the default password). The
+   * API client leaves that call pending for good (callsLeftPending).
    */
   const requirePasswordChange = (reason: string | null) => {
+    callsLeftPending = true;
     if (!token.value) return;
     user.value = {
       ...(user.value ?? {}),
@@ -96,7 +119,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (!token.value || !profile || typeof profile !== 'object') return;
     user.value = { ...(user.value ?? {}), ...profile };
     localStorage.setItem('user', JSON.stringify(user.value));
-    if (!mustChangePassword.value && router.currentRoute.value.name === 'ChangePassword') void router.replace('/');
+    if (!mustChangePassword.value && router.currentRoute.value.name === 'ChangePassword') navigate('/', 'replace');
   };
 
   /**

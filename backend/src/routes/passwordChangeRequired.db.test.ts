@@ -20,7 +20,9 @@
  *   session is only created while the hash checked is current, waiting for a
  *   change in progress; a restricted session gets 401, never through, while
  *   the change or an admin's reset that lifts the restriction finishes;
- * - the boot alert: enabled accounts only, with a command that runs;
+ * - the boot alert: enabled accounts only, with a command that runs; a
+ *   disabled account's is raised when an admin enables it, and a sign-in with
+ *   "changeme" raises one nothing raised yet (still one per flag);
  * - MFA first, no MFA changes while restricted; a disabled account is still
  *   403 'Account is disabled';
  * - the admin API (mustChangePassword, default true, only with a password),
@@ -482,6 +484,73 @@ test('at boot, the default-password alert is raised for enabled accounts only (a
   assert.ok(alert.description.includes(`node dist/scripts/auth-admin.js reset-password ${active.username}`), alert.description);
   assert.equal((await defaultPasswordAlerts(dormant.id)).length, 0, 'no alert to sign in as an account that cannot');
   assert.equal(await raiseDefaultPasswordAlerts({ onlyUserIds: [active.id, dormant.id] }), 0, 'once per flag');
+});
+
+test('a disabled account flagged "default" raises the alert when an admin enables it, once per flag', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const admin = await createUser('enabler', 'admin');
+  const token = (await SessionModel.create(admin.id, 1)).token;
+  const dormant = await createUser('enable-dormant', 'admin', { requirePasswordChange: 'default', enabled: false });
+  await setDefaultPassword(dormant.id);
+  const notifiedBefore = notified.length;
+
+  const enabled = await call('PUT', `/api/users/${dormant.id}`, { token, body: { enabled: true } });
+  assert.equal(enabled.status, 200, JSON.stringify(enabled.body));
+  const alerts = await eventually(() => defaultPasswordAlerts(dormant.id), (list) => list.length > 0);
+  assert.equal(alerts.length, 1, 'raised as the account becomes usable, not at the next restart');
+  assert.equal(alerts[0].severity, 'critical');
+  assert.equal(alerts[0].matched_data.found, 'enabled');
+  assert.equal(alerts[0].matched_data.by, admin.username);
+  assert.ok(alerts[0].description.includes(`(when ${admin.username} enabled it)`), alerts[0].description);
+  assert.ok(alerts[0].description.includes(`reset-password ${dormant.username}`), alerts[0].description);
+  assert.equal(notified.length - notifiedBefore, 1, 'one notification');
+
+  // Disabled and enabled again, a restart, a sign-in with "changeme": the same flag, nothing new.
+  assert.equal((await call('PUT', `/api/users/${dormant.id}`, { token, body: { enabled: false } })).status, 200);
+  assert.equal((await call('PUT', `/api/users/${dormant.id}`, { token, body: { enabled: true } })).status, 200);
+  const { raiseDefaultPasswordAlerts } = await import('../services/auth/defaultPasswordAlerts');
+  assert.equal(await raiseDefaultPasswordAlerts({ onlyUserIds: [dormant.id] }), 0);
+  assert.equal((await login(dormant.username, 'changeme')).body.passwordChangeRequired, true);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal((await defaultPasswordAlerts(dormant.id)).length, 1);
+  assert.equal(notified.length - notifiedBefore, 1);
+
+  // Enabled with a new password: the flag is the admin's now, so no default-password alert.
+  const reset = await createUser('enable-reset', 'admin', { requirePasswordChange: 'default', enabled: false });
+  const resetAnswer = await call('PUT', `/api/users/${reset.id}`, { token, body: { enabled: true, password: `${PASSWORD}-new` } });
+  assert.equal(resetAnswer.status, 200, JSON.stringify(resetAnswer.body));
+  assert.equal(resetAnswer.body.must_change_password_reason, 'admin');
+  // Flagged for another reason, or never disabled: nothing.
+  const other = await createUser('enable-other', 'admin', { requirePasswordChange: 'admin', enabled: false });
+  assert.equal((await call('PUT', `/api/users/${other.id}`, { token, body: { enabled: true } })).status, 200);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal((await defaultPasswordAlerts(reset.id)).length, 0);
+  assert.equal((await defaultPasswordAlerts(other.id)).length, 0);
+});
+
+test('a sign-in with "changeme" to an account already flagged "default" raises the alert it may have missed', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  // Flagged while disabled, then enabled outside the API (SQL, a restore):
+  // nothing raised it yet.
+  const dormant = await createUser('missed', 'admin', { requirePasswordChange: 'default', enabled: false });
+  await setDefaultPassword(dormant.id);
+  await pool.query('UPDATE users SET enabled = TRUE WHERE id = $1', [dormant.id]);
+  const since = (await flags(dormant.id)).since;
+
+  const answer = await login(dormant.username, 'changeme');
+  assert.equal(answer.status, 200);
+  assert.equal(answer.body.passwordChangeRequired, true);
+  const alerts = await eventually(() => defaultPasswordAlerts(dormant.id), (list) => list.length > 0);
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].matched_data.found, 'sign-in');
+  assert.equal((await flags(dormant.id)).since.getTime(), since.getTime(), 'the flag and its date are kept');
+  assert.equal((await auditRows(`action = 'auth.password.change_required' AND user_id = $2`, [dormant.id])).length, 0, 'not flagged again');
+
+  // The right password that isn't "changeme" raises nothing.
+  const other = await createUser('missed-other', 'admin', { requirePasswordChange: 'default' });
+  assert.equal((await login(other.username, PASSWORD)).body.passwordChangeRequired, true);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal((await defaultPasswordAlerts(other.id)).length, 0);
 });
 
 // --- The change ----------------------------------------------------------------------

@@ -8,6 +8,7 @@ import { auditAuth, authContext } from '../services/auth/authEvents';
 import { revokeAccountAccess } from '../services/auth/signInService';
 import { usernameHash } from '../services/auth/signInPolicy';
 import { assignedPasswordProblem } from '../services/auth/passwordChange';
+import { raiseDefaultPasswordAlert } from '../services/auth/defaultPasswordAlerts';
 
 const router = Router();
 
@@ -178,6 +179,19 @@ router.put('/:id', requireAdmin, async (req: Request, res: Response) => {
     if (fields.length > 0) {
       logger.info('User updated', { userId: id, updatedBy: req.user?.username });
       await auditAuth('user.updated', ctx, { userId: req.user!.id, targetUserId: id, status: 200, details: { fields } });
+    }
+    // Enabled while still flagged for the default password "changeme" (the
+    // startup scan flags disabled admins too, and alerts only enabled
+    // accounts): anyone could sign in and choose its password from now on, so
+    // the alert goes out now. One per flag, like every other raise of it.
+    if (
+      enabled === true &&
+      previous?.enabled === false &&
+      user.must_change_password &&
+      user.must_change_password_reason === 'default' &&
+      user.must_change_password_since
+    ) {
+      void raiseDefaultPasswordAlert(user, user.must_change_password_since, { at: 'enabled', ctx, by: req.user!.username });
     }
     if (resettingPassword) {
       // Revoke for the old username as well, in case it changed with this request.

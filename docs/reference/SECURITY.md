@@ -1051,8 +1051,9 @@ default one everyone knows, can do nothing except change it:
   use API keys, never a sign-in session.
 - **Seen.** A `siembox-auth` alert (critical for an admin) and a startup
   warning when an account is found on `changeme` (a disabled one, which
-  can't sign in, gets a warning of its own and no alert until it is enabled
-  again); audit rows
+  can't sign in, gets a warning of its own, and its alert is raised when it is
+  enabled through `PUT /api/users/:id`, or at its first sign-in with
+  `changeme` if it was enabled another way); audit rows
   `auth.password.change_required`, plus `passwordChangeRequired` on
   `auth.login.success`, `user.created` and `user.password_reset`, and `forced`
   on `auth.password.changed`. Refused requests are not audited one by one.

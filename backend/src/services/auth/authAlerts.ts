@@ -15,7 +15,8 @@
  * | a recognized browser is forgotten after 20 failures             | high                            |
  * | more than 100 checked failures in 10 minutes                    | high, at most once an hour      |
  * | an account is found on the default password "changeme", at     | high (critical for an admin)    |
- * |   startup or at a sign-in (defaultPasswordAlerts.ts)            |                                 |
+ * |   startup, at a sign-in or as it is enabled                     |                                 |
+ * |   (defaultPasswordAlerts.ts)                                    |                                 |
  *
  * Deduplicated: event_id is siembox-auth:<trigger>:<sha256(key), 16 hex>:<epoch
  * of the streak's first failure>, so a streak raises its alert once however

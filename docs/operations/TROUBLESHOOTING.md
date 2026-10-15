@@ -214,7 +214,7 @@ docker ps -a --filter name=siembox-postgres --format '{{.Status}}   {{.Ports}}'
    - Verify database user has CREATE TABLE, INSERT, UPDATE permissions
    - May need to run migrations as database superuser
 
-5. **`DEFAULT_ADMIN_PASSWORD is ... characters long`** - on a fresh database
+5. **`DEFAULT_ADMIN_PASSWORD is longer than the 1024 characters sign-in accepts`** - on a fresh database
    the admin account is created with `DEFAULT_ADMIN_PASSWORD`, and sign-in
    accepts at most 1024 characters
    - Solution: set a shorter `DEFAULT_ADMIN_PASSWORD` and start again

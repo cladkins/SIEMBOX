@@ -51,8 +51,10 @@ export async function seedDefaultAdmin(
 
   const password = process.env.DEFAULT_ADMIN_PASSWORD || SHIPPED_DEFAULT_PASSWORD;
   if (password.length > MAX_PASSWORD_LENGTH) {
+    // Nothing derived from the password (not even its length) goes into the
+    // message: it is logged here and again by migrate's error handler.
     const message =
-      `DEFAULT_ADMIN_PASSWORD is ${password.length} characters long; sign-in accepts at most ${MAX_PASSWORD_LENGTH}, ` +
+      `DEFAULT_ADMIN_PASSWORD is longer than the ${MAX_PASSWORD_LENGTH} characters sign-in accepts, ` +
       'so the admin account could never sign in. Set a shorter DEFAULT_ADMIN_PASSWORD and start again.';
     logger.error(message);
     throw new Error(message);

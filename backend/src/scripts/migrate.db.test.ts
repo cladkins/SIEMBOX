@@ -302,6 +302,7 @@ test('a DEFAULT_ADMIN_PASSWORD longer than sign-in accepts fails the migrate, na
   const db = await freshDatabase();
   const run = await migrate(db, { DEFAULT_ADMIN_PASSWORD: 'x'.repeat(1025) });
   assert.equal(run.code, 1);
-  assert.ok(run.output.includes('DEFAULT_ADMIN_PASSWORD is 1025 characters long'), run.output);
+  assert.ok(run.output.includes('DEFAULT_ADMIN_PASSWORD is longer than the 1024 characters sign-in accepts'), run.output);
+  assert.ok(!run.output.includes('is 1025 characters'), run.output);
   assert.deepEqual(await users(db), []);
 });

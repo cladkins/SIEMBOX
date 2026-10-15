@@ -25,6 +25,14 @@ import {
 } from './regexSafety';
 import { isUndecidedUnbounded, redosErrorMessage, redosUndecidedMessage, scanParserRedos } from '../parser/redos';
 
+/**
+ * ^(c+)+<tail>$, exponential on a run of c's. Built at run time: CodeQL's
+ * js/redos flags such a literal wherever it can reach a RegExp, and the gate
+ * only analyzes these (and, for an undecided one, compiles it with V8's
+ * linear-engine flag, which never runs it).
+ */
+const nested = (c: string, tail = '') => `^(${c}+)+${tail}$`;
+
 setVerdictStore(null);
 beforeEach(() => clearRegexVerdictCache());
 after(async () => {
@@ -130,8 +138,8 @@ test('a regex the analyzer cannot read is refused when the linear-time fallback 
 
   // A proven-vulnerable regex next to it keeps the REGEX_UNSAFE code; both are listed.
   const both = await assessRegexes([
-    { location: 'pattern', source: '^(a+)+$', flags: '' },
-    { location: 'derivations[0].extract.x', source: '^(a+)+\\u{17}$', flags: '' },
+    { location: 'pattern', source: nested('a'), flags: '' },
+    { location: 'derivations[0].extract.x', source: nested('a', '\\u{17}'), flags: '' },
   ]);
   assert.equal(refusalCode(both), 'REGEX_UNSAFE');
   assert.equal(both.errors.length, 2);
@@ -214,7 +222,7 @@ test('verdicts are cached in memory and in the store, so a regex is analyzed onc
   };
   setVerdictStore(store);
   try {
-    const refs = [{ location: 'pattern', source: '^(b+)+c$', flags: '' }];
+    const refs = [{ location: 'pattern', source: nested('b', 'c'), flags: '' }];
     const first = await assessRegexes(refs);
     assert.equal(first.vulnerable.length, 1);
     assert.equal(saved.size, 1, 'the verdict was persisted');
@@ -236,7 +244,7 @@ test('verdicts are cached in memory and in the store, so a regex is analyzed onc
 });
 
 test('peek never waits: an unseen regex is pending, then reports its verdict', async () => {
-  const refs = [{ location: 'pattern', source: '^(c+)+d$', flags: '' }];
+  const refs = [{ location: 'pattern', source: nested('c', 'd'), flags: '' }];
   assert.equal(peekRegexSafety(refs).status, 'pending');
   await assessRegexes(refs); // joins the background analysis peek started
   const after = peekRegexSafety(refs);

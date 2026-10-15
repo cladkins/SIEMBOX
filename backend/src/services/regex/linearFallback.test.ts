@@ -120,24 +120,26 @@ test('a linear pattern on a long line never takes the fallback, so it keeps the 
 });
 
 test('linearFallbackCovers asks V8 which regexes its linear engine can run', () => {
+  // Coverage depends on the syntax, not on whether the regex is catastrophic,
+  // so harmless shapes stand in for the dangerous ones.
   // Inside: no flags or m/s, \b, lazy and greedy quantifiers, counted repeats up to 16.
   for (const [source, flags] of [
-    ['^(a+)+$', ''],
+    ['^a+$', ''],
     ['^(?<x>\\S+) \\d{1,16}\\b.*?$', 'ms'],
-    ['^(a+)+\\u{1}$', ''],
+    ['^a+\\u{1}$', ''],
   ]) {
     assert.equal(linearFallbackCovers(source, flags), true, `/${source}/${flags}`);
   }
   // Outside: the i and u flags, lookahead, backreferences, a counted repeat over 16.
   for (const [source, flags] of [
-    ['^(a+)+$', 'i'],
-    ['^(a+)+$', 'u'],
-    ['^(?=a)(a+)+$', ''],
-    ['^(?!b)(a+)+$', ''],
-    ['^(a)(a+)+\\1$', ''],
+    ['^a+$', 'i'],
+    ['^a+$', 'u'],
+    ['^(?=a)a+$', ''],
+    ['^(?!b)a+$', ''],
+    ['^(a)\\1$', ''],
     ['^(?<x>a)\\k<x>$', ''],
-    ['^(?:a|a){1,17}$', ''],
-    ['^(a+)+\\u{17}$', ''],
+    ['^a{1,17}$', ''],
+    ['^a+\\u{17}$', ''],
   ]) {
     assert.equal(linearFallbackCovers(source, flags), false, `/${source}/${flags}`);
   }
@@ -148,10 +150,10 @@ test('linearFallbackCovers asks V8 which regexes its linear engine can run', () 
 
   // With the fallback off, nothing is covered, and the gate is told why.
   const off = { REGEX_LINEAR_FALLBACK: 'false' };
-  assert.equal(linearFallbackCovers('^(a+)+$', '', off), false);
-  assert.equal(linearFallbackObstacle('^(a+)+$', '', off), "V8's linear-time fallback is off (REGEX_LINEAR_FALLBACK=false)");
+  assert.equal(linearFallbackCovers('^a+$', '', off), false);
+  assert.equal(linearFallbackObstacle('^a+$', '', off), "V8's linear-time fallback is off (REGEX_LINEAR_FALLBACK=false)");
   assert.equal(
-    linearFallbackObstacle('^(a+)+$', 'i'),
+    linearFallbackObstacle('^a+$', 'i'),
     "V8's linear-time fallback cannot run it (the i flag, which every derivation `matches` has)"
   );
 });

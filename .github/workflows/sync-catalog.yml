@@ -1,8 +1,10 @@
 name: Sync Catalog
 
-# Keep this repo's catalog source (catalog/parsers/ + rules/) mirrored to the
-# published siembox-catalog repo — the one users actually install from — so the
-# in-repo source, the validate-catalog gate, and Content Packs all agree.
+# Mirror the published siembox-catalog repo (the source of truth for parsers and
+# detections, and what users install from) into this repo's catalog/parsers/ +
+# rules/, so the in-repo copy, the validate-catalog gate, and Content Packs all
+# agree. Author content in siembox-catalog: this copy is exact, so a change made
+# only here is reverted by the next sync.
 #
 # Runs weekly (and on demand). The synced content is VALIDATED before a PR is
 # opened, so a drifted-but-broken upstream never lands an unmergeable PR. A PR

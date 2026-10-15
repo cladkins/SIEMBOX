@@ -374,7 +374,9 @@ before the MFA step.
 - `400` - `"Username and password are required"`: a field is missing or isn't
   what is described above (no database access, nothing counted)
 - `401` - `"Invalid username or password"`: wrong password, unknown username,
-  or a disabled account with a wrong password
+  or a disabled account with a wrong password; also a right password that was
+  changed or reset while this sign-in was being checked (no session is ever
+  created for a password that is no longer the account's)
 - `401` - `{ "message": "MFA code required", "mfaRequired": true }`: the
   password is right and the user has MFA; send the same request with `code`
   (not counted as a failure)

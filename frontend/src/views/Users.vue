@@ -161,7 +161,11 @@
         <el-form-item v-if="!editingUser">
           <el-checkbox v-model="userForm.mustChangePassword">Require a password change at first sign-in</el-checkbox>
           <el-text size="small" type="info" class="checkbox-hint">
-            The password you set here is temporary: until they choose their own, the account can do nothing else.
+            {{
+              userForm.mustChangePassword
+                ? 'The password you set here is temporary: until they choose their own, the account can do nothing else.'
+                : 'The user keeps this password. Uncheck only if they chose it themselves.'
+            }}
           </el-text>
         </el-form-item>
 
@@ -210,7 +214,11 @@
         <el-form-item v-if="!changingOwnPassword">
           <el-checkbox v-model="passwordForm.mustChangePassword">Require a password change at next sign-in</el-checkbox>
           <el-text size="small" type="info" class="checkbox-hint">
-            Until they choose their own password, the account can do nothing else.
+            {{
+              passwordForm.mustChangePassword
+                ? 'Until they choose their own password, the account can do nothing else.'
+                : 'The user keeps this password. Uncheck only if they chose it themselves.'
+            }}
           </el-text>
         </el-form-item>
       </el-form>

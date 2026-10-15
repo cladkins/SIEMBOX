@@ -1039,12 +1039,20 @@ default one everyone knows, can do nothing except change it:
   authenticator to the account). The change still needs the current password,
   counts wrong ones against the account's password-change key (5, then a
   pause), and signs every session out and forgets every recognized browser,
-  so nothing earned with the old password outlives it. `changeme` in any
-  letter case is refused as a new password everywhere.
+  so nothing earned with the old password outlives it. The new password, the
+  lifted restriction and the sign-out are one transaction on the locked
+  account (an admin's reset too), and a sign-in only gets its session and
+  browser while the password it checked is still the account's: a sign-in
+  with the old password still running when it changes gets `401`, and a
+  restricted session's requests while the change finishes are refused, never
+  let through. `changeme` in any letter case is refused as a new password
+  everywhere.
 - **Not affected:** log shippers, endpoint agents and enrollment tokens. They
   use API keys, never a sign-in session.
 - **Seen.** A `siembox-auth` alert (critical for an admin) and a startup
-  warning when an account is found on `changeme`; audit rows
+  warning when an account is found on `changeme` (a disabled one, which
+  can't sign in, gets a warning of its own and no alert until it is enabled
+  again); audit rows
   `auth.password.change_required`, plus `passwordChangeRequired` on
   `auth.login.success`, `user.created` and `user.password_reset`, and `forced`
   on `auth.password.changed`. Refused requests are not audited one by one.
@@ -1151,7 +1159,8 @@ alert:
 SIEMBox automatically logs:
 - Sign-in, in `audit_logs` with the client address and how the request
   arrived (`details.via`): `auth.login.success`, `auth.login.failure` (reason
-  `unknown_user`, `bad_password`, `disabled`, `mfa_invalid`, `mfa_replay`; an
+  `unknown_user`, `bad_password`, `disabled`, `mfa_invalid`, `mfa_replay`,
+  `password_changed` for a right password changed while it was checked; an
   unknown username is a NULL user plus `details.usernameHash`),
   `auth.login.paused` (once per pause, never per refused attempt),
   `auth.logout`, `auth.unlock`, `auth.browser.revoked`

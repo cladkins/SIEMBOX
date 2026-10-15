@@ -37,7 +37,8 @@ export function raiseDefaultPasswordAlert(
       `The account ${user.username} was found with the default password "${SHIPPED_DEFAULT_PASSWORD}" (${where}). ` +
       'It must choose a new password before it can do anything else, but anyone who knows the default and reaches ' +
       `the web UI first can choose it. Sign in as ${user.username} now; if you can't, run ` +
-      `auth-admin reset-password ${user.username}.`,
+      `docker exec siembox-backend node dist/scripts/auth-admin.js reset-password ${user.username} ` +
+      '(see "Locked out of SIEMBox" in docs/operations/TROUBLESHOOTING.md).',
     matched: {
       trigger: 'default-password',
       username: user.username,
@@ -49,16 +50,27 @@ export function raiseDefaultPasswordAlert(
 }
 
 /**
- * At server start: the alert for every account still flagged 'default' (by
- * migrate's scan, or by a sign-in whose alert a restart may have cut short).
- * Repeats are dropped by the alert's event id. Never rejects.
+ * At server start: the alert for every enabled account still flagged
+ * 'default' (by migrate's scan, or by a sign-in whose alert a restart may have
+ * cut short). A disabled one can't sign in, so nobody can choose its password
+ * yet: it is alerted at the first start after it is enabled again. Repeats
+ * are dropped by the alert's event id. `onlyUserIds` limits it (tests).
+ * Never rejects.
  */
-export async function raiseDefaultPasswordAlerts(): Promise<number> {
+export async function raiseDefaultPasswordAlerts(opts: { onlyUserIds?: number[] } = {}): Promise<number> {
   try {
+    const params: unknown[] = [];
+    let only = '';
+    if (opts.onlyUserIds) {
+      params.push(opts.onlyUserIds);
+      only = ' AND id = ANY($1)';
+    }
     const flagged = await query(
       `SELECT id, username, role, must_change_password_since AS since FROM users
-        WHERE must_change_password = TRUE AND must_change_password_reason = 'default' AND must_change_password_since IS NOT NULL
-        ORDER BY id`
+        WHERE enabled = TRUE AND must_change_password = TRUE AND must_change_password_reason = 'default'
+          AND must_change_password_since IS NOT NULL${only}
+        ORDER BY id`,
+      params
     );
     let raised = 0;
     for (const row of flagged.rows as Array<Pick<User, 'id' | 'username' | 'role'> & { since: Date }>) {

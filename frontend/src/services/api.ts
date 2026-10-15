@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
+import axios, { AxiosInstance, AxiosError, type AxiosRequestConfig } from 'axios';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores/auth';
 
@@ -65,11 +65,14 @@ apiClient.interceptors.response.use(
     // The account must choose a new password first (backend middleware/auth.ts):
     // every route but /auth/me, /auth/me/password and /auth/logout answers this.
     // Checked before skipErrorToast, so calls that show their own errors still
-    // land on the change screen, and with no toast: the screen says why.
+    // land on the change screen, and with no toast: the screen says why. The
+    // call never settles, so the caller's own catch ("Failed to fetch ...")
+    // doesn't toast over the change screen either: the page that made it is
+    // being replaced, and the change screen's own calls never get this answer.
     const refusal = error.response?.data as { code?: unknown; reason?: unknown } | undefined;
     if (error.response?.status === 403 && refusal?.code === 'PASSWORD_CHANGE_REQUIRED') {
       useAuthStore().requirePasswordChange(typeof refusal.reason === 'string' ? refusal.reason : null);
-      return Promise.reject(error);
+      return new Promise<never>(() => undefined);
     }
     if (error.response && error.response.status !== 401 && error.config?.skipErrorToast) {
       return Promise.reject(error);
@@ -139,7 +142,7 @@ export const api = {
     ),
   // Best effort (stores/auth.ts signOut): the caller signs out locally whatever happens.
   logout: () => apiClient.post('/auth/logout', undefined, SHOWN_INLINE),
-  getProfile: () => apiClient.get('/auth/me'),
+  getProfile: (config?: AxiosRequestConfig) => apiClient.get('/auth/me', config),
   // A wrong current password is a 400 (429 once paused); the caller shows it,
   // and "unavailable" when no answer came.
   changeOwnPassword: (currentPassword: string, newPassword: string) =>

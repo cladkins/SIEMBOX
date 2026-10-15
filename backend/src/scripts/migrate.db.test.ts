@@ -14,6 +14,8 @@
  *    start, once (audited, with the WARN);
  * 6. an upgraded admin on another password is left alone; another admin-role
  *    account on "changeme" is flagged; a viewer on it is not (sign-in catches it);
+ *    a disabled admin on it is flagged, with a WARN of its own and no banner
+ *    until it is enabled again;
  * 7. a deleted or renamed `admin` is not re-created (and a rename that kept
  *    the email no longer stops the start);
  * 8. an empty users table gets `admin` again;
@@ -242,6 +244,32 @@ test('upgrade: only admin-role accounts on "changeme" are flagged; another passw
   assert.ok(upgrade.output.includes(`Account "ops" ${WARN}`));
   assert.ok(upgrade.output.includes('ADMIN SIGN-IN: username "ops"'));
   assert.ok(!upgrade.output.includes(BANNER), 'no banner for the admin that changed nothing it needs to');
+});
+
+test('upgrade: a disabled admin on "changeme" is flagged, without a "sign in now" WARN or banner until it is enabled', async (t) => {
+  if (skip) return t.skip(skip);
+  const db = await freshDatabase();
+  assert.equal((await migrate(db, { DEFAULT_ADMIN_PASSWORD: 'scripted-install-password' })).code, 0);
+  await addUser(db, 'dormant', 'admin', 'changeme');
+  await sql(db, `UPDATE users SET enabled = FALSE WHERE username = 'dormant'`);
+  await asBeforeTheUpgrade(db);
+
+  const upgrade = await migrate(db, { DEFAULT_ADMIN_PASSWORD: 'scripted-install-password' });
+  assert.equal(upgrade.code, 0, upgrade.output);
+  const dormant = (await users(db)).find((u) => u.username === 'dormant')!;
+  assert.equal(dormant.must_change_password_reason, 'default', 'flagged: right if it is ever enabled again');
+  assert.ok(
+    upgrade.output.includes('Disabled account "dormant" uses the default password "changeme"; it must choose a new one if it is ever enabled.'),
+    upgrade.output
+  );
+  assert.ok(!upgrade.output.includes(`Account "dormant" ${WARN}`), 'no "sign in now": it cannot');
+  assert.ok(!upgrade.output.includes('ADMIN SIGN-IN'), 'no banner for an account that cannot sign in');
+  const again = await migrate(db, { DEFAULT_ADMIN_PASSWORD: 'scripted-install-password' });
+  assert.ok(!again.output.includes('ADMIN SIGN-IN'), 'nor on the next start');
+
+  await sql(db, `UPDATE users SET enabled = TRUE WHERE username = 'dormant'`);
+  const enabled = await migrate(db, { DEFAULT_ADMIN_PASSWORD: 'scripted-install-password' });
+  assert.ok(enabled.output.includes('ADMIN SIGN-IN: username "dormant". Password: "changeme"'), enabled.output);
 });
 
 test('a deleted or renamed admin is not re-created; an empty users table gets it again', async (t) => {

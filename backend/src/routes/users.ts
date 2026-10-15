@@ -159,7 +159,10 @@ router.put('/:id', requireAdmin, async (req: Request, res: Response) => {
 
     const previous = await UserModel.findByIdSafe(id);
     const fieldsToChange = { username, email, role, enabled };
-    const user = await UserModel.update(
+    // A new password signs the account out everywhere in the same transaction
+    // (so lifting a requirement can't let a restricted session through), then
+    // revokeAccountAccess below forgets the browsers and counters.
+    const { user, sessionsRevoked } = await UserModel.applyUpdate(
       id,
       resettingPassword ? { ...fieldsToChange, password: password as string, requirePasswordChange } : fieldsToChange
     );
@@ -189,7 +192,7 @@ router.put('/:id', requireAdmin, async (req: Request, res: Response) => {
         status: 200,
         details: {
           by: 'admin',
-          sessionsRevoked: revoked.sessions,
+          sessionsRevoked: sessionsRevoked + revoked.sessions,
           browsersRevoked: revoked.browsers,
           passwordChangeRequired: requirePasswordChange,
         },

@@ -93,7 +93,9 @@ async function isDefaultHash(hash: unknown): Promise<boolean> {
  * Flag every admin-role account still on the default password that isn't
  * flagged already ('default'), and resolve to the ones this call flagged.
  * Disabled admins are included: flagging them is harmless, and right if they
- * are ever enabled again. `onlyUserIds` limits the scan (tests).
+ * are ever enabled again. They can't sign in meanwhile, so their WARN says
+ * so instead of "sign in now", and the banner and the alert leave them out.
+ * `onlyUserIds` limits the scan (tests).
  */
 export async function flagAdminsOnDefaultPassword(
   opts: { onlyUserIds?: number[] } = {}
@@ -105,13 +107,13 @@ export async function flagAdminsOnDefaultPassword(
     only = ' AND id = ANY($1)';
   }
   const candidates = await query(
-    `SELECT id, username, password_hash FROM users
+    `SELECT id, username, password_hash, enabled FROM users
       WHERE role = 'admin' AND must_change_password = FALSE${only}
       ORDER BY id`,
     params
   );
   const flagged: Array<{ id: number; username: string; since: Date }> = [];
-  for (const row of candidates.rows as Array<{ id: number; username: string; password_hash: string }>) {
+  for (const row of candidates.rows as Array<{ id: number; username: string; password_hash: string; enabled: boolean }>) {
     if (!(await isDefaultHash(row.password_hash))) continue;
     // Compare-and-set on the hash: a password changed since the compare is never flagged.
     const since = await UserModel.requirePasswordChange(row.id, 'default', { ifHash: row.password_hash });
@@ -124,22 +126,27 @@ export async function flagAdminsOnDefaultPassword(
       details: { by: 'startup', reason: 'default' },
     });
     logger.warn(
-      `Account "${row.username}" still uses the default password "${SHIPPED_DEFAULT_PASSWORD}". Anyone who can reach ` +
-        'the web UI can sign in and choose its password. Sign in now: SIEMBox asks for a new password before anything else.'
+      row.enabled
+        ? `Account "${row.username}" still uses the default password "${SHIPPED_DEFAULT_PASSWORD}". Anyone who can reach ` +
+            'the web UI can sign in and choose its password. Sign in now: SIEMBox asks for a new password before anything else.'
+        : `Disabled account "${row.username}" uses the default password "${SHIPPED_DEFAULT_PASSWORD}"; ` +
+            'it must choose a new one if it is ever enabled.'
     );
   }
   return flagged;
 }
 
 /**
- * The "ADMIN SIGN-IN" banner lines, or [] when no admin account waits for its
- * initial or default password to be changed. Never prints a configured
- * password; it names "changeme" only because that one is public.
+ * The "ADMIN SIGN-IN" banner lines, or [] when no enabled admin account waits
+ * for its initial or default password to be changed (a disabled one can't
+ * sign in, so there is nothing to tell anyone to do). Never prints a
+ * configured password; it names "changeme" only because that one is public.
  */
 export async function defaultPasswordBanner(): Promise<string[]> {
   const waiting = await query(
     `SELECT username, must_change_password_reason AS reason FROM users
-      WHERE role = 'admin' AND must_change_password = TRUE AND must_change_password_reason IN ('initial', 'default')
+      WHERE role = 'admin' AND enabled = TRUE AND must_change_password = TRUE
+        AND must_change_password_reason IN ('initial', 'default')
       ORDER BY id`
   );
   if (waiting.rows.length === 0) return [];

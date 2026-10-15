@@ -1,5 +1,6 @@
-import { query } from '../config/database';
+import { getClient, query } from '../config/database';
 import bcrypt from 'bcrypt';
+import type { PoolClient } from 'pg';
 import type { PasswordChangeReason } from '../services/auth/passwordChange';
 
 export interface User {
@@ -77,6 +78,54 @@ const SAFE_COLUMNS =
   'id, username, email, role, enabled, mfa_enabled, password_changed_at, must_change_password, ' +
   'must_change_password_reason, must_change_password_since, last_login, created_at, updated_at';
 
+/** What update() did: the account afterwards (null: no such account), and how many sessions a new password signed out. */
+export interface UserUpdate {
+  user: UserSafe | null;
+  sessionsRevoked: number;
+}
+
+/**
+ * A new password for account `id` (`write`, the UPDATE that sets it) and
+ * signing the account out everywhere, in one transaction that locks the user
+ * row first:
+ * - a sign-in that checked the old password and hasn't created its session
+ *   yet waits for the lock, then finds the new hash and creates none
+ *   (SessionModel.createIfPasswordHash); one that created it already is
+ *   deleted here;
+ * - a request on a restricted session reads its session and account in one
+ *   statement (SessionModel.findUserByToken), so it sees the session with the
+ *   restriction, or no session: never the restriction lifted with the session
+ *   still there.
+ * Resolves to null, with nothing changed, when the account doesn't exist.
+ * The bcrypt hash is computed by the caller, before the lock is taken.
+ */
+async function writePasswordSigningOut<T>(
+  id: number,
+  write: (client: PoolClient) => Promise<T>
+): Promise<{ result: T; sessionsRevoked: number } | null> {
+  const client = await getClient();
+  let failed: Error | true | undefined;
+  try {
+    await client.query('BEGIN');
+    const locked = await client.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [id]);
+    if (locked.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    const sessions = await client.query('DELETE FROM sessions WHERE user_id = $1', [id]);
+    const result = await write(client);
+    await client.query('COMMIT');
+    return { result, sessionsRevoked: sessions.rowCount ?? 0 };
+  } catch (error) {
+    failed = error instanceof Error ? error : true;
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    // A connection whose statement failed is discarded, not reused.
+    client.release(failed);
+  }
+}
+
 export class UserModel {
   static async create(params: CreateUserParams): Promise<UserSafe> {
     const passwordHash = await bcrypt.hash(params.password, 10);
@@ -129,9 +178,16 @@ export class UserModel {
    * Change an account. With a password (an admin's or the CLI's reset), the
    * same UPDATE sets or clears the password-change requirement as
    * `requirePasswordChange` says (a reason replaces any earlier one and its
-   * date); without one, the requirement is left as it is.
+   * date), and the same transaction signs the account out everywhere
+   * (writePasswordSigningOut); without one, the requirement and the sessions
+   * are left as they are.
    */
   static async update(id: number, params: UpdateUserParams): Promise<UserSafe | null> {
+    return (await this.applyUpdate(id, params)).user;
+  }
+
+  /** update(), also saying how many sessions a new password signed out (for the audit row). */
+  static async applyUpdate(id: number, params: UpdateUserParams): Promise<UserUpdate> {
     const updates: string[] = [];
     const values: any[] = [];
     let paramIndex = 1;
@@ -170,38 +226,44 @@ export class UserModel {
     }
 
     if (updates.length === 0) {
-      return this.findByIdSafe(id);
+      return { user: await this.findByIdSafe(id), sessionsRevoked: 0 };
     }
 
     updates.push(`updated_at = NOW()`);
     values.push(id);
 
-    const result = await query(
-      `UPDATE users SET ${updates.join(', ')}
+    const sql = `UPDATE users SET ${updates.join(', ')}
        WHERE id = $${paramIndex}
-       RETURNING ${SAFE_COLUMNS}`,
-      values
-    );
-
-    return result.rows[0] || null;
+       RETURNING ${SAFE_COLUMNS}`;
+    if (params.password === undefined) {
+      const result = await query(sql, values);
+      return { user: result.rows[0] || null, sessionsRevoked: 0 };
+    }
+    const done = await writePasswordSigningOut(id, (client) => client.query(sql, values));
+    return done ? { user: done.result.rows[0] || null, sessionsRevoked: done.sessionsRevoked } : { user: null, sessionsRevoked: 0 };
   }
 
   /**
    * The user changing their own password: also records when
    * (password_changed_at), which an admin's reset or the recovery CLI don't,
-   * and clears any password-change requirement in the same UPDATE. This is
-   * the only way out of a requirement other than an admin's reset with
-   * "require a change" off.
+   * and clears any password-change requirement in the same UPDATE, in the
+   * transaction that signs the account out everywhere
+   * (writePasswordSigningOut). This is the only way out of a requirement
+   * other than an admin's reset with "require a change" off. Resolves to how
+   * many sessions it signed out.
    */
-  static async changeOwnPassword(id: number, newPassword: string): Promise<void> {
+  static async changeOwnPassword(id: number, newPassword: string): Promise<{ sessionsRevoked: number }> {
     const passwordHash = await bcrypt.hash(newPassword, 10);
-    await query(
-      `UPDATE users SET password_hash = $2, password_changed_at = NOW(),
-              must_change_password = FALSE, must_change_password_reason = NULL, must_change_password_since = NULL,
-              updated_at = NOW()
-        WHERE id = $1`,
-      [id, passwordHash]
+    const done = await writePasswordSigningOut(id, (client) =>
+      client.query(
+        `UPDATE users SET password_hash = $2, password_changed_at = NOW(),
+                must_change_password = FALSE, must_change_password_reason = NULL, must_change_password_since = NULL,
+                updated_at = NOW()
+          WHERE id = $1`,
+        [id, passwordHash]
+      )
     );
+    return { sessionsRevoked: done?.sessionsRevoked ?? 0 };
   }
 
   /**

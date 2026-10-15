@@ -177,22 +177,25 @@ export async function main(argv: string[], io: Io = defaultIo): Promise<number> 
       const password = randomPassword();
       // Always temporary: whoever runs this is either the user, who changes it
       // at once, or hands it over.
-      await UserModel.update(user.id, { password, requirePasswordChange: 'cli' });
+      // Signs the account out everywhere in the same transaction; then the
+      // browsers and counters.
+      const { sessionsRevoked } = await UserModel.applyUpdate(user.id, { password, requirePasswordChange: 'cli' });
       const revoked = await revokeAccountAccess(user);
+      const sessions = sessionsRevoked + revoked.sessions;
       await auditAuth('user.password_reset', null, {
         userId: null,
         targetUserId: user.id,
         status: 200,
         details: {
           by: 'cli',
-          sessionsRevoked: revoked.sessions,
+          sessionsRevoked: sessions,
           browsersRevoked: revoked.browsers,
           passwordChangeRequired: 'cli',
         },
       });
       io.out(`New password for ${user.username} (shown only now): ${password}`);
       io.out(
-        `Signed out ${revoked.sessions} session(s), forgot ${revoked.browsers} browser(s), cleared ${revoked.counters} counter(s). ` +
+        `Signed out ${sessions} session(s), forgot ${revoked.browsers} browser(s), cleared ${revoked.counters} counter(s). ` +
           'They must choose a new password at their next sign-in (MFA, if on, is still asked first).'
       );
       return 0;

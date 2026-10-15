@@ -1361,8 +1361,8 @@ under Frontend Issues.
 
 **Symptoms:**
 - After signing in, the web UI shows only **Choose a new password**; typing
-  another address brings you back to it. A tab that was already open jumps
-  there at its next request.
+  another address brings you back to it. A tab already open on the current
+  web UI jumps there at its next request (or when it is reloaded).
 - With a session token, every API route answers `403` with
   `{"code": "PASSWORD_CHANGE_REQUIRED", "reason": "..."}`.
 - A browser still running an older copy of the web UI shows "You do not have

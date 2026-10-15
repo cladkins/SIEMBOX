@@ -353,13 +353,18 @@ access from other origins (CORS)](#browser-access-from-other-origins-cors)).
 `039_password_change_required.sql` runs on its own; no `.env` or compose
 change):
 1. **An admin account still on `changeme` is restricted at the first start.**
-   It can then only change its password or sign out: its open browser tabs
-   land on the "Choose a new password" screen at their next request, the
-   backend log has a `still uses the default password "changeme"` warning,
-   and a critical `siembox-auth` alert reaches your notification channels.
-   Sign in right away and choose a new password: until you do, anyone who
-   reaches the web UI with `changeme` could choose it instead. Other accounts
-   on `changeme` are restricted at their next sign-in.
+   It can then only change its password or sign out. The backend log has a
+   `still uses the default password "changeme"` warning, and a critical
+   `siembox-auth` alert reaches your notification channels. Browser tabs
+   opened before the upgrade still run the old web UI: they show "You do not
+   have permission to perform this action." on every page until you reload
+   them (Ctrl+Shift+R), which brings up the "Choose a new password" screen.
+   (Or use **Settings -> Account -> Password**, which works while
+   restricted.) Sign in right away and choose a new password: until you do,
+   anyone who reaches the web UI with `changeme` could choose it instead.
+   Other accounts on `changeme` are restricted at their next sign-in. A
+   disabled admin account on `changeme` is restricted too, with its own
+   warning and no alert: it must choose a new password if it is ever enabled.
 2. **Log shippers, endpoint agents and their enrollment are not affected**:
    they use API keys, not sign-in sessions.
 3. **Scripts that sign in with a session** get `403` with

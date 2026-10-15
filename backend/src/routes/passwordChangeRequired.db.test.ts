@@ -15,6 +15,12 @@
  *   the default refused in any case, unchanged refused, paused after 5;
  *   success clears the flag in the same UPDATE, revokes every session and
  *   browser, audits forced: true, and the next sign-in is unrestricted;
+ * - races: a sign-in with the old password that is still running when the
+ *   password changes gets no session or browser (and flags nothing); a
+ *   session is only created while the hash checked is current, waiting for a
+ *   change in progress; a restricted session gets 401, never through, while
+ *   the change or an admin's reset that lifts the restriction finishes;
+ * - the boot alert: enabled accounts only, with a command that runs;
  * - MFA first, no MFA changes while restricted; a disabled account is still
  *   403 'Account is disabled';
  * - the admin API (mustChangePassword, default true, only with a password),
@@ -159,7 +165,7 @@ async function auditRows(where: string, params: unknown[]) {
 
 async function defaultPasswordAlerts(userId: number) {
   const res = await pool.query(
-    `SELECT severity, title, event_id, matched_data FROM alerts
+    `SELECT severity, title, description, event_id, matched_data FROM alerts
       WHERE source = 'siembox-auth' AND matched_data->>'trigger' = 'default-password' AND matched_data->>'user_id' = $1`,
     [String(userId)]
   );
@@ -179,6 +185,58 @@ async function eventually<T>(read: () => Promise<T>, done: (value: T) => boolean
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
+
+/** A point a call waits at: `reached` once it got there, `release()` lets it go on. */
+function gate() {
+  let markReached!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>((resolve) => (markReached = resolve));
+  const released = new Promise<void>((resolve) => (release = resolve));
+  return { reached, markReached, released, release };
+}
+
+/**
+ * Hold the next bcrypt compare of `password` once it has answered, until
+ * released: a sign-in with it that read the account and checked the password
+ * before a change, and goes on to create its session after it.
+ */
+function holdNextPasswordCheck(password: string) {
+  const point = gate();
+  const original = bcrypt.compare;
+  let armed = true;
+  const compare = mock.method(bcrypt, 'compare', async (data: string, hash: string) => {
+    const ok = await original.call(bcrypt, data, hash);
+    if (armed && data === password) {
+      armed = false;
+      point.markReached();
+      await point.released;
+    }
+    return ok;
+  });
+  return { ...point, restore: () => compare.mock.restore() };
+}
+
+/**
+ * Hold the next SessionModel.deleteAllForUser of `userId` (revokeAccountAccess,
+ * which follows a password change or reset) until released.
+ */
+function holdNextSessionRevoke(userId: number) {
+  const point = gate();
+  const original = SessionModel.deleteAllForUser;
+  let armed = true;
+  const revoke = mock.method(SessionModel, 'deleteAllForUser', async (id: number) => {
+    if (armed && id === userId) {
+      armed = false;
+      point.markReached();
+      await point.released;
+    }
+    return original.call(SessionModel, id);
+  });
+  return { ...point, restore: () => revoke.mock.restore() };
+}
+
+const sessionsOf = (userId: number) => countRows('SELECT COUNT(*)::int AS n FROM sessions WHERE user_id = $1', [userId]);
+const browsersOf = (userId: number) => countRows('SELECT COUNT(*)::int AS n FROM recognized_browsers WHERE user_id = $1', [userId]);
 
 async function enrollMfa(userId: number): Promise<string> {
   const secret = totp.generateSecret();
@@ -406,6 +464,24 @@ test('an admin found on "changeme" at sign-in raises a critical alert', async (t
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0].severity, 'critical');
   assert.match(alerts[0].event_id, /^siembox-auth:default-password:[0-9a-f]{16}:\d+$/);
+  assert.ok(
+    alerts[0].description.includes(`run docker exec siembox-backend node dist/scripts/auth-admin.js reset-password ${admin.username} `),
+    alerts[0].description
+  );
+});
+
+test('at boot, the default-password alert is raised for enabled accounts only (a disabled one cannot sign in)', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const { raiseDefaultPasswordAlerts } = await import('../services/auth/defaultPasswordAlerts');
+  const active = await createUser('boot-active', 'admin', { requirePasswordChange: 'default' });
+  const dormant = await createUser('boot-dormant', 'admin', { requirePasswordChange: 'default', enabled: false });
+  assert.equal(await raiseDefaultPasswordAlerts({ onlyUserIds: [active.id, dormant.id] }), 1);
+  const [alert] = await eventually(() => defaultPasswordAlerts(active.id), (list) => list.length > 0);
+  assert.equal(alert.matched_data.found, 'startup');
+  assert.ok(alert.description.includes('(at startup)'), alert.description);
+  assert.ok(alert.description.includes(`node dist/scripts/auth-admin.js reset-password ${active.username}`), alert.description);
+  assert.equal((await defaultPasswordAlerts(dormant.id)).length, 0, 'no alert to sign in as an account that cannot');
+  assert.equal(await raiseDefaultPasswordAlerts({ onlyUserIds: [active.id, dormant.id] }), 0, 'once per flag');
 });
 
 // --- The change ----------------------------------------------------------------------
@@ -481,6 +557,127 @@ test('five wrong current passwords pause the forced change (429), and the sessio
   assert.equal(last!.body.code, 'SIGNIN_PAUSED');
   assert.equal(last!.body.reason, 'current_password');
   assertRestricted(await call('GET', '/api/alerts', { token }), 'cli', 'still restricted');
+});
+
+// --- Races: a sign-in or a request still running while the password changes ----------
+
+test('a sign-in with the old password still running when it changes gets no session, and flags nothing', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  // temporary: flagged 'admin'; default: on "changeme", flagged at the owner's
+  // sign-in; found: on "changeme", unflagged, the owner on a session from before.
+  for (const kind of ['temporary', 'default', 'found'] as const) {
+    const password = kind === 'temporary' ? PASSWORD : 'changeme';
+    const user = await createUser(`race-signin-${kind}`, 'admin', { requirePasswordChange: kind === 'temporary' ? 'admin' : null });
+    if (kind !== 'temporary') await setDefaultPassword(user.id);
+    let ownerToken: string;
+    if (kind === 'found') {
+      ownerToken = (await SessionModel.create(user.id, 1)).token;
+    } else {
+      const owner = await login(user.username, password);
+      assert.equal(owner.body.passwordChangeRequired, true, kind);
+      ownerToken = owner.body.token;
+    }
+
+    // Someone else who knows the password signs in; their sign-in is held
+    // after its password check while the owner changes the password.
+    const held = holdNextPasswordCheck(password);
+    let other: Answer;
+    try {
+      const pending = login(user.username, password);
+      await held.reached;
+      const changed = await call('PUT', '/api/auth/me/password', {
+        token: ownerToken,
+        body: { currentPassword: password, newPassword: `${PASSWORD}-${kind}-mine` },
+      });
+      assert.equal(changed.status, 200, `${kind}: ${JSON.stringify(changed.body)}`);
+      held.release();
+      other = await pending;
+    } finally {
+      held.release();
+      held.restore();
+    }
+    assert.equal(other.status, 401, `${kind}: ${JSON.stringify(other.body)}`);
+    assert.equal(other.body.message, 'Invalid username or password', kind);
+    assert.equal(other.body.token, undefined, kind);
+    assert.equal(await sessionsOf(user.id), 0, `${kind}: no session outlives the password it was earned with`);
+    assert.equal(await browsersOf(user.id), 0, `${kind}: nor a recognized browser`);
+    assert.equal((await flags(user.id)).must, false, `${kind}: the new password is not flagged`);
+    const refused = await auditRows(`action = 'auth.login.failure' AND user_id = $2`, [user.id]);
+    assert.deepEqual(
+      refused.map((row) => [row.response_status, row.details.reason]),
+      [[401, 'password_changed']],
+      kind
+    );
+    const again = await login(user.username, `${PASSWORD}-${kind}-mine`);
+    assert.equal(again.status, 200, kind);
+    assert.equal(again.body.passwordChangeRequired, undefined, kind);
+  }
+});
+
+test('createIfPasswordHash waits for a password change in progress, then creates nothing', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const user = await createUser('race-lock');
+  const hashOf = async () => (await pool.query('SELECT password_hash FROM users WHERE id = $1', [user.id])).rows[0].password_hash;
+  const oldHash: string = await hashOf();
+
+  // What UserModel's change does: lock the row, sign out, set the new hash.
+  const change = await pool.connect();
+  let settled = false;
+  let pending: Promise<unknown> | null = null;
+  try {
+    await change.query('BEGIN');
+    await change.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [user.id]);
+    await change.query('DELETE FROM sessions WHERE user_id = $1', [user.id]);
+    await change.query('UPDATE users SET password_hash = $2 WHERE id = $1', [user.id, await bcrypt.hash('another one 1', 4)]);
+    pending = SessionModel.createIfPasswordHash(user.id, oldHash, 1).finally(() => (settled = true));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(settled, false, 'the sign-in waits for the change to finish');
+    await change.query('COMMIT');
+    assert.equal(await pending, null, 'and then finds the new hash');
+  } finally {
+    await change.query('ROLLBACK').catch(() => undefined);
+    change.release();
+    await pending?.catch(() => undefined);
+  }
+  assert.equal(await sessionsOf(user.id), 0);
+  assert.ok(await SessionModel.createIfPasswordHash(user.id, await hashOf(), 1), 'the current hash gets a session');
+  assert.equal(await SessionModel.createIfPasswordHash(user.id + 1_000_000, oldHash, 1), null, 'no account, no session');
+});
+
+test('a restricted session gets nothing while the change or reset that lifts the restriction is finishing', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const admin = await createUser('race-req-admin', 'admin');
+  const adminToken = (await SessionModel.create(admin.id, 1)).token;
+  for (const path of ['self', 'admin-reset'] as const) {
+    const user = await createUser(`race-req-${path}`, 'admin', { requirePasswordChange: 'admin' });
+    const restricted = (await SessionModel.create(user.id, 1)).token;
+    assertRestricted(await call('GET', '/api/users', { token: restricted }), 'admin', path);
+
+    // The change has saved the new password and lifted the requirement; it is
+    // held where it goes on to sign the account out (revokeAccountAccess).
+    const held = holdNextSessionRevoke(user.id);
+    try {
+      const pending =
+        path === 'self'
+          ? call('PUT', '/api/auth/me/password', { token: restricted, body: { currentPassword: PASSWORD, newPassword: `${PASSWORD}-own` } })
+          : call('PUT', `/api/users/${user.id}`, { token: adminToken, body: { password: `${PASSWORD}-set`, mustChangePassword: false } });
+      await held.reached;
+      for (const [method, url] of [['GET', '/api/users'], ['GET', '/api/alerts'], ['POST', '/api/auth/me/mfa/setup']] as const) {
+        const during = await call(method, url, { token: restricted, body: method === 'GET' ? undefined : {} });
+        assert.equal(during.status, 401, `${path} ${method} ${url} while the change finishes: ${JSON.stringify(during.body)}`);
+      }
+      held.release();
+      assert.equal((await pending).status, 200, path);
+    } finally {
+      held.release();
+      held.restore();
+    }
+    assert.equal((await flags(user.id)).must, false, path);
+    assert.equal((await call('GET', '/api/users', { token: restricted })).status, 401, path);
+  }
+  const resets = await auditRows(`action = 'user.password_reset' AND user_id = $2`, [admin.id]);
+  assert.equal(resets.length, 1);
+  assert.equal(resets[0].details.sessionsRevoked, 1, 'the session signed out in the transaction is counted');
 });
 
 // --- MFA, disabled ------------------------------------------------------------------

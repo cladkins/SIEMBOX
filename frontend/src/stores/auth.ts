@@ -99,6 +99,23 @@ export const useAuthStore = defineStore('auth', () => {
     if (!mustChangePassword.value && router.currentRoute.value.name === 'ChangePassword') void router.replace('/');
   };
 
+  /**
+   * Read the profile again and keep it (best effort: with no answer the stored
+   * one stands; a 401 signs out as usual). The router does this once per page
+   * load, before the first page mounts, so a requirement set since the stored
+   * profile was saved (an upgrade's scan, an admin's reset) sends the user to
+   * the change screen before any page makes calls the API refuses.
+   */
+  const refreshProfile = async () => {
+    if (!token.value) return;
+    try {
+      const { data } = await api.getProfile({ skipErrorToast: true, skipNetworkErrorToast: true, timeout: 5000 });
+      setProfile(data);
+    } catch {
+      // Keep what the store has; the page's own calls still redirect on a refusal.
+    }
+  };
+
   const logout = () => {
     token.value = null;
     user.value = null;
@@ -124,6 +141,7 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     requirePasswordChange,
     setProfile,
+    refreshProfile,
     logout,
     signOut,
   };

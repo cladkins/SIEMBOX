@@ -178,8 +178,17 @@ const router = createRouter({
 // Navigation guard for authentication. It returns where to go instead of
 // calling the third `next` argument, which vue-router 5 deprecates: a returned
 // path redirects, and returning nothing lets the navigation through.
-router.beforeEach((to) => {
+// The page load's first navigation reads the profile once (stores/auth.ts
+// refreshProfile), so the checks below see a password-change requirement the
+// stored profile predates before any page mounts.
+let profileRefreshed = false;
+
+router.beforeEach(async (to) => {
   const authStore = useAuthStore();
+  if (!profileRefreshed) {
+    profileRefreshed = true;
+    await authStore.refreshProfile();
+  }
   const requiresAuth = to.matched.some((record) => record.meta.requiresAuth);
   const requiresAdmin = to.matched.some((record) => record.meta.requiresAdmin);
   const allowedRoles = to.matched.find((record) => record.meta.allowedRoles)?.meta.allowedRoles;

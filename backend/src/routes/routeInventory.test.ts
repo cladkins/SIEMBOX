@@ -599,8 +599,10 @@ before(async () => {
   const { ErrorLogService } = await import('../services/errors/errorLogService');
   errorLog = mock.method(ErrorLogService, 'logError', async () => undefined) as unknown as Recorder;
 
-  // One signed-in user per role: authenticate() looks the token up, then the
-  // user. Plus the restricted sessions, whose accounts must change their password.
+  // One signed-in user per role: authenticate() looks the token's session and
+  // user up together (SessionModel.findUserByToken). Plus the restricted
+  // sessions, whose accounts must change their password. UserModel.findById
+  // is what the routes that reload the caller read.
   const { SessionModel } = await import('../models/Session');
   const { UserModel } = await import('../models/User');
   const userOfToken = new Map<string, { id: number; role: Role; restricted: boolean }>([
@@ -608,11 +610,7 @@ before(async () => {
     ...Object.values(RESTRICTED).map(({ token, id, role }) => [token, { id, role, restricted: true }] as const),
   ]);
   const userOfId = new Map([...userOfToken.values()].map((user) => [user.id, user]));
-  mock.method(SessionModel, 'findByToken', async (token: string) => {
-    const user = userOfToken.get(token);
-    return user ? { id: user.id, user_id: user.id, token, expires_at: new Date(Date.now() + 3_600_000), created_at: new Date() } : null;
-  });
-  mock.method(UserModel, 'findById', async (id: number) => {
+  const userRow = (id: number) => {
     const user = userOfId.get(id);
     if (!user) return null;
     const name = `inventory-${user.role}${user.restricted ? '-must-change' : ''}`;
@@ -626,7 +624,12 @@ before(async () => {
       must_change_password_reason: user.restricted ? 'default' : null,
       must_change_password_since: user.restricted ? new Date() : null,
     };
+  };
+  mock.method(SessionModel, 'findUserByToken', async (token: string) => {
+    const user = userOfToken.get(token);
+    return user ? userRow(user.id) : null;
   });
+  mock.method(UserModel, 'findById', async (id: number) => userRow(id));
   // No EDR agent or shipper exists, so no key (a login's included) can pass.
   const { EdrAgentModel } = await import('../models/EdrAgent');
   mock.method(EdrAgentModel, 'findById', async () => null);

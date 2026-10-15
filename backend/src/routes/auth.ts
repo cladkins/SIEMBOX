@@ -24,8 +24,10 @@
  *     which restricts its other sessions at once too.
  *  9. MFA: the code is charged to the MFA key (or the browser's) the same way,
  *     and refunded when it is right.
- * 10. Success: reset the keys that reset, issue or touch the browser token,
- *     create the session. An account that must change its password gets a
+ * 10. Success: create the session, only while the password is still the one
+ *     checked (a change or reset that landed meanwhile answers 401, as a
+ *     wrong password would), reset the keys that reset, issue or touch the
+ *     browser token. An account that must change its password gets a
  *     session too, with passwordChangeRequired: true; that session can only
  *     read /me, change the password or sign out (middleware/auth.ts).
  *
@@ -170,8 +172,10 @@ router.post('/login', async (req: Request, res: Response) => {
     }
     // Still on the shipped default: anyone could look it up, whatever happens
     // at the code step, so flag it before MFA. Only the boolean leaves here.
+    // Compare-and-set on the hash just checked: a password changed since this
+    // sign-in read the account is never flagged (and gets no session, step 10).
     if (!user.must_change_password && isShippedDefaultPassword(input.password)) {
-      const since = await UserModel.requirePasswordChange(user.id, 'default');
+      const since = await UserModel.requirePasswordChange(user.id, 'default', { ifHash: user.password_hash });
       if (since) {
         user.must_change_password = true;
         user.must_change_password_reason = 'default';
@@ -257,6 +261,22 @@ async function completeSignIn(
   }
 ): Promise<void> {
   const { user, browser, ctx, reservation } = params;
+  // The session (24 hours) comes first, and only while the password is still
+  // the one this sign-in checked. A change or reset that landed since (a
+  // bcrypt compare and, with MFA, a code ago) already signed every session
+  // out; a session created now would outlive the password it was earned with,
+  // and no longer be restricted by a requirement that change lifted.
+  const session = await SessionModel.createIfPasswordHash(user.id, user.password_hash, 24);
+  if (!session) {
+    logger.info('Login failed', { userId: user.id, ip: ctx.ip, via: ctx.via, reason: 'password_changed' });
+    await auditAuth('auth.login.failure', ctx, {
+      userId: user.id,
+      status: 401,
+      details: { reason: 'password_changed', recognizedBrowser: browser !== null },
+    });
+    sendError(res, 401, 'Invalid username or password');
+    return;
+  }
   const resetKeys = browser
     ? [browserKey(browser.id, browser.userId).key]
     : [passwordKeys(usernameHash(user.username), ctx.network, user.id)[0].key, mfaKey(user.id).key];
@@ -267,9 +287,9 @@ async function completeSignIn(
     token: params.token,
     ip: ctx.ip,
     userAgent: ctx.userAgent,
+    passwordHash: user.password_hash,
   });
 
-  const session = await SessionModel.create(user.id, 24); // 24 hour session
   await UserModel.updateLastLogin(user.id);
   // Why this session is restricted (middleware/auth.ts), when it is.
   const restricted = user.must_change_password === true;
@@ -434,7 +454,9 @@ router.put('/me/password', authenticateAllowingPasswordChange, async (req: Reque
     // The current password is right: take its charge back now, so a failure
     // to save the new one (a 5xx) is never counted.
     await LoginThrottleModel.refund(reservation);
-    await UserModel.changeOwnPassword(user.id, newPassword);
+    // Signs out every session in the same transaction that sets the new
+    // password and lifts any requirement; then the browsers and counters.
+    const changed = await UserModel.changeOwnPassword(user.id, newPassword);
     const revoked = await revokeAccountAccess(user);
     const forced = user.must_change_password === true;
 
@@ -443,7 +465,7 @@ router.put('/me/password', authenticateAllowingPasswordChange, async (req: Reque
       userId: user.id,
       status: 200,
       details: {
-        sessionsRevoked: revoked.sessions,
+        sessionsRevoked: changed.sessionsRevoked + revoked.sessions,
         browsersRevoked: revoked.browsers,
         ...(forced ? { forced: true, reason: user.must_change_password_reason ?? null } : {}),
       },

@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { SessionModel } from '../models/Session';
-import { UserModel, type User } from '../models/User';
+import type { User } from '../models/User';
 import { ApiError } from './errorHandler';
 import { passwordChangeRequiredBody, type PasswordChangeReason } from '../services/auth/passwordChange';
 
@@ -41,16 +41,13 @@ async function sessionUser(req: Request): Promise<User> {
     throw new ApiError(401, 'Authentication required');
   }
 
-  // Validate session
-  const session = await SessionModel.findByToken(token);
-  if (!session) {
-    throw new ApiError(401, 'Invalid or expired session');
-  }
-
-  // Get user
-  const user = await UserModel.findById(session.user_id);
+  // The session and its account in one statement: a password change that
+  // lifts a restriction deletes the sessions in the same transaction, so this
+  // sees the restricted session or no session, never the session from before
+  // with the account from after (SessionModel.findUserByToken).
+  const user = await SessionModel.findUserByToken(token);
   if (!user) {
-    throw new ApiError(401, 'User not found');
+    throw new ApiError(401, 'Invalid or expired session');
   }
 
   if (!user.enabled) {

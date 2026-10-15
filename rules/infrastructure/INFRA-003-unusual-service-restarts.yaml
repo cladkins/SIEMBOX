@@ -13,8 +13,11 @@ conditions:
     # flags: i — the pattern mixed cases already (Starting/Stopped capitalised
     # for systemd, "restarting" lowercase), so "Restarting docker" — the form
     # Docker actually logs — was missed.
+    # Each "X, then later Y" is written so the gap cannot contain X again, not
+    # as X.*Y: that form is polynomial ReDoS (a crafted "serviceservice..." line
+    # costs O(n^2)) and SIEMBox refuses to store it. Same matches on a single line.
     flags: i
-    value: "(service.*restart|systemd.*restart|Starting.*service|Stopped.*service|restarting)"
+    value: '(service(?:[^s\n\r]|s(?!ervice))*restart|systemd(?:[^s\n\r]|s(?!ystemd))*restart|Starting(?:[^s\n\r]|s(?!tarting))*service|Stopped(?:[^s\n\r]|s(?!topped))*service|restarting)'
 
 aggregation:
   field: service

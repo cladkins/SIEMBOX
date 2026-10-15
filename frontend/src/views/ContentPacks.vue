@@ -172,24 +172,32 @@ async function install(pack: any) {
       `detections: ${d.installed} new, ${d.updated} updated`,
     ];
     const failures = [...(p.failed || []), ...(d.failed || [])];
+    // Installed items with a regex the safety check could not prove safe.
+    const warnings: Array<{ name: string; reason: string }> = (data.warnings || []).flatMap((w: any) =>
+      (w.warnings || []).map((line: string) => ({ name: w.name, reason: line }))
+    );
     if (failures.length) parts.push(`${failures.length} skipped`);
     ElMessage.success(`${pack.name} — ${parts.join('; ')}`);
     await load();
 
-    // Show exactly what was skipped and why, so "7/10" is never a mystery.
-    if (failures.length) {
+    // Show exactly what was skipped and why (a refused regex names the regex and
+    // why), so "7/10" is never a mystery; then any regex warnings.
+    if (failures.length || warnings.length) {
+      const row = (f: { name: string; reason: string }) =>
+        h('div', { style: 'margin-bottom:6px' }, [
+          h('strong', {}, f.name),
+          h('span', { style: 'color:var(--el-text-color-secondary)' }, ` — ${f.reason}`),
+        ]);
       await ElMessageBox({
-        title: `${pack.name}: ${failures.length} item(s) skipped`,
-        message: h(
-          'div',
-          { style: 'max-height:300px;overflow:auto' },
-          failures.map((f: any) =>
-            h('div', { style: 'margin-bottom:6px' }, [
-              h('strong', {}, f.name),
-              h('span', { style: 'color:var(--el-text-color-secondary)' }, ` — ${f.reason}`),
-            ])
-          )
-        ),
+        title: failures.length
+          ? `${pack.name}: ${failures.length} item(s) skipped`
+          : `${pack.name}: installed, but some regexes could not be proven safe`,
+        message: h('div', { style: 'max-height:300px;overflow:auto' }, [
+          ...failures.map(row),
+          ...(warnings.length
+            ? [h('div', { style: 'margin:8px 0 4px;font-weight:600' }, 'Regex warnings'), ...warnings.map(row)]
+            : []),
+        ]),
         confirmButtonText: 'OK',
       }).catch(() => {});
     }

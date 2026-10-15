@@ -12,7 +12,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from '../utils/yaml';
-import { validateRule } from '../services/rules/rulePortable';
+import { validateRule, collectRuleRegexes } from '../services/rules/rulePortable';
+import { isUndecidedUnbounded, redosUndecidedMessage, scanRegexRefs } from '../services/parser/redos';
 
 function findRuleFiles(target: string): string[] {
   const stat = fs.statSync(target);
@@ -37,6 +38,36 @@ function validateFile(file: string): { ok: boolean; lines: string[] } {
   const warn = v.warnings.map((w) => `    ⚠ ${w}`);
   if (!v.ok) {
     return { ok: false, lines: [`✗ ${file}`, ...v.errors.map((e) => `    error: ${e}`), ...warn] };
+  }
+
+  // ReDoS gate, the same as validate-parsers': a rule's regex conditions run on
+  // every parsed log, so a PROVEN-vulnerable one (exponential or polynomial)
+  // fails, and so does one recheck cannot read that V8's linear-time fallback
+  // cannot bound either; any other indeterminate one ('unknown') is a warning.
+  // `required` makes a missing analyzer fail loudly rather than skip the
+  // check. The app's write-time gate refuses the same regexes on install.
+  const redos = scanRegexRefs(collectRuleRegexes(doc), { required: true });
+  const fatal = redos.filter(
+    (f) => f.status === 'vulnerable' || isUndecidedUnbounded(f) || (f.location === 'redos' && f.status === 'error')
+  );
+  for (const f of redos.filter((x) => !fatal.includes(x))) {
+    warn.push(`    ⚠ ReDoS ${f.location}: ${f.status}${f.detail ? ` (${f.detail})` : ''}`);
+  }
+  if (fatal.length > 0) {
+    const why = fatal.every(isUndecidedUnbounded) ? 'regex the ReDoS check cannot read' : 'ReDoS-vulnerable regex';
+    const fl = [`✗ ${file}  (${why})`];
+    for (const f of fatal) {
+      if (isUndecidedUnbounded(f)) {
+        fl.push(`    ${redosUndecidedMessage(f, 'contributing')}`);
+        continue;
+      }
+      const what = f.status === 'error' ? f.detail || 'analyzer error' : `${f.status}${f.complexity ? ` — ${f.complexity}` : ''}`;
+      fl.push(`    ${f.location}: ${what}`);
+    }
+    fl.push(
+      '    Rewrite it linear: no two parts of the pattern may match the same text. For "A, later B" use a gap that cannot contain A (e.g. curl(?:[^c|]|c(?!url))*\\|) — see RULES.md, "Regex safety".'
+    );
+    return { ok: false, lines: [...fl, ...warn] };
   }
   return { ok: true, lines: [`✓ ${file}`, ...warn] };
 }

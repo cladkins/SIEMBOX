@@ -97,7 +97,8 @@ const INVENTORY: Row[] = [
   ['GET', '/api/logs/parsed/search', ANY_ROLE],
 
   // routes/parsers.ts: Parsers page. /validate and /test run a regex the caller
-  // supplies, so they sit with the writes; /:id/test runs a saved parser.
+  // supplies (in a time-bounded worker), so they sit with the writes; /:id/test
+  // runs a saved parser.
   ['GET', '/api/parsers', ANY_ROLE],
   ['GET', '/api/parsers/match-stats', ANY_ROLE],
   ['GET', '/api/parsers/recommendations', ANY_ROLE],

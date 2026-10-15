@@ -5,7 +5,8 @@
  * actually supports, so a rule that passes CI imports and evaluates cleanly.
  */
 import * as yaml from '../../utils/yaml';
-import { validateUserRegex } from './userRegex';
+import { normalizeUserRegex, validateUserRegex } from './userRegex';
+import type { RegexRef } from '../parser/redos';
 
 /** Condition operators the rules engine implements (see rulesEngine.ts). */
 export const RULE_OPERATORS = [
@@ -170,4 +171,57 @@ export function toPortableRule(rule: any): PortableRule {
 /** Serialize a stored rule to the catalog's portable YAML. */
 export function portableRuleToYaml(rule: any): string {
   return yaml.dump(toPortableRule(rule), { lineWidth: 100, noRefs: true, sortKeys: false });
+}
+
+/**
+ * The shape checks POST/PUT /api/rules run on rule logic before the regex
+ * gate (they store the user's YAML/JSON as-is, without validateRule's full
+ * catalog checks): a `regex` condition's `flags` must be a string, and its
+ * `value` a scalar. An array or object there is never what the author meant
+ * (`flags: [i]`, `value: [...]`), and the gate and the engine must read the
+ * same thing. Returns one message per problem; empty when fine.
+ */
+export function ruleRegexTypeErrors(rule: unknown): string[] {
+  const conditions: unknown[] = Array.isArray((rule as any)?.conditions) ? (rule as any).conditions : [];
+  const errors: string[] = [];
+  conditions.forEach((c, i) => {
+    if (!isPlainObject(c) || c.operator !== 'regex') return;
+    if (c.flags !== undefined && c.flags !== null && typeof c.flags !== 'string') {
+      errors.push(`conditions[${i}].flags must be a string (e.g. "i")`);
+    }
+    if (c.value !== null && typeof c.value === 'object') {
+      errors.push(`conditions[${i}].value for "regex" must be a string`);
+    }
+  });
+  return errors;
+}
+
+/**
+ * Every `regex` condition of a detection rule, as the engine compiles it
+ * (inline "(?i)" split off, explicit flags merged), for the ReDoS checks: the
+ * write-time gate (services/regex/regexSafety) and validate-detections. Accepts
+ * a portable rule, a rule_logic object, or a DB row.
+ */
+export function collectRuleRegexes(rule: any): RegexRef[] {
+  const conditions: any[] = Array.isArray(rule?.conditions)
+    ? rule.conditions
+    : Array.isArray(rule?.rule_logic?.conditions)
+      ? rule.rule_logic.conditions
+      : [];
+  const refs: RegexRef[] = [];
+  conditions.forEach((c, i) => {
+    if (!c || typeof c !== 'object' || c.operator !== 'regex') return;
+    if (c.value === undefined || c.value === null || c.value === '') return;
+    try {
+      // Exactly the engine's call (rulesEngine: testUserRegex(String(value), _, condition.flags)),
+      // so the gate analyzes the flags that run: `flags: [i]` is not read as
+      // "no flags" here while the engine applies "i".
+      const { source, flags } = normalizeUserRegex(String(c.value), c.flags);
+      refs.push({ location: `conditions[${i}].value`, source, flags });
+    } catch {
+      // A bad or non-string flag never compiles, so it never runs; validateRule
+      // and the rule routes (ruleRegexTypeErrors) refuse it.
+    }
+  });
+  return refs;
 }

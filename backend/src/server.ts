@@ -30,8 +30,18 @@ import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
 import { TemplateService } from './services/scanner/templateService';
 import { CredentialEncryption } from './services/credentials/credentialEncryption';
 import { ErrorLogService } from './services/errors/errorLogService';
+import { scanStoredRegexes } from './services/regex/storedRegexScan';
+import { closeRegexScanPool } from './services/regex/regexSafety';
+import { closeRegexTestPool } from './services/regex/boundedRegex';
+import { enableLinearRegexFallback } from './services/regex/linearFallback';
 
 loadDotenv();
+
+// A parser or rule regex that backtracks catastrophically on a crafted log line
+// would stall the event loop (API, syslog ingestion, every job). V8 can abandon
+// such a match after 1,000,000 backtracks and finish it on its linear-time engine;
+// see services/regex/linearFallback.ts for what that covers. Before anything runs.
+const linearRegexFallback = enableLinearRegexFallback();
 
 // Last-resort capture. Anything that escaped a service's own try/catch — a
 // rejected promise nobody awaited, a throw from a timer callback — used to
@@ -180,6 +190,11 @@ const startServer = async () => {
     // Which origins' pages may call the API from a browser. Every start warns
     // about CORS_ORIGIN=* and about each entry it ignored.
     logCorsPolicy(corsPolicy);
+    if (!linearRegexFallback) {
+      logger.warn(
+        '[regex-safety] REGEX_LINEAR_FALLBACK is off: a regex that backtracks catastrophically on a log line runs on the event loop until it ends'
+      );
+    }
     // An account found on the default password "changeme" (flagged by
     // migrate's scan, or at a sign-in) raises a siembox-auth alert: once per
     // flag, so restarts add nothing. In the background; never fails the start.
@@ -189,6 +204,18 @@ const startServer = async () => {
     await getDummyHash();
     // Idle counters, unused browsers, expired sessions, old failure audit rows.
     startSignInHousekeepingJob();
+
+    // Regex safety: give every stored parser and rule regex a ReDoS verdict
+    // (cached in regex_safety_verdicts, so only new regexes cost anything) and
+    // WARN for each vulnerable one; the Parsers / Detection Rules pages tag
+    // them "Unsafe regex". Saved before the write-time gate existed, they still
+    // run (disabling them would silently drop parsing). Background, off the
+    // event loop; never fails the start.
+    void scanStoredRegexes().catch((error) => {
+      logger.warn('[regex-safety] startup scan of stored regexes failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
 
     // Warm the Nuclei template cache in the background so the first request to
     // the (heavy) template endpoints hits a populated cache instead of parsing
@@ -258,6 +285,7 @@ const shutdown = async (signal: string) => {
   stopDomainMonitorJob();
   stopSignInHousekeepingJob();
   stopRefusalSummary();
+  await Promise.all([closeRegexScanPool(), closeRegexTestPool()]).catch(() => undefined);
   await closePools();
   logger.info('Database pools closed');
   process.exit(0);

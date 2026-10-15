@@ -15,7 +15,10 @@ conditions:
     # alert as a port scan. The prose phrases get explicit case classes instead,
     # because logs capitalise them inconsistently ("Connection refused" is the
     # canonical form in most daemons, and was missed entirely).
-    value: "([Cc]onnection [Rr]efused|[Cc]onnection [Aa]ttempt|SYN|[Pp]ort.*[Cc]losed|[Nn]o [Rr]oute [Tt]o [Hh]ost)"
+    # "Port, then later closed" is written so the gap cannot contain "Port"
+    # again, not as [Pp]ort.*[Cc]losed: that form is polynomial ReDoS and
+    # SIEMBox refuses to store it. Same matches on a single line.
+    value: '([Cc]onnection [Rr]efused|[Cc]onnection [Aa]ttempt|SYN|[Pp]ort(?:[^Pp\n\r]|[Pp](?!ort))*[Cc]losed|[Nn]o [Rr]oute [Tt]o [Hh]ost)'
 
 aggregation:
   field: source_ip

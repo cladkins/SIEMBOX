@@ -93,6 +93,16 @@ services:
       # failed sign-in audit rows are kept (empty = 90; 0 keeps them).
       AUTH_ALERTS: ${AUTH_ALERTS:-}
       AUTH_FAILURE_AUDIT_RETENTION_DAYS: ${AUTH_FAILURE_AUDIT_RETENTION_DAYS:-}
+      # Regex safety (DEPLOYMENT.md, "Regex safety checks"). Empty = the
+      # defaults: 10000 ms per analysis of one regex at save time (undecided =
+      # saved with a warning), 1000 ms per pattern test run, 2 worker threads
+      # each, V8's linear-time fallback on after 1,000,000 backtracks (false
+      # turns it off).
+      REGEX_SAFETY_CHECK_TIMEOUT_MS: ${REGEX_SAFETY_CHECK_TIMEOUT_MS:-}
+      REGEX_SAFETY_WORKERS: ${REGEX_SAFETY_WORKERS:-}
+      REGEX_TEST_TIMEOUT_MS: ${REGEX_TEST_TIMEOUT_MS:-}
+      REGEX_TEST_WORKERS: ${REGEX_TEST_WORKERS:-}
+      REGEX_LINEAR_FALLBACK: ${REGEX_LINEAR_FALLBACK:-}
       GEOIP_DB_PATH: ${GEOIP_DB_PATH:-/app/data/dbip-country-lite.mmdb}
       GEOIP_HOME_COUNTRIES: ${GEOIP_HOME_COUNTRIES:-}
       # Encrypts stored secrets (scanner creds + the AI API key). Generate with:

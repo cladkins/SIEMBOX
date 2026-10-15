@@ -15,6 +15,7 @@ import * as path from 'path';
 import * as yaml from '../utils/yaml';
 import { DetectionRuleModel } from '../models/DetectionRule';
 import { logger } from '../utils/logger';
+import { assessRuleRegexes, isRefused } from '../services/regex/regexSafety';
 
 interface YAMLRule {
   name: string;
@@ -91,6 +92,20 @@ async function importRule(filePath: string): Promise<boolean> {
 
     // Convert YAML to rule_logic format
     const ruleLogic = convertYAMLToRuleLogic(yamlRule);
+
+    // The write-time regex gate every other save path applies: a regex
+    // condition recheck proves ReDoS-vulnerable (or cannot read, with nothing to
+    // bound it at run time) is never imported (it would run on every parsed
+    // log). Checked only for rules this run would write.
+    const existingRow = await DetectionRuleModel.findByName(yamlRule.name);
+    if (!existingRow || existingRow.rule_yaml !== fileContent) {
+      const safety = await assessRuleRegexes(ruleLogic);
+      if (isRefused(safety)) {
+        logger.error(`Rule "${yamlRule.name}" not imported: ${safety.errors.join('; ')}`, { filePath });
+        return false;
+      }
+      for (const warning of safety.warnings) logger.warn(`Rule "${yamlRule.name}": ${warning}`, { filePath });
+    }
 
     // Upsert: if a rule with this name already exists, re-import it only when the
     // YAML file actually changed, and preserve the operator's enabled/disabled

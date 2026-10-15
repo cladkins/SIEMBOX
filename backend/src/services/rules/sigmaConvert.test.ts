@@ -6,7 +6,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { sigmaToPortable, convertSigmaYaml } from './sigmaConvert';
-import { validateRule } from './rulePortable';
+import { validateRule, collectRuleRegexes } from './rulePortable';
+import { scanRegexRefs } from '../parser/redos';
 
 /** Assert a converted rule is non-null and passes strict portable validation. */
 function assertValid(result: ReturnType<typeof sigmaToPortable>) {
@@ -86,7 +87,12 @@ test('wildcard values convert to anchored regex', () => {
   assertValid(r);
   const c = r.rule!.conditions[0];
   assert.equal(c.operator, 'regex');
-  assert.equal(c.value, '^.*/wp-admin/.*$');
+  // `*x*` on a whole value is "contains x": a plain literal, not ^.*x.*$, which
+  // is polynomial ReDoS (the regex safety gate refuses it).
+  assert.equal(c.value, '/wp-admin/');
+  const re = new RegExp(String(c.value));
+  assert.equal(re.test('/blog/wp-admin/index.php'), true);
+  assert.equal(re.test('/wp-login.php'), false);
 });
 
 test('`|all` modifier produces an AND list of conditions', () => {
@@ -184,8 +190,86 @@ test('keywords with a bare wildcard become a regex wildcard', () => {
     detection: { keywords: ['/etc/*/passwd'], condition: 'keywords' },
   });
   assertValid(r);
-  // bare `*` -> `.*` wildcard; letters become case-insensitive classes.
-  assert.equal(r.rule!.conditions[0].value, '(?:/[Ee][Tt][Cc]/.*/[Pp][Aa][Ss][Ss][Ww][Dd])');
+  // An inner `*` is a first-occurrence chain (linear), not `.*` (polynomial
+  // ReDoS once the line is unanchored); letters become case-insensitive classes.
+  const value = String(r.rule!.conditions[0].value);
+  assert.equal(
+    value,
+    '(?:^(?:(?!/[Ee][Tt][Cc]/)[\\s\\S])*/[Ee][Tt][Cc]/(?:(?!/[Pp][Aa][Ss][Ss][Ww][Dd])[\\s\\S])*/[Pp][Aa][Ss][Ss][Ww][Dd])'
+  );
+  const re = new RegExp(value);
+  assert.equal(re.test('GET /ETC/x/y/passwd HTTP/1.1'), true);
+  assert.equal(re.test('cat /etc/passwd'), false, 'the wildcard needs a segment between');
+  assert.equal(re.test('/passwd then /etc/'), false, 'order matters');
+});
+
+/** Classic glob matcher (`*` any run, `?` one character): the reference semantics. */
+function globMatches(glob: string, s: string): boolean {
+  const dp = Array.from({ length: glob.length + 1 }, () => new Array<boolean>(s.length + 1).fill(false));
+  dp[0][0] = true;
+  for (let i = 1; i <= glob.length; i++) if (glob[i - 1] === '*') dp[i][0] = dp[i - 1][0];
+  for (let i = 1; i <= glob.length; i++) {
+    for (let j = 1; j <= s.length; j++) {
+      const g = glob[i - 1];
+      if (g === '*') dp[i][j] = dp[i - 1][j] || dp[i][j - 1];
+      else if (g === '?' || g === s[j - 1]) dp[i][j] = dp[i - 1][j - 1];
+    }
+  }
+  return dp[glob.length][s.length];
+}
+
+/** Deterministic PRNG so a failure reproduces. */
+function prng(seed: number): () => number {
+  return () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+}
+
+test('wildcard values and keywords match exactly what the Sigma glob means', () => {
+  // Overlapping blocks ("aa" then "ab", "ab" then "ba") are where a shortcut
+  // linearization goes wrong, so the alphabet is built to produce them.
+  const rand = prng(42);
+  const tokens = ['a', 'b', 'ab', 'ba', 'aa', '*', '*', '?'];
+  for (let n = 0; n < 1500; n++) {
+    const glob = Array.from({ length: 1 + Math.floor(rand() * 5) }, () => tokens[Math.floor(rand() * tokens.length)]).join('');
+    const field = sigmaToPortable({ title: 't', detection: { sel: { f: glob }, condition: 'sel' } }).rule!.conditions[0];
+    const keyword = sigmaToPortable({ title: 't', detection: { keywords: [glob], condition: 'keywords' } }).rule!.conditions[0];
+    const fieldRe = field.operator === 'regex' ? new RegExp(String(field.value)) : null;
+    const keywordRe = new RegExp(String(keyword.value));
+    for (let m = 0; m < 20; m++) {
+      const subject = Array.from({ length: Math.floor(rand() * 7) }, () => 'ab'[Math.floor(rand() * 2)]).join('');
+      const expected = /[*?]/.test(glob) ? globMatches(glob, subject) : subject === glob;
+      const actual = fieldRe ? fieldRe.test(subject) : subject === String(field.value);
+      assert.equal(actual, expected, `field glob ${JSON.stringify(glob)} on ${JSON.stringify(subject)}`);
+      assert.equal(keywordRe.test(subject), globMatches(`*${glob}*`, subject), `keyword ${JSON.stringify(glob)} on ${JSON.stringify(subject)}`);
+    }
+  }
+});
+
+test('wildcard conversions are linear: recheck proves them safe and a crafted line stays fast', () => {
+  const r = sigmaToPortable({
+    title: 'Globs',
+    level: 'medium',
+    detection: {
+      sel: { 'c-uri': '*/wp-*/admin*', 'cs-user-agent': ['*sqlmap*', 'nikto*', '*masscan'] },
+      kw: ['*union*select*', 'drop * table'],
+      condition: 'sel and kw',
+    },
+  });
+  assertValid(r);
+  const refs = collectRuleRegexes(r.rule);
+  assert.ok(refs.length >= 3, 'the globs became regex conditions');
+  const vulnerable = scanRegexRefs(refs).filter((f) => f.status === 'vulnerable');
+  assert.deepEqual(vulnerable, [], 'no converted glob is ReDoS-vulnerable');
+  // The shape recheck flagged before this change: many starts, no end token.
+  const hostile = '/wp-'.repeat(16_000);
+  for (const ref of refs) {
+    const started = process.hrtime.bigint();
+    new RegExp(ref.source, ref.flags).test(hostile);
+    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(ms < 250, `${ref.location} took ${ms.toFixed(0)} ms on a 64 KB crafted line`);
+  }
 });
 
 test('a selection that is a list of maps (OR) is rejected', () => {

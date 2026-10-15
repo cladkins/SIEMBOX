@@ -151,9 +151,10 @@ CREDENTIAL_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(3
   admin-only.
 - **Catalog source.** Catalog installs come from a GitHub repository (default
   `cladkins/siembox-parsers`). Pin `SIEMBOX_CATALOG_REPO` / `SIEMBOX_CATALOG_REF`
-  to a source you trust. Every parser/detection is schema-validated and
-  self-tested before it is stored, but a parser is still code-adjacent data — only
-  install from sources you trust.
+  to a source you trust. Every parser/detection is schema-validated, checked for
+  ReDoS-vulnerable regexes (see [ReDoS](#regular-expression-denial-of-service-redos))
+  and self-tested in a time-bounded worker before it is stored, but a parser is
+  still code-adjacent data — only install from sources you trust.
 
 ### Dependency Updates
 
@@ -1102,6 +1103,77 @@ grep -r "query(" backend/src/ | grep -v "\$[0-9]"  # Should find none
 grep -r "req.body\|req.query\|req.params" backend/src/routes/
 ```
 
+### Regular-expression denial of service (ReDoS)
+
+Parsers and detection rules are regexes that run on every incoming log, and
+the text they run on is chosen by whoever can send SIEMBox a log line (syslog
+on 514 needs no credentials). Node runs them on one thread, the same one that
+serves the API, receives syslog and runs the jobs, and V8 cannot interrupt a
+match. A pattern that backtracks catastrophically — `^(a+)+$`, or the quieter
+polynomial `curl.*\|` — therefore turns one crafted line into a stall of the
+whole SIEM: for seconds per line (polynomial) or indefinitely (exponential).
+
+What SIEMBox does about it:
+
+- **Refused at write time.** Every path that stores a regex — parser
+  create/update/import, catalog and content-pack installs (the catalog is
+  remote content, and `SIEMBOX_CATALOG_REPO` may point anywhere), rule
+  create/update, Sigma import, the AI builders' output, the bundled-rule
+  importer — checks it with recheck in a worker thread, with a time budget per
+  analysis pass (`REGEX_SAFETY_CHECK_TIMEOUT_MS`, default 10 s) and the catalog
+  CI's analysis: recheck's automaton backend (which proves how the cost grows
+  with the input) and, when that says safe, its fuzz backend too (which
+  measures the cost, so it also catches a large constant blowup such as ten
+  overlapping fixed-width alternations in a row), with parameters stricter than
+  recheck's defaults about bounded repeats and the attack threshold. A regex must be a string, and the engines compile
+  only strings, so what is checked is what runs. A regex proven
+  vulnerable (exponential or polynomial) is refused with `422 REGEX_UNSAFE`.
+  One the analyzer cannot read at all (`^(a+)+\u{17}$`: without the `u` flag
+  `\u{17}` is seventeen `u`s) is refused with `422 REGEX_UNDECIDED` unless the
+  linear-time fallback below bounds it, since then nothing would. Any other
+  indeterminate one (the analysis ran out of time) is accepted with a warning:
+  the analysis is a proof of vulnerability, not of safety, so an attacker with
+  write access (analyst and up) who crafts a pattern recheck cannot settle in
+  time can still store it. Refusing those too would refuse shipped content:
+  on the pure-JS analyzer the image runs, rules such as PROXY-001 outlast the
+  default budget. The catalog CI (`validate-parsers`, `validate-detections`)
+  refuses the same regexes the gate refuses.
+- **"Try this pattern" is time-bounded.** `POST /api/parsers/test`,
+  `/validate`, `POST /api/parsers/:id/test` (any role), import and catalog
+  self-tests and the recommendation dry-runs run in a small pool of worker
+  threads with a hard wall-clock budget (`REGEX_TEST_TIMEOUT_MS`, default 1 s).
+  A run past it is stopped by terminating its worker, which is replaced; the
+  caller gets `422 REGEX_TIMEOUT`. Samples are capped at 64 KB.
+- **Existing regexes are flagged, not disabled.** At startup the stored
+  regexes are analyzed in the background; each vulnerable one is logged as a
+  `WARN` and tagged *Unsafe regex* in the UI. Disabling it automatically would
+  silently drop parsing or detection, so the operator decides (rewrite it, or
+  switch it off).
+- **Partly bounded: the ingest path itself.** Running every log line through a
+  worker would cost more than the parsing, so live matching still happens on
+  the event loop. Beyond the gate and the startup scan above, the backend turns
+  on V8's linear-time fallback (`REGEX_LINEAR_FALLBACK`, on by default): a match
+  that backtracks more than 1,000,000 times is abandoned and finished on V8's
+  non-backtracking engine. (V8's own default is 50,000, which a linear pattern
+  that backtracks once per character crosses on a 50 KB line; on Node 22 the
+  other engine then costs about 30 times more per line.) That stops exponential
+  and large-constant blowups (`^(a+)+$`, ten `(?:a|a|…)` groups: 5-10 ms
+  instead of seconds or hours), not polynomial ones: `curl.*\|` still costs
+  0.45 s per 64 KB line and 6.8 s per 256 KB TCP line, which is why the gate
+  refuses it. The result is the same on Node 22; on Node 20 (the image's
+  runtime) a quantified group that can match empty (`(?<x>.*?)?`, `(x|){0,2}`)
+  may capture `""` where backtracking leaves it unset, once a match has fallen
+  back. And the engine does not support every regex: case-insensitive (`i`) or
+  unicode (`u`) regexes, lookahead, backreferences, counted repeats over 16
+  (`{1,30}`) and, on Node 20, lookbehind keep backtracking. So a regex of those
+  kinds accepted as *indeterminate* because its analysis ran out of time, or
+  saved before an upgrade and not yet fixed, can still stall ingestion, and no
+  static analysis is complete (recheck's fuzz pass is a search, not a proof).
+  Watch for the startup `WARN` lines and the tag.
+
+The search box on the Logs pages is not a regex (it is a SQL `ILIKE`, run by
+PostgreSQL), and the Log Discovery fingerprints use plain substring matches.
+
 ### Security Headers
 
 Added via nginx reverse proxy (see TLS section above):
@@ -1414,6 +1486,7 @@ journalctl -u docker > docker-journal-$(date +%Y%m%d).log
 - [ ] Tested firewall rules
 - [ ] Verified TLS is working (SSL Labs test)
 - [ ] Confirmed logs are being ingested
+- [ ] Checked the backend log after the start for `[regex-safety]` WARN lines (or an *Unsafe regex* tag on the Parsers / Detection Rules pages) and fixed each one
 - [ ] Set up database backups
 - [ ] Configured retention policies
 - [ ] Enabled audit logging

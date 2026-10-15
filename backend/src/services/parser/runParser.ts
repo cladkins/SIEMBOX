@@ -122,6 +122,9 @@ function postProcessFields(parser: ParserDef, fields: Record<string, any>): Reco
 }
 
 function applyRegexParser(parser: ParserDef, message: string): { fields: Record<string, any>; event_type: string } | null {
+  // Only a string is compiled, so what runs is what the ReDoS gate analyzed
+  // (parser/redos.ts collectParserRegexes collects string patterns only).
+  if (typeof parser.pattern !== 'string') return null;
   const regex = new RegExp(parser.pattern);
   const match = message.match(regex);
   if (!match) return null;

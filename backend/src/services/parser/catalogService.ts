@@ -14,13 +14,8 @@
  */
 import * as https from 'https';
 import { logger } from '../../utils/logger';
-import {
-  validatePortableParser,
-  runSelfTests,
-  PortableParser,
-  ValidationResult,
-  SelfTestResult,
-} from './parserPortable';
+import { validatePortableParser, PortableParser, ValidationResult, SelfTestResult } from './parserPortable';
+import { runSelfTestsBounded } from '../regex/boundedRegex';
 
 export interface CatalogSource {
   repo: string;
@@ -245,7 +240,18 @@ async function loadCatalog(src: CatalogSource, key: string, get: HttpGetter): Pr
     try {
       const p = await fetchRawParser(src, filePath, get);
       const v = validatePortableParser(p, { strict: true });
-      const t = v.ok ? runSelfTests(p) : null;
+      // Remote content (SIEMBOX_CATALOG_REPO may name any repository): its
+      // self-tests run in the regex test pool, never on the event loop. One
+      // that outlives the budget marks the entry invalid with the reason.
+      let t: SelfTestResult | null = null;
+      if (v.ok) {
+        try {
+          t = await runSelfTestsBounded(p);
+        } catch (error) {
+          v.errors.push(`self-tests could not run: ${error instanceof Error ? error.message : String(error)}`);
+          v.ok = false;
+        }
+      }
       if (p?.name) parsers.set(p.name, p);
       entries.push(toEntry(p, filePath, v, t));
     } catch (error) {

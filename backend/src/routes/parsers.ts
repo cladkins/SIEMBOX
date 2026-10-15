@@ -25,12 +25,32 @@ export function validateCreateParserBody(body: {
   }
   return null;
 }
+
+/**
+ * Type checks on the regex fields of PUT /:id, before the regex gate runs.
+ * The gate analyzes string regexes only, and the runtime compiles only
+ * strings; without these checks an array-wrapped `pattern` would be stored
+ * as its node-postgres array literal (`{"..."}`, a string the gate never
+ * saw), and an array-wrapped derivation regex would be stored as a matcher
+ * that never matches. Returns an error message, or null.
+ */
+export function validateUpdateParserBody(body: { pattern?: unknown; derivations?: unknown }): string | null {
+  if (body.pattern !== undefined && typeof body.pattern !== 'string') {
+    return 'pattern must be a string';
+  }
+  if (body.derivations !== undefined && body.derivations !== null) {
+    const errors = validateDerivations(body.derivations);
+    if (errors.length > 0) return `Invalid derivations: ${errors.join('; ')}`;
+  }
+  return null;
+}
+import { validateDerivations } from '../services/parser/derive';
 import { ParserEngine } from '../services/parser/parserEngine';
 import {
   validatePortableParser,
-  runSelfTests,
   toPortableParser,
   PortableParser,
+  SelfTestResult,
 } from '../services/parser/parserPortable';
 import {
   fetchCatalog,
@@ -41,14 +61,27 @@ import {
   parserSignature,
   catalogNewFileUrl,
 } from '../services/parser/catalogService';
-import {
-  recommendParsers,
-  RecommendationResult,
-  SourceSample,
-  HIGH_SEVERITY_MAX,
-} from '../services/parser/parserRecommendations';
+import { RecommendationResult, SourceSample, HIGH_SEVERITY_MAX } from '../services/parser/parserRecommendations';
 import { generateParser } from '../services/ai/aiService';
-import { scanParserRedos } from '../services/parser/redos';
+import { collectParserRegexes, redosErrorMessage, redosUndecidedMessage, redosWarningMessage } from '../services/parser/redos';
+import {
+  assessParserRegexes,
+  isRefused,
+  peekRegexSafety,
+  refusalCode,
+  refusalReason,
+  withParserRegexSafety,
+  type RegexSafetyReport,
+} from '../services/regex/regexSafety';
+import { gateOrRefuse, sendRegexRunError } from '../services/regex/regexHttp';
+import {
+  recommendParsersBounded,
+  regexRunErrorResponse,
+  runParserBounded,
+  runSelfTestsBounded,
+  sampleProblem,
+  testSamplesProblem,
+} from '../services/regex/boundedRegex';
 import { authorize } from '../middleware/auth';
 import { hasRequiredRole, requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { ApiError } from '../middleware/errorHandler';
@@ -58,11 +91,39 @@ const router = Router();
 
 // app.ts mounts this router behind `authenticate`, so the reads are open to every
 // role. Anything that changes a parser, or runs a regex the caller supplies
-// (/validate, /test: no ReDoS check, and the match runs on the event loop that
-// also serves the API and syslog ingestion), needs analyst or higher. A refused
-// call is written to audit_logs. POST /:id/test stays open: it runs a saved
-// parser on a sample the caller supplies.
+// (/validate, /test), needs analyst or higher. A refused call is written to
+// audit_logs. POST /:id/test stays open: it runs a saved parser on a sample the
+// caller supplies.
+//
+// Regex safety (services/regex): every write refuses a regex recheck proves
+// vulnerable to catastrophic backtracking (422 REGEX_UNSAFE) or cannot read when
+// V8's linear-time fallback cannot bound it either (422 REGEX_UNDECIDED), and
+// accepts any other indeterminate one with a warning; every route that runs a pattern on a
+// caller's sample runs it in a worker thread with a hard time budget (422
+// REGEX_TIMEOUT), never on the event loop that serves the API and ingestion.
 const requireParserWrite = requireScanPermission(UserRole.Analyst, 'parser');
+
+/** The write-time regex gate for one parser (answers 422/503 itself and returns null). */
+function gateParser(
+  res: Response,
+  subject: string,
+  parser: Parameters<typeof assessParserRegexes>[0]
+): Promise<RegexSafetyReport | null> {
+  return gateOrRefuse(res, subject, () => assessParserRegexes(parser));
+}
+
+/** A portable parser's self-tests in the regex test pool; answers 422/503 itself and returns null. */
+async function boundedSelfTests(res: Response, parser: PortableParser): Promise<SelfTestResult | null> {
+  try {
+    return await runSelfTestsBounded(parser);
+  } catch (error) {
+    if (sendRegexRunError(res, error, "The parser's self-tests")) return null;
+    throw error;
+  }
+}
+
+/** Fields of a parser whose change can change which regexes run. */
+const REGEX_FIELDS = ['pattern', 'derivations', 'parser_type'] as const;
 
 /** Upsert a (already-validated) portable parser by name. Shared by import + catalog install. */
 async function upsertPortableParser(portable: PortableParser): Promise<{ action: 'created' | 'updated'; parser: Parser | null }> {
@@ -87,11 +148,12 @@ async function upsertPortableParser(portable: PortableParser): Promise<{ action:
   return { action: existing ? 'updated' : 'created', parser: saved };
 }
 
-// Get all parsers
+// Get all parsers. Each carries `regex_safety` (cached verdicts only, never
+// waits): status 'vulnerable' is the Parsers page's "Unsafe regex" tag.
 router.get('/', async (_req: Request, res: Response) => {
   try {
     const parsers = await ParserModel.findAll();
-    res.json(parsers);
+    res.json(parsers.map(withParserRegexSafety));
   } catch {
     throw new ApiError(500, 'Failed to fetch parsers');
   }
@@ -208,12 +270,24 @@ router.get('/recommendations', async (req: Request, res: Response) => {
     const installedSigs = new Set(localParsers.map((p) => parserSignature(p)).filter(Boolean));
     const { entries } = await fetchCatalog(false);
     const portable = await getCatalogParsers();
+    // A candidate already known to be ReDoS-vulnerable is not dry-run (it could
+    // not be installed anyway). The rest run in the regex test pool: they are
+    // catalog regexes against live log lines a remote sender wrote.
     const candidates = entries
       .filter((e) => e.valid && !installedNames.has(e.name) && !(e.signature && installedSigs.has(e.signature)))
       .map((e) => portable.get(e.name))
-      .filter((p): p is PortableParser => !!p);
+      .filter((p): p is PortableParser => !!p)
+      .filter((p) => peekRegexSafety(collectParserRegexes(p)).status !== 'vulnerable');
 
-    const result: RecommendationResult = recommendParsers(samples, candidates);
+    let result: RecommendationResult;
+    try {
+      result = await recommendParsersBounded(samples, candidates);
+    } catch (error) {
+      const answer = regexRunErrorResponse(error, 'The recommendation dry-run');
+      if (!answer) throw error;
+      res.status(503).json(answer.body);
+      return;
+    }
     const body = {
       window: '24h',
       sampled_sources: samples.length,
@@ -232,24 +306,42 @@ router.get('/recommendations', async (req: Request, res: Response) => {
 });
 
 // Validate a portable parser (and run its self-tests) WITHOUT saving. Used by the
-// import preview UI and shares the exact logic the catalog CI runs.
+// import preview UI and shares the exact logic the catalog CI runs, plus the
+// import's own regex safety gate, so the preview refuses what the import would
+// refuse (422 REGEX_UNSAFE). Self-tests run in the regex test pool (422
+// REGEX_TIMEOUT when a pattern backtracks past the budget on a sample).
 router.post('/validate', requireParserWrite, async (req: Request, res: Response) => {
   try {
     const { parser, strict } = req.body ?? {};
     const validation = validatePortableParser(parser, { strict: !!strict });
-    const selfTest = validation.ok ? runSelfTests(parser as PortableParser) : null;
+    if (!validation.ok) {
+      res.json({ ok: false, validation, self_test: null });
+      return;
+    }
+    const portable = parser as PortableParser;
+    const tooBig = testSamplesProblem(portable);
+    if (tooBig) {
+      res.status(413).json({ code: 'SAMPLE_TOO_LARGE', message: tooBig });
+      return;
+    }
+    const safety = await gateParser(res, `Parser "${portable.name}"`, portable);
+    if (!safety) return;
+    const selfTest = await boundedSelfTests(res, portable);
+    if (!selfTest) return;
     res.json({
-      ok: validation.ok && (selfTest ? selfTest.ok : true),
-      validation,
+      ok: selfTest.ok,
+      validation: { ...validation, warnings: [...validation.warnings, ...safety.warnings] },
       self_test: selfTest,
+      regex_safety: { vulnerable: [], unknown: safety.unknown },
     });
   } catch {
     throw new ApiError(500, 'Failed to validate parser');
   }
 });
 
-// Import a portable parser: validate -> run self-tests -> upsert by name. Refuses
-// to import a parser whose own test_samples fail, unless `force` is set.
+// Import a portable parser: validate -> regex safety gate -> run self-tests ->
+// upsert by name. Refuses a ReDoS-vulnerable regex (422 REGEX_UNSAFE), or an
+// undecided one nothing bounds (422 REGEX_UNDECIDED), whatever `force` says, and a parser whose own test_samples fail unless `force` is set.
 router.post('/import', requireParserWrite, async (req: Request, res: Response) => {
   try {
     const { parser, force } = req.body ?? {};
@@ -260,7 +352,15 @@ router.post('/import', requireParserWrite, async (req: Request, res: Response) =
     }
 
     const portable = parser as PortableParser;
-    const selfTest = runSelfTests(portable);
+    const tooBig = testSamplesProblem(portable);
+    if (tooBig) {
+      res.status(413).json({ code: 'SAMPLE_TOO_LARGE', message: tooBig });
+      return;
+    }
+    const safety = await gateParser(res, `Parser "${portable.name}"`, portable);
+    if (!safety) return;
+    const selfTest = await boundedSelfTests(res, portable);
+    if (!selfTest) return;
     if (!selfTest.ok && !force) {
       res.status(422).json({
         message: 'Parser self-tests failed; pass force=true to import anyway',
@@ -274,7 +374,8 @@ router.post('/import', requireParserWrite, async (req: Request, res: Response) =
       action: result.action,
       parser: result.parser,
       self_test: selfTest,
-      warnings: validation.warnings,
+      warnings: [...validation.warnings, ...safety.warnings],
+      regex_safety: { vulnerable: [], unknown: safety.unknown },
     });
   } catch (error) {
     if (error instanceof ApiError) throw error;
@@ -309,12 +410,17 @@ router.get('/catalog', async (req: Request, res: Response) => {
     const { source, entries } = await fetchCatalog(force);
     const installed = await ParserModel.findAll();
     const bySig = new Map(installed.map((p) => [p.name, parserSignature(p)]));
+    // Cached verdicts only (an entry not analyzed yet is queued in the background,
+    // which also warms the cache before an "Install all").
+    const portableByName = await getCatalogParsers();
     const parsers = entries.map((e) => {
       const isInstalled = bySig.has(e.name);
+      const portable = portableByName.get(e.name);
       return {
         ...e,
         installed: isInstalled,
         update_available: isInstalled && e.signature !== '' && bySig.get(e.name) !== e.signature,
+        regex_safety: portable ? peekRegexSafety(collectParserRegexes(portable)) : undefined,
       };
     });
     res.json({ source, parsers });
@@ -347,7 +453,12 @@ router.post('/catalog/install', requireParserWrite, async (req: Request, res: Re
       res.status(422).json({ message: 'Catalog parser failed validation', validation });
       return;
     }
-    const selfTest = runSelfTests(portable);
+    // The catalog is remote content (and SIEMBOX_CATALOG_REPO can point at any
+    // repository): its regexes pass the same gate as a pasted import.
+    const safety = await gateParser(res, `Catalog parser "${portable.name}"`, portable);
+    if (!safety) return;
+    const selfTest = await boundedSelfTests(res, portable);
+    if (!selfTest) return;
     if (!selfTest.ok && !force) {
       res.status(422).json({ message: 'Catalog parser self-tests failed', self_test: selfTest });
       return;
@@ -358,6 +469,8 @@ router.post('/catalog/install', requireParserWrite, async (req: Request, res: Re
       action: result.action,
       parser: result.parser,
       self_test: selfTest,
+      warnings: safety.warnings,
+      regex_safety: { vulnerable: [], unknown: safety.unknown },
     });
   } catch (error) {
     if (error instanceof ApiError) throw error;
@@ -377,7 +490,9 @@ router.post('/catalog/install-all', requireParserWrite, async (req: Request, res
       total: entries.length,
       installed: 0,
       updated: 0,
-      failed: [] as Array<{ name: string; reason: string }>,
+      failed: [] as Array<{ name: string; reason: string; code?: string }>,
+      /** Installed, but a regex could not be proven safe (indeterminate). */
+      warnings: [] as Array<{ name: string; warnings: string[] }>,
     };
     for (const entry of entries) {
       try {
@@ -391,10 +506,26 @@ router.post('/catalog/install-all', requireParserWrite, async (req: Request, res
           results.failed.push({ name: entry.name, reason: 'failed validation' });
           continue;
         }
-        if (!runSelfTests(portable).ok && !force) {
+        let safety: RegexSafetyReport;
+        let selfTestOk: boolean;
+        try {
+          safety = await assessParserRegexes(portable);
+          if (isRefused(safety)) {
+            results.failed.push({ name: entry.name, reason: refusalReason(safety), code: refusalCode(safety) });
+            continue;
+          }
+          selfTestOk = (await runSelfTestsBounded(portable)).ok;
+        } catch (error) {
+          const answer = regexRunErrorResponse(error, "The parser's self-tests");
+          if (!answer) throw error;
+          results.failed.push({ name: entry.name, reason: answer.body.message, code: answer.body.code });
+          continue;
+        }
+        if (!selfTestOk && !force) {
           results.failed.push({ name: entry.name, reason: 'self-tests failed' });
           continue;
         }
+        if (safety.warnings.length > 0) results.warnings.push({ name: entry.name, warnings: safety.warnings });
         const r = await upsertPortableParser(portable);
         if (r.action === 'created') results.installed++;
         else results.updated++;
@@ -435,7 +566,7 @@ router.get('/:id', async (req: Request, res: Response) => {
       throw new ApiError(404, 'Parser not found');
     }
 
-    res.json(parser);
+    res.json(withParserRegexSafety(parser));
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch parser');
@@ -472,14 +603,28 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
 
     const portable = toPortableParser(parser);
     const validation = validatePortableParser(portable, { strict: true });
-    const selfTest = validation.ok ? runSelfTests(portable) : null;
+    // The stored regexes may predate the write-time gate: self-tests run in the
+    // regex test pool, never on the event loop.
+    const selfTest = validation.ok ? await boundedSelfTests(res, portable) : null;
+    if (validation.ok && !selfTest) return;
     // ReDoS gate mirrors the published catalog's CI, so users see (and fix) a
-    // vulnerable pattern here instead of hitting a red CI on their PR. Graceful:
-    // if the analyzer isn't installed it reports nothing rather than blocking.
-    // Only a PROVEN-vulnerable regex blocks the link; 'unknown' is surfaced but
-    // not blocking (matches the validate-parsers CLI gate).
-    const redos = validation.ok ? scanParserRedos(portable) : [];
-    const ready = validation.ok && !!selfTest?.ok && !redos.some((f) => f.status === 'vulnerable');
+    // vulnerable pattern here instead of hitting a red CI on their PR. The
+    // analysis is the write-time gate's (same recheck verdicts, in a worker
+    // thread: the old synchronous scan blocked the event loop for up to 10 s
+    // per regex). A PROVEN-vulnerable regex blocks the link, and so does one
+    // recheck cannot read that the linear-time fallback cannot bound; any other
+    // 'unknown' is surfaced but not blocking (matches the validate-parsers CLI gate).
+    let safety: RegexSafetyReport | null = null;
+    if (validation.ok) {
+      try {
+        safety = await assessParserRegexes(portable);
+      } catch (error) {
+        if (sendRegexRunError(res, error)) return;
+        throw error;
+      }
+    }
+    const redos = safety ? [...safety.vulnerable, ...safety.undecided, ...safety.unknown] : [];
+    const ready = validation.ok && !!selfTest?.ok && !(safety && isRefused(safety));
 
     const filePath = `${getCatalogSource().path}/${parser.name}.parser.json`;
     const content = JSON.stringify(portable, null, 2);
@@ -495,16 +640,10 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
       // results as warnings.
       errors: [
         ...validation.errors,
-        ...redos
-          .filter((f) => f.status === 'vulnerable')
-          .map((f) => `ReDoS: regex at ${f.location} is vulnerable${f.complexity ? ` (${f.complexity})` : ''} — rewrite it linear before contributing`),
+        ...(safety?.vulnerable ?? []).map((f) => redosErrorMessage(f, 'contributing')),
+        ...(safety?.undecided ?? []).map((f) => redosUndecidedMessage(f, 'contributing')),
       ],
-      warnings: [
-        ...validation.warnings,
-        ...redos
-          .filter((f) => f.status !== 'vulnerable')
-          .map((f) => `ReDoS: regex at ${f.location} could not be proven safe (${f.status})`),
-      ],
+      warnings: [...validation.warnings, ...(safety?.unknown ?? []).map(redosWarningMessage)],
       self_test: selfTest,
       redos, // vulnerable/indeterminate regexes, if any (empty = clean)
       ready, // only offer the PR link when it would pass the catalog's CI
@@ -526,6 +665,9 @@ router.post('/', requireParserWrite, async (req: Request, res: Response) => {
       throw new ApiError(400, bodyError);
     }
 
+    const safety = await gateParser(res, `Parser "${name}"`, { parser_type, pattern });
+    if (!safety) return;
+
     const parser = await ParserModel.create({
       name,
       description,
@@ -538,18 +680,43 @@ router.post('/', requireParserWrite, async (req: Request, res: Response) => {
     });
     await ParserEngine.getInstance().reload();
 
-    res.status(201).json(parser);
+    res.status(201).json({ ...withParserRegexSafety(parser), warnings: safety.warnings });
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to create parser');
   }
 });
 
-// Update parser
+// Update parser. A change to pattern, derivations or parser_type passes the
+// regex gate for the parser as it will be saved (so a vulnerable derivation
+// left from before the gate must be fixed in the same edit). Other edits —
+// enable/disable included, the immediate mitigation for an unsafe parser —
+// are never refused for a regex they do not touch.
 router.put('/:id', requireParserWrite, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id as string);
-    const parser = await ParserModel.update(id, req.body);
+    const body = req.body ?? {};
+    const bodyError = validateUpdateParserBody(body);
+    if (bodyError) {
+      throw new ApiError(400, bodyError);
+    }
+    let warnings: string[] = [];
+    if (REGEX_FIELDS.some((field) => body[field] !== undefined)) {
+      const existing = await ParserModel.findById(id);
+      if (!existing) {
+        throw new ApiError(404, 'Parser not found');
+      }
+      const merged = {
+        parser_type: body.parser_type ?? existing.parser_type,
+        pattern: body.pattern ?? existing.pattern,
+        derivations: body.derivations !== undefined ? body.derivations : existing.derivations,
+      };
+      const safety = await gateParser(res, `Parser "${body.name ?? existing.name}"`, merged);
+      if (!safety) return;
+      warnings = safety.warnings;
+    }
+
+    const parser = await ParserModel.update(id, body);
 
     if (!parser) {
       throw new ApiError(404, 'Parser not found');
@@ -557,7 +724,7 @@ router.put('/:id', requireParserWrite, async (req: Request, res: Response) => {
 
     // Enable/disable/edit takes effect on the running engine immediately.
     await ParserEngine.getInstance().reload();
-    res.json(parser);
+    res.json({ ...withParserRegexSafety(parser), warnings });
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to update parser');
@@ -582,7 +749,10 @@ router.delete('/:id', requireParserWrite, async (req: Request, res: Response) =>
   }
 });
 
-// Test parser against sample log (saved parser)
+// Test a saved parser against a caller's sample. Open to every role: the
+// parser's regexes may predate the write-time gate, so the run goes to the
+// regex test pool (422 REGEX_TIMEOUT past the budget) and the sample is capped
+// (413 SAMPLE_TOO_LARGE).
 router.post('/:id/test', async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id as string);
@@ -591,18 +761,28 @@ router.post('/:id/test', async (req: Request, res: Response) => {
     if (!sample) {
       throw new ApiError(400, 'Sample log is required');
     }
+    const tooBig = sampleProblem(sample);
+    if (tooBig) {
+      res.status(413).json({ code: 'SAMPLE_TOO_LARGE', message: tooBig });
+      return;
+    }
 
     const parser = await ParserModel.findById(id);
     if (!parser) {
       throw new ApiError(404, 'Parser not found');
     }
 
-    const parserEngine = new ParserEngine();
-    const result = await parserEngine.testParser(parser, sample);
+    let result;
+    try {
+      result = await runParserBounded(parser, sample);
+    } catch (error) {
+      if (sendRegexRunError(res, error, 'The parser')) return;
+      throw error;
+    }
 
     res.json({
       matched: result !== null,
-      fields: result,
+      fields: result ? result.fields : null,
     });
   } catch (error) {
     if (error instanceof ApiError) throw error;
@@ -610,7 +790,10 @@ router.post('/:id/test', async (req: Request, res: Response) => {
   }
 });
 
-// Test parser configuration without saving (for parser builder)
+// Test parser configuration without saving (for parser builder). The pattern is
+// the caller's and has not been through the gate: it runs in the regex test
+// pool with a hard time budget (422 REGEX_TIMEOUT), on a capped sample (413).
+// An invalid pattern answers 422 REGEX_TEST_FAILED with the compiler's message.
 router.post('/test', requireParserWrite, async (req: Request, res: Response) => {
   try {
     const { parser_type, pattern, field_mappings, sample } = req.body;
@@ -618,29 +801,26 @@ router.post('/test', requireParserWrite, async (req: Request, res: Response) => 
     if (!parser_type || !pattern || !field_mappings || !sample) {
       throw new ApiError(400, 'Missing required fields: parser_type, pattern, field_mappings, sample');
     }
+    if (typeof pattern !== 'string' || typeof field_mappings !== 'object') {
+      throw new ApiError(400, 'pattern must be a string and field_mappings an object');
+    }
+    const tooBig = sampleProblem(sample);
+    if (tooBig) {
+      res.status(413).json({ code: 'SAMPLE_TOO_LARGE', message: tooBig });
+      return;
+    }
 
-    // Create temporary parser object for testing
-    const tempParser: Parser = {
-      id: 0,
-      name: 'Test Parser',
-      description: null,
-      enabled: true,
-      priority: 100,
-      parser_type,
-      pattern,
-      field_mappings,
-      test_samples: null,
-      event_type: null,
-      created_at: new Date(),
-      updated_at: new Date(),
-    };
-
-    const parserEngine = new ParserEngine();
-    const result = await parserEngine.testParser(tempParser, sample);
+    let result;
+    try {
+      result = await runParserBounded({ name: 'Test Parser', parser_type, pattern, field_mappings, event_type: null }, sample);
+    } catch (error) {
+      if (sendRegexRunError(res, error, 'The pattern')) return;
+      throw error;
+    }
 
     res.json({
       matched: result !== null,
-      fields: result,
+      fields: result ? result.fields : null,
     });
   } catch (error) {
     if (error instanceof ApiError) throw error;

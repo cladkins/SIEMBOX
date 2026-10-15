@@ -130,6 +130,12 @@ export default apiClient;
 /** For calls whose caller shows every failure inline, including no answer at all. */
 const SHOWN_INLINE = { skipErrorToast: true, skipNetworkErrorToast: true } as const;
 
+/** For calls whose caller shows the API's error answers inline (no answer at all still toasts). */
+const INLINE = { skipErrorToast: true } as const;
+
+/** A save that waits for the regex safety check: inline errors, and time for a first analysis. */
+const REGEX_GATE = { skipErrorToast: true, timeout: 120000 } as const;
+
 // API service methods
 export const api = {
   // Auth. The Login view shows every failure itself (wrong password, MFA step,
@@ -160,53 +166,56 @@ export const api = {
   getParsedLogs: (params?: any) => apiClient.get('/logs/parsed', { params }),
   getParseCoverage: () => apiClient.get('/logs/parse-coverage'),
 
-  // Parsers
+  // Parsers. Every call that saves or runs a regex shows its failures inline
+  // (a refused ReDoS-vulnerable regex, a test run that timed out, an oversized
+  // sample), so the generic toast is skipped for those (INLINE). Saves wait for
+  // the regex safety check (up to a few seconds per new regex), hence REGEX_GATE.
   getParsers: () => apiClient.get('/parsers'),
   getParserMatchStats: () => apiClient.get('/parsers/match-stats'),
   getParserRecommendations: (refresh = false) =>
     apiClient.get('/parsers/recommendations', { params: refresh ? { refresh: 'true' } : {}, timeout: 60000 }),
   getParser: (id: number) => apiClient.get(`/parsers/${id}`),
-  createParser: (data: any) => apiClient.post('/parsers', data),
-  updateParser: (id: number, data: any) => apiClient.put(`/parsers/${id}`, data),
+  createParser: (data: any) => apiClient.post('/parsers', data, REGEX_GATE),
+  updateParser: (id: number, data: any) => apiClient.put(`/parsers/${id}`, data, REGEX_GATE),
   deleteParser: (id: number) => apiClient.delete(`/parsers/${id}`),
-  testParser: (id: number, sample: string) => apiClient.post(`/parsers/${id}/test`, { sample }),
+  testParser: (id: number, sample: string) => apiClient.post(`/parsers/${id}/test`, { sample }, INLINE),
   testParserConfig: (parser_type: string, pattern: string, field_mappings: any, sample: string) =>
-    apiClient.post('/parsers/test', { parser_type, pattern, field_mappings, sample }),
+    apiClient.post('/parsers/test', { parser_type, pattern, field_mappings, sample }, INLINE),
   // Portable parser export/import (shareable .parser.json; same format the catalog uses)
   exportParser: (id: number) => apiClient.get(`/parsers/${id}/export`, { responseType: 'blob' }),
   // Prepare a community-catalog contribution (validate + self-test + propose-file URL)
-  getParserContribution: (id: number) => apiClient.get(`/parsers/${id}/contribute`),
+  getParserContribution: (id: number) => apiClient.get(`/parsers/${id}/contribute`, REGEX_GATE),
   validatePortableParser: (parser: any, strict = false) =>
-    apiClient.post('/parsers/validate', { parser, strict }),
-  importParser: (parser: any, force = false) => apiClient.post('/parsers/import', { parser, force }),
+    apiClient.post('/parsers/validate', { parser, strict }, REGEX_GATE),
+  importParser: (parser: any, force = false) => apiClient.post('/parsers/import', { parser, force }, REGEX_GATE),
   // Parser catalog (browse/install from a GitHub repo, in-app)
   getCatalog: (refresh = false) => apiClient.get('/parsers/catalog', { params: refresh ? { refresh: true } : {} }),
   getCatalogSource: () => apiClient.get('/parsers/catalog/source'),
   installCatalogParser: (name: string, force = false) =>
-    apiClient.post('/parsers/catalog/install', { name, force }),
+    apiClient.post('/parsers/catalog/install', { name, force }, REGEX_GATE),
   installAllCatalogParsers: (force = false) =>
-    apiClient.post('/parsers/catalog/install-all', { force }, { timeout: 120000 }),
+    apiClient.post('/parsers/catalog/install-all', { force }, { ...INLINE, timeout: 300000 }),
 
-  // Detection Rules
+  // Detection Rules (same inline/REGEX_GATE treatment for saves)
   getRules: () => apiClient.get('/rules'),
   getRule: (id: number) => apiClient.get(`/rules/${id}`),
-  getRuleContribution: (id: number) => apiClient.get(`/rules/${id}/contribute`),
-  createRule: (data: any) => apiClient.post('/rules', data),
-  updateRule: (id: number, data: any) => apiClient.put(`/rules/${id}`, data),
+  getRuleContribution: (id: number) => apiClient.get(`/rules/${id}/contribute`, REGEX_GATE),
+  createRule: (data: any) => apiClient.post('/rules', data, REGEX_GATE),
+  updateRule: (id: number, data: any) => apiClient.put(`/rules/${id}`, data, REGEX_GATE),
   deleteRule: (id: number) => apiClient.delete(`/rules/${id}`),
   // Detection catalog (browse/install rules from the GitHub repo, in-app)
   getRuleCatalog: (refresh = false) => apiClient.get('/rules/catalog', { params: refresh ? { refresh: true } : {} }),
-  installCatalogRule: (name: string) => apiClient.post('/rules/catalog/install', { name }),
+  installCatalogRule: (name: string) => apiClient.post('/rules/catalog/install', { name }, REGEX_GATE),
   getRuleRecommendations: (refresh = false) =>
     apiClient.get('/rules/recommendations', { params: refresh ? { refresh: 'true' } : {}, timeout: 60000 }),
-  installAllCatalogRules: () => apiClient.post('/rules/catalog/install-all', {}, { timeout: 120000 }),
+  installAllCatalogRules: () => apiClient.post('/rules/catalog/install-all', {}, { ...INLINE, timeout: 300000 }),
   // Sigma import: convert community Sigma YAML to portable detections (preview, then import)
-  previewSigmaImport: (sigma: string) => apiClient.post('/rules/import/sigma/preview', { sigma }),
-  importSigma: (sigma: string) => apiClient.post('/rules/import/sigma', { sigma }, { timeout: 120000 }),
+  previewSigmaImport: (sigma: string) => apiClient.post('/rules/import/sigma/preview', { sigma }, REGEX_GATE),
+  importSigma: (sigma: string) => apiClient.post('/rules/import/sigma', { sigma }, { ...INLINE, timeout: 300000 }),
 
   // Content Packs (curated per-technology parser + detection bundles)
   getContentPacks: () => apiClient.get('/packs'),
-  installContentPack: (id: string) => apiClient.post(`/packs/${id}/install`, {}, { timeout: 120000 }),
+  installContentPack: (id: string) => apiClient.post(`/packs/${id}/install`, {}, { timeout: 300000 }),
 
   // AI builder
   getAiSettings: () => apiClient.get('/settings/ai'),

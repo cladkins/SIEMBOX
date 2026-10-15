@@ -174,6 +174,29 @@ export function portableRuleToYaml(rule: any): string {
 }
 
 /**
+ * The shape checks POST/PUT /api/rules run on rule logic before the regex
+ * gate (they store the user's YAML/JSON as-is, without validateRule's full
+ * catalog checks): a `regex` condition's `flags` must be a string, and its
+ * `value` a scalar. An array or object there is never what the author meant
+ * (`flags: [i]`, `value: [...]`), and the gate and the engine must read the
+ * same thing. Returns one message per problem; empty when fine.
+ */
+export function ruleRegexTypeErrors(rule: unknown): string[] {
+  const conditions: unknown[] = Array.isArray((rule as any)?.conditions) ? (rule as any).conditions : [];
+  const errors: string[] = [];
+  conditions.forEach((c, i) => {
+    if (!isPlainObject(c) || c.operator !== 'regex') return;
+    if (c.flags !== undefined && c.flags !== null && typeof c.flags !== 'string') {
+      errors.push(`conditions[${i}].flags must be a string (e.g. "i")`);
+    }
+    if (c.value !== null && typeof c.value === 'object') {
+      errors.push(`conditions[${i}].value for "regex" must be a string`);
+    }
+  });
+  return errors;
+}
+
+/**
  * Every `regex` condition of a detection rule, as the engine compiles it
  * (inline "(?i)" split off, explicit flags merged), for the ReDoS checks: the
  * write-time gate (services/regex/regexSafety) and validate-detections. Accepts
@@ -190,10 +213,14 @@ export function collectRuleRegexes(rule: any): RegexRef[] {
     if (!c || typeof c !== 'object' || c.operator !== 'regex') return;
     if (c.value === undefined || c.value === null || c.value === '') return;
     try {
-      const { source, flags } = normalizeUserRegex(String(c.value), typeof c.flags === 'string' ? c.flags : undefined);
+      // Exactly the engine's call (rulesEngine: testUserRegex(String(value), _, condition.flags)),
+      // so the gate analyzes the flags that run: `flags: [i]` is not read as
+      // "no flags" here while the engine applies "i".
+      const { source, flags } = normalizeUserRegex(String(c.value), c.flags);
       refs.push({ location: `conditions[${i}].value`, source, flags });
     } catch {
-      // A bad flag never compiles, so it never runs; validateRule reports it.
+      // A bad or non-string flag never compiles, so it never runs; validateRule
+      // and the rule routes (ruleRegexTypeErrors) refuse it.
     }
   });
   return refs;

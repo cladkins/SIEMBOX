@@ -25,6 +25,26 @@ export function validateCreateParserBody(body: {
   }
   return null;
 }
+
+/**
+ * Type checks on the regex fields of PUT /:id, before the regex gate runs.
+ * The gate analyzes string regexes only, and the runtime compiles only
+ * strings; without these checks an array-wrapped `pattern` would be stored
+ * as its node-postgres array literal (`{"..."}`, a string the gate never
+ * saw), and an array-wrapped derivation regex would be stored as a matcher
+ * that never matches. Returns an error message, or null.
+ */
+export function validateUpdateParserBody(body: { pattern?: unknown; derivations?: unknown }): string | null {
+  if (body.pattern !== undefined && typeof body.pattern !== 'string') {
+    return 'pattern must be a string';
+  }
+  if (body.derivations !== undefined && body.derivations !== null) {
+    const errors = validateDerivations(body.derivations);
+    if (errors.length > 0) return `Invalid derivations: ${errors.join('; ')}`;
+  }
+  return null;
+}
+import { validateDerivations } from '../services/parser/derive';
 import { ParserEngine } from '../services/parser/parserEngine';
 import {
   validatePortableParser,
@@ -671,6 +691,10 @@ router.put('/:id', requireParserWrite, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id as string);
     const body = req.body ?? {};
+    const bodyError = validateUpdateParserBody(body);
+    if (bodyError) {
+      throw new ApiError(400, bodyError);
+    }
     let warnings: string[] = [];
     if (REGEX_FIELDS.some((field) => body[field] !== undefined)) {
       const existing = await ParserModel.findById(id);

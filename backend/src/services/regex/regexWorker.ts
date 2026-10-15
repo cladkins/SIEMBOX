@@ -15,7 +15,7 @@ import { runParser } from '../parser/runParser';
 import { runSelfTests } from '../parser/parserPortable';
 import { recommendParsers } from '../parser/parserRecommendations';
 import { recommendRules } from '../rules/detectionRecommendations';
-import { analysisFlags, verdictFromDiagnostics, type RegexVerdict } from '../parser/redos';
+import { analysisFlags, RECHECK_PARAMS, verdictFromDiagnostics, type RegexVerdict } from '../parser/redos';
 
 type Handler = (payload: any) => unknown | Promise<unknown>;
 
@@ -39,8 +39,12 @@ async function scan(payload: { source: string; flags: string; timeoutMs: number 
   const check = getRecheck();
   if (!check) return { status: 'unknown', detail: 'the recheck analyzer is not installed' };
   try {
+    // The CLI's analysis parameters (parser/redos.ts RECHECK_PARAMS), with
     // recheck's own time budget; the pool's hard timeout is the backstop.
-    const result = await check(payload.source, analysisFlags(payload.flags), { timeout: payload.timeoutMs });
+    const result = await check(payload.source, analysisFlags(payload.flags), {
+      ...RECHECK_PARAMS,
+      timeout: payload.timeoutMs,
+    });
     return verdictFromDiagnostics(result);
   } catch (e) {
     return { status: 'unknown', detail: e instanceof Error ? e.message : String(e) };

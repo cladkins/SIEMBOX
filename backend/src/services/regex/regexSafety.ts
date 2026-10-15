@@ -16,19 +16,24 @@
  *     the syntax): accepted, with a warning returned to the caller;
  *   - safe: accepted.
  *
- * The analysis is recheck (the analyzer the catalog CI already uses, see
- * parser/redos.ts) with an explicit time budget per regex
- * (REGEX_SAFETY_CHECK_TIMEOUT_MS, default 5000 ms), run in a worker thread
- * (the regex scan pool) with a hard wall-clock backstop, so the check itself
- * can neither hang nor block the event loop. Verdicts are content-addressed
- * (sha256 of flags + source) and cached in memory and in the
- * regex_safety_verdicts table, so each distinct regex is analyzed once per
- * recheck version and budget, not once per save or per restart.
+ * The analysis is recheck (the analyzer the catalog CI already uses, with the
+ * same parameters: parser/redos.ts RECHECK_PARAMS) with an explicit time
+ * budget per regex (REGEX_SAFETY_CHECK_TIMEOUT_MS, default 10000 ms, the CLI
+ * gate's), run in a worker thread (the regex scan pool) with a hard
+ * wall-clock backstop, so the check itself can neither hang nor block the
+ * event loop. Verdicts are content-addressed (sha256 of flags + source) and
+ * cached in memory and in the regex_safety_verdicts table, so each distinct
+ * regex is analyzed once per checker (recheck version, parameters, budget),
+ * not once per save or per restart. An analysis that only ran out of time is
+ * the exception: it is kept in memory for a while and never stored, so it is
+ * tried again rather than remembered as "unknown" forever.
  */
 import * as crypto from 'crypto';
 import { RegexWorkerPool, RegexTimeoutError, RegexPoolBusyError } from './workerPool';
 import {
+  CLI_REDOS_TIMEOUT_MS,
   collectParserRegexes,
+  RECHECK_PARAMS,
   redosErrorMessage,
   redosWarningMessage,
   type RedosFinding,
@@ -47,9 +52,13 @@ function envInt(name: string, fallback: number, min: number): number {
   return Number.isFinite(n) && n >= min ? n : fallback;
 }
 
-/** recheck's time budget for one regex at write time. */
+/**
+ * recheck's time budget for one regex at write time. The default matches the
+ * CLI validators' (parser/redos.ts CLI_REDOS_TIMEOUT_MS): the pure-JS analyzer
+ * (the one the Alpine image runs) needs about 6 s for a common sshd pattern.
+ */
 export function checkTimeoutMs(): number {
-  return envInt('REGEX_SAFETY_CHECK_TIMEOUT_MS', 5000, 100);
+  return envInt('REGEX_SAFETY_CHECK_TIMEOUT_MS', CLI_REDOS_TIMEOUT_MS, 100);
 }
 
 function recheckVersion(): string {
@@ -63,10 +72,14 @@ function recheckVersion(): string {
 
 /**
  * What produced a verdict. A stored verdict is reused only by the same checker:
- * a recheck upgrade or a different time budget analyzes the regex again.
+ * a recheck upgrade, different analysis parameters or a different time budget
+ * analyzes the regex again.
  */
 export function checkerId(): string {
-  return `recheck@${recheckVersion()};timeout=${checkTimeoutMs()}`;
+  const params = Object.entries(RECHECK_PARAMS)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(';');
+  return `recheck@${recheckVersion()};${params};timeout=${checkTimeoutMs()}`;
 }
 
 /** Content address of a regex: sha256 over flags NUL source. */
@@ -78,9 +91,15 @@ export function regexKey(source: string, flags: string): string {
 // Verdict cache: memory first, then the regex_safety_verdicts table.
 // ---------------------------------------------------------------------------
 
-/** A verdict plus whether it may be persisted (an analyzer outage must not be remembered). */
+/**
+ * A verdict plus whether it may be persisted. A transient one (the analyzer is
+ * missing or failed, or the analysis ran out of time) says nothing lasting
+ * about the regex: it is never stored, and memory keeps it only for a while
+ * (from `rememberedAt`), then the regex is analyzed again.
+ */
 interface CachedVerdict extends RegexVerdict {
   transient?: boolean;
+  rememberedAt?: number;
 }
 
 export interface VerdictStore {
@@ -136,6 +155,8 @@ let store: VerdictStore | null = dbStore;
 const memory = new Map<string, CachedVerdict>();
 const MAX_MEMORY = 20_000;
 const inflight = new Map<string, Promise<CachedVerdict>>();
+/** How long memory answers with a transient verdict before the regex is analyzed again. */
+let transientTtlMs = 10 * 60_000;
 
 /** Test seam: replace (or, with null, disable) the persistent verdict store. */
 export function setVerdictStore(next: VerdictStore | null): void {
@@ -147,18 +168,29 @@ export function clearRegexVerdictCache(): void {
   memory.clear();
 }
 
+/** Test seam: how long a transient verdict is kept in memory (default 10 minutes). */
+export function setTransientVerdictTtl(ms: number): void {
+  transientTtlMs = ms;
+}
+
 /** Memory is keyed by checker too, so a changed time budget never reuses an old verdict. */
 function memKey(key: string): string {
   return `${checkerId()}|${key}`;
 }
 
 function recall(key: string): CachedVerdict | undefined {
-  return memory.get(memKey(key));
+  const k = memKey(key);
+  const hit = memory.get(k);
+  if (hit?.rememberedAt !== undefined && Date.now() - hit.rememberedAt >= transientTtlMs) {
+    memory.delete(k);
+    return undefined;
+  }
+  return hit;
 }
 
 function remember(key: string, verdict: CachedVerdict): void {
   if (memory.size >= MAX_MEMORY) memory.clear();
-  memory.set(memKey(key), verdict);
+  memory.set(memKey(key), verdict.transient ? { ...verdict, rememberedAt: Date.now() } : verdict);
 }
 
 /** Load every stored verdict for the current checker into memory (startup). */
@@ -215,12 +247,16 @@ async function analyze(ref: { source: string; flags: string }, priority: 'high' 
       { source: ref.source, flags: ref.flags, timeoutMs },
       { priority }
     );
-    // The analyzer missing is an installation problem, not a fact about the regex.
-    const transient = verdict.status === 'unknown' && /not installed/.test(verdict.detail ?? '');
+    // The analyzer missing is an installation problem, and running out of time
+    // depends on the load and the analyzer backend: neither is a fact about the
+    // regex, so neither is stored (an overrun stored once would be "unknown"
+    // for good, even where a quieter moment or a faster analyzer settles it).
+    const transient =
+      verdict.status === 'unknown' && (verdict.outOfTime === true || /not installed/.test(verdict.detail ?? ''));
     return transient ? { ...verdict, transient } : verdict;
   } catch (error) {
     if (error instanceof RegexTimeoutError) {
-      return { status: 'unknown', detail: 'the analysis hit its time budget' };
+      return { status: 'unknown', detail: 'the analysis hit its time budget', outOfTime: true, transient: true };
     }
     // Fail closed: a saturated checker must not turn "not checked yet" into
     // "accepted with a warning". The caller answers 503 and the client retries.
@@ -231,6 +267,17 @@ async function analyze(ref: { source: string; flags: string }, priority: 'high' 
       transient: true,
     };
   }
+}
+
+/**
+ * How many of ONE call's regexes are analyzed at a time: as many as there are
+ * scan workers. A save with 80 new regexes then takes its turn a few at a
+ * time instead of filling the pool's queue at once, whose cap is there to
+ * detect saturation from concurrent callers (503 REGEX_BUSY), not to refuse
+ * one large save on an idle server.
+ */
+function perCallConcurrency(): number {
+  return regexScanPool().options.size;
 }
 
 /** Verdicts for distinct regexes, from memory, the store, or a fresh analysis. */
@@ -266,24 +313,36 @@ async function verdictsFor(
   }
 
   const fresh: Array<{ key: string; verdict: RegexVerdict }> = [];
-  await Promise.all(
-    missing
-      .filter((ref) => !out.has(ref.key))
-      .map(async (ref) => {
-        let pending = inflight.get(memKey(ref.key));
-        if (!pending) {
-          pending = analyze(ref, priority).then((verdict) => {
-            remember(ref.key, verdict);
-            if (!verdict.transient) fresh.push({ key: ref.key, verdict });
-            return verdict;
-          });
-          inflight.set(memKey(ref.key), pending);
-          void pending.finally(() => inflight.delete(memKey(ref.key)));
-        }
-        out.set(ref.key, await pending);
-      })
-  );
+  const verdictOf = (ref: { key: string; source: string; flags: string }): Promise<CachedVerdict> => {
+    let pending = inflight.get(memKey(ref.key));
+    if (!pending) {
+      pending = analyze(ref, priority).then((verdict) => {
+        remember(ref.key, verdict);
+        if (!verdict.transient) fresh.push({ key: ref.key, verdict });
+        return verdict;
+      });
+      inflight.set(memKey(ref.key), pending);
+      void pending.finally(() => inflight.delete(memKey(ref.key))).catch(() => undefined);
+    }
+    return pending;
+  };
 
+  const todo = missing.filter((ref) => !out.has(ref.key));
+  let next = 0;
+  let failure: { error: unknown } | null = null;
+  const lane = async () => {
+    while (!failure && next < todo.length) {
+      const ref = todo[next++];
+      try {
+        out.set(ref.key, await verdictOf(ref));
+      } catch (error) {
+        failure ??= { error };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(todo.length, perCallConcurrency()) }, lane));
+
+  // Whatever was analyzed is kept, even when the call as a whole fails (busy).
   if (store && fresh.length > 0) {
     try {
       await store.save(fresh, checker);
@@ -293,6 +352,7 @@ async function verdictsFor(
       });
     }
   }
+  if (failure) throw (failure as { error: unknown }).error;
   return out;
 }
 

@@ -78,9 +78,15 @@ const MAX_CACHED = 500;
  * The source and flags the engine would compile for an authored pattern (inline
  * group split off, flags merged and checked), without compiling it. The regex
  * safety gate analyzes exactly this, so it judges the regex that actually runs.
- * Throws UserRegexError for a bad flag.
+ * Throws UserRegexError for a bad flag, and for explicit flags that are not a
+ * string: a rule's `flags` comes from stored YAML/JSON, and stringifying
+ * `[i]` into "i" here while the gate read it as "no flags" would let a
+ * pattern that is only exponential case-insensitively (^(?:q|Q)+$) through.
  */
-export function normalizeUserRegex(pattern: string, explicitFlags?: string): { source: string; flags: string } {
+export function normalizeUserRegex(pattern: string, explicitFlags?: unknown): { source: string; flags: string } {
+  if (explicitFlags !== undefined && explicitFlags !== null && typeof explicitFlags !== 'string') {
+    throw new UserRegexError(`regex flags must be a string such as "i", not ${JSON.stringify(explicitFlags)}`);
+  }
   const { source, flags: inline } = extractInlineFlags(pattern);
   return { source, flags: validateFlags(`${inline}${explicitFlags ?? ''}`, pattern) };
 }

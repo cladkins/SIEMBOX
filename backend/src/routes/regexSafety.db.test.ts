@@ -236,6 +236,83 @@ test('an indeterminate regex is saved with a warning', async (t) => {
   assert.match(res.json.warnings[0], /^ReDoS: regex at pattern could not be proven safe \(unknown: /);
 });
 
+test('a regex that is not a string is refused on every write (the gate analyzes strings, the engines compile only strings)', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const id = (await call('analyst', 'POST', '/api/parsers', parserBody('types', `^${name} (?<payload>\\S+)$`))).json.id;
+  const stored = async () => (await pool.query('SELECT pattern, derivations FROM parsers WHERE id = $1', [id])).rows[0];
+
+  // Array-wrapped derivation regexes used to pass as "safe" and run as the regex they wrap.
+  const arrayMatches = await call('analyst', 'PUT', `/api/parsers/${id}`, {
+    derivations: [{ when: { payload: { matches: [`^(?:${tag})?(a+)+$`] } }, set: { t: '1' } }],
+  });
+  assert.equal(arrayMatches.status, 400, JSON.stringify(arrayMatches.json));
+  assert.match(arrayMatches.json.message, /^Invalid derivations: derivations\[0\]\.when\.payload\.matches must be a string \(a regex\)$/);
+  const arrayExtract = await call('analyst', 'PUT', `/api/parsers/${id}`, {
+    derivations: [{ extract: { q: { from: 'payload', pattern: [`^(?:${tag})?(a+)+$`] } } }],
+  });
+  assert.equal(arrayExtract.status, 400, JSON.stringify(arrayExtract.json));
+  // ...and an array pattern used to be stored as its pg array literal, {"..."}.
+  const arrayPattern = await call('analyst', 'PUT', `/api/parsers/${id}`, { pattern: [`|^(?:${tag})?(c+)+$|`] });
+  assert.equal(arrayPattern.status, 400, JSON.stringify(arrayPattern.json));
+  assert.equal(arrayPattern.json.message, 'pattern must be a string');
+  assert.deepEqual(await stored(), { pattern: `^${name} (?<payload>\\S+)$`, derivations: null });
+
+  // Import (and so catalog install, Install all, content packs) refuses it as invalid.
+  const imported = await call('analyst', 'POST', '/api/parsers/import', {
+    parser: portable('types-import', `^${name} (?<payload>\\S+)$`, {
+      derivations: [{ when: { payload: { matches: [`^(?:${tag})?(a|a)+$`] } }, set: { x: 'y' } }],
+    }),
+  });
+  assert.equal(imported.status, 422, JSON.stringify(imported.json));
+  assert.ok(imported.json.validation.errors.includes('derivations[0].when.payload.matches must be a string (a regex)'));
+  assert.equal(await countRows('parsers', `${name}-types-import`), 0);
+
+  // Rules: flags: [i] used to be analyzed WITHOUT "i" and run WITH it.
+  const flagsYaml = [
+    'conditions:',
+    '  - field: payload',
+    '    operator: regex',
+    `    value: '^(?:${tag})?(?:q|Q)+$'`,
+    '    flags: [i]',
+    'alert:',
+    '  title: t',
+    '  description: d',
+  ].join('\n');
+  const rule = await call('analyst', 'POST', '/api/rules', { name: `${name}-types-rule`, severity: 'low', enabled: false, rule_yaml: flagsYaml });
+  assert.equal(rule.status, 400, JSON.stringify(rule.json));
+  assert.equal(rule.json.message, 'Invalid rule: conditions[0].flags must be a string (e.g. "i")');
+  assert.equal(await countRows('detection_rules', `${name}-types-rule`), 0);
+  // The same rule with `flags: i` is refused as the exponential regex it is.
+  const asString = await call('analyst', 'POST', '/api/rules', {
+    name: `${name}-types-rule`,
+    severity: 'low',
+    enabled: false,
+    rule_yaml: flagsYaml.replace('flags: [i]', 'flags: i'),
+  });
+  assert.equal(asString.status, 422, JSON.stringify(asString.json));
+  assert.equal(asString.json.code, 'REGEX_UNSAFE');
+
+  const good = await call('analyst', 'POST', '/api/rules', { name: `${name}-types-rule`, severity: 'low', enabled: false, rule_yaml: ruleYaml(`^${name}`) });
+  assert.equal(good.status, 201, JSON.stringify(good.json));
+  const direct = await call('analyst', 'PUT', `/api/rules/${good.json.id}`, {
+    rule_logic: { conditions: [{ field: 'payload', operator: 'regex', value: `^(?:${tag})?(?:q|Q)+$`, flags: ['i'] }] },
+  });
+  assert.equal(direct.status, 400, JSON.stringify(direct.json));
+  const viaYaml = await call('analyst', 'PUT', `/api/rules/${good.json.id}`, { rule_yaml: flagsYaml });
+  assert.equal(viaYaml.status, 400, JSON.stringify(viaYaml.json));
+  const logic = (await pool.query('SELECT rule_logic FROM detection_rules WHERE id = $1', [good.json.id])).rows[0].rule_logic;
+  assert.equal(logic.conditions[0].value, `^${name}`, 'unchanged');
+});
+
+test('a bounded repeat over overlapping alternatives is refused at write time', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  // recheck's defaults rated this "safe"; 'a'.repeat(10) + '!' stalled the API for tens of seconds.
+  const res = await call('analyst', 'POST', '/api/parsers', parserBody('bounded', `^(?:${tag})?(?<x>(?:a|a|a|a|a|a|a|a){1,12})$`));
+  assert.equal(res.status, 422, JSON.stringify(res.json));
+  assert.equal(res.json.code, 'REGEX_UNSAFE');
+  assert.equal(await countRows('parsers', `${name}-bounded`), 0);
+});
+
 test('detection rules: create, update and rule_logic sent directly are gated; enable/disable is not', async (t) => {
   if (!dbReady) return t.skip(SKIP);
   const vulnerable = `(?:${tag})?^(a|a)+$`;

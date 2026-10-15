@@ -40,9 +40,14 @@ export interface DeriveRule {
 }
 
 /**
- * Structurally validate a parser's `derivations` (used by import + CI). Returns a
- * list of human-readable errors; empty array means valid. Verifies rule shape,
- * matcher keys, and that every regex (`matches` / `extract.pattern`) compiles.
+ * Structurally validate a parser's `derivations` (used by import, catalog
+ * install, content packs, PUT /api/parsers/:id and CI). Returns a list of
+ * human-readable errors; empty array means valid. Verifies rule shape, matcher
+ * keys, and that every regex (`matches` / `extract.pattern`) is a string that
+ * compiles. A regex must be a string: applyDerivations never compiles anything
+ * else, and the ReDoS gate (parser/redos.ts collectParserRegexes) only
+ * analyzes strings, so an array-wrapped `["^(a+)+$"]` is refused here instead
+ * of being stored as a matcher that silently never matches.
  */
 export function validateDerivations(rules: unknown): string[] {
   const errors: string[] = [];
@@ -72,8 +77,12 @@ export function validateDerivations(rules: unknown): string[] {
             if (!matcherKeys.has(k)) errors.push(`${at}.when.${field} has unknown matcher "${k}"`);
           }
           if (matcher.matches !== undefined) {
-            try { new RegExp(String(matcher.matches)); } catch (e) {
-              errors.push(`${at}.when.${field}.matches is not a valid regex: ${(e as Error).message}`);
+            if (typeof matcher.matches !== 'string') {
+              errors.push(`${at}.when.${field}.matches must be a string (a regex)`);
+            } else {
+              try { new RegExp(matcher.matches); } catch (e) {
+                errors.push(`${at}.when.${field}.matches is not a valid regex: ${(e as Error).message}`);
+              }
             }
           }
           if (matcher.in !== undefined && !Array.isArray(matcher.in)) {
@@ -129,6 +138,9 @@ function matchOne(value: any, m: DeriveMatcher): boolean {
   if (m.contains !== undefined && !s.toLowerCase().includes(String(m.contains).toLowerCase())) return false;
   if (m.in !== undefined && !m.in.map(String).includes(s)) return false;
   if (m.matches !== undefined) {
+    // Only a string is compiled: `new RegExp(["^(a+)+$"])` would stringify the
+    // array into a regex the ReDoS gate never analyzed (it analyzes strings).
+    if (typeof m.matches !== 'string') return false;
     try {
       if (!new RegExp(m.matches, 'i').test(s)) return false;
     } catch {
@@ -166,7 +178,8 @@ export function applyDerivations(fields: Record<string, any>, rules: unknown): v
       for (const [key, spec] of Object.entries(rule.extract || {})) {
         if (!rule.overwrite && !isEmpty(fields[key])) continue;
         const source = fields[spec?.from as string];
-        if (isEmpty(source) || !spec?.pattern) continue;
+        // Only a non-empty string pattern is compiled (see matchOne).
+        if (isEmpty(source) || typeof spec?.pattern !== 'string' || !spec.pattern) continue;
         const match = String(source).match(new RegExp(spec.pattern));
         const captured = match ? match[spec.group ?? 1] : undefined;
         if (!isEmpty(captured)) fields[key] = captured;

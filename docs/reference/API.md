@@ -770,9 +770,22 @@ installs and Install all, `POST`/`PUT /api/rules` (from `rule_yaml` or a
 `rule_logic` sent directly), Sigma import and its preview, content-pack installs,
 and the bundled-rule importer. The check is
 [recheck](https://makenowjust-labs.github.io/recheck/) (the analyzer the catalog
-CI runs), with a time budget per regex (`REGEX_SAFETY_CHECK_TIMEOUT_MS`, default
-5000 ms), in a worker thread. Verdicts are cached per distinct regex in the
-`regex_safety_verdicts` table, so a regex is analyzed once.
+CI runs, with the CI's parameters), with a time budget per regex
+(`REGEX_SAFETY_CHECK_TIMEOUT_MS`, default 10000 ms), in a worker thread.
+Verdicts are cached per distinct regex in the `regex_safety_verdicts` table,
+so a regex is analyzed once; a verdict that only ran out of time is kept in
+memory for 10 minutes and never stored, so it is analyzed again. A save's
+regexes are analyzed a few at a time (one per scan worker), so a save with
+many new regexes takes longer rather than being refused as busy.
+
+A regex must be a string. `PUT /api/parsers/:id` answers `400` for a
+`pattern` that is not a string, or `derivations` that fail the import's
+validation (a `when.*.matches` or `extract.*.pattern` that is not a string
+included); `POST`/`PUT /api/rules` answer `400` for a `regex` condition whose
+`flags` is not a string (`flags: [i]`) or whose `value` is a list or mapping.
+The engines compile nothing else either: a stored non-string regex never
+runs (a parser's matcher fails, a rule's condition logs an invalid-regex
+error and never matches).
 
 - **Proven vulnerable** (recheck found an attack string; exponential or
   polynomial): refused with `422` and nothing is saved. `force` does not
@@ -1071,6 +1084,12 @@ the check must be fixed in the same edit). Other edits, enable/disable
 included, are never refused for a regex they do not touch.
 
 **Errors:**
+- `400` - `pattern must be a string`, or `Invalid derivations: …` (the import's
+  derivation checks; a `when.*.matches` or `extract.*.pattern` must be a string)
+- `404` - Parser not found
+- `422` `REGEX_UNSAFE` - A regex is ReDoS-vulnerable; nothing changed ([Regex safety](#regex-safety-parsers-and-rules))
+
+**Errors:**
 - `404` - Parser not found
 - `422` `REGEX_UNSAFE` - A regex the update would store is ReDoS-vulnerable; nothing changed
 
@@ -1342,7 +1361,7 @@ alert:
 ```
 
 **Errors:**
-- `400` - Missing fields or invalid YAML format
+- `400` - Missing fields, invalid YAML format, or `Invalid rule: conditions[0].flags must be a string (e.g. "i")` (a `regex` condition's `flags` must be a string and its `value` must not be a list or mapping)
 - `422` `REGEX_UNSAFE` - A `regex` condition is ReDoS-vulnerable; nothing saved ([Regex safety](#regex-safety-parsers-and-rules))
 
 ---
@@ -1376,7 +1395,7 @@ regex check; an update that leaves the logic alone (enable/disable) is never
 refused for it.
 
 **Errors:**
-- `400` - Invalid YAML format (if rule_yaml provided)
+- `400` - Invalid YAML format (if rule_yaml provided), or `Invalid rule: …` (as for `POST`)
 - `404` - Rule not found
 - `422` `REGEX_UNSAFE` - A `regex` condition is ReDoS-vulnerable; nothing changed
 

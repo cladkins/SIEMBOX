@@ -53,12 +53,38 @@ export interface RegexRef {
  */
 export const CLI_REDOS_TIMEOUT_MS = 10_000;
 
+/**
+ * recheck's analysis parameters, shared by the CLI scan and the app's worker
+ * scan (and part of the gate's checker id, so a change re-analyzes stored
+ * verdicts). recheck's defaults miss a whole class of real stalls:
+ *
+ *  - maxRepeatCount / maxSimpleRepeatCount (default 30): a bounded quantifier
+ *    up to that count is expanded and treated as constant, so
+ *    ^(?:a|a|a|a|a|a|a|a){1,12}$ is "safe" although 'a'.repeat(10) + '!' costs
+ *    8^10 steps (tens of seconds). At 5, any larger bound goes to the fuzzer,
+ *    which measures it.
+ *  - attackLimit (default 1.5e9 steps): the fuzzer only reports an attack
+ *    string past that many steps, tens of seconds of V8 time on ONE line. At
+ *    1e7 (tens of milliseconds) a pattern that can be driven that far is
+ *    reported.
+ *
+ * Measured on every regex SIEMBox ships (141 parser, 17 rule regexes): no new
+ * finding, and no slower in total.
+ */
+export const RECHECK_PARAMS = Object.freeze({ attackLimit: 10_000_000, maxRepeatCount: 5, maxSimpleRepeatCount: 5 });
+
 /** What one recheck analysis concluded, independent of where the regex came from. */
 export interface RegexVerdict {
   status: 'safe' | 'vulnerable' | 'unknown';
   complexity?: string;
   detail?: string;
   attack?: string;
+  /**
+   * An 'unknown' that only means the analysis ran out of time (load, a slow
+   * analyzer backend), not a fact about the regex: never stored permanently,
+   * so it is analyzed again later.
+   */
+  outOfTime?: boolean;
 }
 
 /** recheck's checkSync, or null if the package is unavailable. Cached. */
@@ -113,10 +139,22 @@ export function verdictFromDiagnostics(result: any): RegexVerdict {
     const attack = typeof result.attack?.pattern === 'string' ? result.attack.pattern.slice(0, 200) : undefined;
     return { status: 'vulnerable', complexity, attack };
   }
-  return { status: 'unknown', detail: unknownDetail(result?.error) };
+  const kind = result?.error?.kind;
+  const verdict: RegexVerdict = { status: 'unknown', detail: unknownDetail(result?.error) };
+  if (kind === 'timeout' || kind === 'cancel') verdict.outOfTime = true;
+  return verdict;
 }
 
-/** Collect every regex source a parser will compile at runtime. */
+/**
+ * Collect every regex source a parser will compile at runtime.
+ *
+ * Only string values are collected because only strings are compiled: the
+ * runtime (runParser, derive.ts) skips a `pattern`, `extract.*.pattern` or
+ * `when.*.matches` that is not a string instead of letting `new RegExp`
+ * stringify it, and the write paths refuse one. So what this returns is
+ * exactly what can run — an array-wrapped `["^(a+)+$"]` is neither analyzed
+ * nor executed.
+ */
 export function collectParserRegexes(parser: ScannableParser): RegexRef[] {
   const refs: RegexRef[] = [];
   // JSON parsers use `pattern` as an ignored placeholder ("" or ".*"), so only
@@ -160,7 +198,7 @@ export function scanRegex(
   }
   let result: any;
   try {
-    result = check(source, analysisFlags(flags), { timeout: opts.timeoutMs ?? CLI_REDOS_TIMEOUT_MS });
+    result = check(source, analysisFlags(flags), { ...RECHECK_PARAMS, timeout: opts.timeoutMs ?? CLI_REDOS_TIMEOUT_MS });
   } catch (e) {
     return { location, source, flags, status: 'error', detail: e instanceof Error ? e.message : String(e) };
   }

@@ -1120,7 +1120,10 @@ What SIEMBox does about it:
   remote content, and `SIEMBOX_CATALOG_REPO` may point anywhere), rule
   create/update, Sigma import, the AI builders' output, the bundled-rule
   importer — checks it with recheck in a worker thread, with a time budget per
-  regex (`REGEX_SAFETY_CHECK_TIMEOUT_MS`, default 5 s). A regex proven
+  regex (`REGEX_SAFETY_CHECK_TIMEOUT_MS`, default 10 s) and the catalog CI's
+  analysis parameters (stricter than recheck's defaults about bounded repeats
+  and the attack threshold). A regex must be a string, and the engines compile
+  only strings, so what is checked is what runs. A regex proven
   vulnerable (exponential or polynomial) is refused with `422 REGEX_UNSAFE`. An
   indeterminate one is accepted with a warning: the analysis is a proof of
   vulnerability, not of safety, so an attacker with write access (analyst and

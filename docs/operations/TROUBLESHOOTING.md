@@ -824,12 +824,21 @@ npm run validate-detections -- /path/to/my-rule.yaml
 
 A warning instead of a refusal — `could not be proven safe (unknown: …)` — means
 the analysis ran out of its time budget (`REGEX_SAFETY_CHECK_TIMEOUT_MS`,
-default 5000 ms) or does not support the syntax. The item was saved. Large but
-well-delimited patterns land there on a slow host; simplify the pattern if you
-want a definite answer.
+default 10000 ms) or does not support the syntax. The item was saved. Large but
+well-delimited patterns can land there on a slow host; simplify the pattern if
+you want a definite answer. A time-budget warning is not remembered for good:
+the regex is analyzed again after 10 minutes, or at the next start, so it may
+settle as safe once the host is quieter.
 
 `503` with `"code": "REGEX_BUSY"` means the checker is saturated (many saves at
-once): retry in a moment. A regex is never saved unchecked.
+once): retry in a moment. A regex is never saved unchecked. One save with many
+new regexes is not refused for that: its regexes take turns, so it just takes
+longer.
+
+`400` with `pattern must be a string`, `…matches must be a string (a regex)`
+or `conditions[0].flags must be a string` means a regex (or its flags) was
+sent as a list or an object, e.g. `"matches": ["^x"]` or `flags: [i]`. Send
+the string itself (`"matches": "^x"`, `flags: i`).
 
 ### Issue: A parser or rule shows an "Unsafe regex" tag
 

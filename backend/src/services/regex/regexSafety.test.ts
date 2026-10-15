@@ -9,16 +9,18 @@ import {
   assessParserRegexes,
   assessRegexes,
   assessRuleRegexes,
+  checkerId,
   clearRegexVerdictCache,
   closeRegexScanPool,
   collectRuleRegexes,
   peekRegexSafety,
   refusalBody,
+  setTransientVerdictTtl,
   setVerdictStore,
   type RegexVerdict,
   type VerdictStore,
 } from './regexSafety';
-import { redosErrorMessage } from '../parser/redos';
+import { redosErrorMessage, scanParserRedos } from '../parser/redos';
 
 setVerdictStore(null);
 beforeEach(() => clearRegexVerdictCache());
@@ -144,4 +146,87 @@ test('peek never waits: an unseen regex is pending, then reports its verdict', a
   assert.equal(after.status, 'vulnerable');
   assert.equal(after.vulnerable[0].location, 'pattern');
   assert.equal(peekRegexSafety([]).status, 'none');
+});
+
+test('a bounded repeat over overlapping alternatives is refused (recheck\'s defaults call it safe)', async () => {
+  // With recheck's defaults this is "safe" (the {1,12} is expanded and counted
+  // as constant), yet 'a'.repeat(10) + '!' stalls a V8 match for tens of seconds.
+  const pattern = '^(?<x>(?:a|a|a|a|a|a|a|a){1,12})$';
+  const report = await assessParserRegexes({ parser_type: 'regex', pattern });
+  assert.deepEqual(report.vulnerable.map((f) => [f.location, f.complexity]), [['pattern', 'exponential']]);
+  // Realistic-looking forms of the same mistake.
+  for (const source of ['^(?:[a-z0-9]|[a-z0-9-]){1,30}$', '^(?:\\w|\\d){1,29}$']) {
+    const r = await assessRegexes([{ location: 'pattern', source, flags: '' }]);
+    assert.equal(r.vulnerable.length, 1, `${source} is refused`);
+  }
+  // The CLI validators (the catalog CI) use the same parameters and agree.
+  const cli = scanParserRedos({ parser_type: 'regex', pattern }, { required: true });
+  assert.deepEqual(cli.map((f) => f.status), ['vulnerable']);
+});
+
+test('the checker id names the analysis parameters, so verdicts made with other settings are redone', () => {
+  assert.match(checkerId(), /^recheck@[^;]+;attackLimit=10000000;maxRepeatCount=5;maxSimpleRepeatCount=5;timeout=10000$/);
+});
+
+test('a verdict that only ran out of time is never stored, and memory forgets it', async (t) => {
+  const previous = process.env.REGEX_SAFETY_CHECK_TIMEOUT_MS;
+  process.env.REGEX_SAFETY_CHECK_TIMEOUT_MS = '100';
+  const saved = new Map<string, RegexVerdict>();
+  let loads = 0;
+  setVerdictStore({
+    async load(keys) {
+      loads++;
+      return new Map(keys.filter((k) => saved.has(k)).map((k) => [k, saved.get(k)!]));
+    },
+    async loadAll() {
+      return new Map(saved);
+    },
+    async save(entries) {
+      for (const { key, verdict } of entries) saved.set(key, verdict);
+    },
+  });
+  t.after(() => {
+    setVerdictStore(null);
+    setTransientVerdictTtl(10 * 60_000);
+    if (previous === undefined) delete process.env.REGEX_SAFETY_CHECK_TIMEOUT_MS;
+    else process.env.REGEX_SAFETY_CHECK_TIMEOUT_MS = previous;
+  });
+  // The same large, safe pattern the "indeterminate" test uses: undecidable in 100 ms.
+  const refs = [
+    {
+      location: 'pattern',
+      source:
+        '^(?<client_ip>[\\d.]+) - (?<remote_user>\\S+) \\[(?<timestamp>[^\\]]+)\\] "(?<method>\\w+) (?<request_uri>\\S+) ' +
+        '(?<protocol>[^"]+)" (?<status_code>\\d{3}) (?<bytes>\\d+|-)(?: "(?<referer>[^"]*)" "(?<user_agent>[^"]*)")?' +
+        '(?: (?<request_time>[\\d.]+))?(?: (?<upstream>\\S+))?$',
+      flags: '',
+    },
+  ];
+  const first = await assessRegexes(refs);
+  assert.match(first.warnings[0] ?? '', /hit its time budget/);
+  assert.equal(saved.size, 0, 'a time-budget "unknown" is not persisted');
+  assert.equal(loads, 1);
+
+  // Within the retry window, memory answers (a save is not slowed down again).
+  await assessRegexes(refs);
+  assert.equal(loads, 1);
+
+  // Once it expires, the regex is looked up and analyzed again.
+  setTransientVerdictTtl(0);
+  const again = await assessRegexes(refs);
+  assert.equal(loads, 2);
+  assert.match(again.warnings[0] ?? '', /hit its time budget/);
+  assert.equal(saved.size, 0);
+});
+
+test('one call with more new regexes than the queue holds is analyzed a few at a time, not refused as busy', async () => {
+  // The scan pool refuses a 65th waiting task (that is how saturation from
+  // concurrent callers is detected); one save with 80 new regexes is not that.
+  const refs = Array.from({ length: 80 }, (_, i) => ({
+    location: `derivations[0].extract.f${i}`,
+    source: `^busy${i}x(\\d+)$`,
+    flags: '',
+  }));
+  const report = await assessRegexes(refs);
+  assert.deepEqual(report, { vulnerable: [], unknown: [], errors: [], warnings: [] });
 });

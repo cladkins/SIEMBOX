@@ -706,7 +706,7 @@ the default):
 
 | Variable | Default | |
 |---|---|---|
-| `REGEX_SAFETY_CHECK_TIMEOUT_MS` | `5000` | Time budget for analyzing one regex when it is saved. A regex not decided within it is saved with a warning; a longer budget decides more of them but makes a first save or install slower. Changing it re-checks stored regexes at the next start |
+| `REGEX_SAFETY_CHECK_TIMEOUT_MS` | `10000` | Time budget for analyzing one regex when it is saved (the catalog CI's budget). A regex not decided within it is saved with a warning; a longer budget decides more of them but makes a first save or install slower. A verdict that only ran out of time is not stored: it is analyzed again after 10 minutes or at the next start. Changing the budget re-checks stored regexes at the next start |
 | `REGEX_SAFETY_WORKERS` | `2` | Worker threads for those analyses |
 | `REGEX_TEST_TIMEOUT_MS` | `1000` | Wall-clock limit for one pattern test (Test buttons, import self-tests); past it the run is stopped and answers `422 REGEX_TIMEOUT` |
 | `REGEX_TEST_WORKERS` | `2` | Worker threads for pattern tests |

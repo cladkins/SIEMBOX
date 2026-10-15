@@ -97,7 +97,7 @@ services:
       AUTH_ALERTS: ${AUTH_ALERTS:-}
       AUTH_FAILURE_AUDIT_RETENTION_DAYS: ${AUTH_FAILURE_AUDIT_RETENTION_DAYS:-}
       # Regex safety (DEPLOYMENT.md, "Regex safety checks"). Empty = the
-      # defaults: 5000 ms to analyze one regex at save time (undecided = saved
+      # defaults: 10000 ms to analyze one regex at save time (undecided = saved
       # with a warning), 1000 ms per pattern test run, 2 worker threads each.
       REGEX_SAFETY_CHECK_TIMEOUT_MS: ${REGEX_SAFETY_CHECK_TIMEOUT_MS:-}
       REGEX_SAFETY_WORKERS: ${REGEX_SAFETY_WORKERS:-}

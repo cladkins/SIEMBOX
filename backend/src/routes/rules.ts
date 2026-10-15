@@ -3,7 +3,7 @@ import { DetectionRuleModel } from '../models/DetectionRule';
 import * as yaml from '../utils/yaml';
 import { ApiError } from '../middleware/errorHandler';
 import { RulesEngine } from '../services/rules/rulesEngine';
-import { validateRule, toPortableRule, portableRuleToYaml } from '../services/rules/rulePortable';
+import { validateRule, toPortableRule, portableRuleToYaml, ruleRegexTypeErrors } from '../services/rules/rulePortable';
 import { convertSigmaYaml } from '../services/rules/sigmaConvert';
 import { catalogNewFileUrl } from '../services/parser/catalogService';
 import {
@@ -567,6 +567,10 @@ router.post('/', requireRuleWrite, async (req: Request, res: Response) => {
     } catch {
       throw new ApiError(400, 'Invalid YAML format');
     }
+    const typeErrors = ruleRegexTypeErrors(rule_logic);
+    if (typeErrors.length > 0) {
+      throw new ApiError(400, `Invalid rule: ${typeErrors.join('; ')}`);
+    }
 
     const safety = await gateRule(res, `Rule "${name}"`, rule_logic);
     if (!safety) return;
@@ -608,6 +612,10 @@ router.put('/:id', requireRuleWrite, async (req: Request, res: Response) => {
     // for a regex it does not touch: disabling is the mitigation for an unsafe one.
     let warnings: string[] = [];
     if (updateData.rule_logic !== undefined) {
+      const typeErrors = ruleRegexTypeErrors(updateData.rule_logic);
+      if (typeErrors.length > 0) {
+        throw new ApiError(400, `Invalid rule: ${typeErrors.join('; ')}`);
+      }
       const subject = typeof updateData.name === 'string' ? `Rule "${updateData.name}"` : `Rule ${id}`;
       const safety = await gateRule(res, subject, updateData.rule_logic);
       if (!safety) return;

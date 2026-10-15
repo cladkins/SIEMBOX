@@ -1,6 +1,7 @@
 <template>
   <el-alert
     v-if="problem"
+    ref="alertRef"
     :type="problem.type"
     :title="problem.title"
     :closable="false"
@@ -29,9 +30,32 @@
 </template>
 
 <script setup lang="ts">
+import { nextTick, ref, watch } from 'vue';
 import type { InlineProblem } from '@/utils/regexSafety';
 
-defineProps<{ problem: InlineProblem | null }>();
+const props = defineProps<{
+  problem: InlineProblem | null;
+  /**
+   * Bring the alert into view whenever a new problem appears. For dialogs
+   * whose Save button sits below the fold, where the alert renders at the
+   * top: without it a refused (or warned) save looks like nothing happened.
+   */
+  autoScroll?: boolean;
+}>();
+
+const alertRef = ref<{ $el?: Element } | null>(null);
+
+watch(
+  () => props.problem,
+  async (problem) => {
+    if (!problem || !props.autoScroll) return;
+    await nextTick();
+    const el = alertRef.value?.$el;
+    if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
+      (el as HTMLElement).scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }
+);
 </script>
 
 <style scoped>

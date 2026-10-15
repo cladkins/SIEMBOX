@@ -125,7 +125,8 @@ conditions:
 ```
 
 Supported flags are `i` (ignore case), `m` (multiline `^`/`$`), `s` (dot matches
-newline) and `u` (unicode). `g` and `y` are rejected: both make the pattern
+newline) and `u` (unicode), written as one string (`flags: im`; a list such as
+`flags: [i]` is refused when the rule is saved, and never applied). `g` and `y` are rejected: both make the pattern
 stateful via `lastIndex`, so the same input would alternate between matching and
 not matching.
 
@@ -1055,12 +1056,16 @@ analyzer `npm run validate-detections` now runs too:
 | recheck says | What happens |
 |---|---|
 | **vulnerable** (exponential or polynomial: it found an attack string) | Refused, `422`: `ReDoS: regex at conditions[0].value is vulnerable (polynomial, degree 2) — rewrite it linear before saving`. In a batch (Install all, Sigma import, a pack) the rule is skipped with that reason and the rest install. |
-| **unknown** (the time budget, `REGEX_SAFETY_CHECK_TIMEOUT_MS`, ran out) | Saved, with a warning. |
+| **unknown** (the time budget, `REGEX_SAFETY_CHECK_TIMEOUT_MS`, default 10 s, ran out) | Saved, with a warning. Not stored as a verdict: analyzed again after 10 minutes, or at the next start. |
 | **safe** | Saved. |
 
 The condition is analyzed exactly as the engine compiles it: a leading `(?i)`
 and `flags: i` are applied, so a case-insensitive pattern is checked
-case-insensitively.
+case-insensitively (`^(?:q|Q)+$` is linear, and exponential with `i`). Both go
+through the same function, which refuses `flags` that are not a string, so
+the check and the engine cannot read the flags differently. The analysis uses
+the catalog CI's parameters, stricter than recheck's defaults about bounded
+repeats: `^(?:\w|\d){1,29}$` is refused (see PARSERS.md, Regex Safety).
 
 **The usual offender in a rule is "X, then later Y" written `X.*Y`.** From
 every X the engine rescans the rest of the line looking for Y, which is O(n²)

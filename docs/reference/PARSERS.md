@@ -361,7 +361,8 @@ console.log('Groups:', match?.groups);
 ### Regex Safety
 
 A parser's `pattern` and its derivation regexes (`derivations[].extract.*.pattern`,
-and `derivations[].when.*.matches`, which is always matched case-insensitively)
+and `derivations[].when.*.matches`, which is always matched case-insensitively;
+each must be a string — a list such as `["^x"]` is refused, and never compiled)
 run on **every log line**, on the same thread that serves the API and receives
 syslog. JavaScript regexes backtrack: a pattern where two parts can match the
 same text can take exponential or polynomial time on a crafted line, and anyone
@@ -374,13 +375,19 @@ While it runs, nothing else does.
 regexes first: Create/Update in the parser editor, Import, the import preview,
 catalog Install / Install all, content packs, and the AI builder's Save. The
 check is [recheck](https://makenowjust-labs.github.io/recheck/), the same
-analyzer the catalog CI runs (`npm run validate-parsers`), with a time budget
-per regex (`REGEX_SAFETY_CHECK_TIMEOUT_MS`, default 5 s).
+analyzer the catalog CI runs (`npm run validate-parsers`), with the same
+parameters and the same time budget per regex (`REGEX_SAFETY_CHECK_TIMEOUT_MS`,
+default 10 s). The parameters are stricter than recheck's defaults, which
+count a bounded repeat up to 30 as constant and only report an attack past
+1.5 billion steps: `^(?:a|a|a|a|a|a|a|a){1,12}$` passes those defaults although
+`aaaaaaaaaa!` stalls a match for tens of seconds. SIEMBox expands bounded repeats
+only up to 5 and reports an attack past 10 million steps (tens of milliseconds),
+which refuses it; no regex SIEMBox ships is affected.
 
 | recheck says | What happens |
 |---|---|
 | **vulnerable** (it found an attack string: exponential or polynomial) | Refused: `422`, nothing saved, with `ReDoS: regex at pattern is vulnerable (exponential) — rewrite it linear before saving`. The editor and import dialog show it inline with the regex, the kind of backtracking and an example of slow input. `force` does not override it. |
-| **unknown** (the budget ran out, or the syntax is not supported) | Saved, with a warning: `ReDoS: regex at pattern could not be proven safe (unknown: …)`. Large catalog patterns often land here on a slow host; that is not a finding. |
+| **unknown** (the budget ran out, or the syntax is not supported) | Saved, with a warning: `ReDoS: regex at pattern could not be proven safe (unknown: …)`. Large catalog patterns can land here on a slow host; that is not a finding. A verdict that only ran out of time is not stored: the regex is analyzed again after 10 minutes, or at the next start. |
 | **safe** | Saved. |
 
 Each distinct regex is analyzed once (the verdict is kept in the
@@ -405,7 +412,8 @@ so there is only ever one way to match.
 | `^(a+)+$`, `^(\w+\s?)+$` | A repeated group whose body can match the same run in many ways (exponential) | `^a+$`, `^\w+(?:\s\w+)*$` (each repetition must start with something the previous one cannot end with) |
 | `^(a\|a)+$`, `^(\d\|\d\d)+$` | Alternatives that overlap | Make them disjoint, or use one class: `^\d+$` |
 | `^(?<user>.*) logged in from (?<ip>.*)$` | Two wildcards around a literal: either can take the text the other needs (polynomial) | Tokens and delimiters: `^(?<user>\S+) logged in from (?<ip>\S+)$` |
-| `curl.*\|`, `Port.*closed` (unanchored "X, then later Y") | From every X the engine rescans to the end of the line (polynomial) | A gap that cannot contain X again: `curl(?:[^c\|\n]\|c(?!url))*\|`, `[Pp]ort(?:[^Pp\n]\|[Pp](?!ort))*[Cc]losed` |
+| `curl.*[\|]`, `Port.*closed` (unanchored "X, then later Y") | From every X the engine rescans to the end of the line (polynomial) | A gap that cannot contain X again: `curl(?:[^c\|\n]\|c(?!url))*[\|]`, `[Pp]ort(?:[^Pp\n]\|[Pp](?!ort))*[Cc]losed` (`[\|]` is a literal pipe) |
+| `^(?:a\|a){1,30}$`, `^(?:\w\|\d){1,29}$` | Overlapping alternatives under a bounded repeat: still exponential up to the bound | Disjoint alternatives or one class: `^a{1,30}$`, `^\w{1,29}$` |
 | `^(.+?)\s(.+?)\s(.+)$` | Lazy wildcards still try every split | Tokens: `^(\S+)\s(\S+)\s(.+)$` |
 | `\[(?<ts>[^\]]+)\]` with no `^` | Unanchored, it is retried from every `[` of a line like `[[[[…` (polynomial) | Anchor it: `^\[(?<ts>[^\]]+)\]` |
 
@@ -421,7 +429,15 @@ Habits that keep patterns linear:
 - Bounded repeats (`.{0,200}`) are cheap in practice but recheck still reports
   them as polynomial, so they are refused; use the gap form above instead.
 - Check before saving: `npm run validate-parsers -- my.parser.json` runs the
-  same analysis (with a 10 s budget), and the editor's Save tells you inline.
+  same analysis (same parameters, same 10 s budget), and the editor's Save
+  tells you inline.
+
+The "X, then later Y" row without the table's pipe escaping:
+
+```text
+curl.*\|                       refused: polynomial
+curl(?:[^c|\n]|c(?!url))*\|     linear: each "curl" scans only up to the next "curl"
+```
 
 **Parsers saved before this check** may already contain a vulnerable regex. At
 every start SIEMBox analyzes the stored regexes in the background, logs one

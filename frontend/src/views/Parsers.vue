@@ -190,8 +190,9 @@
       width="900px"
       @close="resetForm"
     >
-      <!-- A refused save, a stored unsafe regex, or a save's warnings: inline, not a toast. -->
-      <RegexProblemAlert :problem="editorProblem" />
+      <!-- A refused save, a stored unsafe regex, or a save's warnings: inline (scrolled
+           into view: Save is below the fold), with a short toast pointing at it. -->
+      <RegexProblemAlert :problem="editorProblem" auto-scroll />
       <el-form :model="parserForm" :rules="rules" ref="formRef" label-width="120px" :disabled="!canEdit">
         <el-form-item label="Name" prop="name">
           <el-input v-model="parserForm.name" placeholder="e.g., SSH Authentication" />
@@ -983,12 +984,14 @@ async function saveParser() {
         editMode.value = true;
         selectedParser.value = res.data;
         editorProblem.value = warned;
+        ElMessage.warning('Saved, with a warning: see the top of the editor');
         return;
       }
       ElMessage.success(editMode.value ? 'Parser updated successfully' : 'Parser created successfully');
       dialogVisible.value = false;
     } catch (error: any) {
       editorProblem.value = problemFromError(error, 'Failed to save parser');
+      ElMessage.error('Not saved: see the top of the editor');
     } finally {
       saving.value = false;
     }

@@ -169,8 +169,9 @@
       width="1000px"
       @close="resetForm"
     >
-      <!-- A refused save, a stored unsafe regex, or a save's warnings: inline, not a toast. -->
-      <RegexProblemAlert :problem="editorProblem" />
+      <!-- A refused save, a stored unsafe regex, or a save's warnings: inline (scrolled
+           into view: Save is below the fold), with a short toast pointing at it. -->
+      <RegexProblemAlert :problem="editorProblem" auto-scroll />
       <el-form :model="ruleForm" :rules="formRules" ref="formRef" label-width="120px" :disabled="!canEdit">
         <el-form-item label="Name" prop="name">
           <el-input v-model="ruleForm.name" placeholder="e.g., SSH Brute Force Detection" />
@@ -1070,12 +1071,14 @@ async function saveRule() {
         editMode.value = true;
         selectedRule.value = res.data;
         editorProblem.value = warned;
+        ElMessage.warning('Saved, with a warning: see the top of the editor');
         return;
       }
       ElMessage.success(editMode.value ? 'Rule updated successfully' : 'Rule created successfully');
       dialogVisible.value = false;
     } catch (error: any) {
       editorProblem.value = problemFromError(error, 'Failed to save rule');
+      ElMessage.error('Not saved: see the top of the editor');
     } finally {
       saving.value = false;
     }

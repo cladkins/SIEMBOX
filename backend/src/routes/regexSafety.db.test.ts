@@ -313,6 +313,29 @@ test('a bounded repeat over overlapping alternatives is refused at write time', 
   assert.equal(await countRows('parsers', `${name}-bounded`), 0);
 });
 
+test('ten overlapping fixed-width groups (no quantifier) are refused at write time, as a parser and as a rule', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  // recheck's automaton rated these "safe" (a constant cost does not grow with
+  // the input), yet 'a'.repeat(10) + '!' costs 8^10 steps: one 11-byte syslog
+  // line stalled the API for seconds.
+  const groups = '(?:a|a|a|a|a|a|a|a)'.repeat(10);
+  const parser = await call('analyst', 'POST', '/api/parsers', parserBody('fixed-width', `^(?:${tag})?(?<x>${groups})$`));
+  assert.equal(parser.status, 422, JSON.stringify(parser.json));
+  assert.equal(parser.json.code, 'REGEX_UNSAFE');
+  assert.match(parser.json.errors[0], /^ReDoS: regex at pattern is vulnerable \(exponential\)/);
+  assert.equal(await countRows('parsers', `${name}-fixed-width`), 0);
+
+  const rule = await call('analyst', 'POST', '/api/rules', {
+    name: `${name}-fixed-width-rule`,
+    severity: 'low',
+    enabled: false,
+    rule_yaml: ruleYaml(`^(?:${tag})?(?:${groups})$`),
+  });
+  assert.equal(rule.status, 422, JSON.stringify(rule.json));
+  assert.equal(rule.json.code, 'REGEX_UNSAFE');
+  assert.equal(await countRows('detection_rules', `${name}-fixed-width-rule`), 0);
+});
+
 test('detection rules: create, update and rule_logic sent directly are gated; enable/disable is not', async (t) => {
   if (!dbReady) return t.skip(SKIP);
   const vulnerable = `(?:${tag})?^(a|a)+$`;

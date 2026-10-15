@@ -33,8 +33,15 @@ import { ErrorLogService } from './services/errors/errorLogService';
 import { scanStoredRegexes } from './services/regex/storedRegexScan';
 import { closeRegexScanPool } from './services/regex/regexSafety';
 import { closeRegexTestPool } from './services/regex/boundedRegex';
+import { enableLinearRegexFallback } from './services/regex/linearFallback';
 
 loadDotenv();
+
+// A parser or rule regex that backtracks catastrophically on a crafted log line
+// would stall the event loop (API, syslog ingestion, every job). V8 can abandon
+// such a match after 50,000 backtracks and finish it on its linear-time engine;
+// see services/regex/linearFallback.ts for what that covers. Before anything runs.
+const linearRegexFallback = enableLinearRegexFallback();
 
 // Last-resort capture. Anything that escaped a service's own try/catch — a
 // rejected promise nobody awaited, a throw from a timer callback — used to
@@ -183,6 +190,11 @@ const startServer = async () => {
     // Which origins' pages may call the API from a browser. Every start warns
     // about CORS_ORIGIN=* and about each entry it ignored.
     logCorsPolicy(corsPolicy);
+    if (!linearRegexFallback) {
+      logger.warn(
+        '[regex-safety] REGEX_LINEAR_FALLBACK is off: a regex that backtracks catastrophically on a log line runs on the event loop until it ends'
+      );
+    }
     // An account found on the default password "changeme" (flagged by
     // migrate's scan, or at a sign-in) raises a siembox-auth alert: once per
     // flag, so restarts add nothing. In the background; never fails the start.

@@ -164,8 +164,46 @@ test('a bounded repeat over overlapping alternatives is refused (recheck\'s defa
   assert.deepEqual(cli.map((f) => f.status), ['vulnerable']);
 });
 
-test('the checker id names the analysis parameters, so verdicts made with other settings are redone', () => {
-  assert.match(checkerId(), /^recheck@[^;]+;attackLimit=10000000;maxRepeatCount=5;maxSimpleRepeatCount=5;timeout=10000$/);
+test('overlapping fixed-width alternations with no quantifier are refused (recheck\'s automaton calls them safe)', async () => {
+  // Ten groups of eight identical alternatives: 8^10 backtracking steps on the
+  // 11 bytes 'a'.repeat(10) + '!' (about 14 s in V8). recheck's 'auto' picks its
+  // automaton backend for these, which only asks whether the cost GROWS with
+  // the input, and rates them safe; the fuzz pass measures the steps.
+  const groups = '(?:a|a|a|a|a|a|a|a)'.repeat(10);
+  const pattern = `^(?<x>${groups})$`;
+  const report = await assessParserRegexes({ parser_type: 'regex', pattern });
+  assert.deepEqual(report.vulnerable.map((f) => f.location), ['pattern']);
+  assert.match(report.errors[0], /^ReDoS: regex at pattern is vulnerable \(exponential\)/);
+
+  // The same mistake as a rule condition (with and without `i`), a derivation, and in realistic shapes.
+  const rule = await assessRuleRegexes({
+    conditions: [
+      { field: 'message', operator: 'regex', value: `^(?:${groups})$` },
+      { field: 'message', operator: 'regex', value: `(?i)^(?:${groups})$` },
+    ],
+  });
+  assert.deepEqual(rule.vulnerable.map((f) => f.location), ['conditions[0].value', 'conditions[1].value']);
+  const derived = await assessParserRegexes({
+    parser_type: 'regex',
+    pattern: '^(?<message>.+)$',
+    derivations: [{ extract: { user: { from: 'message', pattern: `^(?<u>${groups})$` } } }],
+  });
+  assert.deepEqual(derived.vulnerable.map((f) => f.location), ['derivations[0].extract.user']);
+  for (const source of [`^${'(?:\\w|\\d)'.repeat(24)}$`, `^${'(?:[a-z0-9]|[a-z0-9-])'.repeat(24)}$`]) {
+    const r = await assessRegexes([{ location: 'pattern', source, flags: '' }]);
+    assert.equal(r.vulnerable.length, 1, `${source} is refused`);
+  }
+
+  // The CLI validators (the catalog CI) run the same two passes and agree.
+  const cli = scanParserRedos({ parser_type: 'regex', pattern }, { required: true });
+  assert.deepEqual(cli.map((f) => f.status), ['vulnerable']);
+});
+
+test('the checker id names the analysis and its parameters, so verdicts made any other way are redone', () => {
+  assert.match(
+    checkerId(),
+    /^recheck@[^;]+;analysis=auto\+fuzz;attackLimit=10000000;maxRepeatCount=5;maxSimpleRepeatCount=5;timeout=10000$/
+  );
 });
 
 test('a verdict that only ran out of time is never stored, and memory forgets it', async (t) => {

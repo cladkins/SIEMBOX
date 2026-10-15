@@ -12,8 +12,9 @@
  *
  * The ingest path itself (ParserEngine.processLog, RulesEngine.evaluateLog) is
  * NOT routed through here: a worker round trip per log line would cost more
- * than the parsing. It is protected by the write-time gate (regexSafety.ts)
- * and the startup scan of stored regexes instead.
+ * than the parsing. It is protected by the write-time gate (regexSafety.ts),
+ * the startup scan of stored regexes and V8's linear-time fallback
+ * (linearFallback.ts) instead.
  */
 import { RegexWorkerPool, RegexTimeoutError, RegexPoolBusyError, RegexWorkerError } from './workerPool';
 import type { ParserDef, RunContext, RunResult } from '../parser/runParser';

@@ -47,9 +47,10 @@ export interface RegexRef {
 }
 
 /**
- * Time budget for one regex in the CLI validators: recheck's own default, now
- * explicit so the check itself can never hang. A regex the analyzer cannot
- * decide within it is reported as 'unknown' (a warning, never a failure).
+ * Time budget for each analysis pass of one regex in the CLI validators
+ * (RECHECK_ANALYSIS): recheck's own default, now explicit so the check itself
+ * can never hang. A regex the analyzer cannot decide within it is reported as
+ * 'unknown' (a warning, never a failure).
  */
 export const CLI_REDOS_TIMEOUT_MS = 10_000;
 
@@ -70,8 +71,48 @@ export const CLI_REDOS_TIMEOUT_MS = 10_000;
  *
  * Measured on every regex SIEMBox ships (141 parser, 17 rule regexes): no new
  * finding, and no slower in total.
+ *
+ * attackLimit applies to the fuzz backend, and the repeat counts decide when
+ * 'auto' leaves a regex to it; the automaton backend never sees a large
+ * constant cost at all (RECHECK_ANALYSIS).
  */
 export const RECHECK_PARAMS = Object.freeze({ attackLimit: 10_000_000, maxRepeatCount: 5, maxSimpleRepeatCount: 5 });
+
+/**
+ * How a regex is analyzed (part of the gate's checker id, so verdicts made any
+ * other way are redone): recheck's 'auto' first, then, when 'auto' chose the
+ * automaton backend and it said safe, the fuzz backend too. The stricter
+ * verdict wins.
+ *
+ * The automaton backend decides how the cost of a match GROWS with the input,
+ * so it rates a large but constant cost "safe": ten overlapping fixed-width
+ * alternations, ^(?:a|a|a|a|a|a|a|a)(?:a|a|a|a|a|a|a|a)…$ (ten groups, no
+ * quantifier), cost 8^10 backtracking steps on 'a'.repeat(10) + '!' (about
+ * 14 s in V8, for one 11-byte log line), and recheck's 'auto' picks the
+ * automaton for it. The fuzz backend measures the steps a match takes, so it
+ * finds such a pattern (and every regex the automaton calls vulnerable is
+ * refused without it). Fuzzing is a search, not a proof: it runs with
+ * recheck's fixed default seed, so a regex gets the same verdict every time,
+ * and the ingest path keeps its own bound (services/regex/linearFallback.ts).
+ *
+ * Measured on every regex SIEMBox ships (158): no new finding. The pure-JS
+ * analyzer (the Alpine image's) took 167 s for all of them instead of 119 s,
+ * and no regex the first pass decides took more than 7 s for both passes.
+ */
+export const RECHECK_ANALYSIS = 'auto+fuzz';
+
+/** Does a first-pass ('auto') result need the fuzz pass? Only an automaton "safe" does. */
+export function needsFuzzPass(result: { status?: string; checker?: string } | null | undefined): boolean {
+  return result?.status === 'safe' && result?.checker === 'automaton';
+}
+
+/**
+ * recheck's parameters for one pass of the analysis. Each pass has its own
+ * time budget, so one regex costs at most twice `timeoutMs`.
+ */
+export function recheckParams(pass: 'auto' | 'fuzz', timeoutMs: number): Record<string, unknown> {
+  return { ...RECHECK_PARAMS, checker: pass, timeout: timeoutMs };
+}
 
 /** What one recheck analysis concluded, independent of where the regex came from. */
 export interface RegexVerdict {
@@ -197,8 +238,11 @@ export function scanRegex(
     return { location, source, flags, status: 'error', detail: 'recheck unavailable' };
   }
   let result: any;
+  const timeoutMs = opts.timeoutMs ?? CLI_REDOS_TIMEOUT_MS;
   try {
-    result = check(source, analysisFlags(flags), { ...RECHECK_PARAMS, timeout: opts.timeoutMs ?? CLI_REDOS_TIMEOUT_MS });
+    // RECHECK_ANALYSIS: 'auto', then the fuzz pass when the automaton said safe.
+    result = check(source, analysisFlags(flags), recheckParams('auto', timeoutMs));
+    if (needsFuzzPass(result)) result = check(source, analysisFlags(flags), recheckParams('fuzz', timeoutMs));
   } catch (e) {
     return { location, source, flags, status: 'error', detail: e instanceof Error ? e.message : String(e) };
   }

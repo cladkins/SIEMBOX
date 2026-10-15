@@ -1120,9 +1120,12 @@ What SIEMBox does about it:
   remote content, and `SIEMBOX_CATALOG_REPO` may point anywhere), rule
   create/update, Sigma import, the AI builders' output, the bundled-rule
   importer — checks it with recheck in a worker thread, with a time budget per
-  regex (`REGEX_SAFETY_CHECK_TIMEOUT_MS`, default 10 s) and the catalog CI's
-  analysis parameters (stricter than recheck's defaults about bounded repeats
-  and the attack threshold). A regex must be a string, and the engines compile
+  analysis pass (`REGEX_SAFETY_CHECK_TIMEOUT_MS`, default 10 s) and the catalog
+  CI's analysis: recheck's automaton backend (which proves how the cost grows
+  with the input) and, when that says safe, its fuzz backend too (which
+  measures the cost, so it also catches a large constant blowup such as ten
+  overlapping fixed-width alternations in a row), with parameters stricter than
+  recheck's defaults about bounded repeats and the attack threshold. A regex must be a string, and the engines compile
   only strings, so what is checked is what runs. A regex proven
   vulnerable (exponential or polynomial) is refused with `422 REGEX_UNSAFE`. An
   indeterminate one is accepted with a warning: the analysis is a proof of
@@ -1141,12 +1144,18 @@ What SIEMBox does about it:
   `WARN` and tagged *Unsafe regex* in the UI. Disabling it automatically would
   silently drop parsing or detection, so the operator decides (rewrite it, or
   switch it off).
-- **Not bounded: the ingest path itself.** Running every log line through a
+- **Partly bounded: the ingest path itself.** Running every log line through a
   worker would cost more than the parsing, so live matching still happens on
-  the event loop; it is protected by the gate and the startup scan above. A
-  regex accepted as *indeterminate*, or one saved before an upgrade and not yet
-  fixed, can still stall ingestion. Watch for the startup `WARN` lines and the
-  tag.
+  the event loop. Beyond the gate and the startup scan above, the backend turns
+  on V8's linear-time fallback (`REGEX_LINEAR_FALLBACK`, on by default): a match
+  that backtracks more than 50,000 times is abandoned and finished on V8's
+  non-backtracking engine, with the same result, in time linear in the line.
+  That engine does not support every regex: case-insensitive (`i`) or unicode
+  (`u`) regexes, lookahead, backreferences and bounded repeats over about 16
+  (`{1,30}`) keep backtracking. So a regex of that kind accepted as
+  *indeterminate*, or saved before an upgrade and not yet fixed, can still
+  stall ingestion, and no static analysis is complete (recheck's fuzz pass is a
+  search, not a proof). Watch for the startup `WARN` lines and the tag.
 
 The search box on the Logs pages is not a regex (it is a SQL `ILIKE`, run by
 PostgreSQL), and the Log Discovery fingerprints use plain substring matches.

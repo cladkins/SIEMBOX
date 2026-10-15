@@ -1065,7 +1065,12 @@ case-insensitively (`^(?:q|Q)+$` is linear, and exponential with `i`). Both go
 through the same function, which refuses `flags` that are not a string, so
 the check and the engine cannot read the flags differently. The analysis uses
 the catalog CI's parameters, stricter than recheck's defaults about bounded
-repeats: `^(?:\w|\d){1,29}$` is refused (see PARSERS.md, Regex Safety).
+repeats: `^(?:\w|\d){1,29}$` is refused, and, like the CI, runs recheck's fuzz
+backend as well when its automaton says safe, so a large constant blowup such
+as ten `(?:a|a|a|a|a|a|a|a)` groups in a row is refused too (see PARSERS.md,
+Regex Safety). A case-insensitive condition is not covered by the live
+stream's linear-time fallback (`REGEX_LINEAR_FALLBACK`), so for it the check is
+the only protection.
 
 **The usual offender in a rule is "X, then later Y" written `X.*Y`.** From
 every X the engine rescans the rest of the line looking for Y, which is O(n²)

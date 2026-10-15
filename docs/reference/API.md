@@ -770,8 +770,11 @@ installs and Install all, `POST`/`PUT /api/rules` (from `rule_yaml` or a
 `rule_logic` sent directly), Sigma import and its preview, content-pack installs,
 and the bundled-rule importer. The check is
 [recheck](https://makenowjust-labs.github.io/recheck/) (the analyzer the catalog
-CI runs, with the CI's parameters), with a time budget per regex
-(`REGEX_SAFETY_CHECK_TIMEOUT_MS`, default 10000 ms), in a worker thread.
+CI runs, run the same way: its automaton backend and, when that says safe, its
+fuzz backend, which also catches a large constant blowup such as
+`^(?:a|a|a|a|a|a|a|a)(?:a|a|a|a|a|a|a|a)…$`; with the CI's parameters), with a
+time budget per analysis pass (`REGEX_SAFETY_CHECK_TIMEOUT_MS`, default
+10000 ms), in a worker thread.
 Verdicts are cached per distinct regex in the `regex_safety_verdicts` table,
 so a regex is analyzed once; a verdict that only ran out of time is kept in
 memory for 10 minutes and never stored, so it is analyzed again. A save's
@@ -1195,7 +1198,7 @@ Test parser configuration without saving (for parser builder).
 **Errors:**
 - `400` - Missing required fields
 - `413` `SAMPLE_TOO_LARGE` - Sample over 64 KB
-- `422` `REGEX_TIMEOUT` - The pattern did not finish within the budget on this sample and was stopped (e.g. `^(a+)+$` on `'a'.repeat(40) + '!'` answers in about 1 s)
+- `422` `REGEX_TIMEOUT` - The pattern did not finish within the budget on this sample and was stopped (e.g. `^(?:a|a){1,30}$` on `'a'.repeat(28) + '!'` answers in about 1 s). A pattern V8's linear-time fallback covers (`REGEX_LINEAR_FALLBACK`, on by default; no `i`/`u` flag, lookahead or backreference), such as `^(a+)+$`, finishes quickly with `"matched": false` instead
 - `422` `REGEX_TEST_FAILED` - The pattern does not compile (the message quotes the compiler)
 - `503` `REGEX_BUSY` - Every test worker is busy; retry
 

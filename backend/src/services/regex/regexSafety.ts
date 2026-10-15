@@ -16,23 +16,26 @@
  *     the syntax): accepted, with a warning returned to the caller;
  *   - safe: accepted.
  *
- * The analysis is recheck (the analyzer the catalog CI already uses, with the
- * same parameters: parser/redos.ts RECHECK_PARAMS) with an explicit time
- * budget per regex (REGEX_SAFETY_CHECK_TIMEOUT_MS, default 10000 ms, the CLI
- * gate's), run in a worker thread (the regex scan pool) with a hard
- * wall-clock backstop, so the check itself can neither hang nor block the
- * event loop. Verdicts are content-addressed (sha256 of flags + source) and
- * cached in memory and in the regex_safety_verdicts table, so each distinct
- * regex is analyzed once per checker (recheck version, parameters, budget),
- * not once per save or per restart. An analysis that only ran out of time is
- * the exception: it is kept in memory for a while and never stored, so it is
- * tried again rather than remembered as "unknown" forever.
+ * The analysis is recheck (the analyzer the catalog CI already uses, run the
+ * same way: parser/redos.ts RECHECK_ANALYSIS and RECHECK_PARAMS — 'auto', then
+ * the fuzz backend when the automaton said safe, because the automaton rates a
+ * large constant blowup "safe") with an explicit time budget per pass
+ * (REGEX_SAFETY_CHECK_TIMEOUT_MS, default 10000 ms, the CLI gate's), run in a
+ * worker thread (the regex scan pool) with a hard wall-clock backstop, so the
+ * check itself can neither hang nor block the event loop. Verdicts are
+ * content-addressed (sha256 of flags + source) and cached in memory and in the
+ * regex_safety_verdicts table, so each distinct regex is analyzed once per
+ * checker (recheck version, analysis, parameters, budget), not once per save
+ * or per restart. An analysis that only ran out of time is the exception: it
+ * is kept in memory for a while and never stored, so it is tried again rather
+ * than remembered as "unknown" forever.
  */
 import * as crypto from 'crypto';
 import { RegexWorkerPool, RegexTimeoutError, RegexPoolBusyError } from './workerPool';
 import {
   CLI_REDOS_TIMEOUT_MS,
   collectParserRegexes,
+  RECHECK_ANALYSIS,
   RECHECK_PARAMS,
   redosErrorMessage,
   redosWarningMessage,
@@ -53,9 +56,11 @@ function envInt(name: string, fallback: number, min: number): number {
 }
 
 /**
- * recheck's time budget for one regex at write time. The default matches the
- * CLI validators' (parser/redos.ts CLI_REDOS_TIMEOUT_MS): the pure-JS analyzer
- * (the one the Alpine image runs) needs about 6 s for a common sshd pattern.
+ * recheck's time budget for each analysis pass of one regex at write time (a
+ * regex gets at most two: parser/redos.ts RECHECK_ANALYSIS). The default
+ * matches the CLI validators' (parser/redos.ts CLI_REDOS_TIMEOUT_MS): the
+ * pure-JS analyzer (the one the Alpine image runs) needs about 6 s for a
+ * common sshd pattern.
  */
 export function checkTimeoutMs(): number {
   return envInt('REGEX_SAFETY_CHECK_TIMEOUT_MS', CLI_REDOS_TIMEOUT_MS, 100);
@@ -72,14 +77,14 @@ function recheckVersion(): string {
 
 /**
  * What produced a verdict. A stored verdict is reused only by the same checker:
- * a recheck upgrade, different analysis parameters or a different time budget
- * analyzes the regex again.
+ * a recheck upgrade, a different analysis (which backends run), different
+ * parameters or a different time budget analyzes the regex again.
  */
 export function checkerId(): string {
   const params = Object.entries(RECHECK_PARAMS)
     .map(([k, v]) => `${k}=${v}`)
     .join(';');
-  return `recheck@${recheckVersion()};${params};timeout=${checkTimeoutMs()}`;
+  return `recheck@${recheckVersion()};analysis=${RECHECK_ANALYSIS};${params};timeout=${checkTimeoutMs()}`;
 }
 
 /** Content address of a regex: sha256 over flags NUL source. */
@@ -220,9 +225,10 @@ function regexScanPool(): RegexWorkerPool {
     scanPool = new RegexWorkerPool({
       name: 'regex safety check',
       size: envInt('REGEX_SAFETY_WORKERS', 2, 1),
-      // recheck stops itself at its budget; this backstop covers loading the
-      // analyzer in a fresh worker and an analyzer that ignores its budget.
-      timeoutMs: budget + 5000,
+      // recheck stops each of its (at most two) passes at the budget; this
+      // backstop covers loading the analyzer in a fresh worker and an analyzer
+      // that ignores its budget.
+      timeoutMs: 2 * budget + 5000,
       maxQueue: 64,
       // A save waits for the check of its own regexes; background scans queue behind.
       maxQueueWaitMs: 60_000,

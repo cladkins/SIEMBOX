@@ -375,14 +375,24 @@ While it runs, nothing else does.
 regexes first: Create/Update in the parser editor, Import, the import preview,
 catalog Install / Install all, content packs, and the AI builder's Save. The
 check is [recheck](https://makenowjust-labs.github.io/recheck/), the same
-analyzer the catalog CI runs (`npm run validate-parsers`), with the same
-parameters and the same time budget per regex (`REGEX_SAFETY_CHECK_TIMEOUT_MS`,
-default 10 s). The parameters are stricter than recheck's defaults, which
-count a bounded repeat up to 30 as constant and only report an attack past
-1.5 billion steps: `^(?:a|a|a|a|a|a|a|a){1,12}$` passes those defaults although
-`aaaaaaaaaa!` stalls a match for tens of seconds. SIEMBox expands bounded repeats
-only up to 5 and reports an attack past 10 million steps (tens of milliseconds),
-which refuses it; no regex SIEMBox ships is affected.
+analyzer the catalog CI runs (`npm run validate-parsers`), run the same way and
+with the same time budget per analysis pass (`REGEX_SAFETY_CHECK_TIMEOUT_MS`,
+default 10 s). Two things make it stricter than recheck's defaults:
+
+- **Both backends.** recheck's automaton backend proves how the cost of a match
+  grows with the input, so it calls a large but *constant* cost safe: ten
+  overlapping groups in a row, `^(?:a|a|a|a|a|a|a|a)(?:a|a|a|a|a|a|a|a)…$` (no
+  quantifier anywhere), take 8^10 backtracking steps (about 14 s) on the 11
+  bytes `aaaaaaaaaa!`. When the automaton says safe, SIEMBox also runs the fuzz
+  backend, which measures the steps and refuses that pattern.
+- **Parameters.** recheck's defaults count a bounded repeat up to 30 as
+  constant and only report an attack past 1.5 billion steps:
+  `^(?:a|a|a|a|a|a|a|a){1,12}$` passes them although `aaaaaaaaaa!` stalls a
+  match for tens of seconds. SIEMBox expands bounded repeats only up to 5 and
+  reports an attack past 10 million steps (tens of milliseconds), which refuses
+  it.
+
+No regex SIEMBox ships is affected by either.
 
 | recheck says | What happens |
 |---|---|
@@ -402,6 +412,17 @@ recommendation dry-runs run the regex in a worker thread with a hard budget
 instead of a hung SIEM. Samples are capped at 64 KB, and a portable parser at
 100 `test_samples`.
 
+**On the live log stream.** Parsing still runs on the main thread (a worker
+per line would cost more than the parsing), so the check above is what
+protects ingestion. A second line: the backend turns on V8's linear-time
+fallback (`REGEX_LINEAR_FALLBACK`, on by default), which abandons a match after
+50,000 backtracks and finishes it on a non-backtracking engine, with the same
+result. It covers a `pattern` and `extract` regexes as long as they use no
+lookahead, no backreference and no bounded repeat over about 16; it does not
+cover `when.*.matches` (always case-insensitive), which backtracks as before.
+With the fallback on, testing such a covered pattern answers *no match* quickly
+instead of `REGEX_TIMEOUT`; saving it is still refused.
+
 #### Rewriting a pattern so it is linear
 
 The rule: **no two parts of the pattern may be able to match the same text**,
@@ -414,6 +435,7 @@ so there is only ever one way to match.
 | `^(?<user>.*) logged in from (?<ip>.*)$` | Two wildcards around a literal: either can take the text the other needs (polynomial) | Tokens and delimiters: `^(?<user>\S+) logged in from (?<ip>\S+)$` |
 | `curl.*[\|]`, `Port.*closed` (unanchored "X, then later Y") | From every X the engine rescans to the end of the line (polynomial) | A gap that cannot contain X again: `curl(?:[^c\|\n]\|c(?!url))*[\|]`, `[Pp]ort(?:[^Pp\n]\|[Pp](?!ort))*[Cc]losed` (`[\|]` is a literal pipe) |
 | `^(?:a\|a){1,30}$`, `^(?:\w\|\d){1,29}$` | Overlapping alternatives under a bounded repeat: still exponential up to the bound | Disjoint alternatives or one class: `^a{1,30}$`, `^\w{1,29}$` |
+| `^(?:a\|a)(?:a\|a)(?:a\|a)…$`, `^(?:\w\|\d)(?:\w\|\d)…$` | The same overlap written out with no quantifier: every group doubles the ways to fail | One class per position, or a bounded class: `^a{10}$`, `^\w{10}$` |
 | `^(.+?)\s(.+?)\s(.+)$` | Lazy wildcards still try every split | Tokens: `^(\S+)\s(\S+)\s(.+)$` |
 | `\[(?<ts>[^\]]+)\]` with no `^` | Unanchored, it is retried from every `[` of a line like `[[[[…` (polynomial) | Anchor it: `^\[(?<ts>[^\]]+)\]` |
 

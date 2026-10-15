@@ -16,7 +16,8 @@
 #   frontend:    nginx serves the UI and proxies /api to that backend over the
 #                api-socket volume.
 #   log-shipper: Node version, and the bundled discovery agent probing that
-#                backend (TCP connect and an HTTP GET).
+#                backend (TCP connect and an HTTP GET) and a self-signed HTTPS
+#                target (TLS handshake, certificate subject and SAN, HTTPS GET).
 #
 # Keep the build contexts, Dockerfiles and build args in step with
 # build-containers.yml. Checks for one image: .github/image-smoke/.
@@ -213,16 +214,37 @@ jobs:
         run: |
           docker run --rm siembox-log-shipper:check node --version | tee node-version.txt
           grep -q '^v22\.' node-version.txt
-          # A dispatched active scan, against the backend container: the agent's
-          # liveness sweep, TCP connect scan, TLS attempt and HTTP GET.
+          # An HTTPS target with a self-signed certificate, as homelab admin UIs
+          # serve, so the agent's TLS handshake, certificate read and HTTPS GET
+          # run in the shipper's Node and its bundled OpenSSL. The backend only
+          # serves plain HTTP, where the TLS attempt always fails. Throwaway key,
+          # made readable for whichever user the container runs as.
+          tls_dir="$RUNNER_TEMP/imagecheck-tls"
+          mkdir -p "$tls_dir"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=imagecheck.local \
+            -addext subjectAltName=DNS:imagecheck.local \
+            -keyout "$tls_dir/key.pem" -out "$tls_dir/cert.pem" 2>/dev/null
+          chmod 0644 "$tls_dir/key.pem"
+          docker run -d --name tlsprobe --network siembox -v "$tls_dir:/tls:ro" siembox-backend:check node -e \
+            "const f=require('fs');require('https').createServer({key:f.readFileSync('/tls/key.pem'),cert:f.readFileSync('/tls/cert.pem')},(q,s)=>{s.writeHead(200);s.end('ok')}).listen(8443,()=>console.log('tlsprobe: listening on 8443'))"
+          for _ in $(seq 1 30); do docker logs tlsprobe 2>&1 | grep 'listening on 8443' >/dev/null && break; sleep 1; done
+          docker logs tlsprobe 2>&1 | grep 'listening on 8443'
+          # A dispatched active scan of both: the agent's liveness sweep, TCP
+          # connect scan, TLS attempt and HTTP(S) GET on each open port.
           ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' backend)
-          echo "{\"mode\":\"active\",\"cidrs\":[\"$ip/32\"],\"probePlan\":{\"ports\":[8421],\"httpPaths\":[\"/health\"],\"mdnsServices\":[]}}" \
+          tls_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' tlsprobe)
+          echo "{\"mode\":\"active\",\"cidrs\":[\"$ip/32\",\"$tls_ip/32\"],\"probePlan\":{\"ports\":[8421,8443],\"httpPaths\":[\"/health\"],\"mdnsServices\":[]}}" \
             | docker run --rm -i --network siembox siembox-log-shipper:check node /usr/local/lib/siembox/discovery-agent.js > signals.json
-          echo "discovery agent output for $ip:"
-          jq -c '.[] | {ip, open_ports, http_responses: [.http_responses[] | {port, path, status}], discovery_methods}' signals.json
+          echo "discovery agent output for $ip (backend) and $tls_ip (tlsprobe):"
+          jq -c '.[] | {ip, open_ports, tls_subjects, http_responses: [.http_responses[] | {port, path, status}], discovery_methods}' signals.json
           # Checked with the shipper's own jq, which shipper-managed.sh posts the output with.
-          docker run --rm -i siembox-log-shipper:check jq -e --arg ip "$ip" \
-            'any(.[]; .ip == $ip and .open_ports == [8421] and any(.http_responses[]; .port == 8421 and .path == "/health" and .status == 200))' \
+          # One CN is stored as a string (backend/src/services/logDiscovery/tlsSubject.ts).
+          docker run --rm -i siembox-log-shipper:check jq -e --arg ip "$ip" --arg tls_ip "$tls_ip" '
+            any(.[]; .ip == $ip and .open_ports == [8421]
+              and any(.http_responses[]; .port == 8421 and .path == "/health" and .status == 200))
+            and any(.[]; .ip == $tls_ip and .open_ports == [8443]
+              and .tls_subjects == [{port: 8443, subject_cn: "imagecheck.local", san: ["DNS:imagecheck.local"]}]
+              and any(.http_responses[]; .port == 8443 and .path == "/health" and .status == 200 and .body == "ok"))' \
             < signals.json > /dev/null
           docker run --rm siembox-log-shipper:check sh -c \
             'nmap --version | head -1; nuclei -version 2>&1 | grep -i "engine version"; docker --version; journalctl --version | head -1'
@@ -230,7 +252,7 @@ jobs:
       - name: Container logs
         if: always()
         run: |
-          for c in backend frontend postgres; do
+          for c in backend frontend postgres tlsprobe; do
             if docker inspect "$c" >/dev/null 2>&1; then
               echo "::group::$c"
               docker logs "$c" 2>&1 | tail -200

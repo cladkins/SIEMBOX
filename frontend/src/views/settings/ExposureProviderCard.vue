@@ -23,7 +23,8 @@
     <p class="card-intro">
       Checks for the identities above need an HIBP API key.
       <a :href="HIBP_API_KEY_URL" target="_blank" rel="noopener noreferrer">Get an HIBP API key</a>
-      — then paste it here. The password check below works without one.
+      — then paste it here. The password check on the
+      <router-link to="/digital-risk">Digital Risk page</router-link> works without one.
     </p>
 
     <el-alert

@@ -27,6 +27,7 @@
 import crypto from 'crypto';
 import { logger } from '../../utils/logger';
 import {
+  CREDENTIAL_DATA_CLASSES,
   MonitoredIdentityModel,
   type MonitoredIdentity,
   type ExposureSeverity,
@@ -174,10 +175,9 @@ export const CONTRADICTION_NOTE =
 
 // ---- Severity, fingerprint, finding -------------------------------------------
 
-// Data classes that hand an attacker a way into the account. Hashed passwords
-// count too: leaked hashes get cracked offline.
-const CREDENTIAL_DATA_CLASSES = new Set(['passwords', 'historical passwords', 'auth tokens']);
-
+// CREDENTIAL_DATA_CLASSES (models/Exposure.ts): the data classes that hand an
+// attacker a way into the account. The Digital Risk summary counts "accounts to
+// reset" with the same list, in SQL.
 export function exposesCredentials(breach: BreachRecord): boolean {
   return breach.dataClasses.some((c) => CREDENTIAL_DATA_CLASSES.has(c.trim().toLowerCase()));
 }

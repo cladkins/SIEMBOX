@@ -5,9 +5,10 @@
       :key="item.key"
       class="bar-row"
       :class="{ 'is-clickable': clickable }"
+      :style="{ gridTemplateColumns: `${labelWidth} 1fr 50px` }"
       @click="onClick(item)"
     >
-      <span class="bar-label">{{ item.label }}</span>
+      <span class="bar-label" :title="item.label">{{ item.label }}</span>
       <span class="bar-track">
         <span class="bar-fill" :style="{ width: fillPct(item.value) + '%', backgroundColor: item.color }" />
       </span>
@@ -27,9 +28,18 @@ interface BarItem {
   color: string;
 }
 
-const props = withDefaults(defineProps<{ items: BarItem[]; clickable?: boolean }>(), {
-  clickable: true,
-});
+const props = withDefaults(
+  defineProps<{
+    items: BarItem[];
+    clickable?: boolean;
+    /** Width of the label column (a CSS length); wider for longer labels. */
+    labelWidth?: string;
+  }>(),
+  {
+    clickable: true,
+    labelWidth: '88px',
+  }
+);
 const emit = defineEmits<{ (e: 'item-click', key: string): void }>();
 
 const maxValue = computed(() => Math.max(1, ...props.items.map((i) => i.value)));
@@ -56,6 +66,7 @@ function onClick(item: BarItem) {
 
 .bar-row {
   display: grid;
+  /* The column widths are set inline from labelWidth. */
   grid-template-columns: 88px 1fr 50px;
   align-items: center;
   gap: 12px;

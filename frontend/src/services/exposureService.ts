@@ -3,9 +3,9 @@ import apiClient from './api';
 /**
  * Typed client for the Exposure Monitoring ("Digital Risk") API at
  * /api/exposure (backend/src/routes/exposure.ts; documented in
- * docs/reference/API.md). Settings → Digital Risk and the onboarding checklist
- * both go through this client, so anything entered in one shows up in the
- * other.
+ * docs/reference/API.md). The Digital Risk page, Settings → Digital Risk and
+ * the onboarding checklist all go through this client, so anything entered in
+ * one shows up in the others.
  *
  * Every GET is open to any signed-in user except getHibpVerifiedDomains()
  * (the HIBP account's own data, admin-only like the key test). Every write is
@@ -21,6 +21,30 @@ export type ExposureFindingSource = 'leaked-creds' | 'domain-monitor';
 export type ExposureJobStatus = 'idle' | 'running' | 'ok' | 'failed' | 'skipped' | 'disabled';
 
 export const EXPOSURE_SEVERITIES: readonly ExposureSeverity[] = ['low', 'medium', 'high', 'critical'];
+
+/** Every event type a finding is written with (the backend's EXPOSURE_EVENT_TYPES). */
+export const EXPOSURE_EVENT_TYPES = [
+  'breach',
+  'new_cert',
+  'unexpected_ca',
+  'lookalike_registered',
+  'rdap_change',
+  'dns_drift',
+  'expiry_warning',
+] as const;
+export type ExposureEventType = (typeof EXPOSURE_EVENT_TYPES)[number];
+
+/**
+ * What a finding is about: a leaked account, a lookalike of a watched domain
+ * (its registration or a certificate for it), or a change to the watched
+ * domain itself. Derived by the backend from the event type and detail.
+ */
+export type RiskCategory = 'credentials' | 'impersonation' | 'domain_changes';
+export const RISK_CATEGORY_KEYS: readonly RiskCategory[] = ['credentials', 'impersonation', 'domain_changes'];
+
+/** The windows GET /summary accepts, in days. */
+export const SUMMARY_DAYS = [30, 90, 180, 365] as const;
+export type SummaryDays = (typeof SUMMARY_DAYS)[number];
 
 export interface DomainCollectors {
   ct: boolean;
@@ -166,9 +190,13 @@ export interface ExposureFinding {
   first_seen: string;
   last_seen: string;
   resolved_at: string | null;
+  /** Absent from backends before the Digital Risk page. */
+  category?: RiskCategory;
   identity_kind: IdentityKind | null;
   identity_value: string | null;
   domain: string | null;
+  /** The linked alert's status (new, investigating, closed, false_positive); null without an alert. */
+  alert_status?: string | null;
 }
 
 export interface ExposureFindingsPage {
@@ -185,6 +213,21 @@ export interface ExposureFindingsQuery {
   unresolved?: boolean;
   identity_id?: number;
   domain_id?: number;
+  event_type?: ExposureEventType;
+  category?: RiskCategory;
+  /** First seen in the last N days (1-365). */
+  since_days?: number;
+  /** First seen at or after this ISO timestamp. */
+  since?: string;
+  alert_id?: number;
+  /** Case-insensitive, literal; at most 200 characters. */
+  search?: string;
+  /** The breached account, whole (case-insensitive). */
+  account?: string;
+  /** The lookalike domain a finding is about, whole (case-insensitive). */
+  lookalike?: string;
+  /** 'newest' (default) or 'severity' (most severe first, then newest). */
+  sort?: 'newest' | 'severity';
   /** 1-200, default 50. */
   limit?: number;
   offset?: number;
@@ -303,6 +346,8 @@ export interface ExposureCounts {
   identities_due: number;
   domains: number;
   domains_enabled: number;
+  /** Enabled domains due for a check now. */
+  domains_due?: number;
   findings_total: number;
   findings_open: number;
   findings_open_by_severity: Partial<Record<ExposureSeverity, number>>;
@@ -355,6 +400,84 @@ export interface ExposureStatus {
     last_run: { at: string; trigger: string; summary: LeakedCredentialRunSummary } | null;
     job: LeakedCredentialJobState | null;
   };
+  /** In-process state of the domain monitor: resets when the backend restarts. Absent from older backends. */
+  domain_monitor?: {
+    running: boolean;
+    domains_in_progress: number;
+    last_run: { at: string; trigger: string; summary: Record<string, unknown> } | null;
+    job: LeakedCredentialJobState | null;
+  };
+}
+
+export type SeverityCounts = Record<ExposureSeverity, number>;
+
+/** GET /summary: the Digital Risk page's aggregates, from one database snapshot. */
+export interface ExposureSummary {
+  generated_at: string;
+  window: { days: SummaryDays; bucket: 'day' | 'week' | 'month'; since: string };
+  open: {
+    total: number;
+    by_severity: SeverityCounts;
+    by_source: Record<ExposureFindingSource, number>;
+    oldest_critical_high_first_seen: string | null;
+  };
+  in_window: { new: number; new_by_severity: SeverityCounts; resolved: number; prev_new: number };
+  by_type: Array<{
+    source: string;
+    event_type: string;
+    category: RiskCategory;
+    open: number;
+    open_by_severity: SeverityCounts;
+    new: number;
+    resolved: number;
+  }>;
+  trend: ExposureTrendBucket[];
+  accounts: {
+    total: number;
+    to_reset: number;
+    top: ExposureSummaryAccount[];
+  };
+  lookalikes: {
+    state: 'not_watched' | 'not_checked' | 'checked';
+    candidates_checked: number;
+    registered: number;
+    with_mx: number;
+    with_address: number;
+    with_current_cert: number;
+    top: ExposureSummaryLookalike[];
+  };
+}
+
+export interface ExposureTrendBucket {
+  start: string;
+  new: Record<RiskCategory, number>;
+  resolved: number;
+  open_at_end: number;
+  monitoring_added: { identities: number; domains: number };
+}
+
+export interface ExposureSummaryAccount {
+  account: string;
+  identity_id: number | null;
+  open: number;
+  credential_exposures: number;
+  stealer_log: boolean;
+  worst_severity: ExposureSeverity;
+  breaches: Array<{ title: string; date: string | null }>;
+  last_detected: string;
+}
+
+export interface ExposureSummaryLookalike {
+  lookalike: string;
+  domain_id: number;
+  watched_domain: string;
+  scope: DomainScope;
+  technique: string | null;
+  has_mx: boolean | null;
+  has_address: boolean | null;
+  certs: 'current' | 'none' | 'not_checked';
+  reported_at: string | null;
+  open_findings: { count: number; worst_severity: ExposureSeverity } | null;
 }
 
 export interface PasswordCheckResult {
@@ -395,6 +518,12 @@ class ExposureServiceClient {
 
   async getStatus(): Promise<ExposureStatus> {
     const response = await apiClient.get('/exposure/status');
+    return response.data;
+  }
+
+  /** The Digital Risk page's aggregates over the last `days` (any signed-in user). */
+  async getSummary(days: SummaryDays = 90): Promise<ExposureSummary> {
+    const response = await apiClient.get('/exposure/summary', { params: { days }, ...HANDLED });
     return response.data;
   }
 
@@ -545,6 +674,15 @@ class ExposureServiceClient {
     if (query.unresolved) params.unresolved = 'true';
     if (query.identity_id !== undefined) params.identity_id = query.identity_id;
     if (query.domain_id !== undefined) params.domain_id = query.domain_id;
+    if (query.event_type) params.event_type = query.event_type;
+    if (query.category) params.category = query.category;
+    if (query.since_days !== undefined) params.since_days = query.since_days;
+    if (query.since) params.since = query.since;
+    if (query.alert_id !== undefined) params.alert_id = query.alert_id;
+    if (query.search) params.search = query.search;
+    if (query.account) params.account = query.account;
+    if (query.lookalike) params.lookalike = query.lookalike;
+    if (query.sort && query.sort !== 'newest') params.sort = query.sort;
     if (query.limit !== undefined) params.limit = query.limit;
     if (query.offset !== undefined) params.offset = query.offset;
     const response = await apiClient.get('/exposure/findings', { params, ...HANDLED });

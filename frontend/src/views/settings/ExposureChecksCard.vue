@@ -44,39 +44,18 @@
 
     <el-divider />
 
-    <div class="run-now">
-      <el-button :icon="VideoPlay" :loading="running" @click="runNow">Run check now</el-button>
-      <el-checkbox v-model="force" :disabled="running">Re-check every enabled identity, not just the due ones</el-checkbox>
-    </div>
-    <el-text size="small" type="info">
-      Runs the leaked-credential check now instead of waiting for the next 15-minute tick. It stops
-      starting new checks after about 90 seconds (HIBP calls are paced to your plan); anything left stays
-      due for the scheduled job.
-    </el-text>
-
-    <el-alert
-      v-if="runResult"
-      :type="runResult.type"
-      :title="runResult.title"
-      :description="runResult.description"
-      show-icon
-      :closable="false"
-      class="run-result"
-    />
+    <LeakedCredsRunNow @ran="emit('ran')" />
   </el-card>
 </template>
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Check, VideoPlay } from '@element-plus/icons-vue';
+import { Check } from '@element-plus/icons-vue';
 import HelpTip from '@/components/HelpTip.vue';
-import exposureService, {
-  EXPOSURE_SEVERITIES,
-  type ExposureSettings,
-  type LeakedCredentialRunSummary,
-} from '@/services/exposureService';
-import { apiErrorMessage, apiErrorStatus, formatWhen, pluralize } from '@/utils/exposure';
+import LeakedCredsRunNow from '@/components/LeakedCredsRunNow.vue';
+import exposureService, { EXPOSURE_SEVERITIES, type ExposureSettings } from '@/services/exposureService';
+import { apiErrorMessage } from '@/utils/exposure';
 
 const emit = defineEmits<{
   /** Settings were saved. */
@@ -93,10 +72,6 @@ const form = reactive<ExposureSettings>({
 const loading = ref(false);
 const loadFailed = ref(false);
 const saving = ref(false);
-
-const force = ref(false);
-const running = ref(false);
-const runResult = ref<{ type: 'success' | 'info' | 'warning' | 'error'; title: string; description: string } | null>(null);
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -139,51 +114,6 @@ async function save() {
   }
 }
 
-function describeRun(s: LeakedCredentialRunSummary) {
-  if (s.skipped) {
-    return { type: 'info' as const, title: 'Nothing was checked', description: s.reason ? `Reason: ${s.reason}.` : '' };
-  }
-  const parts = [
-    `Checked ${pluralize(s.checked, 'identity', 'identities')}`,
-    pluralize(s.newFindings, 'new finding'),
-  ];
-  if (s.failed) parts.push(`${s.failed} failed (see their status above)`);
-  if (s.unverified) parts.push(`${pluralize(s.unverified, 'email domain')} skipped: not verified on HIBP`);
-  if (s.remaining) parts.push(`${s.remaining} still due`);
-  let description = parts.join(' · ');
-  if (s.error) {
-    description += `. Stopped early: ${s.error}`;
-    if (s.rateLimitedUntil) description += `. Checks resume after ${formatWhen(s.rateLimitedUntil, s.rateLimitedUntil)}`;
-    return { type: 'warning' as const, title: 'Check stopped early', description };
-  }
-  return { type: s.failed ? ('warning' as const) : ('success' as const), title: 'Check complete', description };
-}
-
-async function runNow() {
-  running.value = true;
-  runResult.value = null;
-  try {
-    const summary = await exposureService.runNow(force.value);
-    runResult.value = describeRun(summary);
-    if (summary.skipped) ElMessage.info('Nothing was checked');
-    else ElMessage.success(`Checked ${pluralize(summary.checked, 'identity', 'identities')}`);
-    emit('ran');
-  } catch (error) {
-    const message = apiErrorMessage(error, 'The check could not be started');
-    if (apiErrorStatus(error) === 409) {
-      // Someone (or the scheduled job) is already running a check.
-      runResult.value = { type: 'info', title: 'A check is already running', description: message };
-      ElMessage.warning(message);
-      emit('ran');
-    } else {
-      runResult.value = { type: 'error', title: 'The check failed', description: message };
-      ElMessage.error(message);
-    }
-  } finally {
-    running.value = false;
-  }
-}
-
 onMounted(() => load(true));
 </script>
 
@@ -194,17 +124,5 @@ onMounted(() => load(true));
 
 .inline-hint a {
   color: var(--el-color-primary);
-}
-
-.run-now {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 8px;
-}
-
-.run-result {
-  margin-top: 12px;
 }
 </style>

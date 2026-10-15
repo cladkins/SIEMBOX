@@ -1,7 +1,7 @@
 # Digital Risk Monitoring, Per-Area Settings & Onboarding
 
 **Status:** design agreed; build in progress (see [Roadmap](#roadmap))
-**Last updated:** 2026-10-13
+**Last updated:** 2026-10-15
 
 This document covers three connected changes:
 
@@ -31,9 +31,11 @@ This document covers three connected changes:
 Exposure Monitoring is a **sibling subsystem** next to Threat Intel and Threat Feeds. It's a thin feature layer over infrastructure SIEMBox already has, so very little new plumbing is needed.
 
 ```
- Onboarding "Digital Risk" step ──┐
+ /digital-risk (every role) ──► GET /status, /summary, /identities, /domains, /findings
+                                  │ (admins also: POST /run-now, /findings/:id/resolve)
+ Onboarding "Digital Risk" step ──┤
                                   ├──► /api/exposure/* ──► watched_domains, monitored_identities
- /settings/digital-risk ──────────┘          │                         │
+ /settings/digital-risk (admin) ──┘          │                         │
                                              │          jobs (jobRegistry): leaked-creds, domain-monitor
                                              │                         │
                        system_settings ◄─────┘                         ▼
@@ -95,7 +97,7 @@ A `leaked-creds` job is registered in the job registry. It ticks every 15 minute
 1. Plaintext passwords, password hashes, and API keys are **never stored or logged**. `sanitizeDetail()` strips secret-like keys from every finding before it's written.
 2. Pwned Passwords is called **only through k-anonymity**: just the first 5 characters of the SHA-1 hash leave the box, and response padding is on.
 3. Only accounts and domains the org **owns** are monitored. HIBP domain search requires verified ownership: SIEMBox lists the key's verified domains, skips the unverified ones, and only offers "Monitor" for domains HIBP lists as verified.
-4. HIBP is credited (its data is CC BY 4.0) wherever breach data is shown: the Findings card, the verified-domain list, the alert lists (Alerts, SOC Triage, Dashboard → Recent Alerts) and the alert details whenever leaked-credential alerts are shown, and the plain-text licence line in new alert descriptions and notifications. A breach's own designated credit (HIBP's per-breach `Attribution`) is kept as plain text. The password check credits Pwned Passwords, which asks for no attribution but welcomes it.
+4. HIBP is credited (its data is CC BY 4.0) wherever breach data is shown: the Digital Risk page's Accounts and Findings cards, the verified-domain list, the alert lists (Alerts, SOC Triage, Dashboard → Recent Alerts) and the alert details whenever leaked-credential alerts are shown, and the plain-text licence line in new alert descriptions and notifications. A breach's own designated credit (HIBP's per-breach `Attribution`) is kept as plain text. The password check credits Pwned Passwords, which asks for no attribution but welcomes it.
 5. Requests send a descriptive User-Agent, honor 429 `retry-after`, and time out. Jobs are best-effort and never crash the process.
 6. `POST /api/exposure/password-check` is stateless, never logged, and rate-limited per IP.
 
@@ -140,22 +142,55 @@ Today `Settings.vue` is a single ~2,000-line page of unrelated cards, and its ro
 | Detections | `/settings/detections` | IP whitelist (alert suppression) | `/settings/ip-whitelist*` | admin |
 | Asset Discovery | `/settings/discovery` | Auto-discovery schedule, stale-asset threshold | `/settings/auto-discovery*` | admin |
 | System | `/settings/system` | Version and runtime info, table sizes | `/settings`, `/admin` | admin |
-| **Digital Risk** | `/settings/digital-risk` | See Part 4 | **`/api/exposure/*`** | admin |
+| **Digital Risk** | `/settings/digital-risk` | Configuration only (Part 4); findings, trends and the password check are on the Digital Risk page (Part 4b) | **`/api/exposure/*`** | admin |
 
 Every area page has the same structure: a header (title, HelpTip, and an admin badge where it applies), then `el-card` sections, each with its own Save button and a success/error toast.
 
 ---
 
-## Part 4 — The Digital Risk settings page (`/settings/digital-risk`)
+## Part 4 — The Digital Risk settings page (configuration)
+
+`/settings/digital-risk`, admin only. It holds configuration; what the monitoring found is on the Digital Risk page (Part 4b), which a link row at the top of this page points to.
 
 1. **Owned domains.** Domains to watch for certificate mis-issuance, DNS drift, and RDAP changes.
 2. **Breach-monitored identities.** Email domains and specific addresses to check against HIBP.
 3. **Brand / lookalike domains.** Domains whose lookalikes and typosquats should be watched.
 4. **Provider API keys.** The HIBP key, shown masked and stored encrypted; it's never displayed again after saving. If no encryption key is configured on the server, a warning appears and saving is disabled.
-5. **Notifications.** Whether exposure alerts are sent, and the minimum severity for sending them.
-6. **Password check.** An on-demand Pwned Passwords check (k-anonymity; nothing is stored).
+5. **Notifications and checks.** Whether exposure alerts are sent, the minimum severity for sending them, whether leaked-credential checks run, and **Run check now** (the same component as on the Digital Risk page).
 
-A status banner at the top says which state the feature is in: *no API key*, *network access blocked*, *encryption key missing*, or *healthy*.
+A status banner at the top says which state the feature is in: *no API key*, *network access blocked*, *encryption key missing*, or *healthy*. Its wording points at the cards on this page; its counts line links the open findings to the Digital Risk page.
+
+---
+
+## Part 4b — The Digital Risk page (`/digital-risk`)
+
+A top-level sidebar item, open to **every role**: every request it makes (`GET /status`, `/summary`, `/identities`, `/domains`, `/findings` and `POST /password-check`) was already open to all of them. It never asks for the HIBP account's verified-domain list (admin-only); each email domain's standing comes from `/identities`.
+
+Top to bottom, each section answers one question:
+
+| Section | Question | Data |
+|---|---|---|
+| Header: window (30 / 90 / 180 days, 1 year), Refresh, Configure (admin) | — | `/status` counts |
+| **Monitoring**: breach checks (HIBP) and domain monitoring side by side, plus where new findings are notified | Is monitoring working? A quiet page must mean "nothing found", not "nothing checked". | `/status`, `/identities`, `/domains` |
+| **Tiles**: Open findings (by severity), New in the window (vs the window before), Accounts to reset, Lookalikes with mail (MX) | What is open, how severe, and what is new? | `/summary` |
+| **Findings detected per day/week/month** (stacked by risk category, resolved as a dashed line, a table view) and **Open findings by type** | What is trending? | `/summary` |
+| **Accounts to act on** and **Lookalike domains** | Which account or domain, and what to do about it? | `/summary` |
+| **Findings** (the triage queue: filters, search, sort, the linked alert and its status) | Triage this finding. | `/findings` |
+| **Password check** | Is this password in a breach? (needs no setup, so it is always shown) | `/password-check` |
+
+Clicking a severity chip, a tile, a type, an account or a lookalike's findings filters the queue below and scrolls to it. Deep links (`?days=`, `severity`, `event_type`, `category`, `source`, `domain_id`, `identity_id`, `alert_id`, `account`, `lookalike`, `search`, `open`, `sort`) are read once on load; anything invalid is ignored. An alert raised by a finding links to it (`/digital-risk?alert_id=ID`), and the finding links back to the alert (`/alerts?alert=ID`).
+
+**Roles.** Configure, Run check now, Resolve, the "in Settings" links and the inline setup are for admins; other roles see the same page without them (and a line saying only an administrator can change a problem). Breached account addresses, readable by every role through the API before, are now shown to every role.
+
+**A zero only counts when checked.** "Accounts to reset" shows "—" when breach checks can't run and nothing was found; "Lookalikes with mail" shows "—" while domain monitoring is off, nothing is watched, or the first check hasn't run.
+
+**Lookalikes already registered at the first check** are recorded silently (no finding): they live only in the lookalike baseline. The Lookalike card reads the baselines with the collectors' own parsers, so it lists them too ("Already registered when first checked").
+
+**One snapshot.** `GET /summary` reads everything in one `REPEATABLE READ` transaction, so the tiles, the trend and the lists agree while the jobs write. Buckets are UTC, weeks start on Monday, and the window starts on a bucket boundary, so the trend sums exactly to the tiles.
+
+**History comes from finding timestamps** (first seen, resolved), not from a run log: deleting an identity or a domain deletes its findings, which then leave past buckets too. Adding an identity whose first check reports all its past breaches spikes one bucket; the tooltip and table say "Monitoring added".
+
+**What resets on restart.** The jobs' run state (running, last run, next tick, pauses) is in memory. Each identity's and domain's last check (`last_checked_at`, `next_run_at`, `last_status`, `last_error`) is stored, and the Monitoring card reads those, so it still shows the last successful check right after a restart; the next breach check reads "within 15 minutes" until the job has ticked.
 
 ---
 
@@ -182,6 +217,7 @@ A status banner at the top says which state the feature is in: *no API key*, *ne
 | 9 | Exposure notifications | Off until enabled; minimum severity medium |
 | 10 | AI triage of exposure alerts | Off in v1 |
 | 11 | Domain expiry warning | 30 days ahead |
+| 12 | Where findings are shown | Findings, trends, lookalikes and the password check live on `/digital-risk` for every role; Settings → Digital Risk keeps the configuration and its status banner |
 
 ---
 
@@ -195,6 +231,7 @@ A status banner at the top says which state the feature is in: *no API key*, *ne
 | 4 | Digital Risk settings page + onboarding Digital Risk step | 2, 3 | Done (#268) |
 | 5 | Domain monitoring collectors + `domain-monitor` job (migration 035) | 3 | Done (#269) |
 | 6 | HIBP domain-search polish (verified-domain status, attribution) + storing onboarding completion server-side | 3, 4 | Done (#304) |
+| 7 | The Digital Risk page (`/digital-risk`, every role) with a dashboard; `GET /api/exposure/summary` and the new `/findings` filters; Settings keeps the configuration | 4, 5, 6 | This PR |
 
 ---
 

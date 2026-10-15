@@ -1,5 +1,6 @@
 /**
- * Helpers shared by Settings → Digital Risk and the onboarding checklist.
+ * Helpers shared by the Digital Risk page, Settings → Digital Risk and the
+ * onboarding checklist.
  *
  * The validators mirror backend/src/services/exposure/validation.ts so obvious
  * mistakes (a URL, a wildcard, an IP) are caught before a request is made. The
@@ -18,7 +19,9 @@ import {
   type HibpVerifiedDomainsView,
   type IdentityHibpDomain,
   type IdentityKind,
+  type LeakedCredentialRunSummary,
   type MonitoredIdentity,
+  type RiskCategory,
   type WatchedDomain,
 } from '@/services/exposureService';
 
@@ -577,6 +580,32 @@ export interface ExposureStatusContext {
   noDomainSearchDomains?: number | null;
   /** Enabled email domains that may be larger than the plan covers ('verified_limited'). */
   limitedDomains?: number | null;
+  /**
+   * Where the text is shown: 'settings' (default; it points at the cards on
+   * Settings → Digital Risk, "below") or 'dashboard' (the Digital Risk page,
+   * which points at Settings instead). Only the pointers differ.
+   */
+  place?: 'settings' | 'dashboard';
+}
+
+/**
+ * The status context from GET /identities (enabled identities whose last check
+ * failed, and the email domains HIBP skips or may only partly search), plus the
+ * key-save error Settings may hold.
+ */
+export function statusContextFromIdentities(
+  identities: ReadonlyArray<Pick<MonitoredIdentity, 'kind' | 'enabled' | 'last_status' | 'hibp_domain'>> | null,
+  encryptionError?: string | null
+): ExposureStatusContext {
+  return {
+    ...(encryptionError !== undefined ? { encryptionKeyError: encryptionError } : {}),
+    ...(identities
+      ? {
+          failingIdentities: identities.filter((i) => i.enabled && i.last_status === 'error').length,
+          ...domainVerificationCounts(identities),
+        }
+      : {}),
+  };
 }
 
 /**
@@ -588,6 +617,8 @@ export interface ExposureStatusContext {
  * healthy. Domain monitoring reports per domain, in the domain cards.
  */
 export function describeExposureStatus(status: ExposureStatus, context: ExposureStatusContext = {}): StatusBanner {
+  // Settings points at its own cards; the Digital Risk page points at Settings.
+  const where = (settings: string, dashboard: string) => (context.place === 'dashboard' ? dashboard : settings);
   const provider = status.providers.find((p) => p.name === 'hibp') ?? null;
   const run = status.leaked_creds;
   const counts = status.counts;
@@ -606,8 +637,10 @@ export function describeExposureStatus(status: ExposureStatus, context: Exposure
     return {
       type: 'info',
       title: 'Leaked-credential checks are switched off',
-      detail:
-        'Monitored identities are not checked against Have I Been Pwned. Turn checks on under Notifications and checks. The password check still works.',
+      detail: `Monitored identities are not checked against Have I Been Pwned. ${where(
+        'Turn checks on under Notifications and checks.',
+        'Turn checks on in Settings → Digital Risk (Notifications and checks).'
+      )} The password check still works.`,
     };
   }
   if (!provider?.configured) {
@@ -617,7 +650,10 @@ export function describeExposureStatus(status: ExposureStatus, context: Exposure
     return {
       type: keyNeeded ? 'warning' : 'info',
       title: 'No Have I Been Pwned API key',
-      detail: `Breach checks for email addresses and email domains need an HIBP API key; add one under Have I Been Pwned below. ${keyless}`,
+      detail: `Breach checks for email addresses and email domains need an HIBP API key; ${where(
+        'add one under Have I Been Pwned below.',
+        'add one in Settings → Digital Risk (Have I Been Pwned).'
+      )} ${keyless}`,
     };
   }
   if (provider.usable === false) {
@@ -627,14 +663,17 @@ export function describeExposureStatus(status: ExposureStatus, context: Exposure
       detail:
         "The backend can't decrypt the saved key, so no breach checks run. CREDENTIAL_ENCRYPTION_KEY is missing or has " +
         'changed since the key was saved: put the original value back and restart the backend (the other stored ' +
-        'credentials need it too), or save the HIBP key again below.',
+        `credentials need it too), or save the HIBP key again ${where('below.', 'in Settings → Digital Risk.')}`,
     };
   }
   if (!provider.enabled) {
     return {
       type: keyNeeded ? 'warning' : 'info',
       title: 'Have I Been Pwned is disabled',
-      detail: 'A key is saved, but the provider is switched off, so no breach checks run. Enable it under Have I Been Pwned below.',
+      detail: `A key is saved, but the provider is switched off, so no breach checks run. ${where(
+        'Enable it under Have I Been Pwned below.',
+        'Enable it in Settings → Digital Risk (Have I Been Pwned).'
+      )}`,
     };
   }
   if (run.paused_until) {
@@ -673,7 +712,10 @@ export function describeExposureStatus(status: ExposureStatus, context: Exposure
     return {
       type: 'info',
       title: 'Ready: add an email address or email domain to monitor',
-      detail: 'Have I Been Pwned is set up. Add identities under Breach-monitored identities to start checking them.',
+      detail: `Have I Been Pwned is set up. ${where(
+        'Add identities under Breach-monitored identities to start checking them.',
+        'Add identities in Settings → Digital Risk to start checking them.'
+      )}`,
     };
   }
   if (counts.identities_enabled === 0) {
@@ -696,8 +738,10 @@ export function describeExposureStatus(status: ExposureStatus, context: Exposure
       type: 'warning',
       title: `${failing} of ${of} failed ${failing === 1 ? 'its' : 'their'} last check`,
       detail:
-        'See the Status column under Breach-monitored identities for the error. Most errors (HIBP unreachable, ' +
-        'outbound network access blocked) are retried on the next check.',
+        `${where(
+          'See the Status column under Breach-monitored identities for the error.',
+          'The identities that failed are listed below.'
+        )} Most errors (HIBP unreachable, ` + 'outbound network access blocked) are retried on the next check.',
     };
   }
 
@@ -721,7 +765,7 @@ export function describeExposureStatus(status: ExposureStatus, context: Exposure
       detail:
         `HIBP's domain search only works for domains you've verified in its dashboard, so SIEMBox skips ${them} ` +
         `(no errors, no HIBP calls). Verify ${them} at haveibeenpwned.com, then click Re-check HIBP verification ` +
-        'under Breach-monitored identities.',
+        where('under Breach-monitored identities.', 'in Settings → Digital Risk.'),
     };
   }
   const limited = context.limitedDomains ?? 0;
@@ -731,7 +775,7 @@ export function describeExposureStatus(status: ExposureStatus, context: Exposure
       title: `${pluralize(limited, 'verified email domain')} may be larger than your HIBP plan covers`,
       detail:
         `HIBP then returns only subscription-free breaches for ${limited === 1 ? 'it' : 'them'} until the plan is ` +
-        'upgraded. See Have I Been Pwned below for the numbers.',
+        `upgraded. ${where('See Have I Been Pwned below for the numbers.', 'See Settings → Digital Risk (Have I Been Pwned) for the numbers.')}`,
     };
   }
 
@@ -741,6 +785,199 @@ export function describeExposureStatus(status: ExposureStatus, context: Exposure
   else parts.push('waiting for the first check');
   if (run.job?.next_run_at) parts.push(`next ${formatRelative(run.job.next_run_at)}`);
   return { type: 'success', title: 'Leaked-credential checks are healthy', detail: `${parts.join(' · ')}.` };
+}
+
+/** The result of a manual leaked-credential run (POST /run-now), as both pages show it. */
+export function runSummaryMessage(s: LeakedCredentialRunSummary): {
+  type: 'success' | 'info' | 'warning';
+  title: string;
+  description: string;
+} {
+  if (s.skipped) {
+    return { type: 'info', title: 'Nothing was checked', description: s.reason ? `Reason: ${s.reason}.` : '' };
+  }
+  const parts = [
+    `Checked ${pluralize(s.checked, 'identity', 'identities')}`,
+    pluralize(s.newFindings, 'new finding'),
+  ];
+  if (s.failed) parts.push(`${s.failed} failed (see their status above)`);
+  if (s.unverified) parts.push(`${pluralize(s.unverified, 'email domain')} skipped: not verified on HIBP`);
+  if (s.remaining) parts.push(`${s.remaining} still due`);
+  let description = parts.join(' · ');
+  if (s.error) {
+    description += `. Stopped early: ${s.error}`;
+    if (s.rateLimitedUntil) description += `. Checks resume after ${formatWhen(s.rateLimitedUntil, s.rateLimitedUntil)}`;
+    return { type: 'warning', title: 'Check stopped early', description };
+  }
+  return { type: s.failed ? 'warning' : 'success', title: 'Check complete', description };
+}
+
+// ---- Risk categories (the Digital Risk page) --------------------------------------
+
+export interface RiskCategoryInfo {
+  key: RiskCategory;
+  label: string;
+  /** Series colour on the light card surface (#fff). */
+  light: string;
+  /** Series colour on the dark card surface (#1d1d1d). */
+  dark: string;
+}
+
+/**
+ * What a finding is about, in the page's fixed order, with the series colours
+ * the trend chart and the "Open findings by type" list use. Checked with a
+ * palette validator over all pairs on both card surfaces: every check passes,
+ * except that the light magenta is under 3:1 against white, which the
+ * always-on legend, the tooltip and the table view make up for. The severity
+ * colours stay reserved for severity, so none of these is one of them.
+ */
+export const RISK_CATEGORIES: readonly RiskCategoryInfo[] = [
+  { key: 'credentials', label: 'Leaked credentials', light: '#6250d6', dark: '#9085e9' },
+  { key: 'impersonation', label: 'Lookalike domains', light: '#e87ba4', dark: '#e0609a' },
+  { key: 'domain_changes', label: 'Changes to your domains', light: '#199e70', dark: '#148a63' },
+];
+
+/** A category's label and colours; an unknown key reads as a change to your domains (as on the backend). */
+export function riskCategoryInfo(key: string | null | undefined): RiskCategoryInfo {
+  return RISK_CATEGORIES.find((c) => c.key === key) ?? RISK_CATEGORIES[RISK_CATEGORIES.length - 1];
+}
+
+// ---- Domain monitoring health (the Digital Risk page) -------------------------------
+
+/** A watched domain the Monitoring card lists under its headline. */
+export interface DomainAttention {
+  id: number;
+  domain: string;
+  tag: { type: TagType; label: string };
+  note: string;
+}
+
+export interface DomainMonitoringHealth extends StatusBanner {
+  /** Domains that need a look: their last check failed, they're overdue, or only partly monitored. */
+  attention: DomainAttention[];
+}
+
+// The domain job ticks every 15 minutes: a domain more than 30 minutes past due
+// while nothing runs means the job isn't getting to it.
+const OVERDUE_GRACE_MS = 30 * 60_000;
+
+/**
+ * Domain monitoring's state for the Digital Risk page, most urgent first:
+ * unavailable → switched off → nothing watched → everything disabled → the
+ * last job run failed → domains overdue → domains whose last check failed →
+ * domains only partly monitored → waiting for the first check → healthy.
+ * It reads the persisted per-domain timestamps as well as the in-memory job
+ * state, so it still says something useful right after a restart.
+ */
+export function describeDomainMonitoring(
+  status: ExposureStatus,
+  domains: ReadonlyArray<WatchedDomain>,
+  now = Date.now()
+): DomainMonitoringHealth {
+  const result = (
+    type: StatusBanner['type'],
+    title: string,
+    detail: string,
+    attention: DomainAttention[] = []
+  ): DomainMonitoringHealth => ({ type, title, detail, attention });
+
+  if (!status.features.domain_monitor_available) {
+    return result('info', "Domain monitoring isn't available in this backend", 'Upgrade the backend to watch domains and their lookalikes.');
+  }
+  if (status.features.domain_monitor_enabled === false) {
+    return result('info', 'Domain monitoring is switched off', 'Watched domains, their lookalikes and certificates are not checked.');
+  }
+  if (domains.length === 0) {
+    return result(
+      'info',
+      'No domains are watched',
+      'Watch an owned or brand domain to look for lookalikes, new certificates and DNS or registration changes.'
+    );
+  }
+  const enabled = domains.filter((d) => d.enabled);
+  if (enabled.length === 0) {
+    return result('info', 'Every watched domain is disabled', 'Nothing is checked until a domain is enabled.');
+  }
+
+  const running = status.domain_monitor?.running === true;
+  const job = status.domain_monitor?.job ?? null;
+  const parse = (v: string | null | undefined) => (v ? Date.parse(v) : NaN);
+  // A domain never scheduled yet (just added) is due since it was added.
+  const dueAt = (d: WatchedDomain) => {
+    const at = parse(d.next_run_at ?? d.created_at);
+    return Number.isNaN(at) ? Infinity : at;
+  };
+  const overdue = running ? [] : enabled.filter((d) => dueAt(d) < now - OVERDUE_GRACE_MS);
+  const failed = enabled.filter((d) => d.last_status === 'error');
+  const partial = enabled.filter((d) => {
+    const label = domainStatusTag(d).label;
+    return label === 'Warnings' || label === 'Partly monitored';
+  });
+
+  const attention: DomainAttention[] = [];
+  const listed = new Set<number>();
+  const list = (d: WatchedDomain, note: string) => {
+    if (listed.has(d.id)) return;
+    listed.add(d.id);
+    attention.push({ id: d.id, domain: d.domain, tag: domainStatusTag(d), note });
+  };
+  for (const d of failed) list(d, d.last_error || 'The last check failed');
+  for (const d of overdue) list(d, `Due since ${formatWhen(new Date(dueAt(d)).toISOString(), '')}`);
+  for (const d of partial) list(d, domainCoverageNote(d));
+
+  const checkTimes = enabled.map((d) => parse(d.last_checked_at)).filter((t) => !Number.isNaN(t));
+  const newestCheck = checkTimes.length ? Math.max(...checkTimes) : 0;
+  const jobRunAt = parse(job?.last_run_at);
+  if (job?.status === 'failed' && !Number.isNaN(jobRunAt) && jobRunAt >= newestCheck) {
+    return result(
+      'error',
+      'The last domain-monitoring run failed',
+      `${sentence(job.last_error ?? 'The run stopped with an error')} Domains that weren't checked stay due and are retried on the next run.`,
+      attention
+    );
+  }
+  const ofEnabled = (n: number) => `${n} of ${pluralize(enabled.length, 'domain')}`;
+  if (overdue.length) {
+    return result(
+      'warning',
+      `${pluralize(overdue.length, 'domain is', 'domains are')} overdue for a check`,
+      'Due domains are checked every 15 minutes. Check that the backend is running and can reach the internet.',
+      attention
+    );
+  }
+  if (failed.length) {
+    return result(
+      'warning',
+      `${ofEnabled(failed.length)} failed ${failed.length === 1 ? 'its' : 'their'} last check`,
+      'Most errors (a lookup or crt.sh unreachable, outbound network access blocked) are retried on the next check.',
+      attention
+    );
+  }
+  if (partial.length) {
+    return result(
+      'warning',
+      `${ofEnabled(partial.length)} ${partial.length === 1 ? 'is' : 'are'} only partly monitored`,
+      'Some checks ran with warnings, are switched off, or are not available for these domains.',
+      attention
+    );
+  }
+  if (checkTimes.length === 0) {
+    return result(
+      'info',
+      running ? 'The first domain check is running' : 'Waiting for the first check',
+      'New domains are checked within 15 minutes.'
+    );
+  }
+
+  const parts = [`Monitoring ${pluralize(enabled.length, 'domain')}`];
+  if (running) parts.push('a check is running now');
+  else parts.push(`last check ${formatRelative(new Date(newestCheck).toISOString())}`);
+  const nextTimes = enabled.map((d) => parse(d.next_run_at)).filter((t) => !Number.isNaN(t));
+  if (nextTimes.length) {
+    const nextAt = Math.min(...nextTimes);
+    parts.push(nextAt <= now ? 'next check due now' : `next ${formatRelative(new Date(nextAt).toISOString())}`);
+  }
+  return result('success', 'Domain monitoring is healthy', `${parts.join(' · ')}.`);
 }
 
 // ---- Domain-monitoring finding detail -------------------------------------------

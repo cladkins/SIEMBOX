@@ -440,6 +440,7 @@ export interface ExposureSummary {
   lookalikes: {
     state: 'not_watched' | 'not_checked' | 'checked';
     candidates_checked: number;
+    /** Distinct registered names (one shared by two watched domains counts once); `top` has a row per domain. */
     registered: number;
     with_mx: number;
     with_address: number;
@@ -459,11 +460,15 @@ export interface ExposureTrendBucket {
 export interface ExposureSummaryAccount {
   account: string;
   identity_id: number | null;
+  /** Open breach findings (one breach reported through two identities is two). */
   open: number;
   credential_exposures: number;
   stealer_log: boolean;
   worst_severity: ExposureSeverity;
+  /** Up to three distinct breaches, newest first. */
   breaches: Array<{ title: string; date: string | null }>;
+  /** Distinct breaches in all ("+N more" counts from this, not from `open`). */
+  breach_count: number;
   last_detected: string;
 }
 

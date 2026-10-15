@@ -145,21 +145,6 @@ export function breachAttention(identities: readonly MonitoredIdentity[]): Ident
   return out;
 }
 
-/** The newest successful check of an enabled identity (persisted, so it survives a restart). */
-export function lastSuccessfulCheck(identities: readonly MonitoredIdentity[]): string | null {
-  let best: string | null = null;
-  let bestAt = -Infinity;
-  for (const i of identities) {
-    if (!i.enabled || i.last_status !== 'ok' || !i.last_checked_at) continue;
-    const at = Date.parse(i.last_checked_at);
-    if (!Number.isNaN(at) && at > bestAt) {
-      bestAt = at;
-      best = i.last_checked_at;
-    }
-  }
-  return best;
-}
-
 // ---- The findings queue's filters -----------------------------------------------------
 
 export type FindingsSort = 'newest' | 'severity';

@@ -5,7 +5,7 @@
       :key="item.key"
       class="bar-row"
       :class="{ 'is-clickable': clickable }"
-      :style="{ gridTemplateColumns: `${labelWidth} 1fr 50px` }"
+      :style="{ gridTemplateColumns: `minmax(0, ${labelWidth}) minmax(32px, 1fr) 50px` }"
       @click="onClick(item)"
     >
       <span class="bar-label" :title="item.label">{{ item.label }}</span>
@@ -32,7 +32,11 @@ const props = withDefaults(
   defineProps<{
     items: BarItem[];
     clickable?: boolean;
-    /** Width of the label column (a CSS length); wider for longer labels. */
+    /**
+     * Width of the label column (a CSS length); wider for longer labels. In a
+     * narrow card the label gives way first (it ellipsizes and has a title), so
+     * the bar and the count always stay visible.
+     */
     labelWidth?: string;
   }>(),
   {
@@ -66,8 +70,10 @@ function onClick(item: BarItem) {
 
 .bar-row {
   display: grid;
-  /* The column widths are set inline from labelWidth. */
-  grid-template-columns: 88px 1fr 50px;
+  /* The column widths are set inline from labelWidth: the label shrinks before
+     the bar (at least 32px) and the count (a fixed column, so every row's bar
+     has the same length to scale against). */
+  grid-template-columns: minmax(0, 88px) minmax(32px, 1fr) 50px;
   align-items: center;
   gap: 12px;
   padding: 5px 8px;

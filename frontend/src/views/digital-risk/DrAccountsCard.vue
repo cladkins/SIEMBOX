@@ -4,7 +4,7 @@
       <div class="card-header">
         <span>
           Accounts to act on
-          <HelpTip text="Accounts in open breach findings, those whose password, password hash or auth token leaked (or that turned up in a stealer log) first. Click a row to see its findings." />
+          <HelpTip text="Accounts in open breach findings, those whose password, password hash or auth token leaked (or that turned up in a stealer log) first. Click an account to see its findings." />
         </span>
         <el-text v-if="accounts.total" size="small" type="info">{{ pluralize(accounts.to_reset, 'account') }} to reset</el-text>
       </div>
@@ -14,7 +14,15 @@
       <el-table :data="accounts.top" size="small" class="accounts-table clickable-rows" row-key="account" @row-click="onRow">
         <el-table-column label="Account" min-width="170">
           <template #default="{ row }">
-            <span class="account-name">{{ row.account }}</span>
+            <!-- A button, so the click-through works from the keyboard too; the row click stays for the mouse. -->
+            <button
+              type="button"
+              class="account-button"
+              :aria-label="`Show the ${pluralize(row.open, 'open finding')} for ${row.account}`"
+              @click.stop="onRow(row)"
+            >
+              {{ row.account }}
+            </button>
           </template>
         </el-table-column>
         <el-table-column label="Breaches" min-width="170">
@@ -28,7 +36,8 @@
               >
                 <span class="breach-title">{{ b.title }}</span>
               </el-tooltip>
-              <span v-if="row.open > row.breaches.length" class="more">+{{ row.open - row.breaches.length }} more</span>
+              <!-- Distinct breaches: one breach reported through two identities is two findings. -->
+              <span v-if="row.breach_count > row.breaches.length" class="more">+{{ row.breach_count - row.breaches.length }} more</span>
             </span>
           </template>
         </el-table-column>
@@ -44,7 +53,7 @@
             <SeverityBadge :severity="row.worst_severity" size="small" effect="light" :show-icon="false" />
           </template>
         </el-table-column>
-        <el-table-column label="Open" width="64" align="right" prop="open" />
+        <el-table-column label="Findings" width="80" align="right" prop="open" />
       </el-table>
 
       <p class="footer-line">
@@ -67,6 +76,11 @@
         <p class="empty-title">{{ breachTitle }}</p>
         <p class="empty-text">No breached accounts can be found until breach checks run.</p>
       </template>
+      <p v-else-if="identities === 0" class="empty-text">No identities are monitored for breaches yet.</p>
+      <p v-else-if="identitiesEnabled === 0" class="empty-text">Every monitored identity is disabled, so nothing is checked.</p>
+      <p v-else-if="identitiesLoaded && !lastChecked" class="empty-text">
+        No identity has been checked yet: breached accounts appear here after the first successful check.
+      </p>
       <p v-else class="empty-text">
         No breached accounts among {{ pluralize(identitiesEnabled, 'monitored identity', 'monitored identities') }}<template
           v-if="lastChecked"
@@ -91,7 +105,10 @@ defineProps<{
   checksReady: boolean;
   /** The Monitoring card's breach headline, said again when checks can't run. */
   breachTitle: string;
+  identities: number;
   identitiesEnabled: number;
+  /** GET /identities has answered, so a null lastChecked means none was ever checked successfully. */
+  identitiesLoaded: boolean;
   lastChecked: string | null;
 }>();
 const emit = defineEmits<{ (e: 'filter', filters: FindingsFilters): void }>();
@@ -123,9 +140,26 @@ defineExpose({ scrollIntoView });
   cursor: pointer;
 }
 
-.account-name {
+.account-button {
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  font: inherit;
   font-weight: 500;
+  color: var(--el-color-primary);
+  text-align: left;
   overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.account-button:hover {
+  text-decoration: underline;
+}
+
+.account-button:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
 }
 
 .breaches {

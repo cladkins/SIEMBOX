@@ -1741,8 +1741,13 @@ The jobs' run state (a check running, the last run, the next tick, an HIBP
 pause) lives in the backend's memory and starts empty after a restart. What
 each identity and domain last did (`last_checked_at`, `next_run_at`,
 `last_status`, `last_error`) is stored, and the Monitoring card reads that:
-it keeps showing the last successful check, and the next breach check reads
-*within 15 minutes* until the job ticks (it runs every 15 minutes).
+it keeps showing the last successful check (the breach headline says *last
+check …* from it rather than *waiting for the first check*), and the next
+breach check reads *within 15 minutes* until the job ticks (it runs every 15
+minutes). The banner on Settings → Digital Risk reads only the run state, so
+it says *waiting for the first check* until the next run. While HIBP pauses
+the checks (its rate limit, or a rejected key) the card shows when they resume
+instead of the next check.
 
 *Waiting for the first check* under Domain monitoring means no enabled domain
 has been checked yet (just added, or monitoring was off); the first check runs

@@ -13,6 +13,7 @@ import { getClient, query } from '../config/database';
 import type { DomainEventType } from '../services/exposure/domainMonitor/types';
 import {
   BUCKET_FOR_DAYS,
+  WINDOW_BACK,
   buildAccounts,
   buildLookalikeInventory,
   foldBreakdown,
@@ -669,23 +670,42 @@ export async function getExposureSummary(days: SummaryDays, client?: PoolClient)
   }
 }
 
+// What tells two breaches apart (alias f): HIBP's breach name, else its title.
+const BREACH_KEY_SQL = `COALESCE(f.detail->>'breach_name', f.detail->>'breach_title')`;
+
 // Open breach findings with an account (alias f).
 const OPEN_BREACH_SQL = `f.source = 'leaked-creds' AND f.event_type = 'breach' AND f.resolved_at IS NULL
    AND jsonb_typeof(f.detail->'account') = 'string'`;
+
+/**
+ * The summary window at `at` (default: the transaction's NOW()): `since` is
+ * the start of the UTC bucket holding `at` minus WINDOW_BACK, so the window
+ * holds whole buckets (31 days, 13-14 or 26-27 weeks, 13 months). The unit and
+ * the interval come from the whitelists and are bound as text, never
+ * interpolated. Exported for the tests, which pin `at` to awkward dates.
+ */
+export async function summaryWindow(
+  db: Pick<PoolClient, 'query'>,
+  days: SummaryDays,
+  at?: Date | string
+): Promise<{ now: Date; since: Date }> {
+  // timestamptz only: node-pg reads a timestamp without time zone as local time.
+  // The interval is taken off the UTC wall-clock time, so months are calendar
+  // months in UTC whatever the session's TimeZone.
+  const win = await db.query(
+    `SELECT n.now,
+            date_trunc($2::text, (n.now AT TIME ZONE 'UTC') - $3::text::interval) AT TIME ZONE 'UTC' AS since
+       FROM (SELECT COALESCE($1::timestamptz, NOW()) AS now) n`,
+    [at ?? null, BUCKET_FOR_DAYS[days], WINDOW_BACK[days]]
+  );
+  return { now: win.rows[0].now, since: win.rows[0].since };
+}
 
 // The queries run one after another on the snapshot's connection.
 async function readExposureSummary(db: PoolClient, days: SummaryDays): Promise<ExposureSummary> {
   // The unit comes from the whitelist and is bound as text, never interpolated.
   const unit = BUCKET_FOR_DAYS[days];
-  // timestamptz only: node-pg reads a timestamp without time zone as local time.
-  const win = await db.query(
-    `SELECT NOW() AS now,
-            (date_trunc($2::text, (NOW() - make_interval(days => $1::int)) AT TIME ZONE 'UTC'))
-              AT TIME ZONE 'UTC' AS since`,
-    [days, unit]
-  );
-  const now: Date = win.rows[0].now;
-  const since: Date = win.rows[0].since;
+  const { now, since } = await summaryWindow(db, days);
 
   // At most 2 sources x 7 types x 2 categories x 4 severities rows.
   const breakdown = await db.query(
@@ -740,7 +760,10 @@ async function readExposureSummary(db: PoolClient, days: SummaryDays): Promise<E
     [credentialClasses]
   );
   // breach_date is 'YYYY-MM-DD' text, so text order is date order. Up to ten
-  // breaches per account come back; buildAccounts keeps three distinct titles.
+  // breaches per account come back; buildAccounts keeps three distinct ones.
+  // One breach can be two findings (the account is monitored as an address and
+  // through its email domain), so breaches are told apart, and counted, by
+  // their name: breach_count, not open_n, is how many breaches there are.
   const accounts = await db.query(
     `SELECT lower(f.detail->>'account') AS account,
             MIN(f.identity_id) AS identity_id,
@@ -748,7 +771,9 @@ async function readExposureSummary(db: PoolClient, days: SummaryDays): Promise<E
             (COUNT(*) FILTER (WHERE ${credExposedSql('$1')}))::int AS credential_exposures,
             bool_or(COALESCE(f.detail->'is_stealer_log' = 'true'::jsonb, false)) AS stealer_log,
             MAX(${SEV_RANK_SQL}) AS worst_rank,
+            COUNT(DISTINCT ${BREACH_KEY_SQL})::int AS breach_count,
             to_jsonb((array_agg(jsonb_build_object(
+                'key', ${BREACH_KEY_SQL},
                 'title', COALESCE(f.detail->>'breach_title', f.detail->>'breach_name'),
                 'date', f.detail->>'breach_date')
               ORDER BY f.detail->>'breach_date' DESC NULLS LAST, f.id DESC))[1:10]) AS breaches,

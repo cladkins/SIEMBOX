@@ -4875,8 +4875,10 @@ twice — is `400 { "message": "days must be one of 30, 90, 180, 365" }`.
 
 All bucketing is **UTC** and weeks start on **Monday**. The window starts on a
 bucket boundary (`window.since` = the start of the bucket holding
-`now − days`), so it can reach a few days (up to a month for `365`) further
-back than `days`, and the trend sums exactly to the window's counts.
+`now − days`; for `365`, `now − 12 months`, so a year is always the current
+month and the 12 before it, leap days included), so it can reach a few days
+(up to a month for `365`) further back than `days`, and the trend sums exactly
+to the window's counts.
 
 Everything is read in **one database snapshot** (a `REPEATABLE READ READ ONLY`
 transaction, with one `NOW()`), so the parts agree with each other while the
@@ -4930,8 +4932,8 @@ jobs write:
       {
         "account": "carol@example.com",
         "identity_id": 4,
-        "open": 3,
-        "credential_exposures": 3,
+        "open": 5,
+        "credential_exposures": 5,
         "stealer_log": true,
         "worst_severity": "high",
         "breaches": [
@@ -4939,6 +4941,7 @@ jobs write:
           { "title": "Twitter (200M)", "date": "2021-01-01" },
           { "title": "Dropbox", "date": "2012-07-01" }
         ],
+        "breach_count": 4,
         "last_detected": "2026-06-28T02:28:19.000Z"
       }
     ]
@@ -4987,7 +4990,11 @@ jobs write:
   (case-insensitive): `to_reset` counts the accounts with at least one breach
   that exposed passwords, historical passwords or auth tokens, or came from a
   stealer log. `top` lists at most 10, those first, then the worst severity;
-  each with at most 3 distinct breaches, newest breach date first.
+  each with at most 3 distinct breaches, newest breach date first. `open`
+  counts the account's open breach findings and `breach_count` its distinct
+  breaches (by HIBP breach name): an account monitored as an address and
+  through its email domain gets one finding per identity for the same breach,
+  so `open` can be larger.
 - `lookalikes` reads the lookalike and CT baselines of every **enabled**
   domain that runs the lookalike check, so it includes the lookalikes that
   were already registered at the domain's first check (recorded silently,
@@ -4995,8 +5002,12 @@ jobs write:
   such domain), `not_checked` (none checked yet) or `checked`. `has_mx` /
   `has_address` are `null` while every lookup so far failed; `certs` is
   `current` (a certificate that hasn't expired), `none` or `not_checked`.
-  `top` lists at most 25: mail first, then a current certificate, then an
-  address, then the worst open finding, then the newest report.
+  `registered`, `with_mx`, `with_address` and `with_current_cert` count
+  **distinct lookalike domains**: one that imitates two watched domains
+  (`acme.co` for both `acme.com` and `acme.net`) counts once, with a flag set
+  when any domain's checks saw it. `top` has one row per (watched domain,
+  lookalike) and lists at most 25: mail first, then a current certificate,
+  then an address, then the worst open finding, then the newest report.
 - No raw `detail` is returned, and no field holds a secret.
 
 ---

@@ -99,8 +99,8 @@
       </el-table>
 
       <p class="footer-line">
-        <template v-if="lookalikes.top.length < lookalikes.registered">
-          Showing the {{ lookalikes.top.length }} riskiest of {{ lookalikes.registered.toLocaleString() }}.
+        <template v-if="shownNames < lookalikes.registered">
+          Showing the {{ shownNames }} riskiest of {{ lookalikes.registered.toLocaleString() }}.
         </template>
         {{ lookalikes.with_current_cert.toLocaleString() }} with a current TLS certificate ·
         {{ pluralize(lookalikes.candidates_checked, 'candidate') }} checked.
@@ -130,6 +130,10 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: 'filter', filters: FindingsFilters): void }>();
 
 const cardRef = ref<{ $el: HTMLElement } | null>(null);
+
+// The totals count each registered name once; the table has a row per watched
+// domain it looks like (acme.co can imitate both acme.com and acme.net).
+const shownNames = computed(() => new Set(props.lookalikes.top.map((r) => r.lookalike)).size);
 
 const monitorOff = computed(() =>
   props.domainMonitor === 'unavailable'

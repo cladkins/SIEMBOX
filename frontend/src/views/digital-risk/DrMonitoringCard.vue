@@ -30,7 +30,8 @@
         <p class="facts">
           <span>{{ status.counts.identities_enabled.toLocaleString() }} of {{ pluralize(status.counts.identities, 'identity', 'identities') }} enabled</span>
           <span v-if="lastOk">last successful check {{ formatRelative(lastOk) }}</span>
-          <span v-if="checksReady">next check {{ nextBreachCheck }}</span>
+          <span v-if="pausedUntil">checks resume {{ formatWhen(pausedUntil, 'later') }}</span>
+          <span v-else-if="checksReady">next check {{ nextBreachCheck }}</span>
         </p>
 
         <div v-if="breachIssues.length" class="attention">
@@ -126,10 +127,12 @@ import {
   describeDomainMonitoring,
   describeExposureStatus,
   formatRelative,
+  formatWhen,
+  lastSuccessfulCheck,
   pluralize,
   statusContextFromIdentities,
 } from '@/utils/exposure';
-import { breachAttention, lastSuccessfulCheck } from './dashboard';
+import { breachAttention } from './dashboard';
 
 const props = defineProps<{
   status: ExposureStatus;
@@ -159,6 +162,8 @@ const breach = computed(() =>
 );
 const breachNeedsFix = computed(() => breach.value.type === 'warning' || breach.value.type === 'error');
 const checksReady = computed(() => breachChecksReady(props.status));
+// A pause (HIBP's rate limit, or a rejected key) skips the job's ticks until it ends.
+const pausedUntil = computed(() => (checksReady.value ? props.status.leaked_creds.paused_until : null));
 const lastOk = computed(() => (props.identities ? lastSuccessfulCheck(props.identities) : null));
 // The job's next tick is in memory: right after a restart it isn't known yet.
 const nextBreachCheck = computed(() => {
@@ -175,11 +180,13 @@ const lastDomainCheck = computed(() => {
   }
   return best;
 });
-// What an administrator can do about the domain headline in Settings.
+// What an administrator can do about the domain headline in Settings. Settings
+// has no switch for exposure_domain_monitor_enabled: its domain cards say how to
+// turn it back on (PUT /api/exposure/settings).
 const domainFix = computed(() => {
   const health = domainHealth.value;
   if (!health || !props.domains || !props.status.features.domain_monitor_available) return '';
-  if (props.status.features.domain_monitor_enabled === false) return 'Switch it on in Settings → Digital Risk →';
+  if (props.status.features.domain_monitor_enabled === false) return 'How to switch it back on: Settings → Digital Risk →';
   if (props.domains.length === 0) return 'Add one in Settings →';
   if (!props.domains.some((d) => d.enabled)) return 'Enable one in Settings →';
   return health.type === 'warning' || health.type === 'error' ? 'Fix in Settings → Digital Risk →' : '';

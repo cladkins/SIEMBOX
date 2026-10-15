@@ -131,15 +131,15 @@
                 <div class="stat-icon"><el-icon :size="26"><Key /></el-icon></div>
                 <div class="stat-info">
                   <button type="button" class="stat-button" :disabled="!summary" @click="accountsCard?.scrollIntoView()">
-                    <span class="stat-value">{{ accountsValue }}</span>
+                    <span class="stat-value">{{ accountsTile.value }}</span>
                     <span class="stat-label">Accounts to reset</span>
                   </button>
                 </div>
               </div>
               <el-skeleton v-if="!summary" :rows="0" animated class="stat-skeleton" />
               <template v-else>
-                <div class="stat-sub">{{ accountsSub }}</div>
-                <div v-if="accountsNote" class="stat-sub stat-note">{{ accountsNote }}</div>
+                <div v-if="accountsTile.sub" class="stat-sub">{{ accountsTile.sub }}</div>
+                <div v-if="accountsTile.note" class="stat-sub stat-note">{{ accountsTile.note }}</div>
               </template>
             </el-card>
           </el-col>
@@ -161,9 +161,10 @@
           </el-col>
         </el-row>
 
-        <!-- 3. What is trending? -->
+        <!-- 3. What is trending? Stacked below 1200px: beside the chart, the type
+             list's labels, bars and counts need more than a third of a laptop window. -->
         <el-row :gutter="16" class="section">
-          <el-col :xs="24" :md="16" class="row-col">
+          <el-col :xs="24" :lg="14" :xl="16" class="row-col">
             <el-card class="fill-card">
               <template #header>
                 <span>Findings detected per {{ summary?.window.bucket ?? 'week' }}</span>
@@ -172,7 +173,7 @@
               <DrTrendChart v-else :trend="summary.trend" :window="summary.window" />
             </el-card>
           </el-col>
-          <el-col :xs="24" :md="8" class="row-col">
+          <el-col :xs="24" :lg="10" :xl="8" class="row-col">
             <el-card class="fill-card">
               <template #header>
                 <div class="card-header">
@@ -182,7 +183,7 @@
               </template>
               <el-skeleton v-if="!summary" :rows="5" animated />
               <p v-else-if="!typeBars.length" class="card-empty">No open findings</p>
-              <RankedBarList v-else :items="typeBars" label-width="170px" @item-click="filterType" />
+              <RankedBarList v-else :items="typeBars" label-width="200px" @item-click="filterType" />
             </el-card>
           </el-col>
         </el-row>
@@ -196,7 +197,9 @@
             :accounts="summary.accounts"
             :checks-ready="checksReady"
             :breach-title="breachTitle"
+            :identities="status.counts.identities"
             :identities-enabled="status.counts.identities_enabled"
+            :identities-loaded="!!identities"
             :last-checked="lastBreachCheck"
             @filter="applyQueueFilters"
           />
@@ -250,6 +253,8 @@ import {
   apiErrorMessage,
   breachChecksReady,
   describeExposureStatus,
+  formatWhen,
+  lastSuccessfulCheck,
   pluralize,
   statusContextFromIdentities,
 } from '@/utils/exposure';
@@ -262,7 +267,6 @@ import ExposureFindingsCard from './ExposureFindingsCard.vue';
 import PasswordCheckCard from './PasswordCheckCard.vue';
 import {
   isNotSetUp,
-  lastSuccessfulCheck,
   parseDeepLink,
   parseTypeKey,
   typeItems,
@@ -432,22 +436,28 @@ const trendMark = computed(() => {
   return s.new > s.prev_new ? '▲' : s.new < s.prev_new ? '▼' : '=';
 });
 
-// A zero only reads as good when the check could have run.
-const accountsValue = computed(() => {
+// A zero only reads as good when a check ran: the checks can run, and some
+// enabled identity has been checked successfully (an email domain HIBP skips
+// as not verified never is). Until the identities have loaded that isn't known.
+const accountsTile = computed((): { value: string; sub: string; note: string } => {
   const a = summary.value?.accounts;
-  if (!a) return '—';
-  if (!checksReady.value && a.total === 0) return '—';
-  return a.to_reset.toLocaleString();
+  const s = status.value;
+  if (!a || !s) return { value: '—', sub: '', note: '' };
+  const pausedUntil = checksReady.value ? s.leaked_creds.paused_until : null;
+  const pausedNote = pausedUntil ? `Breach checks are paused until ${formatWhen(pausedUntil, 'later')}` : '';
+  if (a.total === 0) {
+    if (!checksReady.value) return { value: '—', sub: "Breach checks aren't running", note: '' };
+    if (s.counts.identities === 0) return { value: '—', sub: 'No identities are monitored', note: '' };
+    if (s.counts.identities_enabled === 0) return { value: '—', sub: 'Every monitored identity is disabled', note: '' };
+    if (!identities.value) return { value: '—', sub: identitiesError.value ? "Couldn't load the identities" : '', note: '' };
+    if (!lastBreachCheck.value) return { value: '—', sub: 'Not checked yet', note: pausedNote };
+  }
+  return {
+    value: a.to_reset.toLocaleString(),
+    sub: `of ${pluralize(a.total, 'breached account')}`,
+    note: checksReady.value ? pausedNote : "Breach checks aren't running now",
+  };
 });
-const accountsSub = computed(() => {
-  const a = summary.value?.accounts;
-  if (!a) return '';
-  if (!checksReady.value && a.total === 0) return "Breach checks aren't running";
-  return `of ${pluralize(a.total, 'breached account')}`;
-});
-const accountsNote = computed(() =>
-  summary.value && !checksReady.value && summary.value.accounts.total > 0 ? "Breach checks aren't running now" : ''
-);
 const accountsColor = computed(() => ((summary.value?.accounts.to_reset ?? 0) > 0 ? SEVERITY_COLORS.high : NEUTRAL));
 
 const lookalikesUnknown = computed(() => {

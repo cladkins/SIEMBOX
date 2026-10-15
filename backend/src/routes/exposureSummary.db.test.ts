@@ -24,7 +24,7 @@ import app from '../app';
 import pool, { closePools } from '../config/database';
 import { UserModel } from '../models/User';
 import { SessionModel } from '../models/Session';
-import { getExposureSummary } from '../models/Exposure';
+import { getExposureSummary, summaryWindow } from '../models/Exposure';
 import { SECRET_KEY_PATTERN } from '../services/exposure/findingWriter';
 import type { ExposureSummary, SummaryDays } from '../services/exposure/summary';
 
@@ -333,6 +333,15 @@ test('summary, 90 days: exact counts from the fixtures, in one snapshot', async 
       { title: 'oldlist', date: null },
     ]);
     assert.deepEqual(s.accounts.top[0].breaches, [{ title: 'StealerX', date: '2024-02-02' }], 'one breach seen twice');
+    assert.deepEqual(
+      s.accounts.top.map((a) => [a.account, a.breach_count]),
+      [
+        ['bob@acme.test', 1],
+        ['alice@acme.test', 3],
+        ['dave@acme.test', 1],
+      ],
+      'distinct breaches: bob has two findings for one breach, so no "+1 more"'
+    );
 
     // Lookalikes: the enabled domain's baseline only (acme.org is disabled).
     const l = s.lookalikes;
@@ -394,6 +403,88 @@ test('summary: each window has whole UTC buckets of its unit, and the same invar
       assertInvariants(s, String(days));
     }
   });
+});
+
+test('summary accounts: breach_count counts distinct breaches, not findings', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const db = await pool.connect();
+  try {
+    await db.query('BEGIN');
+    for (const tbl of ['exposure_findings', 'monitored_identities', 'watched_domains', 'domain_baselines']) {
+      await db.query(`CREATE TEMP TABLE ${tbl} (LIKE public.${tbl} INCLUDING DEFAULTS) ON COMMIT DROP`);
+    }
+    await db.query(
+      `INSERT INTO monitored_identities (id, kind, value, created_at, updated_at) VALUES
+         (1, 'email', 'erin@acme.test', NOW() - INTERVAL '50 days', NOW()),
+         (2, 'email_domain', 'acme.test', NOW() - INTERVAL '50 days', NOW())`
+    );
+    // Five breaches; Adobe is reported through both identities (two findings).
+    const rows: Array<[number, number, string, string]> = [
+      [1, 1, 'Adobe', '2013-10-04'],
+      [2, 2, 'Adobe', '2013-10-04'],
+      [3, 1, 'LinkedIn', '2012-05-05'],
+      [4, 1, 'Dropbox', '2012-07-01'],
+      [5, 1, 'Canva', '2019-05-24'],
+      [6, 2, 'Trello', '2024-01-16'],
+    ];
+    for (const [id, identity, title, date] of rows) {
+      await db.query(
+        `INSERT INTO exposure_findings (id, source, identity_id, event_type, fingerprint, title, severity, detail, first_seen, last_seen)
+         VALUES ($1, 'leaked-creds', $2, 'breach', $3, $4, 'medium', $5, NOW() - INTERVAL '1 day', NOW())`,
+        [id, identity, `fp-${id}`, `erin in ${title}`, JSON.stringify(breach('erin@acme.test', title, date))]
+      );
+    }
+    const s = await getExposureSummary(90, db);
+    assert.equal(s.accounts.top.length, 1);
+    const [erin] = s.accounts.top;
+    assert.equal(erin.open, 6, 'six open findings');
+    assert.equal(erin.breach_count, 5, 'in five breaches');
+    assert.deepEqual(
+      erin.breaches.map((b) => b.title),
+      ['Trello', 'Canva', 'Adobe'],
+      'newest three, Adobe once'
+    );
+    assert.equal(erin.breach_count - erin.breaches.length, 2, 'the card says "+2 more"');
+  } finally {
+    await db.query('ROLLBACK').catch(() => undefined);
+    db.release();
+  }
+});
+
+test('summary window: a year is always 13 whole months, leap days included', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  // 365 days back from a day between Feb 29 and the next Jan 31 lands on the
+  // 1st of the next month; the window must still start 12 months back.
+  const cases: Array<[string, string]> = [
+    ['2028-02-29T12:00:00Z', '2027-02-01T00:00:00.000Z'],
+    ['2028-03-31T12:00:00Z', '2027-03-01T00:00:00.000Z'],
+    ['2029-01-31T23:59:59Z', '2028-01-01T00:00:00.000Z'],
+    ['2028-02-28T00:00:00Z', '2027-02-01T00:00:00.000Z'],
+    ['2026-10-15T12:00:00Z', '2025-10-01T00:00:00.000Z'],
+    ['2027-03-31T12:00:00Z', '2026-03-01T00:00:00.000Z'],
+  ];
+  for (const [at, since] of cases) {
+    const w = await summaryWindow(pool, 365, at);
+    assert.equal(w.now.toISOString(), new Date(at).toISOString());
+    assert.equal(w.since.toISOString(), since, `365 at ${at}`);
+    const months = (w.now.getUTCFullYear() - w.since.getUTCFullYear()) * 12 + w.now.getUTCMonth() - w.since.getUTCMonth();
+    assert.equal(months + 1, 13, `${at}: 13 monthly buckets`);
+  }
+  // The shorter windows still reach back their days, to a bucket boundary.
+  const at = '2028-03-01T10:00:00Z'; // a Wednesday, the day after a leap day
+  assert.equal((await summaryWindow(pool, 30, at)).since.toISOString(), '2028-01-31T00:00:00.000Z');
+  assert.equal((await summaryWindow(pool, 90, at)).since.toISOString(), '2027-11-29T00:00:00.000Z', 'the Monday of Dec 2, 2027 - 90 days');
+  assert.equal((await summaryWindow(pool, 180, at)).since.toISOString(), '2027-08-30T00:00:00.000Z');
+  // A session in another time zone changes nothing (all bucketing is UTC).
+  const db = await pool.connect();
+  try {
+    await db.query("SET TIME ZONE 'America/Los_Angeles'");
+    assert.equal((await summaryWindow(db, 365, '2028-03-01T03:00:00Z')).since.toISOString(), '2027-03-01T00:00:00.000Z');
+    assert.equal((await summaryWindow(db, 30, '2028-03-01T03:00:00Z')).since.toISOString(), '2028-01-31T00:00:00.000Z');
+  } finally {
+    await db.query('RESET TIME ZONE').catch(() => undefined);
+    db.release();
+  }
 });
 
 test('summary: nothing configured is an empty, consistent answer', async (t) => {

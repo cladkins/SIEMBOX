@@ -174,7 +174,7 @@ Top to bottom, each section answers one question:
 | **Monitoring**: breach checks (HIBP) and domain monitoring side by side, plus where new findings are notified | Is monitoring working? A quiet page must mean "nothing found", not "nothing checked". | `/status`, `/identities`, `/domains` |
 | **Tiles**: Open findings (by severity), New in the window (vs the window before), Accounts to reset, Lookalikes with mail (MX) | What is open, how severe, and what is new? | `/summary` |
 | **Findings detected per day/week/month** (stacked by risk category, resolved as a dashed line, a table view) and **Open findings by type** | What is trending? | `/summary` |
-| **Accounts to act on** and **Lookalike domains** | Which account or domain, and what to do about it? | `/summary` |
+| **Accounts to act on** and **Lookalike domains** | Which account or domain, and what to do about it? (each account and each lookalike's findings is a button, so the click-throughs work from the keyboard) | `/summary` |
 | **Findings** (the triage queue: filters, search, sort, the linked alert and its status) | Triage this finding. | `/findings` |
 | **Password check** | Is this password in a breach? (needs no setup, so it is always shown) | `/password-check` |
 
@@ -182,7 +182,9 @@ Clicking a severity chip, a tile, a type, an account or a lookalike's findings f
 
 **Roles.** Configure, Run check now, Resolve, the "in Settings" links and the inline setup are for admins; other roles see the same page without them (and a line saying only an administrator can change a problem). Breached account addresses, readable by every role through the API before, are now shown to every role.
 
-**A zero only counts when checked.** "Accounts to reset" shows "—" when breach checks can't run and nothing was found; "Lookalikes with mail" shows "—" while domain monitoring is off, nothing is watched, or the first check hasn't run.
+**A zero only counts when checked.** "Accounts to reset" shows "—" when nothing was found and breach checks can't run, no identity is monitored or enabled, or no enabled identity has been checked successfully yet (just added, or only email domains HIBP skips as not verified); the Accounts card says which. While HIBP pauses the checks (rate limit, rejected key) the tile notes until when, and the Monitoring card shows when checks resume instead of the next tick. "Lookalikes with mail" shows "—" while domain monitoring is off, nothing is watched, or the first check hasn't run.
+
+**Counting.** An account monitored through two identities (an address and its email domain) gets one finding per identity for the same breach, so the Accounts card counts breaches by name (`breach_count`) for its "+N more", and its Findings column counts findings, as the queue does. A lookalike that imitates two watched domains (acme.co for both acme.com and acme.net) has a row per domain in the Lookalike card, but counts once in the totals and the tile.
 
 **Lookalikes already registered at the first check** are recorded silently (no finding): they live only in the lookalike baseline. The Lookalike card reads the baselines with the collectors' own parsers, so it lists them too ("Already registered when first checked").
 
@@ -190,7 +192,7 @@ Clicking a severity chip, a tile, a type, an account or a lookalike's findings f
 
 **History comes from finding timestamps** (first seen, resolved), not from a run log: deleting an identity or a domain deletes its findings, which then leave past buckets too. Adding an identity whose first check reports all its past breaches spikes one bucket; the tooltip and table say "Monitoring added".
 
-**What resets on restart.** The jobs' run state (running, last run, next tick, pauses) is in memory. Each identity's and domain's last check (`last_checked_at`, `next_run_at`, `last_status`, `last_error`) is stored, and the Monitoring card reads those, so it still shows the last successful check right after a restart; the next breach check reads "within 15 minutes" until the job has ticked.
+**What resets on restart.** The jobs' run state (running, last run, next tick, pauses) is in memory. Each identity's and domain's last check (`last_checked_at`, `next_run_at`, `last_status`, `last_error`) is stored, and the Monitoring card reads those, so it still shows the last successful check right after a restart: the breach headline then reads "last check {time}" from those timestamps (Settings' banner keeps "waiting for the first check" until a run), and the next breach check reads "within 15 minutes" until the job has ticked.
 
 ---
 

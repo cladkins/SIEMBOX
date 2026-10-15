@@ -40,6 +40,20 @@ export const BUCKET_FOR_DAYS: Readonly<Record<SummaryDays, SummaryBucket>> = {
   365: 'month',
 };
 
+/**
+ * How far back each window reaches (a Postgres interval) before its start is
+ * rounded down to a bucket boundary. The year is 12 calendar months rather
+ * than 365 days: 365 days back from a day between Feb 29 and the next Jan 31
+ * lands on the 1st of the following month, which would leave 12 monthly
+ * buckets instead of 13. Whitelisted and bound as text, never interpolated.
+ */
+export const WINDOW_BACK: Readonly<Record<SummaryDays, string>> = {
+  30: '30 days',
+  90: '90 days',
+  180: '180 days',
+  365: '12 months',
+};
+
 export const SUMMARY_DAYS_ERROR = `days must be one of ${SUMMARY_DAYS.join(', ')}`;
 
 /**
@@ -131,6 +145,12 @@ export interface SummaryAccount {
   worst_severity: ExposureSeverity;
   /** Up to three distinct breaches, newest breach date first. */
   breaches: Array<{ title: string; date: string | null }>;
+  /**
+   * Distinct breaches among the open findings. An account monitored through
+   * two identities (an address and its email domain) has two findings for one
+   * breach, so this can be less than `open`; the page's "+N more" counts from it.
+   */
+  breach_count: number;
   last_detected: string;
 }
 
@@ -156,11 +176,16 @@ export interface SummaryLookalikes {
   /** not_watched: no enabled domain runs the lookalike check; not_checked: none has run it yet. */
   state: 'not_watched' | 'not_checked' | 'checked';
   candidates_checked: number;
+  /**
+   * Distinct registered lookalike names. Two watched domains can share one
+   * (acme.com and acme.net both have acme.co as a TLD swap): it counts once,
+   * and a flag counts when any domain's checks saw it.
+   */
   registered: number;
   with_mx: number;
   with_address: number;
   with_current_cert: number;
-  /** At most LOOKALIKE_TOP, riskiest first. */
+  /** At most LOOKALIKE_TOP, riskiest first; one row per (watched domain, name). */
   top: SummaryLookalike[];
 }
 
@@ -360,19 +385,27 @@ export interface AccountRow {
   credential_exposures: number;
   stealer_log: boolean | null;
   worst_rank: number;
-  /** Newest breach date first (up to ten). */
+  /** COUNT(DISTINCT breach): the same key the breaches are told apart by. */
+  breach_count?: number | string | null;
+  /** Newest breach date first (up to ten): { key (the breach's name), title, date }. */
   breaches: unknown;
   last_detected: Date | string;
 }
 
-/** The accounts list, in query order, each with up to three distinct breaches. */
+/**
+ * The accounts list, in query order, each with up to three distinct breaches
+ * (told apart by the breach's name, as breach_count counts them) and the
+ * number of distinct breaches in all.
+ */
 export function buildAccounts(rows: readonly AccountRow[]): SummaryAccount[] {
   return rows.slice(0, ACCOUNTS_TOP).map((r) => {
     const breaches: SummaryAccount['breaches'] = [];
     const seen = new Set<string>();
     for (const b of Array.isArray(r.breaches) ? r.breaches : []) {
-      if (!isPlainObject(b) || typeof b.title !== 'string' || !b.title || seen.has(b.title)) continue;
-      seen.add(b.title);
+      if (!isPlainObject(b) || typeof b.title !== 'string' || !b.title) continue;
+      const key = typeof b.key === 'string' && b.key ? b.key : b.title;
+      if (seen.has(key)) continue;
+      seen.add(key);
       breaches.push({ title: b.title, date: typeof b.date === 'string' && b.date ? b.date : null });
       if (breaches.length === BREACHES_SHOWN) break;
     }
@@ -384,6 +417,7 @@ export function buildAccounts(rows: readonly AccountRow[]): SummaryAccount[] {
       stealer_log: r.stealer_log === true,
       worst_severity: severityFromRank(r.worst_rank),
       breaches,
+      breach_count: Math.max(Number(r.breach_count) || 0, breaches.length),
       last_detected: toIso(r.last_detected) ?? '',
     };
   });
@@ -455,6 +489,8 @@ export function buildLookalikeInventory(
   }
 
   const rows: Array<{ row: SummaryLookalike; rank: number }> = [];
+  // The totals are per name: one name in two domains' baselines is one lookalike.
+  const names = new Map<string, { mx: boolean; addr: boolean; current: boolean }>();
   let checked = false;
   for (const d of eligible) {
     out.candidates_checked += candidatesChecked(d.last_summary);
@@ -483,13 +519,21 @@ export function buildLookalikeInventory(
         open_findings: found && found.count > 0 ? { count: found.count, worst_severity: severityFromRank(found.rank) } : null,
       };
       rows.push({ row, rank: found && found.count > 0 ? found.rank : 0 });
-      out.registered++;
-      if (info.mx === true) out.with_mx++;
-      if (info.addr === true) out.with_address++;
-      if (certs === 'current') out.with_current_cert++;
+      const seen = names.get(name);
+      names.set(name, {
+        mx: (seen?.mx ?? false) || info.mx === true,
+        addr: (seen?.addr ?? false) || info.addr === true,
+        current: (seen?.current ?? false) || certs === 'current',
+      });
     }
   }
   out.state = checked ? 'checked' : 'not_checked';
+  out.registered = names.size;
+  for (const n of names.values()) {
+    if (n.mx) out.with_mx++;
+    if (n.addr) out.with_address++;
+    if (n.current) out.with_current_cert++;
+  }
 
   const flag = (v: boolean) => (v ? 1 : 0);
   const reported = (r: SummaryLookalike) => (r.reported_at ? Date.parse(r.reported_at) : 0);

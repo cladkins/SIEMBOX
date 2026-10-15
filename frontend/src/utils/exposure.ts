@@ -581,6 +581,14 @@ export interface ExposureStatusContext {
   /** Enabled email domains that may be larger than the plan covers ('verified_limited'). */
   limitedDomains?: number | null;
   /**
+   * The newest successful check of an enabled identity (GET /identities'
+   * persisted last_checked_at). The run state is in memory, so right after a
+   * restart there is no last run: the Digital Risk page then says when the
+   * identities were last checked instead of "waiting for the first check".
+   * Settings ignores it, so its banner reads as it always has.
+   */
+  lastSuccessfulCheck?: string | null;
+  /**
    * Where the text is shown: 'settings' (default; it points at the cards on
    * Settings → Digital Risk, "below") or 'dashboard' (the Digital Risk page,
    * which points at Settings instead). Only the pointers differ.
@@ -588,13 +596,32 @@ export interface ExposureStatusContext {
   place?: 'settings' | 'dashboard';
 }
 
+/** The newest successful check of an enabled identity (persisted, so it survives a restart); null if none. */
+export function lastSuccessfulCheck(
+  identities: ReadonlyArray<Pick<MonitoredIdentity, 'enabled' | 'last_status' | 'last_checked_at'>>
+): string | null {
+  let best: string | null = null;
+  let bestAt = -Infinity;
+  for (const i of identities) {
+    if (!i.enabled || i.last_status !== 'ok' || !i.last_checked_at) continue;
+    const at = Date.parse(i.last_checked_at);
+    if (!Number.isNaN(at) && at > bestAt) {
+      bestAt = at;
+      best = i.last_checked_at;
+    }
+  }
+  return best;
+}
+
 /**
  * The status context from GET /identities (enabled identities whose last check
- * failed, and the email domains HIBP skips or may only partly search), plus the
- * key-save error Settings may hold.
+ * failed, the email domains HIBP skips or may only partly search, and the last
+ * successful check), plus the key-save error Settings may hold.
  */
 export function statusContextFromIdentities(
-  identities: ReadonlyArray<Pick<MonitoredIdentity, 'kind' | 'enabled' | 'last_status' | 'hibp_domain'>> | null,
+  identities: ReadonlyArray<
+    Pick<MonitoredIdentity, 'kind' | 'enabled' | 'last_status' | 'last_checked_at' | 'hibp_domain'>
+  > | null,
   encryptionError?: string | null
 ): ExposureStatusContext {
   return {
@@ -603,6 +630,7 @@ export function statusContextFromIdentities(
       ? {
           failingIdentities: identities.filter((i) => i.enabled && i.last_status === 'error').length,
           ...domainVerificationCounts(identities),
+          lastSuccessfulCheck: lastSuccessfulCheck(identities),
         }
       : {}),
   };
@@ -780,8 +808,10 @@ export function describeExposureStatus(status: ExposureStatus, context: Exposure
   }
 
   const parts = [`Monitoring ${pluralize(counts.identities_enabled, 'identity', 'identities')}`];
+  // No last run in memory (just restarted): the dashboard reads the identities' own last check.
+  const lastCheck = run.last_run?.at ?? (context.place === 'dashboard' ? context.lastSuccessfulCheck : null);
   if (run.running) parts.push('a check is running now');
-  else if (run.last_run) parts.push(`last check ${formatRelative(run.last_run.at)}`);
+  else if (lastCheck) parts.push(`last check ${formatRelative(lastCheck)}`);
   else parts.push('waiting for the first check');
   if (run.job?.next_run_at) parts.push(`next ${formatRelative(run.job.next_run_at)}`);
   return { type: 'success', title: 'Leaked-credential checks are healthy', detail: `${parts.join(' · ')}.` };

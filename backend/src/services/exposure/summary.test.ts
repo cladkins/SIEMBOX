@@ -200,8 +200,58 @@ test('buildAccounts: three distinct breaches, numbers coerced, severity from ran
       { title: 'Alpha', date: null },
       { title: 'Beta', date: null },
     ],
+    breach_count: 3, // none reported: at least the breaches listed
     last_detected: '2026-10-01T00:00:00.000Z',
   });
+});
+
+test('buildAccounts: breach_count is the distinct breaches, which "+N more" counts from', () => {
+  // alice@acme.test is monitored as an address and through acme.test: HIBP
+  // reports her in Adobe through both, which is two findings for one breach.
+  const [twice, many] = buildAccounts([
+    {
+      account: 'alice@acme.test',
+      identity_id: 1,
+      open_n: 2,
+      credential_exposures: 2,
+      stealer_log: false,
+      worst_rank: 3,
+      breach_count: 1,
+      breaches: [
+        { key: 'Adobe', title: 'Adobe', date: '2013-10-04' },
+        { key: 'Adobe', title: 'Adobe', date: '2013-10-04' },
+      ],
+      last_detected: '2026-10-01T00:00:00Z',
+    },
+    {
+      account: 'bob@acme.test',
+      identity_id: 1,
+      open_n: 9,
+      credential_exposures: 0,
+      stealer_log: false,
+      worst_rank: 2,
+      breach_count: '8',
+      breaches: [
+        // Two breaches HIBP titles alike are still two breaches.
+        { key: 'Forum2019', title: 'Forum', date: '2019-01-01' },
+        { key: 'Forum2019', title: 'Forum', date: '2019-01-01' },
+        { key: 'Forum2017', title: 'Forum', date: '2017-01-01' },
+        { key: 'Shop', title: 'Shop', date: null },
+      ],
+      last_detected: '2026-10-01T00:00:00Z',
+    },
+  ]);
+  assert.equal(twice.open, 2, 'Open still counts the findings');
+  assert.equal(twice.breach_count, 1);
+  assert.deepEqual(twice.breaches, [{ title: 'Adobe', date: '2013-10-04' }], 'one breach seen twice');
+  assert.equal(twice.breach_count - twice.breaches.length, 0, 'no "+1 more"');
+
+  assert.equal(many.breach_count, 8);
+  assert.deepEqual(
+    many.breaches.map((b) => `${b.title} ${b.date}`),
+    ['Forum 2019-01-01', 'Forum 2017-01-01', 'Shop null']
+  );
+  assert.equal(many.breach_count - many.breaches.length, 5, '"+5 more", not open - shown (6)');
 });
 
 // ---- Lookalike inventory -------------------------------------------------------------
@@ -360,6 +410,8 @@ test('lookalikes: riskiest first (mail, then a current certificate), then capped
     ]
   );
 
+  assert.equal(inv.registered, 8, 'a-plain.com looks like both domains but is one registered name');
+
   const many: Record<string, unknown> = {};
   for (let i = 0; i < 40; i++) many[`l${String(i).padStart(2, '0')}.com`] = info({ mx: i % 4 === 0 });
   const capped = buildLookalikeInventory([domain({ lookalike: lookalikeSnapshot(many) })], [], NOW);
@@ -367,4 +419,41 @@ test('lookalikes: riskiest first (mail, then a current certificate), then capped
   assert.equal(capped.registered, 40);
   assert.equal(capped.with_mx, 10);
   assert.ok(capped.top.slice(0, 10).every((r) => r.has_mx === true), 'mail first');
+});
+
+test('lookalikes: a name in two watched domains\' baselines is counted once in the totals', () => {
+  // acme.com (owned) and acme.net (brand) share their TLD swaps, so a
+  // registered acme.co is in both baselines. One row per watched domain (each
+  // has its own "Looks like" and finding filter), one name in the totals.
+  const inv = buildLookalikeInventory(
+    [
+      domain({
+        id: 1,
+        domain: 'acme.com',
+        lookalike: lookalikeSnapshot({
+          'acme.co': info({ mx: true, fuzzer: 'tld-swap' }),
+          'acrne.com': info({ fuzzer: 'homoglyph' }),
+        }),
+      }),
+      domain({
+        id: 2,
+        domain: 'acme.net',
+        scope: 'brand',
+        // This domain's checks saw an address and a current certificate the other's didn't.
+        lookalike: lookalikeSnapshot({ 'acme.co': info({ mx: false, addr: true, fuzzer: 'tld-swap' }) }),
+        ct: ctSnapshot({ 'acme.co': { k: NOW + DAY } }),
+      }),
+    ],
+    [],
+    NOW
+  );
+  assert.deepEqual(
+    [inv.registered, inv.with_mx, inv.with_address, inv.with_current_cert],
+    [2, 1, 1, 1],
+    'distinct names; a flag counts when any watched domain saw it'
+  );
+  assert.deepEqual(
+    inv.top.map((r) => `${r.lookalike}@${r.watched_domain}`).sort(),
+    ['acme.co@acme.com', 'acme.co@acme.net', 'acrne.com@acme.com']
+  );
 });

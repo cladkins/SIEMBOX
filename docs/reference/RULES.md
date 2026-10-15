@@ -52,6 +52,7 @@ Detection rules in SIEMBox are organized by severity to help you prioritize resp
 - [MEDIUM Severity Rules](#medium-severity-rules)
 - [LOW Severity Rules](#low-severity-rules)
 - [Rule Management](#rule-management)
+  - [Regex Safety](#regex-safety)
 - [Response Playbooks](#response-playbooks)
 - [Tuning Guidance](#tuning-guidance)
 - [Contributing Rules](#contributing-rules)
@@ -761,6 +762,10 @@ Detects suspicious process execution through sudo.
 
 **What It Detects:** Unexpected or dangerous commands executed with sudo
 
+**Pattern note:** "curl/wget piped to something" is written with a gap that
+cannot contain `curl` again rather than `curl.*\|`, which is polynomial ReDoS
+(see [Regex Safety](#regex-safety)).
+
 **Response:** Kill suspicious process, investigate source, check for backdoors
 
 ---
@@ -1033,6 +1038,65 @@ alert:
   title: "Unauthorized Calendar Access by {user}"
   description: "{count} calendar file accesses by {user} from {source_ip}"
 ```
+
+### Regex Safety
+
+A `regex` condition runs against every parsed log, on the thread that also
+serves the API and receives syslog, against text a remote sender controls (and
+an aggregation re-runs the conditions over up to 50,000 recent logs). A pattern
+that backtracks catastrophically lets one crafted line stall ingestion. So
+every way of storing a rule checks its `regex` conditions first — Create/Update
+in the rule editor (from `rule_yaml`, or a `rule_logic` sent directly), catalog
+Install / Install all, Sigma import (and its preview), content packs, the AI
+builder (it is asked to rewrite a vulnerable condition) and the bundled-rule
+importer — with [recheck](https://makenowjust-labs.github.io/recheck/), the
+analyzer `npm run validate-detections` now runs too:
+
+| recheck says | What happens |
+|---|---|
+| **vulnerable** (exponential or polynomial: it found an attack string) | Refused, `422`: `ReDoS: regex at conditions[0].value is vulnerable (polynomial, degree 2) — rewrite it linear before saving`. In a batch (Install all, Sigma import, a pack) the rule is skipped with that reason and the rest install. |
+| **unknown** (the time budget, `REGEX_SAFETY_CHECK_TIMEOUT_MS`, ran out) | Saved, with a warning. |
+| **safe** | Saved. |
+
+The condition is analyzed exactly as the engine compiles it: a leading `(?i)`
+and `flags: i` are applied, so a case-insensitive pattern is checked
+case-insensitively.
+
+**The usual offender in a rule is "X, then later Y" written `X.*Y`.** From
+every X the engine rescans the rest of the line looking for Y, which is O(n²)
+on a line of repeated X with no Y. Write the gap so it cannot contain X again:
+
+```yaml
+# Refused: polynomial
+value: 'curl.*\|'
+# Linear: each "curl" scans only up to the next "curl"
+value: 'curl(?:[^c|\n\r]|c(?!url))*\|'
+```
+
+The pattern is `X(?:[^x\n\r]|x(?!rest-of-X))*Y`, where `x` is X's first
+character: any character but `x`, or an `x` that does not start X. It matches
+the same single-line text as `X.*Y`. ACCESS-003, INFRA-001 and INFRA-003 were
+rewritten this way (their tests pin that old and new forms match the same
+lines); a copy installed before this change shows an **Unsafe regex** tag until
+you reinstall it from the catalog. Other rewrites:
+
+- Anchor with `^` when the field allows (`^/admin`): an unanchored pattern is
+  retried from every position of the field.
+- Make alternatives disjoint (`(a|a)+`, `(\d|\d\d)+` are exponential).
+- Prefer `contains`, `in` and `equals` (no regex at all) where they do the job.
+- Bounded gaps (`curl.{0,200}\|`) are linear in practice but recheck still
+  reports them as polynomial, so they are refused.
+
+Sigma wildcards are converted to linear patterns automatically: `*x*` becomes a
+plain "contains x", and `*a*b*` matches its blocks at first occurrence
+(`(?:(?!a)[\s\S])*a…`) instead of `.*a.*b.*`.
+
+**Rules saved before this check** are analyzed at every start in the
+background: each vulnerable condition is logged as a `WARN` and the rule gets an
+**Unsafe regex** tag on the Detection Rules page. It keeps running (nothing is
+disabled for you); fix the condition in the editor, disable the rule until you
+do (that toggle is never refused), or reinstall the fixed catalog version. See
+[Troubleshooting: Unsafe regex tag](../operations/TROUBLESHOOTING.md#issue-a-parser-or-rule-shows-an-unsafe-regex-tag).
 
 ---
 

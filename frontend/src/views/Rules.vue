@@ -98,7 +98,11 @@
       </template>
 
       <el-table :data="rules" v-loading="loading" stripe>
-        <el-table-column prop="name" label="Name" min-width="250" />
+        <el-table-column prop="name" label="Name" min-width="250">
+          <template #default="{ row }">
+            {{ row.name }}<UnsafeRegexTag :safety="row.regex_safety" />
+          </template>
+        </el-table-column>
         <el-table-column prop="severity" label="Severity" width="120" sortable>
           <template #default="{ row }">
             <el-tag :type="getSeverityType(row.severity)">
@@ -165,6 +169,8 @@
       width="1000px"
       @close="resetForm"
     >
+      <!-- A refused save, a stored unsafe regex, or a save's warnings: inline, not a toast. -->
+      <RegexProblemAlert :problem="editorProblem" />
       <el-form :model="ruleForm" :rules="formRules" ref="formRef" label-width="120px" :disabled="!canEdit">
         <el-form-item label="Name" prop="name">
           <el-input v-model="ruleForm.name" placeholder="e.g., SSH Brute Force Detection" />
@@ -303,6 +309,7 @@
       </div>
 
       <el-alert v-if="catalogError" type="error" :closable="false" :title="catalogError" style="margin-bottom: 12px" />
+      <RegexProblemAlert :problem="catalogProblem" />
 
       <el-table :data="filteredRuleCatalog" v-loading="catalogLoading" stripe max-height="460" :default-sort="{ prop: 'name', order: 'ascending' }">
         <el-table-column prop="name" label="Name" min-width="220" sortable>
@@ -399,9 +406,15 @@
           <ul v-if="aiResult.validation && aiResult.validation.errors.length">
             <li v-for="(e, i) in aiResult.validation.errors" :key="i">{{ e }}</li>
           </ul>
+          <ul v-if="aiRedosVulnerable.length">
+            <li v-for="(f, i) in aiRedosVulnerable" :key="'r' + i">
+              ReDoS: regex at {{ f.location }} is vulnerable ({{ f.complexity }}) — saving it would be refused
+            </li>
+          </ul>
         </el-alert>
         <pre v-if="aiResult.rule" class="ai-preview">{{ aiRuleYaml }}</pre>
       </template>
+      <RegexProblemAlert :problem="aiProblem" />
 
       <template #footer>
         <el-button @click="aiDialogVisible = false">Close</el-button>
@@ -471,6 +484,9 @@
         style="font-family: var(--el-font-family-mono, monospace)"
       />
 
+      <div style="margin-top: 14px">
+        <RegexProblemAlert :problem="sigmaProblem" />
+      </div>
       <div v-if="sigmaPreview.length" style="margin-top: 14px">
         <el-alert
           :type="sigmaConvertible > 0 ? 'success' : 'warning'"
@@ -525,6 +541,9 @@ import { useAuthStore } from '@/stores/auth';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
 import { Plus, CircleCheck, Shop, Refresh, MagicStick, Download, Upload, Warning, InfoFilled } from '@element-plus/icons-vue';
 import yaml from 'js-yaml';
+import RegexProblemAlert from '@/components/RegexProblemAlert.vue';
+import UnsafeRegexTag from '@/components/UnsafeRegexTag.vue';
+import { batchProblem, problemFromError, storedUnsafeProblem, warningsProblem, type InlineProblem } from '@/utils/regexSafety';
 
 // Viewers browse rules and contribute them. Changing rules (create, edit,
 // enable, catalog install, delete) is analyst and up; the AI builder and Sigma
@@ -539,6 +558,13 @@ const recsLoading = ref(false);
 const loading = ref(false);
 const updating = ref(false);
 const saving = ref(false);
+
+// Inline problems (a refused ReDoS-vulnerable regex, a save's warnings, a
+// batch's skipped items), shown in the dialog that caused them, not a toast.
+const editorProblem = ref<InlineProblem | null>(null);
+const catalogProblem = ref<InlineProblem | null>(null);
+const aiProblem = ref<InlineProblem | null>(null);
+const sigmaProblem = ref<InlineProblem | null>(null);
 
 // Detection catalog (browse/install from GitHub)
 const catalogDialogVisible = ref(false);
@@ -595,6 +621,7 @@ function severityType(sev: string) {
 }
 
 function openCatalog() {
+  catalogProblem.value = null;
   catalogDialogVisible.value = true;
   if (catalog.value.length === 0) loadCatalog(false);
 }
@@ -615,12 +642,17 @@ async function loadCatalog(refresh: boolean) {
 
 async function installRule(row: any) {
   installing.value = row.name;
+  catalogProblem.value = null;
   try {
     const res = await api.installCatalogRule(row.name);
     ElMessage.success(`Rule "${row.name}" ${res.data.action}`);
+    catalogProblem.value = warningsProblem(res.data?.warnings, `"${row.name}" installed — but a regex could not be proven safe`);
     await Promise.all([fetchRules(), loadCatalog(false)]);
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || `Failed to install "${row.name}"`);
+    const problem = problemFromError(error, `Failed to install "${row.name}"`);
+    // Recommendations install from the page, not the catalog dialog: a message there.
+    if (catalogDialogVisible.value) catalogProblem.value = { ...problem, title: `"${row.name}": ${problem.title}` };
+    else ElMessage.error(problem.lines[0] || problem.title);
   } finally {
     installing.value = '';
   }
@@ -645,15 +677,16 @@ async function installRecommended(row: any) {
 
 async function installAll() {
   installingAll.value = true;
+  catalogProblem.value = null;
   try {
     const { data } = await api.installAllCatalogRules();
     const msg = `Detections: ${data.installed} installed, ${data.updated} updated` +
       (data.failed?.length ? `, ${data.failed.length} failed` : '');
-    if (data.failed?.length) ElMessage.warning(msg);
-    else ElMessage.success(msg);
+    catalogProblem.value = batchProblem(msg, data);
+    if (!catalogProblem.value) ElMessage.success(msg);
     await Promise.all([fetchRules(), loadCatalog(false)]);
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || 'Failed to install catalog');
+    catalogProblem.value = problemFromError(error, 'Failed to install catalog');
   } finally {
     installingAll.value = false;
   }
@@ -667,6 +700,9 @@ const aiGenerating = ref(false);
 const aiResult = ref<any>(null);
 const aiError = ref('');
 const aiSaving = ref(false);
+const aiRedosVulnerable = computed<any[]>(() =>
+  (aiResult.value?.redos || []).filter((f: any) => f.status === 'vulnerable')
+);
 const aiRuleYaml = computed(() => {
   try {
     return aiResult.value?.rule ? yaml.dump(aiResult.value.rule) : '';
@@ -678,6 +714,7 @@ const aiRuleYaml = computed(() => {
 function openAiBuilder() {
   aiResult.value = null;
   aiError.value = '';
+  aiProblem.value = null;
   aiDialogVisible.value = true;
 }
 
@@ -707,6 +744,7 @@ async function saveAiRule() {
   const rule = aiResult.value?.rule;
   if (!rule) return;
   aiSaving.value = true;
+  aiProblem.value = null;
   try {
     await api.createRule({
       name: rule.name,
@@ -720,7 +758,7 @@ async function saveAiRule() {
     aiDialogVisible.value = false;
     fetchRules();
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || 'Failed to save rule');
+    aiProblem.value = problemFromError(error, 'Failed to save rule');
   } finally {
     aiSaving.value = false;
   }
@@ -901,6 +939,7 @@ function showCreateDialog() {
 function editRule(rule: any) {
   editMode.value = true;
   selectedRule.value = rule;
+  editorProblem.value = storedUnsafeProblem(rule.regex_safety, 'rule');
 
   Object.assign(ruleForm, {
     name: rule.name,
@@ -926,6 +965,7 @@ function resetForm() {
   selectedTemplate.value = '';
   yamlError.value = '';
   yamlValid.value = false;
+  editorProblem.value = null;
   formRef.value?.clearValidate();
 }
 
@@ -1016,19 +1056,26 @@ async function saveRule() {
     };
 
     saving.value = true;
+    editorProblem.value = null;
     try {
-      if (editMode.value && selectedRule.value) {
-        await api.updateRule(selectedRule.value.id, data);
-        ElMessage.success('Rule updated successfully');
-      } else {
-        await api.createRule(data);
-        ElMessage.success('Rule created successfully');
-      }
-
-      dialogVisible.value = false;
+      const res =
+        editMode.value && selectedRule.value
+          ? await api.updateRule(selectedRule.value.id, data)
+          : await api.createRule(data);
       fetchRules();
+      // Saved, but a regex could not be proven safe: say so here and keep the
+      // editor open on the saved rule, rather than closing over the warning.
+      const warned = warningsProblem(res.data?.warnings, 'Saved — but a regex could not be proven safe');
+      if (warned) {
+        editMode.value = true;
+        selectedRule.value = res.data;
+        editorProblem.value = warned;
+        return;
+      }
+      ElMessage.success(editMode.value ? 'Rule updated successfully' : 'Rule created successfully');
+      dialogVisible.value = false;
     } catch (error: any) {
-      ElMessage.error(error.response?.data?.message || 'Failed to save rule');
+      editorProblem.value = problemFromError(error, 'Failed to save rule');
     } finally {
       saving.value = false;
     }
@@ -1082,8 +1129,8 @@ async function contributeRule(rule: any) {
   try {
     const { data } = await api.getRuleContribution(rule.id);
     contributeData.value = data;
-  } catch (error) {
-    ElMessage.error('Failed to prepare contribution');
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Failed to prepare contribution');
     contributeDialogVisible.value = false;
   } finally {
     contributeLoading.value = false;
@@ -1127,20 +1174,24 @@ const sigmaConvertible = computed(() => sigmaPreview.value.filter((r) => r.ok).l
 function openSigmaImport() {
   sigmaText.value = '';
   sigmaPreview.value = [];
+  sigmaProblem.value = null;
   sigmaDialogVisible.value = true;
 }
 
 async function runSigmaPreview() {
   if (!sigmaText.value.trim()) return;
   sigmaPreviewing.value = true;
+  sigmaProblem.value = null;
   try {
+    // Each converted rule passes the import's regex gate in the preview too, so
+    // a refused (ReDoS-vulnerable) one shows its reason in its own entry below.
     const { data } = await api.previewSigmaImport(sigmaText.value);
     sigmaPreview.value = data.results || [];
     if (sigmaConvertible.value === 0) {
       ElMessage.warning('No rules could be converted — see the reasons below');
     }
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || 'Preview failed');
+    sigmaProblem.value = problemFromError(error, 'Preview failed');
   } finally {
     sigmaPreviewing.value = false;
   }
@@ -1149,20 +1200,24 @@ async function runSigmaPreview() {
 async function runSigmaImport() {
   if (!sigmaText.value.trim()) return;
   sigmaImporting.value = true;
+  sigmaProblem.value = null;
   try {
     const { data } = await api.importSigma(sigmaText.value);
     const parts = [`${data.created} created`, `${data.updated} updated`];
     if (data.failed?.length) parts.push(`${data.failed.length} skipped`);
-    ElMessage.success(`Sigma import: ${parts.join(', ')}`);
-    if (data.failed?.length) {
-      // Re-run preview so the skipped reasons stay visible for the user.
+    const summary = `Sigma import: ${parts.join(', ')}`;
+    const problem = batchProblem(summary, data);
+    if (problem) {
+      // Keep the dialog open with every skipped rule and its reason inline.
       await runSigmaPreview();
+      sigmaProblem.value = problem;
     } else {
+      ElMessage.success(summary);
       sigmaDialogVisible.value = false;
     }
     await fetchRules();
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || 'Import failed');
+    sigmaProblem.value = problemFromError(error, 'Import failed');
   } finally {
     sigmaImporting.value = false;
   }

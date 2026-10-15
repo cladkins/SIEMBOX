@@ -5,7 +5,8 @@
  * actually supports, so a rule that passes CI imports and evaluates cleanly.
  */
 import * as yaml from '../../utils/yaml';
-import { validateUserRegex } from './userRegex';
+import { normalizeUserRegex, validateUserRegex } from './userRegex';
+import type { RegexRef } from '../parser/redos';
 
 /** Condition operators the rules engine implements (see rulesEngine.ts). */
 export const RULE_OPERATORS = [
@@ -170,4 +171,30 @@ export function toPortableRule(rule: any): PortableRule {
 /** Serialize a stored rule to the catalog's portable YAML. */
 export function portableRuleToYaml(rule: any): string {
   return yaml.dump(toPortableRule(rule), { lineWidth: 100, noRefs: true, sortKeys: false });
+}
+
+/**
+ * Every `regex` condition of a detection rule, as the engine compiles it
+ * (inline "(?i)" split off, explicit flags merged), for the ReDoS checks: the
+ * write-time gate (services/regex/regexSafety) and validate-detections. Accepts
+ * a portable rule, a rule_logic object, or a DB row.
+ */
+export function collectRuleRegexes(rule: any): RegexRef[] {
+  const conditions: any[] = Array.isArray(rule?.conditions)
+    ? rule.conditions
+    : Array.isArray(rule?.rule_logic?.conditions)
+      ? rule.rule_logic.conditions
+      : [];
+  const refs: RegexRef[] = [];
+  conditions.forEach((c, i) => {
+    if (!c || typeof c !== 'object' || c.operator !== 'regex') return;
+    if (c.value === undefined || c.value === null || c.value === '') return;
+    try {
+      const { source, flags } = normalizeUserRegex(String(c.value), typeof c.flags === 'string' ? c.flags : undefined);
+      refs.push({ location: `conditions[${i}].value`, source, flags });
+    } catch {
+      // A bad flag never compiles, so it never runs; validateRule reports it.
+    }
+  });
+  return refs;
 }

@@ -113,7 +113,11 @@
       </template>
 
       <el-table :data="parsers" v-loading="loading" stripe>
-        <el-table-column prop="name" label="Name" min-width="200" />
+        <el-table-column prop="name" label="Name" min-width="200">
+          <template #default="{ row }">
+            {{ row.name }}<UnsafeRegexTag :safety="row.regex_safety" />
+          </template>
+        </el-table-column>
         <el-table-column prop="parser_type" label="Type" width="120">
           <template #default="{ row }">
             <el-tag>{{ row.parser_type.toUpperCase() }}</el-tag>
@@ -186,6 +190,8 @@
       width="900px"
       @close="resetForm"
     >
+      <!-- A refused save, a stored unsafe regex, or a save's warnings: inline, not a toast. -->
+      <RegexProblemAlert :problem="editorProblem" />
       <el-form :model="parserForm" :rules="rules" ref="formRef" label-width="120px" :disabled="!canEdit">
         <el-form-item label="Name" prop="name">
           <el-input v-model="parserForm.name" placeholder="e.g., SSH Authentication" />
@@ -260,9 +266,13 @@
             :rows="3"
             placeholder="Paste a sample log line to test your parser"
           />
-          <el-button type="primary" size="small" @click="testCurrentParser" style="margin-top: 10px">
+          <el-button type="primary" size="small" :loading="testing" @click="testCurrentParser" style="margin-top: 10px">
             <el-icon><CircleCheck /></el-icon> Test Parser
           </el-button>
+        </el-form-item>
+
+        <el-form-item v-if="testProblem" label="Test Result">
+          <RegexProblemAlert :problem="testProblem" />
         </el-form-item>
 
         <el-form-item v-if="testResult" label="Test Result">
@@ -297,6 +307,9 @@
         <el-form-item>
           <el-button type="primary" @click="runTest" :loading="testing">Test</el-button>
         </el-form-item>
+        <el-form-item v-if="testProblem" label="Result">
+          <RegexProblemAlert :problem="testProblem" />
+        </el-form-item>
         <el-form-item v-if="testResult" label="Result">
           <el-alert
             :title="testResult.matched ? 'Matched!' : 'No Match'"
@@ -317,6 +330,9 @@
           <el-tag v-if="importParserData.parser_type" size="small">{{ importParserData.parser_type.toUpperCase() }}</el-tag>
         </p>
         <p v-if="importParserData.description" class="import-desc">{{ importParserData.description }}</p>
+
+        <!-- The preview (POST /parsers/validate) runs the import's own regex gate. -->
+        <RegexProblemAlert :problem="importProblem" />
 
         <el-alert
           v-if="importValidation && !importValidation.ok"
@@ -355,7 +371,7 @@
         <el-button @click="importDialogVisible = false">Cancel</el-button>
         <el-button
           type="primary"
-          :disabled="!importValidation || !importValidation.ok"
+          :disabled="!importValidation || !importValidation.ok || importProblem?.type === 'error'"
           :loading="importing"
           @click="doImport"
         >
@@ -408,11 +424,12 @@
         :title="catalogError"
         style="margin-bottom: 12px"
       />
+      <RegexProblemAlert :problem="catalogProblem" />
 
       <el-table :data="filteredParserCatalog" v-loading="catalogLoading" stripe max-height="460" :default-sort="{ prop: 'name', order: 'ascending' }">
         <el-table-column prop="name" label="Name" min-width="150" sortable>
           <template #default="{ row }">
-            <strong>{{ row.name }}</strong>
+            <strong>{{ row.name }}</strong><UnsafeRegexTag :safety="row.regex_safety" />
             <div v-if="row.log_source" class="catalog-sub">{{ row.log_source }}</div>
           </template>
         </el-table-column>
@@ -506,6 +523,11 @@ e.g. Jan 1 12:00:00 host myapp: login failed from 203.0.113.5"
           <ul v-if="aiResult.validation && aiResult.validation.errors.length">
             <li v-for="(e, i) in aiResult.validation.errors" :key="i">{{ e }}</li>
           </ul>
+          <ul v-if="aiRedosVulnerable.length">
+            <li v-for="(f, i) in aiRedosVulnerable" :key="'r' + i">
+              ReDoS: regex at {{ f.location }} is vulnerable ({{ f.complexity }}) — saving it would be refused
+            </li>
+          </ul>
           <div v-for="(f, i) in (aiResult.self_test && aiResult.self_test.failures) || []" :key="'f' + i" class="selftest-failure">
             sample[{{ f.index }}]<span v-if="!f.matched"> — did not match</span>
             <ul><li v-for="(m, j) in f.mismatches" :key="j">{{ m.field }}: expected {{ JSON.stringify(m.expected) }}, got {{ JSON.stringify(m.actual) }}</li></ul>
@@ -517,11 +539,12 @@ e.g. Jan 1 12:00:00 host myapp: login failed from 203.0.113.5"
         </p>
         <pre v-if="aiResult.parser" class="ai-preview">{{ JSON.stringify(aiResult.parser, null, 2) }}</pre>
       </template>
+      <RegexProblemAlert :problem="aiProblem" />
 
       <template #footer>
         <el-button @click="aiDialogVisible = false">Close</el-button>
         <el-button
-          v-if="aiResult && aiResult.parser && !aiResult.ok"
+          v-if="aiResult && aiResult.parser && !aiResult.ok && !aiRedosVulnerable.length"
           type="warning"
           plain
           :loading="aiSaving"
@@ -591,6 +614,9 @@ import { api } from '@/services/api';
 import { useAuthStore } from '@/stores/auth';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
 import { Plus, Delete, Right, CircleCheck, Upload, Shop, Refresh, MagicStick, Download, InfoFilled } from '@element-plus/icons-vue';
+import RegexProblemAlert from '@/components/RegexProblemAlert.vue';
+import UnsafeRegexTag from '@/components/UnsafeRegexTag.vue';
+import { batchProblem, problemFromError, storedUnsafeProblem, warningsProblem, type InlineProblem } from '@/utils/regexSafety';
 
 // Viewers browse, test saved parsers, export and contribute. Changing parsers
 // (create, edit, enable, import, catalog install, delete) is analyst and up,
@@ -629,6 +655,14 @@ const mappingKeys = ref<string[]>([]);
 const testSample = ref('');
 const testInput = ref('');
 const testResult = ref<any>(null);
+
+// Inline problems (regex refused / test run stopped / oversized sample / warnings),
+// shown in the dialog that caused them instead of a generic toast.
+const editorProblem = ref<InlineProblem | null>(null);
+const testProblem = ref<InlineProblem | null>(null);
+const importProblem = ref<InlineProblem | null>(null);
+const catalogProblem = ref<InlineProblem | null>(null);
+const aiProblem = ref<InlineProblem | null>(null);
 
 // Portable parser import/export
 const importFileInput = ref<HTMLInputElement>();
@@ -690,10 +724,14 @@ const aiGenerating = ref(false);
 const aiResult = ref<any>(null);
 const aiError = ref('');
 const aiSaving = ref(false);
+const aiRedosVulnerable = computed<any[]>(() =>
+  (aiResult.value?.redos || []).filter((f: any) => f.status === 'vulnerable')
+);
 
 function openAiBuilder() {
   aiResult.value = null;
   aiError.value = '';
+  aiProblem.value = null;
   aiDialogVisible.value = true;
 }
 
@@ -735,13 +773,14 @@ async function saveAiParser(force = false) {
     }
   }
   aiSaving.value = true;
+  aiProblem.value = null;
   try {
     const res = await api.importParser(aiResult.value.parser, force);
     ElMessage.success(`Parser "${res.data.parser?.name}" ${res.data.action}`);
     aiDialogVisible.value = false;
     fetchParsers();
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || 'Failed to save parser');
+    aiProblem.value = problemFromError(error, 'Failed to save parser');
   } finally {
     aiSaving.value = false;
   }
@@ -802,6 +841,7 @@ function showCreateDialog() {
 function editParser(parser: any) {
   editMode.value = true;
   selectedParser.value = parser;
+  editorProblem.value = storedUnsafeProblem(parser.regex_safety, 'parser');
 
   Object.assign(parserForm, {
     name: parser.name,
@@ -832,6 +872,8 @@ function resetForm() {
   mappingKeys.value = [];
   testSample.value = '';
   testResult.value = null;
+  testProblem.value = null;
+  editorProblem.value = null;
   formRef.value?.clearValidate();
 }
 
@@ -888,8 +930,11 @@ async function testCurrentParser() {
   });
 
   testing.value = true;
+  testResult.value = null;
+  testProblem.value = null;
   try {
-    // Test parser configuration without saving
+    // Test parser configuration without saving. It runs in a worker with a time
+    // budget: a catastrophic pattern answers 422 REGEX_TIMEOUT, shown here.
     const response = await api.testParserConfig(
       parserForm.parser_type,
       parserForm.pattern,
@@ -897,8 +942,8 @@ async function testCurrentParser() {
       testSample.value
     );
     testResult.value = response.data;
-  } catch (error) {
-    ElMessage.error('Test failed');
+  } catch (error: any) {
+    testProblem.value = problemFromError(error, 'Test failed');
   } finally {
     testing.value = false;
   }
@@ -924,19 +969,26 @@ async function saveParser() {
     };
 
     saving.value = true;
+    editorProblem.value = null;
     try {
-      if (editMode.value && selectedParser.value) {
-        await api.updateParser(selectedParser.value.id, data);
-        ElMessage.success('Parser updated successfully');
-      } else {
-        await api.createParser(data);
-        ElMessage.success('Parser created successfully');
-      }
-
-      dialogVisible.value = false;
+      const res =
+        editMode.value && selectedParser.value
+          ? await api.updateParser(selectedParser.value.id, data)
+          : await api.createParser(data);
       fetchParsers();
+      // Saved, but a regex could not be proven safe: say so here and keep the
+      // editor open on the saved parser, rather than closing over the warning.
+      const warned = warningsProblem(res.data?.warnings, 'Saved — but a regex could not be proven safe');
+      if (warned) {
+        editMode.value = true;
+        selectedParser.value = res.data;
+        editorProblem.value = warned;
+        return;
+      }
+      ElMessage.success(editMode.value ? 'Parser updated successfully' : 'Parser created successfully');
+      dialogVisible.value = false;
     } catch (error: any) {
-      ElMessage.error(error.response?.data?.message || 'Failed to save parser');
+      editorProblem.value = problemFromError(error, 'Failed to save parser');
     } finally {
       saving.value = false;
     }
@@ -960,6 +1012,7 @@ function testParser(parser: any) {
   selectedParser.value = parser;
   testInput.value = '';
   testResult.value = null;
+  testProblem.value = null;
   testDialogVisible.value = true;
 }
 
@@ -970,11 +1023,13 @@ async function runTest() {
   }
 
   testing.value = true;
+  testResult.value = null;
+  testProblem.value = null;
   try {
     const response = await api.testParser(selectedParser.value.id, testInput.value);
     testResult.value = response.data;
-  } catch (error) {
-    ElMessage.error('Test failed');
+  } catch (error: any) {
+    testProblem.value = problemFromError(error, 'Test failed');
   } finally {
     testing.value = false;
   }
@@ -1006,8 +1061,8 @@ async function contributeParser(parser: any) {
   try {
     const { data } = await api.getParserContribution(parser.id);
     contributeData.value = data;
-  } catch (error) {
-    ElMessage.error('Failed to prepare contribution');
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Failed to prepare contribution');
     contributeDialogVisible.value = false;
   } finally {
     contributeLoading.value = false;
@@ -1052,20 +1107,23 @@ async function onImportFileChange(e: Event) {
   importParserData.value = parsed;
   importValidation.value = null;
   importSelfTest.value = null;
+  importProblem.value = null;
+  importDialogVisible.value = true;
   try {
     const res = await api.validatePortableParser(parsed);
     importValidation.value = res.data.validation;
     importSelfTest.value = res.data.self_test;
-  } catch {
-    ElMessage.error('Failed to validate parser');
+  } catch (error: any) {
+    // 422 REGEX_UNSAFE / REGEX_TIMEOUT, 413 SAMPLE_TOO_LARGE: what the import would refuse.
+    importProblem.value = problemFromError(error, 'Failed to validate parser');
   }
-  importDialogVisible.value = true;
 }
 
 async function doImport() {
   if (!importParserData.value) return;
   const force = !!(importSelfTest.value && !importSelfTest.value.ok);
   importing.value = true;
+  importProblem.value = null;
   try {
     const res = await api.importParser(importParserData.value, force);
     ElMessage.success(`Parser ${res.data.action} successfully`);
@@ -1073,13 +1131,14 @@ async function doImport() {
     importParserData.value = null;
     fetchParsers();
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || 'Failed to import parser');
+    importProblem.value = problemFromError(error, 'Failed to import parser');
   } finally {
     importing.value = false;
   }
 }
 
 function openCatalog() {
+  catalogProblem.value = null;
   catalogDialogVisible.value = true;
   if (catalog.value.length === 0) loadCatalog(false);
 }
@@ -1100,12 +1159,17 @@ async function loadCatalog(refresh: boolean) {
 
 async function install(row: any) {
   installing.value = row.name;
+  catalogProblem.value = null;
   try {
     const res = await api.installCatalogParser(row.name);
     ElMessage.success(`Parser "${row.name}" ${res.data.action}`);
+    catalogProblem.value = warningsProblem(res.data?.warnings, `"${row.name}" installed — but a regex could not be proven safe`);
     await Promise.all([fetchParsers(), loadCatalog(false)]);
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || `Failed to install "${row.name}"`);
+    const problem = problemFromError(error, `Failed to install "${row.name}"`);
+    // Recommendations install from the page, not the catalog dialog: a message there.
+    if (catalogDialogVisible.value) catalogProblem.value = { ...problem, title: `"${row.name}": ${problem.title}` };
+    else ElMessage.error(problem.lines[0] || problem.title);
   } finally {
     installing.value = '';
   }
@@ -1143,15 +1207,16 @@ function aiFromSource(u: any) {
 
 async function installAll() {
   installingAll.value = true;
+  catalogProblem.value = null;
   try {
     const { data } = await api.installAllCatalogParsers();
     const msg = `Parsers: ${data.installed} installed, ${data.updated} updated` +
       (data.failed?.length ? `, ${data.failed.length} failed` : '');
-    if (data.failed?.length) ElMessage.warning(msg);
-    else ElMessage.success(msg);
+    catalogProblem.value = batchProblem(msg, data);
+    if (!catalogProblem.value) ElMessage.success(msg);
     await Promise.all([fetchParsers(), loadCatalog(false)]);
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || 'Failed to install catalog');
+    catalogProblem.value = problemFromError(error, 'Failed to install catalog');
   } finally {
     installingAll.value = false;
   }

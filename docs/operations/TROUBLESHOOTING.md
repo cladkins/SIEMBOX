@@ -791,6 +791,91 @@ Only a manually added source's address can be changed; a scan-discovered source 
 
 ## Parser Problems
 
+### Issue: Saving a parser or rule is refused: "ReDoS: regex at … is vulnerable"
+
+**Symptoms:**
+- The parser editor, rule editor, import dialog or catalog dialog shows
+  *Refused: a regex can backtrack catastrophically (ReDoS)* with a sentence like
+  `ReDoS: regex at pattern is vulnerable (exponential) — rewrite it linear before saving`
+- The API answers `422` with `"code": "REGEX_UNSAFE"`
+- In *Install all*, a Sigma import or a content pack, one item is skipped with
+  that sentence as its reason (the rest install)
+
+**Why:** the regex at that location (`pattern`, `derivations[0].extract.user`,
+`conditions[1].value`, …) can take exponential or polynomial time on a crafted
+line, and parsers and rules run on every log line, on the same thread as the
+API and syslog ingestion. SIEMBox checks every regex it stores with recheck and
+refuses one it can prove vulnerable; `force` does not override that.
+
+**Fix:** rewrite the regex so no two parts can match the same text. The alert
+shows the regex, the kind of backtracking and an example of slow input. The
+common shapes and their linear rewrites are in
+[PARSERS.md, Regex Safety](../reference/PARSERS.md#regex-safety) and
+[RULES.md, Regex Safety](../reference/RULES.md#regex-safety); the usual ones are a
+repeated group like `(\w+\s?)+`, two wildcards around a literal
+(`^(.*) from (.*)$`), and "X, then later Y" written `X.*Y`. You can check a file
+before importing it:
+
+```bash
+cd backend && npm run build
+npm run validate-parsers -- /path/to/my.parser.json
+npm run validate-detections -- /path/to/my-rule.yaml
+```
+
+A warning instead of a refusal — `could not be proven safe (unknown: …)` — means
+the analysis ran out of its time budget (`REGEX_SAFETY_CHECK_TIMEOUT_MS`,
+default 5000 ms) or does not support the syntax. The item was saved. Large but
+well-delimited patterns land there on a slow host; simplify the pattern if you
+want a definite answer.
+
+`503` with `"code": "REGEX_BUSY"` means the checker is saturated (many saves at
+once): retry in a moment. A regex is never saved unchecked.
+
+### Issue: A parser or rule shows an "Unsafe regex" tag
+
+**Symptoms:**
+- A red **Unsafe regex** tag next to a parser on the Parsers page, or a rule on
+  the Detection Rules page; opening it shows *This parser has an unsafe regex
+  (ReDoS)* with the regex
+- The backend log has, after a start:
+
+```
+[regex-safety] Parser "my-app" (id 12) has an unsafe regex at pattern: ReDoS-vulnerable (exponential). It runs on every log line and a crafted line can stall ingestion. It stays active; ...
+```
+
+**Why:** it was saved before SIEMBox checked regexes at write time (or imported
+by a path that did not check). At every start SIEMBox analyzes the stored
+regexes in the background and flags the vulnerable ones. It does **not**
+disable them: that would silently stop parsing (or detecting) those logs.
+
+**Fix**, in order of preference:
+1. Edit it and rewrite the regex linear (see the previous issue). Saving a
+   change to its pattern is refused until the regex is linear, so the editor
+   tells you when you are done.
+2. If it came from the catalog, reinstall it (*Browse Catalog* → *Update* or
+   *Reinstall*); ACCESS-003, INFRA-001 and INFRA-003 were rewritten for this.
+3. Until then, switch it off with its toggle (never refused) if you can do
+   without it, so a crafted line cannot reach it.
+
+The tag disappears on the next page load after the fix (verdicts are cached in
+the `regex_safety_verdicts` table; deleting rows there only costs a re-check).
+
+### Issue: Test says "Stopped: the pattern ran out of time on this input"
+
+**Symptoms:** the parser editor's **Test**, **Test** on a saved parser, or an
+import preview's self-tests answer `422` with `"code": "REGEX_TIMEOUT"`:
+*The pattern did not finish within 1000 ms on this input and was stopped.*
+
+**Why:** test runs happen in a worker thread with a hard budget
+(`REGEX_TEST_TIMEOUT_MS`, default 1000 ms) so a catastrophic pattern cannot hang
+SIEMBox; this one backtracked past it on your sample. The same pattern on the
+live log stream would stall ingestion, and saving it is refused if recheck can
+prove it.
+
+**Fix:** rewrite the pattern linear (first issue above). `413` with
+`"code": "SAMPLE_TOO_LARGE"` means the sample is over 64 KB (or a portable
+parser has more than 100 `test_samples`): test a shorter line.
+
 ### Issue: "Invalid regular expression: Invalid group" Error
 
 **Symptoms:**

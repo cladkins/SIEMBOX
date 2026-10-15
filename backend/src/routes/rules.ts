@@ -14,15 +14,22 @@ import {
   clearDetectionCache,
   ruleSignature,
 } from '../services/rules/detectionCatalog';
-import {
-  recommendRules,
-  RuleSourceSample,
-  CandidateRule,
-} from '../services/rules/detectionRecommendations';
+import { RuleSourceSample, CandidateRule } from '../services/rules/detectionRecommendations';
 import { generateDetection } from '../services/ai/aiService';
 import { authorize } from '../middleware/auth';
 import { hasRequiredRole, requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { query } from '../config/database';
+import { redosErrorMessage, redosWarningMessage } from '../services/parser/redos';
+import {
+  assessRuleRegexes,
+  collectRuleRegexes,
+  peekRegexSafety,
+  refusalReason,
+  withRuleRegexSafety,
+  type RegexSafetyReport,
+} from '../services/regex/regexSafety';
+import { recommendRulesBounded, regexRunErrorResponse } from '../services/regex/boundedRegex';
+import { gateOrRefuse, sendRegexRunError } from '../services/regex/regexHttp';
 
 const router = Router();
 
@@ -30,13 +37,40 @@ const router = Router();
 // role. Creating, changing, deleting or installing a detection needs analyst or
 // higher (a viewer could otherwise disable detections); a refused call is
 // written to audit_logs. The AI builder and Sigma import stay admin-only.
+//
+// Regex safety (services/regex): a rule's `regex` conditions run on every parsed
+// log. Every write path refuses one recheck proves vulnerable to catastrophic
+// backtracking (422 REGEX_UNSAFE; a batch records it in `failed`) and accepts an
+// indeterminate one with a warning.
 const requireRuleWrite = requireScanPermission(UserRole.Analyst, 'detection_rule');
+
+/** The write-time regex gate for one rule (answers 422/503 itself and returns null). */
+function gateRule(res: Response, subject: string, rule: unknown): Promise<RegexSafetyReport | null> {
+  return gateOrRefuse(res, subject, () => assessRuleRegexes(rule));
+}
+
+type BatchGate = { ok: true; report: RegexSafetyReport } | { ok: false; reason: string; code: string };
+
+/** The gate for one item of a batch (catalog install-all, Sigma import): it never answers the request. */
+async function batchGate(rule: unknown): Promise<BatchGate> {
+  try {
+    const report = await assessRuleRegexes(rule);
+    if (report.vulnerable.length > 0) return { ok: false, reason: refusalReason(report), code: 'REGEX_UNSAFE' };
+    return { ok: true, report };
+  } catch (error) {
+    const answer = regexRunErrorResponse(error);
+    if (!answer) throw error;
+    return { ok: false, reason: answer.body.message, code: answer.body.code };
+  }
+}
 
 // Get all rules
 router.get('/', async (_req: Request, res: Response) => {
   try {
     const rules = await DetectionRuleModel.findAll();
-    res.json(rules);
+    // `regex_safety` (cached verdicts only): status 'vulnerable' is the
+    // Detection Rules page's "Unsafe regex" tag.
+    res.json(rules.map(withRuleRegexSafety));
   } catch {
     throw new ApiError(500, 'Failed to fetch rules');
   }
@@ -116,17 +150,29 @@ router.get('/recommendations', async (req: Request, res: Response) => {
     const installedNames = new Set(localRules.map((r) => r.name));
     const installedSigs = new Set(localRules.map((r) => ruleSignature(r)).filter(Boolean));
     const parsedByName = await getCatalogDetections();
+    // A candidate already known to be ReDoS-vulnerable is not dry-run; the rest
+    // run in the regex test pool (catalog regexes against live log fields).
     const candidates: CandidateRule[] = entries
       .filter((e) => e.valid && !installedNames.has(e.name) && !(e.signature && installedSigs.has(e.signature)))
       .map((e) => parsedByName.get(e.name))
-      .filter((r): r is CandidateRule => !!r);
+      .filter((r): r is CandidateRule => !!r)
+      .filter((r) => peekRegexSafety(collectRuleRegexes(r)).status !== 'vulnerable');
 
+    let recommended: Awaited<ReturnType<typeof recommendRulesBounded>>;
+    try {
+      recommended = await recommendRulesBounded(sources, candidates);
+    } catch (error) {
+      const answer = regexRunErrorResponse(error, 'The recommendation dry-run');
+      if (!answer) throw error;
+      res.status(503).json(answer.body);
+      return;
+    }
     const body = {
       window: '24h',
       sampled_parsers: sources.length,
       candidates_considered: candidates.length,
       computed_at: new Date().toISOString(),
-      ...recommendRules(sources, candidates),
+      ...recommended,
     };
     ruleRecsCache = { at: Date.now(), body };
     res.json(body);
@@ -147,12 +193,16 @@ router.get('/catalog', async (req: Request, res: Response) => {
     const { source, entries } = await fetchDetectionCatalog(force);
     const installed = await DetectionRuleModel.findAll();
     const bySig = new Map(installed.map((r) => [r.name, ruleSignature(r)]));
+    // Cached verdicts only; entries not analyzed yet are queued in the background.
+    const parsedByName = await getCatalogDetections();
     const rules = entries.map((e) => {
       const isInstalled = bySig.has(e.name);
+      const parsed = parsedByName.get(e.name);
       return {
         ...e,
         installed: isInstalled,
         update_available: isInstalled && e.signature !== '' && bySig.get(e.name) !== e.signature,
+        regex_safety: parsed ? peekRegexSafety(collectRuleRegexes(parsed)) : undefined,
       };
     });
     res.json({ source, rules });
@@ -186,6 +236,8 @@ router.post('/catalog/install', requireRuleWrite, async (req: Request, res: Resp
       res.status(422).json({ message: 'Catalog rule failed validation', validation });
       return;
     }
+    const safety = await gateRule(res, `Catalog rule "${parsed.name}"`, parsed);
+    if (!safety) return;
 
     const rule_logic = {
       conditions: parsed.conditions,
@@ -212,7 +264,12 @@ router.post('/catalog/install', requireRuleWrite, async (req: Request, res: Resp
         });
 
     await RulesEngine.getInstance().reload();
-    res.status(existing ? 200 : 201).json({ action: existing ? 'updated' : 'created', rule: saved });
+    res.status(existing ? 200 : 201).json({
+      action: existing ? 'updated' : 'created',
+      rule: saved,
+      warnings: safety.warnings,
+      regex_safety: { vulnerable: [], unknown: safety.unknown },
+    });
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to install rule from catalog');
@@ -230,7 +287,9 @@ router.post('/catalog/install-all', requireRuleWrite, async (req: Request, res: 
       total: entries.length,
       installed: 0,
       updated: 0,
-      failed: [] as Array<{ name: string; reason: string }>,
+      failed: [] as Array<{ name: string; reason: string; code?: string }>,
+      /** Installed, but a regex could not be proven safe (indeterminate). */
+      warnings: [] as Array<{ name: string; warnings: string[] }>,
     };
     for (const entry of entries) {
       try {
@@ -245,6 +304,12 @@ router.post('/catalog/install-all', requireRuleWrite, async (req: Request, res: 
           results.failed.push({ name: entry.name, reason: 'failed validation' });
           continue;
         }
+        const gate = await batchGate(parsed);
+        if (!gate.ok) {
+          results.failed.push({ name: entry.name, reason: gate.reason, code: gate.code });
+          continue;
+        }
+        if (gate.report.warnings.length > 0) results.warnings.push({ name: entry.name, warnings: gate.report.warnings });
         const rule_logic = {
           conditions: parsed.conditions,
           aggregation: parsed.aggregation,
@@ -308,14 +373,35 @@ router.post('/import/sigma/preview', authorize('admin'), async (req: Request, re
   if (typeof sigma !== 'string' || sigma.trim() === '') {
     throw new ApiError(400, 'sigma (YAML string) is required');
   }
-  const results = convertSigmaYaml(sigma).map((r) => ({
-    title: r.title,
-    ok: !!r.rule,
-    rule: r.rule,
-    errors: r.errors,
-    warnings: r.warnings,
-    fieldsUsed: r.fieldsUsed,
-  }));
+  // Each converted rule passes the import's regex gate here too, so the
+  // preview shows (inline, per document) the refusal the import would give.
+  const results = [];
+  for (const r of convertSigmaYaml(sigma)) {
+    let errors = r.errors;
+    let warnings = r.warnings;
+    let regex_safety: { vulnerable: unknown[]; unknown: unknown[] } | undefined;
+    if (r.rule) {
+      let report: RegexSafetyReport;
+      try {
+        report = await assessRuleRegexes(r.rule);
+      } catch (error) {
+        if (sendRegexRunError(res, error)) return;
+        throw error;
+      }
+      errors = [...errors, ...report.errors];
+      warnings = [...warnings, ...report.warnings];
+      regex_safety = { vulnerable: report.vulnerable, unknown: report.unknown };
+    }
+    results.push({
+      title: r.title,
+      ok: !!r.rule && (regex_safety?.vulnerable.length ?? 0) === 0,
+      rule: r.rule,
+      errors,
+      warnings,
+      fieldsUsed: r.fieldsUsed,
+      regex_safety,
+    });
+  }
   res.json({
     total: results.length,
     convertible: results.filter((r) => r.ok).length,
@@ -338,7 +424,9 @@ router.post('/import/sigma', authorize('admin'), async (req: Request, res: Respo
     total: converted.length,
     created: 0,
     updated: 0,
-    failed: [] as Array<{ title?: string; reason: string }>,
+    failed: [] as Array<{ title?: string; reason: string; code?: string }>,
+    /** Imported, but a regex could not be proven safe (indeterminate). */
+    warnings: [] as Array<{ title?: string; warnings: string[] }>,
   };
 
   for (const c of converted) {
@@ -351,6 +439,12 @@ router.post('/import/sigma', authorize('admin'), async (req: Request, res: Respo
       results.failed.push({ title: c.title, reason: `validation: ${validation.errors.join('; ')}` });
       continue;
     }
+    const gate = await batchGate(c.rule);
+    if (!gate.ok) {
+      results.failed.push({ title: c.title, reason: gate.reason, code: gate.code });
+      continue;
+    }
+    if (gate.report.warnings.length > 0) results.warnings.push({ title: c.title, warnings: gate.report.warnings });
     try {
       const rule_logic = {
         conditions: c.rule.conditions,
@@ -401,7 +495,7 @@ router.get('/:id', async (req: Request, res: Response) => {
       throw new ApiError(404, 'Rule not found');
     }
 
-    res.json(rule);
+    res.json(withRuleRegexSafety(rule));
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch rule');
@@ -420,7 +514,19 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
 
     const portable = toPortableRule(rule);
     const validation = validateRule(portable, { strict: true });
-    const ready = validation.ok;
+    // The detection catalog's CI (validate-detections) refuses a ReDoS-vulnerable
+    // regex, so this check does too: same verdicts as the write-time gate, same
+    // wording as the parser contribute check. 'unknown' is a warning only.
+    let safety: RegexSafetyReport | null = null;
+    if (validation.ok) {
+      try {
+        safety = await assessRuleRegexes(portable);
+      } catch (error) {
+        if (sendRegexRunError(res, error)) return;
+        throw error;
+      }
+    }
+    const ready = validation.ok && (safety?.vulnerable.length ?? 0) === 0;
 
     const slug = String(rule.name || `rule-${id}`).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || `rule-${id}`;
     const filePath = `${getDetectionSource().path}/${slug}.yaml`;
@@ -432,8 +538,9 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
       path: filePath,
       content,
       valid: validation.ok,
-      errors: validation.errors,
-      warnings: validation.warnings,
+      errors: [...validation.errors, ...(safety?.vulnerable ?? []).map((f) => redosErrorMessage(f, 'contributing'))],
+      warnings: [...validation.warnings, ...(safety?.unknown ?? []).map(redosWarningMessage)],
+      redos: safety ? [...safety.vulnerable, ...safety.unknown] : [],
       self_test: null, // detections have no self-tests (parsers do)
       ready,
       contribute_url: ready ? catalogNewFileUrl(filePath, content) : null,
@@ -461,6 +568,9 @@ router.post('/', requireRuleWrite, async (req: Request, res: Response) => {
       throw new ApiError(400, 'Invalid YAML format');
     }
 
+    const safety = await gateRule(res, `Rule "${name}"`, rule_logic);
+    if (!safety) return;
+
     const rule = await DetectionRuleModel.create({
       name,
       description,
@@ -471,7 +581,7 @@ router.post('/', requireRuleWrite, async (req: Request, res: Response) => {
       tags,
     });
 
-    res.status(201).json(rule);
+    res.status(201).json({ ...withRuleRegexSafety(rule), warnings: safety.warnings });
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to create rule');
@@ -493,6 +603,17 @@ router.put('/:id', requireRuleWrite, async (req: Request, res: Response) => {
       }
     }
 
+    // New rule logic (from YAML, or sent directly) passes the regex gate. An
+    // edit that leaves the logic alone (enable/disable, rename) is never refused
+    // for a regex it does not touch: disabling is the mitigation for an unsafe one.
+    let warnings: string[] = [];
+    if (updateData.rule_logic !== undefined) {
+      const subject = typeof updateData.name === 'string' ? `Rule "${updateData.name}"` : `Rule ${id}`;
+      const safety = await gateRule(res, subject, updateData.rule_logic);
+      if (!safety) return;
+      warnings = safety.warnings;
+    }
+
     const rule = await DetectionRuleModel.update(id, updateData);
 
     if (!rule) {
@@ -502,7 +623,7 @@ router.put('/:id', requireRuleWrite, async (req: Request, res: Response) => {
     // Reload rules engine to pick up the changes
     await RulesEngine.getInstance().reload();
 
-    res.json(rule);
+    res.json({ ...withRuleRegexSafety(rule), warnings });
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to update rule');

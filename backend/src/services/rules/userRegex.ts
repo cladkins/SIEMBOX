@@ -75,12 +75,22 @@ const cache = new Map<string, RegExp>();
 const MAX_CACHED = 500;
 
 /**
+ * The source and flags the engine would compile for an authored pattern (inline
+ * group split off, flags merged and checked), without compiling it. The regex
+ * safety gate analyzes exactly this, so it judges the regex that actually runs.
+ * Throws UserRegexError for a bad flag.
+ */
+export function normalizeUserRegex(pattern: string, explicitFlags?: string): { source: string; flags: string } {
+  const { source, flags: inline } = extractInlineFlags(pattern);
+  return { source, flags: validateFlags(`${inline}${explicitFlags ?? ''}`, pattern) };
+}
+
+/**
  * Compile an authored pattern. Throws UserRegexError for a bad flag and the
  * native SyntaxError for a bad pattern, so callers can report which it was.
  */
 export function compileUserRegex(pattern: string, explicitFlags?: string): CompiledRegex {
-  const { source, flags: inline } = extractInlineFlags(pattern);
-  const flags = validateFlags(`${inline}${explicitFlags ?? ''}`, pattern);
+  const { source, flags } = normalizeUserRegex(pattern, explicitFlags);
 
   // NUL separator: a regex source may contain any printable character, so the
   // delimiter has to be one it cannot. Written as an escape rather than a raw

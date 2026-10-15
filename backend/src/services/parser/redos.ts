@@ -10,6 +10,13 @@
  * AI parser builder means "passes locally" and "passes catalog CI" can never
  * diverge again.
  *
+ * This file is the SYNCHRONOUS scan (recheck's checkSync blocks the calling
+ * thread until the analysis ends): right for the CLI validators, wrong for a
+ * request handler. The app's write-time gate (services/regex/regexSafety) runs
+ * the same analysis in a worker thread and reuses the verdict mapping and the
+ * message wording below, so the CLI, the contribute check and the gate say the
+ * same thing about the same regex.
+ *
  * recheck is loaded lazily so the server never fails to boot if it is missing;
  * callers that must not silently skip the gate (CI) pass `required: true`.
  */
@@ -22,6 +29,8 @@ export interface RedosFinding {
   status: 'vulnerable' | 'unknown' | 'error';
   complexity?: string;
   detail?: string;
+  /** For a vulnerable regex: recheck's attack string, e.g. `'a'.repeat(31) + '\x00'`. */
+  attack?: string;
 }
 
 /** Structural shape this module needs from a portable parser. */
@@ -31,15 +40,30 @@ interface ScannableParser {
   derivations?: any[] | null;
 }
 
-interface RegexRef {
+export interface RegexRef {
   location: string;
   source: string;
   flags: string;
 }
 
+/**
+ * Time budget for one regex in the CLI validators: recheck's own default, now
+ * explicit so the check itself can never hang. A regex the analyzer cannot
+ * decide within it is reported as 'unknown' (a warning, never a failure).
+ */
+export const CLI_REDOS_TIMEOUT_MS = 10_000;
+
+/** What one recheck analysis concluded, independent of where the regex came from. */
+export interface RegexVerdict {
+  status: 'safe' | 'vulnerable' | 'unknown';
+  complexity?: string;
+  detail?: string;
+  attack?: string;
+}
+
 /** recheck's checkSync, or null if the package is unavailable. Cached. */
-let checker: ((src: string, flags: string) => any) | null | undefined;
-function getChecker(): ((src: string, flags: string) => any) | null {
+let checker: ((src: string, flags: string, params?: Record<string, unknown>) => any) | null | undefined;
+function getChecker(): ((src: string, flags: string, params?: Record<string, unknown>) => any) | null {
   if (checker === undefined) {
     try {
       // Lazy CJS require: keeps recheck off the startup path and lets the server
@@ -57,6 +81,39 @@ function getChecker(): ((src: string, flags: string) => any) | null {
 /** Is the recheck analyzer available in this process? */
 export function redosCheckerAvailable(): boolean {
   return getChecker() !== null;
+}
+
+/** recheck's `g`/`y` don't affect backtracking; strip them before analysis. */
+export function analysisFlags(flags: string): string {
+  return flags.replace(/[gy]/g, '');
+}
+
+/** Why recheck gave up, in words a user can act on. */
+function unknownDetail(error: { kind?: string; message?: string } | undefined): string | undefined {
+  switch (error?.kind) {
+    case 'timeout':
+      return 'the analysis hit its time budget';
+    case 'cancel':
+      return 'the analysis was cancelled';
+    case 'unsupported':
+      return `the analyzer does not support this syntax${error.message ? ` (${error.message})` : ''}`;
+    case 'invalid':
+      return `the analyzer could not parse it${error.message ? ` (${error.message})` : ''}`;
+    default:
+      return error?.message || undefined;
+  }
+}
+
+/** Map recheck's Diagnostics object to a verdict. Shared with the worker-thread scan. */
+export function verdictFromDiagnostics(result: any): RegexVerdict {
+  if (result?.status === 'safe') return { status: 'safe' };
+  if (result?.status === 'vulnerable') {
+    const c = result.complexity || {};
+    const complexity = c.degree != null ? `${c.type}, degree ${c.degree}` : c.type;
+    const attack = typeof result.attack?.pattern === 'string' ? result.attack.pattern.slice(0, 200) : undefined;
+    return { status: 'vulnerable', complexity, attack };
+  }
+  return { status: 'unknown', detail: unknownDetail(result?.error) };
 }
 
 /** Collect every regex source a parser will compile at runtime. */
@@ -91,21 +148,28 @@ export function collectParserRegexes(parser: ScannableParser): RegexRef[] {
  * Scan one regex source. Returns null when it is safe (constant/linear), or a
  * finding when it is vulnerable / indeterminate / errored.
  */
-export function scanRegex(location: string, source: string, flags: string): RedosFinding | null {
+export function scanRegex(
+  location: string,
+  source: string,
+  flags: string,
+  opts: { timeoutMs?: number } = {}
+): RedosFinding | null {
   const check = getChecker();
   if (!check) {
     return { location, source, flags, status: 'error', detail: 'recheck unavailable' };
   }
   let result: any;
   try {
-    result = check(source, flags.replace(/[gy]/g, '')); // g/y don't affect backtracking analysis
+    result = check(source, analysisFlags(flags), { timeout: opts.timeoutMs ?? CLI_REDOS_TIMEOUT_MS });
   } catch (e) {
     return { location, source, flags, status: 'error', detail: e instanceof Error ? e.message : String(e) };
   }
-  if (result?.status === 'safe') return null;
-  const c = result?.complexity || {};
-  const complexity = c.degree != null ? `${c.type} (degree ${c.degree})` : c.type;
-  return { location, source, flags, status: result?.status === 'vulnerable' ? 'vulnerable' : 'unknown', complexity };
+  const verdict = verdictFromDiagnostics(result);
+  if (verdict.status === 'safe') return null;
+  // The CLI and contribute wording predates `detail`; keep it off unknown findings here.
+  return verdict.status === 'vulnerable'
+    ? { location, source, flags, status: 'vulnerable', complexity: verdict.complexity, attack: verdict.attack }
+    : { location, source, flags, status: 'unknown' };
 }
 
 /**
@@ -116,17 +180,35 @@ export function scanRegex(location: string, source: string, flags: string): Redo
  */
 export function scanParserRedos(
   parser: ScannableParser,
-  opts: { required?: boolean } = {}
+  opts: { required?: boolean; timeoutMs?: number } = {}
 ): RedosFinding[] {
+  return scanRegexRefs(collectParserRegexes(parser), opts);
+}
+
+/** Scan a list of regex references (a parser's, or a detection rule's). */
+export function scanRegexRefs(refs: RegexRef[], opts: { required?: boolean; timeoutMs?: number } = {}): RedosFinding[] {
   if (!redosCheckerAvailable()) {
     return opts.required
       ? [{ location: 'redos', source: '', flags: '', status: 'error', detail: 'recheck analyzer not installed' }]
       : [];
   }
   const findings: RedosFinding[] = [];
-  for (const ref of collectParserRegexes(parser)) {
-    const f = scanRegex(ref.location, ref.source, ref.flags);
+  for (const ref of refs) {
+    const f = scanRegex(ref.location, ref.source, ref.flags, { timeoutMs: opts.timeoutMs });
     if (f) findings.push(f);
   }
   return findings;
+}
+
+/**
+ * The one sentence for a proven-vulnerable regex, used by the contribute check
+ * ("before contributing") and by the write-time gate ("before saving").
+ */
+export function redosErrorMessage(f: RedosFinding, action: 'contributing' | 'saving'): string {
+  return `ReDoS: regex at ${f.location} is vulnerable${f.complexity ? ` (${f.complexity})` : ''} — rewrite it linear before ${action}`;
+}
+
+/** The one sentence for a regex recheck could not decide. */
+export function redosWarningMessage(f: RedosFinding): string {
+  return `ReDoS: regex at ${f.location} could not be proven safe (${f.status}${f.detail ? `: ${f.detail}` : ''})`;
 }

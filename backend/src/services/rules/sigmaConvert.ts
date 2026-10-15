@@ -60,45 +60,98 @@ function hasWildcard(s: string): boolean {
   return /[*?]/.test(s);
 }
 
-/** Convert a Sigma glob (with * and ?) to an anchored regex source. */
-function globToRegex(s: string): string {
-  // Escape everything, then turn the escaped wildcards back into regex.
-  const escaped = escapeRegex(s).replace(/\\\*/g, '.*').replace(/\\\?/g, '.');
-  return `^${escaped}$`;
+/**
+ * A Sigma value split at its unescaped `*` wildcards. Each block is a regex
+ * source for the text between two stars (`?` -> one character, `\*` `\?` `\\`
+ * literal, everything else escaped); `leading`/`trailing` say whether the
+ * value starts/ends with a star. Consecutive stars collapse.
+ */
+function splitGlob(input: string, caseFold: boolean): { leading: boolean; trailing: boolean; blocks: string[] } {
+  const blocks: string[] = [];
+  let current = '';
+  let leading = false;
+  let trailing = false;
+  let sawStar = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    let piece: string;
+    if (ch === '\\') {
+      const next = input[i + 1];
+      if (next === '*' || next === '?' || next === '\\') {
+        piece = escapeRegex(next); // escaped -> literal
+        i++;
+      } else {
+        piece = '\\\\'; // lone backslash -> literal backslash
+      }
+    } else if (ch === '*') {
+      if (current === '') {
+        if (blocks.length === 0) leading = true;
+      } else {
+        blocks.push(current);
+        current = '';
+      }
+      sawStar = true;
+      trailing = true;
+      continue;
+    } else if (ch === '?') {
+      piece = '[\\s\\S]';
+    } else if (caseFold && /[a-zA-Z]/.test(ch)) {
+      piece = `[${ch.toUpperCase()}${ch.toLowerCase()}]`;
+    } else {
+      piece = escapeRegex(ch);
+    }
+    current += piece;
+    trailing = false;
+  }
+  if (current !== '') blocks.push(current);
+  return { leading, trailing: trailing && sawStar, blocks };
 }
 
 /**
- * Convert one Sigma keyword/value to an UN-anchored regex fragment, honoring
- * Sigma escaping: `\*` `\?` `\\` are literals; bare `*`/`?` are wildcards. Used
- * for keyword (string-list) selections, which match anywhere in the event.
+ * The blocks of a glob matched left to right, each at its FIRST occurrence
+ * after the previous one: `(?:(?!B)[\s\S])*B` cannot step past an occurrence
+ * of B, so there is exactly one way to match and the work is linear in the
+ * input. Leftmost-first is also exactly glob semantics. (The obvious
+ * `.*B1.*B2` is polynomial ReDoS, which the regex safety gate refuses.)
+ */
+function firstOccurrenceChain(blocks: string[]): string {
+  return blocks.map((b) => `(?:(?!${b})[\\s\\S])*${b}`).join('');
+}
+
+/**
+ * Convert a Sigma glob (with * and ?) to a regex for a whole field value
+ * (anchored semantics), in a form the ReDoS gate accepts: `*x*` is plain
+ * "contains x", `x*` / `*x` are a prefix / suffix test, and longer globs
+ * match their blocks at first occurrence (see firstOccurrenceChain).
+ */
+function globToRegex(s: string): string {
+  const { leading, trailing, blocks } = splitGlob(s, false);
+  if (blocks.length === 0) return '^'; // "*": anything
+  if (!leading && !trailing && blocks.length === 1) return `^${blocks[0]}$`; // only ? wildcards
+  if (leading && trailing && blocks.length === 1) return blocks[0];
+  if (!leading && trailing && blocks.length === 1) return `^${blocks[0]}`;
+  if (leading && !trailing && blocks.length === 1) return `${blocks[0]}$`;
+  const head = leading ? '' : blocks[0];
+  const middle = blocks.slice(leading ? 0 : 1, trailing ? undefined : -1);
+  const tail = trailing ? '' : `[\\s\\S]*${blocks[blocks.length - 1]}$`;
+  return `^${head}${firstOccurrenceChain(middle)}${tail}`;
+}
+
+/**
+ * Convert one Sigma keyword/value to an UN-anchored "contains" regex fragment,
+ * honoring Sigma escaping: `\*` `\?` `\\` are literals; bare `*`/`?` are
+ * wildcards. Used for keyword (string-list) selections, which match anywhere
+ * in the event: leading/trailing stars add nothing to "contains", and inner
+ * ones become a first-occurrence chain (linear, unlike `a.*b`).
  */
 function sigmaToRegexFragment(input: string): string {
   // Sigma string matching is case-INSENSITIVE by default, but the engine compiles
   // `regex` with a flagless `new RegExp` (and we must not flip the global operator
   // to /i — that would change every existing rule). So encode case-insensitivity
   // inline as per-letter classes ([Dd]) rather than relying on the `i` flag.
-  let out = '';
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
-    if (ch === '\\') {
-      const next = input[i + 1];
-      if (next === '*' || next === '?' || next === '\\') {
-        out += escapeRegex(next); // escaped -> literal
-        i++;
-      } else {
-        out += '\\\\'; // lone backslash -> literal backslash
-      }
-    } else if (ch === '*') {
-      out += '.*';
-    } else if (ch === '?') {
-      out += '.';
-    } else if (/[a-zA-Z]/.test(ch)) {
-      out += `[${ch.toUpperCase()}${ch.toLowerCase()}]`;
-    } else {
-      out += escapeRegex(ch);
-    }
-  }
-  return out;
+  const { blocks } = splitGlob(input, true);
+  if (blocks.length <= 1) return blocks[0] ?? '';
+  return `^${firstOccurrenceChain(blocks)}`;
 }
 
 /**
@@ -236,10 +289,11 @@ function convertEntry(
     if (!valueMod && values.every((v) => !hasWildcard(String(v)))) {
       return { conditions: [{ field, operator: 'in', value: values.map((v) => String(v)) }] };
     }
-    // Equality list WITH wildcards -> regex alternation of globs (still OR, representable).
+    // Equality list WITH wildcards -> regex alternation of globs (still OR,
+    // representable). Each alternative carries its own anchors.
     if (!valueMod) {
-      const alt = values.map((v) => globToRegex(String(v)).replace(/^\^|\$$/g, '')).join('|');
-      return { conditions: [{ field, operator: 'regex', value: `^(?:${alt})$` }] };
+      const alt = values.map((v) => globToRegex(String(v))).join('|');
+      return { conditions: [{ field, operator: 'regex', value: `(?:${alt})` }] };
     }
     // OR of contains/startswith/endswith/re across a list can't be a single AND condition.
     return { unsupported: `field "${rawField}" is an OR-list with "${valueMod}", which needs OR the engine can't express` };

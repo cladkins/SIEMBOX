@@ -11,15 +11,11 @@ import crypto from 'crypto';
 import { query, getClient } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { CredentialEncryption } from '../credentials/credentialEncryption';
-import {
-  validatePortableParser,
-  runSelfTests,
-  PortableParser,
-  ValidationResult,
-  SelfTestResult,
-} from '../parser/parserPortable';
-import { scanParserRedos, RedosFinding } from '../parser/redos';
+import { validatePortableParser, PortableParser, ValidationResult, SelfTestResult } from '../parser/parserPortable';
+import { RedosFinding } from '../parser/redos';
 import { validateRule, RuleValidationResult, PortableRule } from '../rules/rulePortable';
+import { assessParserRegexes, assessRuleRegexes } from '../regex/regexSafety';
+import { regexRunErrorResponse, runSelfTestsBounded } from '../regex/boundedRegex';
 
 export type AiProvider = 'anthropic' | 'openai' | 'ollama';
 
@@ -880,17 +876,32 @@ export async function generateParser(
     // STRICT validation + the ReDoS scan: the exact gate the catalog CI runs on
     // a contribution, so a generated parser that passes here also passes there.
     // (strict:false used to let AI output through with warnings-as-passes, then
-    // fail the user's catalog PR.)
+    // fail the user's catalog PR.) The scan comes first and is the write-time
+    // gate's own: a proven-vulnerable regex is never run on the sample at all,
+    // and the self-tests that do run go to the regex test pool, so model output
+    // never executes on the event loop.
     const validation = validatePortableParser(parser, { strict: true });
-    const self_test = validation.ok ? runSelfTests(parser as PortableParser) : null;
-    const redos = validation.ok ? scanParserRedos(parser as PortableParser) : [];
-    const redosVulnerable = redos.filter((f) => f.status === 'vulnerable');
-    const ok = validation.ok && (self_test ? self_test.ok : true) && redosVulnerable.length === 0;
-    last = { ok, parser, validation, self_test, redos, attempts: attempt };
+    const safety = validation.ok ? await assessParserRegexes(parser as PortableParser) : null;
+    const redos = safety ? [...safety.vulnerable, ...safety.unknown] : [];
+    const redosVulnerable = safety?.vulnerable ?? [];
+    let self_test: SelfTestResult | null = null;
+    let selfTestError: string | undefined;
+    if (validation.ok && redosVulnerable.length === 0) {
+      try {
+        self_test = await runSelfTestsBounded(parser as PortableParser);
+      } catch (e) {
+        const answer = regexRunErrorResponse(e, "The parser's self-tests");
+        if (!answer) throw e;
+        selfTestError = answer.body.message;
+      }
+    }
+    const ok = validation.ok && redosVulnerable.length === 0 && !selfTestError && (self_test ? self_test.ok : true);
+    last = { ok, parser, validation, self_test, redos, attempts: attempt, ...(selfTestError ? { error: selfTestError } : {}) };
     if (ok) return last;
 
     const errors = [
       ...validation.errors,
+      ...(selfTestError ? [selfTestError] : []),
       ...(self_test?.failures || []).flatMap((f) =>
         f.matched
           ? f.mismatches.map((m) => `sample[${f.index}] ${m.field}: expected ${JSON.stringify(m.expected)}, got ${JSON.stringify(m.actual)}`)
@@ -956,6 +967,8 @@ export interface GenerateRuleResult {
   ok: boolean;
   rule: PortableRule | null;
   validation: RuleValidationResult | null;
+  /** ReDoS findings for the final attempt's regex conditions (empty = every one proven safe). */
+  redos?: RedosFinding[];
   attempts: number;
   error?: string;
 }
@@ -991,9 +1004,23 @@ export async function generateDetection(
     }
 
     const validation = validateRule(rule, { strict: false });
-    last = { ok: validation.ok, rule, validation, attempts: attempt };
-    if (validation.ok) return last;
-    prev = { rule, errors: validation.errors };
+    // The same regex gate the rule's save will apply: a vulnerable condition is
+    // fed back to the model to rewrite instead of being handed to the user.
+    const safety = validation.ok ? await assessRuleRegexes(rule) : null;
+    const redos = safety ? [...safety.vulnerable, ...safety.unknown] : [];
+    const ok = validation.ok && (safety?.vulnerable.length ?? 0) === 0;
+    last = { ok, rule, validation, redos, attempts: attempt };
+    if (ok) return last;
+    prev = {
+      rule,
+      errors: [
+        ...validation.errors,
+        ...(safety?.vulnerable ?? []).map(
+          (f) =>
+            `regex at ${f.location} is ReDoS-vulnerable (${f.complexity || 'catastrophic backtracking'}): rewrite it to be linear — no two parts may match the same text (e.g. not "a.*b"; use a gap that cannot contain the start token, or a bounded token like \\S+)`
+        ),
+      ],
+    };
   }
   return last;
 }

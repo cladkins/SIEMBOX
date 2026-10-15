@@ -694,6 +694,27 @@ tuning for typical homelab volumes; if you do see drops, start with
 which also lists the tuning variables (`DB_INGEST_POOL_MAX`, `INGEST_CONCURRENCY`,
 `INGEST_QUEUE_MAX`, ...).
 
+### Regex safety checks
+
+Every parser and rule regex is checked for catastrophic backtracking (ReDoS)
+before it is saved, and pattern tests run in worker threads with a time limit
+([PARSERS.md, Regex Safety](./docs/reference/PARSERS.md#regex-safety)). The
+defaults need no tuning; on a slow host (a Raspberry Pi) the first check of a
+big catalog takes longer, and each verdict is kept in the database, so it is
+paid once. Settings (in `.env`; both compose files pass them on; empty means
+the default):
+
+| Variable | Default | |
+|---|---|---|
+| `REGEX_SAFETY_CHECK_TIMEOUT_MS` | `5000` | Time budget for analyzing one regex when it is saved. A regex not decided within it is saved with a warning; a longer budget decides more of them but makes a first save or install slower. Changing it re-checks stored regexes at the next start |
+| `REGEX_SAFETY_WORKERS` | `2` | Worker threads for those analyses |
+| `REGEX_TEST_TIMEOUT_MS` | `1000` | Wall-clock limit for one pattern test (Test buttons, import self-tests); past it the run is stopped and answers `422 REGEX_TIMEOUT` |
+| `REGEX_TEST_WORKERS` | `2` | Worker threads for pattern tests |
+
+At every start the backend checks the regexes already stored in the background
+and logs a `[regex-safety]` WARN for each unsafe one (see
+[TROUBLESHOOTING.md](./docs/operations/TROUBLESHOOTING.md#issue-a-parser-or-rule-shows-an-unsafe-regex-tag)).
+
 ### Log Retention
 
 Configure in the UI under **Settings → Data Retention**:

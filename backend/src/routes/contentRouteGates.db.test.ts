@@ -209,7 +209,7 @@ test('parsers: a viewer can no longer create, import, install, change or delete;
   await refused(['viewer'], 'POST', '/api/parsers/catalog/install', {});
   await refused(['viewer'], 'POST', '/api/parsers/catalog/install-all', {});
   await refused(['viewer'], 'POST', '/api/parsers/catalog/refresh');
-  // These two run a regex the caller supplies on the event loop: analyst and up only.
+  // These two run a regex the caller supplies (in a time-bounded worker): analyst and up only.
   await refused(['viewer'], 'POST', '/api/parsers/validate', { parser: portableParser('viewer') });
   await refused(['viewer'], 'POST', '/api/parsers/test', { ...parserBody('viewer'), sample: `${name} hello` });
   assert.equal(await fingerprint('parsers'), untouched, 'no parser was created or changed');

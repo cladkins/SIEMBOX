@@ -11,7 +11,11 @@ tags: [sudo, process-execution, exploitation, malware, access-control]
 conditions:
   - field: command
     operator: regex
-    value: '(/tmp/|curl.*\||wget.*\||bash\s+-c|sh\s+-c|python\s+-c|perl\s+-e|nc\s+-[el]|ncat|socat.*exec)'
+    # "curl, then later a pipe" is written so the gap cannot contain "curl"
+    # again (likewise wget, socat), not as curl.*\|: that form is polynomial
+    # ReDoS (a crafted "curlcurlcurl..." line costs O(n^2)), and SIEMBox refuses
+    # to store it. Same matches on a single line.
+    value: '(/tmp/|curl(?:[^c|\n\r]|c(?!url))*\||wget(?:[^w|\n\r]|w(?!get))*\||bash\s+-c|sh\s+-c|python\s+-c|perl\s+-e|nc\s+-[el]|ncat|socat(?:[^s\n\r]|s(?!ocat))*exec)'
 
 alert:
   title: "Suspicious Process Execution by {user} via Sudo"

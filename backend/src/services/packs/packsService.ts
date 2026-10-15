@@ -9,11 +9,35 @@ import { ParserModel } from '../../models/Parser';
 import { DetectionRuleModel } from '../../models/DetectionRule';
 import { getCatalogParser, fetchCatalog } from '../parser/catalogService';
 import { ParserEngine } from '../parser/parserEngine';
-import { validatePortableParser, runSelfTests } from '../parser/parserPortable';
+import { validatePortableParser } from '../parser/parserPortable';
 import { fetchDetectionCatalog, getCatalogDetection } from '../rules/detectionCatalog';
 import { validateRule, portableRuleToYaml } from '../rules/rulePortable';
 import { RulesEngine } from '../rules/rulesEngine';
 import { logger } from '../../utils/logger';
+import { assessParserRegexes, assessRuleRegexes, refusalReason, type RegexSafetyReport } from '../regex/regexSafety';
+import { regexRunErrorResponse } from '../regex/boundedRegex';
+
+/**
+ * The write-time regex gate for one pack item: a refusal reason (a regex recheck
+ * proves vulnerable, or the checker is saturated), or null when it may be saved.
+ * Indeterminate regexes are installed; their warnings go into `warnings`.
+ */
+async function packItemRefusal(
+  check: () => Promise<RegexSafetyReport>,
+  name: string,
+  warnings: Array<{ name: string; warnings: string[] }>
+): Promise<string | null> {
+  try {
+    const report = await check();
+    if (report.vulnerable.length > 0) return refusalReason(report);
+    if (report.warnings.length > 0) warnings.push({ name, warnings: report.warnings });
+    return null;
+  } catch (error) {
+    const answer = regexRunErrorResponse(error);
+    if (!answer) throw error;
+    return answer.body.message;
+  }
+}
 import { CONTENT_PACKS, ContentPack, getContentPack, detectionMatchesPack } from './contentPacks';
 
 /** Per-item status so the UI can show exactly what's installed vs missing, and why. */
@@ -128,6 +152,8 @@ export interface PackInstallResult {
   pack: string;
   parsers: { installed: number; updated: number; failed: Array<{ name: string; reason: string }> };
   detections: { installed: number; updated: number; failed: Array<{ name: string; reason: string }> };
+  /** Installed items with a regex that could not be proven safe (indeterminate). */
+  warnings: Array<{ name: string; warnings: string[] }>;
 }
 
 /** Install (or update) every parser + detection a pack references. */
@@ -139,6 +165,7 @@ export async function installPack(id: string): Promise<PackInstallResult> {
     pack: pack.id,
     parsers: { installed: 0, updated: 0, failed: [] },
     detections: { installed: 0, updated: 0, failed: [] },
+    warnings: [],
   };
 
   // --- Parsers ---
@@ -154,9 +181,15 @@ export async function installPack(id: string): Promise<PackInstallResult> {
         result.parsers.failed.push({ name, reason: 'failed validation' });
         continue;
       }
-      // Self-test is informational here; the user explicitly chose the pack, so a
-      // self-test miss doesn't block install (matches catalog install with force).
-      runSelfTests(portable);
+      // The same regex gate as a single catalog install: a ReDoS-vulnerable
+      // regex is refused even though the user chose the pack. (Self-tests are
+      // informational here and were never run for the result, so they no
+      // longer run at all: they only cost an unbounded match on the event loop.)
+      const refused = await packItemRefusal(() => assessParserRegexes(portable), name, result.warnings);
+      if (refused) {
+        result.parsers.failed.push({ name, reason: refused });
+        continue;
+      }
       const existing = await ParserModel.findByName(portable.name);
       const params = {
         name: portable.name,
@@ -202,6 +235,11 @@ export async function installPack(id: string): Promise<PackInstallResult> {
       const validation = validateRule(parsed, { strict: false });
       if (!validation.ok) {
         result.detections.failed.push({ name, reason: 'failed validation' });
+        continue;
+      }
+      const refused = await packItemRefusal(() => assessRuleRegexes(parsed), name, result.warnings);
+      if (refused) {
+        result.detections.failed.push({ name, reason: refused });
         continue;
       }
       const rule_logic = { conditions: parsed.conditions, aggregation: parsed.aggregation, alert: parsed.alert };

@@ -151,9 +151,10 @@ CREDENTIAL_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(3
   admin-only.
 - **Catalog source.** Catalog installs come from a GitHub repository (default
   `cladkins/siembox-parsers`). Pin `SIEMBOX_CATALOG_REPO` / `SIEMBOX_CATALOG_REF`
-  to a source you trust. Every parser/detection is schema-validated and
-  self-tested before it is stored, but a parser is still code-adjacent data — only
-  install from sources you trust.
+  to a source you trust. Every parser/detection is schema-validated, checked for
+  ReDoS-vulnerable regexes (see [ReDoS](#regular-expression-denial-of-service-redos))
+  and self-tested in a time-bounded worker before it is stored, but a parser is
+  still code-adjacent data — only install from sources you trust.
 
 ### Dependency Updates
 
@@ -1102,6 +1103,51 @@ grep -r "query(" backend/src/ | grep -v "\$[0-9]"  # Should find none
 grep -r "req.body\|req.query\|req.params" backend/src/routes/
 ```
 
+### Regular-expression denial of service (ReDoS)
+
+Parsers and detection rules are regexes that run on every incoming log, and
+the text they run on is chosen by whoever can send SIEMBox a log line (syslog
+on 514 needs no credentials). Node runs them on one thread, the same one that
+serves the API, receives syslog and runs the jobs, and V8 cannot interrupt a
+match. A pattern that backtracks catastrophically — `^(a+)+$`, or the quieter
+polynomial `curl.*\|` — therefore turns one crafted line into a stall of the
+whole SIEM: for seconds per line (polynomial) or indefinitely (exponential).
+
+What SIEMBox does about it:
+
+- **Refused at write time.** Every path that stores a regex — parser
+  create/update/import, catalog and content-pack installs (the catalog is
+  remote content, and `SIEMBOX_CATALOG_REPO` may point anywhere), rule
+  create/update, Sigma import, the AI builders' output, the bundled-rule
+  importer — checks it with recheck in a worker thread, with a time budget per
+  regex (`REGEX_SAFETY_CHECK_TIMEOUT_MS`, default 5 s). A regex proven
+  vulnerable (exponential or polynomial) is refused with `422 REGEX_UNSAFE`. An
+  indeterminate one is accepted with a warning: the analysis is a proof of
+  vulnerability, not of safety, so an attacker with write access (analyst and
+  up) who crafts a pattern recheck cannot settle can still store it. The
+  catalog CI (`validate-parsers`, `validate-detections`) refuses the same
+  regexes.
+- **"Try this pattern" is time-bounded.** `POST /api/parsers/test`,
+  `/validate`, `POST /api/parsers/:id/test` (any role), import and catalog
+  self-tests and the recommendation dry-runs run in a small pool of worker
+  threads with a hard wall-clock budget (`REGEX_TEST_TIMEOUT_MS`, default 1 s).
+  A run past it is stopped by terminating its worker, which is replaced; the
+  caller gets `422 REGEX_TIMEOUT`. Samples are capped at 64 KB.
+- **Existing regexes are flagged, not disabled.** At startup the stored
+  regexes are analyzed in the background; each vulnerable one is logged as a
+  `WARN` and tagged *Unsafe regex* in the UI. Disabling it automatically would
+  silently drop parsing or detection, so the operator decides (rewrite it, or
+  switch it off).
+- **Not bounded: the ingest path itself.** Running every log line through a
+  worker would cost more than the parsing, so live matching still happens on
+  the event loop; it is protected by the gate and the startup scan above. A
+  regex accepted as *indeterminate*, or one saved before an upgrade and not yet
+  fixed, can still stall ingestion. Watch for the startup `WARN` lines and the
+  tag.
+
+The search box on the Logs pages is not a regex (it is a SQL `ILIKE`, run by
+PostgreSQL), and the Log Discovery fingerprints use plain substring matches.
+
 ### Security Headers
 
 Added via nginx reverse proxy (see TLS section above):
@@ -1414,6 +1460,7 @@ journalctl -u docker > docker-journal-$(date +%Y%m%d).log
 - [ ] Tested firewall rules
 - [ ] Verified TLS is working (SSL Labs test)
 - [ ] Confirmed logs are being ingested
+- [ ] Checked the backend log after the start for `[regex-safety]` WARN lines (or an *Unsafe regex* tag on the Parsers / Detection Rules pages) and fixed each one
 - [ ] Set up database backups
 - [ ] Configured retention policies
 - [ ] Enabled audit logging

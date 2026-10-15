@@ -30,6 +30,9 @@ import { reconcileInterruptedScans } from './services/scanner/scanReconciler';
 import { TemplateService } from './services/scanner/templateService';
 import { CredentialEncryption } from './services/credentials/credentialEncryption';
 import { ErrorLogService } from './services/errors/errorLogService';
+import { scanStoredRegexes } from './services/regex/storedRegexScan';
+import { closeRegexScanPool } from './services/regex/regexSafety';
+import { closeRegexTestPool } from './services/regex/boundedRegex';
 
 loadDotenv();
 
@@ -190,6 +193,18 @@ const startServer = async () => {
     // Idle counters, unused browsers, expired sessions, old failure audit rows.
     startSignInHousekeepingJob();
 
+    // Regex safety: give every stored parser and rule regex a ReDoS verdict
+    // (cached in regex_safety_verdicts, so only new regexes cost anything) and
+    // WARN for each vulnerable one; the Parsers / Detection Rules pages tag
+    // them "Unsafe regex". Saved before the write-time gate existed, they still
+    // run (disabling them would silently drop parsing). Background, off the
+    // event loop; never fails the start.
+    void scanStoredRegexes().catch((error) => {
+      logger.warn('[regex-safety] startup scan of stored regexes failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+
     // Warm the Nuclei template cache in the background so the first request to
     // the (heavy) template endpoints hits a populated cache instead of parsing
     // ~10k files inline and tripping the client timeout. Fire-and-forget.
@@ -258,6 +273,7 @@ const shutdown = async (signal: string) => {
   stopDomainMonitorJob();
   stopSignInHousekeepingJob();
   stopRefusalSummary();
+  await Promise.all([closeRegexScanPool(), closeRegexTestPool()]).catch(() => undefined);
   await closePools();
   logger.info('Database pools closed');
   process.exit(0);

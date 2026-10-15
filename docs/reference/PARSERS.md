@@ -8,6 +8,7 @@ This document contains community-contributed log parsers for SIEMBox. These pars
   - [Step-by-Step Parser Creation](#step-by-step-parser-creation)
   - [Testing Your Parser](#testing-your-parser)
   - [Common Issues and Solutions](#common-issues-and-solutions)
+  - [Regex Safety](#regex-safety)
 - [Built-in Parsers](#built-in-parsers)
   - [SSH Authentication](#ssh-authentication)
   - [Apache/Nginx Access Log](#apachenginx-access-log)
@@ -350,11 +351,87 @@ console.log('Groups:', match?.groups);
 - Parser timeouts
 
 **Solutions:**
-1. Avoid catastrophic backtracking in regex
-2. Use non-greedy matching: `.*?` instead of `.*`
+1. Avoid catastrophic backtracking in regex: SIEMBox refuses a pattern that is
+   proven vulnerable, see [Regex Safety](#regex-safety)
+2. Use delimiters and tokens (`[^"]*`, `\S+`) instead of `.*`
 3. Anchor patterns with `^` to fail fast on non-matches
 4. Simplify complex nested groups
 5. Consider parser priority - put most common parsers first
+
+### Regex Safety
+
+A parser's `pattern` and its derivation regexes (`derivations[].extract.*.pattern`,
+and `derivations[].when.*.matches`, which is always matched case-insensitively)
+run on **every log line**, on the same thread that serves the API and receives
+syslog. JavaScript regexes backtrack: a pattern where two parts can match the
+same text can take exponential or polynomial time on a crafted line, and anyone
+who can send SIEMBox a log line chooses that line. `^(a+)+$` against
+`'a'.repeat(40) + '!'` runs for longer than anyone will wait; `curl.*\|` costs
+about 0.3 s on a 64 KB line of `curlcurlcurl…` and seconds on a 256 KB TCP line.
+While it runs, nothing else does.
+
+**What is refused.** Every way of storing a parser checks every one of its
+regexes first: Create/Update in the parser editor, Import, the import preview,
+catalog Install / Install all, content packs, and the AI builder's Save. The
+check is [recheck](https://makenowjust-labs.github.io/recheck/), the same
+analyzer the catalog CI runs (`npm run validate-parsers`), with a time budget
+per regex (`REGEX_SAFETY_CHECK_TIMEOUT_MS`, default 5 s).
+
+| recheck says | What happens |
+|---|---|
+| **vulnerable** (it found an attack string: exponential or polynomial) | Refused: `422`, nothing saved, with `ReDoS: regex at pattern is vulnerable (exponential) — rewrite it linear before saving`. The editor and import dialog show it inline with the regex, the kind of backtracking and an example of slow input. `force` does not override it. |
+| **unknown** (the budget ran out, or the syntax is not supported) | Saved, with a warning: `ReDoS: regex at pattern could not be proven safe (unknown: …)`. Large catalog patterns often land here on a slow host; that is not a finding. |
+| **safe** | Saved. |
+
+Each distinct regex is analyzed once (the verdict is kept in the
+`regex_safety_verdicts` table), so saving the same parser again, or installing
+it on another day, costs nothing.
+
+**What is time-bounded.** The **Test** button (unsaved pattern), **Test** on a
+saved parser, the import preview's and catalog's self-tests and the
+recommendation dry-runs run the regex in a worker thread with a hard budget
+(`REGEX_TEST_TIMEOUT_MS`, default 1 s). Past it the run is stopped and you get
+*Stopped: the pattern ran out of time on this input* (`422 REGEX_TIMEOUT`)
+instead of a hung SIEM. Samples are capped at 64 KB, and a portable parser at
+100 `test_samples`.
+
+#### Rewriting a pattern so it is linear
+
+The rule: **no two parts of the pattern may be able to match the same text**,
+so there is only ever one way to match.
+
+| Vulnerable | Why | Linear rewrite |
+|---|---|---|
+| `^(a+)+$`, `^(\w+\s?)+$` | A repeated group whose body can match the same run in many ways (exponential) | `^a+$`, `^\w+(?:\s\w+)*$` (each repetition must start with something the previous one cannot end with) |
+| `^(a\|a)+$`, `^(\d\|\d\d)+$` | Alternatives that overlap | Make them disjoint, or use one class: `^\d+$` |
+| `^(?<user>.*) logged in from (?<ip>.*)$` | Two wildcards around a literal: either can take the text the other needs (polynomial) | Tokens and delimiters: `^(?<user>\S+) logged in from (?<ip>\S+)$` |
+| `curl.*\|`, `Port.*closed` (unanchored "X, then later Y") | From every X the engine rescans to the end of the line (polynomial) | A gap that cannot contain X again: `curl(?:[^c\|\n]\|c(?!url))*\|`, `[Pp]ort(?:[^Pp\n]\|[Pp](?!ort))*[Cc]losed` |
+| `^(.+?)\s(.+?)\s(.+)$` | Lazy wildcards still try every split | Tokens: `^(\S+)\s(\S+)\s(.+)$` |
+| `\[(?<ts>[^\]]+)\]` with no `^` | Unanchored, it is retried from every `[` of a line like `[[[[…` (polynomial) | Anchor it: `^\[(?<ts>[^\]]+)\]` |
+
+Habits that keep patterns linear:
+
+- Anchor with `^` whenever the format allows. An unanchored pattern is
+  retried at every position of the line, which turns many harmless-looking
+  patterns polynomial (see the last row above).
+- Use the format's delimiters: `"(?<ua>[^"]*)"`, `\[(?<ts>[^\]]+)\]`,
+  `(?<host>\S+)`. A negated class cannot run past its delimiter, so there is
+  nothing to backtrack into.
+- Prefer `\S+` tokens to `.*`; keep one `.*`/`.+` at most, at the end.
+- Bounded repeats (`.{0,200}`) are cheap in practice but recheck still reports
+  them as polynomial, so they are refused; use the gap form above instead.
+- Check before saving: `npm run validate-parsers -- my.parser.json` runs the
+  same analysis (with a 10 s budget), and the editor's Save tells you inline.
+
+**Parsers saved before this check** may already contain a vulnerable regex. At
+every start SIEMBox analyzes the stored regexes in the background, logs one
+`WARN` per vulnerable regex (`[regex-safety] Parser "…" (id …) has an unsafe
+regex at pattern: ReDoS-vulnerable (…)`), and the Parsers page shows an
+**Unsafe regex** tag on it. Nothing is disabled for you — that would silently
+stop parsing those logs. Fix it in the editor (it shows the regex and why), or
+switch the parser off until you do (that toggle is never refused), or reinstall
+a fixed version from the catalog. See
+[Troubleshooting: Unsafe regex tag](../operations/TROUBLESHOOTING.md#issue-a-parser-or-rule-shows-an-unsafe-regex-tag).
 
 ---
 

@@ -1,3 +1,10 @@
+# The discovery agent's Node runtime comes from the official Node 22 image
+# (Debian bookworm's own `nodejs` package is Node 18, end-of-life since April
+# 2025). Only the `node` binary is copied: it links against glibc, libstdc++ and
+# libgcc, all already in debian:bookworm-slim, which is what node:22-bookworm-slim
+# is built on.
+FROM node:22-bookworm-slim AS node
+
 FROM debian:bookworm-slim
 
 LABEL maintainer="SIEMBox"
@@ -10,9 +17,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # systemd itself). `nmap` runs asset-discovery scans SIEMBox dispatches to the
 # shipper; `nuclei` (installed below) runs dispatched vulnerability scans (see
 # shipper-managed.sh's poll_and_run_scans). `unzip` is only needed to unpack the
-# nuclei release archive. `nodejs` runs the bundled log-discovery agent (a single
-# pure-stdlib JS file -- no npm packages needed). The rest match what the shipper
-# script needs.
+# nuclei release archive. The rest match what the shipper script needs. Node,
+# for the bundled log-discovery agent, is copied in below rather than installed
+# from apt.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bash \
         netcat-openbsd \
@@ -21,7 +28,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         jq \
         nmap \
-        nodejs \
         unzip \
         systemd \
     && rm -rf /var/lib/apt/lists/*
@@ -57,6 +63,11 @@ RUN set -eux; \
     mv /tmp/nuclei/nuclei /usr/local/bin/nuclei; \
     rm -rf /tmp/nuclei /tmp/nuclei.zip; \
     nuclei -version
+
+# Node 22 for the bundled log-discovery agent (a single pure-stdlib JS file, so
+# no npm or packages are needed). The shipper runs it as `node` from PATH.
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+RUN node --version
 
 # Bundled log-discovery agent (a standalone Node script; regenerate with
 # log-shipper/build-discovery-agent.mjs when the discovery probe code changes).

@@ -22,8 +22,9 @@ updates:
         update-types: ["minor", "patch"]
     ignore:
       # @types/node stays on the major of the oldest Node the backend runs on
-      # (backend/Dockerfile: node:20-alpine), so tsc rejects APIs that Node lacks.
-      # Move it in the same change as the Dockerfile base image and CI's Node.
+      # (backend/Dockerfile: node:22-alpine; CI's Node 22), so tsc rejects APIs
+      # that Node lacks. Move it in the same change as the Dockerfile base image
+      # and CI's Node.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
       # js-yaml stays on 4.x (the v4-legacy line): js-yaml 5 rejects
@@ -45,7 +46,7 @@ updates:
         update-types: ["minor", "patch"]
     ignore:
       # Same as the backend: @types/node stays on the major of the Node the
-      # frontend builds on (frontend/Dockerfile: node:20-alpine, CI's Node 20).
+      # frontend builds on (frontend/Dockerfile: node:22-alpine, CI's Node 22).
       # Move it in the same change as both.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]

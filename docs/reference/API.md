@@ -820,7 +820,7 @@ error and never matches).
   without the `u` flag, which JavaScript reads as seventeen `u`s, and V8's
   linear-time fallback cannot bound it on a log line either: an `i` or `u` flag
   (every `when.*.matches` is case-insensitive), lookahead, a backreference, a
-  counted repeat over 16, lookbehind on Node 20, or `REGEX_LINEAR_FALLBACK=false`):
+  counted repeat over 16, lookbehind on a backend built on Node 20, or `REGEX_LINEAR_FALLBACK=false`):
   refused with `422` and `"code": "REGEX_UNDECIDED"`, nothing saved, same body
   shape with the regex under `regex_safety.undecided`:
   `"ReDoS: regex at pattern could not be proven safe (unknown: the analyzer could not parse it (…)) and V8's linear-time fallback cannot run it (a counted repeat over 16), so nothing would bound it on a log line — rewrite it before saving"`.
@@ -1210,7 +1210,7 @@ Test parser configuration without saving (for parser builder).
 **Errors:**
 - `400` - Missing required fields
 - `413` `SAMPLE_TOO_LARGE` - Sample over 64 KB
-- `422` `REGEX_TIMEOUT` - The pattern did not finish within the budget on this sample and was stopped (e.g. `^(?:a|a){1,30}$` on `'a'.repeat(28) + '!'` answers in about 1 s). A pattern V8's linear-time fallback covers (`REGEX_LINEAR_FALLBACK`, on by default; no `i`/`u` flag, lookahead, backreference or counted repeat over 16, and on Node 20 no lookbehind), such as `^(a+)+$`, finishes quickly with `"matched": false` instead
+- `422` `REGEX_TIMEOUT` - The pattern did not finish within the budget on this sample and was stopped (e.g. `^(?:a|a){1,30}$` on `'a'.repeat(28) + '!'` answers in about 1 s). A pattern V8's linear-time fallback covers (`REGEX_LINEAR_FALLBACK`, on by default; no `i`/`u` flag, lookahead, backreference or counted repeat over 16, and on a backend built on Node 20 no lookbehind), such as `^(a+)+$`, finishes quickly with `"matched": false` instead
 - `422` `REGEX_TEST_FAILED` - The pattern does not compile (the message quotes the compiler)
 - `503` `REGEX_BUSY` - Every test worker is busy; retry
 

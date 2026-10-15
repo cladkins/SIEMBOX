@@ -23,6 +23,8 @@ env:
 jobs:
   # Build each image for each architecture on a native runner (no QEMU
   # emulation), pushing by digest. Manifests are assembled in the merge job.
+  # Pull requests build and run the same images without pushing them in
+  # image-check.yml: keep its contexts, Dockerfiles and build args in step.
   build:
     name: Build ${{ matrix.image.name }} (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}

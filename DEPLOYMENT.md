@@ -390,6 +390,23 @@ change):
    renamed one that kept its email stopped every start). To get back into an
    account, use `auth-admin reset-password <username>`.
 
+**Updating to the release on Node 22** (no `.env`, compose or database
+change): the backend image and the frontend's build stage moved from
+`node:20-alpine` to `node:22-alpine`, and the log shipper's Node, which runs
+the discovery agent, from Debian's `nodejs` (Node 18) to Node 22 copied from
+`node:22-bookworm-slim`. Node 18 and Node 20 are end-of-life.
+- **Prebuilt images** (`compose.prod.yaml`): pull and restart as usual.
+- **Building from source:** `docker compose build --pull && docker compose up -d`
+  fetches the new base images. `bcrypt` and `recheck` install from the
+  lockfiles as before; nothing else needs rebuilding by hand.
+- **A Dockerfile of your own on `node:20-alpine`** keeps working for now, but
+  Node 20 gets no more security fixes, and V8's linear-time regex fallback
+  there covers less (no lookbehind) and can capture `""` from an optional
+  group (see `REGEX_LINEAR_FALLBACK` under [Regex safety
+  checks](#regex-safety-checks)). Move it to `node:22-alpine`.
+- **Running the backend or frontend outside Docker:** use Node.js 22.13 or
+  newer.
+
 ## Database Migrations and Seeding
 
 ### Automatic Initialization
@@ -710,7 +727,7 @@ the default):
 | `REGEX_SAFETY_WORKERS` | `2` | Worker threads for those analyses |
 | `REGEX_TEST_TIMEOUT_MS` | `1000` | Wall-clock limit for one pattern test (Test buttons, import self-tests); past it the run is stopped and answers `422 REGEX_TIMEOUT` |
 | `REGEX_TEST_WORKERS` | `2` | Worker threads for pattern tests |
-| `REGEX_LINEAR_FALLBACK` | on | V8's linear-time fallback for the live log stream: a parser or rule match that backtracks more than 1,000,000 times is finished on V8's non-backtracking engine instead of stalling ingestion (V8's own default, 50,000, sent linear patterns on long lines to the slower engine). Stops exponential blowups, not polynomial ones, in regexes with no `i`/`u` flag, lookahead, backreference or counted repeat over 16, and on Node 20 (the image's runtime) no lookbehind. Same result, except that on Node 20 a quantified group that can match empty, such as `(?<x>.*?)?`, may capture `""` once a match has fallen back ([SECURITY.md](./docs/reference/SECURITY.md#regular-expression-denial-of-service-redos)). A regex the save-time check cannot read is refused (`422 REGEX_UNDECIDED`) unless the fallback covers it. `false` turns it off: every start then logs a `[regex-safety]` WARN, and every regex the check cannot read is refused |
+| `REGEX_LINEAR_FALLBACK` | on | V8's linear-time fallback for the live log stream: a parser or rule match that backtracks more than 1,000,000 times is finished on V8's non-backtracking engine instead of stalling ingestion (V8's own default, 50,000, sent linear patterns on long lines to the slower engine). Stops exponential blowups, not polynomial ones, in regexes with no `i`/`u` flag, lookahead, backreference or counted repeat over 16, and, only on a backend you build on Node 20 (the images run Node 22), no lookbehind. Same result on Node 22; on Node 20 a quantified group that can match empty, such as `(?<x>.*?)?`, may capture `""` once a match has fallen back ([SECURITY.md](./docs/reference/SECURITY.md#regular-expression-denial-of-service-redos)). A regex the save-time check cannot read is refused (`422 REGEX_UNDECIDED`) unless the fallback covers it. `false` turns it off: every start then logs a `[regex-safety]` WARN, and every regex the check cannot read is refused |
 
 At every start the backend checks the regexes already stored in the background
 and logs a `[regex-safety]` WARN for each unsafe one (see
@@ -733,7 +750,7 @@ Configure in the UI under **Settings → Data Retention**:
 5. **Restrict port 514** to trusted networks only
 6. **Regular backups** of PostgreSQL database
 7. **Monitor disk space** - logs can grow quickly
-8. **Update regularly** - `git pull && docker compose build --pull && docker compose up -d` (`--pull` also refreshes the `node:20-alpine` and `nginx:alpine` base images, which a plain `up -d --build` keeps reusing)
+8. **Update regularly** - `git pull && docker compose build --pull && docker compose up -d` (`--pull` also refreshes the `node:22-alpine`, `node:22-bookworm-slim`, `debian:bookworm-slim` and `nginx:alpine` base images, which a plain `up -d --build` keeps reusing)
 
 ## Network Configuration
 

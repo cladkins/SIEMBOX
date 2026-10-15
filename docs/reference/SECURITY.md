@@ -1160,12 +1160,13 @@ What SIEMBox does about it:
   and large-constant blowups (`^(a+)+$`, ten `(?:a|a|…)` groups: 5-10 ms
   instead of seconds or hours), not polynomial ones: `curl.*\|` still costs
   0.45 s per 64 KB line and 6.8 s per 256 KB TCP line, which is why the gate
-  refuses it. The result is the same on Node 22; on Node 20 (the image's
-  runtime) a quantified group that can match empty (`(?<x>.*?)?`, `(x|){0,2}`)
-  may capture `""` where backtracking leaves it unset, once a match has fallen
-  back. And the engine does not support every regex: case-insensitive (`i`) or
-  unicode (`u`) regexes, lookahead, backreferences, counted repeats over 16
-  (`{1,30}`) and, on Node 20, lookbehind keep backtracking. So a regex of those
+  refuses it. The result is the same on Node 22, the images' runtime. (A
+  backend built on Node 20 differs: there a quantified group that can match
+  empty (`(?<x>.*?)?`, `(x|){0,2}`) may capture `""` where backtracking leaves
+  it unset, once a match has fallen back.) And the engine does not support
+  every regex: case-insensitive (`i`) or unicode (`u`) regexes, lookahead,
+  backreferences, counted repeats over 16 (`{1,30}`) and, on Node 20,
+  lookbehind keep backtracking. So a regex of those
   kinds accepted as *indeterminate* because its analysis ran out of time, or
   saved before an upgrade and not yet fixed, can still stall ingestion, and no
   static analysis is complete (recheck's fuzz pass is a search, not a proof).

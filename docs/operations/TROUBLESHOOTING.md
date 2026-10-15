@@ -112,7 +112,7 @@ curl http://localhost:8421/api/health
 
 ---
 
-### Issue: Frontend image build fails on an old Node 20 image
+### Issue: Frontend image build fails on an old Node base image
 
 **Symptoms:** `docker compose up -d --build` (building from source) fails in the
 frontend's `npm run build` (`vite build`) step, after `npm run type-check`
@@ -127,15 +127,19 @@ TypeError [ERR_INVALID_ARG_VALUE]: The argument 'format' must be one of: 'reset'
     at styleText (node:util:...)
 ```
 
-**Cause:** The frontend builds with Vite 8, which needs Node.js 20.19 or newer.
-`frontend/Dockerfile` builds on `node:20-alpine`, and Docker reuses whatever copy
-of that image it pulled earlier instead of fetching the current one. Vite's
-bundler, Rolldown, crashes before Vite checks the Node version on Node 20.11 and
-older (images pulled before late March 2024: the `styleText` export error) and
-on 20.12 (pulled between late March and early May 2024: the
-`ERR_INVALID_ARG_VALUE` error). Node 20.13 to 20.18 only print
-`You are using Node.js 20.x. Vite requires Node.js version 20.19+ or 22.12+`
-and still build the same files; the fix below clears that warning too.
+**Cause:** The frontend builds with Vite 8, which needs Node.js 20.19+ or
+22.12+, and Docker reuses whatever copy of a base image it pulled earlier
+instead of fetching the current one. `frontend/Dockerfile` builds on
+`node:22-alpine`; before the move to Node 22 it built on `node:20-alpine`, so
+these errors come from a checkout older than that, or from a Dockerfile of your
+own still on `node:20-alpine`. Vite's bundler, Rolldown, crashes before Vite
+checks the Node version on Node 20.11 and older (images pulled before late March
+2024: the `styleText` export error) and on 20.12 (pulled between late March and
+early May 2024: the `ERR_INVALID_ARG_VALUE` error). Node 20.13 to 20.18, and a
+`node:22-alpine` pulled before December 2024 (Node 22.11 or older), print
+`You are using Node.js … Vite requires Node.js version 20.19+ or 22.12+`
+instead; the fix below clears that warning too. Node 20 is end-of-life: move a
+Dockerfile of your own to `node:22-alpine`.
 
 **Fix:** Pull the current base image while building:
 
@@ -826,7 +830,7 @@ npm run validate-detections -- /path/to/my-rule.yaml
 would bound it on a log line*) means the analyzer cannot read the regex at all,
 and V8's linear-time fallback could not bound it on the live stream either (an
 `i` or `u` flag, which every `when.*.matches` has, lookahead, a backreference, a
-counted repeat over 16, lookbehind on Node 20, or `REGEX_LINEAR_FALLBACK=false`).
+counted repeat over 16, lookbehind on a backend built on Node 20, or `REGEX_LINEAR_FALLBACK=false`).
 Usually it is legacy syntax JavaScript accepts but reads oddly: `\u{17}` without
 the `u` flag means seventeen `u`s. Write what you mean in plain syntax (`u{17}`,
 or `\u0017` for the character) and save again.
@@ -873,8 +877,8 @@ It does **not** disable them: that would silently stop parsing (or detecting)
 those logs. On the live stream, V8's linear-time fallback
 (`REGEX_LINEAR_FALLBACK`, on by default) finishes an exponential match quickly
 anyway, but not a polynomial one (`curl.*\|`), a case-insensitive one, one
-with lookahead or a backreference, a counted repeat over 16, or (on Node 20,
-the image's runtime) one with lookbehind.
+with lookahead or a backreference, a counted repeat over 16, or (on a backend
+built on Node 20; the images run Node 22) one with lookbehind.
 
 **Fix**, in order of preference:
 1. Edit it and rewrite the regex linear (see the previous issue). Saving a

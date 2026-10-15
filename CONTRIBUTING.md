@@ -20,7 +20,7 @@ Thank you for your interest in contributing to SIEMBox! This document provides g
 ### Development Setup
 
 **Prerequisites:**
-- Node.js 22.13+ (what CI uses; the backend's ESLint 10 and `npm test` need it)
+- Node.js 22.13+ (what the images and CI run; the backend's ESLint 10 and `npm test` need it)
 - Docker and Docker Compose
 - PostgreSQL 15+ (if running locally without Docker)
 

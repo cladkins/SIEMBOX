@@ -55,8 +55,9 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
-      # Node 22, not the images' Node 20: `npm test` passes a quoted glob
-      # ("src/**/*.test.ts") to the test runner, and only Node >= 21 expands it.
+      # Node 22, the images' runtime (backend/Dockerfile). `npm test` also needs
+      # Node >= 21: it passes a quoted glob ("src/**/*.test.ts") to the test
+      # runner, and only Node >= 21 expands it.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -70,15 +71,6 @@ jobs:
           npm run migrate
       - run: npm test
       - run: npm run lint
-      # The production image runs Node 20 (backend/Dockerfile), whose V8 runs the
-      # linear-time regex fallback differently from Node 22's (no lookbehind, and
-      # "" captures from groups that can match empty). The regex gate and
-      # fallback tests run there too; a single named file needs no glob expansion.
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 20
-      - name: Regex fallback and gate tests on Node 20
-        run: npx tsx --test src/services/regex/linearFallback.test.ts src/services/regex/regexSafety.test.ts
 
   frontend:
     runs-on: ubuntu-latest
@@ -88,9 +80,10 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v7
+      # Node 22, the Node frontend/Dockerfile builds on.
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci

@@ -20,17 +20,24 @@ after(async () => {
 const CATASTROPHIC = { name: 't', parser_type: 'regex', pattern: '^(a+)+$', field_mappings: {} };
 const ATTACK = 'a'.repeat(40) + '!';
 const SAFE = { name: 't', parser_type: 'regex', pattern: '^(?<user>\\w+) logged in$', field_mappings: { user: 'user' } };
+/**
+ * Budget for a quick task that is the first on a fresh worker: under tsx the
+ * worker loads the backend's modules first, which on a busy CI runner can
+ * outlast an 800 ms budget. The timeout tests still use their short budgets for
+ * the catastrophic task itself.
+ */
+const WARM_UP_MS = 15_000;
 
 test('runs a parser in a worker and returns its fields', async () => {
   const p = pool();
-  const result = await p.run<any>('runParser', { parser: SAFE, message: 'alice logged in' });
+  const result = await p.run<any>('runParser', { parser: SAFE, message: 'alice logged in' }, { timeoutMs: WARM_UP_MS });
   assert.equal(result.fields.user, 'alice');
   assert.equal(await p.run('runParser', { parser: SAFE, message: 'nothing to see' }), null);
 });
 
 test('^(a+)+$ on a crafted line is stopped at the budget while the event loop keeps running', async () => {
   const p = pool({ timeoutMs: 1000 });
-  await p.run('runParser', { parser: SAFE, message: 'warm up' }); // worker started
+  await p.run('runParser', { parser: SAFE, message: 'warm up' }, { timeoutMs: WARM_UP_MS }); // worker started
 
   // The main thread must stay responsive: count timer ticks during the run.
   let ticks = 0;
@@ -50,7 +57,7 @@ test('^(a+)+$ on a crafted line is stopped at the budget while the event loop ke
 
 test('the worker that timed out is terminated and replaced, and the pool keeps working', async () => {
   const p = pool({ timeoutMs: 500 });
-  await p.run('runParser', { parser: SAFE, message: 'warm up' });
+  await p.run('runParser', { parser: SAFE, message: 'warm up' }, { timeoutMs: WARM_UP_MS });
   const before = p.threadIds();
   assert.equal(before.length, 1);
 
@@ -79,15 +86,17 @@ test('a full queue is refused as busy instead of waiting behind a stuck worker',
 test('a pattern that does not compile is reported, not thrown on the main thread', async () => {
   const p = pool();
   await assert.rejects(
-    p.run('runParser', { parser: { ...SAFE, pattern: '(unclosed' }, message: 'x' }),
+    p.run('runParser', { parser: { ...SAFE, pattern: '(unclosed' }, message: 'x' }, { timeoutMs: WARM_UP_MS }),
     (error: unknown) => error instanceof RegexWorkerError && /Invalid regular expression/.test(error.message)
   );
 });
 
 test('self-tests run in the worker too', async () => {
   const p = pool();
-  const result = await p.run<any>('selfTest', {
-    parser: { ...SAFE, schema: 'siembox.parser/v1', test_samples: [{ input: 'erin logged in', expect: { user: 'erin' } }] },
-  });
+  const result = await p.run<any>(
+    'selfTest',
+    { parser: { ...SAFE, schema: 'siembox.parser/v1', test_samples: [{ input: 'erin logged in', expect: { user: 'erin' } }] } },
+    { timeoutMs: WARM_UP_MS }
+  );
   assert.deepEqual({ ok: result.ok, passed: result.passed }, { ok: true, passed: 1 });
 });

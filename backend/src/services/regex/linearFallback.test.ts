@@ -2,15 +2,15 @@
  * The live ingest path's bound on a backtracking regex (linearFallback.ts): with
  * V8's linear-time fallback on, a parser whose pattern backtracks for seconds on
  * a crafted line answers in milliseconds, on the main thread, with the same
- * result. Each case runs in a child process (V8 flags are process-wide, and a
- * child without the fallback is stopped by spawnSync's timeout instead of
- * stalling the test run). DB-free; `npm test`.
+ * result. That case runs in a child process (V8 flags are process-wide, and a
+ * child whose fallback does not work is stopped by spawnSync's timeout instead
+ * of stalling the test run). DB-free; `npm test`.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
-import { enableLinearRegexFallback, linearFallbackWanted } from './linearFallback';
+import { enableLinearRegexFallback, LINEAR_FALLBACK_V8_FLAG, linearFallbackWanted } from './linearFallback';
 
 /** Ten groups of eight identical alternatives: 8^10 backtracking steps (about 14 s) on ATTACK. */
 const PATTERN = `^(?<x>${'(?:a|a|a|a|a|a|a|a)'.repeat(10)})$`;
@@ -57,22 +57,15 @@ test('with the fallback on, a parser pattern that backtracks for seconds answers
 
 test('REGEX_LINEAR_FALLBACK=false leaves V8 alone; anything else turns the fallback on', () => {
   for (const off of ['false', 'FALSE', '0', 'off', 'no', ' false ']) {
+    const set: string[] = [];
     assert.equal(linearFallbackWanted({ REGEX_LINEAR_FALLBACK: off }), false, off);
-    assert.equal(enableLinearRegexFallback({ REGEX_LINEAR_FALLBACK: off }), false, off);
+    assert.equal(enableLinearRegexFallback({ REGEX_LINEAR_FALLBACK: off }, (f) => set.push(f)), false, off);
+    assert.deepEqual(set, [], `${off}: no V8 flag is set`);
   }
   for (const on of [undefined, '', 'true', '1', 'on', 'yes']) {
+    const set: string[] = [];
     assert.equal(linearFallbackWanted({ REGEX_LINEAR_FALLBACK: on }), true, String(on));
+    assert.equal(enableLinearRegexFallback({ REGEX_LINEAR_FALLBACK: on }, (f) => set.push(f)), true, String(on));
+    assert.deepEqual(set, [LINEAR_FALLBACK_V8_FLAG]);
   }
-  // Without the fallback the same match backtracks: the child is still in it when it is stopped.
-  const r = child(
-    `console.log('on=' + fallback.enableLinearRegexFallback());
-     const started = Date.now();
-     runParser({ name: 'p', parser_type: 'regex', pattern: ${JSON.stringify(PATTERN)}, field_mappings: {} }, ${JSON.stringify(ATTACK)}, {});
-     console.log('finished in ' + (Date.now() - started) + ' ms');`,
-    { REGEX_LINEAR_FALLBACK: 'false' },
-    4000
-  );
-  assert.match(r.stdout, /^on=false$/m, `the child started: ${r.stderr}`);
-  assert.equal(r.timedOut, true, `expected the unbounded match to outlive the child, got: ${r.stdout}`);
-  assert.doesNotMatch(r.stdout, /finished/);
 });

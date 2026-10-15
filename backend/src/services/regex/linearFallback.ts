@@ -47,10 +47,13 @@ export function linearFallbackWanted(env: NodeJS.ProcessEnv = process.env): bool
 
 /**
  * Turn the fallback on for this process unless REGEX_LINEAR_FALLBACK disables
- * it. Returns whether it is on.
+ * it. Returns whether it is on. (`setFlags` is a test seam.)
  */
-export function enableLinearRegexFallback(env: NodeJS.ProcessEnv = process.env): boolean {
+export function enableLinearRegexFallback(
+  env: NodeJS.ProcessEnv = process.env,
+  setFlags: (flags: string) => void = v8.setFlagsFromString
+): boolean {
   if (!linearFallbackWanted(env)) return false;
-  v8.setFlagsFromString(LINEAR_FALLBACK_V8_FLAG);
+  setFlags(LINEAR_FALLBACK_V8_FLAG);
   return true;
 }

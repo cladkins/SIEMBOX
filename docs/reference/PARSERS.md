@@ -397,7 +397,8 @@ No regex SIEMBox ships is affected by either.
 | recheck says | What happens |
 |---|---|
 | **vulnerable** (it found an attack string: exponential or polynomial) | Refused: `422`, nothing saved, with `ReDoS: regex at pattern is vulnerable (exponential) — rewrite it linear before saving`. The editor and import dialog show it inline with the regex, the kind of backtracking and an example of slow input. `force` does not override it. |
-| **unknown** (the budget ran out, or the syntax is not supported) | Saved, with a warning: `ReDoS: regex at pattern could not be proven safe (unknown: …)`. Large catalog patterns can land here on a slow host; that is not a finding. A verdict that only ran out of time is not stored: the regex is analyzed again after 10 minutes, or at the next start. |
+| **unknown**, and recheck cannot read it, and the linear-time fallback (below) cannot bound it either | Refused: `422 REGEX_UNDECIDED`, nothing saved. For example `^(a+)+\u{17}$`: without the `u` flag `\u{17}` means seventeen `u`s, which recheck cannot parse and the fallback cannot run, and `aaaa…uuuu!` stalls a match for seconds. Write it in plain syntax (`u{17}`, or `\u0017` for the character). A `when.*.matches` is always case-insensitive, so the fallback never covers it. |
+| **unknown** otherwise (the budget ran out, or the fallback bounds it) | Saved, with a warning: `ReDoS: regex at pattern could not be proven safe (unknown: …)`; when the fallback cannot bound it, the warning says so. Large catalog patterns can land here on a slow host; that is not a finding. A verdict that only ran out of time is not stored: the regex is analyzed again after 10 minutes, or at the next start. |
 | **safe** | Saved. |
 
 Each distinct regex is analyzed once (the verdict is kept in the
@@ -416,12 +417,17 @@ instead of a hung SIEM. Samples are capped at 64 KB, and a portable parser at
 per line would cost more than the parsing), so the check above is what
 protects ingestion. A second line: the backend turns on V8's linear-time
 fallback (`REGEX_LINEAR_FALLBACK`, on by default), which abandons a match after
-50,000 backtracks and finishes it on a non-backtracking engine, with the same
-result. It stops exponential blowups such as `^(a+)+$` in a `pattern` or
-`extract` regex that uses no lookahead, no backreference and no bounded repeat
-over about 16. It does not stop polynomial ones (`curl.*\|` still costs about
-0.45 s per 64 KB line), and it does not cover `when.*.matches` (always
-case-insensitive), which backtracks as before.
+1,000,000 backtracks and finishes it on a non-backtracking engine. (V8's default
+of 50,000 sent ordinary linear patterns to it on lines over about 50 KB, where,
+on Node 22, it is about 30 times slower.) It stops exponential blowups such as `^(a+)+$` in a
+`pattern` or `extract` regex that uses no lookahead, no backreference, no
+counted repeat over 16 and, on Node 20 (the image's runtime), no lookbehind. It
+does not stop polynomial ones (`curl.*\|` still costs about 0.45 s per 64 KB
+line), and it does not cover `when.*.matches` (always case-insensitive), which
+backtracks as before. The result is the same on Node 22. On Node 20, once a
+match has fallen back, a quantified group that can match empty may come out
+different: `^(?<prefix>.*?)?user=…` can set `prefix` to `""` where backtracking
+leaves it unset, so avoid optional groups whose body can match nothing.
 With the fallback on, testing such a covered pattern answers *no match* quickly
 instead of `REGEX_TIMEOUT`; saving it is still refused.
 

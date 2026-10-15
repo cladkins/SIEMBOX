@@ -70,6 +70,15 @@ jobs:
           npm run migrate
       - run: npm test
       - run: npm run lint
+      # The production image runs Node 20 (backend/Dockerfile), whose V8 runs the
+      # linear-time regex fallback differently from Node 22's (no lookbehind, and
+      # "" captures from groups that can match empty). The regex gate and
+      # fallback tests run there too; a single named file needs no glob expansion.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+      - name: Regex fallback and gate tests on Node 20
+        run: npx tsx --test src/services/regex/linearFallback.test.ts src/services/regex/regexSafety.test.ts
 
   frontend:
     runs-on: ubuntu-latest

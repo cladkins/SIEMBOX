@@ -14,12 +14,13 @@ import { fetchDetectionCatalog, getCatalogDetection } from '../rules/detectionCa
 import { validateRule, portableRuleToYaml } from '../rules/rulePortable';
 import { RulesEngine } from '../rules/rulesEngine';
 import { logger } from '../../utils/logger';
-import { assessParserRegexes, assessRuleRegexes, refusalReason, type RegexSafetyReport } from '../regex/regexSafety';
+import { assessParserRegexes, assessRuleRegexes, isRefused, refusalReason, type RegexSafetyReport } from '../regex/regexSafety';
 import { regexRunErrorResponse } from '../regex/boundedRegex';
 
 /**
  * The write-time regex gate for one pack item: a refusal reason (a regex recheck
- * proves vulnerable, or the checker is saturated), or null when it may be saved.
+ * proves vulnerable, or cannot read when nothing bounds it at run time, or the
+ * checker is saturated), or null when it may be saved.
  * Indeterminate regexes are installed; their warnings go into `warnings`.
  */
 async function packItemRefusal(
@@ -29,7 +30,7 @@ async function packItemRefusal(
 ): Promise<string | null> {
   try {
     const report = await check();
-    if (report.vulnerable.length > 0) return refusalReason(report);
+    if (isRefused(report)) return refusalReason(report);
     if (report.warnings.length > 0) warnings.push({ name, warnings: report.warnings });
     return null;
   } catch (error) {

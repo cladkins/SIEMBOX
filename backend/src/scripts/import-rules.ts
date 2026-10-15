@@ -15,7 +15,7 @@ import * as path from 'path';
 import * as yaml from '../utils/yaml';
 import { DetectionRuleModel } from '../models/DetectionRule';
 import { logger } from '../utils/logger';
-import { assessRuleRegexes } from '../services/regex/regexSafety';
+import { assessRuleRegexes, isRefused } from '../services/regex/regexSafety';
 
 interface YAMLRule {
   name: string;
@@ -94,12 +94,13 @@ async function importRule(filePath: string): Promise<boolean> {
     const ruleLogic = convertYAMLToRuleLogic(yamlRule);
 
     // The write-time regex gate every other save path applies: a regex
-    // condition recheck proves ReDoS-vulnerable is never imported (it would run
-    // on every parsed log). Checked only for rules this run would write.
+    // condition recheck proves ReDoS-vulnerable (or cannot read, with nothing to
+    // bound it at run time) is never imported (it would run on every parsed
+    // log). Checked only for rules this run would write.
     const existingRow = await DetectionRuleModel.findByName(yamlRule.name);
     if (!existingRow || existingRow.rule_yaml !== fileContent) {
       const safety = await assessRuleRegexes(ruleLogic);
-      if (safety.vulnerable.length > 0) {
+      if (isRefused(safety)) {
         logger.error(`Rule "${yamlRule.name}" not imported: ${safety.errors.join('; ')}`, { filePath });
         return false;
       }

@@ -12,8 +12,21 @@
  *
  *   - proven vulnerable (recheck found an attack string): refused, 422, with
  *     the same sentence the parser contribute check uses;
- *   - indeterminate (recheck ran out of its time budget, or does not support
- *     the syntax): accepted, with a warning returned to the caller;
+ *   - indeterminate (recheck ran out of its time budget, or cannot read the
+ *     syntax) and inside V8's linear engine, so the live stream's linear-time
+ *     fallback (linearFallback.ts) bounds it: accepted, with a warning
+ *     returned to the caller;
+ *   - indeterminate because the analyzer cannot read it (a fact about the
+ *     regex), and outside that engine (an i or u flag, lookahead, a
+ *     backreference, a counted repeat over 16, lookbehind on Node 20) or with
+ *     the fallback off: refused, 422 REGEX_UNDECIDED. Nothing would bound it
+ *     on a log line: ^(a+)+\u{17}$ (Annex B reads \u{17} as seventeen u's)
+ *     is one recheck cannot parse, and it backtracks for seconds;
+ *   - indeterminate only because the analysis ran out of time, outside that
+ *     engine: accepted, with a warning that says nothing bounds it. Refusing
+ *     those would refuse shipped content: on the pure-JS analyzer the Docker
+ *     image runs, rules such as PROXY-001 (lookahead) need more than the
+ *     default budget. It is not stored, so it is analyzed again later;
  *   - safe: accepted.
  *
  * The analysis is recheck (the analyzer the catalog CI already uses, run the
@@ -38,12 +51,14 @@ import {
   RECHECK_ANALYSIS,
   RECHECK_PARAMS,
   redosErrorMessage,
+  redosUndecidedMessage,
   redosWarningMessage,
   type RedosFinding,
   type RegexRef,
   type RegexVerdict,
 } from '../parser/redos';
 import { collectRuleRegexes } from '../rules/rulePortable';
+import { linearFallbackCovers, linearFallbackObstacle } from './linearFallback';
 import { query } from '../../config/database';
 import { logger } from '../../utils/logger';
 
@@ -369,29 +384,47 @@ async function verdictsFor(
 export interface RegexSafetyReport {
   /** Proven super-linear (an attack string exists): the write is refused. */
   vulnerable: RedosFinding[];
-  /** Could not be decided: the write goes ahead with these as warnings. */
+  /**
+   * The analyzer cannot read it, and the live stream's linear-time fallback
+   * cannot bound it (or is off): the write is refused too (REGEX_UNDECIDED).
+   */
+  undecided: RedosFinding[];
+  /** Could not be decided otherwise: the write goes ahead with these as warnings. */
   unknown: RedosFinding[];
-  /** One sentence per vulnerable regex (same wording as the contribute check). */
+  /** One sentence per refused regex: vulnerable (same wording as the contribute check), then undecided. */
   errors: string[];
-  /** One sentence per indeterminate regex. */
+  /** One sentence per indeterminate regex that was accepted. */
   warnings: string[];
 }
 
 export function emptyReport(): RegexSafetyReport {
-  return { vulnerable: [], unknown: [], errors: [], warnings: [] };
+  return { vulnerable: [], undecided: [], unknown: [], errors: [], warnings: [] };
+}
+
+/** Must the write be refused? (A vulnerable or an undecided regex.) */
+export function isRefused(report: RegexSafetyReport): boolean {
+  return report.vulnerable.length > 0 || report.undecided.length > 0;
+}
+
+/** The 422 code for a refused report: REGEX_UNSAFE when any regex is proven vulnerable. */
+export function refusalCode(report: RegexSafetyReport): 'REGEX_UNSAFE' | 'REGEX_UNDECIDED' {
+  return report.vulnerable.length > 0 ? 'REGEX_UNSAFE' : 'REGEX_UNDECIDED';
 }
 
 /** Prefix every location (e.g. "rules[2].") when one report covers several items. */
 export function mergeReports(parts: Array<{ prefix?: string; report: RegexSafetyReport }>): RegexSafetyReport {
   const out = emptyReport();
+  const at = (prefix: string) => (f: RedosFinding) => ({ ...f, location: `${prefix}${f.location}` });
   for (const { prefix = '', report } of parts) {
-    const vulnerable = report.vulnerable.map((f) => ({ ...f, location: `${prefix}${f.location}` }));
-    const unknown = report.unknown.map((f) => ({ ...f, location: `${prefix}${f.location}` }));
-    out.vulnerable.push(...vulnerable);
-    out.unknown.push(...unknown);
-    out.errors.push(...vulnerable.map((f) => redosErrorMessage(f, 'saving')));
-    out.warnings.push(...unknown.map(redosWarningMessage));
+    out.vulnerable.push(...report.vulnerable.map(at(prefix)));
+    out.undecided.push(...report.undecided.map(at(prefix)));
+    out.unknown.push(...report.unknown.map(at(prefix)));
   }
+  out.errors.push(
+    ...out.vulnerable.map((f) => redosErrorMessage(f, 'saving')),
+    ...out.undecided.map((f) => redosUndecidedMessage(f, 'saving'))
+  );
+  out.warnings.push(...out.unknown.map(redosWarningMessage));
   return out;
 }
 
@@ -412,9 +445,10 @@ export async function assessRegexes(
 
 function reportFrom(
   refs: Array<RegexRef & { key: string }>,
-  verdictOf: (key: string) => RegexVerdict | undefined
+  verdictOf: (key: string) => CachedVerdict | undefined
 ): RegexSafetyReport {
   const report = emptyReport();
+  const undecidedErrors: string[] = [];
   for (const ref of refs) {
     const v = verdictOf(ref.key);
     if (!v || v.status === 'safe') continue;
@@ -423,12 +457,23 @@ function reportFrom(
       const f: RedosFinding = { ...base, status: 'vulnerable', complexity: v.complexity, attack: v.attack };
       report.vulnerable.push(f);
       report.errors.push(redosErrorMessage(f, 'saving'));
+      continue;
+    }
+    const f: RedosFinding = { ...base, status: 'unknown', detail: v.detail };
+    if (v.outOfTime) f.outOfTime = true;
+    if (!linearFallbackCovers(ref.source, ref.flags)) f.unbounded = linearFallbackObstacle(ref.source, ref.flags);
+    // Refused when nothing bounds it and the verdict is a fact about the regex.
+    // A transient one (out of time, analyzer missing or crashed) is accepted
+    // with a warning and analyzed again later.
+    if (f.unbounded !== undefined && !v.transient) {
+      report.undecided.push(f);
+      undecidedErrors.push(redosUndecidedMessage(f, 'saving'));
     } else {
-      const f: RedosFinding = { ...base, status: 'unknown', detail: v.detail };
       report.unknown.push(f);
       report.warnings.push(redosWarningMessage(f));
     }
   }
+  report.errors.push(...undecidedErrors);
   return report;
 }
 
@@ -446,11 +491,11 @@ export function assessRuleRegexes(rule: unknown, opts: { priority?: 'high' | 'lo
 /** The 422 body for a refused write. `subject` names it: `Parser "nginx"`. */
 export function refusalBody(subject: string, report: RegexSafetyReport) {
   return {
-    code: 'REGEX_UNSAFE',
+    code: refusalCode(report),
     message: `${subject} was not saved: ${report.errors.join('; ')}`,
     errors: report.errors,
     warnings: report.warnings,
-    regex_safety: { vulnerable: report.vulnerable, unknown: report.unknown },
+    regex_safety: { vulnerable: report.vulnerable, undecided: report.undecided, unknown: report.unknown },
   };
 }
 
@@ -482,15 +527,12 @@ export function peekRegexSafety(refs: RegexRef[]): RegexSafetySummary {
     void assessRegexes(missing, { priority: 'low' }).catch(() => undefined);
   }
   const report = reportFrom(keyed, recall);
+  // A stored regex the gate would now refuse as undecided reads as "could not
+  // be proven safe" here; only a proven-vulnerable one is tagged.
+  const unknown = [...report.undecided, ...report.unknown];
   const status: RegexSafetySummary['status'] =
-    report.vulnerable.length > 0
-      ? 'vulnerable'
-      : missing.length > 0
-        ? 'pending'
-        : report.unknown.length > 0
-          ? 'unknown'
-          : 'safe';
-  return { status, vulnerable: report.vulnerable, unknown: report.unknown };
+    report.vulnerable.length > 0 ? 'vulnerable' : missing.length > 0 ? 'pending' : unknown.length > 0 ? 'unknown' : 'safe';
+  return { status, vulnerable: report.vulnerable, unknown };
 }
 
 /** A parser row as the API returns it, with its regex safety summary. */

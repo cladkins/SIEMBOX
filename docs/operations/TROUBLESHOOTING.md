@@ -822,9 +822,19 @@ npm run validate-parsers -- /path/to/my.parser.json
 npm run validate-detections -- /path/to/my-rule.yaml
 ```
 
+`422` with `"code": "REGEX_UNDECIDED"` (*could not be proven safe … so nothing
+would bound it on a log line*) means the analyzer cannot read the regex at all,
+and V8's linear-time fallback could not bound it on the live stream either (an
+`i` or `u` flag, which every `when.*.matches` has, lookahead, a backreference, a
+counted repeat over 16, lookbehind on Node 20, or `REGEX_LINEAR_FALLBACK=false`).
+Usually it is legacy syntax JavaScript accepts but reads oddly: `\u{17}` without
+the `u` flag means seventeen `u`s. Write what you mean in plain syntax (`u{17}`,
+or `\u0017` for the character) and save again.
+
 A warning instead of a refusal — `could not be proven safe (unknown: …)` — means
 the analysis ran out of its time budget (`REGEX_SAFETY_CHECK_TIMEOUT_MS`,
-default 10000 ms) or does not support the syntax. The item was saved. Large but
+default 10000 ms), or cannot read the syntax but the linear-time fallback bounds
+it. The item was saved. Large but
 well-delimited patterns can land there on a slow host; simplify the pattern if
 you want a definite answer. A time-budget warning is not remembered for good:
 the regex is analyzed again after 10 minutes, or at the next start, so it may
@@ -863,7 +873,8 @@ It does **not** disable them: that would silently stop parsing (or detecting)
 those logs. On the live stream, V8's linear-time fallback
 (`REGEX_LINEAR_FALLBACK`, on by default) finishes an exponential match quickly
 anyway, but not a polynomial one (`curl.*\|`), a case-insensitive one, one
-with lookahead or a backreference, or a bounded repeat over about 16.
+with lookahead or a backreference, a counted repeat over 16, or (on Node 20,
+the image's runtime) one with lookbehind.
 
 **Fix**, in order of preference:
 1. Edit it and rewrite the regex linear (see the previous issue). Saving a

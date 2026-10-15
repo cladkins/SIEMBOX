@@ -21,6 +21,8 @@
  * callers that must not silently skip the gate (CI) pass `required: true`.
  */
 
+import { linearFallbackCovers, linearFallbackObstacle } from '../regex/linearFallback';
+
 export interface RedosFinding {
   /** Where in the parser the regex came from, e.g. "pattern" or "derivations[2].extract.user". */
   location: string;
@@ -31,6 +33,13 @@ export interface RedosFinding {
   detail?: string;
   /** For a vulnerable regex: recheck's attack string, e.g. `'a'.repeat(31) + '\x00'`. */
   attack?: string;
+  /** For an indeterminate regex: the analysis only ran out of time (load, a slow analyzer), so it may settle later. */
+  outOfTime?: boolean;
+  /**
+   * For an indeterminate regex: why the live stream's linear-time fallback
+   * cannot bound it either (services/regex/linearFallback.ts), when it cannot.
+   */
+  unbounded?: string;
 }
 
 /** Structural shape this module needs from a portable parser. */
@@ -248,10 +257,25 @@ export function scanRegex(
   }
   const verdict = verdictFromDiagnostics(result);
   if (verdict.status === 'safe') return null;
+  if (verdict.status === 'vulnerable') {
+    return { location, source, flags, status: 'vulnerable', complexity: verdict.complexity, attack: verdict.attack };
+  }
   // The CLI and contribute wording predates `detail`; keep it off unknown findings here.
-  return verdict.status === 'vulnerable'
-    ? { location, source, flags, status: 'vulnerable', complexity: verdict.complexity, attack: verdict.attack }
-    : { location, source, flags, status: 'unknown' };
+  const finding: RedosFinding = { location, source, flags, status: 'unknown' };
+  if (verdict.outOfTime) finding.outOfTime = true;
+  if (!linearFallbackCovers(source, flags)) finding.unbounded = linearFallbackObstacle(source, flags);
+  return finding;
+}
+
+/**
+ * Is this CLI finding one the app's write-time gate refuses as undecided
+ * (REGEX_UNDECIDED)? An indeterminate verdict that is a fact about the regex
+ * (the analyzer cannot read it, not merely that it ran out of time) for a
+ * regex the live stream's linear-time fallback cannot bound. The CLI
+ * validators fail on it too, so content that passes the catalog CI installs.
+ */
+export function isUndecidedUnbounded(f: RedosFinding): boolean {
+  return f.status === 'unknown' && !f.outOfTime && f.unbounded !== undefined;
 }
 
 /**
@@ -290,7 +314,21 @@ export function redosErrorMessage(f: RedosFinding, action: 'contributing' | 'sav
   return `ReDoS: regex at ${f.location} is vulnerable${f.complexity ? ` (${f.complexity})` : ''} — rewrite it linear before ${action}`;
 }
 
-/** The one sentence for a regex recheck could not decide. */
+/**
+ * The one sentence for a regex recheck could not decide that is accepted (a
+ * warning). When the linear-time fallback cannot bound it either, it says so:
+ * an analysis that only ran out of time is accepted, and analyzed again later.
+ */
 export function redosWarningMessage(f: RedosFinding): string {
-  return `ReDoS: regex at ${f.location} could not be proven safe (${f.status}${f.detail ? `: ${f.detail}` : ''})`;
+  const base = `ReDoS: regex at ${f.location} could not be proven safe (${f.status}${f.detail ? `: ${f.detail}` : ''})`;
+  return f.unbounded ? `${base}; ${f.unbounded}, so until an analysis decides it nothing bounds it on a log line` : base;
+}
+
+/** The one sentence for a refused undecided regex (the gate's REGEX_UNDECIDED, the CLI's isUndecidedUnbounded). */
+export function redosUndecidedMessage(f: RedosFinding, action: 'contributing' | 'saving'): string {
+  return (
+    `ReDoS: regex at ${f.location} could not be proven safe (${f.status}${f.detail ? `: ${f.detail}` : ''}) ` +
+    `and ${f.unbounded ?? "V8's linear-time fallback cannot run it"}, so nothing would bound it on a log line — ` +
+    `rewrite it before ${action}`
+  );
 }

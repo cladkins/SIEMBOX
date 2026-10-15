@@ -882,11 +882,13 @@ export async function generateParser(
     // never executes on the event loop.
     const validation = validatePortableParser(parser, { strict: true });
     const safety = validation.ok ? await assessParserRegexes(parser as PortableParser) : null;
-    const redos = safety ? [...safety.vulnerable, ...safety.unknown] : [];
+    const redos = safety ? [...safety.vulnerable, ...safety.undecided, ...safety.unknown] : [];
     const redosVulnerable = safety?.vulnerable ?? [];
+    // Refused at save as well: the analyzer cannot read it and nothing bounds it at run time.
+    const redosUndecided = safety?.undecided ?? [];
     let self_test: SelfTestResult | null = null;
     let selfTestError: string | undefined;
-    if (validation.ok && redosVulnerable.length === 0) {
+    if (validation.ok && redosVulnerable.length === 0 && redosUndecided.length === 0) {
       try {
         self_test = await runSelfTestsBounded(parser as PortableParser);
       } catch (e) {
@@ -895,7 +897,12 @@ export async function generateParser(
         selfTestError = answer.body.message;
       }
     }
-    const ok = validation.ok && redosVulnerable.length === 0 && !selfTestError && (self_test ? self_test.ok : true);
+    const ok =
+      validation.ok &&
+      redosVulnerable.length === 0 &&
+      redosUndecided.length === 0 &&
+      !selfTestError &&
+      (self_test ? self_test.ok : true);
     last = { ok, parser, validation, self_test, redos, attempts: attempt, ...(selfTestError ? { error: selfTestError } : {}) };
     if (ok) return last;
 
@@ -911,6 +918,7 @@ export async function generateParser(
         (f) =>
           `regex at ${f.location} is ReDoS-vulnerable (${f.complexity || 'catastrophic backtracking'}): rewrite it to be linear — anchor segments, avoid adjacent \\s+/.* over the same text, give captures like (.+?) explicit non-overlapping boundaries, prefer bounded character classes`
       ),
+      ...redosUndecided.map((f) => `regex at ${f.location} could not be analyzed (${f.detail || 'unsupported syntax'}): rewrite it in plain JavaScript regex syntax — escape literal braces and backslashes, no \\u{...} without the u flag`),
     ];
     prev = { parser, errors };
   }
@@ -1007,8 +1015,8 @@ export async function generateDetection(
     // The same regex gate the rule's save will apply: a vulnerable condition is
     // fed back to the model to rewrite instead of being handed to the user.
     const safety = validation.ok ? await assessRuleRegexes(rule) : null;
-    const redos = safety ? [...safety.vulnerable, ...safety.unknown] : [];
-    const ok = validation.ok && (safety?.vulnerable.length ?? 0) === 0;
+    const redos = safety ? [...safety.vulnerable, ...safety.undecided, ...safety.unknown] : [];
+    const ok = validation.ok && (safety?.vulnerable.length ?? 0) === 0 && (safety?.undecided.length ?? 0) === 0;
     last = { ok, rule, validation, redos, attempts: attempt };
     if (ok) return last;
     prev = {
@@ -1019,6 +1027,7 @@ export async function generateDetection(
           (f) =>
             `regex at ${f.location} is ReDoS-vulnerable (${f.complexity || 'catastrophic backtracking'}): rewrite it to be linear — no two parts may match the same text (e.g. not "a.*b"; use a gap that cannot contain the start token, or a bounded token like \\S+)`
         ),
+        ...(safety?.undecided ?? []).map((f) => `regex at ${f.location} could not be analyzed (${f.detail || 'unsupported syntax'}): rewrite it in plain JavaScript regex syntax — escape literal braces and backslashes, no \\u{...} without the u flag`),
       ],
     };
   }

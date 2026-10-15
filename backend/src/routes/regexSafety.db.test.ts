@@ -1,8 +1,9 @@
 /**
  * Regex safety end to end: the real app on an ephemeral port and a real
  * Postgres. Every write path refuses a regex recheck proves ReDoS-vulnerable
- * (422 REGEX_UNSAFE, nothing saved) and accepts an indeterminate one with a
- * warning; "try this pattern" routes run in a worker with a time budget (422
+ * (422 REGEX_UNSAFE, nothing saved), refuses one recheck cannot read that V8's
+ * linear-time fallback cannot bound (422 REGEX_UNDECIDED), and accepts any other
+ * indeterminate one with a warning; "try this pattern" routes run in a worker with a time budget (422
  * REGEX_TIMEOUT) while the event loop keeps answering; the startup scan flags a
  * stored unsafe parser or rule (WARN + `regex_safety` on the list) without
  * disabling it.
@@ -234,6 +235,40 @@ test('an indeterminate regex is saved with a warning', async (t) => {
   assert.equal(res.status, 201, JSON.stringify(res.json));
   assert.equal(res.json.warnings.length, 1);
   assert.match(res.json.warnings[0], /^ReDoS: regex at pattern could not be proven safe \(unknown: /);
+});
+
+test('a regex the analyzer cannot read is refused when the linear-time fallback cannot bound it (422 REGEX_UNDECIDED)', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  // Annex B reads \u{17} (no u flag) as "u" seventeen times: recheck cannot
+  // parse it, and V8's linear engine refuses a repeat of 17. This one used to
+  // be saved with a warning, and 'a'.repeat(27) + 'u'.repeat(16) + '!' then
+  // held the event loop for about 8 s per line.
+  const unreadable = `^(?:${tag})?(?<message>(a+)+)\\u{17}$`;
+  const parser = await call('analyst', 'POST', '/api/parsers', parserBody('undecided', unreadable));
+  assert.equal(parser.status, 422, JSON.stringify(parser.json));
+  assert.equal(parser.json.code, 'REGEX_UNDECIDED');
+  assert.match(parser.json.errors[0], /^ReDoS: regex at pattern could not be proven safe \(unknown: the analyzer could not parse it .*a counted repeat over 16\), so nothing would bound it on a log line — rewrite it before saving$/);
+  assert.equal(parser.json.regex_safety.undecided[0].source, unreadable);
+  assert.equal(await countRows('parsers', `${name}-undecided`), 0);
+
+  // A rule condition with the i flag: the linear engine has no i.
+  const rule = await call('analyst', 'POST', '/api/rules', {
+    name: `${name}-undecided-rule`,
+    severity: 'low',
+    enabled: false,
+    rule_yaml: ruleYaml(`(?i)^(?:${tag})?(a+)+\\u{1}$`),
+  });
+  assert.equal(rule.status, 422, JSON.stringify(rule.json));
+  assert.equal(rule.json.code, 'REGEX_UNDECIDED');
+  assert.match(rule.json.errors[0], /^ReDoS: regex at conditions\[0\]\.value could not be proven safe .*the i flag/);
+  assert.equal(await countRows('detection_rules', `${name}-undecided-rule`), 0);
+
+  // The same unreadable regex inside the linear engine (\u{1}, no flags): the
+  // fallback bounds it on a log line, so it is saved with a warning.
+  const bounded = await call('analyst', 'POST', '/api/parsers', parserBody('undecided-bounded', `^(?:${tag})?(?<message>(a+)+)\\u{1}$`));
+  assert.equal(bounded.status, 201, JSON.stringify(bounded.json));
+  assert.equal(bounded.json.warnings.length, 1);
+  assert.match(bounded.json.warnings[0], /^ReDoS: regex at pattern could not be proven safe \(unknown: the analyzer could not parse it/);
 });
 
 test('a regex that is not a string is refused on every write (the gate analyzes strings, the engines compile only strings)', async (t) => {

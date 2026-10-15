@@ -19,11 +19,13 @@ import { generateDetection } from '../services/ai/aiService';
 import { authorize } from '../middleware/auth';
 import { hasRequiredRole, requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { query } from '../config/database';
-import { redosErrorMessage, redosWarningMessage } from '../services/parser/redos';
+import { redosErrorMessage, redosUndecidedMessage, redosWarningMessage } from '../services/parser/redos';
 import {
   assessRuleRegexes,
   collectRuleRegexes,
+  isRefused,
   peekRegexSafety,
+  refusalCode,
   refusalReason,
   withRuleRegexSafety,
   type RegexSafetyReport,
@@ -40,8 +42,9 @@ const router = Router();
 //
 // Regex safety (services/regex): a rule's `regex` conditions run on every parsed
 // log. Every write path refuses one recheck proves vulnerable to catastrophic
-// backtracking (422 REGEX_UNSAFE; a batch records it in `failed`) and accepts an
-// indeterminate one with a warning.
+// backtracking (422 REGEX_UNSAFE; a batch records it in `failed`), refuses one
+// recheck cannot read that V8's linear-time fallback cannot bound either (422
+// REGEX_UNDECIDED), and accepts any other indeterminate one with a warning.
 const requireRuleWrite = requireScanPermission(UserRole.Analyst, 'detection_rule');
 
 /** The write-time regex gate for one rule (answers 422/503 itself and returns null). */
@@ -55,7 +58,7 @@ type BatchGate = { ok: true; report: RegexSafetyReport } | { ok: false; reason: 
 async function batchGate(rule: unknown): Promise<BatchGate> {
   try {
     const report = await assessRuleRegexes(rule);
-    if (report.vulnerable.length > 0) return { ok: false, reason: refusalReason(report), code: 'REGEX_UNSAFE' };
+    if (isRefused(report)) return { ok: false, reason: refusalReason(report), code: refusalCode(report) };
     return { ok: true, report };
   } catch (error) {
     const answer = regexRunErrorResponse(error);
@@ -379,7 +382,7 @@ router.post('/import/sigma/preview', authorize('admin'), async (req: Request, re
   for (const r of convertSigmaYaml(sigma)) {
     let errors = r.errors;
     let warnings = r.warnings;
-    let regex_safety: { vulnerable: unknown[]; unknown: unknown[] } | undefined;
+    let regex_safety: { vulnerable: unknown[]; undecided: unknown[]; unknown: unknown[] } | undefined;
     if (r.rule) {
       let report: RegexSafetyReport;
       try {
@@ -390,11 +393,11 @@ router.post('/import/sigma/preview', authorize('admin'), async (req: Request, re
       }
       errors = [...errors, ...report.errors];
       warnings = [...warnings, ...report.warnings];
-      regex_safety = { vulnerable: report.vulnerable, unknown: report.unknown };
+      regex_safety = { vulnerable: report.vulnerable, undecided: report.undecided, unknown: report.unknown };
     }
     results.push({
       title: r.title,
-      ok: !!r.rule && (regex_safety?.vulnerable.length ?? 0) === 0,
+      ok: !!r.rule && (regex_safety?.vulnerable.length ?? 0) === 0 && (regex_safety?.undecided.length ?? 0) === 0,
       rule: r.rule,
       errors,
       warnings,
@@ -515,8 +518,9 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
     const portable = toPortableRule(rule);
     const validation = validateRule(portable, { strict: true });
     // The detection catalog's CI (validate-detections) refuses a ReDoS-vulnerable
-    // regex, so this check does too: same verdicts as the write-time gate, same
-    // wording as the parser contribute check. 'unknown' is a warning only.
+    // regex, and one recheck cannot read that the linear-time fallback cannot
+    // bound, so this check does too: same verdicts as the write-time gate, same
+    // wording as the parser contribute check. Any other 'unknown' is a warning.
     let safety: RegexSafetyReport | null = null;
     if (validation.ok) {
       try {
@@ -526,7 +530,7 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
         throw error;
       }
     }
-    const ready = validation.ok && (safety?.vulnerable.length ?? 0) === 0;
+    const ready = validation.ok && !(safety && isRefused(safety));
 
     const slug = String(rule.name || `rule-${id}`).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || `rule-${id}`;
     const filePath = `${getDetectionSource().path}/${slug}.yaml`;
@@ -538,9 +542,13 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
       path: filePath,
       content,
       valid: validation.ok,
-      errors: [...validation.errors, ...(safety?.vulnerable ?? []).map((f) => redosErrorMessage(f, 'contributing'))],
+      errors: [
+        ...validation.errors,
+        ...(safety?.vulnerable ?? []).map((f) => redosErrorMessage(f, 'contributing')),
+        ...(safety?.undecided ?? []).map((f) => redosUndecidedMessage(f, 'contributing')),
+      ],
       warnings: [...validation.warnings, ...(safety?.unknown ?? []).map(redosWarningMessage)],
-      redos: safety ? [...safety.vulnerable, ...safety.unknown] : [],
+      redos: safety ? [...safety.vulnerable, ...safety.undecided, ...safety.unknown] : [],
       self_test: null, // detections have no self-tests (parsers do)
       ready,
       contribute_url: ready ? catalogNewFileUrl(filePath, content) : null,

@@ -63,10 +63,12 @@ import {
 } from '../services/parser/catalogService';
 import { RecommendationResult, SourceSample, HIGH_SEVERITY_MAX } from '../services/parser/parserRecommendations';
 import { generateParser } from '../services/ai/aiService';
-import { collectParserRegexes, redosErrorMessage, redosWarningMessage } from '../services/parser/redos';
+import { collectParserRegexes, redosErrorMessage, redosUndecidedMessage, redosWarningMessage } from '../services/parser/redos';
 import {
   assessParserRegexes,
+  isRefused,
   peekRegexSafety,
+  refusalCode,
   refusalReason,
   withParserRegexSafety,
   type RegexSafetyReport,
@@ -94,8 +96,9 @@ const router = Router();
 // caller supplies.
 //
 // Regex safety (services/regex): every write refuses a regex recheck proves
-// vulnerable to catastrophic backtracking (422 REGEX_UNSAFE) and accepts an
-// indeterminate one with a warning; every route that runs a pattern on a
+// vulnerable to catastrophic backtracking (422 REGEX_UNSAFE) or cannot read when
+// V8's linear-time fallback cannot bound it either (422 REGEX_UNDECIDED), and
+// accepts any other indeterminate one with a warning; every route that runs a pattern on a
 // caller's sample runs it in a worker thread with a hard time budget (422
 // REGEX_TIMEOUT), never on the event loop that serves the API and ingestion.
 const requireParserWrite = requireScanPermission(UserRole.Analyst, 'parser');
@@ -337,8 +340,8 @@ router.post('/validate', requireParserWrite, async (req: Request, res: Response)
 });
 
 // Import a portable parser: validate -> regex safety gate -> run self-tests ->
-// upsert by name. Refuses a ReDoS-vulnerable regex (422 REGEX_UNSAFE) whatever
-// `force` says, and a parser whose own test_samples fail unless `force` is set.
+// upsert by name. Refuses a ReDoS-vulnerable regex (422 REGEX_UNSAFE), or an
+// undecided one nothing bounds (422 REGEX_UNDECIDED), whatever `force` says, and a parser whose own test_samples fail unless `force` is set.
 router.post('/import', requireParserWrite, async (req: Request, res: Response) => {
   try {
     const { parser, force } = req.body ?? {};
@@ -507,8 +510,8 @@ router.post('/catalog/install-all', requireParserWrite, async (req: Request, res
         let selfTestOk: boolean;
         try {
           safety = await assessParserRegexes(portable);
-          if (safety.vulnerable.length > 0) {
-            results.failed.push({ name: entry.name, reason: refusalReason(safety), code: 'REGEX_UNSAFE' });
+          if (isRefused(safety)) {
+            results.failed.push({ name: entry.name, reason: refusalReason(safety), code: refusalCode(safety) });
             continue;
           }
           selfTestOk = (await runSelfTestsBounded(portable)).ok;
@@ -608,8 +611,9 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
     // vulnerable pattern here instead of hitting a red CI on their PR. The
     // analysis is the write-time gate's (same recheck verdicts, in a worker
     // thread: the old synchronous scan blocked the event loop for up to 10 s
-    // per regex). Only a PROVEN-vulnerable regex blocks the link; 'unknown' is
-    // surfaced but not blocking (matches the validate-parsers CLI gate).
+    // per regex). A PROVEN-vulnerable regex blocks the link, and so does one
+    // recheck cannot read that the linear-time fallback cannot bound; any other
+    // 'unknown' is surfaced but not blocking (matches the validate-parsers CLI gate).
     let safety: RegexSafetyReport | null = null;
     if (validation.ok) {
       try {
@@ -619,8 +623,8 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
         throw error;
       }
     }
-    const redos = safety ? [...safety.vulnerable, ...safety.unknown] : [];
-    const ready = validation.ok && !!selfTest?.ok && !redos.some((f) => f.status === 'vulnerable');
+    const redos = safety ? [...safety.vulnerable, ...safety.undecided, ...safety.unknown] : [];
+    const ready = validation.ok && !!selfTest?.ok && !(safety && isRefused(safety));
 
     const filePath = `${getCatalogSource().path}/${parser.name}.parser.json`;
     const content = JSON.stringify(portable, null, 2);
@@ -636,9 +640,10 @@ router.get('/:id/contribute', async (req: Request, res: Response) => {
       // results as warnings.
       errors: [
         ...validation.errors,
-        ...redos.filter((f) => f.status === 'vulnerable').map((f) => redosErrorMessage(f, 'contributing')),
+        ...(safety?.vulnerable ?? []).map((f) => redosErrorMessage(f, 'contributing')),
+        ...(safety?.undecided ?? []).map((f) => redosUndecidedMessage(f, 'contributing')),
       ],
-      warnings: [...validation.warnings, ...redos.filter((f) => f.status !== 'vulnerable').map(redosWarningMessage)],
+      warnings: [...validation.warnings, ...(safety?.unknown ?? []).map(redosWarningMessage)],
       self_test: selfTest,
       redos, // vulnerable/indeterminate regexes, if any (empty = clean)
       ready, // only offer the PR link when it would pass the catalog's CI

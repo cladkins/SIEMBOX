@@ -1127,12 +1127,17 @@ What SIEMBox does about it:
   overlapping fixed-width alternations in a row), with parameters stricter than
   recheck's defaults about bounded repeats and the attack threshold. A regex must be a string, and the engines compile
   only strings, so what is checked is what runs. A regex proven
-  vulnerable (exponential or polynomial) is refused with `422 REGEX_UNSAFE`. An
-  indeterminate one is accepted with a warning: the analysis is a proof of
-  vulnerability, not of safety, so an attacker with write access (analyst and
-  up) who crafts a pattern recheck cannot settle can still store it. The
-  catalog CI (`validate-parsers`, `validate-detections`) refuses the same
-  regexes.
+  vulnerable (exponential or polynomial) is refused with `422 REGEX_UNSAFE`.
+  One the analyzer cannot read at all (`^(a+)+\u{17}$`: without the `u` flag
+  `\u{17}` is seventeen `u`s) is refused with `422 REGEX_UNDECIDED` unless the
+  linear-time fallback below bounds it, since then nothing would. Any other
+  indeterminate one (the analysis ran out of time) is accepted with a warning:
+  the analysis is a proof of vulnerability, not of safety, so an attacker with
+  write access (analyst and up) who crafts a pattern recheck cannot settle in
+  time can still store it. Refusing those too would refuse shipped content:
+  on the pure-JS analyzer the image runs, rules such as PROXY-001 outlast the
+  default budget. The catalog CI (`validate-parsers`, `validate-detections`)
+  refuses the same regexes the gate refuses.
 - **"Try this pattern" is time-bounded.** `POST /api/parsers/test`,
   `/validate`, `POST /api/parsers/:id/test` (any role), import and catalog
   self-tests and the recommendation dry-runs run in a small pool of worker
@@ -1148,17 +1153,23 @@ What SIEMBox does about it:
   worker would cost more than the parsing, so live matching still happens on
   the event loop. Beyond the gate and the startup scan above, the backend turns
   on V8's linear-time fallback (`REGEX_LINEAR_FALLBACK`, on by default): a match
-  that backtracks more than 50,000 times is abandoned and finished on V8's
-  non-backtracking engine, with the same result. That stops exponential and
-  large-constant blowups (`^(a+)+$`, ten `(?:a|a|…)` groups: milliseconds
+  that backtracks more than 1,000,000 times is abandoned and finished on V8's
+  non-backtracking engine. (V8's own default is 50,000, which a linear pattern
+  that backtracks once per character crosses on a 50 KB line; on Node 22 the
+  other engine then costs about 30 times more per line.) That stops exponential
+  and large-constant blowups (`^(a+)+$`, ten `(?:a|a|…)` groups: 5-10 ms
   instead of seconds or hours), not polynomial ones: `curl.*\|` still costs
   0.45 s per 64 KB line and 6.8 s per 256 KB TCP line, which is why the gate
-  refuses it. And the engine does not support every regex: case-insensitive
-  (`i`) or unicode (`u`) regexes, lookahead, backreferences and bounded repeats
-  over about 16 (`{1,30}`) keep backtracking. So a regex of those kinds accepted
-  as *indeterminate*, or saved before an upgrade and not yet fixed, can still
-  stall ingestion, and no static analysis is complete (recheck's fuzz pass is a
-  search, not a proof). Watch for the startup `WARN` lines and the tag.
+  refuses it. The result is the same on Node 22; on Node 20 (the image's
+  runtime) a quantified group that can match empty (`(?<x>.*?)?`, `(x|){0,2}`)
+  may capture `""` where backtracking leaves it unset, once a match has fallen
+  back. And the engine does not support every regex: case-insensitive (`i`) or
+  unicode (`u`) regexes, lookahead, backreferences, counted repeats over 16
+  (`{1,30}`) and, on Node 20, lookbehind keep backtracking. So a regex of those
+  kinds accepted as *indeterminate* because its analysis ran out of time, or
+  saved before an upgrade and not yet fixed, can still stall ingestion, and no
+  static analysis is complete (recheck's fuzz pass is a search, not a proof).
+  Watch for the startup `WARN` lines and the tag.
 
 The search box on the Logs pages is not a regex (it is a SQL `ILIKE`, run by
 PostgreSQL), and the Log Discovery fingerprints use plain substring matches.

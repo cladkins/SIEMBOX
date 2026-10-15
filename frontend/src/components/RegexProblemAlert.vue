@@ -20,11 +20,20 @@
       <code class="regex-problem-source">{{ f.source }}</code>
       <div v-if="f.attack" class="regex-problem-attack">Slow input, for example: <code>{{ f.attack }}</code></div>
     </div>
-    <div v-if="problem.findings.length || problem.code === 'REGEX_TIMEOUT'" class="regex-problem-help">
+    <div
+      v-if="(problem.findings.length && problem.code !== 'REGEX_UNDECIDED') || problem.code === 'REGEX_TIMEOUT'"
+      class="regex-problem-help"
+    >
       Rewrite it so no two parts of the pattern can match the same text: anchor it, use bounded character
       classes such as <code>[^"]*</code> or <code>\S+</code>, and never nest or chain quantifiers over the same
       characters (<code>(a+)+</code>, <code>.*x.*</code>). For "A, then later B" use a gap that cannot contain A,
       e.g. <code>curl(?:[^c|]|c(?!url))*\|</code>. See "Regex safety" in PARSERS.md / RULES.md.
+    </div>
+    <div v-else-if="problem.code === 'REGEX_UNDECIDED'" class="regex-problem-help">
+      The ReDoS check could not read this pattern, and the live stream's linear-time fallback cannot bound it
+      (case-insensitive patterns, lookahead, backreferences and counted repeats over 16 stay on the backtracking
+      engine). Write it in plain JavaScript syntax: escape literal braces, and use <code>\u{...}</code> only
+      with the <code>u</code> flag. See "Regex safety" in PARSERS.md / RULES.md.
     </div>
   </el-alert>
 </template>

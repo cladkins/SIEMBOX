@@ -96,7 +96,8 @@ services:
       # Regex safety (DEPLOYMENT.md, "Regex safety checks"). Empty = the
       # defaults: 10000 ms per analysis of one regex at save time (undecided =
       # saved with a warning), 1000 ms per pattern test run, 2 worker threads
-      # each, V8's linear-time fallback on (false turns it off).
+      # each, V8's linear-time fallback on after 1,000,000 backtracks (false
+      # turns it off).
       REGEX_SAFETY_CHECK_TIMEOUT_MS: ${REGEX_SAFETY_CHECK_TIMEOUT_MS:-}
       REGEX_SAFETY_WORKERS: ${REGEX_SAFETY_WORKERS:-}
       REGEX_TEST_TIMEOUT_MS: ${REGEX_TEST_TIMEOUT_MS:-}

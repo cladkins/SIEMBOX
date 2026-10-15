@@ -816,10 +816,21 @@ error and never matches).
   `derivations[0].when.message.matches`, or for a rule `conditions[1].value`.
   The sentence is the one `GET /api/parsers/:id/contribute` uses (there it ends
   "before contributing").
-- **Indeterminate** (the budget ran out, or the syntax is not supported by the
-  analyzer): saved. The response carries
+- **Unreadable and unbounded** (the analyzer cannot parse it, e.g. `\u{17}`
+  without the `u` flag, which JavaScript reads as seventeen `u`s, and V8's
+  linear-time fallback cannot bound it on a log line either: an `i` or `u` flag
+  (every `when.*.matches` is case-insensitive), lookahead, a backreference, a
+  counted repeat over 16, lookbehind on Node 20, or `REGEX_LINEAR_FALLBACK=false`):
+  refused with `422` and `"code": "REGEX_UNDECIDED"`, nothing saved, same body
+  shape with the regex under `regex_safety.undecided`:
+  `"ReDoS: regex at pattern could not be proven safe (unknown: the analyzer could not parse it (…)) and V8's linear-time fallback cannot run it (a counted repeat over 16), so nothing would bound it on a log line — rewrite it before saving"`.
+  In a batch it is listed in `failed` with `"code": "REGEX_UNDECIDED"`.
+- **Indeterminate** otherwise (the budget ran out, or the fallback bounds it):
+  saved. The response carries
   `"warnings": ["ReDoS: regex at pattern could not be proven safe (unknown: the analysis hit its time budget)"]`
-  (batch responses: `warnings: [{ name, warnings }]`).
+  (batch responses: `warnings: [{ name, warnings }]`). When the fallback cannot
+  bound it, the warning adds that nothing bounds it on a log line until an
+  analysis decides it.
 - **Checker saturated**: `503` with `"code": "REGEX_BUSY"` — retry; a regex is
   never accepted unchecked.
 
@@ -1052,6 +1063,7 @@ Create a new log parser.
 **Errors:**
 - `400` - Missing required fields
 - `422` `REGEX_UNSAFE` - The pattern is ReDoS-vulnerable; nothing saved ([Regex safety](#regex-safety-parsers-and-rules))
+- `422` `REGEX_UNDECIDED` - The check cannot read the pattern and nothing would bound it at run time; nothing saved
 - `503` `REGEX_BUSY` - The regex checker is saturated; retry
 
 ---
@@ -1198,7 +1210,7 @@ Test parser configuration without saving (for parser builder).
 **Errors:**
 - `400` - Missing required fields
 - `413` `SAMPLE_TOO_LARGE` - Sample over 64 KB
-- `422` `REGEX_TIMEOUT` - The pattern did not finish within the budget on this sample and was stopped (e.g. `^(?:a|a){1,30}$` on `'a'.repeat(28) + '!'` answers in about 1 s). A pattern V8's linear-time fallback covers (`REGEX_LINEAR_FALLBACK`, on by default; no `i`/`u` flag, lookahead or backreference), such as `^(a+)+$`, finishes quickly with `"matched": false` instead
+- `422` `REGEX_TIMEOUT` - The pattern did not finish within the budget on this sample and was stopped (e.g. `^(?:a|a){1,30}$` on `'a'.repeat(28) + '!'` answers in about 1 s). A pattern V8's linear-time fallback covers (`REGEX_LINEAR_FALLBACK`, on by default; no `i`/`u` flag, lookahead, backreference or counted repeat over 16, and on Node 20 no lookbehind), such as `^(a+)+$`, finishes quickly with `"matched": false` instead
 - `422` `REGEX_TEST_FAILED` - The pattern does not compile (the message quotes the compiler)
 - `503` `REGEX_BUSY` - Every test worker is busy; retry
 
@@ -1467,7 +1479,7 @@ another.
 | Method & Path | Purpose |
 |---|---|
 | `GET /api/parsers/:id/export` | Export an installed parser as a portable `siembox.parser/v1` JSON document. |
-| `POST /api/parsers/validate` | Validate a portable parser and run its self-tests without saving. Body: `{ "parser": { … }, "strict": false }`. Applies the import's regex check: `422 REGEX_UNSAFE` for what the import would refuse, `422 REGEX_TIMEOUT` when a self-test outlives its budget, `413` for oversized samples; indeterminate regexes appear in `validation.warnings`. |
+| `POST /api/parsers/validate` | Validate a portable parser and run its self-tests without saving. Body: `{ "parser": { … }, "strict": false }`. Applies the import's regex check: `422 REGEX_UNSAFE` or `REGEX_UNDECIDED` for what the import would refuse, `422 REGEX_TIMEOUT` when a self-test outlives its budget, `413` for oversized samples; indeterminate regexes appear in `validation.warnings`. |
 | `POST /api/parsers/import` | Import a portable parser. Body: `{ "parser": { … }, "force": false }`. Validated + regex-checked + self-tested before upsert; `422` on failure unless `force` (never for `REGEX_UNSAFE`). |
 
 ### AI Builder

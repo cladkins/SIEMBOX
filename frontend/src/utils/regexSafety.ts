@@ -4,6 +4,8 @@
  * show (backend services/regex, docs/reference/API.md "Regex safety").
  *
  *   422 REGEX_UNSAFE      a regex is ReDoS-vulnerable; nothing was saved
+ *   422 REGEX_UNDECIDED   a regex the check cannot read, which nothing would
+ *                         bound at run time; nothing was saved
  *   422 REGEX_TIMEOUT     a test run outlived its time budget and was stopped
  *   422 REGEX_TEST_FAILED the pattern could not run (e.g. it does not compile)
  *   413 SAMPLE_TOO_LARGE  the sample is over the size cap
@@ -40,6 +42,7 @@ export interface InlineProblem {
 
 const TITLES: Record<string, string> = {
   REGEX_UNSAFE: 'Refused: a regex can backtrack catastrophically (ReDoS)',
+  REGEX_UNDECIDED: 'Refused: a regex could not be checked for ReDoS, and nothing would bound it',
   REGEX_TIMEOUT: 'Stopped: the pattern ran out of time on this input',
   REGEX_TEST_FAILED: 'The pattern could not be run',
   SAMPLE_TOO_LARGE: 'The sample is too large',
@@ -54,13 +57,17 @@ const TITLES: Record<string, string> = {
 export function problemFromError(error: any, fallback: string): InlineProblem {
   const data = error?.response?.data ?? {};
   const code: string | undefined = typeof data.code === 'string' ? data.code : undefined;
-  if (code === 'REGEX_UNSAFE') {
+  if (code === 'REGEX_UNSAFE' || code === 'REGEX_UNDECIDED') {
+    const safety = data.regex_safety ?? {};
     return {
       type: 'error',
       code,
       title: TITLES[code],
       lines: Array.isArray(data.errors) && data.errors.length ? data.errors : [data.message],
-      findings: Array.isArray(data.regex_safety?.vulnerable) ? data.regex_safety.vulnerable : [],
+      findings: [
+        ...(Array.isArray(safety.vulnerable) ? safety.vulnerable : []),
+        ...(Array.isArray(safety.undecided) ? safety.undecided : []),
+      ],
     };
   }
   const message: string =

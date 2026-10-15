@@ -14,7 +14,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { validatePortableParser, runSelfTests, PortableParser } from '../services/parser/parserPortable';
-import { scanParserRedos } from '../services/parser/redos';
+import { isUndecidedUnbounded, redosUndecidedMessage, scanParserRedos } from '../services/parser/redos';
 
 function findParserFiles(target: string): string[] {
   const stat = fs.statSync(target);
@@ -60,20 +60,27 @@ function validateFile(file: string): { ok: boolean; lines: string[] } {
 
   // ReDoS gate: every shipped regex must be non-backtracking — the same scan the
   // published catalog's CI runs, so local == CI. `required` makes a missing
-  // analyzer fail loudly rather than silently skipping the check. Only PROVEN
-  // backtracking (status 'vulnerable') fails the build; a per-regex 'unknown'
-  // (recheck couldn't decide, common for very large patterns) is surfaced as a
-  // warning so a complex-but-safe pattern isn't blocked.
+  // analyzer fail loudly rather than silently skipping the check. PROVEN
+  // backtracking (status 'vulnerable') fails the build, and so does a regex
+  // recheck cannot read that V8's linear-time fallback cannot bound either (the
+  // app refuses both on install). Any other per-regex 'unknown' (recheck ran
+  // out of time, common for very large patterns) is surfaced as a warning so a
+  // complex-but-safe pattern isn't blocked.
   const redos = scanParserRedos(parsed as PortableParser, { required: true });
   const fatal = redos.filter(
-    (f) => f.status === 'vulnerable' || (f.location === 'redos' && f.status === 'error')
+    (f) => f.status === 'vulnerable' || isUndecidedUnbounded(f) || (f.location === 'redos' && f.status === 'error')
   );
   for (const f of redos.filter((x) => !fatal.includes(x))) {
     lines.push(`    ⚠ ReDoS ${f.location}: ${f.status}${f.complexity ? ` — ${f.complexity}` : ''}${f.detail ? ` (${f.detail})` : ''}`);
   }
   if (fatal.length > 0) {
-    const fl: string[] = [`✗ ${file}  (ReDoS-vulnerable regex)`];
+    const why = fatal.every(isUndecidedUnbounded) ? 'regex the ReDoS check cannot read' : 'ReDoS-vulnerable regex';
+    const fl: string[] = [`✗ ${file}  (${why})`];
     for (const f of fatal) {
+      if (isUndecidedUnbounded(f)) {
+        fl.push(`    ${redosUndecidedMessage(f, 'contributing')}`);
+        continue;
+      }
       const what = f.status === 'error' ? f.detail || 'analyzer error' : `${f.status}${f.complexity ? ` — ${f.complexity}` : ''}`;
       fl.push(`    ${f.location}: ${what}`);
     }

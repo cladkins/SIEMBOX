@@ -39,7 +39,7 @@ loadDotenv();
 
 // A parser or rule regex that backtracks catastrophically on a crafted log line
 // would stall the event loop (API, syslog ingestion, every job). V8 can abandon
-// such a match after 50,000 backtracks and finish it on its linear-time engine;
+// such a match after 1,000,000 backtracks and finish it on its linear-time engine;
 // see services/regex/linearFallback.ts for what that covers. Before anything runs.
 const linearRegexFallback = enableLinearRegexFallback();
 

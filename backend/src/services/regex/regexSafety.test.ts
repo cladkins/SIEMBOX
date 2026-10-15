@@ -13,14 +13,17 @@ import {
   clearRegexVerdictCache,
   closeRegexScanPool,
   collectRuleRegexes,
+  isRefused,
+  mergeReports,
   peekRegexSafety,
   refusalBody,
+  refusalCode,
   setTransientVerdictTtl,
   setVerdictStore,
   type RegexVerdict,
   type VerdictStore,
 } from './regexSafety';
-import { redosErrorMessage, scanParserRedos } from '../parser/redos';
+import { isUndecidedUnbounded, redosErrorMessage, redosUndecidedMessage, scanParserRedos } from '../parser/redos';
 
 setVerdictStore(null);
 beforeEach(() => clearRegexVerdictCache());
@@ -61,7 +64,7 @@ test('a linear regex passes with nothing to report', async () => {
     parser_type: 'regex',
     pattern: '^(?<client_ip>\\d{1,3}(?:\\.\\d{1,3}){3}) - (?<user>\\S+) \\[(?<ts>[^\\]]+)\\]',
   });
-  assert.deepEqual(report, { vulnerable: [], unknown: [], errors: [], warnings: [] });
+  assert.deepEqual(report, { vulnerable: [], undecided: [], unknown: [], errors: [], warnings: [] });
 });
 
 test('an indeterminate regex is accepted with a warning', async (t) => {
@@ -80,6 +83,100 @@ test('an indeterminate regex is accepted with a warning', async (t) => {
   assert.equal(report.vulnerable.length, 0, 'never refused');
   assert.equal(report.unknown.length, 1);
   assert.match(report.warnings[0], /^ReDoS: regex at pattern could not be proven safe \(unknown: the analysis hit its time budget\)$/);
+});
+
+test('a regex the analyzer cannot read is refused when the linear-time fallback cannot bound it either', async (t) => {
+  // Annex B reads \u{17} (no u flag) as "u" seventeen times. recheck cannot
+  // parse it, so the verdict is "unknown"; V8's linear engine refuses a repeat
+  // of 17, so the fallback would not cut it: 'a'.repeat(27) + 'u'.repeat(16) + '!'
+  // backtracks for about 8 s on the event loop. It used to be saved with a warning.
+  const report = await assessParserRegexes({ parser_type: 'regex', pattern: '^(?<x>(a+)+)\\u{17}$' });
+  assert.equal(report.vulnerable.length, 0, 'not proven vulnerable');
+  assert.deepEqual(report.unknown, []);
+  assert.deepEqual(report.undecided.map((f) => [f.location, f.status, f.unbounded]), [
+    ['pattern', 'unknown', "V8's linear-time fallback cannot run it (a counted repeat over 16)"],
+  ]);
+  assert.match(report.undecided[0].detail ?? '', /could not parse it/);
+  assert.equal(isRefused(report), true);
+  assert.equal(report.errors.length, 1);
+  assert.match(
+    report.errors[0],
+    /^ReDoS: regex at pattern could not be proven safe \(unknown: the analyzer could not parse it \(.+\)\) and V8's linear-time fallback cannot run it \(a counted repeat over 16\), so nothing would bound it on a log line — rewrite it before saving$/
+  );
+  const body = refusalBody('Parser "x"', report);
+  assert.equal(body.code, 'REGEX_UNDECIDED');
+  assert.deepEqual(body.regex_safety.undecided, report.undecided);
+
+  // The same unreadable regex inside the linear engine (\u{1}): the fallback
+  // bounds it on a log line, so it is accepted with a warning, as before.
+  const bounded = await assessParserRegexes({ parser_type: 'regex', pattern: '^(?<x>(a+)+)\\u{1}$' });
+  assert.equal(isRefused(bounded), false);
+  assert.equal(bounded.warnings.length, 1);
+  assert.match(bounded.warnings[0], /^ReDoS: regex at pattern could not be proven safe \(unknown: the analyzer could not parse it \(.+\)\)$/);
+
+  // ...but not as a rule condition with the i flag (the linear engine has no
+  // i), nor as a derivation `matches` (always case-insensitive).
+  const rule = await assessRuleRegexes({
+    conditions: [{ field: 'message', operator: 'regex', value: '^(a+)+\\u{1}$', flags: 'i' }],
+  });
+  assert.equal(refusalCode(rule), 'REGEX_UNDECIDED');
+  assert.match(rule.errors[0], /^ReDoS: regex at conditions\[0\]\.value could not be proven safe .*the i flag/);
+  const derived = await assessParserRegexes({
+    parser_type: 'regex',
+    pattern: '^(?<message>.+)$',
+    derivations: [{ when: { message: { matches: '^(a+)+\\u{1}$' } }, set: { t: '1' } }],
+  });
+  assert.deepEqual(derived.undecided.map((f) => f.location), ['derivations[0].when.message.matches']);
+
+  // A proven-vulnerable regex next to it keeps the REGEX_UNSAFE code; both are listed.
+  const both = await assessRegexes([
+    { location: 'pattern', source: '^(a+)+$', flags: '' },
+    { location: 'derivations[0].extract.x', source: '^(a+)+\\u{17}$', flags: '' },
+  ]);
+  assert.equal(refusalCode(both), 'REGEX_UNSAFE');
+  assert.equal(both.errors.length, 2);
+  const merged = mergeReports([{ prefix: 'rules[1].', report: both }]);
+  assert.deepEqual(merged.undecided.map((f) => f.location), ['rules[1].derivations[0].extract.x']);
+  assert.equal(merged.errors.length, 2);
+
+  // With the fallback off, nothing bounds any regex: the bounded one is refused too.
+  const previous = process.env.REGEX_LINEAR_FALLBACK;
+  process.env.REGEX_LINEAR_FALLBACK = 'false';
+  t.after(() => {
+    if (previous === undefined) delete process.env.REGEX_LINEAR_FALLBACK;
+    else process.env.REGEX_LINEAR_FALLBACK = previous;
+  });
+  const off = await assessParserRegexes({ parser_type: 'regex', pattern: '^(?<x>(a+)+)\\u{1}$' });
+  assert.match(off.errors[0] ?? '', /V8's linear-time fallback is off \(REGEX_LINEAR_FALLBACK=false\)/);
+
+  // The CLI validators (the catalog CI) fail on the same regexes, so content that passes there installs.
+  const cli = scanParserRedos({ parser_type: 'regex', pattern: '^(?<x>(a+)+)\\u{17}$' }, { required: true });
+  assert.deepEqual(cli.map(isUndecidedUnbounded), [true]);
+  assert.match(redosUndecidedMessage(cli[0], 'contributing'), /nothing would bound it on a log line — rewrite it before contributing$/);
+});
+
+test('an analysis that only ran out of time is accepted even outside the linear engine, and the warning says nothing bounds it', async (t) => {
+  // Refusing these would refuse shipped content: on the pure-JS analyzer the
+  // Docker image runs, rules such as PROXY-001 (lookahead) outlast the default budget.
+  const previous = process.env.REGEX_SAFETY_CHECK_TIMEOUT_MS;
+  process.env.REGEX_SAFETY_CHECK_TIMEOUT_MS = '100';
+  t.after(() => {
+    if (previous === undefined) delete process.env.REGEX_SAFETY_CHECK_TIMEOUT_MS;
+    else process.env.REGEX_SAFETY_CHECK_TIMEOUT_MS = previous;
+  });
+  // The large pattern the "indeterminate" test uses, as a case-insensitive rule condition.
+  const value =
+    '^(?<client_ip>[\\d.]+) - (?<remote_user>\\S+) \\[(?<timestamp>[^\\]]+)\\] "(?<method>\\w+) (?<request_uri>\\S+) ' +
+    '(?<protocol>[^"]+)" (?<status_code>\\d{3}) (?<bytes>\\d+|-)(?: "(?<referer>[^"]*)" "(?<user_agent>[^"]*)")?' +
+    '(?: (?<request_time>[\\d.]+))?(?: (?<upstream>\\S+))?$';
+  const report = await assessRuleRegexes({ conditions: [{ field: 'message', operator: 'regex', value, flags: 'i' }] });
+  assert.equal(isRefused(report), false);
+  const why = "V8's linear-time fallback cannot run it (the i flag, which every derivation `matches` has)";
+  assert.deepEqual(report.unknown.map((f) => [f.outOfTime, f.unbounded]), [[true, why]]);
+  assert.deepEqual(report.warnings, [
+    'ReDoS: regex at conditions[0].value could not be proven safe (unknown: the analysis hit its time budget); ' +
+      `${why}, so until an analysis decides it nothing bounds it on a log line`,
+  ]);
 });
 
 test("a rule's regex conditions are analyzed as the engine compiles them", async () => {
@@ -266,5 +363,5 @@ test('one call with more new regexes than the queue holds is analyzed a few at a
     flags: '',
   }));
   const report = await assessRegexes(refs);
-  assert.deepEqual(report, { vulnerable: [], unknown: [], errors: [], warnings: [] });
+  assert.deepEqual(report, { vulnerable: [], undecided: [], unknown: [], errors: [], warnings: [] });
 });

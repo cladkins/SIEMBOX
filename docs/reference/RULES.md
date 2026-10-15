@@ -1056,7 +1056,8 @@ analyzer `npm run validate-detections` now runs too:
 | recheck says | What happens |
 |---|---|
 | **vulnerable** (exponential or polynomial: it found an attack string) | Refused, `422`: `ReDoS: regex at conditions[0].value is vulnerable (polynomial, degree 2) — rewrite it linear before saving`. In a batch (Install all, Sigma import, a pack) the rule is skipped with that reason and the rest install. |
-| **unknown** (the time budget, `REGEX_SAFETY_CHECK_TIMEOUT_MS`, default 10 s, ran out) | Saved, with a warning. Not stored as a verdict: analyzed again after 10 minutes, or at the next start. |
+| **unknown**, because recheck cannot read it (e.g. `\u{17}` without the `u` flag, which means seventeen `u`s), in a condition the live stream's linear-time fallback cannot bound (any `i` condition; lookahead, a backreference, a counted repeat over 16) | Refused, `422 REGEX_UNDECIDED`; in a batch, skipped with that reason. |
+| **unknown** otherwise (the time budget, `REGEX_SAFETY_CHECK_TIMEOUT_MS`, default 10 s, ran out) | Saved, with a warning. Not stored as a verdict: analyzed again after 10 minutes, or at the next start. |
 | **safe** | Saved. |
 
 The condition is analyzed exactly as the engine compiles it: a leading `(?i)`

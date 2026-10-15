@@ -70,14 +70,16 @@ test('the worker that timed out is terminated and replaced, and the pool keeps w
     { timedOut: 1, replaced: 1 }
   );
 
-  const result = await p.run<any>('runParser', { parser: SAFE, message: 'bob logged in' });
+  // The replacement is a cold worker too.
+  const result = await p.run<any>('runParser', { parser: SAFE, message: 'bob logged in' }, { timeoutMs: WARM_UP_MS });
   assert.equal(result.fields.user, 'bob', 'the replacement serves the next request');
 });
 
 test('a full queue is refused as busy instead of waiting behind a stuck worker', async () => {
   const p = pool({ timeoutMs: 1500, maxQueue: 1 });
   const stuck = p.run('runParser', { parser: CATASTROPHIC, message: ATTACK });
-  const queued = p.run('runParser', { parser: SAFE, message: 'carol logged in' });
+  // It runs on the replacement for the stuck worker, a cold one.
+  const queued = p.run('runParser', { parser: SAFE, message: 'carol logged in' }, { timeoutMs: WARM_UP_MS });
   await assert.rejects(p.run('runParser', { parser: SAFE, message: 'dave logged in' }), RegexPoolBusyError);
   await assert.rejects(stuck, RegexTimeoutError);
   assert.equal(((await queued) as any).fields.user, 'carol', 'the queued task ran once a worker was free');

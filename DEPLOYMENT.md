@@ -406,6 +406,14 @@ the discovery agent, from Debian's `nodejs` (Node 18) to Node 22 copied from
   checks](#regex-safety-checks)). Move it to `node:22-alpine`.
 - **Running the backend or frontend outside Docker:** use Node.js 22.13 or
   newer.
+- **Log shippers** are not part of the root compose project, so the commands
+  above leave each one on its old image and Node 18. Update each one on the
+  host it runs on, in the
+  directory that holds its compose file (`log-shipper/` in a checkout, or the
+  directory you downloaded `compose.prod.yaml` into):
+  `docker compose -f compose.prod.yaml pull && docker compose -f compose.prod.yaml up -d`
+  for the prebuilt image, or `docker compose build --pull && docker compose up -d`
+  for a shipper built from source.
 
 ## Database Migrations and Seeding
 
@@ -750,7 +758,7 @@ Configure in the UI under **Settings → Data Retention**:
 5. **Restrict port 514** to trusted networks only
 6. **Regular backups** of PostgreSQL database
 7. **Monitor disk space** - logs can grow quickly
-8. **Update regularly** - `git pull && docker compose build --pull && docker compose up -d` (`--pull` also refreshes the `node:22-alpine`, `node:22-bookworm-slim`, `debian:bookworm-slim` and `nginx:alpine` base images, which a plain `up -d --build` keeps reusing)
+8. **Update regularly** - `git pull && docker compose build --pull && docker compose up -d` (`--pull` also refreshes the backend's and frontend's `node:22-alpine` and `nginx:alpine` base images, which a plain `up -d --build` keeps reusing). Log shippers are updated where they run: the same `docker compose build --pull && docker compose up -d` in `log-shipper/` refreshes a source-built shipper's `node:22-bookworm-slim` and `debian:bookworm-slim` bases, and `docker compose -f compose.prod.yaml pull && docker compose -f compose.prod.yaml up -d` updates a prebuilt one
 
 ## Network Configuration
 

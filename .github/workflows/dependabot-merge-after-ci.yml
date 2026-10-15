@@ -1,7 +1,15 @@
 # Merge a Dependabot PR labelled `dependabot-automerge` (see
-# dependabot-auto-merge.yml) once the CI workflow has succeeded on its current
-# head commit. Major npm updates are never labelled, so they always wait for a
-# human.
+# dependabot-auto-merge.yml) once its checks have passed on its current head
+# commit: the CI workflow, and the Image check workflow whenever it ran on that
+# commit. Major npm updates are never labelled, so they always wait for a human.
+#
+# Image check (image-check.yml) builds the container images and runs them. It is
+# path-filtered, but every npm lockfile bump matches, so a grouped minor/patch
+# PR is merged only after its images were built and ran. main has no required
+# status checks, so this job is what holds the merge back. It runs when either
+# workflow completes and merges only when every one of them that ran on the
+# commit succeeded. Otherwise it exits without merging: a check that is still
+# running runs this job again when it completes.
 #
 # Runs on workflow_run, so it executes this file from main with a write token.
 # It never checks out or runs PR code. Values that come from the PR (branch
@@ -14,12 +22,14 @@ name: Dependabot merge after CI
 
 on:
   workflow_run:
-    workflows: [CI]
+    workflows: [CI, Image check]
     types: [completed]
 
 permissions:
   contents: write
   pull-requests: write
+  # To read the CI and Image check runs on the PR's commit.
+  actions: read
 
 jobs:
   merge:
@@ -29,13 +39,19 @@ jobs:
       github.event.workflow_run.actor.login == 'dependabot[bot]' &&
       startsWith(github.event.workflow_run.head_branch, 'dependabot/')
     runs-on: ubuntu-latest
+    # CI and Image check can complete together: one merge attempt per branch at
+    # a time, so the second finds the PR already merged.
+    concurrency:
+      group: dependabot-merge-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
     steps:
-      - name: Merge the PR if it is still labelled and unchanged
+      - name: Merge the PR if it is still labelled, unchanged and its checks passed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          TRIGGER: ${{ github.event.workflow_run.name }}
         run: |
           set -euo pipefail
           pr=$(gh pr list --repo "$REPO" --state open --base main --head "$HEAD_BRANCH" \
@@ -45,5 +61,29 @@ jobs:
             echo "No open, labelled PR at $HEAD_SHA on $HEAD_BRANCH; nothing to merge."
             exit 0
           fi
-          echo "CI passed on #$pr at $HEAD_SHA; merging."
+
+          runs=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" --jq '.workflow_runs')
+          # gate <name> <workflow file> <required|if-run>: returns when the latest
+          # run of that workflow on HEAD_SHA succeeded (or, for if-run, when there
+          # is none: Image check's path filter did not match); otherwise ends the
+          # job without merging.
+          gate() {
+            local state
+            state=$(jq -r --arg path "$2" \
+              '[.[] | select(.path == $path)] | max_by(.id) // empty | "\(.status) \(.conclusion // "none")"' <<<"$runs")
+            echo "$1 on $HEAD_SHA: ${state:-no run}"
+            case "$state" in
+              "completed success") return 0 ;;
+              "")
+                if [ "$3" = if-run ]; then return 0; fi
+                echo "$1 has not run on #$pr at $HEAD_SHA; not merging." ;;
+              completed\ *) echo "$1 did not pass on #$pr at $HEAD_SHA; not merging." ;;
+              *) echo "$1 is still running on #$pr; its completion runs this job again." ;;
+            esac
+            exit 0
+          }
+          gate CI .github/workflows/ci.yml required
+          gate "Image check" .github/workflows/image-check.yml if-run
+
+          echo "Checks passed on #$pr at $HEAD_SHA (this run: $TRIGGER completed); merging."
           gh pr merge "$pr" --repo "$REPO" --squash --match-head-commit "$HEAD_SHA"

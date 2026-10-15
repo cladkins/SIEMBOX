@@ -2,10 +2,12 @@
 #
 # PRs target `main`, where all development lands. Every PR runs the CI workflow
 # (.github/workflows/ci.yml: backend build, migrations and tests against Postgres;
-# frontend type-check, build and lint). Only MINOR and PATCH updates are grouped,
-# and those groups, plus GitHub Actions bumps, are merged automatically once CI
-# has passed on them (see .github/workflows/dependabot-auto-merge.yml and
-# dependabot-merge-after-ci.yml). MAJOR bumps are deliberately left OUT of the
+# frontend type-check, build and lint), and every npm bump also runs Image check
+# (.github/workflows/image-check.yml: the container images built and run on
+# amd64 and arm64). Only MINOR and PATCH updates are grouped, and those groups,
+# plus GitHub Actions bumps, are merged automatically once CI, and Image check
+# where it ran, have passed on them (see .github/workflows/dependabot-auto-merge.yml
+# and dependabot-merge-after-ci.yml). MAJOR bumps are deliberately left OUT of the
 # groups so each breaking change arrives as its own PR to be reviewed and tested
 # on its own (e.g. express 4→5, pinia 2→3, vue-router 4→5).
 version: 2

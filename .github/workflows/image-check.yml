@@ -8,12 +8,15 @@
 # (no registry, no credentials, nothing pushed), then:
 #   backend:     Node version; bcrypt hash/compare (native module); recheck on
 #                its default backend and on RECHECK_BACKEND=pure; the compiled
-#                linear-time regex fallback against a catastrophic pattern;
-#                the image's own CMD (migrations, then dist/server.js) against
-#                Postgres, started twice; a syslog line stored; a dist CLI.
+#                linear-time regex fallback against a catastrophic pattern; the
+#                regex worker pools (save-time gate and bounded test runs) from
+#                dist/; the image's own CMD (migrations, then dist/server.js)
+#                against Postgres, started twice; a syslog line stored; a dist
+#                CLI; nmap service detection (NSE), nuclei and trivy.
 #   frontend:    nginx serves the UI and proxies /api to that backend over the
 #                api-socket volume.
-#   log-shipper: Node version and the bundled discovery agent.
+#   log-shipper: Node version, and the bundled discovery agent probing that
+#                backend (TCP connect and an HTTP GET).
 #
 # Keep the build contexts, Dockerfiles and build args in step with
 # build-containers.yml. Checks for one image: .github/image-smoke/.
@@ -22,26 +25,16 @@ name: Image check
 on:
   pull_request:
     branches: [main]
-    # What goes into an image or what the checks exercise. Source changes are
-    # built and tested by ci.yml.
+    # build-containers.yml's push paths (everything it rebuilds and publishes
+    # after a merge, docs excluded), so no change is published without having
+    # been built and run here first; plus this check's own files.
     paths:
-      - 'backend/Dockerfile'
-      - 'backend/package.json'
-      - 'backend/package-lock.json'
-      - 'backend/tsconfig.json'
-      - 'backend/scripts/**'
-      - 'backend/src/server.ts'
-      - 'backend/src/scripts/migrate.ts'
-      - 'backend/src/services/regex/**'
-      - 'frontend/Dockerfile'
-      - 'frontend/package.json'
-      - 'frontend/package-lock.json'
-      - 'frontend/tsconfig*.json'
-      - 'frontend/vite.config.ts'
-      - 'frontend/nginx.conf.template'
+      - 'backend/**'
+      - 'frontend/**'
       - 'log-shipper/**'
       - '.github/image-smoke/**'
       - '.github/workflows/image-check.yml'
+      - '.github/workflows/build-containers.yml'
       - '!**/*.md'
   workflow_dispatch:
 
@@ -133,6 +126,12 @@ jobs:
           # The same match with the fallback off, for comparison (not a check).
           docker run --rm -v "$PWD/.github/image-smoke:/smoke:ro" -e REGEX_LINEAR_FALLBACK=false siembox-backend:check node /smoke/backend-runtime.js linearFallback
 
+      # What a parser or rule save and a Test button run: worker threads started
+      # from dist/services/regex/regexWorker.js (recheck inside them falls back
+      # to a worker of its own here), the linear fallback applying in them.
+      - name: "Backend: regex worker pools (save-time gate, bounded test run)"
+        run: docker run --rm -v "$PWD/.github/image-smoke:/smoke:ro" siembox-backend:check node /smoke/backend-runtime.js regexPools
+
       - name: "Backend: start against Postgres (migrations, then dist/server.js), twice"
         run: |
           wait_for() { # <what> <command...>: up to 3 minutes
@@ -180,6 +179,21 @@ jobs:
           test -n "$stored"
           docker exec backend node dist/scripts/auth-admin.js status
 
+      # The scanners come from the Alpine line under node:22-alpine. A packaging
+      # split there (nse_main.lua moving to nmap-nselibs) once made every -sV
+      # and -O scan die with "NSE: failed to initialize the script engine".
+      - name: "Backend: nmap service detection (NSE), nuclei, trivy"
+        run: |
+          docker exec backend nmap -v -sV --version-light -p 8421 127.0.0.1 > nmap.txt 2>&1 || { cat nmap.txt; exit 1; }
+          grep -E 'NSE: Loaded|^8421/tcp|Nmap done' nmap.txt
+          if grep -F 'failed to initialize the script engine' nmap.txt; then exit 1; fi
+          grep -q 'NSE: Loaded [0-9]* scripts' nmap.txt
+          grep -qE '^8421/tcp +open' nmap.txt
+          docker exec backend nuclei -version 2>&1 | tee nuclei.txt
+          grep -qi 'engine version' nuclei.txt
+          docker exec backend trivy --version | tee trivy.txt
+          grep -q '^Version: ' trivy.txt
+
       - name: "Frontend: UI and /api through nginx"
         run: |
           docker run -d --name frontend --network siembox \
@@ -199,10 +213,17 @@ jobs:
         run: |
           docker run --rm siembox-log-shipper:check node --version | tee node-version.txt
           grep -q '^v22\.' node-version.txt
-          echo '{"mode":"active","cidrs":[],"probePlan":{"ports":[],"httpPaths":[],"mdnsServices":[]}}' \
-            | docker run --rm -i siembox-log-shipper:check node /usr/local/lib/siembox/discovery-agent.js > signals.json
-          echo "discovery agent output: $(cat signals.json)"
-          docker run --rm -i siembox-log-shipper:check jq -e 'type == "array"' < signals.json > /dev/null
+          # A dispatched active scan, against the backend container: the agent's
+          # liveness sweep, TCP connect scan, TLS attempt and HTTP GET.
+          ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' backend)
+          echo "{\"mode\":\"active\",\"cidrs\":[\"$ip/32\"],\"probePlan\":{\"ports\":[8421],\"httpPaths\":[\"/health\"],\"mdnsServices\":[]}}" \
+            | docker run --rm -i --network siembox siembox-log-shipper:check node /usr/local/lib/siembox/discovery-agent.js > signals.json
+          echo "discovery agent output for $ip:"
+          jq -c '.[] | {ip, open_ports, http_responses: [.http_responses[] | {port, path, status}], discovery_methods}' signals.json
+          # Checked with the shipper's own jq, which shipper-managed.sh posts the output with.
+          docker run --rm -i siembox-log-shipper:check jq -e --arg ip "$ip" \
+            'any(.[]; .ip == $ip and .open_ports == [8421] and any(.http_responses[]; .port == 8421 and .path == "/health" and .status == 200))' \
+            < signals.json > /dev/null
           docker run --rm siembox-log-shipper:check sh -c \
             'nmap --version | head -1; nuclei -version 2>&1 | grep -i "engine version"; docker --version; journalctl --version | head -1'
 

@@ -102,6 +102,74 @@ const checks = {
       assert.equal(lookbehind, true, "Node 22's linear engine runs lookbehind");
     }
   },
+
+  // The production path for every regex check and Test run: the save-time gate
+  // (scan pool) and the bounded test runs (test pool) execute in worker threads
+  // started from the compiled dist/services/regex/regexWorker.js, with
+  // resourceLimits. Inside a scan worker, recheck's async check cannot start its
+  // native binary on Alpine (or arm64) and falls back to a worker of its own.
+  // The checks above run on the main thread and never start a pool.
+  async regexPools() {
+    const fallback = appRequire('./dist/services/regex/linearFallback.js');
+    const on = fallback.enableLinearRegexFallback();
+    const safety = appRequire('./dist/services/regex/regexSafety.js');
+    const bounded = appRequire('./dist/services/regex/boundedRegex.js');
+    // No database here: analyze every regex afresh instead of reading stored verdicts.
+    safety.setVerdictStore(null);
+    try {
+      let started = Date.now();
+      const report = await safety.assessRegexes([
+        { location: 'a', source: '^(a+)+$', flags: '' },
+        { location: 'b', source: '^[a-z]+=\\d+$', flags: '' },
+      ]);
+      const gateMs = Date.now() - started;
+      const where = (findings) => findings.map((f) => f.location).join(',') || 'none';
+      console.log(
+        `regex safety gate (scan pool, RECHECK_BACKEND=${process.env.RECHECK_BACKEND || 'auto'}): ` +
+          `refused=${safety.isRefused(report)}, vulnerable=${where(report.vulnerable)}, ` +
+          `undecided=${where(report.undecided)}, unknown=${where(report.unknown)} in ${gateMs} ms`
+      );
+      for (const f of [...report.undecided, ...report.unknown]) console.log(`  ${f.location}: ${f.detail}`);
+      assert.equal(safety.isRefused(report), true, 'the gate refuses ^(a+)+$');
+      assert.equal(where(report.vulnerable), 'a', 'only ^(a+)+$ is vulnerable');
+      assert.equal(where(report.undecided), 'none');
+      assert.equal(where(report.unknown), 'none', 'both regexes get a verdict from the analyzer');
+
+      // Start a test worker first, so the budget below times the match rather
+      // than the worker's start.
+      const warm = await bounded.runParserBounded(
+        { name: 'kv', parser_type: 'regex', pattern: '^(?<key>[a-z]+)=(?<value>\\d+)$', field_mappings: {} },
+        'port=8421'
+      );
+      assert.ok(warm && warm.fields, 'a test worker runs a parser');
+      const budget = bounded.regexTestPool().options.timeoutMs;
+      started = Date.now();
+      let outcome;
+      try {
+        outcome = await bounded.runParserBounded(
+          {
+            name: 'x',
+            parser_type: 'regex',
+            pattern: `^(?<x>${'(?:a|a|a|a|a|a|a|a)'.repeat(9)})$`,
+            field_mappings: {},
+          },
+          'a'.repeat(9) + '!'
+        );
+      } catch (err) {
+        throw new Error(
+          `the catastrophic test run did not finish (linear fallback ${on ? 'on' : 'off'}): ${err && err.message}`
+        );
+      }
+      const runMs = Date.now() - started;
+      console.log(
+        `regex test pool (budget ${budget} ms, linear fallback ${on ? 'on' : 'off'}): ` +
+          `catastrophic pattern on 'aaaaaaaaa!' -> ${JSON.stringify(outcome)} in ${runMs} ms`
+      );
+      assert.equal(outcome, null);
+    } finally {
+      await Promise.all([safety.closeRegexScanPool(), bounded.closeRegexTestPool()]);
+    }
+  },
 };
 
 const name = process.argv[2];

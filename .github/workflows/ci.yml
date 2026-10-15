@@ -9,7 +9,7 @@
 #
 # Dependabot PRs get a read-only token and no secrets here, which is all this
 # needs. dependabot-merge-after-ci.yml merges low-risk Dependabot updates only
-# after this workflow succeeds on them.
+# after this workflow, and image-check.yml when it ran, succeed on them.
 name: CI
 
 on:

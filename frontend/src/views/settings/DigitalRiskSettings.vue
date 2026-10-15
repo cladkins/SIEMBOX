@@ -76,10 +76,10 @@ import {
 } from '@/utils/exposure';
 import ExposureChecksCard from './ExposureChecksCard.vue';
 import ExposureDomainsCard from './ExposureDomainsCard.vue';
-import ExposureFindingsCard from './ExposureFindingsCard.vue';
+import ExposureFindingsCard from '../digital-risk/ExposureFindingsCard.vue';
 import ExposureIdentitiesCard from './ExposureIdentitiesCard.vue';
 import ExposureProviderCard from './ExposureProviderCard.vue';
-import PasswordCheckCard from './PasswordCheckCard.vue';
+import PasswordCheckCard from '../digital-risk/PasswordCheckCard.vue';
 
 // Each card loads and writes its own slice of /api/exposure (through the same
 // client the onboarding checklist uses) and emits `changed` after a write. The

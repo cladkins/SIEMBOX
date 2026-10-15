@@ -127,7 +127,6 @@ DEFAULT_ADMIN_PASSWORD=changeme
 CREDENTIAL_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef
 
 LOG_LEVEL=debug
-CORS_ORIGIN=*
 SYSLOG_PORT=5514
 CLEANUP_INTERVAL_HOURS=24
 EOF
@@ -157,12 +156,9 @@ cd frontend
 # Install dependencies
 npm install
 
-# Create .env.local file (optional)
-cat > .env.local << EOF
-VITE_API_URL=http://localhost:8421/api
-EOF
-
-# Start development server
+# Start development server. It proxies /api to http://localhost:8421, so the
+# browser stays on one origin and the backend needs no CORS_ORIGIN. For a
+# backend elsewhere: API_PROXY_TARGET=http://<host>:8421 npm run dev
 npm run dev
 
 # Frontend will be available at http://localhost:5173
@@ -507,7 +503,7 @@ When making changes, update relevant documentation:
 | `DEFAULT_ADMIN_PASSWORD` | Initial admin password | changeme | No |
 | `CREDENTIAL_ENCRYPTION_KEY` | Encryption key | - | Yes |
 | `LOG_LEVEL` | Winston log level | info | No |
-| `CORS_ORIGIN` | CORS allowed origins | * | No |
+| `CORS_ORIGIN` | Origins whose pages may call the API from a browser, comma-separated; empty = same-origin only | (empty) | No |
 | `SYSLOG_PORT` | Syslog listener port | 514 | No |
 | `CLEANUP_INTERVAL_HOURS` | Cleanup frequency | 24 | No |
 
@@ -515,7 +511,8 @@ When making changes, update relevant documentation:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `VITE_API_URL` | Backend API URL | /api |
+| `VITE_API_URL` | The UI's API base (keep `/api`; an absolute URL calls the API cross-origin and needs `CORS_ORIGIN`) | /api |
+| `API_PROXY_TARGET` | Where the dev server proxies `/api` (not exposed to the UI) | http://localhost:8421 |
 
 ## Troubleshooting
 
@@ -543,8 +540,11 @@ SYSLOG_PORT=5514 npm run dev
 
 **Solution**:
 1. Verify backend is running on port 8421
-2. Check `VITE_API_URL` in `.env.local`
-3. Check browser console for CORS errors
+2. Leave `VITE_API_URL` unset in `.env.local`, so requests go through the dev
+   server's `/api` proxy
+3. A "blocked by CORS policy" error in the browser console means the UI calls
+   the API on another origin: drop the absolute `VITE_API_URL`, or set
+   `CORS_ORIGIN=http://localhost:5173` in the backend's `.env`
 
 ---
 

@@ -10,8 +10,8 @@ SIEMBox is configured with environment variables (a `.env` file next to your com
 | `PORT` | `8421` | Backend API port (inside the container). |
 | `HOST` | `0.0.0.0` | Bind address. |
 | `LOG_LEVEL` | `info` | Backend log verbosity. |
-| `CORS_ORIGIN` | `*` | Allowed origin(s) for the API. |
-| `VITE_API_URL` | `/api` | Where the frontend calls the API. |
+| `CORS_ORIGIN` | empty | Origins whose web pages may call the API from a browser. Empty = same-origin only (no CORS headers): the web UI, the Vite dev server, shippers, agents and scripts need nothing here. Otherwise exact origins, comma-separated (`https://dash.example.com,http://localhost:5173`; no paths or wildcards; invalid entries are ignored with a warning). `*` allows every web page your users open to call the API (password guessing from inside your network) and logs a warning at every start. See [DEPLOYMENT.md, "Browser access from other origins (CORS)"](https://github.com/cladkins/SIEMBOX/blob/main/DEPLOYMENT.md#browser-access-from-other-origins-cors). |
+| `VITE_API_URL` | `/api` | Where the frontend calls the API (build time). Keep `/api`: an absolute URL makes the browser call the API cross-origin, which needs `CORS_ORIGIN`. |
 
 ## Client addresses & reverse proxies
 

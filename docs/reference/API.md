@@ -39,6 +39,12 @@ Authorization: Bearer YOUR_JWT_TOKEN
 
 The only routes that take no login are `POST /api/auth/login`, the `/health` checks, the shipper-facing `/api/shippers` endpoints (authenticated by the shipper's API key or HTTP push key, see [Log Shippers](#log-shippers-endpoints)), and the EDR agent endpoints (enrollment token or per-agent key).
 
+### Calling the API from a browser (CORS)
+
+The web UI calls the API on its own origin (its nginx proxies `/api`), so by default the API sends no CORS headers: a page on another origin can't read its answers, and the preflight a browser sends before a JSON body or an `Authorization` header gets an empty `204` with no `Access-Control-Allow-*` headers, so the request itself is never sent. Every `OPTIONS` request is answered that way, before the rate limit and the routes. Scripts, shippers, agents and `curl` send no preflight and are unaffected.
+
+To let pages on other origins call the API, list their exact origins in `CORS_ORIGIN`, comma-separated (`https://dash.example.com,http://localhost:5173`). A request whose `Origin` header is one of them gets `Access-Control-Allow-Origin: <that origin>` and `Access-Control-Allow-Credentials: true`, and its preflight also gets `Access-Control-Allow-Methods: GET,HEAD,PUT,PATCH,POST,DELETE` and the requested headers in `Access-Control-Allow-Headers`; with a list set, every answer carries `Vary: Origin`. `CORS_ORIGIN=*` answers every origin with `Access-Control-Allow-Origin: *` and logs a warning at every start. No response headers are exposed beyond the CORS-safelisted ones. See DEPLOYMENT.md, "Browser access from other origins (CORS)".
+
 ### Roles
 
 Every signed-in user has one of four roles, each including the ones before it: `viewer` < `analyst` < `operator` < `admin` (see [User Management](../guides/USER-MANAGEMENT.md#user-roles)). A call a role may not make answers `403`. Viewers are read-only: the only non-GET calls open to them act on their own session or account, or compute an answer and store nothing (logout, `/api/auth/me/*`, `POST /api/parsers/:id/test`, `POST /api/ai/explain`, `POST /api/log-discovery/sources/:id/onboard/preview`, `POST /api/exposure/password-check`).

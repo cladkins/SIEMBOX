@@ -57,7 +57,12 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-this-secret-key}
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-changeme}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      # Origins whose web pages may call the API from a browser (DEPLOYMENT.md,
+      # "Browser access from other origins (CORS)"). Empty = same-origin only:
+      # the web UI on 8420 needs nothing here, nor do shippers, agents and
+      # scripts. Set it only for your own page or app on another origin, as
+      # exact origins, comma-separated: https://dash.example.com,http://localhost:5173
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
       # Client addresses (DEPLOYMENT.md, "Client addresses and reverse proxies").
       # X-Forwarded-For is believed only from the bundled frontend, over the
       # api-socket volume below or by its service name, and from what this

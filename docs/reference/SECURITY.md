@@ -905,16 +905,38 @@ services:
 
 ### CORS Configuration
 
-**Restrict CORS to specific domains:**
+**Same-origin by default.** With `CORS_ORIGIN` empty (the default in both
+compose files and `.env.example`) the API sends no CORS headers at all, so a
+web page on another origin can't read its answers, and a browser won't send it
+a JSON request or one with an `Authorization` header (the preflight gets an
+empty `204` with no allow headers). The web UI needs no CORS: its nginx serves
+it and proxies `/api` on the same origin, as the Vite dev server does in
+development. Shippers, endpoint agents, scripts and `curl` aren't browsers and
+are unaffected.
 
-Update `.env`:
+**Why it matters.** The API authenticates with a Bearer token, not a cookie.
+With `CORS_ORIGIN=*`, any page a user on your network opens could use their
+browser to script sign-in attempts against port 8421 (password spraying from
+inside the network, past any firewall rule that keeps the internet out) and
+read the answers of every call that needs no login.
+
+**Only when a page of yours on another origin must call the API**, list exactly
+its origin(s), comma-separated (`scheme://host[:port]`, no path, no wildcard):
+
 ```bash
-# Development (allows all)
-CORS_ORIGIN=*
-
-# Production (specific domain only)
-CORS_ORIGIN=https://siembox.company.com
+# .env
+CORS_ORIGIN=https://dash.example.com,http://localhost:5173
 ```
+
+Listed origins get their own origin back in `Access-Control-Allow-Origin` (with
+`Vary: Origin`); every other origin still gets nothing. An entry that isn't an
+exact origin is ignored with a warning in the backend log. `CORS_ORIGIN=*`
+still allows every origin, and the backend logs a warning about it at every
+start. Details: DEPLOYMENT.md, "Browser access from other origins (CORS)".
+
+What CORS does not stop: a page can still make a browser send a request that
+needs no preflight (a plain form post) and never see the answer. A sign-in
+sent that way is counted by sign-in protection like any other failure.
 
 ### Rate Limiting
 
@@ -968,7 +990,10 @@ DEPLOYMENT.md, "Sign-in protection"):
   briefly.
 
 Not covered yet: a correct first guess of the default `admin` / `changeme`
-password (change it right after installing), and `CORS_ORIGIN=*`.
+password (change it right after installing). Pages on other origins can no
+longer try passwords through a user's browser and read the answer:
+`CORS_ORIGIN` is same-origin only unless you set it (see [CORS
+Configuration](#cors-configuration)).
 
 The address can't be forged: the web UI's nginx reaches the backend over a
 unix socket on a volume only those two containers mount, and a direct caller
@@ -1305,6 +1330,7 @@ journalctl -u docker > docker-journal-$(date +%Y%m%d).log
 - [ ] Restricted syslog port to internal networks only
 - [ ] Set up TLS/SSL with Let's Encrypt
 - [ ] Configured reverse proxy (nginx/traefik)
+- [ ] Left `CORS_ORIGIN` empty, or listed only the origins that need it (not `*`)
 - [ ] Enabled automatic security updates
 
 ### Post-Deployment Checklist

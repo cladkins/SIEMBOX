@@ -1,11 +1,11 @@
 import express, { Application, NextFunction, Request, Response } from 'express';
-import cors from 'cors';
 import qs from 'qs';
 import rateLimit from 'express-rate-limit';
 import { bodyParserErrorHandler, errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requestTimeoutLogger } from './middleware/requestTimeoutLogger';
 import { authenticate } from './middleware/auth';
 import { query } from './config/database';
+import { corsHeaders, parseCorsOrigin } from './net/cors';
 import { ignoredForwardedForTracker, trustedProxies } from './net/trustedProxies';
 import { rateLimitedHandler, requestLimitKey } from './net/requestLimits';
 import { envInt } from './utils/envInt';
@@ -52,10 +52,12 @@ app.set('query parser', (str: string) => qs.parse(str, { allowPrototypes: true, 
 // to be trusted shows up in the log and in /api/admin/client-address.
 app.use(ignoredForwardedForTracker());
 
-app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
-  credentials: true,
-}));
+// CORS: same-origin only unless CORS_ORIGIN lists the origins (or `*`) whose
+// pages may call the API from a browser. The web UI is same-origin through its
+// nginx and needs none. See net/cors.ts; server.ts logs the policy at startup.
+// Read here, after config/database.ts has loaded .env.
+export const corsPolicy = parseCorsOrigin(process.env.CORS_ORIGIN);
+app.use(corsHeaders(corsPolicy));
 
 // Agent and log-push routes that sit behind their own limiter (edrAgentLimiter
 // in routes/edr.ts, logPushLimiter in routes/shippers.ts) and identify the

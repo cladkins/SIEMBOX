@@ -7,6 +7,7 @@ Start by checking container health: `docker compose -f compose.prod.yaml ps` and
 - Confirm the **frontend** and **backend** containers are `Up`.
 - The UI is on **8420**; make sure that port is published and reachable (firewall/security group).
 - Check `docker compose logs frontend` and `... backend` for startup errors (a missing required secret like `JWT_SECRET` or `CREDENTIAL_ENCRYPTION_KEY` will stop the backend).
+- "Blocked by CORS policy" in the browser console: a page on another origin is calling the API, which answers browsers on its own origin only unless `CORS_ORIGIN` lists that origin. The bundled UI needs no CORS (keep `VITE_API_URL=/api`). See [TROUBLESHOOTING.md, "CORS error in the browser console"](https://github.com/cladkins/SIEMBOX/blob/main/docs/operations/TROUBLESHOOTING.md#issue-cors-error-in-the-browser-console).
 
 ## No logs are arriving
 

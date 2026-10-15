@@ -309,6 +309,26 @@ Other changes in that release:
 - Recovery without the web UI: `docker exec siembox-backend node
   dist/scripts/auth-admin.js ...` (unlock, reset-password, disable-mfa).
 
+**Updating to the release with same-origin CORS:** `CORS_ORIGIN` now defaults
+to empty, which means same-origin only: the API sends no CORS headers, so a
+page on another origin can no longer call it from a browser (see [Browser
+access from other origins (CORS)](#browser-access-from-other-origins-cors)).
+- **Not affected:** the bundled web UI (nginx serves it and proxies `/api`),
+  the Vite dev server's proxy, log shippers, endpoint agents, scripts and
+  `curl`.
+- **Affected:** browser code on another origin that calls the API: a UI built
+  with an absolute `VITE_API_URL` such as `http://<host>:8421/api`, a frontend
+  dev setup with that in `.env.local`, your own dashboard or tool on another
+  host. Its requests now fail with "blocked by CORS policy" in the browser
+  console. **The fix is one line in `.env`**, the origin that page is served
+  from, then `docker compose up -d`:
+  `CORS_ORIGIN=https://dash.example.com` (several: comma-separated).
+- **A `.env` copied from the old `.env.example` still says `CORS_ORIGIN=*`**,
+  which keeps the old behaviour and now logs a warning at every start. Unless
+  you need it, change it to `CORS_ORIGIN=` (empty) or list your origins.
+- `CORS_ORIGIN` takes a comma-separated list now; an entry that isn't an exact
+  origin (a path, a wildcard, no scheme) is ignored with a warning.
+
 ## Database Migrations and Seeding
 
 ### Automatic Initialization
@@ -617,10 +637,11 @@ Configure in the UI under **Settings → Data Retention**:
 1. **Change default passwords immediately**
 2. **Use strong JWT secret** (32+ random characters)
 3. **Run behind reverse proxy** (nginx/traefik) with SSL, and list it in `TRUSTED_PROXIES` (see [Client addresses and reverse proxies](#client-addresses-and-reverse-proxies))
-4. **Restrict port 514** to trusted networks only
-5. **Regular backups** of PostgreSQL database
-6. **Monitor disk space** - logs can grow quickly
-7. **Update regularly** - `git pull && docker compose build --pull && docker compose up -d` (`--pull` also refreshes the `node:20-alpine` and `nginx:alpine` base images, which a plain `up -d --build` keeps reusing)
+4. **Leave `CORS_ORIGIN` empty** (same-origin only) unless a page of yours on another origin needs the API, and then list just that origin; avoid `*` (see [Browser access from other origins (CORS)](#browser-access-from-other-origins-cors))
+5. **Restrict port 514** to trusted networks only
+6. **Regular backups** of PostgreSQL database
+7. **Monitor disk space** - logs can grow quickly
+8. **Update regularly** - `git pull && docker compose build --pull && docker compose up -d` (`--pull` also refreshes the `node:20-alpine` and `nginx:alpine` base images, which a plain `up -d --build` keeps reusing)
 
 ## Network Configuration
 
@@ -869,6 +890,69 @@ done; echo
 
 Then clear it on Settings -> Sign-in protection ("Clear network") or with
 `auth-admin.js unlock --network <your IP>`.
+
+## Browser access from other origins (CORS)
+
+By default the API answers browsers on its own origin only: it sends no CORS
+headers (`Access-Control-Allow-*`), so a web page on any other origin can't
+read its answers, and the browser won't even send it a JSON request or one
+carrying a token. That is all SIEMBox itself needs:
+
+- **The web UI** on port 8420 calls `/api` on its own origin; its nginx proxies
+  that to the backend. A reverse proxy in front of 8420 keeps the UI and its
+  `/api` on one origin, so it needs nothing either.
+- **The Vite dev server** (`npm run dev` in `frontend/`) proxies `/api` the same
+  way, to `http://localhost:8421` or to `API_PROXY_TARGET`.
+- **Log shippers, endpoint agents, scripts and `curl`** aren't browsers and
+  ignore CORS: they work the same whatever `CORS_ORIGIN` says.
+
+Why not `*`, the old default: the API takes a Bearer token, not a cookie, so
+with `Access-Control-Allow-Origin: *` any page one of your users opens (an ad,
+a compromised site, a link in a phishing mail) can script calls to
+`http://<host>:8421` from their browser, inside your network, and read the
+answers: password guessing against sign-in that never crosses your firewall,
+and probing whatever the API answers without a login.
+
+**`CORS_ORIGIN`** (in `.env`; both compose files pass it on, empty by default):
+
+| Value | What a browser page on another origin gets |
+|---|---|
+| empty or unset (default) | Nothing: same-origin only. Its preflight gets an empty `204` with no allow headers, so the browser stops there. |
+| `https://dash.example.com,http://localhost:5173` | Exact origins, comma-separated. A request whose `Origin` is one of them gets it back in `Access-Control-Allow-Origin`, with `Access-Control-Allow-Credentials: true`; every answer carries `Vary: Origin`. Other origins get nothing. |
+| `*` | Every origin (`Access-Control-Allow-Origin: *`). Still works, and every start logs a warning that names the risk. |
+
+An origin is `scheme://host[:port]`, as the browser sends it in the `Origin`
+header: no path, no wildcard. Entries are normalized (lowercase host, default
+port and trailing `/` dropped), and the `Origin` header must match one
+exactly. An entry that isn't an exact `http://` or `https://` origin
+(`siem.example.com`, `https://siem.example.com/app`, `https://*.example.com`,
+`null`) is ignored with a warning naming it, and the others still apply. That
+fails closed (the bad entry allows nothing), and the backend, which also takes
+your syslog, shipper and agent traffic, keeps collecting logs instead of
+refusing to start over a setting only browsers read. Startup logs the result:
+
+```bash
+docker logs siembox-backend 2>&1 | grep CORS
+# CORS: same-origin only (CORS_ORIGIN is empty). The web UI does not need CORS.
+```
+
+**When to set it:** only for a page or app of your own, on another origin, that
+calls the API from a browser: a dashboard on another host, a web UI built with
+an absolute `VITE_API_URL` (`https://api.example.com/api` behind a proxy on a
+second hostname), or a frontend dev server pointed straight at
+`http://localhost:8421/api` instead of using its proxy. List exactly the
+origins those pages are served from, then apply the change with
+`docker compose up -d` (a restart keeps the old environment).
+
+**Check it** (from any machine; `curl` shows the headers a browser would get):
+
+```bash
+# The default: prints nothing (no Access-Control-* headers at all)
+curl -si -X OPTIONS http://<host>:8421/api/auth/login \
+  -H 'Origin: http://evil.example' -H 'Access-Control-Request-Method: POST' | grep -i '^access-control'
+# A listed origin gets itself back
+curl -si http://<host>:8421/health -H 'Origin: https://dash.example.com' | grep -i '^access-control-allow-origin'
+```
 
 ## Monitoring
 

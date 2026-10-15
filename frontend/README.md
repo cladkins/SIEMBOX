@@ -83,7 +83,7 @@ npm run dev
 # Access at http://localhost:5173
 ```
 
-The dev server will proxy API requests to `http://localhost:8421` (configurable via `VITE_API_URL`).
+The dev server proxies `/api` to `http://localhost:8421` (another backend: `API_PROXY_TARGET=http://<host>:8421 npm run dev`), so the UI calls the API on its own origin and the backend needs no `CORS_ORIGIN`.
 
 ### Building for Production
 
@@ -434,11 +434,15 @@ docker build -t siembox-frontend .
 Create `.env.local` for local overrides:
 
 ```bash
-# API endpoint (default: /api)
-VITE_API_URL=http://localhost:8421/api
+# API base the UI calls (default: /api, through the dev proxy or nginx).
+# An absolute URL makes the browser call the API cross-origin, which the
+# backend only allows for origins listed in its CORS_ORIGIN.
+# VITE_API_URL=/api
 ```
 
 **Note**: Variables must be prefixed with `VITE_` to be exposed to the app.
+`API_PROXY_TARGET` (the dev proxy's backend) is read by `vite.config.ts` and is
+not exposed.
 
 ## Code Style
 
@@ -478,8 +482,10 @@ export default defineConfig({
 ### API Connection Issues
 
 1. Verify backend is running on port 8421
-2. Check `VITE_API_URL` environment variable
-3. Check browser console for CORS errors
+2. Check `VITE_API_URL` is unset or `/api`
+3. "Blocked by CORS policy" in the browser console: the UI is calling the API
+   on another origin. Use the `/api` proxy, or list the UI's origin in the
+   backend's `CORS_ORIGIN`
 4. Verify network tab in dev tools
 
 ### Hot Reload Not Working

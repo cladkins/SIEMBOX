@@ -1339,15 +1339,9 @@ docker exec siembox-postgres psql -U siembox -d siembox -c \
   "UPDATE users SET enabled = true WHERE username = 'admin';"
 ```
 
-**CORS Error:**
-```bash
-# Check browser console for CORS errors
-# Update backend .env:
-CORS_ORIGIN=http://your-frontend-domain.com
-
-# Restart backend
-docker-compose restart backend
-```
+**CORS error in the browser console** ("blocked by CORS policy"): see
+[CORS error in the browser console](#issue-cors-error-in-the-browser-console)
+under Frontend Issues.
 
 ---
 
@@ -1880,11 +1874,67 @@ docker-compose up -d frontend
 # Check VITE_API_URL in .env
 grep VITE_API_URL .env
 
-# Should be:
-VITE_API_URL=/api  # If using same domain
-# Or:
-VITE_API_URL=http://backend-server:8421/api  # If separate
+# Should be (the UI's nginx proxies /api to the backend, same origin):
+VITE_API_URL=/api
+# An absolute URL makes the browser call the API cross-origin, which needs
+# CORS_ORIGIN set to the UI's origin (see the next issue):
+# VITE_API_URL=http://backend-server:8421/api
 ```
+
+### Issue: CORS error in the browser console
+
+**Symptoms:** the browser console (F12) shows something like
+`Access to XMLHttpRequest at 'http://<host>:8421/api/...' from origin
+'http://<page origin>' has been blocked by CORS policy: No
+'Access-Control-Allow-Origin' header is present on the requested resource`
+(Firefox: `Cross-Origin Request Blocked ... (Reason: CORS header
+'Access-Control-Allow-Origin' missing)`), and the page shows "Network Error"
+or nothing loads, while `curl` against the same URL works.
+
+**Cause:** a page on one origin (`scheme://host:port`) is calling the API on
+another, and the API doesn't list that origin. Since the release with
+same-origin CORS, `CORS_ORIGIN` is empty by default: the API sends no CORS
+headers, so browsers block every page but its own origin (DEPLOYMENT.md,
+"Browser access from other origins (CORS)"). `curl`, shippers and agents
+ignore CORS, which is why they still work.
+
+**Diagnosis:**
+```bash
+# What the backend allows (one line at every start)
+docker logs siembox-backend 2>&1 | grep -E "CORS"
+# What a browser on that origin gets: no access-control-allow-origin line = blocked
+curl -si http://<host>:8421/health -H 'Origin: http://<page origin>' | grep -i '^access-control'
+```
+
+**Solutions:**
+- **The bundled web UI shows it:** it was built with an absolute
+  `VITE_API_URL` (e.g. `http://<host>:8421/api`). Rebuild it with the default
+  `VITE_API_URL=/api`, so it calls the API through its own nginx and needs no
+  CORS. Or keep the URL and list the UI's origin (below).
+- **The Vite dev server (`npm run dev`):** remove `VITE_API_URL` from
+  `frontend/.env.local`. The dev server proxies `/api` to
+  `http://localhost:8421` (another backend: `API_PROXY_TARGET=http://<host>:8421
+  npm run dev`), so the browser stays on one origin.
+- **A page or tool of your own on another origin:** list its origin, exactly
+  as the error message quotes it, in `.env`, then `docker compose up -d` (a
+  restart keeps the old environment):
+  ```bash
+  CORS_ORIGIN=https://dash.example.com
+  # several: CORS_ORIGIN=https://dash.example.com,http://localhost:5173
+  ```
+  An origin has no path: `https://dash.example.com`, not
+  `https://dash.example.com/app` or `dash.example.com`. An entry like that is
+  ignored, and the backend logs `CORS_ORIGIN entry "..." ignored: <why>` at
+  startup.
+- **The origin is listed but the error stays:** check the scheme and port
+  (`http://` vs `https://`, `:8420`), that the container got the new value
+  (`docker exec siembox-backend printenv CORS_ORIGIN`), and that a reverse
+  proxy in front of 8421 doesn't strip or add `Access-Control-*` headers of its
+  own.
+
+`CORS_ORIGIN=*` allows every origin again, but then any web page your users
+open can call the API through their browser (the backend warns at every
+start). List origins instead.
 
 ---
 

@@ -1,7 +1,8 @@
 import { loadDotenv } from './config/dotenv';
 import type { Server } from 'node:http';
-import app from './app';
+import app, { corsPolicy } from './app';
 import { createApiServer, listenProxySocket, stopListening } from './net/apiListeners';
+import { logCorsPolicy } from './net/cors';
 import { clientAddressSummary } from './net/diagnostics';
 import { trustedProxies } from './net/trustedProxies';
 import { logger } from './utils/logger';
@@ -175,6 +176,9 @@ const startServer = async () => {
           `; alerts ${signIn.alerts ? 'on' : 'off'}.`
       );
     }
+    // Which origins' pages may call the API from a browser. Every start warns
+    // about CORS_ORIGIN=* and about each entry it ignored.
+    logCorsPolicy(corsPolicy);
     // The dummy hash unknown usernames are checked against, made before the
     // first sign-in needs it.
     await getDummyHash();

@@ -526,6 +526,8 @@ Every syslog message goes through a bounded queue, and what happens when it fill
 
 Connection failures on the ingest path (no free connection, connection refused, `too many clients`) are retried with backoff for up to 30 seconds before a message is given up on. Only failures where the statement cannot have run are retried, so a retry never stores a log twice. A message whose insert was already in flight when its connection was cut (for example `terminating connection due to administrator command`) is not retried, because it may already have been stored; each of those is logged as `Error processing syslog message`. On `docker stop` the backend stops listening, then waits up to 5 seconds for queued messages to be stored; anything still unprocessed after that is logged (`Shutdown: N syslog message(s) were still unprocessed ... and are lost`).
 
+Every stored log is also counted in memory into per-minute totals per source (the `ingest_source_minute` table, kept for 48 hours), so log rates per source can be shown without counting `raw_logs`. The totals are written every 5 seconds on the ingest pool. A write that fails is logged as `Failed to write per-minute ingest counts; they were dropped` and not retried: the logs themselves are stored as usual, and only those few seconds of per-minute totals are missing.
+
 **Diagnosis:**
 ```bash
 # Who holds connections, and what are they doing?

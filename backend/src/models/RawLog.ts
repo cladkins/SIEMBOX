@@ -1,5 +1,6 @@
 import { query } from '../config/database';
 import { batchedDelete } from '../utils/batchDelete';
+import { ingestCounter } from '../services/ingest/ingestCounter';
 
 export interface RawLog {
   id: number;
@@ -111,6 +112,11 @@ export class RawLogModel {
    * `discovery_source_id` are mutually exclusive by construction (push vs.
    * pull ingestion paths never set both), so exactly one partial unique index
    * is ever a candidate conflict target for a given row.
+   *
+   * Every stored row is also counted into the per-minute, per-source ingest
+   * rollup (services/ingest/ingestCounter.ts): a synchronous in-memory bump,
+   * written in batches off this path. Deduplicated rows are not counted. This
+   * is the one place syslog, HTTP push and the API poller all store logs.
    */
   static async create(params: CreateRawLogParams): Promise<RawLog | null> {
     const conflictClause =
@@ -136,7 +142,9 @@ export class RawLogModel {
       ]
     );
 
-    return result.rows[0] || null;
+    const row: RawLog | null = result.rows[0] || null;
+    if (row) ingestCounter.bump(row);
+    return row;
   }
 
   static async findById(id: number): Promise<RawLog | null> {

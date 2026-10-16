@@ -9,6 +9,8 @@ import { logger } from './utils/logger';
 import pool, { closePools } from './config/database';
 import { diagnoseDbConnectionError } from './config/dbDiagnostics';
 import { SyslogServer } from './services/syslog/syslogServer';
+import { registerIngestStats } from './services/syslog/ingestStats';
+import { ingestCounter } from './services/ingest/ingestCounter';
 import { CleanupService } from './services/cleanup/cleanupService';
 import { importRules } from './scripts/import-rules';
 import { startAutoDiscoveryJob, stopAutoDiscoveryJob } from './jobs/autoDiscovery';
@@ -129,6 +131,8 @@ const startServer = async () => {
     // Start syslog server
     syslogServer = new SyslogServer(SYSLOG_PORT);
     await syslogServer.start();
+    // Its queue counters (UDP drops among them), for code without a handle on it.
+    registerIngestStats(() => syslogServer.getIngestStats());
 
     // Start cleanup service
     cleanupService = new CleanupService(CLEANUP_INTERVAL_HOURS);
@@ -269,6 +273,7 @@ const shutdown = async (signal: string) => {
     } catch (error) {
       logger.error('Error stopping syslog server:', error);
     }
+    registerIngestStats(null);
   }
   if (cleanupService) {
     cleanupService.stop();
@@ -286,6 +291,9 @@ const shutdown = async (signal: string) => {
   stopSignInHousekeepingJob();
   stopRefusalSummary();
   await Promise.all([closeRegexScanPool(), closeRegexTestPool()]).catch(() => undefined);
+  // The per-minute ingest counts not yet written (at most 5 s of them), now
+  // that syslog has drained and the poller has stopped. Never throws.
+  await ingestCounter.close();
   await closePools();
   logger.info('Database pools closed');
   process.exit(0);

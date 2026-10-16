@@ -73,9 +73,68 @@ export default withVueTs(
     // with current or future HTML elements, so multi-word-component-names
     // adds no safety here. It stays on for src/components/** (reusable
     // components), where a name collision would be a real bug.
-    files: ['src/views/**/*.vue'],
+    // The wall display's panels (Ingest, Sources, Shippers, ...) are named
+    // after the panel kinds they render and are only used inside the board.
+    files: ['src/views/**/*.vue', 'src/display/**/*.vue'],
     rules: {
       'vue/multi-word-component-names': 'off',
+    },
+  },
+  {
+    // The wall display (display.html -> src/display) shares no session, API
+    // client, store or component with the app, so opening a display link can
+    // never touch, replace or sign out a signed-in user's session, and it
+    // keeps its bundle small for TV sticks (docs/architecture/BIG-DISPLAY.md
+    // §4.4, §8.1). It keeps no browser storage either: the only exception is
+    // reload.ts's per-tab stale-chunk flag in sessionStorage (next block).
+    // src/display/isolation.test.ts proves these rules fire. The direction is
+    // one-way: the app may import src/display/board/**.
+    files: ['src/display/**/*.{ts,vue}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@/stores/*', '@/services/*', '@/router', '@/router/*', '@/views/*', '@/components/*'],
+              message:
+                "The display page must not share the main app's session, API client, stores or components (BIG-DISPLAY.md §4.4).",
+            },
+            {
+              group: ['axios', 'pinia', 'vue-router', 'element-plus', 'element-plus/*', '@element-plus/*'],
+              message: 'Not on the display page: session isolation and bundle size (BIG-DISPLAY.md §4.4, §8.1).',
+            },
+            {
+              // The same folders reached by a relative path (src/display has none of its own).
+              regex: '^(\\.\\./)+(stores|services|router|views|components)(/|$)',
+              message: "The display page must not share the main app's session, API client, stores or components.",
+            },
+          ],
+        },
+      ],
+      'no-restricted-globals': ['error', 'localStorage', 'sessionStorage'],
+      'no-restricted-properties': [
+        'error',
+        { object: 'window', property: 'localStorage' },
+        { object: 'window', property: 'sessionStorage' },
+        { object: 'globalThis', property: 'localStorage' },
+        { object: 'globalThis', property: 'sessionStorage' },
+        { object: 'self', property: 'localStorage' },
+        { object: 'self', property: 'sessionStorage' },
+      ],
+    },
+  },
+  {
+    // Its stale-chunk reload flag (siembox.display.chunk-reloaded) only.
+    files: ['src/display/reload.ts'],
+    rules: {
+      'no-restricted-globals': ['error', 'localStorage'],
+      'no-restricted-properties': [
+        'error',
+        { object: 'window', property: 'localStorage' },
+        { object: 'globalThis', property: 'localStorage' },
+        { object: 'self', property: 'localStorage' },
+      ],
     },
   },
 );

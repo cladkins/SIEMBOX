@@ -10,7 +10,8 @@
     "build:check": "vue-tsc && vite build",
     "check:legal-comments": "node scripts/check-legal-comments.mjs",
     "check:graph-chunk": "node scripts/check-graph-chunk.mjs",
-    "test:unit": "node --test src/graph/*.test.ts src/utils/*.test.ts",
+    "test:unit": "node --test src/graph/*.test.ts src/utils/*.test.ts src/display/*.test.ts src/display/board/*.test.ts",
+    "check:display-bundle": "node scripts/check-display-bundle.mjs",
     "preview": "vite preview",
     "lint": "eslint src",
     "format": "prettier --write \"src/**/*.{vue,ts,css}\""

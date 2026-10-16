@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
@@ -15,8 +15,32 @@ const { version: cytoscapeVersion } = JSON.parse(
 const bundles = (chunk: { moduleIds: string[] }, pkg: string) =>
   chunk.moduleIds.some((id) => id.replace(/\\/g, '/').includes(`/node_modules/${pkg}/`));
 
+/**
+ * /display and /display/ serve display.html in development, as nginx's
+ * `location = /display` does in production (nginx.conf.template). Without it
+ * Vite's SPA fallback would answer with index.html, which runs the main app's
+ * router guard and session handling on a display link (BIG-DISPLAY.md §4.4).
+ */
+const displayEntry: Plugin = {
+  name: 'siembox-display-entry',
+  configureServer(server) {
+    server.middlewares.use((req, _res, next) => {
+      const path = (req.url ?? '').split('?')[0];
+      if (path === '/display' || path === '/display/') req.url = '/display.html';
+      next();
+    });
+  },
+  configurePreviewServer(server) {
+    server.middlewares.use((req, _res, next) => {
+      const path = (req.url ?? '').split('?')[0];
+      if (path === '/display' || path === '/display/') req.url = '/display.html';
+      next();
+    });
+  },
+};
+
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), displayEntry],
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),
@@ -45,6 +69,12 @@ export default defineConfig({
     // Firefox 114 and Safari 16.4.
     target: ['es2020', 'edge88', 'firefox78', 'chrome87', 'safari14'],
     rolldownOptions: {
+      // Two pages: the app, and the wall display (display.html -> src/display),
+      // which shares none of the app's session code (BIG-DISPLAY.md §8.1).
+      input: {
+        main: path.resolve(import.meta.dirname, 'index.html'),
+        display: path.resolve(import.meta.dirname, 'display.html'),
+      },
       output: {
         // Keep the libraries' license and copyright headers (/*! ... */,
         // @license, @preserve) in the minified bundle, as Vite 5's esbuild
@@ -79,6 +109,14 @@ export default defineConfig({
             // of their own, or the chart group takes them in and every chunk
             // needing one (markdown, which the layout loads) imports chart.js.
             { name: 'oxc-runtime', test: /^\0@oxc-project\+runtime@/, priority: 1 },
+            // Vue in a chunk of its own: otherwise the element-plus group below
+            // takes it in as a dependency, and every wall display would
+            // download Element Plus (scripts/check-display-bundle.mjs).
+            {
+              name: 'vue',
+              test: /[\\/]node_modules[\\/](vue|@vue[\\/](runtime-core|runtime-dom|reactivity|shared))[\\/].*\.m?js$/,
+              priority: 2,
+            },
             { name: 'element-plus', test: /[\\/]node_modules[\\/]element-plus[\\/].*\.m?js$/ },
             { name: 'chart', test: /[\\/]node_modules[\\/](chart\.js|vue-chartjs)[\\/].*\.m?js$/ },
             // The Context Graph's canvas library, loaded only when the graph

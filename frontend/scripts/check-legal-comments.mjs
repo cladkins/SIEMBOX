@@ -19,6 +19,8 @@ const EXPECTED = {
   'chart.js': 'Chart.js v',
   dompurify: '@license DOMPurify',
   'js-yaml': 'js-yaml',
+  // vite.config.ts puts this header on the lazy graph chunk (postBanner).
+  cytoscape: 'cytoscape ',
 };
 
 if (!existsSync(assets)) {

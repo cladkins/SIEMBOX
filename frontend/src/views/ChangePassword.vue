@@ -182,7 +182,8 @@ async function changePassword() {
     form.confirm = '';
     // The server has signed this session out already, with every other one.
     ElMessage.success('Password changed. Sign in with your new password.');
-    authStore.logout();
+    // Keep the page the user was going to when they signed in.
+    authStore.logout({ keepTarget: true });
   } catch (failure) {
     if (errorStatus(failure) === 429) {
       error.value = errorBody(failure).message || 'Too many wrong current passwords. Please wait before trying again.';

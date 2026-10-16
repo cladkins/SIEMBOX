@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { settingsAreas, settingsRouteName } from '@/views/settings/areas';
+import { safeRedirect } from '@/utils/safeRedirect';
 
 // The meta fields the guard below reads, merged into vue-router's RouteMeta:
 // the guard needs no casts, and a wrong value type in a route fails type-check.
@@ -52,6 +53,12 @@ const routes: RouteRecordRaw[] = [
         path: 'threat-intel',
         name: 'ThreatIntel',
         component: () => import('@/views/ThreatIntel.vue'),
+      },
+      {
+        // Context Graph: every role (the API decides what each role's graph holds).
+        path: 'graph',
+        name: 'ContextGraph',
+        component: () => import('@/views/graph/ContextGraph.vue'),
       },
       {
         // Every signed-in role: each request it makes is open to all of them,
@@ -182,6 +189,15 @@ const router = createRouter({
   routes,
 });
 
+/**
+ * `value` (a ?redirect= or a held target) as an in-app path to go to after
+ * signing in, or null: utils/safeRedirect.ts refuses other origins, the
+ * sign-in and password-change pages, and paths no route matches.
+ */
+export function redirectTarget(value: unknown): string | null {
+  return safeRedirect(value, (path) => router.resolve(path));
+}
+
 // Navigation guard for authentication. It returns where to go instead of
 // calling the third `next` argument, which vue-router 5 deprecates: a returned
 // path redirects, and returning nothing lets the navigation through.
@@ -201,13 +217,15 @@ router.beforeEach(async (to) => {
   const allowedRoles = to.matched.find((record) => record.meta.allowedRoles)?.meta.allowedRoles;
 
   if (requiresAuth && !authStore.isAuthenticated) {
-    return '/login';
+    // Come back here after signing in (a link opened while signed out).
+    const redirect = to.fullPath !== '/' ? redirectTarget(to.fullPath) : null;
+    return redirect ? { path: '/login', query: { redirect } } : '/login';
   } else if (authStore.isAuthenticated && authStore.mustChangePassword && to.name !== 'ChangePassword') {
     return { name: 'ChangePassword' }; // /login too: nothing else works until the password is changed
   } else if (to.name === 'ChangePassword' && !authStore.mustChangePassword) {
     return '/';
   } else if (to.path === '/login' && authStore.isAuthenticated) {
-    return '/';
+    return redirectTarget(to.query.redirect) ?? '/';
   } else if (requiresAdmin && authStore.user?.role !== 'admin') {
     return '/'; // Redirect non-admins to dashboard
   } else if (allowedRoles && !allowedRoles.includes(authStore.user?.role || '')) {

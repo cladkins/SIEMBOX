@@ -90,4 +90,8 @@ jobs:
       - run: npm run type-check
       - run: npm run build
       - run: npm run check:legal-comments
+      # Cytoscape (the Context Graph canvas) stays in its own lazy chunk.
+      - run: npm run check:graph-chunk
       - run: npm run lint
+      # The pure graph modules and safeRedirect, under node --test (Node 22 strips the types).
+      - run: npm run test:unit

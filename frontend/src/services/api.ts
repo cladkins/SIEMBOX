@@ -91,7 +91,9 @@ apiClient.interceptors.response.use(
           // The login endpoint's 401s (wrong password / MFA required) are not
           // session expiries — let the Login view handle them inline.
           if (!/\/auth\/login$/.test(error.config?.url || '')) {
-            authStore.logout();
+            // Keep the page as the target: after signing in, the user is back
+            // on it (a Context Graph link included), not on the Dashboard.
+            authStore.logout({ keepTarget: true });
             ElMessage.error('Session expired. Please login again.');
           }
           break;
@@ -135,6 +137,41 @@ const INLINE = { skipErrorToast: true } as const;
 
 /** A save that waits for the regex safety check: inline errors, and time for a first analysis. */
 const REGEX_GATE = { skipErrorToast: true, timeout: 120000 } as const;
+
+/** Context Graph calls: every failure shown inline, 8 s at most. */
+const GRAPH_CALL = { ...SHOWN_INLINE, timeout: 8000 } as const;
+
+export interface GraphNeighborhoodParams {
+  entity: string;
+  window?: string;
+  around?: string;
+  limit?: number;
+  /** Origins to run, comma-separated in the request. */
+  include?: string[];
+  vuln_status?: 'open' | 'all';
+}
+
+export interface GraphRelationParams extends Omit<GraphNeighborhoodParams, 'include'> {
+  rel: string;
+  offset?: number;
+  q?: string;
+  sort?: 'count' | 'last_seen' | 'first_seen';
+  order?: 'asc' | 'desc';
+}
+
+/** The query of a graph call: `include` as CSV, nothing empty. */
+function graphParams(params: GraphNeighborhoodParams | GraphRelationParams): Record<string, string | number> {
+  const out: Record<string, string | number> = {};
+  for (const [name, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '') continue;
+    if (Array.isArray(value)) {
+      if (value.length > 0) out[name] = value.join(',');
+    } else {
+      out[name] = value as string | number;
+    }
+  }
+  return out;
+}
 
 // API service methods
 export const api = {
@@ -422,6 +459,18 @@ export const api = {
   revokeEnrollmentToken: (tokenHash: string) => apiClient.delete(`/edr/tokens/${tokenHash}`),
   getYaraStatus: () => apiClient.get('/edr/yara'),
   refreshYaraForge: () => apiClient.post('/edr/yara/refresh'),
+
+  // Context Graph (GET only, every role). The graph page shows every failure
+  // inline (a busy answer retries once), so nothing toasts; an 8 s timeout and
+  // the caller's AbortSignal (Cancel) bound each call. A 401 still means only
+  // that the session expired: the handler above signs out and keeps the page
+  // as the target to come back to after signing in.
+  graphSearch: (q: string, signal?: AbortSignal) =>
+    apiClient.get('/graph/search', { params: { q }, ...GRAPH_CALL, signal }),
+  graphNeighborhood: (params: GraphNeighborhoodParams, signal?: AbortSignal) =>
+    apiClient.get('/graph/neighborhood', { params: graphParams(params), ...GRAPH_CALL, signal }),
+  graphRelation: (params: GraphRelationParams, signal?: AbortSignal) =>
+    apiClient.get('/graph/relation', { params: graphParams(params), ...GRAPH_CALL, signal }),
 
   // Generic methods
   get: (url: string, config?: any) => apiClient.get(url, config),

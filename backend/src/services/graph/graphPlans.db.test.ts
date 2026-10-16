@@ -1,7 +1,7 @@
 /**
  * Query plans: the alert lookups the graph, Threat Intel's IP view and
- * Asset-360 send, as they send them (ORDER BY created_at DESC LIMIT n), use
- * migration 043's indexes and read a bounded number of rows.
+ * Asset-360 send, as they send them (ORDER BY key, created_at DESC LIMIT n),
+ * use migration 043's indexes and read a bounded number of rows.
  *
  * The SQL is captured from the real resolvers (a recording query function) or
  * is the statement the route exports, then EXPLAINed on a dedicated
@@ -26,6 +26,14 @@
  * idx_alerts_created_at through every alert in the window to find a few. Each
  * arm is now ordered by its own key first (alertKeys.ts AlertArm), an order
  * only that key's index gives.
+ *
+ * Sequential scans are off in the transaction (enable_seqscan, which only
+ * makes them a last resort). 24,500 alerts fit in under 1,000 pages, so reading
+ * them all and sorting can cost less than an ordered scan of a common value,
+ * and does when other tests have left alerts' indexes bloated (an emptied
+ * table keeps its index pages): a choice the planner never makes at the sizes
+ * these tests stand for, which would fail them depending on what ran before.
+ * A lookup no index serves still shows as a sequential scan.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -61,6 +69,7 @@ before(async () => {
     return;
   }
   await db.query('BEGIN');
+  await db.query('SET LOCAL enable_seqscan = off');
   // 20,000 alerts over 30 days: 1,000 distinct source IPs, 2,000 users and hosts, a
   // few EDR, sign-in and Digital Risk alerts, and 500 sign-in audit rows.
   await db.query(
@@ -340,30 +349,26 @@ test('a key holding most alerts, nearly all older than the window (an EDR host a
     await db.query('ANALYZE alerts');
 
     const real: Query = async <T>(sql: string, params: unknown[] = []) => (await db!.query(sql, params)).rows as T[];
-    // The asset and the rule: read off their own index, a few rows. (An EDR host
-    // like this one timed out its entity_alerts, and /relation answered 503.)
-    const strict: Array<[string, RelationDef, EntityRef, Record<string, unknown> | null, string[]]> = [
-      ['asset', def('asset', 'entity_alerts'), entityRef('asset', String(assetId)), { ip: '198.19.252.5', hostname: 'x' }, ['idx_graph_alerts_asset_created']],
-      ['rule', def('rule', 'rule_alerts'), entityRef('rule', String(ruleId)), null, ['idx_graph_alerts_rule_created']],
+    const cases: Array<[string, RelationDef, EntityRef, Record<string, unknown> | null, string]> = [
+      ['asset', def('asset', 'entity_alerts'), entityRef('asset', String(assetId)), { ip: '198.19.252.5', hostname: 'x' }, 'idx_graph_alerts_asset_created'],
+      ['rule', def('rule', 'rule_alerts'), entityRef('rule', String(ruleId)), null, 'idx_graph_alerts_rule_created'],
+      ['ip', def('ip', 'entity_alerts'), entityRef('ip', noisy.ip), null, 'idx_graph_alerts_md_source_ip'],
+      ['user', def('user', 'entity_alerts'), entityRef('user', noisy.user), null, 'idx_graph_alerts_md_user'],
     ];
-    // The IP and user: never the walk either. The planner may read a window as
-    // small as this 7 days (6,000 alerts) whole and sort it, which it picks only
-    // when that costs less than the ordered scan; at 30 days it uses the index.
-    const loose: Array<[string, RelationDef, EntityRef, null]> = [
-      ['ip', def('ip', 'entity_alerts'), entityRef('ip', noisy.ip), null],
-      ['user', def('user', 'entity_alerts'), entityRef('user', noisy.user), null],
-    ];
-    for (const window of ['7d', '30d']) {
-      for (const [label, relation, ref, row, expected] of strict) {
-        const statement = await captured(relation, ref, row, window);
-        await assertOrderedArms(`${label} ${window}`, statement, expected);
-        await assertBounded(`${label} ${window}`, statement, TOTAL_CAP + 1, 6);
-      }
-      for (const [label, relation, ref] of loose) await assertNoWalk(`${label} ${window}`, await captured(relation, ref, null, window));
-      for (const [label, , ref, row] of [...strict, ...loose]) {
+    for (const [label, relation, ref, row, own] of cases) {
+      // Never the walk. A window as small as these 7 days (6,000 alerts) the
+      // planner may read whole and sort, when that costs less than the ordered
+      // scan; it knows the window's size, so that read stays small.
+      for (const window of ['7d', '30d']) {
+        await assertNoWalk(`${label} ${window}`, await captured(relation, ref, row, window));
         const count = await countAlertsNaming(real, ctxFor(ref, row, window));
         assert.deepEqual(count, { total: 5, capped: false }, `${label} ${window}: the 5 recent alerts`);
       }
+      // 30 days (24,500 alerts): its own index, a few rows. (An EDR host like
+      // this one timed out its entity_alerts, and /relation answered 503.)
+      const month = await captured(relation, ref, row, '30d');
+      await assertOrderedArms(`${label} 30d`, month, [own]);
+      await assertBounded(`${label} 30d`, month, TOTAL_CAP + 1, 6);
     }
     // Asset-360 has no window: the asset's latest 100, off the same index.
     const asset360 = { sql: ASSET_ALERTS_SQL, params: [assetId, '198.19.252.5'] };

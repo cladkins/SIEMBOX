@@ -387,7 +387,17 @@ describe('ingest counter', () => {
       const rows = rowsOfMinute(r.writes, m);
       assert.equal(rows.filter((x) => x.key.startsWith('10.9.')).length, ESTABLISHED_SOURCES_PER_KIND, `minute ${m}`);
       assert.equal(rows.filter((x) => x.kind === 'direct').length, MAX_SOURCES_PER_KIND, `minute ${m}: 500 + 100 new`);
+      // What restore() rebuilds the set from: the 500 rows say established,
+      // the newcomers' (and the overflow row) do not.
+      assert.ok(rows.filter((x) => x.key.startsWith('10.9.')).every((x) => x.established), `minute ${m}: the 500 are marked`);
+      assert.deepEqual(
+        rows.filter((x) => !x.key.startsWith('10.9.')).map((x) => x.established),
+        Array(NEW_SOURCES_PER_MINUTE + 1).fill(false),
+        `minute ${m}: the newcomers and the overflow row are not`
+      );
     }
+    // A newcomer that joined while there was room is marked from its first row.
+    assert.ok(rowsOfMinute(r.writes, 0).every((x) => x.established));
     assert.equal(r.counter.stats().establishedSources, ESTABLISHED_SOURCES_PER_KIND, 'the newcomers were not remembered');
   });
 

@@ -32,14 +32,16 @@
  * - Sources per minute are limited per kind (shipper, poller, direct), so that
  *   spraying random shipper tags, which anyone who can reach port 514 can do,
  *   can't grow the table or push other sources out of it:
- *   - A source that had its own row within the last RECENT_MINUTES is
- *     established, and always gets its own row. At most
- *     ESTABLISHED_SOURCES_PER_KIND are remembered per kind; a source joins only
- *     while there is room, and leaves only after RECENT_MINUTES without logs,
- *     so newcomers never displace an established source. server.ts calls
- *     restore() at startup, which reloads them from the table (the steadiest
- *     first), so a restart while a spray is running doesn't hand every slot to
- *     the spray.
+ *   - Established sources always get their own row. A source that gets its
+ *     own row joins them while its kind has fewer than
+ *     ESTABLISHED_SOURCES_PER_KIND, and leaves only after RECENT_MINUTES
+ *     without logs, so newcomers never displace an established source.
+ *   - Each row records whether its source was established (the `established`
+ *     column), so the established sources are exactly those with such a row in
+ *     the last RECENT_MINUTES. server.ts calls restore() at startup, which
+ *     reloads that set, so a restart while a spray is running leaves the set as
+ *     it was: the spray's sources that only had new-source slots stay out.
+ *     (Counts lost to a failed write or a crash are missing there too.)
  *   - Any other source gets its own row only while fewer than
  *     NEW_SOURCES_PER_MINUTE such sources of its kind have had one this minute.
  *   - Logs from the rest count into ('overflow', '*'). Per-minute totals stay
@@ -115,6 +117,8 @@ export interface IngestCountRow {
   kind: IngestSourceKind;
   key: string;
   logs: number;
+  /** The source was one of its kind's established sources in this minute (never the overflow row). */
+  established: boolean;
 }
 
 /** The minute a timestamp (ms since the epoch) falls in, as minutes since the epoch. */
@@ -122,21 +126,28 @@ export function minuteBucket(epochMs: number): number {
   return Math.floor(epochMs / 60_000);
 }
 
+/** `established` stays true once any write for the row says so (a restart within the minute can't clear it). */
 export const UPSERT_SQL = `
-  INSERT INTO ingest_source_minute (minute, source_kind, source_key, logs)
-  SELECT * FROM unnest($1::timestamptz[], $2::text[], $3::text[], $4::bigint[])
+  INSERT INTO ingest_source_minute (minute, source_kind, source_key, logs, established)
+  SELECT * FROM unnest($1::timestamptz[], $2::text[], $3::text[], $4::bigint[], $5::boolean[])
   ON CONFLICT (minute, source_kind, source_key)
-  DO UPDATE SET logs = ingest_source_minute.logs + EXCLUDED.logs`;
+  DO UPDATE SET logs = ingest_source_minute.logs + EXCLUDED.logs,
+                established = ingest_source_minute.established OR EXCLUDED.established`;
 
 export const PRUNE_SQL = `DELETE FROM ingest_source_minute WHERE minute < NOW() - make_interval(hours => $1)`;
 
+/** How the writes and restore() reach the database: config/database's query(), unless a test hands in its own connection. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type RunQuery = (text: string, params: unknown[]) => Promise<{ rows: any[] }>;
+
 /** The upsert. On the ingest pool inside runInIngestContext (every write but the one at shutdown), else the main pool. */
-async function writeRows(rows: IngestCountRow[]): Promise<void> {
-  await query(UPSERT_SQL, [
+export async function writeRows(rows: IngestCountRow[], run: RunQuery = query): Promise<void> {
+  await run(UPSERT_SQL, [
     rows.map((r) => r.minute),
     rows.map((r) => r.kind),
     rows.map((r) => r.key),
     rows.map((r) => r.logs),
+    rows.map((r) => r.established),
   ]);
 }
 
@@ -145,19 +156,23 @@ async function pruneRows(): Promise<void> {
 }
 
 /**
- * The sources that had their own row in the last $1 minutes, at most $2 per
- * kind: those present in the most minutes first (a spray's one-off tags come
- * last), then the busiest. Least recent first, as the established set keeps
- * them. Reads at most 60 minutes of rows through the primary key.
+ * The established sources: those with an `established` row in the last $1
+ * minutes, each with the last such minute. That is the set as it was before a
+ * restart, because a member leaves only after $1 minutes without a row and
+ * every row it has while a member is marked. A source that only had new-source slots (a
+ * spray's tags among them, however steady) is not in it. At most $2 per kind,
+ * keeping the most recent (the set never holds more, so this is only a guard),
+ * returned least recent first, the order the set keeps them in. Reads at most
+ * 60 minutes of rows through the primary key.
  */
 export const RECENT_SOURCES_SQL = `
   SELECT source_kind AS kind, source_key AS key, last_minute
     FROM (SELECT source_kind, source_key,
                  (EXTRACT(EPOCH FROM MAX(minute)) / 60)::bigint AS last_minute,
-                 ROW_NUMBER() OVER (PARTITION BY source_kind
-                                    ORDER BY COUNT(*) DESC, SUM(logs) DESC, MAX(minute) DESC, source_key) AS rank
+                 ROW_NUMBER() OVER (PARTITION BY source_kind ORDER BY MAX(minute) DESC, source_key) AS rank
             FROM ingest_source_minute
            WHERE minute >= date_trunc('minute', NOW()) - make_interval(mins => $1)
+             AND established
              AND source_kind IN ('shipper', 'poller', 'direct')
            GROUP BY source_kind, source_key) ranked
    WHERE rank <= $2
@@ -170,8 +185,8 @@ export interface RecentSource {
   minute: number;
 }
 
-async function loadRecentRows(): Promise<RecentSource[]> {
-  const result = await query(RECENT_SOURCES_SQL, [RECENT_MINUTES, ESTABLISHED_SOURCES_PER_KIND]);
+export async function loadRecentRows(run: RunQuery = query): Promise<RecentSource[]> {
+  const result = await run(RECENT_SOURCES_SQL, [RECENT_MINUTES, ESTABLISHED_SOURCES_PER_KIND]);
   return result.rows.map((r: { kind: CountedSourceKind; key: string; last_minute: string }) => ({
     kind: r.kind,
     key: r.key,
@@ -195,9 +210,9 @@ export interface IngestCounterDeps {
 
 const defaultDeps: IngestCounterDeps = {
   now: () => Date.now(),
-  write: writeRows,
+  write: (rows) => writeRows(rows),
   prune: pruneRows,
-  loadRecent: loadRecentRows,
+  loadRecent: () => loadRecentRows(),
   setTimer: (fn, ms) => setTimeout(fn, ms),
   clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
 };
@@ -238,9 +253,10 @@ export interface IngestCounter {
    */
   close(stopIngest?: () => Promise<unknown>): Promise<void>;
   /**
-   * For startup: reload the established sources from the table (on the main
-   * pool), so a restart keeps them. Merges with any counted since start. Logs
-   * and moves on if the read fails. Never rejects.
+   * For startup, before ingest starts: reload the established sources from
+   * the table (on the main pool), the set as it was before the restart, so a
+   * restart keeps it. Merges with any counted since start. Logs and moves on if
+   * the read fails. Never rejects.
    */
   restore(): Promise<void>;
   stats(): IngestCounterStats;
@@ -253,7 +269,12 @@ interface Entry {
   /** As the row had it: shipper ids are lowercased when written. */
   key: string | number;
   pending: number;
+  /** The source is one of its kind's established sources this minute; its rows say so, for restore(). */
+  established: boolean;
 }
+
+/** What a flush takes from an entry. */
+type Taken = Pick<Entry, 'minute' | 'kind' | 'key' | 'established'> & { logs: number };
 
 /** One kind of source, with its own limits. */
 interface KindState {
@@ -287,14 +308,18 @@ const newKindState = (kind: CountedSourceKind, keyOf: KindState['keyOf'] = (text
 const pollerKey = (text: string): number | null => (/^[1-9][0-9]{0,9}$/.test(text) ? Number(text) : null);
 
 /** Rows for the upsert, one per minute + source: shipper ids lowercased, and rows that then coincide merged. */
-function toRows(entries: Array<{ minute: number; kind: IngestSourceKind; key: string | number; logs: number }>): IngestCountRow[] {
+function toRows(entries: Taken[]): IngestCountRow[] {
   const rows = new Map<string, IngestCountRow>();
   for (const e of entries) {
     const key = e.kind === 'shipper' ? String(e.key).toLowerCase() : String(e.key);
     const id = `${e.minute}|${e.kind}|${key}`;
     const row = rows.get(id);
-    if (row) row.logs += e.logs;
-    else rows.set(id, { minute: new Date(e.minute * 60_000), kind: e.kind, key, logs: e.logs });
+    if (row) {
+      row.logs += e.logs;
+      row.established ||= e.established;
+    } else {
+      rows.set(id, { minute: new Date(e.minute * 60_000), kind: e.kind, key, logs: e.logs, established: e.established });
+    }
   }
   return [...rows.values()];
 }
@@ -355,7 +380,7 @@ export function createIngestCounter(overrides: Partial<IngestCounterDeps> = {}):
     if (last === undefined || last < currentMinute - RECENT_MINUTES) {
       if (s.newThisMinute >= NEW_SOURCES_PER_MINUTE) {
         if (!overflow) {
-          overflow = { minute: currentMinute, kind: 'overflow', key: OVERFLOW_KEY, pending: 0 };
+          overflow = { minute: currentMinute, kind: 'overflow', key: OVERFLOW_KEY, pending: 0, established: false };
           overflowMinutesSinceWarning++;
         }
         return overflow;
@@ -366,7 +391,10 @@ export function createIngestCounter(overrides: Partial<IngestCounterDeps> = {}):
     // a new one is remembered only while there is room.
     if (last !== undefined) s.established.delete(key);
     if (last !== undefined || s.established.size < ESTABLISHED_SOURCES_PER_KIND) s.established.set(key, currentMinute);
-    const entry: Entry = { minute: currentMinute, kind: s.kind, key, pending: 0 };
+    // A source with only a new-source slot (the set was full) is not marked,
+    // so restore() never mistakes it for an established one, however often it
+    // comes back.
+    const entry: Entry = { minute: currentMinute, kind: s.kind, key, pending: 0, established: s.established.has(key) };
     s.current.set(key, entry);
     return entry;
   }
@@ -463,12 +491,12 @@ export function createIngestCounter(overrides: Partial<IngestCounterDeps> = {}):
 
   /** Take every unwritten count, leaving all entries at zero. */
   function takePending(): IngestCountRow[] {
-    const taken: Array<{ minute: number; kind: IngestSourceKind; key: string | number; logs: number }> = [];
-    for (const e of sealed) taken.push({ minute: e.minute, kind: e.kind, key: e.key, logs: e.pending });
+    const take = (e: Entry): Taken => ({ minute: e.minute, kind: e.kind, key: e.key, established: e.established, logs: e.pending });
+    const taken = sealed.map(take);
     sealed = [];
     for (const e of currentEntries()) {
       if (e.pending === 0) continue;
-      taken.push({ minute: e.minute, kind: e.kind, key: e.key, logs: e.pending });
+      taken.push(take(e));
       e.pending = 0;
     }
     pendingKeys = 0;

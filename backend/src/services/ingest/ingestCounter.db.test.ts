@@ -3,7 +3,8 @@
  * flush writes on the ingest pool, upserts accumulate across flushes, buckets
  * land on the right instant whatever the session time zone, rows past 48 h are
  * pruned, RawLogModel.create counts a stored log once and its deduplicated
- * repeat not at all, restore() reads the established sources back, and the
+ * repeat not at all, restore() reads the established sources back (also after
+ * a steady fixed-tag spray, whose tags it must leave out), and the
  * shutdown path counts logs whose inserts were still running when it started.
  * Skips itself when Postgres (or that schema) isn't
  * reachable. Every key used here is unique to this run, and its rows are
@@ -14,7 +15,15 @@ import assert from 'node:assert/strict';
 import crypto from 'crypto';
 import pool, { closeIngestPool, closePools, getPoolStats, runInIngestContext } from '../../config/database';
 import { RawLogModel } from '../../models/RawLog';
-import { RECENT_SOURCES_SQL, createIngestCounter, ingestCounter, minuteBucket, type IngestCountRow } from './ingestCounter';
+import {
+  RECENT_SOURCES_SQL,
+  createIngestCounter,
+  ingestCounter,
+  loadRecentRows,
+  minuteBucket,
+  writeRows,
+  type IngestCountRow,
+} from './ingestCounter';
 
 let dbReady = false;
 const tag = crypto.randomBytes(4).toString('hex');
@@ -108,19 +117,15 @@ test('upserts accumulate across flushes, one row per minute and source', async (
 test('a bucket is the same instant whatever the session time zone', async (t) => {
   if (!dbReady) return t.skip('Postgres with migration 041 is not reachable');
   const now = Date.UTC(2026, 9, 15, 12, 34, 56);
-  // Write through a connection whose session time zone is far from UTC.
+  // The counter's own upsert, through a connection whose session time zone is
+  // far from UTC.
   const counter = createIngestCounter({
     now: () => now,
     write: async (rows) => {
       const client = await pool.connect();
       try {
         await client.query(`SET TIME ZONE 'Pacific/Kiritimati'`);
-        await client.query(
-          `INSERT INTO ingest_source_minute (minute, source_kind, source_key, logs)
-           SELECT * FROM unnest($1::timestamptz[], $2::text[], $3::text[], $4::bigint[])
-           ON CONFLICT (minute, source_kind, source_key) DO UPDATE SET logs = ingest_source_minute.logs + EXCLUDED.logs`,
-          [rows.map((r) => r.minute), rows.map((r) => r.kind), rows.map((r) => r.key), rows.map((r) => r.logs)]
-        );
+        await writeRows(rows, (text, params) => client.query(text, params));
       } finally {
         await client.query('RESET TIME ZONE');
         client.release();
@@ -129,7 +134,7 @@ test('a bucket is the same instant whatever the session time zone', async (t) =>
   });
   counter.bump(direct(key('tz')));
   await counter.close();
-  // Read back with the default writer's own path too: the counter's real upsert.
+  // And through the default writer, on the ingest pool's connections.
   const real = createIngestCounter({ now: () => now });
   real.bump(direct(key('tz')));
   await real.close();
@@ -181,22 +186,25 @@ test('RawLogModel.create counts a stored log once, and its deduplicated repeat n
   );
 });
 
-test("RECENT_SOURCES_SQL: the last hour's sources, steadiest then busiest first, at most N per kind, least recent first", async (t) => {
+test('RECENT_SOURCES_SQL: sources with an established row in the last hour, at most N per kind (the most recent), least recent first', async (t) => {
   if (!dbReady) return t.skip('Postgres with migration 041 is not reachable');
   // On a temporary table of the same name, which this session's queries see
-  // instead of the real one: other rows in the table can't change the ranking.
+  // instead of the real one: other rows in the table can't change the result.
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     await client.query('CREATE TEMP TABLE ingest_source_minute (LIKE public.ingest_source_minute INCLUDING ALL) ON COMMIT DROP');
     await client.query(
-      `INSERT INTO ingest_source_minute (minute, source_kind, source_key, logs)
-       SELECT date_trunc('minute', NOW()) - make_interval(mins => v.ago), v.kind, v.key, v.logs
-         FROM (VALUES (3, 'direct', 'steady', 1), (2, 'direct', 'steady', 1), (1, 'direct', 'steady', 1),
-                      (1, 'direct', 'busy', 1000), (2, 'direct', 'oneoff', 1),
-                      (60, 'direct', 'edge', 5), (61, 'direct', 'old', 50),
-                      (5, 'poller', '42', 3), (1, 'shipper', 'ab12cd34', 7), (1, 'overflow', '*', 99)
-              ) AS v(ago, kind, key, logs)`
+      `INSERT INTO ingest_source_minute (minute, source_kind, source_key, logs, established)
+       SELECT date_trunc('minute', NOW()) - make_interval(mins => v.ago), v.kind, v.key, v.logs, v.established
+         FROM (VALUES (3, 'direct', 'steady', 1, true), (2, 'direct', 'steady', 1, true), (1, 'direct', 'steady', 1, true),
+                      (2, 'direct', 'quiet', 1, true),
+                      (60, 'direct', 'edge', 5, true), (61, 'direct', 'old', 50, true),
+                      -- A spray's tag with only new-source slots: in every minute, and the busiest.
+                      (3, 'direct', 'sprayed', 1000, false), (2, 'direct', 'sprayed', 1000, false), (1, 'direct', 'sprayed', 1000, false),
+                      (5, 'poller', '42', 3, true), (1, 'shipper', 'ab12cd34', 7, true), (1, 'shipper', 'f0000000', 400, false),
+                      (1, 'overflow', '*', 99, false)
+              ) AS v(ago, kind, key, logs, established)`
     );
     const nowMinute = Number(
       (await client.query(`SELECT (EXTRACT(EPOCH FROM date_trunc('minute', NOW())) / 60)::bigint AS m`)).rows[0].m
@@ -208,22 +216,21 @@ test("RECENT_SOURCES_SQL: the last hour's sources, steadiest then busiest first,
       [
         ['direct', 'edge', 60],
         ['poller', '42', 5],
-        ['direct', 'oneoff', 2],
-        ['direct', 'busy', 1],
+        ['direct', 'quiet', 2],
         ['direct', 'steady', 1],
         ['shipper', 'ab12cd34', 1],
       ],
-      '60 minutes back inclusive, never the overflow row, least recent first'
+      '60 minutes back inclusive, only established rows (never a sprayed tag or the overflow row), least recent first'
     );
     assert.deepEqual(
       await read(2),
       [
         ['poller', '42', 5],
-        ['direct', 'busy', 1],
+        ['direct', 'quiet', 2],
         ['direct', 'steady', 1],
         ['shipper', 'ab12cd34', 1],
       ],
-      'per kind, the one present in the most minutes, then the busiest'
+      'per kind, the most recent'
     );
   } finally {
     await client.query('ROLLBACK');
@@ -233,10 +240,13 @@ test("RECENT_SOURCES_SQL: the last hour's sources, steadiest then busiest first,
 
 test('restore() reads the sources back from the table, so a restart keeps them established', async (t) => {
   if (!dbReady) return t.skip('Postgres with migration 041 is not reachable');
+  // One source that was established in the last three minutes, and one that
+  // only had new-source slots then.
   await pool.query(
-    `INSERT INTO ingest_source_minute (minute, source_kind, source_key, logs)
-     SELECT date_trunc('minute', NOW()) - make_interval(mins => ago), 'direct', $1, 1000 FROM generate_series(1, 3) AS ago`,
-    [key('restored')]
+    `INSERT INTO ingest_source_minute (minute, source_kind, source_key, logs, established)
+     SELECT date_trunc('minute', NOW()) - make_interval(mins => ago), 'direct', k.key, 1000, k.established
+       FROM generate_series(1, 3) AS ago, (VALUES ($1, true), ($2, false)) AS k(key, established)`,
+    [key('restored'), key('unmarked')]
   );
   const writes: IngestCountRow[] = [];
   const counter = createIngestCounter({
@@ -245,14 +255,122 @@ test('restore() reads the sources back from the table, so a restart keeps them e
     },
   });
   await counter.restore();
-  // The new-source slots are gone before the two sources log.
+  // The new-source slots are gone before the three sources log.
   for (let i = 0; i < 100; i++) counter.bump(direct(key(`new-${i}`)));
   counter.bump(direct(key('restored')));
+  counter.bump(direct(key('unmarked')));
   counter.bump(direct(key('unseen')));
   await counter.close();
-  assert.equal(writes.find((r) => r.key === key('restored'))?.logs, 1, 'restored: its own row');
+  const restored = writes.find((r) => r.key === key('restored'));
+  assert.equal(restored?.logs, 1, 'restored: its own row');
+  assert.equal(restored?.established, true, 'and it is still established');
+  assert.equal(writes.find((r) => r.key === key('unmarked')), undefined, 'never established: overflow');
   assert.equal(writes.find((r) => r.key === key('unseen')), undefined, 'never seen: overflow');
-  assert.equal(writes.find((r) => r.kind === 'overflow')?.logs, 1);
+  assert.equal(writes.find((r) => r.kind === 'overflow')?.logs, 2);
+});
+
+/**
+ * The round 2 review's reproduction: ten shippers are established, then one
+ * sender sends the same 600 tags at the start of every minute for 74 minutes,
+ * and the backend restarts. Everything goes through the real counter, the real
+ * upsert and the real restore() query, on one connection whose temporary table
+ * of the same name hides the real one (so other rows can't change what is
+ * restored). Returns, per minute, how many of the ten had their own row, and
+ * the overflow logs of the minute after the restart.
+ */
+async function restartDuringFixedTagSpray(opts: { shippersEvery: number; shipperLines: number; sprayLines: number }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('CREATE TEMP TABLE ingest_source_minute (LIKE public.ingest_source_minute INCLUDING ALL) ON COMMIT DROP');
+    // NOW() is the transaction's start for every statement in it: restore()'s
+    // window ends at this minute.
+    const nowMinute = Number(
+      (await client.query(`SELECT (EXTRACT(EPOCH FROM date_trunc('minute', NOW())) / 60)::bigint AS m`)).rows[0].m
+    );
+    const run = (text: string, params: unknown[]) => client.query(text, params);
+    let now = 0;
+    const counterOnClient = () =>
+      createIngestCounter({
+        now: () => now,
+        write: (rows) => writeRows(rows, run),
+        loadRecent: () => loadRecentRows(run),
+        prune: async () => undefined,
+        setTimer: () => ({}),
+        clearTimer: () => undefined,
+      });
+    // The shippers' ids sort after every sprayed tag, so no tie broken by key
+    // can favour them.
+    const shippers = Array.from({ length: 10 }, (_, i) => `fe${i.toString(16).padStart(6, '0')}`);
+    const spray = Array.from({ length: 600 }, (_, i) => `f${i.toString(16).padStart(7, '0')}`);
+    const shipper = (id: string) => ({ shipper_id: id, discovery_source_id: null, source_ip: '203.0.113.7' });
+    const logsIn = (m: number) => (nowMinute - m) % opts.shippersEvery === 0;
+    const minute = async (counter: ReturnType<typeof createIngestCounter>, m: number, sprayed: boolean) => {
+      now = m * 60_000;
+      if (sprayed) for (const id of spray) for (let i = 0; i < opts.sprayLines; i++) counter.bump(shipper(id));
+      now = m * 60_000 + 20_000;
+      if (logsIn(m)) for (const id of shippers) for (let i = 0; i < opts.shipperLines; i++) counter.bump(shipper(id));
+      await counter.flush();
+    };
+    const ownRows = async (m: number) =>
+      Number(
+        (
+          await client.query(`SELECT COUNT(*) AS n FROM ingest_source_minute WHERE minute = to_timestamp($1) AND source_key = ANY($2)`, [
+            m * 60,
+            shippers,
+          ])
+        ).rows[0].n
+      );
+
+    // Before the restart: the shippers log alone once, then the spray runs.
+    const first = nowMinute - 75;
+    const before = counterOnClient();
+    await minute(before, first, false);
+    const beforeRestart: number[] = [];
+    for (let m = first + 1; m < nowMinute; m++) {
+      await minute(before, m, true);
+      if (logsIn(m)) beforeRestart.push(await ownRows(m));
+    }
+    await before.close();
+
+    // The restart, and the next minute of the spray.
+    const after = counterOnClient();
+    now = nowMinute * 60_000;
+    await after.restore();
+    await minute(after, nowMinute, true);
+    await after.close();
+    const overflow = Number(
+      (
+        await client.query(`SELECT COALESCE(SUM(logs), 0) AS n FROM ingest_source_minute WHERE minute = to_timestamp($1) AND source_kind = 'overflow'`, [
+          nowMinute * 60,
+        ])
+      ).rows[0].n
+    );
+    return { beforeRestart, afterRestart: await ownRows(nowMinute), overflow };
+  } finally {
+    await client.query('ROLLBACK');
+    client.release();
+  }
+}
+
+test('a restart during a fixed-tag spray: shippers that log every minute keep their own rows', async (t) => {
+  if (!dbReady) return t.skip('Postgres with migration 041 is not reachable');
+  // Shippers at 3 lines a minute, the sprayer at 4 lines per tag: by minutes
+  // present and then by volume, the sprayer's tags outrank them.
+  const r = await restartDuringFixedTagSpray({ shippersEvery: 1, shipperLines: 3, sprayLines: 4 });
+  assert.ok(r.beforeRestart.length >= 70 && r.beforeRestart.every((n) => n === 10), 'precondition: 10 of 10 in every minute before the restart');
+  assert.equal(r.afterRestart, 10, 'after the restart: 10 of 10');
+  // 490 sprayed tags were established with the shippers, 100 more take the
+  // new-shipper budget, and the last 10 overflow: none of it the shippers'.
+  assert.equal(r.overflow, 10 * 4);
+});
+
+test('a restart during a fixed-tag spray: shippers that log every 5 minutes keep their own rows', async (t) => {
+  if (!dbReady) return t.skip('Postgres with migration 041 is not reachable');
+  const r = await restartDuringFixedTagSpray({ shippersEvery: 5, shipperLines: 1, sprayLines: 1 });
+  assert.ok(r.beforeRestart.length >= 14 && r.beforeRestart.every((n) => n === 10), 'precondition: 10 of 10 whenever they logged before the restart');
+  assert.equal(r.afterRestart, 10, 'after the restart: 10 of 10');
+  assert.equal(r.overflow, 10);
 });
 
 // Last in the file: it closes the ingest pool.

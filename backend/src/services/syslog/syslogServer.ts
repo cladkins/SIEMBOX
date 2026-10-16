@@ -79,6 +79,8 @@ export class SyslogServer {
   private tcpConnections = new Map<net.Socket, () => void>();
   private stopping = false;
   private stopPromise: Promise<void> | null = null;
+  /** How long stop() waits for accepted messages (SHUTDOWN_DRAIN_MS; tests shorten it). */
+  private readonly drainMs = SHUTDOWN_DRAIN_MS;
   private reportTimer: NodeJS.Timeout | null = null;
   private lastReport = { dropped: 0, retries: 0 };
   /** Messages whose processing threw -- in practice, a database error. Each is also logged. */
@@ -394,14 +396,19 @@ export class SyslogServer {
 
     // Everything already accepted -- running, queued, or waiting for room -- is
     // data the sender believes was delivered. Give it a chance to reach the database.
-    const drained = await this.queue.drain(SHUTDOWN_DRAIN_MS);
+    const drained = await this.queue.drain(this.drainMs);
     if (!drained) {
       const left = this.queue.stats();
       logger.warn(
         `Shutdown: ${left.active + left.queued + left.blocked} syslog message(s) were still unprocessed after ` +
-          `${SHUTDOWN_DRAIN_MS}ms and are lost`
+          `${this.drainMs}ms and are lost`
       );
     }
+    // Start nothing more: the database pools close next, so a message not yet
+    // started could only fail (or, in the few ms before they close, be stored
+    // after the ingest counter has written its last counts). Messages already
+    // running finish.
+    this.queue.close();
 
     for (const socket of this.tcpConnections.keys()) socket.destroy();
     await Promise.all(closed);

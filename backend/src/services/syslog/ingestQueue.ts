@@ -102,6 +102,7 @@ export class IngestQueue {
   private dropped = 0;
   private processed = 0;
   private failed = 0;
+  private closed = false;
 
   constructor(private readonly opts: IngestQueueOptions) {
     if (!Number.isInteger(opts.concurrency) || opts.concurrency < 1) {
@@ -129,6 +130,7 @@ export class IngestQueue {
    * queue is full. For UDP-style sources that cannot be slowed down.
    */
   trySubmit(task: IngestTask): boolean {
+    if (this.closed) return false;
     if (!this.hasRoom()) {
       this.dropped++;
       return false;
@@ -144,6 +146,7 @@ export class IngestQueue {
    * socket until this resolves.
    */
   admit(task: IngestTask): Promise<void> {
+    if (this.closed) return ACCEPTED;
     if (this.hasRoom()) {
       this.accept({ task });
       return ACCEPTED;
@@ -153,6 +156,7 @@ export class IngestQueue {
 
   /** Like admit(), but resolves when the task has FINISHED. */
   submit(task: IngestTask): Promise<void> {
+    if (this.closed) return ACCEPTED;
     return new Promise<void>((done) => {
       const entry: Entry = { task, done };
       if (this.hasRoom()) this.accept(entry);
@@ -250,6 +254,34 @@ export class IngestQueue {
       };
       this.idleWaiters.push(wake);
     });
+  }
+
+  /**
+   * For shutdown, once drain() has given up: forget every task not yet
+   * started (queued, or with its caller still waiting for room), and refuse
+   * anything submitted from now on. Callers waiting in admit()/submit() are
+   * released as if accepted/finished, so nothing hangs. Tasks already running
+   * finish. Returns how many were dropped.
+   *
+   * Without this, a backlog the pools are about to close under keeps starting:
+   * each task then fails at once without I/O, so tens of thousands run back to
+   * back on one stretch of microtasks, holding the event loop (and with it the
+   * rest of the shutdown) for seconds.
+   */
+  close(): number {
+    this.closed = true;
+    let n = 0;
+    for (let entry = this.backlog.shift(); entry; entry = this.backlog.shift()) {
+      entry.done?.();
+      n++;
+    }
+    for (let waiter = this.waiting.shift(); waiter; waiter = this.waiting.shift()) {
+      waiter.accepted();
+      waiter.entry.done?.();
+      n++;
+    }
+    this.notifyIdle();
+    return n;
   }
 
   stats(): IngestQueueStats {

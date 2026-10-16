@@ -168,10 +168,23 @@ export function getPoolStats(): { main: PoolStats; ingest: PoolStats; ingestRetr
 }
 
 let closing: Promise<void> | null = null;
+let closingIngest: Promise<void> | null = null;
+
+/**
+ * Close the ingest pool alone (idempotent; closePools() closes it too). Queries
+ * already running on it finish, and anything that asks it for a connection from
+ * now on is refused, so no log can be stored after it resolves. Resolves once
+ * every checked-out ingest client has been returned. At shutdown, the ingest
+ * counter closes it before writing its last counts (on the main pool).
+ */
+export function closeIngestPool(): Promise<void> {
+  closingIngest ??= ingestPool.end().catch(() => undefined);
+  return closingIngest;
+}
 
 /** Close both pools (idempotent). Resolves once every checked-out client has been returned. */
 export function closePools(): Promise<void> {
-  closing ??= Promise.allSettled([pool.end(), ingestPool.end()]).then(() => undefined);
+  closing ??= Promise.allSettled([pool.end(), closeIngestPool()]).then(() => undefined);
   return closing;
 }
 

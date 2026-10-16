@@ -13,11 +13,15 @@ import { logger } from '../../utils/logger';
 import { RawLogModel, type RawLog } from '../../models/RawLog';
 import {
   CLOSE_WAIT_MS,
+  ESTABLISHED_SOURCES_PER_KIND,
   FLUSH_KEYS,
   FLUSH_MS,
   MAX_PENDING_KEYS,
-  MAX_SOURCES_PER_MINUTE,
+  MAX_SOURCES_PER_KIND,
+  NEW_SOURCES_PER_MINUTE,
+  OVERFLOW_WARN_MS,
   PRUNE_MS,
+  RECENT_MINUTES,
   createIngestCounter,
   ingestCounter,
   minuteBucket,
@@ -92,6 +96,7 @@ function rig(t: TestContext, over: Partial<IngestCounterDeps> = {}): Rig {
     prune: async () => {
       r.prunes++;
     },
+    loadRecent: async () => [],
     setTimer: (fn, ms) => {
       const timer = new FakeTimer(fn, ms);
       timers.push(timer);
@@ -107,6 +112,36 @@ function rig(t: TestContext, over: Partial<IngestCounterDeps> = {}): Rig {
 
 const shipperRow = (id: string) => ({ shipper_id: id, discovery_source_id: null, source_ip: '10.0.0.9' });
 const directRow = (ip: string) => ({ shipper_id: null, discovery_source_id: null, source_ip: ip });
+const pollerRow = (id: number) => ({ shipper_id: null, discovery_source_id: id, source_ip: '10.0.0.9' });
+/** A shipper id no one has used yet (what a sender spraying random tags sends). */
+let sprayed = 0;
+const sprayRow = () => shipperRow(`f${(sprayed++).toString(16).padStart(7, '0')}`);
+
+/**
+ * Bump one log each from `n` never-seen sources, NEW_SOURCES_PER_MINUTE of each
+ * kind per minute (all a minute admits), from minute `fromMinute` on. Returns
+ * the next unused minute.
+ */
+let distinct = 0;
+function bumpDistinct(r: Rig, n: number, fromMinute = 0): number {
+  let minute = fromMinute;
+  for (let made = 0; made < n; minute++) {
+    r.setNow(T0 + minute * MINUTE);
+    for (let i = 0; i < NEW_SOURCES_PER_MINUTE && made < n; i++) {
+      for (const row of [directRow(`d${distinct}`), shipperRow(`s${distinct}`), pollerRow(1e6 + distinct)]) {
+        if (made === n) break;
+        r.counter.bump(row);
+        made++;
+      }
+      distinct++;
+    }
+  }
+  return minute;
+}
+
+/** Rows written for one minute (T0 + m minutes). */
+const rowsOfMinute = (writes: IngestCountRow[][], m: number) =>
+  writes.flat().filter((x) => x.minute.getTime() === T0 + m * MINUTE);
 
 /** Sum every written row per minute|kind|key. */
 function totals(writes: IngestCountRow[][]): Map<string, number> {
@@ -201,8 +236,11 @@ describe('ingest counter', () => {
       pendingKeys: 100,
       pendingLogs: 20_000,
       sourcesThisMinute: 100,
+      establishedSources: 100,
       flushing: false,
       droppedLogs: 0,
+      overflowLogs: 0,
+      overflowLogsByKind: { shipper: 0, poller: 0, direct: 0 },
     });
     r.fireTimer();
     await settle();
@@ -213,20 +251,17 @@ describe('ingest counter', () => {
 
   test(`writes as soon as ${FLUSH_KEYS} keys are pending, without waiting for the timer`, async (t) => {
     // Only reachable when keys from three or more minutes pile up (a slow
-    // write, here a timer that never fires): within one minute the per-source
-    // cap stops far below it.
+    // write, here a timer that never fires): within one minute the per-kind
+    // limits stop far below it.
     const r = rig(t);
-    let n = 0;
-    for (let m = 0; n < FLUSH_KEYS - 1; m++) {
-      r.setNow(T0 + m * MINUTE);
-      for (let s = 0; s < MAX_SOURCES_PER_MINUTE && n < FLUSH_KEYS - 1; s++, n++) r.counter.bump(directRow(`10.1.${s >> 8}.${s & 255}`));
-    }
+    const next = bumpDistinct(r, FLUSH_KEYS - 1);
     // Repeats of a pending key don't add keys.
-    for (let i = 0; i < 50; i++) r.counter.bump(directRow('10.1.0.0'));
+    for (let i = 0; i < 50; i++) r.counter.bump(directRow(`d${distinct - 1}`));
     await settle();
     assert.equal(r.writes.length, 0);
     assert.equal(r.counter.stats().pendingKeys, FLUSH_KEYS - 1);
 
+    r.setNow(T0 + next * MINUTE);
     r.counter.bump(directRow('10.1.9.9'));
     await settle();
     assert.equal(r.writes.length, 1);
@@ -270,27 +305,244 @@ describe('ingest counter', () => {
     await counter.close();
   });
 
-  test(`counts at most ${MAX_SOURCES_PER_MINUTE} sources per minute; the rest go to ('overflow', '*')`, async (t) => {
+  test(`a minute gives ${NEW_SOURCES_PER_MINUTE} never-seen sources of a kind their own row; the rest go to ('overflow', '*')`, async (t) => {
     const r = rig(t);
-    const extra = 120;
-    for (let i = 0; i < MAX_SOURCES_PER_MINUTE + extra; i++) r.counter.bump(shipperRow(i.toString(16).padStart(8, '0')));
-    // A source counted before the cap keeps its own row after it.
+    const extra = 20;
+    for (let i = 0; i < NEW_SOURCES_PER_MINUTE + extra; i++) r.counter.bump(shipperRow(i.toString(16).padStart(8, '0')));
+    // A source counted before the limit keeps its own row after it.
     r.counter.bump(shipperRow('00000000'));
     await r.counter.flush();
 
-    const minute0 = [...totals(r.writes)].filter(([k]) => k.startsWith('2026-10-15T12:00:00.000Z|'));
-    const own = minute0.filter(([k]) => k.includes('|shipper|'));
-    assert.equal(own.length, MAX_SOURCES_PER_MINUTE);
+    const minute0 = rowsOfMinute(r.writes, 0);
+    assert.equal(minute0.filter((x) => x.kind === 'shipper').length, NEW_SOURCES_PER_MINUTE);
     assert.equal(totals(r.writes).get('2026-10-15T12:00:00.000Z|shipper|00000000'), 2);
     assert.equal(totals(r.writes).get('2026-10-15T12:00:00.000Z|overflow|*'), extra);
-    assert.equal(minute0.length, MAX_SOURCES_PER_MINUTE + 1);
+    assert.equal(minute0.length, NEW_SOURCES_PER_MINUTE + 1);
 
-    // The cap is per minute: the next minute counts new sources again.
+    // The limit is per minute, and the sources that had their own row are now
+    // established: next minute they all get one again, and so do 100 new ones.
     r.setNow(T0 + MINUTE);
-    r.counter.bump(shipperRow('ffffffff'));
+    for (let i = 0; i < NEW_SOURCES_PER_MINUTE * 2 + extra; i++) r.counter.bump(shipperRow(i.toString(16).padStart(8, '0')));
     await r.counter.flush();
-    assert.equal(totals(r.writes).get('2026-10-15T12:01:00.000Z|shipper|ffffffff'), 1);
-    assert.equal(totals(r.writes).get('2026-10-15T12:01:00.000Z|overflow|*'), undefined);
+    const minute1 = rowsOfMinute(r.writes, 1);
+    assert.equal(minute1.filter((x) => x.kind === 'shipper').length, NEW_SOURCES_PER_MINUTE * 2);
+    assert.equal(totals(r.writes).get('2026-10-15T12:01:00.000Z|overflow|*'), extra);
+    assert.equal(r.counter.stats().establishedSources, NEW_SOURCES_PER_MINUTE * 2);
+  });
+
+  test('500 random shipper tags at the start of a minute push no established source into overflow', async (t) => {
+    // The review's reproduction: one unauthenticated sender sprays random
+    // [xxxxxxxx] tags to port 514 right after each minute starts.
+    const r = rig(t);
+    const legit = () => {
+      for (let i = 1; i <= 10; i++) r.counter.bump(directRow(`127.0.1.${i}`));
+      r.counter.bump(shipperRow('aaaaaaaa'));
+    };
+    legit(); // minute 0, before the spray
+    for (let m = 1; m <= 3; m++) {
+      r.setNow(T0 + m * MINUTE);
+      for (let i = 0; i < 500; i++) r.counter.bump(sprayRow());
+      r.setNow(T0 + m * MINUTE + 30_000);
+      legit();
+    }
+    await r.counter.flush();
+    for (let m = 1; m <= 3; m++) {
+      const rows = rowsOfMinute(r.writes, m);
+      const own = rows.filter((x) => x.key === 'aaaaaaaa' || x.key.startsWith('127.0.1.'));
+      assert.equal(own.length, 11, `minute ${m}: each of the 11 sources has its own row`);
+      assert.equal(rows.filter((x) => x.kind === 'shipper').length, NEW_SOURCES_PER_MINUTE + 1);
+      assert.equal(rows.find((x) => x.kind === 'overflow')?.logs, 500 - NEW_SOURCES_PER_MINUTE);
+    }
+  });
+
+  test('each kind has its own limits: a shipper-tag spray leaves never-seen direct senders and pollers their rows', async (t) => {
+    const r = rig(t);
+    for (let i = 0; i < 1000; i++) r.counter.bump(sprayRow());
+    r.counter.bump(directRow('192.0.2.50'));
+    r.counter.bump(pollerRow(3));
+    await r.counter.flush();
+    const t0 = totals(r.writes);
+    assert.equal(t0.get('2026-10-15T12:00:00.000Z|direct|192.0.2.50'), 1);
+    assert.equal(t0.get('2026-10-15T12:00:00.000Z|poller|3'), 1);
+    assert.deepEqual(r.counter.stats().overflowLogsByKind, { shipper: 1000 - NEW_SOURCES_PER_MINUTE, poller: 0, direct: 0 });
+  });
+
+  test(`at most ${ESTABLISHED_SOURCES_PER_KIND} established sources per kind, and newcomers never displace one`, async (t) => {
+    const r = rig(t);
+    const legit = Array.from({ length: ESTABLISHED_SOURCES_PER_KIND }, (_, i) => `10.9.${i >> 8}.${i & 255}`);
+    // Minutes 0-4: the 500 arrive, 100 new ones a minute, and stay.
+    for (let m = 0; m < 5; m++) {
+      r.setNow(T0 + m * MINUTE);
+      for (const ip of legit.slice(0, (m + 1) * NEW_SOURCES_PER_MINUTE)) r.counter.bump(directRow(ip));
+    }
+    assert.equal(r.counter.stats().establishedSources, ESTABLISHED_SOURCES_PER_KIND);
+    // Minutes 5-7: 1,000 never-seen addresses first, then the 500.
+    for (let m = 5; m < 8; m++) {
+      r.setNow(T0 + m * MINUTE);
+      for (let i = 0; i < 1000; i++) r.counter.bump(directRow(`198.18.${m}.${i}`));
+      for (const ip of legit) r.counter.bump(directRow(ip));
+    }
+    await r.counter.flush();
+    for (let m = 5; m < 8; m++) {
+      const rows = rowsOfMinute(r.writes, m);
+      assert.equal(rows.filter((x) => x.key.startsWith('10.9.')).length, ESTABLISHED_SOURCES_PER_KIND, `minute ${m}`);
+      assert.equal(rows.filter((x) => x.kind === 'direct').length, MAX_SOURCES_PER_KIND, `minute ${m}: 500 + 100 new`);
+    }
+    assert.equal(r.counter.stats().establishedSources, ESTABLISHED_SOURCES_PER_KIND, 'the newcomers were not remembered');
+  });
+
+  test(`a source is established for ${RECENT_MINUTES} minutes after its last own row, then competes as a new one`, async (t) => {
+    const r = rig(t);
+    r.counter.bump(directRow('192.0.2.1')); // minute 0
+    r.setNow(T0 + MINUTE);
+    r.counter.bump(directRow('192.0.2.2')); // minute 1
+    // RECENT_MINUTES + 1: the new-source budget is gone before either logs again.
+    const m = RECENT_MINUTES + 1;
+    r.setNow(T0 + m * MINUTE);
+    for (let i = 0; i < NEW_SOURCES_PER_MINUTE; i++) r.counter.bump(directRow(`198.18.0.${i}`));
+    r.counter.bump(directRow('192.0.2.1'));
+    r.counter.bump(directRow('192.0.2.2'));
+    await r.counter.flush();
+    const rows = rowsOfMinute(r.writes, m);
+    assert.equal(rows.find((x) => x.key === '192.0.2.1'), undefined, `${RECENT_MINUTES + 1} minutes quiet: no longer established`);
+    assert.equal(rows.find((x) => x.key === '192.0.2.2')?.logs, 1, `${RECENT_MINUTES} minutes quiet: still established`);
+    assert.equal(rows.find((x) => x.kind === 'overflow')?.logs, 1);
+  });
+
+  test('a restart while a spray runs: restore() gives the sources the table shows their own rows back', async (t) => {
+    // Ten shippers that logged every minute before the restart. Without
+    // restore() they are new after it, and a spray at the start of each
+    // minute takes every new-shipper slot first.
+    const legit = Array.from({ length: 10 }, (_, i) => `aaaaaa${i.toString(16).padStart(2, '0')}`);
+    const before = minuteBucket(T0) - 1;
+    const run = async (restore: boolean) => {
+      const r = rig(t, {
+        loadRecent: async () => legit.map((key) => ({ kind: 'shipper' as const, key, minute: before })),
+      });
+      if (restore) await r.counter.restore();
+      for (let i = 0; i < 500; i++) r.counter.bump(sprayRow());
+      for (const id of legit) r.counter.bump(shipperRow(id));
+      await r.counter.flush();
+      return rowsOfMinute(r.writes, 0).filter((x) => legit.includes(x.key)).length;
+    };
+    assert.equal(await run(false), 0, 'precondition: without restore() the spray takes every slot');
+    assert.equal(await run(true), legit.length);
+  });
+
+  test('restore() keeps the per-kind limit, skips stale and malformed entries, and wins over sources counted since start', async (t) => {
+    const now = minuteBucket(T0);
+    const restored = [
+      { kind: 'direct' as const, key: '192.0.2.200', minute: now - RECENT_MINUTES - 1 }, // stale
+      { kind: 'poller' as const, key: 'not-a-number', minute: now - 1 },
+      { kind: 'poller' as const, key: '7', minute: now - 1 },
+      ...Array.from({ length: ESTABLISHED_SOURCES_PER_KIND }, (_, i) => ({
+        kind: 'direct' as const,
+        key: `10.8.${i >> 8}.${i & 255}`,
+        minute: now - 1 - (i % 30),
+      })),
+    ];
+    const r = rig(t, { loadRecent: async () => restored });
+    // Counted between start and restore(): five new direct senders.
+    for (let i = 0; i < 5; i++) r.counter.bump(directRow(`198.18.9.${i}`));
+    await r.counter.restore();
+    assert.equal(r.counter.stats().establishedSources, ESTABLISHED_SOURCES_PER_KIND + 1, '500 direct (the restored ones) and poller 7');
+
+    // Next minute, new sources of both kinds take every new slot first.
+    r.setNow(T0 + MINUTE);
+    for (let i = 0; i < NEW_SOURCES_PER_MINUTE; i++) {
+      r.counter.bump(directRow(`198.18.10.${i}`));
+      r.counter.bump(pollerRow(1000 + i));
+    }
+    r.counter.bump(pollerRow(7));
+    r.counter.bump(directRow('10.8.0.0'));
+    r.counter.bump(directRow('10.8.1.243')); // the 500th
+    r.counter.bump(directRow('192.0.2.200'));
+    r.counter.bump(directRow('198.18.9.0'));
+    await r.counter.flush();
+    const t1 = totals(r.writes);
+    const m1 = '2026-10-15T12:01:00.000Z';
+    assert.equal(t1.get(`${m1}|poller|7`), 1, 'a restored poller id matches the rows its number');
+    assert.equal(t1.get(`${m1}|direct|10.8.0.0`), 1);
+    assert.equal(t1.get(`${m1}|direct|10.8.1.243`), 1);
+    assert.equal(t1.get(`${m1}|direct|192.0.2.200`), undefined, 'stale: not restored');
+    assert.equal(t1.get(`${m1}|direct|198.18.9.0`), undefined, 'counted since start, but the restored ones filled the limit');
+    assert.equal(t1.get(`${m1}|overflow|*`), 2);
+  });
+
+  test('restore() that cannot read the table logs it and leaves counting as it was', async (t) => {
+    const r = rig(t, {
+      loadRecent: async () => {
+        throw new Error('relation "ingest_source_minute" does not exist');
+      },
+    });
+    await assert.doesNotReject(r.counter.restore());
+    assert.equal(callCount(logger.warn), 1);
+    r.counter.bump(directRow('192.0.2.1'));
+    await r.counter.flush();
+    assert.deepEqual(totals(r.writes), new Map([['2026-10-15T12:00:00.000Z|direct|192.0.2.1', 1]]));
+  });
+
+  test('a sustained spray of every kind keeps each minute bounded, and the per-minute total exact', async (t) => {
+    const r = rig(t);
+    let logs = 0;
+    for (let m = 0; m < 8; m++) {
+      r.setNow(T0 + m * MINUTE);
+      for (let i = 0; i < 2000; i++) {
+        r.counter.bump(sprayRow());
+        r.counter.bump(directRow(`s${m}-${i}`));
+        r.counter.bump(pollerRow(m * 10_000 + i));
+        logs += 3;
+      }
+      await r.counter.flush();
+    }
+    for (let m = 0; m < 8; m++) {
+      const rows = rowsOfMinute(r.writes, m);
+      for (const kind of ['shipper', 'poller', 'direct']) {
+        assert.ok(rows.filter((x) => x.kind === kind).length <= MAX_SOURCES_PER_KIND, `minute ${m}, ${kind}`);
+      }
+      assert.equal(rows.filter((x) => x.kind === 'overflow').length, 1);
+      assert.equal(rows.reduce((n, x) => n + x.logs, 0), 6000, `minute ${m}: every log is counted somewhere`);
+    }
+    assert.equal(r.counter.stats().establishedSources, 3 * ESTABLISHED_SOURCES_PER_KIND);
+    assert.equal(r.counter.stats().overflowLogs, logs - 8 * 3 * NEW_SOURCES_PER_MINUTE);
+  });
+
+  test(`overflow is logged at the first write that has it, then at most once per ${OVERFLOW_WARN_MS / 60_000} minutes`, async (t) => {
+    const r = rig(t);
+    const warn = logger.warn as unknown as { mock: { calls: Array<{ arguments: unknown[] }> } };
+    const overflowWarnings = () => warn.mock.calls.filter((c) => /counted as overflow/.test(String(c.arguments[0])));
+    for (let i = 0; i < NEW_SOURCES_PER_MINUTE; i++) r.counter.bump(sprayRow());
+    await r.counter.flush();
+    assert.equal(overflowWarnings().length, 0, 'nothing over the limit yet');
+
+    for (let i = 0; i < 30; i++) r.counter.bump(sprayRow());
+    r.counter.bump(directRow('192.0.2.1'));
+    await r.counter.flush();
+    assert.equal(overflowWarnings().length, 1);
+    assert.deepEqual(overflowWarnings()[0].arguments[1], {
+      overflowLogs: 30,
+      byKind: { shipper: 30, poller: 0, direct: 0 },
+      minutes: 1,
+    });
+
+    // Later minutes overflow too: no new line within the hour...
+    for (let m = 1; m < 4; m++) {
+      r.setNow(T0 + m * MINUTE);
+      for (let i = 0; i < NEW_SOURCES_PER_MINUTE + 5; i++) r.counter.bump(sprayRow());
+      await r.counter.flush();
+    }
+    assert.equal(overflowWarnings().length, 1);
+    // ...then one, with everything since the last.
+    r.setNow(T0 + OVERFLOW_WARN_MS);
+    for (let i = 0; i < NEW_SOURCES_PER_MINUTE + 2; i++) r.counter.bump(sprayRow());
+    await r.counter.flush();
+    assert.equal(overflowWarnings().length, 2);
+    assert.deepEqual(overflowWarnings()[1].arguments[1], {
+      overflowLogs: 3 * 5 + 2,
+      byKind: { shipper: 17, poller: 0, direct: 0 },
+      minutes: 4,
+    });
+    assert.equal(r.counter.stats().overflowLogs, 30 + 17);
   });
 
   test('a failed write drops its counts: nothing is kept or retried, and later counts are written normally', async (t) => {
@@ -331,23 +583,21 @@ describe('ingest counter', () => {
         if (calls === 1) await stuck;
       },
     });
-    // Enough minutes x sources to start a write (FLUSH_KEYS), then pass the
-    // pending cap by 300 while that write hangs (a timer that never fires).
-    const total = FLUSH_KEYS + MAX_PENDING_KEYS + 300;
-    let n = 0;
-    for (let m = 0; n < total; m++) {
-      r.setNow(T0 + m * MINUTE);
-      for (let s = 0; s < MAX_SOURCES_PER_MINUTE && n < total; s++, n++) {
-        r.counter.bump(directRow(`10.3.${s >> 8}.${s & 255}`));
-      }
-    }
+    // Enough minutes x sources to start a write (FLUSH_KEYS), then fill the
+    // pending cap while that write hangs (a timer that never fires)...
+    const next = bumpDistinct(r, FLUSH_KEYS + MAX_PENDING_KEYS - 1);
+    r.setNow(T0 + next * MINUTE);
+    r.counter.bump(directRow('192.0.2.99'));
     await settle();
     assert.equal(calls, 1, 'one write at a time');
     assert.equal(r.counter.stats().pendingKeys, MAX_PENDING_KEYS);
-    assert.equal(r.counter.stats().droppedLogs, 300);
-    // A key already pending (this minute's first source) still counts.
-    r.counter.bump(directRow('10.3.0.0'));
-    assert.equal(r.counter.stats().droppedLogs, 300);
+    // ...so counts for new keys are dropped,
+    for (let i = 0; i < 150; i++) r.counter.bump(directRow(`198.18.1.${i}`));
+    assert.equal(r.counter.stats().pendingKeys, MAX_PENDING_KEYS);
+    assert.equal(r.counter.stats().droppedLogs, 150);
+    // while a key already pending still counts.
+    r.counter.bump(directRow('192.0.2.99'));
+    assert.equal(r.counter.stats().droppedLogs, 150);
     assert.equal(r.counter.stats().pendingLogs, MAX_PENDING_KEYS + 1);
 
     release();
@@ -386,7 +636,7 @@ describe('ingest counter', () => {
     assert.deepEqual(r.writes[1].map((x) => x.key), ['192.0.2.2']);
   });
 
-  test('every write runs on the ingest pool context', async (t) => {
+  test('every write runs on the ingest pool context, except the last one after the ingest pool has closed', async (t) => {
     const r = rig(t);
     assert.equal(isInIngestContext(), false);
     r.counter.bump(directRow('192.0.2.1'));
@@ -394,7 +644,9 @@ describe('ingest counter', () => {
     r.counter.bump(directRow('192.0.2.1'));
     r.fireTimer();
     await settle();
-    assert.deepEqual(r.contexts, [true, true]);
+    r.counter.bump(directRow('192.0.2.1'));
+    await r.counter.close(async () => r.counter.bump(directRow('192.0.2.1')));
+    assert.deepEqual(r.contexts, [true, true, true, false]);
   });
 
   test('prunes from the flush path at most hourly, and only after a successful write', async (t) => {
@@ -425,7 +677,7 @@ describe('ingest counter', () => {
     assert.equal(r.prunes, 2, 'an hour on, after a successful write');
   });
 
-  test('close() writes what is pending, clears the timer and ignores later counts', async (t) => {
+  test('close() writes what is pending (on the ingest pool when it is not told to stop ingest) and clears the timer', async (t) => {
     const r = rig(t);
     r.counter.bump(shipperRow('ab12cd34'));
     r.counter.bump(directRow('192.0.2.7'));
@@ -433,11 +685,50 @@ describe('ingest counter', () => {
     await r.counter.close();
     assert.equal(r.writes.length, 1);
     assert.equal(r.writes[0].length, 2);
+    assert.deepEqual(r.contexts, [true]);
     assert.equal(r.liveTimer(), undefined, 'the timer is cleared');
 
     r.counter.bump(shipperRow('ab12cd34'));
-    assert.equal(r.counter.stats().pendingKeys, 0, 'counts after close are ignored');
-    assert.equal(r.liveTimer(), undefined, 'and arm no timer');
+    assert.equal(r.liveTimer(), undefined, 'a count after close() arms no timer');
+  });
+
+  test('close(stopIngest) writes what it has, counts every log stored until ingest has stopped, then writes those on the main pool', async (t) => {
+    // The review's reproduction: SIGTERM under load. The syslog backlog the
+    // drain gave up on, and HTTP push batches in flight, still store logs
+    // until the ingest pool closes; each of them must be counted.
+    const r = rig(t);
+    r.counter.bump(directRow('192.0.2.1'));
+    let stopped!: () => void;
+    let stops = 0;
+    const closing = r.counter.close(() => {
+      stops++;
+      return new Promise<void>((resolve) => (stopped = resolve));
+    });
+    await settle();
+    assert.equal(stops, 1);
+    assert.deepEqual(
+      r.writes.map((w) => w.map((x) => [x.key, x.logs])),
+      [[['192.0.2.1', 1]]],
+      'what was counted is written first, on the ingest pool'
+    );
+
+    // Stored meanwhile:
+    const timersBefore = r.timers.length;
+    r.counter.bump(directRow('192.0.2.1'));
+    r.counter.bump(shipperRow('ab12cd34'));
+    assert.equal(r.timers.length, timersBefore, 'and they arm no flush timer of their own');
+
+    stopped();
+    await closing;
+    assert.equal(r.writes.length, 2);
+    assert.deepEqual(
+      totals(r.writes),
+      new Map([
+        ['2026-10-15T12:00:00.000Z|direct|192.0.2.1', 2],
+        ['2026-10-15T12:00:00.000Z|shipper|ab12cd34', 1],
+      ])
+    );
+    assert.deepEqual(r.contexts, [true, false], 'the last on the main pool: the ingest pool is closed by then');
   });
 
   test('close() waits for a write already running, then writes what arrived meanwhile', async (t) => {
@@ -455,11 +746,18 @@ describe('ingest counter', () => {
     await settle();
     r.counter.bump(directRow('192.0.2.9'));
     let closed = false;
-    const closing = r.counter.close().then(() => (closed = true));
+    let stops = 0;
+    const closing = r.counter
+      .close(async () => {
+        stops++;
+      })
+      .then(() => (closed = true));
     await settle();
     assert.equal(closed, false);
+    assert.equal(stops, 0, 'ingest is stopped only once the running write has finished on the ingest pool');
     release();
     await closing;
+    assert.equal(stops, 1);
     assert.equal(calls, 2);
     assert.deepEqual(r.writes[1].map((x) => x.key), ['192.0.2.9']);
   });
@@ -478,6 +776,22 @@ describe('ingest counter', () => {
     r.fireTimer();
     await closing;
     assert.equal(closed, true);
+  });
+
+  test(`close() gives up after ${CLOSE_WAIT_MS / 1000} s in all when stopping ingest hangs`, async (t) => {
+    const r = rig(t);
+    r.counter.bump(directRow('192.0.2.3'));
+    let closed = false;
+    const closing = r.counter.close(() => new Promise<void>(() => undefined)).then(() => (closed = true));
+    await settle();
+    assert.equal(closed, false);
+    assert.equal(r.writes.length, 1, 'what was counted before is written');
+    r.counter.bump(directRow('192.0.2.3'));
+    assert.equal(r.liveTimer()?.ms, CLOSE_WAIT_MS);
+    r.fireTimer();
+    await closing;
+    assert.equal(closed, true);
+    assert.equal(r.writes.length, 1, 'a log stored while ingest would not stop is not');
   });
 
   test('a bump never throws into the ingest path', (t) => {

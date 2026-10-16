@@ -234,6 +234,25 @@ test('stop() lets messages that were already accepted reach the database before 
   assert.equal(rig.server.getIngestStats().processed, 7, 'all seven were stored before stop() returned');
 });
 
+test('stop() that gives up on the drain starts none of the backlog: the pools close next, under it', async (t) => {
+  const { logger } = await import('../../utils/logger');
+  const warn = t.mock.method(logger, 'warn', () => logger);
+  const rig = await startRig(t);
+  (rig.server as unknown as { drainMs: number }).drainMs = 50;
+  await sendUdp(rig.udpPort, Array.from({ length: 7 }, (_, i) => line(i)));
+  await waitFor(() => rig.server.getIngestStats().queued === 5, 'queue to fill');
+
+  await rig.server.stop();
+  assert.ok(
+    warn.mock.calls.some((c) => /^Shutdown: 7 syslog message\(s\) were still unprocessed after 50ms and are lost/.test(String(c.arguments[0]))),
+    'the loss is reported'
+  );
+  rig.release();
+  await sleep(50);
+  assert.deepEqual(rig.started, ['msg-0', 'msg-1'], 'only the two already running');
+  assert.equal(rig.server.getIngestStats().queued, 0);
+});
+
 test('stop() is idempotent and safe on a server that never started', async () => {
   const never = new SyslogServer(0);
   await never.stop();

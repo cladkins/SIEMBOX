@@ -264,7 +264,13 @@ test('deleting the creator keeps the link: created_by becomes NULL and the scree
     assert.deepEqual(row, { created_by: null, updated_by: null, revoked_at: null });
     await assertWorks(token, 'after its creator was deleted');
 
-    const link = (await call('GET', `/api/display-links/${id}`, { token: other.token })).body.link;
+    // The screen's use is recorded after its response is sent, so give that
+    // write a moment to land before reading the status.
+    let link = (await call('GET', `/api/display-links/${id}`, { token: other.token })).body.link;
+    for (let i = 0; i < 40 && link.status !== 'live'; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      link = (await call('GET', `/api/display-links/${id}`, { token: other.token })).body.link;
+    }
     assert.equal(link.created_by, null, 'the list says "deleted user"');
     assert.equal(link.status, 'live');
     const { out, io } = quietIo();

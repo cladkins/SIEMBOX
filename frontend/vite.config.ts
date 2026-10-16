@@ -1,9 +1,19 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 import path from 'path';
 
-const { version: jsYamlVersion } = createRequire(import.meta.url)('js-yaml/package.json');
+const require = createRequire(import.meta.url);
+const { version: jsYamlVersion } = require('js-yaml/package.json');
+// Cytoscape's package.json isn't in its "exports": read it from its folder.
+const { version: cytoscapeVersion } = JSON.parse(
+  readFileSync(path.join(path.dirname(require.resolve('cytoscape')), '..', 'package.json'), 'utf8')
+);
+
+/** Does this chunk bundle a module of `pkg` (node_modules/<pkg>/...)? */
+const bundles = (chunk: { moduleIds: string[] }, pkg: string) =>
+  chunk.moduleIds.some((id) => id.replace(/\\/g, '/').includes(`/node_modules/${pkg}/`));
 
 export default defineConfig({
   plugins: [vue()],
@@ -42,13 +52,21 @@ export default defineConfig({
         // Apache-2.0 code we ship (Vue, Chart.js, DOMPurify, ...) must carry
         // its notice. scripts/check-legal-comments.mjs fails CI without them.
         comments: { legal: true },
-        // js-yaml's v4-legacy releases (4.3.x) ship their ESM build without the
-        // license header 4.2.0 had, so put the same header on the chunk that
-        // bundles it (after minification, so nothing can strip it).
+        // Headers the libraries' own builds don't keep, put on the chunk that
+        // bundles them (after minification, so nothing can strip them):
+        // - js-yaml's v4-legacy releases (4.3.x) ship their ESM build without
+        //   the license header 4.2.0 had;
+        // - Cytoscape's ESM build opens with a plain /** Copyright ... */ block
+        //   (MIT), which comments.legal doesn't count as a legal comment.
         postBanner: (chunk) =>
-          chunk.moduleIds.some((id) => /[\\/]node_modules[\\/]js-yaml[\\/]/.test(id))
-            ? `/*! js-yaml ${jsYamlVersion} https://github.com/nodeca/js-yaml @license MIT */`
-            : '',
+          [
+            bundles(chunk, 'js-yaml') ? `/*! js-yaml ${jsYamlVersion} https://github.com/nodeca/js-yaml @license MIT */` : '',
+            bundles(chunk, 'cytoscape')
+              ? `/*! cytoscape ${cytoscapeVersion} | (c) The Cytoscape Consortium | https://js.cytoscape.org @license MIT */`
+              : '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
         // The vendor chunks of Vite 5's manualChunks object, which Rolldown no
         // longer accepts. Like manualChunks, a group also takes in the
         // dependencies of the modules it matches (Vue, lodash-es, dayjs,
@@ -63,6 +81,10 @@ export default defineConfig({
             { name: 'oxc-runtime', test: /^\0@oxc-project\+runtime@/, priority: 1 },
             { name: 'element-plus', test: /[\\/]node_modules[\\/]element-plus[\\/].*\.m?js$/ },
             { name: 'chart', test: /[\\/]node_modules[\\/](chart\.js|vue-chartjs)[\\/].*\.m?js$/ },
+            // The Context Graph's canvas library, loaded only when the graph
+            // page draws (components/graph/GraphCanvas.vue imports it lazily);
+            // scripts/check-graph-chunk.mjs fails CI if it reaches another chunk.
+            { name: 'graph', test: /[\\/]node_modules[\\/]cytoscape[\\/].*\.m?js$/ },
           ],
         },
       },

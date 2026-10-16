@@ -2074,6 +2074,50 @@ attempts ...", `code: "SIGNIN_PAUSED"`) is something else: see
 
 ## Frontend Issues
 
+### Issue: Context Graph is busy, partial or empty
+
+**Symptoms:**
+- "SIEMBox is busy, trying again in a few seconds", then a **Try again** button
+- A yellow banner such as "Alerts relationships took too long and were left out"
+- A relation shows a "timed out" badge
+- The graph shows alerts, assets and findings but no users or client IPs
+
+**What it means:**
+- The graph runs a bounded number of lookups at once, each with a time
+  budget (`GET /api/graph/neighborhood`, API.md "Context Graph"). When every
+  slot is taken it answers `503 GRAPH_BUSY` with `Retry-After`; the page waits
+  and retries once by itself. A source that runs out of time is left out and
+  named in a banner; the rest of the graph is complete.
+- No users or client IPs: the graph reads them from what alerts recorded,
+  which comes from parsers. With no parser installed the page says so
+  ("No parsers are installed…") and links to *Parsers*. Install parsers for
+  your sources from *Parsers → Browse Catalog*.
+- "Nothing is linked to … between … and …": nothing SIEMBox holds names that
+  entity in the window. Try **90 days**, or look the IP up in Threat Intel.
+
+**Solution:**
+- Press **Try again** or **Refresh** (the page never polls on its own).
+- If it is busy often, check database load (see [Database Issues](#database-issues)).
+- A failed expansion keeps the graph you had; only that node's expansion is missing.
+
+### Issue: The Context Graph canvas is blank
+
+The canvas (Cytoscape, a separate `graph-*.js` file) loads only on the graph
+page. If it can't start (an old browser, a blocked script), the page says so
+and shows the **List** view, a table of the same nodes and links. Check the
+browser console for a failed `graph-*.js` request: a proxy or cache serving an
+old `index.html` with new assets (or the reverse) causes it; reload without the
+cache.
+
+### Issue: A link to a SIEMBox page lands on the Dashboard after signing in
+
+A link opened while signed out keeps its target as `?redirect=` on the
+sign-in page and returns there after signing in (also through a forced
+password change, and after a session expires on that page). It lands on the
+Dashboard instead when the target isn't a SIEMBox page (another host, a path
+no page matches) or is a page the account's role can't open. That is
+deliberate: the sign-in page never sends anyone to another site.
+
 ### Issue: Blank Page or JavaScript Errors
 
 **Diagnosis:**

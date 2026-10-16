@@ -3,13 +3,15 @@ import { isIP } from 'net';
 import { query } from '../config/database';
 import { ApiError } from '../middleware/errorHandler';
 import { geoipService } from '../services/geoip/geoipService';
+import { alertIpMatch } from '../services/graph/alertKeys';
 
 const router = Router();
 
 /**
  * GET /ip/:ip — everything we know about an IP: its GeoIP country, recent parsed
  * log events from it, and recent alerts that referenced it. All three IP-keyed
- * queries are index-/key-filtered, so they stay fast.
+ * queries are index-/key-filtered, so they stay fast: the alert ones on
+ * migration 043's matched_data IP indexes (alertIpMatch states their guard).
  */
 router.get('/ip/:ip', async (req: Request, res: Response) => {
   const ip = ((req.params.ip as string) || '').trim();
@@ -34,9 +36,7 @@ router.get('/ip/:ip', async (req: Request, res: Response) => {
             r.name AS rule_name
        FROM alerts a
        LEFT JOIN detection_rules r ON a.rule_id = r.id
-      WHERE a.matched_data->>'source_ip' = $1
-         OR a.matched_data->>'client_ip' = $1
-         OR a.matched_data->>'dest_ip' = $1
+      WHERE ${alertIpMatch('$1')}
       ORDER BY a.created_at DESC
       LIMIT 50`,
     [ip]
@@ -45,10 +45,7 @@ router.get('/ip/:ip', async (req: Request, res: Response) => {
   const counts = await query(
     `SELECT
        (SELECT COUNT(*) FROM parsed_logs WHERE source_ip = $1) AS event_count,
-       (SELECT COUNT(*) FROM alerts
-          WHERE matched_data->>'source_ip' = $1
-             OR matched_data->>'client_ip' = $1
-             OR matched_data->>'dest_ip' = $1) AS alert_count`,
+       (SELECT COUNT(*) FROM alerts WHERE ${alertIpMatch('$1', { column: 'matched_data' })}) AS alert_count`,
     [ip]
   );
 

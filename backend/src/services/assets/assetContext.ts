@@ -16,6 +16,7 @@ import { AssetRepository } from './assetRepository';
 import { VulnerabilityRepository } from '../vulnerabilities/vulnerabilityRepository';
 import { geoipService } from '../geoip/geoipService';
 import { OFFLINE_THRESHOLD_MINUTES } from '../../models/EdrAgent';
+import { alertKeyEquals } from '../graph/alertKeys';
 
 export interface AssetContext {
   agent: Record<string, any> | null;
@@ -56,13 +57,14 @@ export async function getAssetContext(assetId: number): Promise<AssetContext | n
         LIMIT 1`,
       [hostname, ip]
     ),
-    // Alerts linked to the asset, or whose extracted source_ip matches the IP.
+    // Alerts linked to the asset, or whose extracted source_ip matches the IP
+    // (on migration 043's source_ip index: alertKeyEquals states its guard).
     query(
       `SELECT id, rule_id, severity, title, description, status, source, event_id,
               matched_data, created_at
          FROM alerts
         WHERE asset_id = $1
-           OR ($2::text IS NOT NULL AND matched_data->>'source_ip' = $2)
+           OR ($2::text IS NOT NULL AND ${alertKeyEquals('source_ip', '$2', { column: 'matched_data' })})
         ORDER BY created_at DESC
         LIMIT 100`,
       [assetId, ip]

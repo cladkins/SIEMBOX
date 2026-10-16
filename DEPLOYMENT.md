@@ -415,6 +415,16 @@ the discovery agent, from Debian's `nodejs` (Node 18) to Node 22 copied from
   for the prebuilt image, or `docker compose build --pull && docker compose up -d`
   for a shipper built from source.
 
+**Updating to the release with the Context Graph API** (migration
+`043_context_graph_lookups.sql` runs on its own; no `.env` or compose change):
+the first start builds 12 indexes on `alerts` and `audit_logs`
+(`idx_graph_*`), before the API takes requests. Alerts are few next to logs,
+so this takes seconds: about 1 s and 12 MB in all for 60,000 alerts. They
+also speed up Threat Intel's IP view and an asset's related alerts, which read
+every alert before (20-40 ms down to under 1 ms on 60,000 alerts). The new read-only `/api/graph` routes are described in
+[API.md](docs/reference/API.md#context-graph-endpoints); the graph page comes
+in a later release.
+
 ## Database Migrations and Seeding
 
 ### Automatic Initialization

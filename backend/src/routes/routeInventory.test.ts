@@ -370,6 +370,13 @@ const INVENTORY: Row[] = [
   ['POST', '/api/exposure/findings/:id/resolve', ADMIN_ONLY],
   ['POST', '/api/exposure/run-now', ADMIN_ONLY],
   ['POST', '/api/exposure/password-check', ANY_ROLE],
+
+  // routes/graph.ts: Context Graph (every role reads; services/graph/visibility.ts
+  // decides what each role's graph holds, and the mirror test below keeps it
+  // within these routes' roles)
+  ['GET', '/api/graph/search', ANY_ROLE],
+  ['GET', '/api/graph/neighborhood', ANY_ROLE],
+  ['GET', '/api/graph/relation', ANY_ROLE],
 ];
 
 /**
@@ -823,6 +830,31 @@ test('a restricted session is refused before any role gate: a viewer on an admin
   for (const id of PASSWORD_CHANGE_ALLOWED) {
     const [method, path] = id.split(' ');
     assert.equal((await call(method, path, asRestricted('viewer'))).reached, id);
+  }
+});
+
+test('the Context Graph shows a role nothing the routes it mirrors refuse that role', async () => {
+  // services/graph/visibility.ts names, for each node type (and for account
+  // details), the routes whose data it carries; each must be listed here and
+  // admit every role the graph shows it to.
+  const { NODE_VISIBILITY } = await import('../services/graph/visibility');
+  const whoOf = new Map(INVENTORY.map(([method, path, who]) => [`${method} ${path}`, who]));
+  const subjects = Object.entries(NODE_VISIBILITY);
+  assert.ok(subjects.length >= 15, `found ${subjects.length} visibility entries`);
+  for (const [subject, entry] of subjects) {
+    assert.ok(entry.mirrors.length > 0, `${subject}: name the routes it mirrors`);
+    for (const id of entry.mirrors) {
+      const who = whoOf.get(id);
+      assert.ok(who !== undefined, `${subject} mirrors ${id}, which INVENTORY does not list`);
+      assert.ok(Array.isArray(who), `${subject} mirrors ${id}, which takes no login`);
+      for (const role of entry.roles) {
+        assert.ok(who.includes(role), `the graph shows ${subject} to ${role}, but ${id} refuses ${role}`);
+      }
+    }
+  }
+  // The graph's own routes are open to every role that sees anything in it.
+  for (const path of ['/api/graph/search', '/api/graph/neighborhood', '/api/graph/relation']) {
+    assert.deepEqual(whoOf.get(`GET ${path}`), ANY_ROLE, path);
   }
 });
 

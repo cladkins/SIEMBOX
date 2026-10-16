@@ -74,5 +74,14 @@ END $$;
 -- A rule's latest alerts, without sorting all of a noisy rule's alerts.
 CREATE INDEX IF NOT EXISTS idx_graph_alerts_rule_created ON alerts (rule_id, created_at DESC) WHERE rule_id IS NOT NULL;
 
+-- An asset's latest alerts (EDR detections set asset_id), read in order: the
+-- graph's and Asset-360's asset_id arm is ordered by (asset_id, created_at
+-- DESC), which only this index gives (alertKeys.ts AlertArm). Before it, for a
+-- host whose alerts were mostly older than the window (one endpoint scan can
+-- leave hundreds of thousands), the planner walked idx_alerts_created_at back
+-- through every alert in the window. idx_alerts_asset_id (016) stays: it also
+-- serves the asset_id foreign key.
+CREATE INDEX IF NOT EXISTS idx_graph_alerts_asset_created ON alerts (asset_id, created_at DESC) WHERE asset_id IS NOT NULL;
+
 -- Admin-only pivot: SIEMBox sign-ins from an IP. (ip_address = $1 implies IS NOT NULL.)
 CREATE INDEX IF NOT EXISTS idx_graph_audit_logs_ip_time ON audit_logs (ip_address, timestamp DESC) WHERE ip_address IS NOT NULL;

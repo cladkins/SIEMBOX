@@ -19,6 +19,13 @@
  * expression so a common value's scan stops at its limit. These tests check
  * the shape, the statistics, and the bound where the table is big enough to
  * show it (LIMIT 50 and 100); 24,500 rows are too few to show the walk itself.
+ *
+ * The last test adds the case no estimate covered: one key (an EDR host, a
+ * rule, an IP, a user) holding most of the alerts, nearly all older than the
+ * window. Taking them to be spread evenly over time, the planner walked
+ * idx_alerts_created_at through every alert in the window to find a few. Each
+ * arm is now ordered by its own key first (alertKeys.ts AlertArm), an order
+ * only that key's index gives.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -169,6 +176,23 @@ async function assertOrderedArms(label: string, statement: Statement, expected: 
   for (const name of expected) assert.ok(used.some((n) => n['Index Name'] === name), `${label}: ${name} in ${used.map((n) => n['Index Name']).join(', ')}`);
 }
 
+/**
+ * Never the walk: idx_alerts_created_at read in its own order under a Limit,
+ * stopping once enough rows pass the filter, which for a key whose alerts are
+ * mostly older than the window means reading every alert in it. Each arm is
+ * ordered by its key first, which that index can't give, so a scan of it can
+ * only appear under a Sort (the window read whole, which the planner picks for
+ * a small window).
+ */
+async function assertNoWalk(label: string, statement: Statement) {
+  const all = await plan(statement);
+  for (const n of all.filter((node) => node['Index Name'] === 'idx_alerts_created_at')) {
+    assert.equal(n.parent, 'Sort', `${label}: idx_alerts_created_at only read whole and sorted, not walked (under ${n.parent})`);
+  }
+  assert.ok(!all.some((n) => n['Node Type'] === 'BitmapOr'), `${label}: no OR of keys`);
+  assert.ok(!all.some((n) => n['Node Type'] === 'Seq Scan' && n['Relation Name'] === 'alerts'), `${label}: no sequential scan`);
+}
+
 /** Rows each scan of `alerts` read (kept, filtered out, rechecked), over all its loops. */
 async function rowsRead(statement: Statement): Promise<Array<{ index: string; read: number }>> {
   return (await plan(statement, true))
@@ -234,7 +258,7 @@ test("an asset's alerts: asset_id, and its current IP under each key", async (t)
     await assertOrderedArms(
       `asset ${window}`,
       await captured(def('asset', 'entity_alerts'), entityRef('asset', '1'), { ip: '198.18.7.3', hostname: 'x' }, window),
-      ['idx_alerts_asset_id', ...IP_INDEXES]
+      ['idx_graph_alerts_asset_created', ...IP_INDEXES]
     );
   }
 });
@@ -274,7 +298,7 @@ test("Threat Intel's IP view and Asset-360, as they send them (LIMIT 50 and 100)
   for (const ip of [RARE_IP, HOT.ip]) {
     await assertOrderedArms(`threat intel ${ip}`, { sql: IP_ALERTS_SQL, params: [ip] }, IP_INDEXES);
     await assertBounded(`threat intel ${ip}`, { sql: IP_ALERTS_SQL, params: [ip] }, 50, 3);
-    await assertOrderedArms(`asset-360 ${ip}`, { sql: ASSET_ALERTS_SQL, params: [1, ip] }, ['idx_alerts_asset_id', 'idx_graph_alerts_md_source_ip']);
+    await assertOrderedArms(`asset-360 ${ip}`, { sql: ASSET_ALERTS_SQL, params: [1, ip] }, ['idx_graph_alerts_asset_created', 'idx_graph_alerts_md_source_ip']);
     await assertBounded(`asset-360 ${ip}`, { sql: ASSET_ALERTS_SQL, params: [1, ip] }, 100, 2);
   }
   const hot = (await db.query(IP_ALERTS_SQL, [HOT.ip])).rows;
@@ -289,4 +313,66 @@ test('SIEMBox sign-ins from an IP (admin): idx_graph_audit_logs_ip_time', async 
   if (!db) return t.skip(SKIP);
   const indexes = await plannedIndexes(await captured(def('ip', 'ip_signins'), entityRef('ip', '198.18.7.3')));
   assert.ok(indexes.includes('idx_graph_audit_logs_ip_time'), indexes.join(', '));
+});
+
+test('a key holding most alerts, nearly all older than the window (an EDR host after one scan): its own index, never a walk', async (t) => {
+  if (!db) return t.skip(SKIP);
+  // 40,000 alerts 45 days ago (62% of alerts) and 5 in the last 5 days, all
+  // naming one asset, rule, IP and user: an endpoint scan that matched a YARA
+  // rule on many files. ANALYZE sees each key at 62% of alerts, and takes them
+  // to be spread evenly over time.
+  await db.query('SAVEPOINT noisy');
+  try {
+    const [{ id: assetId }] = (await db.query(`INSERT INTO assets (ip_address, hostname) VALUES ('198.19.252.5', $1) RETURNING id`, [`noisy-${tag}`])).rows;
+    const [{ id: ruleId }] = (
+      await db.query(`INSERT INTO detection_rules (name, severity, rule_yaml, rule_logic) VALUES ($1, 'high', 'x: 1', '{}') RETURNING id`, [`noisy-${tag}`])
+    ).rows;
+    const noisy = { ip: '198.19.252.6', user: `scanned-${tag}` };
+    await db.query(
+      `INSERT INTO alerts (severity, title, matched_data, status, created_at, source, asset_id, rule_id)
+       SELECT 'high', 'plan ' || $1, jsonb_build_object('source_ip', $2::text, 'user', $3::text), 'new',
+              CASE WHEN g <= 5 THEN NOW() - make_interval(days => g) + interval '1 hour'
+                   ELSE NOW() - interval '45 days' - make_interval(secs => g) END,
+              'edr', $4, $5
+         FROM generate_series(1, 40005) g`,
+      [tag, noisy.ip, noisy.user, assetId, ruleId]
+    );
+    await db.query('ANALYZE alerts');
+
+    const real: Query = async <T>(sql: string, params: unknown[] = []) => (await db!.query(sql, params)).rows as T[];
+    // The asset and the rule: read off their own index, a few rows. (An EDR host
+    // like this one timed out its entity_alerts, and /relation answered 503.)
+    const strict: Array<[string, RelationDef, EntityRef, Record<string, unknown> | null, string[]]> = [
+      ['asset', def('asset', 'entity_alerts'), entityRef('asset', String(assetId)), { ip: '198.19.252.5', hostname: 'x' }, ['idx_graph_alerts_asset_created']],
+      ['rule', def('rule', 'rule_alerts'), entityRef('rule', String(ruleId)), null, ['idx_graph_alerts_rule_created']],
+    ];
+    // The IP and user: never the walk either. The planner may read a window as
+    // small as this 7 days (6,000 alerts) whole and sort it, which it picks only
+    // when that costs less than the ordered scan; at 30 days it uses the index.
+    const loose: Array<[string, RelationDef, EntityRef, null]> = [
+      ['ip', def('ip', 'entity_alerts'), entityRef('ip', noisy.ip), null],
+      ['user', def('user', 'entity_alerts'), entityRef('user', noisy.user), null],
+    ];
+    for (const window of ['7d', '30d']) {
+      for (const [label, relation, ref, row, expected] of strict) {
+        const statement = await captured(relation, ref, row, window);
+        await assertOrderedArms(`${label} ${window}`, statement, expected);
+        await assertBounded(`${label} ${window}`, statement, TOTAL_CAP + 1, 6);
+      }
+      for (const [label, relation, ref] of loose) await assertNoWalk(`${label} ${window}`, await captured(relation, ref, null, window));
+      for (const [label, , ref, row] of [...strict, ...loose]) {
+        const count = await countAlertsNaming(real, ctxFor(ref, row, window));
+        assert.deepEqual(count, { total: 5, capped: false }, `${label} ${window}: the 5 recent alerts`);
+      }
+    }
+    // Asset-360 has no window: the asset's latest 100, off the same index.
+    const asset360 = { sql: ASSET_ALERTS_SQL, params: [assetId, '198.19.252.5'] };
+    await assertOrderedArms('asset-360', asset360, ['idx_graph_alerts_asset_created']);
+    await assertBounded('asset-360', asset360, 100, 2);
+    const latest = (await db.query(asset360.sql, asset360.params)).rows;
+    assert.equal(latest.length, 100);
+    assert.ok(latest[0].created_at > latest[5].created_at, 'newest first: the 5 recent alerts lead');
+  } finally {
+    await db.query('ROLLBACK TO SAVEPOINT noisy');
+  }
 });

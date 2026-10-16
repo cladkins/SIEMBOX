@@ -2,8 +2,8 @@
  * The alert lookup expressions: migration 043 holds exactly the indexes and
  * statistics alertKeys.ts describes (so every lookup is served by one), each
  * lookup carries its index's size guard, "the latest alerts naming X" is one
- * ordered scan per key (never an OR), and the IP spellings cover how logs
- * write addresses. Run with `npm test` (tsx --test).
+ * ordered scan per key (never an OR), each arm ordered by its own key, and the
+ * IP spellings cover how logs write addresses. Run with `npm test` (tsx --test).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,10 +11,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   ALERT_KEY_INDEXES,
+  alertColumnArm,
   alertIpArms,
   alertIpMatch,
+  alertKeyArm,
   alertKeyEquals,
   alertKeyExpr,
+  alertKeyGuard,
   alertKeyIndexSql,
   alertKeyStatsName,
   alertKeyStatsSql,
@@ -66,14 +69,41 @@ test('latestAlerts: one ordered scan per arm, each stopping at the limit; never 
   const arms = sql.split(' UNION ');
   assert.equal(arms.length, IP_KEYS.length);
   IP_KEYS.forEach((key, i) => {
-    assert.equal(arms[i], `(SELECT a.id FROM alerts a WHERE ${alertKeyEquals(key, '$1')} AND a.created_at >= $2 ORDER BY a.created_at DESC LIMIT 50)`);
+    const expr = alertKeyExpr(key, 'a.matched_data');
+    assert.equal(
+      arms[i],
+      `(SELECT a.id FROM alerts a WHERE (${expr} = ANY(ARRAY[$1]::text[]) AND octet_length(${expr}) <= ${MAX_INDEXED_BYTES}) AND a.created_at >= $2 ORDER BY ${expr}, a.created_at DESC LIMIT 50)`
+    );
   });
   assert.ok(!sql.includes(' OR '), sql);
-  // A single value per arm (not ANY): only then does the (key, created_at DESC) index return it in order.
-  assert.ok(!sql.includes('ANY('), sql);
+  // One value per arm, as an array of one, and the key leading the order: with
+  // `= $1` the planner drops the key from the ORDER BY, and idx_alerts_created_at
+  // then gives the same order (see AlertArm).
+  assert.ok(!/ = \$1\b/.test(sql), sql);
   assert.throws(() => latestAlerts([], 'a.id', 50), /no arms/);
-  assert.throws(() => latestAlerts(['true'], 'a.id', 0), /positive integer/);
-  assert.throws(() => latestAlerts(['true'], 'a.id', 1.5), /positive integer/);
+  assert.throws(() => latestAlerts([alertColumnArm('rule_id', '$1')], 'a.id', 0), /positive integer/);
+  assert.throws(() => latestAlerts([alertColumnArm('rule_id', '$1')], 'a.id', 1.5), /positive integer/);
+});
+
+test("latestAlerts arms state their index's conditions: source, guard, or the column", () => {
+  assert.deepEqual(alertKeyArm('agent_id', '$3'), {
+    where: `(a.source = 'edr' AND lower(a.matched_data->>'agent_id') = ANY(ARRAY[$3]::text[]) AND octet_length(lower(a.matched_data->>'agent_id')) <= ${MAX_INDEXED_BYTES})`,
+    key: `lower(a.matched_data->>'agent_id')`,
+  });
+  for (const entry of ALERT_KEY_INDEXES) {
+    const arm = alertKeyArm(entry.key, '$1');
+    assert.equal(arm.where.includes(`a.source = '${entry.source}'`), Boolean(entry.source), arm.where);
+    assert.ok(arm.where.includes(alertKeyGuard(entry.key, 'a.matched_data')), arm.where);
+  }
+  assert.deepEqual(alertColumnArm('asset_id', '$1'), { where: 'a.asset_id = ANY(ARRAY[$1]::integer[])', key: 'a.asset_id' });
+  // And 043 holds the (column, created_at DESC) index each column arm is read from.
+  for (const column of ['rule_id', 'asset_id']) {
+    assert.match(MIGRATION, new RegExp(`^CREATE INDEX IF NOT EXISTS idx_graph_alerts_\\w+ ON alerts \\(${column}, created_at DESC\\) WHERE ${column} IS NOT NULL;$`, 'm'), column);
+  }
+  assert.equal(
+    latestAlerts([alertColumnArm('rule_id', '$2')], 'a.id', 1001),
+    '(SELECT a.id FROM alerts a WHERE a.rule_id = ANY(ARRAY[$2]::integer[]) ORDER BY a.rule_id, a.created_at DESC LIMIT 1001)'
+  );
 });
 
 test('the SQL expressions apply the same text rules as entityKey.ts (ASCII inputs)', () => {

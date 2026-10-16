@@ -668,8 +668,9 @@ test('migration 043 re-runs on the populated database without changing anything'
   const { rows } = await pool.query(
     `SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname LIKE 'idx_graph_%' ORDER BY 1`
   );
-  assert.equal(rows.length, 12);
+  assert.equal(rows.length, 13);
   assert.ok(rows.every((row) => row.indisvalid));
+  assert.ok(rows.some((row) => row.relname === 'idx_graph_alerts_asset_created'), 'the asset index is among them');
   // Its statistics exist and hold data: the first-fill ANALYZE ran (alerts isn't empty here).
   const stats = await pool.query(`SELECT statistics_name, null_frac FROM pg_stats_ext_exprs WHERE statistics_name LIKE 'graph\\_alerts\\_%' ORDER BY 1`);
   assert.equal(stats.rows.length, 10);

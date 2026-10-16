@@ -27,7 +27,7 @@
  */
 import type { Query } from '../budget';
 import { canonicalDomain, canonicalHost, canonicalId, canonicalIp, canonicalShipperTag, canonicalUser, canonicalUuid, entityRef, JUNK_USERS, type EntityRef } from '../entityKey';
-import { alertIpArms, alertKeyEquals, latestAlerts } from '../alertKeys';
+import { alertColumnArm, alertIpArms, alertKeyArm, alertKeyEquals, latestAlerts, type AlertArm } from '../alertKeys';
 import { shipperTags } from '../shipperTags';
 import { TOTAL_CAP, type NodeType } from '../types';
 import {
@@ -149,8 +149,8 @@ function alertOrder(page: PageRequest): string {
 }
 
 interface AlertMatch {
-  /** latestAlerts() arms: predicates on `a`, each served in created_at order by one index. */
-  arms: string[];
+  /** latestAlerts() arms: one key and value each, each served in order by that key's index. */
+  arms: AlertArm[];
   /** The IP role column; binds its parameter only when called (the count has no use for it). */
   roleExpr?: () => string;
   byAssetExpr?: string;
@@ -197,25 +197,25 @@ function alertMatch(ctx: ResolverCtx, bind: (value: unknown) => string): AlertMa
       };
     case 'user': {
       const p = bind(center.key);
-      return { arms: [alertKeyEquals('user', p), alertKeyEquals('target_user', p)], edge: toCenter('alert_users') };
+      return { arms: [alertKeyArm('user', p), alertKeyArm('target_user', p)], edge: toCenter('alert_users') };
     }
     case 'host':
-      return { arms: [alertKeyEquals('host', bind(center.key))], edge: toCenter('alert_hosts') };
+      return { arms: [alertKeyArm('host', bind(center.key))], edge: toCenter('alert_hosts') };
     case 'domain': {
       const p = bind(center.key);
       return {
-        arms: [alertKeyEquals('domain', p), `(a.source = 'domain-monitor' AND ${alertKeyEquals('lookalike', p)})`],
+        // lookalike: on domain-monitor alerts only (alertKeyArm states its index's source).
+        arms: [alertKeyArm('domain', p), alertKeyArm('lookalike', p)],
         edge: toCenter('alert_domains'),
       };
     }
     case 'asset': {
       const id = bind(Number(center.key));
       const ip = canonicalIp(ctx.centerInfo.row?.ip);
-      const byAsset = `(a.asset_id = ${id})`;
       return {
         // The asset's current IP: the alerts that name it, which may predate it being this asset's.
-        arms: [byAsset, ...(ip ? ipArms(ip, bind) : [])],
-        byAssetExpr: byAsset,
+        arms: [alertColumnArm('asset_id', id), ...(ip ? ipArms(ip, bind) : [])],
+        byAssetExpr: `(a.asset_id = ${id})`,
         edge: (alert, row) =>
           row.by_asset === true
             ? edgeSpec('alert_asset', alert, center, 'alerts', 'recorded')
@@ -223,11 +223,11 @@ function alertMatch(ctx: ResolverCtx, bind: (value: unknown) => string): AlertMa
       };
     }
     case 'account':
-      return { arms: [`(a.source = 'siembox-auth' AND ${alertKeyEquals('user_id', bind(center.key))})`], edge: toCenter('alert_account') };
+      return { arms: [alertKeyArm('user_id', bind(center.key))], edge: toCenter('alert_account') };
     case 'endpoint':
-      return { arms: [`(a.source = 'edr' AND ${alertKeyEquals('agent_id', bind(center.key))})`], edge: toCenter('alert_endpoint') };
+      return { arms: [alertKeyArm('agent_id', bind(center.key))], edge: toCenter('alert_endpoint') };
     case 'rule':
-      return { arms: [`a.rule_id = ${bind(Number(center.key))}`], edge: toCenter('alert_rule') };
+      return { arms: [alertColumnArm('rule_id', bind(Number(center.key)))], edge: toCenter('alert_rule') };
     default:
       return null;
   }

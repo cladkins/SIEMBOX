@@ -338,6 +338,27 @@ test("the screen's snapshot: its layout, the server's clock and version, and no 
   assert.deepEqual([asBearer.status, asBearer.body.message], [401, 'Invalid or expired session']);
 });
 
+test('a stored config that no longer validates: the screen gets DISPLAY_CONFIG_INVALID, the error log one row, the list still loads', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const { id, token } = await createLink('broken');
+  // As a newer version's panel kind would read after a downgrade.
+  await pool.query(`UPDATE display_links SET config = '{"views":[{"title":"A","panels":[{"id":"future_graph"}]}]}' WHERE id = $1`, [id]);
+  const errorsBefore = (await pool.query('SELECT COUNT(*)::int AS n FROM application_errors')).rows[0].n;
+  for (let i = 0; i < 5; i++) {
+    const res = await snapshot(token);
+    assert.equal(res.status, 500);
+    assert.equal(res.body.code, 'DISPLAY_CONFIG_INVALID');
+    assert.equal(res.headers['cache-control'], 'no-store');
+  }
+  const errorsAfter = (await pool.query('SELECT COUNT(*)::int AS n FROM application_errors')).rows[0].n;
+  assert.equal(errorsAfter, errorsBefore, 'a polling screen adds no application_errors rows');
+  const link = (await admin('GET', `/api/display-links/${id}`)).body.link;
+  assert.deepEqual([link.config, link.view_count, link.panel_keys, link.privacy], [null, 0, [], 'operations']);
+  const fixed = await admin('PUT', `/api/display-links/${id}`, { config: CONFIG });
+  assert.equal(fixed.status, 200, 'saving it again repairs it');
+  assert.equal((await snapshot(token)).status, 200);
+});
+
 test('rotate stops the old secret at once and forgets its devices; the new one works', async (t) => {
   if (!dbReady) return t.skip(SKIP);
   const { id, token } = await createLink('rotate');

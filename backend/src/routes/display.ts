@@ -14,7 +14,6 @@
  */
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { authenticateDisplay, displayTokenLimiter } from '../middleware/displayAuth';
-import { ApiError } from '../middleware/errorHandler';
 import { describeDisplay, parseDisplayConfig } from '../services/display/config';
 import { APP_VERSION } from '../utils/appVersion';
 import { logger } from '../utils/logger';
@@ -27,14 +26,33 @@ router.use(function noStore(_req: Request, res: Response, next: NextFunction) {
   next();
 });
 
+/** linkId -> when its invalid stored config was last logged. */
+const invalidConfigLogged = new Map<number, number>();
+const INVALID_CONFIG_LOG_MS = 60 * 60 * 1000;
+
 router.get('/snapshot', displayTokenLimiter, authenticateDisplay, (req: Request, res: Response) => {
   const link = req.displayLink!;
   // The row's config was validated when it was saved; read it back the same
-  // way, so a row changed by hand can't put something unchecked on a screen.
+  // way, so a row changed by hand (or left by a newer version with a panel
+  // kind this one doesn't know) can't put something unchecked on a screen.
+  // Answered here, and logged at most hourly per link: a screen polling every
+  // 30 s must not add an application_errors row each time.
   const config = parseDisplayConfig(link.config);
   if (!config.ok) {
-    logger.error('Display link has a stored config that does not validate', { linkId: link.id, field: config.field });
-    throw new ApiError(500, "This display link's configuration is not valid. Ask an administrator to save it again.");
+    const now = Date.now();
+    const last = invalidConfigLogged.get(link.id);
+    if (last === undefined || now - last >= INVALID_CONFIG_LOG_MS) {
+      if (invalidConfigLogged.size >= 5000) invalidConfigLogged.clear();
+      invalidConfigLogged.set(link.id, now);
+      logger.error('Display link has a stored config that does not validate', { linkId: link.id, field: config.field });
+    }
+    res.status(500).json({
+      status: 'error',
+      statusCode: 500,
+      code: 'DISPLAY_CONFIG_INVALID',
+      message: "This display link's configuration is not valid. Ask an administrator to save it again.",
+    });
+    return;
   }
   const now = new Date().toISOString();
   res.json({

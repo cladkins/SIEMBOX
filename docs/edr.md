@@ -96,7 +96,7 @@ contract: `docs/SERVER_YARA_ADDON.md` in the agent repo.
 go build -o /tmp/siembox-agent ./cmd/siembox-agent
 mkdir -p /tmp/agentdir
 cat > /tmp/agentdir/agent.json <<EOF
-{"server_url":"https://<server>:8421","enrollment_token":"<TOKEN_FROM_UI>","insecure_skip_verify":true}
+{"server_url":"http://<server>:8421","enrollment_token":"<TOKEN_FROM_UI>"}
 EOF
 /tmp/siembox-agent -dir /tmp/agentdir -v run
 ```

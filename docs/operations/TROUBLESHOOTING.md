@@ -8,6 +8,7 @@ Comprehensive troubleshooting guide for diagnosing and resolving common issues i
 - [Deployment Issues](#deployment-issues)
 - [Syslog & Log Ingestion](#syslog--log-ingestion)
 - [Log Shipper Issues](#log-shipper-issues)
+- [Endpoint Agent Issues](#endpoint-agent-issues)
 - [Log Discovery & API-Polled Sources](#log-discovery--api-polled-sources)
 - [Parser Problems](#parser-problems)
 - [Detection Rules](#detection-rules)
@@ -722,6 +723,56 @@ curl -X PUT http://localhost:8421/api/shippers/sources/<source-id> \
   -H "Content-Type: application/json" \
   -d '{"enabled": true}'
 ```
+
+---
+
+## Endpoint Agent Issues
+
+### Issue: Endpoint Agent Installed but Never Appears on the Endpoints Page
+
+**Symptoms:**
+- The agent service runs on the host, but the endpoint is missing from *Endpoints*
+- No `identity.json` in the agent's state directory (`/etc/siembox-agent` on Linux)
+
+An endpoint appears only after the agent enrolls. Until then it retries in the
+background and logs each failure.
+
+**Diagnosis:**
+```bash
+# On the endpoint (Linux)
+sudo journalctl -u siembox-agent -n 50 --no-pager | grep -i "not enrolled"
+sudo cat /etc/siembox-agent/agent.json
+```
+
+**Common causes, by the `err` in the "not enrolled yet; will retry" line:**
+
+1. **`server gave HTTP response to HTTPS client` or a TLS handshake error.**
+   The API on port 8421 serves plain HTTP. Set
+   `"server_url": "http://<siembox-host>:8421"`. Use `https://` only when a TLS
+   reverse proxy fronts the API.
+2. **`401 Invalid, expired, or already-used enrollment token`.** Tokens work
+   once and can expire. Generate a new one on *Endpoints* and paste it into
+   `enrollment_token`.
+3. **`no enrollment_token configured`, or a `CHANGE-ME` host.** The installer
+   writes a placeholder `agent.json` and starts the service anyway. Fill in
+   `server_url` and `enrollment_token`.
+4. **Timeout or `connection refused`.** Check the network path from the
+   endpoint: a 401 from the command below means the server is reachable.
+   ```bash
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+     http://<siembox-host>:8421/api/edr/agents/enroll \
+     -H 'Content-Type: application/json' -d '{}'
+   ```
+
+**Solution:** after fixing `agent.json`, restart and watch for `enrolled`:
+```bash
+sudo siembox-agent -dir /etc/siembox-agent restart
+sudo journalctl -u siembox-agent -f
+```
+The endpoint shows up within a minute, on its first heartbeat. If
+`identity.json` exists but the endpoint is still missing, the agent enrolled
+against a different server: delete `identity.json`, add a new token, and
+restart.
 
 ---
 

@@ -25,6 +25,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Vulnerabilities](#vulnerabilities-endpoints)
   - [Exposure Monitoring (Digital Risk)](#exposure-monitoring-digital-risk)
   - [Context Graph](#context-graph-endpoints)
+  - [Endpoint Agent Updates (EDR)](#endpoint-agent-updates-edr)
   - [Admin Dashboard](#admin-dashboard-endpoints)
 
 ---
@@ -6269,6 +6270,56 @@ alerts severity then recency), `order` (`desc` or `asc`), `vuln_status`.
 
 `next_offset` is `null` on the last page. A relation that times out is
 `503 GRAPH_BUSY`.
+
+---
+
+## Endpoint Agent Updates (EDR)
+
+Console-triggered updates for SIEMBox Endpoint agents (see [Endpoint agent](../edr.md#agent-updates)). All routes below are under `/api/edr`, admin-only, and every write is recorded in `audit_logs` (`edr.agent_update.*`, `resource_type` `edr_agent`). `GET /api/edr/agents` and `GET /api/edr/agents/:id` also return the update columns: `update_request_id`, `update_target_version`, `update_state`, `update_error`, `update_requested_at`, `update_updated_at`.
+
+`update_state` is `pending` (requested, not yet seen), `downloading`, `installing`, `succeeded` or `failed` (`update_error` holds the agent's message). `update_request_id` is set only while a request is outstanding; after success or a cancel it is `null` and the other fields stay for display (a cancel clears them).
+
+Versions are plain `X.Y.Z`. An agent on any other version string (`dev`, `a8922f4-dirty`) is a development build: it can be updated by hand, never by auto-update or `update-outdated`. A downgrade or same-version update is never requested.
+
+### GET /api/edr/agent-updates
+
+The latest known release and the auto-update switch.
+
+```json
+{ "latest_version": "1.4.0", "checked_at": "2026-10-16T08:00:00.000Z", "error": null, "auto_update": false }
+```
+
+`latest_version` is `null` until a check has accepted a release; `error` is the last check's failure (kept alongside the previous good `latest_version`).
+
+### POST /api/edr/agent-updates/check
+
+Runs the GitHub release check now (also run every 6 hours by the `edr-agent-release` job). Returns the same shape as above. A network failure is not an HTTP error: it comes back in `error`. A release is accepted only when its tag is `vX.Y.Z` and it has an asset named exactly `SHA256SUMS`.
+
+### PUT /api/edr/agent-updates/settings
+
+Body `{ "auto_update": true }` (a boolean, else `400`). Returns the status object. Turning it on immediately requests the latest version for every outdated agent without an outstanding request for it.
+
+### POST /api/edr/agents/:id/update
+
+Requests an update to the latest version. Gives the agent a new `request_id` and bumps its `config_version`. Returns `{ "requested": true, "target_version": "1.4.0" }`. `404` unknown agent; `409` when no latest version is known yet, or the agent is already at or above it.
+
+### DELETE /api/edr/agents/:id/update
+
+Cancels an outstanding request (including a failed one the agent keeps reporting). Returns `{ "cancelled": true }`. `404` unknown agent; `409` when there is no request.
+
+### POST /api/edr/agents/update-outdated
+
+Requests the latest version for every agent on a lower `X.Y.Z` version, retrying failed requests and leaving in-flight ones alone. Returns `{ "requested": 3 }`.
+
+### Agent-facing changes
+
+`GET /api/edr/agents/:id/config` carries `"agent_update": { "version": "1.4.0", "request_id": "<uuid>" }`, or `null` when no update is requested. `POST /api/edr/agents/:id/heartbeat` accepts an optional
+
+```json
+"update": { "request_id": "<uuid>", "version": "1.4.0", "state": "installing", "error": "" }
+```
+
+with `state` one of `downloading`, `installing`, `succeeded`, `failed` and `error` (kept for `failed` only) cut to 500 characters. A malformed `update` is ignored, as is one whose `request_id` is not the agent's current request. The request completes when the agent reports `succeeded` or the heartbeat's `agent_version` equals the target.
 
 ---
 

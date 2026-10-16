@@ -776,6 +776,48 @@ restart.
 
 ---
 
+### Issue: An Endpoint Update Stays Pending or Fails
+
+**Symptoms:**
+- On *Endpoints*, the agent's update tag stays `pending` (or `downloading` / `installing`) for more than a few minutes, or turns `failed` (hover it for the agent's error)
+- The agent keeps its old version after the installer should have run
+
+**Diagnosis:**
+```bash
+# On the endpoint (Linux): the agent log and the installer output
+sudo journalctl -u siembox-agent -n 100 --no-pager | grep -i update
+sudo tail -n 50 /etc/siembox-agent/update.log
+```
+On the server, *Check now* on *Endpoints* shows `Last release check failed: ...`,
+and `GET /api/edr/agent-updates` returns the same `error`.
+
+**Common causes:**
+
+1. **Stays `pending`: the agent cannot self-update.** Agents released before this
+   feature ignore the update request. Upgrade each one by hand once (reinstall
+   the current release); later updates work from the console. An offline
+   endpoint also stays pending until it checks in.
+2. **`failed` with a download or TLS error: no GitHub egress.** The endpoint
+   downloads straight from `github.com` over HTTPS, using its system CA store
+   (not the SIEMBox CA settings). Allow `github.com` and the release CDN
+   through its proxy or firewall.
+3. **`failed` mentioning `SHA256SUMS`: the release has no checksum file.** The
+   agent refuses releases it cannot verify, and the server only offers a release
+   that has an asset named exactly `SHA256SUMS`. Releases published before the
+   checksum step cannot be update targets; publish a new release, or install
+   that version by hand.
+4. **Release check fails, no latest version.** The server cannot reach
+   `api.github.com`, or GitHub rate-limited the request (set `GITHUB_TOKEN`
+   in the backend environment), or the latest tag is not `vX.Y.Z`.
+5. **No Update button on a development build or a current agent.** Only an
+   agent behind the latest `X.Y.Z` release, or a development build (manual
+   only), can be updated; auto-update skips development builds.
+
+**Solution:** fix the cause, then press *Update* again (a failed update is
+retried with a new request; *Cancel update* clears a stuck one).
+
+---
+
 ## Log Discovery & API-Polled Sources
 
 ### Issue: A discovery scan failed with `t.subject_cn?.toLowerCase is not a function`, or shows "not recorded" hosts

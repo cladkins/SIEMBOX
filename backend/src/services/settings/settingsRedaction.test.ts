@@ -83,6 +83,10 @@ const PLAIN_SETTINGS: Array<[key: string, value: string]> = [
   ['exposure_domain_expiry_warning_days', '30'],
   ['exposure_lookalike_max_candidates', '300'],
   ['exposure_dns_secondary_resolver', '9.9.9.9'],
+  ['edr_agent_auto_update', 'false'],
+  ['edr_agent_latest_version', '1.4.0'],
+  ['edr_agent_latest_checked_at', '2026-10-12T09:41:07.000Z'],
+  ['edr_agent_latest_error', ''],
   [
     'exposure_hibp_domains',
     JSON.stringify({

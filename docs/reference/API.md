@@ -25,6 +25,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Vulnerabilities](#vulnerabilities-endpoints)
   - [Exposure Monitoring (Digital Risk)](#exposure-monitoring-digital-risk)
   - [Context Graph](#context-graph-endpoints)
+  - [Display links (Big Display)](#display-links-big-display)
   - [Admin Dashboard](#admin-dashboard-endpoints)
 
 ---
@@ -39,7 +40,7 @@ Authorization: Bearer YOUR_JWT_TOKEN
 
 **Session Duration:** Tokens are valid for 24 hours from login.
 
-The only routes that take no login are `POST /api/auth/login`, the `/health` checks, the shipper-facing `/api/shippers` endpoints (authenticated by the shipper's API key or HTTP push key, see [Log Shippers](#log-shippers-endpoints)), and the EDR agent endpoints (enrollment token or per-agent key).
+The only routes that take no login are `POST /api/auth/login`, the `/health` checks, the shipper-facing `/api/shippers` endpoints (authenticated by the shipper's API key or HTTP push key, see [Log Shippers](#log-shippers-endpoints)), the EDR agent endpoints (enrollment token or per-agent key), and a wall screen's `GET /api/display/snapshot` (its display link, see [Display link tokens](#display-link-tokens-x-display-token)).
 
 ### Password change required
 
@@ -81,6 +82,54 @@ with the new password. MFA is still asked at sign-in first, and MFA can't be
 set up or turned off while restricted. Refused requests are not audited or
 logged one by one. Shipper and agent routes don't take a session and are not
 affected.
+
+### Display link tokens (X-Display-Token)
+
+A wall screen or TV shows the Big Display without anyone signing in, with a
+**display link** an admin creates ([Display links](#display-links-big-display)).
+Each link has one secret: `sbd1_` followed by 43 base64url characters (256
+bits). SIEMBox stores only its sha256 and shows the secret once, in the answer
+to the create or rotate call. The screen opens `/display#k=<secret>`: the
+secret is in the URL fragment, which browsers never send to a server or put in
+a `Referer`, so it never reaches nginx's or SIEMBox's logs. The page sends it
+on each request in its own header:
+
+```http
+GET /api/display/snapshot
+X-Display-Token: sbd1_…
+```
+
+A display token is never a login, and a login is never a display token. The
+token is accepted in this header on this one route only: never in
+`Authorization`, a path or a query string. Every route that takes a login
+answers a display token (in either header) as it answers no login, and
+`GET /api/display/snapshot` ignores `Authorization` entirely, whatever the
+session's role.
+
+Every request re-reads the link, so pausing, rotating or revoking it takes
+effect at the screen's next refresh. A link never expires unless an admin set
+`expires_at`, and nothing about the admin who made it (a password change or
+reset, a required password change, their sessions ending, their account being
+deleted) affects it. A refusal is answered in the usual error envelope with a
+`code`, with `Cache-Control: no-store`, and is neither audited nor written to
+the error log (refusals are counted in memory and summed up in one log line
+every 5 minutes):
+
+| Status | `code` | When | The screen (BIG-DISPLAY.md §5.8) |
+|---|---|---|---|
+| 401 | `DISPLAY_TOKEN_REQUIRED` | No `X-Display-Token` header | "This page needs a display link" |
+| 401 | `DISPLAY_LINK_INVALID` | Malformed, or no link has it (rotated, never issued). The same answer for both. | Asks for the new link; checks again every 10 min |
+| 401 | `DISPLAY_LINK_REVOKED` | The link was revoked | Stops |
+| 401 | `DISPLAY_LINK_EXPIRED` | `expires_at` has passed; the answer also has `expires_at` | Checks again every 10 min (an admin can extend it) |
+| 403 | `DISPLAY_LINK_PAUSED` | An admin paused it | Checks every 60 s and resumes by itself |
+| 403 | `DISPLAY_NETWORK_NOT_ALLOWED` | The client address is outside the link's `allowed_cidrs` | Checks again every 5 min |
+| 503 | `DISPLAY_UNAVAILABLE` | The database couldn't be asked (with `Retry-After: 5`); never reported as an invalid link | Keeps the last data and retries |
+| 429 | `RATE_LIMITED` | 30 failed (`401`) display lookups from the address in 15 minutes | Waits for `Retry-After` |
+
+The checks run in that order, and the first that applies answers. A valid
+secret used from outside its networks is the one refusal that is audited
+(`display_link.refused_network`, at most once per link and address per hour):
+it is a sign the link has leaked.
 
 ### Calling the API from a browser (CORS)
 
@@ -166,7 +215,7 @@ A refused scan or asset write is also recorded in `audit_logs` (`action` `access
 | 409 | Conflict | Resource already exists |
 | 429 | Too Many Requests | Rate limit exceeded |
 | 500 | Internal Server Error | Server error |
-| 503 | Service Unavailable | Busy (the database, or a regex check worker): try again shortly. The [Context Graph](#context-graph-endpoints)'s `code: "GRAPH_BUSY"` says when, in `Retry-After` |
+| 503 | Service Unavailable | Busy (the database, or a regex check worker): try again shortly. The [Context Graph](#context-graph-endpoints)'s `code: "GRAPH_BUSY"` says when, in `Retry-After`. `code: "DISPLAY_UNAVAILABLE"`: a display link couldn't be checked because the database is unreachable (see [Display link tokens](#display-link-tokens-x-display-token)) |
 
 A request body that isn't valid JSON is rejected with `400` (`"Malformed request
 body: expected valid JSON"`), and an oversized one with `413`, before any route
@@ -190,6 +239,7 @@ restarts. Failed sign-ins are counted separately, in the database: see
 | EDR agents | 30000 requests (`EDR_AGENT_RATE_MAX`) | Agent-key routes, which skip the general limit when they carry `X-Agent-ID` and use the route's own method: `POST` heartbeat, `GET` (or `HEAD`) config and YARA, `POST` inventory, events and vulnerabilities. Any other method, and enrollment, is under the general limit. | `RateLimit-*` |
 | HTTP log push | 6000 requests (`SHIPPER_LOG_PUSH_MAX`) | `POST /api/shippers/logs`, which skips the general limit when it carries `X-Shipper-ID` (other methods on that path don't) | `RateLimit-*` |
 | Password check | 30 requests | `POST /api/exposure/password-check` | `RateLimit-*` |
+| Display link lookups | 30 failed lookups | `GET /api/display/snapshot`: only answers with `401` count (a working, paused or out-of-network screen never uses it up); the 31st gets `429` and no database work. Display requests also count towards the general limit: one screen refreshing every 30 s makes 30 requests per 15 minutes, so many screens behind one address may need a higher `API_RATE_LIMIT_MAX`. | `RateLimit-*` |
 
 A limited request gets `429` with a `Retry-After` header (seconds) and a JSON
 body in the usual error envelope:
@@ -205,7 +255,8 @@ body in the usual error envelope:
 ```
 
 `retryAfter` matches the `Retry-After` header. Request bodies sent to
-`/api/auth/*` are limited to 16 kB (a larger one gets `413`); other routes
+`/api/auth/*` are limited to 16 kB, and those sent to `/api/display/*` and
+`/api/display-links/*` to 32 kB (a larger one gets `413`); other routes
 accept up to 10 MB. A body may be compressed (`Content-Encoding: gzip`,
 `deflate` or `br`); the limits apply to its decompressed size, and one that
 does not decompress gets `400` (`"Invalid request body"`).
@@ -6269,6 +6320,257 @@ alerts severity then recency), `order` (`desc` or `asc`), `vuln_status`.
 
 `next_offset` is `null` on the last page. A relation that times out is
 `503 GRAPH_BUSY`.
+
+---
+
+## Display links (Big Display)
+
+A display link is a read-only credential for one wall screen or TV: it shows
+a board of aggregate panels, with no user signed in, until an admin pauses,
+rotates or revokes it (design: docs/architecture/BIG-DISPLAY.md). Links are
+managed by **admins only** (`/api/display-links`, any other role gets `403`);
+the screen itself calls `GET /api/display/snapshot` with the link's secret in
+`X-Display-Token` (see [Display link tokens](#display-link-tokens-x-display-token)).
+Use one link per screen: to cut one screen off, rotate its link.
+
+Links belong to the install, like shipper and agent keys: they survive
+restarts, upgrades and backup restores (only the hash is stored), and nothing
+about the admin who created one changes it. At most 50 links are live (not
+revoked) at once.
+
+Errors are the usual envelope plus a `code`, and `field` (the path of the
+first bad field, such as `config.views[0].panels[2].id`) on a `400`:
+
+| Status | `code` | When |
+|---|---|---|
+| 400 | `DISPLAY_CONFIG_INVALID` | The board layout (`config`) is invalid: an unknown key, a value out of range, a panel a link can't show |
+| 400 | `DISPLAY_LINK_BAD_REQUEST` | Another field: `name`, `expires_at`, `allowed_cidrs`, `enabled`, or a field the route doesn't take |
+| 404 | `DISPLAY_LINK_NOT_FOUND` | No link with that id |
+| 409 | `DISPLAY_LINK_NAME_TAKEN` | Another live link has this name (names compare case-insensitively; a revoked link's name is free) |
+| 409 | `DISPLAY_LINK_LIMIT` | 50 links are live already |
+| 409 | `DISPLAY_LINK_REVOKED` | The link was revoked: it can't be changed, rotated or revoked again |
+
+Every answer under `/api/display-links` and `/api/display` has
+`Cache-Control: no-store`. Request bodies are limited to 32 kB.
+
+### The board layout (`config`)
+
+```json
+{
+  "privacy": "operations",
+  "refresh_seconds": 30,
+  "rotation": { "enabled": true, "seconds": 20 },
+  "timezone": null,
+  "clock": true,
+  "burn_in_shift": true,
+  "views": [
+    { "title": "SOC overview", "panels": [{ "id": "open_alerts" }, { "id": "recent_alerts", "min_severity": "high" }, { "id": "ingest" }] },
+    { "title": "Threats", "panels": [{ "id": "threat_map", "window_days": 7 }, { "id": "top_sources" }] }
+  ]
+}
+```
+
+Only `views` is required; every other field has the default shown. The
+stored config has every default filled in.
+
+| Field | Values |
+|---|---|
+| `privacy` | `operations` (the default: rule names, shipper and host names, IP addresses) or `public` (counts only). Alert titles and descriptions, usernames, email addresses, breach names and raw log text are never shown in either. |
+| `refresh_seconds` | `15`, `30`, `60` or `120` |
+| `rotation` | `enabled` (boolean) and `seconds` (whole, 10 to 600): how long each view shows; ignored with one view |
+| `timezone` | An IANA zone such as `"Europe/London"` (or `"UTC"`) for the clock, or `null` for the screen's own |
+| `clock`, `burn_in_shift` | Booleans |
+| `views` | 1 to 6 views, each a `title` (1 to 40 characters) and 1 to 6 `panels`. A panel appears at most once per view, and a config shows at most 12 different panels. |
+
+Panels (`id`, plus the one option some have):
+
+| `id` | Option (default) | In `public` |
+|---|---|---|
+| `open_alerts`, `alert_pulse`, `ingest`, `shippers`, `digital_risk`, `vulnerabilities` | — | yes |
+| `recent_alerts` | `min_severity`: `critical`, `high` (default) or `medium` | yes |
+| `sources` | `silent_after_minutes`: `5`, `15` (default), `30` or `60` | yes |
+| `threat_map` | `window_days`: `1` (default), `7` or `30` | yes |
+| `top_rules` | `window_hours`: `1` or `24` (default) | no |
+| `top_sources` | — | no |
+| `endpoints` | — | Never on a link: endpoint health is admin-only (`"Endpoint health is admin-only and can't be shown on a display link in this version."`) |
+
+A panel's **key** is its id plus its option, as the snapshot names it:
+`recent_alerts:high`, `top_rules:24`, `sources:15`, `threat_map:7`; panels
+without an option are bare (`open_alerts`). The serialized config may be at
+most 16 kB.
+
+### GET /api/display/snapshot
+
+**Who:** a display link (`X-Display-Token`), never a login.
+
+What the screen draws: its layout (from the link's own row, never from the
+request), the server's clock (for the screen's clock offset) and version (the
+screen reloads when it changes), and each panel's data.
+
+```json
+{
+  "generated_at": "2026-10-16T03:43:55.258Z",
+  "server_time": "2026-10-16T03:43:55.258Z",
+  "app_version": "4.0.0",
+  "display": {
+    "name": "NOC wall left",
+    "config_version": 1,
+    "privacy": "operations",
+    "refresh_seconds": 30,
+    "rotation": { "enabled": true, "seconds": 20 },
+    "timezone": null,
+    "clock": true,
+    "burn_in_shift": true,
+    "views": [{ "title": "SOC overview", "panels": ["open_alerts", "recent_alerts:high", "ingest"] }]
+  },
+  "alarms": [],
+  "attributions": [],
+  "panels": {}
+}
+```
+
+`config_version` goes up whenever an admin changes the layout, so a screen
+applies the new one at its next refresh. **`panels`, `alarms` and
+`attributions` are empty in this version**: the panel data arrives with the
+snapshot builder (Big Display PR 3). Refusals: see
+[Display link tokens](#display-link-tokens-x-display-token).
+
+A screen's use is recorded at most once a minute per device: the link's
+`last_used_at`, and the device's address and user agent (the 20 most recently
+seen are kept). An address new to the link writes `display_link.client_first_seen`
+to the audit log (at most 10 per link per hour). None of this ever refuses a
+request.
+
+### GET /api/display-links
+
+**Who:** admin. `?include_revoked=true` adds revoked links (after the live ones).
+
+```json
+{
+  "links": [
+    {
+      "id": 7,
+      "name": "NOC wall left",
+      "token_hint": "x9Qa",
+      "status": "live",
+      "privacy": "operations",
+      "view_count": 2,
+      "panel_keys": ["open_alerts", "recent_alerts:high", "ingest", "threat_map:7", "top_sources"],
+      "enabled": true,
+      "expires_at": null,
+      "revoked_at": null,
+      "allowed_cidrs": ["10.20.0.0/16"],
+      "created_by": { "id": 1, "username": "admin" },
+      "created_at": "2026-10-16T03:40:00.000Z",
+      "updated_at": "2026-10-16T03:40:00.000Z",
+      "token_rotated_at": "2026-10-16T03:40:00.000Z",
+      "last_used_at": "2026-10-16T03:43:55.913Z",
+      "last_client": { "ip": "10.20.30.12", "user_agent": "Mozilla/5.0 (X11; Linux aarch64) ..." },
+      "clients_24h": 1
+    }
+  ],
+  "limit": 50
+}
+```
+
+- `token_hint` is the secret's last 4 characters. No answer ever contains the
+  secret or its hash.
+- `status`: `revoked`, `expired` (`expires_at` passed), `paused`, `never_used`,
+  `live` (used within three refresh intervals, and never less than a minute
+  plus two refreshes, since uses are written once a minute) or `idle` (used
+  before, not recently).
+- `created_by` is `null` when the admin who created it was deleted ("deleted
+  user"); the link keeps working.
+- `clients_24h` is the number of distinct addresses that used it in the last
+  24 hours: more than one for a one-screen link is worth a look.
+
+### POST /api/display-links
+
+**Who:** admin.
+
+```json
+{
+  "name": "NOC wall left",
+  "config": { "views": [{ "title": "SOC overview", "panels": [{ "id": "open_alerts" }] }] },
+  "expires_at": null,
+  "allowed_cidrs": ["10.20.0.0/16"]
+}
+```
+
+- `name`: 1 to 80 characters, trimmed; unique among live links whatever its case.
+- `config`: [the board layout](#the-board-layout-config).
+- `expires_at` (optional): `null` (the default) for never, or an ISO 8601
+  date in the future.
+- `allowed_cidrs` (optional): up to 32 addresses or networks (IPv4 or IPv6);
+  `[]` (the default) is any network. Stored in network form
+  (`10.20.30.12/16` is `10.20.0.0/16`, an address alone its `/32` or `/128`).
+  They are compared with the client address SIEMBox sees, so behind another
+  reverse proxy set `TRUSTED_PROXIES` (DEPLOYMENT.md, "Client addresses and
+  reverse proxies").
+
+**Response:** `201`, **the only time the secret is shown** (and again after a rotation):
+
+```json
+{
+  "link": { "id": 7, "name": "NOC wall left", "status": "never_used", "...": "the fields above", "config": { "...": "..." }, "config_version": 1, "clients": [] },
+  "token": "sbd1_3q2V...43 characters",
+  "path": "/display#k=sbd1_3q2V..."
+}
+```
+
+The screen's URL is your SIEMBox address followed by `path`, for example
+`https://siembox.example/display#k=sbd1_…`. Audit: `display_link.created`.
+
+### GET /api/display-links/:id
+
+**Who:** admin. `{ "link": … }`: the list's fields plus `config` (the stored
+layout), `config_version` and `clients` (the devices seen, at most 20, most
+recent first: `ip`, `user_agent`, `first_seen`, `last_seen`).
+
+### PUT /api/display-links/:id
+
+**Who:** admin. Any of `name`, `config`, `enabled`, `expires_at` (`null` for
+never; a date must be in the future), `allowed_cidrs`; at least one.
+`{ "enabled": false }` pauses the link and `{ "enabled": true }` resumes it.
+Extending `expires_at` brings back a link whose expiry passed, with the same
+secret. `config_version` goes up only when the layout actually changes.
+
+**Response:** `{ "link": … }`. `409 DISPLAY_LINK_REVOKED` for a revoked link.
+Audit: `display_link.paused` or `display_link.resumed` when only `enabled`
+changed, `display_link.updated` otherwise.
+
+### DELETE /api/display-links/:id
+
+**Who:** admin. Revokes the link: `{ "revoked": true }`. Its screens show
+"revoked" at their next refresh and stop. This can't be undone: create a new
+link. The row stays (without a usable secret) for the audit trail, and its
+name is free again. Audit: `display_link.revoked`.
+
+### POST /api/display-links/:id/rotate
+
+**Who:** admin. A new secret for the link; the old one stops at once (its
+screen shows "not valid any more" at its next refresh). The devices seen and
+`last_used_at` belonged to the old secret and are cleared. **Response:**
+`{ "link", "token", "path" }`, as on create; the new secret is shown only
+here. Audit: `display_link.rotated`.
+
+### Audit and recovery
+
+Every change writes an `audit_logs` row with `resource_type` `display_link`
+and the link's id: `display_link.created`, `.updated`, `.paused`, `.resumed`,
+`.rotated`, `.revoked`, and from screens `.client_first_seen` and
+`.refused_network`. `details` names the link and the changed fields, with old
+and new values for `enabled`, `privacy`, `expires_at` and `allowed_cidrs`. No
+row ever holds a secret or its hash.
+
+When the web UI can't be used, the backend's `auth-admin` CLI lists and
+revokes links (it writes `display_link.revoked` with no user and
+`details.by = "cli"`):
+
+```bash
+docker exec siembox-backend node dist/scripts/auth-admin.js display-links [--all]
+docker exec siembox-backend node dist/scripts/auth-admin.js revoke-display-link <id|all>
+```
 
 ---
 

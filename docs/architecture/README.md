@@ -42,6 +42,14 @@ Design for Digital Risk / Exposure Monitoring, the per-area settings hub, and on
 - The Digital Risk page (`/digital-risk`, every role): monitoring health, tiles, trend, accounts, lookalikes and the findings queue
 - An onboarding Digital Risk step that shares its API with the settings page; roadmap and default decisions
 
+### [BIG-DISPLAY.md](./BIG-DISPLAY.md)
+Design for the Big Display wall-screen board and its read-only display links:
+- One display-link mechanism: a hashed `sbd1_` secret in the URL fragment, sent as `X-Display-Token`, never a login
+- The gate's refusal order, the failed-lookup limiter, pause / rotate / revoke / expiry / network allow-list
+- Links belong to the install: password changes, resets and deleting the creator never stop them
+- The board layout (views of panel kinds), privacy modes, roles, audit trail and CLI recovery
+- The five-PR plan and what each one adds
+
 ### [VAULTWARDEN-PARSER-IMPLEMENTATION.md](./VAULTWARDEN-PARSER-IMPLEMENTATION.md)
 Implementation details for Vaultwarden password manager parser:
 - Log format analysis

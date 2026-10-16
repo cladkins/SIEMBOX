@@ -296,6 +296,26 @@ curl -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8421/api/exposure/findings?unresolved=true&event_type=dns_drift&sort=severity"
 ```
 
+### Display links (Big Display)
+
+```bash
+# Create a read-only link for one wall screen (admin only). The answer holds the
+# secret ("token") and the screen's path; they are shown only now.
+curl -X POST http://localhost:8421/api/display-links \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "NOC wall left", "config": {"views": [{"title": "SOC overview", "panels": [{"id": "open_alerts"}, {"id": "ingest"}]}]}}'
+
+# What the screen reads: its display link in X-Display-Token, never a login
+curl -H "X-Display-Token: $DISPLAY_TOKEN" "http://localhost:8421/api/display/snapshot"
+
+# Pause, resume, rotate (a new secret; the old one stops at once), revoke
+curl -X PUT http://localhost:8421/api/display-links/7 -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"enabled": false}'
+curl -X POST http://localhost:8421/api/display-links/7/rotate -H "Authorization: Bearer $TOKEN"
+curl -X DELETE http://localhost:8421/api/display-links/7 -H "Authorization: Bearer $TOKEN"
+```
+
 ### Settings
 
 ```bash
@@ -408,6 +428,7 @@ address; its `X-Forwarded-For` is ignored (see [API.md](API.md#rate-limiting)).
 | EDR agent routes with `X-Agent-ID`, with the route's own method (not enrollment) | 30000 requests (`EDR_AGENT_RATE_MAX`) |
 | `POST /api/shippers/logs` with `X-Shipper-ID` | 6000 requests (`SHIPPER_LOG_PUSH_MAX`) |
 | `POST /api/exposure/password-check` | 30 requests |
+| `GET /api/display/snapshot` | 30 failed (`401`) display link lookups; working screens never use it up |
 
 General API headers:
 ```

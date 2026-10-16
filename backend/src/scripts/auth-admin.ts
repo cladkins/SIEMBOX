@@ -21,6 +21,13 @@
  *                              account must choose its own password at the
  *                              next sign-in (MFA, if on, is still asked first)
  *   disable-mfa <username>     turn MFA off for an account
+ *   display-links [--all]      the display links wall screens use: id, name,
+ *                              status, last use and creator (--all: revoked
+ *                              ones too)
+ *   revoke-display-link <id|all>
+ *                              revoke one display link, or every live one;
+ *                              the screens using it stop at their next
+ *                              refresh (docs/architecture/BIG-DISPLAY.md)
  *
  * There is no command that clears a required password change: only changing
  * the password does (docs/operations/TROUBLESHOOTING.md has the SQL last
@@ -39,6 +46,8 @@ import { revokeAccountAccess } from '../services/auth/signInService';
 import { countBrowsers } from '../services/auth/recognizedBrowsers';
 import { signInSettings, usernameHash } from '../services/auth/signInPolicy';
 import { parseSignInNetwork } from '../net/clientAddress';
+import { DisplayLinkError, DisplayLinkModel, type DisplayLinkSummary } from '../models/DisplayLink';
+import { AuditService } from '../services/audit/auditService';
 import { closePools } from '../config/database';
 
 export interface Io {
@@ -62,6 +71,10 @@ const USAGE = [
   '  reset-password <username>  set a random password (printed once), sign out everywhere;',
   '                             a new password must be chosen at the next sign-in',
   '  disable-mfa <username>     turn MFA off for an account',
+  '  display-links [--all]      list display links (wall screens): id, name, status, last use,',
+  '                             creator (--all: revoked ones too)',
+  '  revoke-display-link <id|all>',
+  '                             revoke one display link, or every live one',
 ].join('\n');
 
 /** Unambiguous characters (no 0/O, 1/l/I). */
@@ -91,6 +104,26 @@ function describeHold(hold: NetworkHold, username: string): string[] {
     `  holds ${username} back for ${hold.held_seconds}s more (they failed from this network ` +
       `${hold.since_failure_seconds}s ago); 'unlock ${username}' lets them in, the network stays paused`,
   ];
+}
+
+function describeDisplayLink(link: DisplayLinkSummary): string {
+  const lastUsed = link.last_used_at ? new Date(link.last_used_at).toISOString() : 'never';
+  const creator = link.created_by ? link.created_by.username : 'deleted user';
+  return `${String(link.id).padStart(5)}  ${link.name.padEnd(32)} ${link.status.padEnd(10)} last used ${lastUsed.padEnd(24)} created by ${creator}`;
+}
+
+/** The audit row the CLI writes for a revoked link: no user, details.by = 'cli'. */
+async function auditDisplayRevoke(link: { id: number; name: string }): Promise<void> {
+  await AuditService.log({
+    userId: null,
+    action: 'display_link.revoked',
+    resourceType: 'display_link',
+    resourceId: link.id,
+    ipAddress: null,
+    userAgent: null,
+    responseStatus: 200,
+    details: { by: 'cli', name: link.name },
+  });
 }
 
 /** 'yes (default, since 2026-10-14T09:30:00.000Z)' or 'no'. */
@@ -217,6 +250,48 @@ export async function main(argv: string[], io: Io = defaultIo): Promise<number> 
         details: { by: 'cli' },
       });
       io.out(`MFA disabled for ${user.username}. They can enroll again under Settings -> Account.`);
+      return 0;
+    }
+
+    case 'display-links': {
+      if (args[0] !== undefined && args[0] !== '--all') {
+        io.err(USAGE);
+        return 1;
+      }
+      const links = await DisplayLinkModel.list({ includeRevoked: args[0] === '--all' });
+      if (links.length === 0) {
+        io.out(args[0] === '--all' ? 'No display links.' : 'No live display links.');
+        return 0;
+      }
+      io.out(`${'id'.padStart(5)}  ${'name'.padEnd(32)} ${'status'.padEnd(10)} last use and creator`);
+      for (const link of links) io.out(describeDisplayLink(link));
+      return 0;
+    }
+
+    case 'revoke-display-link': {
+      const target = args[0];
+      if (target === 'all') {
+        const revoked = await DisplayLinkModel.revokeAllLive(null);
+        for (const link of revoked) await auditDisplayRevoke(link);
+        io.out(`Revoked ${revoked.length} display link(s). Their screens stop at their next refresh.`);
+        return 0;
+      }
+      if (!target || !/^[1-9]\d{0,8}$/.test(target)) {
+        io.err('revoke-display-link needs a link id (see display-links) or all.');
+        return 1;
+      }
+      let row;
+      try {
+        row = await DisplayLinkModel.revoke(Number(target), null);
+      } catch (error) {
+        if (error instanceof DisplayLinkError) {
+          io.err(error.code === 'DISPLAY_LINK_REVOKED' ? `Display link ${target} is already revoked.` : `No display link ${target}.`);
+          return 1;
+        }
+        throw error;
+      }
+      await auditDisplayRevoke(row);
+      io.out(`Revoked display link ${row.id} (${row.name}). Its screens stop at their next refresh.`);
       return 0;
     }
 

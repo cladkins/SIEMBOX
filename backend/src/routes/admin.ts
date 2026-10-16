@@ -15,6 +15,7 @@ import { listRecurringJobs } from '../services/jobs/jobRegistry';
 import { clientAddressReport } from '../net/diagnostics';
 import { parseSignInNetwork } from '../net/clientAddress';
 import { logger } from '../utils/logger';
+import { APP_VERSION } from '../utils/appVersion';
 import { UserModel } from '../models/User';
 import { LoginThrottleModel } from '../models/LoginThrottle';
 import {
@@ -28,20 +29,6 @@ import {
 import { auditAuth, authContext, refusalStats, refusalsForKey } from '../services/auth/authEvents';
 
 const router = Router();
-
-// The container runs `node dist/server.js` directly (not `npm start`), so
-// process.env.npm_package_version is never populated and the dashboard always
-// showed 0.1.0. Read the real version from the packaged manifest instead.
-// require() resolves to /app/package.json at runtime (dist/routes/admin.js ->
-// ../../package.json) and is typed `any`, so it sidesteps tsc's rootDir check.
-const APP_VERSION: string = (() => {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- runtime path outside rootDir, see above
-    return require('../../package.json').version || '0.1.0';
-  } catch {
-    return process.env.npm_package_version || '0.1.0';
-  }
-})();
 
 // All admin routes require authentication and admin role
 router.use(authenticate);

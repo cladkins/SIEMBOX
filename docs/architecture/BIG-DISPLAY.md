@@ -158,7 +158,9 @@ like shipper and agent keys.
   last seen, written by `touchUsed()` without holding up the response: at most
   once a minute per (link, address), from an in-memory map of at most 5,000
   entries (cleared when full). A use with no client address only updates
-  `last_used_at`.
+  `last_used_at`. The write is conditioned on the secret the request
+  authenticated with still being the link's live one, so a use in flight
+  when an admin rotates or revokes the link records nothing.
 - An address new to the link (`RETURNING (xmax = 0)` on the upsert) trims the
   link to its 20 most recently seen addresses and writes
   `display_link.client_first_seen` (at most 10 per link per hour).

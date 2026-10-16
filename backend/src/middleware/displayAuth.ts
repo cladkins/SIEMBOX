@@ -140,8 +140,10 @@ function mayAuditFirstSeen(linkId: number, now: number): boolean {
  * holding up the response. An address new to the link trims the link's
  * devices to the 20 most recently seen and writes display_link.client_first_seen
  * (at most 10 per link per hour). Informational only: it never refuses.
+ * `tokenHash` is the secret this request authenticated with: the write is
+ * dropped if a rotate or revoke committed in the meantime.
  */
-export function touchUsed(link: DisplayLinkAuth, req: Request): void {
+export function touchUsed(link: DisplayLinkAuth, req: Request, tokenHash: string): void {
   const ip = clientAddress(req);
   const key = `${link.id}|${ip ?? '-'}`;
   const now = Date.now();
@@ -149,7 +151,8 @@ export function touchUsed(link: DisplayLinkAuth, req: Request): void {
   if (last !== undefined && now - last < TOUCH_INTERVAL_SECONDS * 1000) return;
   remember(lastTouch, key, now);
   const userAgent = req.get('User-Agent') ?? null;
-  const work = ip ? DisplayLinkModel.touch(link.id, ip, userAgent) : DisplayLinkModel.touchLastUsed(link.id).then(() => false);
+  const work = ip ? DisplayLinkModel.touch(link.id, tokenHash, ip, userAgent)
+    : DisplayLinkModel.touchLastUsed(link.id, tokenHash).then(() => false);
   void work
     .then(async (firstTime) => {
       if (!firstTime || !ip) return;
@@ -220,9 +223,10 @@ export async function authenticateDisplay(req: Request, res: Response, next: Nex
   const token = req.get(DISPLAY_TOKEN_HEADER); // Authorization is never read here
   if (!token) return refuse(res, 'DISPLAY_TOKEN_REQUIRED');
   if (!isDisplayToken(token)) return refuse(res, 'DISPLAY_LINK_INVALID');
+  const tokenHash = hashDisplayToken(token);
   let link: DisplayLinkAuth | null;
   try {
-    link = await DisplayLinkModel.findForAuth(hashDisplayToken(token), clientAddress(req));
+    link = await DisplayLinkModel.findForAuth(tokenHash, clientAddress(req));
   } catch {
     return refuse(res, 'DISPLAY_UNAVAILABLE'); // database down is not "invalid link"
   }
@@ -237,7 +241,7 @@ export async function authenticateDisplay(req: Request, res: Response, next: Nex
     return refuse(res, 'DISPLAY_NETWORK_NOT_ALLOWED');
   }
   req.displayLink = link;
-  touchUsed(link, req);
+  touchUsed(link, req, tokenHash);
   next();
 }
 

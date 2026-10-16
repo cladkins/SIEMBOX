@@ -252,7 +252,7 @@ test('a use is written once a minute per link and address; a new address trims a
   for (let i = 0; i < 5; i++) assert.equal((await withToken(LIVE.token, '10.5.5.5')).status, 200);
   await settle();
   assert.equal(touch.mock.callCount(), 1, 'one write for five polls in a minute');
-  assert.deepEqual(touch.mock.calls[0].arguments.slice(0, 2), [LIVE.id, '10.5.5.5']);
+  assert.deepEqual(touch.mock.calls[0].arguments.slice(0, 3), [LIVE.id, sha(LIVE.token), '10.5.5.5'], 'only while this secret is the live one');
   await withToken(LIVE.token, '10.5.5.6');
   await settle();
   assert.equal(touch.mock.callCount(), 2, 'another address is written at once');
@@ -285,9 +285,10 @@ test('a use is written once a minute per link and address; a new address trims a
 test('a request with no client address only updates last_used_at', async () => {
   // Without trust proxy the address is 127.0.0.1; drive the middleware directly with none.
   const req = { get: () => undefined, ip: undefined, ips: [], socket: { remoteAddress: undefined } } as never;
-  auth.touchUsed({ id: LIVE.id, name: 'link-L' } as LinkAuth, req);
+  auth.touchUsed({ id: LIVE.id, name: 'link-L' } as LinkAuth, req, sha(LIVE.token));
   await settle();
   assert.equal(touchLastUsed.mock.callCount(), 1);
+  assert.deepEqual(touchLastUsed.mock.calls[0].arguments, [LIVE.id, sha(LIVE.token)]);
   assert.equal(touch.mock.callCount(), 0);
 });
 

@@ -381,22 +381,26 @@ export class DisplayLinkModel {
   /**
    * Record a screen's use from `ip`: last_used_at, and the device's row.
    * True when the address is new for this link (xmax = 0: inserted, not updated).
+   * Only while `tokenHash` is still the link's live secret: a use authenticated
+   * just before a rotate or revoke, written after it, records nothing (the
+   * rotation cleared the old secret's devices and last use).
    */
-  static async touch(id: number, ip: string, userAgent: string | null): Promise<boolean> {
+  static async touch(id: number, tokenHash: string, ip: string, userAgent: string | null): Promise<boolean> {
     const res = await query(
-      `WITH t AS (UPDATE display_links SET last_used_at = NOW() WHERE id = $1 RETURNING id)
+      `WITH t AS (UPDATE display_links SET last_used_at = NOW()
+                   WHERE id = $1 AND token_hash = $2 AND revoked_at IS NULL RETURNING id)
        INSERT INTO display_link_clients (link_id, ip, user_agent)
-       SELECT id, $2::inet, left($3, 256) FROM t
+       SELECT id, $3::inet, left($4, 256) FROM t
        ON CONFLICT (link_id, ip) DO UPDATE SET last_seen = NOW(), user_agent = EXCLUDED.user_agent
        RETURNING (xmax = 0) AS first_time`,
-      [id, ip, userAgent]
+      [id, tokenHash, ip, userAgent]
     );
     return res.rows[0]?.first_time === true;
   }
 
-  /** A use with no client address: last_used_at only. */
-  static async touchLastUsed(id: number): Promise<void> {
-    await query('UPDATE display_links SET last_used_at = NOW() WHERE id = $1', [id]);
+  /** A use with no client address: last_used_at only (same live-secret condition as touch). */
+  static async touchLastUsed(id: number, tokenHash: string): Promise<void> {
+    await query('UPDATE display_links SET last_used_at = NOW() WHERE id = $1 AND token_hash = $2 AND revoked_at IS NULL', [id, tokenHash]);
   }
 
   /** Keep the most recently seen MAX_CLIENTS_PER_LINK addresses of a link. */

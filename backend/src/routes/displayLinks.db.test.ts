@@ -388,6 +388,39 @@ test('rotate stops the old secret at once and forgets its devices; the new one w
   assert.deepEqual(rows.map((r) => r.ip), ['100.64.1.1']);
 });
 
+test("a screen's use still being written when its link is rotated or revoked is not recorded against the link", async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  for (const action of ['rotate', 'revoke'] as const) {
+    const { id, token } = await createLink(`inflight-${action}`);
+    // Hold the use's write until the admin's change has committed.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let written!: Promise<unknown>;
+    const real = DisplayLinkModel.touch.bind(DisplayLinkModel);
+    const touch = mock.method(DisplayLinkModel, 'touch', (...args: Parameters<typeof real>) => {
+      written = gate.then(() => real(...args));
+      return written;
+    });
+    try {
+      assert.equal((await snapshot(token, '100.64.40.1')).status, 200, action);
+      assert.equal(touch.mock.callCount(), 1);
+      const changed = action === 'rotate' ? await admin('POST', `/api/display-links/${id}/rotate`) : await admin('DELETE', `/api/display-links/${id}`);
+      assert.equal(changed.status, 200, JSON.stringify(changed.body));
+      if (action === 'rotate') secrets.push(changed.body.token);
+      release();
+      await written;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      touch.mock.restore();
+    }
+    assert.deepEqual(await clientRows(id), [], `${action}: the old secret's device is not listed`);
+    const row = (await pool.query('SELECT last_used_at FROM display_links WHERE id = $1', [id])).rows[0];
+    assert.equal(row.last_used_at, null, `${action}: last_used_at is not set by the old secret`);
+    if (action === 'rotate') assert.equal((await admin('GET', `/api/display-links/${id}`)).body.link.status, 'never_used');
+    assert.equal((await auditRows(id, 'display_link.client_first_seen')).length, 0, `${action}: no first sighting audited`);
+  }
+});
+
 test('pause is 403 and resume restores it; an expiry that passed is EXPIRED, and extending it revives the link', async (t) => {
   if (!dbReady) return t.skip(SKIP);
   const { id, token } = await createLink('pause');

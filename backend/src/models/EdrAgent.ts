@@ -129,9 +129,15 @@ export class EdrAgentModel {
     update?: HeartbeatUpdateReport | null
   ): Promise<number | null> {
     const matched = `($4::uuid IS NOT NULL AND update_request_id = $4::uuid)`;
+    // Reaching the target OR passing it (an admin upgraded the host by hand)
+    // completes the request; otherwise it would stay pending forever.
+    const semver = `'^[0-9]{1,9}[.][0-9]{1,9}[.][0-9]{1,9}$'`;
+    const reached = `($3::text = update_target_version
+         OR ($3::text ~ ${semver} AND update_target_version ~ ${semver}
+             AND string_to_array($3::text, '.')::int[] >= string_to_array(update_target_version, '.')::int[]))`;
     const success = `(update_request_id IS NOT NULL AND (
          (${matched} AND $5::text = 'succeeded')
-         OR ($3::text IS NOT NULL AND $3::text = update_target_version)))`;
+         OR ($3::text IS NOT NULL AND ${reached})))`;
     const result = await query(
       `UPDATE edr_agents
          SET last_seen = NOW(),

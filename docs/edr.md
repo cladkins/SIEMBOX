@@ -100,7 +100,7 @@ state `pending`) and bumps its `config_version`; the agent sees
 minute), attempts each `request_id` at most once, and reports
 `downloading` / `installing` / `succeeded` / `failed` in its heartbeat. The
 request completes when the agent reports `succeeded` or its heartbeat
-`agent_version` equals the target; a failure shows the agent's error as a
+`agent_version` reaches or passes the target; a failure shows the agent's error as a
 tooltip on the state tag, and *Update* issues a new request to retry.
 *Cancel update* drops a request that has not started.
 

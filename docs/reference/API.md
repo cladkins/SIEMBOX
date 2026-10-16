@@ -6319,7 +6319,7 @@ Requests the latest version for every agent on a lower `X.Y.Z` version, retrying
 "update": { "request_id": "<uuid>", "version": "1.4.0", "state": "installing", "error": "" }
 ```
 
-with `state` one of `downloading`, `installing`, `succeeded`, `failed` and `error` (kept for `failed` only) cut to 500 characters. A malformed `update` is ignored, as is one whose `request_id` is not the agent's current request. The request completes when the agent reports `succeeded` or the heartbeat's `agent_version` equals the target.
+with `state` one of `downloading`, `installing`, `succeeded`, `failed` and `error` (kept for `failed` only) cut to 500 characters. A malformed `update` is ignored, as is one whose `request_id` is not the agent's current request. The request completes when the agent reports `succeeded` or the heartbeat's `agent_version` reaches or passes the target (numeric X.Y.Z compare).
 
 ---
 

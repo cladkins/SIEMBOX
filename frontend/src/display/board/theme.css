@@ -1,0 +1,122 @@
+/*
+ * The wall's own theme (BIG-DISPLAY.md §5.1): scoped --bd-* tokens on the
+ * board root, never the app's theme store or Element Plus variables. Sizes are
+ * in vh so one layout reads the same at 720p, 1080p and 4K; nothing is smaller
+ * than the 2.2 vh floor. board/theme.test.ts checks every text and fill pair
+ * below against WCAG 4.5 : 1.
+ */
+.bd-root {
+  --bd-bg: #0b0f14;
+  --bd-panel: #121a24;
+  --bd-border: #223040;
+  --bd-text: #e8edf3;
+  --bd-text-2: #a9b6c6;
+  --bd-bar: #7d8ea3;
+  --bd-critical: #f56c6c;
+  --bd-warning: #e6a23c;
+  --bd-on-fill: #0b0f14;
+  --bd-highlight: #24364a;
+
+  --bd-hero: 10vh;
+  --bd-number: 5vh;
+  --bd-title: 3vh;
+  --bd-label: 2.8vh;
+  --bd-floor: 2.2vh;
+
+  background: var(--bd-bg);
+  color: var(--bd-text);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--bd-label);
+  line-height: 1.2;
+}
+
+.bd-root *,
+.bd-root *::before,
+.bd-root *::after {
+  box-sizing: border-box;
+}
+
+.bd-hero {
+  font-size: var(--bd-hero);
+  font-weight: 700;
+  line-height: 1;
+}
+.bd-number {
+  font-size: var(--bd-number);
+  font-weight: 700;
+  line-height: 1.05;
+}
+.bd-label {
+  font-size: var(--bd-label);
+}
+.bd-small {
+  font-size: var(--bd-floor);
+  color: var(--bd-text-2);
+}
+.bd-muted {
+  color: var(--bd-text-2);
+}
+
+/* Lists: at most 6 rows, label left, value right, one line each. */
+.bd-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6vh;
+  min-height: 0;
+}
+.bd-row {
+  display: flex;
+  align-items: baseline;
+  gap: 1vh;
+  font-size: var(--bd-label);
+  white-space: nowrap;
+  min-width: 0;
+}
+.bd-row-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bd-row-value {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+/* Health and alarm fills: dark text on a filled chip, plus a word and a shape. */
+.bd-fill-critical {
+  background: var(--bd-critical);
+  color: var(--bd-on-fill);
+}
+.bd-fill-warning {
+  background: var(--bd-warning);
+  color: var(--bd-on-fill);
+}
+.bd-tag {
+  display: inline-block;
+  padding: 0.1vh 0.8vh;
+  border-radius: 0.5vh;
+  font-weight: 700;
+  font-size: var(--bd-floor);
+}
+
+/* A changed number: a 1 s background highlight, never a flash. */
+.bd-changed {
+  background: var(--bd-highlight);
+  transition: background-color 1s ease-out;
+}
+.bd-num {
+  border-radius: 0.5vh;
+  transition: background-color 1s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bd-changed,
+  .bd-num {
+    background: transparent;
+    transition: none;
+  }
+}

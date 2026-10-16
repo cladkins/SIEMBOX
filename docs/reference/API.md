@@ -24,6 +24,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Log Discovery](#log-discovery-endpoints)
   - [Vulnerabilities](#vulnerabilities-endpoints)
   - [Exposure Monitoring (Digital Risk)](#exposure-monitoring-digital-risk)
+  - [Context Graph](#context-graph-endpoints)
   - [Admin Dashboard](#admin-dashboard-endpoints)
 
 ---
@@ -165,6 +166,7 @@ A refused scan or asset write is also recorded in `audit_logs` (`action` `access
 | 409 | Conflict | Resource already exists |
 | 429 | Too Many Requests | Rate limit exceeded |
 | 500 | Internal Server Error | Server error |
+| 503 | Service Unavailable | Busy (the database, or a regex check worker): try again shortly. The [Context Graph](#context-graph-endpoints)'s `code: "GRAPH_BUSY"` says when, in `Retry-After` |
 
 A request body that isn't valid JSON is rejected with `400` (`"Malformed request
 body: expected valid JSON"`), and an oversized one with `413`, before any route
@@ -5969,6 +5971,304 @@ At most 1024 characters.
 - `400` - missing, empty or over-long password, or a malformed JSON body
 - `429` - rate limit exceeded
 - `502` - the Pwned Passwords service could not be reached
+
+---
+
+## Context Graph Endpoints
+
+The Context Graph answers "what is linked to this?" for one thing SIEMBox
+knows: an alert, an IP, a user or host named in alerts, a domain, an asset, a
+vulnerability, a Digital Risk finding or identity, a log shipper (or a ghost
+shipper's tag), a detection rule, and, for admins, a SIEMBox account or an
+endpoint agent. Each call returns that entity (the **centre**), its nearest
+neighbours per relation, and a count of the rest, so a client expands the
+graph one hop at a time. The graph page that uses it comes in a later release.
+
+These answers come from SIEMBox's own records: alerts, the asset inventory and
+vulnerability management, Digital Risk, log shippers, detection rules and the
+sign-in audit log, plus, for an alert, the device and shipper of the log it
+was raised on. Relationships seen across all logs (which users an IP signed
+in as, which hosts it reached) are a later release too.
+
+**Authentication:** every route requires a session and is a `GET`, open to
+every role. What each role's graph holds never goes beyond what the role can
+already read elsewhere in the API (see [Roles](#roles-in-the-graph)). No call
+changes anything, and nothing here calls an external service.
+
+### Entities
+
+An entity is written `type:key`, the same string used as the node `id`:
+
+| Type | Key | Example |
+|---|---|---|
+| `ip` | IPv4 dotted, or IPv6 in its lower-case canonical form (RFC 5952); `::ffff:a.b.c.d` is the IPv4 address | `ip:198.51.100.7` |
+| `host` | spaces trimmed, lower-cased; 1-253 characters, no whitespace, control or bidi characters | `host:nas` |
+| `user` | spaces trimmed, case kept; 1-128 characters, no control or bidi characters; `-`, `unknown`, `null`, `none`, `(null)`, `n/a`, `nobody` and `?` are refused | `user:root` |
+| `domain` | spaces trimmed, lower-cased, trailing dots removed, at least one dot | `domain:example.com` |
+| `alert`, `rule`, `asset`, `vuln`, `finding`, `identity`, `shipper`, `account` | the record's id (`vuln` is `vulnerabilities.id`, `account` is `users.id`) | `alert:812` |
+| `shipper_tag` | the 8 hex characters of a `raw_logs.shipper_id` that no shipper matches (a ghost shipper) | `shipper_tag:1a2b3c4d` |
+| `endpoint` | an endpoint agent's id (UUID) | `endpoint:3f2504e0-4f89-11d3-9a0c-0305e82c3301` |
+
+The type is everything before the first `:`, so IPv6 keys keep their colons.
+Alerts are found by the same rules applied to their `matched_data` (an alert
+naming `Example.COM.` is found from `domain:example.com`), and by an IP in its
+usual spellings: IPv4 also as `::ffff:a.b.c.d`, IPv6 compressed, uncompressed
+or zero-padded, in lower or upper case. A `matched_data` value longer than
+2,000 bytes is never matched (the lookup indexes leave such values out). Entity
+values appear in the request URL, and so in browser history and proxy logs, as
+Threat Intel's `?ip=` already does.
+
+### Time window
+
+`window=24h|7d|30d|90d` (default `7d`) ends at the current minute, rounded up.
+`around=<ISO 8601 time with a zone>` is that time minus 24 hours to plus 1
+hour (its end at most an hour from now): the window for an alert's own time.
+Give one or the other. Alerts, sign-ins and resolved findings are windowed;
+inventory relations (an asset's IP, host name, vulnerabilities, shipper and
+agent) are current state; open findings always count.
+
+### Responses and limits
+
+| Status | When |
+|---|---|
+| `200` | Success, including partial answers (a source that timed out; see `groups[].status` and `sources`) and entities nothing links to (`center.exists: false`) |
+| `400` | `code: "GRAPH_BAD_ENTITY"` (the entity isn't a valid `type:key`) or `"GRAPH_BAD_PARAM"` (any other parameter) |
+| `401` | Only a missing or expired session; never bad input |
+| `403` | Only `PASSWORD_CHANGE_REQUIRED` |
+| `404` | `code: "GRAPH_NOT_AVAILABLE"`: the relation isn't one of this entity type, or the role can't expand this type (accounts and endpoint agents, for non-admins) |
+| `429` | The general [rate limit](#rate-limiting) |
+| `503` | `code: "GRAPH_BUSY"` with `Retry-After: 2` and `retryAfter: 2`: no slot within a second, no database connection, or every source timed out |
+
+Errors use the usual envelope plus a `code`:
+
+```json
+{ "status": "error", "statusCode": 400, "code": "GRAPH_BAD_ENTITY", "message": "that is not a valid ip" }
+```
+
+So that the graph can't crowd out the rest of SIEMBox:
+
+- At most 4 graph requests run at a time in the backend, and 2 per user. A
+  request that gets no slot within 1 second is answered `503 GRAPH_BUSY`.
+- Each request runs on one database connection, in a read-only transaction:
+  1.5 seconds per statement, no new statement after 3.5 seconds, 4 seconds in
+  all. A source (one relation, or one type's facts) that runs out of time is
+  left out and marked `timeout`; the rest of the answer stands.
+- Answers are cached for 20 seconds, shared only between roles that see the
+  same graph (`cached: true`). Partial answers are not cached.
+- Per relation, totals are counted over at most 1,001 rows: `total` is then
+  `1000` with `total_capped: true` ("1,000+"). Alert relations rank the latest
+  1,000 alerts in the window, by severity and then recency.
+- An answer holds at most 300 nodes and 600 edges.
+
+### Nodes, edges and groups
+
+```json
+{
+  "id": "ip:198.51.100.7",
+  "type": "ip",
+  "key": "198.51.100.7",
+  "label": "198.51.100.7",
+  "facts": { "country": "Netherlands", "country_code": "NL", "private": false, "threat_feeds": "Blocklist.de" },
+  "flags": ["threat_feed", "foreign"],
+  "expandable": true
+}
+```
+
+- `label` is at most 64 characters, with control and bidi characters removed;
+  string facts at most 256. Labels and facts come from logs and alerts, so a
+  client must render them as text, never as HTML.
+- `facts` per type: `ip` country, country_code, private, threat_feeds (the
+  local feeds that list it); `user` is_email; `domain` watched (`own` or
+  `brand`) and unicode (an IDN's Unicode form); `alert` title, severity,
+  status, source, rule_id, created_at, verdict, risk_score (never
+  `matched_data`); `rule` name, severity, enabled; `asset` hostname, ip,
+  asset_type, criticality, status, last_seen, open_vulns, agent_status,
+  agent_version, agent_last_seen; `vuln` cve_id, severity, cvss, title;
+  `finding` title, source, event_type, severity, first_seen, last_seen,
+  resolved; `identity` kind, value; `shipper` name, status, hostname,
+  ip_address, version, last_seen (never a key); `shipper_tag` tag; `endpoint`
+  hostname, os, agent_version, status, last_seen; `account` username, and for
+  admins role, enabled, mfa_enabled, last_login.
+- A shipper's and an endpoint agent's `status` is the live one, worked out
+  from `last_seen` as the rest of SIEMBox does: a shipper is `pending` (never
+  heard from), `offline` (no heartbeat for 3 minutes), `error` or `online`, as
+  [`GET /api/shippers/:id`](#get-apishippersid) says; an agent is `online`
+  when seen in the last 5 minutes, else `offline`, as the Endpoints page and
+  the asset's `agent_status` say. The stored status column is never shown: it
+  says `online` long after a shipper (a revoked or ghost one, say) or an agent
+  has stopped reporting.
+- `flags`: `threat_feed`, `foreign` (outside `GEOIP_HOME_COUNTRIES`), `private`,
+  `critical` (asset criticality), `open_vulns`, `closed` (a closed or
+  false-positive alert).
+- An **edge** is `{id, source, target, rel, origin, style}`, plus `role` on
+  `alert_ips` (`source`, `dest`, or `sender`: the IP equals the log's
+  `observer_ip`, the device that sent it) and `count`, `failures`,
+  `successes`, `first_seen`, `last_seen` on `account_signins`. Its id is
+  `rel|source|target`, and its direction is fixed (an alert points at the IP
+  it names, whichever side was expanded), so the same fact reached from
+  either side is one edge.
+- `origin` is `alerts`, `logs`, `inventory`, `risk` or `accounts`. `style` is
+  `recorded` (SIEMBox's own record: solid), `logs` (what a log said: dashed)
+  or `heuristic` (a match by name or address: dotted).
+- A **group** describes one relation of the centre: `{rel, label,
+  neighbor_type, origin, total, total_capped, shown, very_common, status,
+  note?}`. `neighbor_type` is the type of the neighbours it holds; for
+  `alert_device` that is `host` (the log's syslog header host) or `ip` (its
+  sender, when the header named no host), and `host` when there is none to
+  show. `shown` of `total` neighbours are in `nodes`; `very_common` means
+  200 or more ("likely infrastructure"). `status` is `ok`, `timeout` or
+  `unavailable`. `note: "log_expired"`: the log an alert was raised on has
+  been deleted by retention.
+
+### Relations
+
+| `rel` | From | To | Origin, style | Source |
+|---|---|---|---|---|
+| `alert_ips` | alert | ip | alerts, solid | `matched_data` `source_ip`, `client_ip`, `dest_ip`, with `role` |
+| `alert_users` | alert | user | alerts, solid | `matched_data` `user`, `target_user` |
+| `alert_hosts` | alert | host | alerts, solid | `matched_data.host` ("host named in the log") |
+| `alert_domains` | alert | domain | alerts, solid | `matched_data.domain`; and `matched_data.lookalike` on Digital Risk lookalike alerts (`source` `domain-monitor`) only, the same rule as finding the alerts from the domain |
+| `alert_rule` | alert | rule | alerts, solid | `rule_id` |
+| `alert_asset` | alert | asset | alerts, solid | `asset_id` (endpoint detections) |
+| `alert_finding` | alert, finding | finding, alert | risk, solid | the finding that raised the alert |
+| `alert_same_event` | alert | alert | alerts, solid | alerts on the same parsed log |
+| `alert_account` | alert | account | alerts, solid | a sign-in protection alert's account |
+| `alert_endpoint` | alert | endpoint (admin) | alerts, solid | an endpoint detection's agent |
+| `alert_device` | alert | host or ip, and its shipper | logs, dashed | the log's syslog header host, else its sender IP, and the shipper (or ghost `shipper_tag`) its tag names, while the log is retained; the second edge is `shipped_by` |
+| `entity_alerts` | ip, user, host, domain, asset, account (admin), endpoint (admin) | alert | alerts, solid | alerts in the window naming it; for an asset, by `asset_id` (solid) or naming its current IP (dotted) |
+| `rule_alerts` | rule | alert | alerts, solid | the rule's alerts in the window |
+| `asset_ip` / `ip_asset` | asset / ip | ip / asset | inventory, solid | the asset's current IP |
+| `asset_host` / `host_assets` | asset / host | host / asset | inventory, solid | the asset's host name |
+| `asset_vulns` / `vuln_assets` | asset / vuln | vuln / asset | inventory, solid | open findings, or all with `vuln_status=all`, by risk score |
+| `asset_shipper` / `shipper_assets` | asset / shipper | shipper / asset | inventory, dotted | a shipper with the asset's host name or IP |
+| `asset_endpoint` | asset, endpoint (admin) | endpoint, asset | inventory, solid | the asset's agent |
+| `shipper_address` | shipper | ip, host | inventory, solid | the address and host name it reported |
+| `ip_shipper` / `host_shipper` | ip / host | shipper | inventory, solid | shippers at that address or host |
+| `finding_identity` / `identity_findings` | finding / identity | identity / finding | risk, solid | the monitored identity |
+| `finding_domain` / `domain_findings` | finding / domain | domain / finding | risk, solid | the watched domain and the lookalike it names |
+| `identity_user` | identity (email), user | user, identity | risk, dotted | users in alerts that are that address (compared in lower case) |
+| `identity_domain` | identity (email domain), domain | domain, identity | risk, solid | the email domain |
+| `account_signins` / `ip_signins` | account / ip (admin) | ip / account | accounts, solid | sign-ins in `audit_logs`, with successes and failures |
+
+### Roles in the graph
+
+| Nodes and relations | Admin | Operator | Analyst | Viewer |
+|---|---|---|---|---|
+| ip, host, user, domain, alert, rule, asset (with its agent status), vuln, finding, identity, shipper, shipper_tag | yes | yes | yes | yes |
+| account nodes a sign-in alert names: the username the alert shows, not expandable | yes | yes | yes | yes |
+| account details, expanding an account, `account_signins` / `ip_signins` | yes | no | no | no |
+| endpoint nodes, `alert_endpoint`, `asset_endpoint` | yes | no | no | no |
+
+Relations a role can't see don't run and aren't listed, and nothing says how
+many were left out. Each row mirrors routes the role can already call
+(`backend/src/services/graph/visibility.ts`; the test suite checks it against
+`routeInventory.test.ts`).
+
+### GET /api/graph/search
+
+What a typed string could mean, as at most 10 candidates. It reads only small
+tables (assets, shippers, watched domains, rules, identities, vulnerabilities)
+and counts alerts, never logs.
+
+**Query:** `q` (1-200 characters).
+
+Resolution: a literal `type:key` gives just that entity (if valid and, for
+records, existing); an IP gives `ip:` and the asset with that address; `#123`
+or `alert 123` the alert; `CVE-...` or `NUCLEI-...` the vulnerability; a string
+with `@` the user and a monitored email identity; a host- or domain-like word
+assets and shippers by name prefix, watched domains, `host:`, `domain:` (with a
+dot) or `user:` (without) and rules by name; anything else `user:` and rules.
+
+**Response:**
+
+```json
+{
+  "candidates": [
+    { "entity": "ip:10.0.0.5", "type": "ip", "label": "10.0.0.5", "hint": "1 alert in 30 d" },
+    { "entity": "asset:12", "type": "asset", "label": "nas", "hint": "asset · 10.0.0.5 · critical" }
+  ],
+  "cached": false,
+  "elapsed_ms": 5
+}
+```
+
+### GET /api/graph/neighborhood
+
+An entity and its nearest neighbours.
+
+**Query:**
+
+| Parameter | Default | |
+|---|---|---|
+| `entity` | required | `type:key`, given once |
+| `window` or `around` | `window=7d` | see [Time window](#time-window) |
+| `limit` | `5` | neighbours per relation, 1-25 |
+| `include` | every origin the role sees | comma-separated origins to run: `alerts,logs,inventory,risk,accounts` |
+| `vuln_status` | `open` | `all` adds patched and accepted vulnerabilities |
+
+**Response:**
+
+```json
+{
+  "center": { "id": "alert:812", "type": "alert", "key": "812", "label": "#812 SSH brute force from 198.51.100.7",
+              "facts": { "severity": "high", "status": "new", "...": "..." }, "flags": [], "expandable": true, "exists": true },
+  "window": { "from": "2026-10-08T14:03:00.000Z", "to": "2026-10-15T14:03:00.000Z", "preset": "7d" },
+  "nodes": [ { "id": "alert:812", "...": "..." }, { "id": "ip:198.51.100.7", "...": "..." } ],
+  "edges": [
+    { "id": "alert_ips|alert:812|ip:198.51.100.7", "source": "alert:812", "target": "ip:198.51.100.7",
+      "rel": "alert_ips", "origin": "alerts", "style": "recorded", "role": "source" }
+  ],
+  "groups": [
+    { "rel": "alert_ips", "label": "IPs", "neighbor_type": "ip", "origin": "alerts", "total": 1,
+      "total_capped": false, "shown": 1, "very_common": false, "status": "ok" }
+  ],
+  "sources": { "alerts": { "status": "ok" }, "risk": { "status": "ok" }, "logs": { "status": "ok" } },
+  "generated_at": "2026-10-15T14:02:31.120Z",
+  "cached": false,
+  "elapsed_ms": 18
+}
+```
+
+`center.exists` is `false` (still `200`) for a record that doesn't exist, an
+IP, user, host or domain nothing links to in the window, or a ghost shipper
+tag no retained log carries. `sources` has one entry per origin that ran:
+`ok`, `partial` (a group timed out, or some facts are missing) or `timeout`.
+
+### GET /api/graph/relation
+
+One relation of an entity, paged and searchable: the table behind a group.
+
+**Query:** `entity`, `rel` (a `groups[].rel` of that entity), the window,
+`limit` (1-50, default 50), `offset` (0-1000), `q` (at most 100 characters,
+no control or bidi characters, matched anywhere in the neighbour's label,
+case-insensitively, among all the neighbours in the window: a rule by its
+name, an asset by its host name, an alert by its title; `%` and `_` are
+literal; `total` then counts the matches), `sort`
+(`count`, `last_seen` or `first_seen`; default: the relation's own order, for
+alerts severity then recency), `order` (`desc` or `asc`), `vuln_status`.
+
+**Response:**
+
+```json
+{
+  "rel": "entity_alerts",
+  "total": 7,
+  "total_capped": false,
+  "items": [
+    { "node": { "id": "alert:9001", "type": "alert", "...": "..." },
+      "edge": { "id": "alert_ips|alert:9001|ip:198.51.100.7", "rel": "alert_ips", "role": "source", "...": "..." } }
+  ],
+  "next_offset": 4,
+  "status": "ok",
+  "window": { "from": "...", "to": "...", "preset": "7d" },
+  "generated_at": "2026-10-15T14:02:31.120Z",
+  "cached": false,
+  "elapsed_ms": 7
+}
+```
+
+`next_offset` is `null` on the last page. A relation that times out is
+`503 GRAPH_BUSY`.
 
 ---
 

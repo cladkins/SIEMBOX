@@ -16,6 +16,29 @@ import { AssetRepository } from './assetRepository';
 import { VulnerabilityRepository } from '../vulnerabilities/vulnerabilityRepository';
 import { geoipService } from '../geoip/geoipService';
 import { OFFLINE_THRESHOLD_MINUTES } from '../../models/EdrAgent';
+import { alertColumnArm, alertKeyArm, latestAlerts } from '../graph/alertKeys';
+
+/** The source_ip arm, skipped for an asset with no IP ($2 NULL). */
+const sourceIpArm = alertKeyArm('source_ip', '$2');
+
+/**
+ * The asset's latest 100 alerts: linked by asset_id, or naming its IP as
+ * source_ip. One ordered scan per arm (alertKeys.ts latestAlerts()): the
+ * asset_id arm on idx_graph_alerts_asset_created, the IP arm on the source_ip
+ * index, each stopping at 100 rows. Neither an IP no alert names nor an EDR
+ * host whose many alerts are older than its latest 100 sends Postgres back
+ * through every alert by created_at.
+ */
+export const ASSET_ALERTS_SQL = `SELECT a.id, a.rule_id, a.severity, a.title, a.description, a.status, a.source, a.event_id,
+              a.matched_data, a.created_at
+         FROM alerts a
+        WHERE a.id IN (${latestAlerts(
+          [alertColumnArm('asset_id', '$1'), { ...sourceIpArm, where: `($2::text IS NOT NULL AND ${sourceIpArm.where})` }],
+          'a.id',
+          100
+        )})
+        ORDER BY a.created_at DESC
+        LIMIT 100`;
 
 export interface AssetContext {
   agent: Record<string, any> | null;
@@ -56,17 +79,9 @@ export async function getAssetContext(assetId: number): Promise<AssetContext | n
         LIMIT 1`,
       [hostname, ip]
     ),
-    // Alerts linked to the asset, or whose extracted source_ip matches the IP.
-    query(
-      `SELECT id, rule_id, severity, title, description, status, source, event_id,
-              matched_data, created_at
-         FROM alerts
-        WHERE asset_id = $1
-           OR ($2::text IS NOT NULL AND matched_data->>'source_ip' = $2)
-        ORDER BY created_at DESC
-        LIMIT 100`,
-      [assetId, ip]
-    ),
+    // Alerts linked to the asset, or whose extracted source_ip matches the IP
+    // (on migration 043's indexes, one ordered scan per arm).
+    query(ASSET_ALERTS_SQL, [assetId, ip]),
     // Reuse the existing nested asset-vuln shape (vulnerability.* fields).
     VulnerabilityRepository.getAssetVulnerabilities(assetId),
   ]);

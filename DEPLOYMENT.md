@@ -415,6 +415,26 @@ the discovery agent, from Debian's `nodejs` (Node 18) to Node 22 copied from
   for the prebuilt image, or `docker compose build --pull && docker compose up -d`
   for a shipper built from source.
 
+**Updating to the release with the Context Graph API** (migration
+`043_context_graph_lookups.sql` runs on its own; no `.env` or compose change):
+the first start builds 13 indexes on `alerts` and `audit_logs`
+(`idx_graph_*`) and planner statistics on 10 of their expressions, then runs
+`ANALYZE alerts` once to fill them, before the API takes requests. Alerts are
+few next to logs, so this is quick: on 1.6 million alerts (each naming a
+source and destination IP, a user and a host) the indexes took 13 s and
+378 MB, and the `ANALYZE` 1.5 s. The index on an asset's alerts holds only
+alerts linked to an asset, which EDR detections set: on 1.9 million alerts,
+260,000 of them from EDR hosts, it took 0.3 s and 8 MB, and the whole
+migration 12 s. Later starts skip all of it. Threat Intel's IP view and an
+asset's related alerts use the indexes too: on those 1.6 million alerts, an IP
+no alert names took 1.1 s (Threat Intel) and 0.8 s (the asset's alerts)
+before, and takes under 1 ms now; a common IP takes about 1 ms. An EDR host
+whose alerts are mostly older than its latest 100 (200,000 of the 1.9
+million) took 0.3 to 2.8 s for its related alerts, depending on the host,
+and takes under 1 ms now. The new read-only `/api/graph` routes are described
+in [API.md](docs/reference/API.md#context-graph-endpoints); the graph page
+comes in a later release.
+
 ## Database Migrations and Seeding
 
 ### Automatic Initialization

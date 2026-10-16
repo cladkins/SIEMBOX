@@ -5,6 +5,7 @@ import {
   ShipperSourceModel,
   ShipperVolumeModel,
   ShipperActivityModel,
+  SHIPPER_OFFLINE_THRESHOLD_MINUTES,
   withHttpPushStatus,
   type LogShipper,
   type ShipperSource,
@@ -141,7 +142,7 @@ function calculateStatus(lastSeen: Date | null, currentStatus: string): 'pending
   const minutesSinceLastSeen = (now.getTime() - lastSeenTime.getTime()) / 1000 / 60;
 
   // Consider offline if no heartbeat for 3 minutes (2x heartbeat interval + buffer)
-  if (minutesSinceLastSeen > 3) {
+  if (minutesSinceLastSeen > SHIPPER_OFFLINE_THRESHOLD_MINUTES) {
     return 'offline';
   }
 

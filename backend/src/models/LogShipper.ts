@@ -1,5 +1,13 @@
 import pool from '../config/database';
 
+/**
+ * A shipper with no heartbeat for this long is offline (two heartbeat
+ * intervals plus a buffer). The stored status column is only ever set to
+ * 'online' by a heartbeat or a push, so readers work the live status out from
+ * last_seen: GET /api/shippers (calculateStatus) and the Context Graph.
+ */
+export const SHIPPER_OFFLINE_THRESHOLD_MINUTES = 3;
+
 export interface LogShipper {
   id: number;
   name: string;

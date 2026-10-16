@@ -32,6 +32,7 @@ import edrRoutes from './routes/edr';
 import packsRoutes from './routes/packs';
 import logDiscoveryRoutes from './routes/logDiscovery';
 import exposureRoutes from './routes/exposure';
+import graphRoutes from './routes/graph';
 
 const app: Application = express();
 
@@ -177,6 +178,7 @@ app.use('/api/edr', edrRoutes); // EDR endpoint agents (enroll + agent-auth inge
 app.use('/api/packs', authenticate, packsRoutes); // Content Packs (curated parser+detection bundles)
 app.use('/api/log-discovery', authenticate, logDiscoveryRoutes); // Log source discovery, fingerprinting + onboarding
 app.use('/api/exposure', authenticate, exposureRoutes); // Digital Risk: leaked credentials, watched domains, findings
+app.use('/api/graph', authenticate, graphRoutes); // Context Graph: read-only pivots between alerts, IPs, assets, findings, rules
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

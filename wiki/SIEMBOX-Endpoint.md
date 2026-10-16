@@ -11,7 +11,7 @@ SIEMBox v3 adds **SIEMBOX Endpoint**: lightweight agents you install on your hos
 ## Enrolling an endpoint
 
 1. **Generate a token.** On *Endpoints*, create a one-time **enrollment token** (shown once — copy it).
-2. **Install + enroll the agent** on the host, pointing it at your server (`https://<siembox-host>:8421`) with that token.
+2. **Install + enroll the agent** on the host, pointing it at your server (`http://<siembox-host>:8421`; the API serves plain HTTP unless you put a TLS proxy in front of it) with that token.
 3. The agent calls `POST /api/edr/agents/enroll`; the server validates the token (single-use, optional expiry), then returns a unique **agent ID** and **API key** (the key is shown once and stored only as a hash server-side).
 4. The agent **heartbeats** (~60s) and **pulls config** (~5m). Revoke a token anytime from the same page; revoked/expired tokens can't enroll.
 

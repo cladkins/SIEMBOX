@@ -248,7 +248,8 @@ const detail = reactive<{ agent: any; detections: any[]; vulns: any[]; loading: 
   agent: null, detections: [], vulns: [], loading: false,
 });
 
-const serverUrl = computed(() => `https://${window.location.hostname}:8421`);
+// The API on 8421 serves plain HTTP; an https URL here fails every enrollment.
+const serverUrl = computed(() => `http://${window.location.hostname}:8421`);
 const installSnippet = computed(() =>
   `# agent.json on the endpoint\n{\n  "server_url": "${serverUrl.value}",\n  "enrollment_token": "${generated.value}"\n}\n\n# then run the agent:\nsiembox-agent -dir /etc/siembox-agent run`
 );

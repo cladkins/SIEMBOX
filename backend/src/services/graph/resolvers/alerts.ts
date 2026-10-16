@@ -9,7 +9,9 @@
  *                  IP); else source
  *   alert_users    user, target_user (junk dropped)
  *   alert_hosts    lower(host): "host named in the log"
- *   alert_domains  domain, lookalike (Digital Risk alerts)
+ *   alert_domains  domain; lookalike on Digital Risk domain-monitor alerts
+ *                  only (a rule alert's log may carry any field of that name),
+ *                  the same rule as the reverse lookup and its index
  *   alert_rule     rule_id;  alert_asset  asset_id (EDR)
  *   alert_account  siembox-auth user_id (labelled with the alert's username)
  *   alert_endpoint EDR agent_id (admin)
@@ -19,12 +21,13 @@
  *                  the log is retained (dashed: seen in logs)
  *
  * To alerts (entity_alerts, rule_alerts): the latest TOTAL_CAP + 1 alerts in
- * the window naming the centre, ranked by severity then recency, each lookup
- * on a migration 043 index (idx_graph_alerts_*, through alertKeys.ts).
+ * the window naming the centre, ranked by severity then recency: one ordered
+ * scan of a migration 043 index (idx_graph_alerts_*) per key and spelling,
+ * through alertKeys.ts's latestAlerts(), never an OR the planner could misjudge.
  */
 import type { Query } from '../budget';
 import { canonicalDomain, canonicalHost, canonicalId, canonicalIp, canonicalShipperTag, canonicalUser, canonicalUuid, entityRef, JUNK_USERS, type EntityRef } from '../entityKey';
-import { alertIpMatch, alertKeyEquals } from '../alertKeys';
+import { alertIpArms, alertKeyEquals, latestAlerts } from '../alertKeys';
 import { shipperTags } from '../shipperTags';
 import { TOTAL_CAP, type NodeType } from '../types';
 import {
@@ -146,8 +149,10 @@ function alertOrder(page: PageRequest): string {
 }
 
 interface AlertMatch {
-  pred: string;
-  roleExpr?: string;
+  /** latestAlerts() arms: predicates on `a`, each served in created_at order by one index. */
+  arms: string[];
+  /** The IP role column; binds its parameter only when called (the count has no use for it). */
+  roleExpr?: () => string;
   byAssetExpr?: string;
   edge: (alert: EntityRef, row: Row) => EdgeSpec;
 }
@@ -173,34 +178,33 @@ export function ipForms(ip: string): string[] {
   return [...new Set(spellings.flatMap((form) => [form, form.toUpperCase()]))];
 }
 
-const ipPredicate = (p: string) => alertIpMatch(p, { any: true });
-const ipRole = (p: string) =>
-  `CASE WHEN ${alertKeyEquals('dest_ip', p, { any: true })} THEN 'dest' WHEN a.matched_data->>'observer_ip' = ANY(${p}::text[]) THEN 'sender' ELSE 'source' END`;
+/** One arm per IP key and spelling of `ip`: each a single-value lookup, so each scan is ordered. */
+const ipArms = (ip: string, bind: (value: unknown) => string) => ipForms(ip).flatMap((form) => alertIpArms(bind(form)));
+const ipRole = (forms: string) =>
+  `CASE WHEN ${alertKeyEquals('dest_ip', forms, { any: true })} THEN 'dest' WHEN a.matched_data->>'observer_ip' = ANY(${forms}::text[]) THEN 'sender' ELSE 'source' END`;
 
-/** The alerts naming the centre, as an SQL predicate on `a` with its params bound through `bind`. */
+/** The alerts naming the centre, as latestAlerts() arms on `a` with their params bound through `bind`. */
 function alertMatch(ctx: ResolverCtx, bind: (value: unknown) => string): AlertMatch | null {
   const center = ctx.center;
   const toCenter = (rel: EdgeSpec['rel']) => (alert: EntityRef) => edgeSpec(rel, alert, center, 'alerts', 'recorded');
   switch (center.type) {
-    case 'ip': {
-      const p = bind(ipForms(center.key));
+    case 'ip':
       return {
-        pred: ipPredicate(p),
-        roleExpr: ipRole(p),
+        arms: ipArms(center.key, bind),
+        roleExpr: () => ipRole(bind(ipForms(center.key))),
         edge: (alert, row) =>
           edgeSpec('alert_ips', alert, center, 'alerts', 'recorded', { role: (str(row.ip_role) ?? 'source') as 'source' }),
       };
-    }
     case 'user': {
       const p = bind(center.key);
-      return { pred: `(${alertKeyEquals('user', p)} OR ${alertKeyEquals('target_user', p)})`, edge: toCenter('alert_users') };
+      return { arms: [alertKeyEquals('user', p), alertKeyEquals('target_user', p)], edge: toCenter('alert_users') };
     }
     case 'host':
-      return { pred: alertKeyEquals('host', bind(center.key)), edge: toCenter('alert_hosts') };
+      return { arms: [alertKeyEquals('host', bind(center.key))], edge: toCenter('alert_hosts') };
     case 'domain': {
       const p = bind(center.key);
       return {
-        pred: `(${alertKeyEquals('domain', p)} OR (a.source = 'domain-monitor' AND ${alertKeyEquals('lookalike', p)}))`,
+        arms: [alertKeyEquals('domain', p), `(a.source = 'domain-monitor' AND ${alertKeyEquals('lookalike', p)})`],
         edge: toCenter('alert_domains'),
       };
     }
@@ -210,7 +214,7 @@ function alertMatch(ctx: ResolverCtx, bind: (value: unknown) => string): AlertMa
       const byAsset = `(a.asset_id = ${id})`;
       return {
         // The asset's current IP: the alerts that name it, which may predate it being this asset's.
-        pred: ip ? `(a.asset_id = ${id} OR ${ipPredicate(bind(ipForms(ip)))})` : byAsset,
+        arms: [byAsset, ...(ip ? ipArms(ip, bind) : [])],
         byAssetExpr: byAsset,
         edge: (alert, row) =>
           row.by_asset === true
@@ -219,17 +223,25 @@ function alertMatch(ctx: ResolverCtx, bind: (value: unknown) => string): AlertMa
       };
     }
     case 'account':
-      return { pred: `(a.source = 'siembox-auth' AND ${alertKeyEquals('user_id', bind(center.key))})`, edge: toCenter('alert_account') };
+      return { arms: [`(a.source = 'siembox-auth' AND ${alertKeyEquals('user_id', bind(center.key))})`], edge: toCenter('alert_account') };
     case 'endpoint':
-      return { pred: `(a.source = 'edr' AND ${alertKeyEquals('agent_id', bind(center.key))})`, edge: toCenter('alert_endpoint') };
+      return { arms: [`(a.source = 'edr' AND ${alertKeyEquals('agent_id', bind(center.key))})`], edge: toCenter('alert_endpoint') };
     case 'rule':
-      return { pred: `a.rule_id = ${bind(Number(center.key))}`, edge: toCenter('alert_rule') };
+      return { arms: [`a.rule_id = ${bind(Number(center.key))}`], edge: toCenter('alert_rule') };
     default:
       return null;
   }
 }
 
-/** The alerts in the window naming the centre: a page of them, ranked. */
+/** The window as a condition on `a`. */
+const windowOf = (ctx: ResolverCtx, bind: (value: unknown) => string) =>
+  `a.created_at >= ${bind(ctx.window.from)}::timestamptz AND a.created_at < ${bind(ctx.window.to)}::timestamptz`;
+
+/**
+ * The alerts in the window naming the centre: a page of them, ranked. The
+ * latest TOTAL_CAP + 1 (searched by title first, if asked) come from one
+ * ordered scan per arm (latestAlerts()), whatever the planner estimates.
+ */
 export async function alertsNaming(q: Query, ctx: ResolverCtx, page: PageRequest): Promise<RelationPage> {
   if (!ctx.centerInfo.exists) return EMPTY_PAGE;
   const params: unknown[] = [];
@@ -239,17 +251,15 @@ export async function alertsNaming(q: Query, ctx: ResolverCtx, page: PageRequest
   };
   const match = alertMatch(ctx, bind);
   if (!match) return EMPTY_PAGE;
-  const inner = `
-    SELECT a.id, a.severity, a.created_at,
-           ${match.roleExpr ?? 'NULL::text'} AS ip_role,
+  const columns = `a.id, a.severity, a.created_at,
+           ${match.roleExpr?.() ?? 'NULL::text'} AS ip_role,
            ${match.byAssetExpr ?? 'NULL::boolean'} AS by_asset,
-           ${SEVERITY_RANK} AS sev_rank
-      FROM alerts a
-     WHERE ${match.pred}
-       AND a.created_at >= ${bind(ctx.window.from)}::timestamptz
-       AND a.created_at < ${bind(ctx.window.to)}::timestamptz
-       ${LABEL_FILTER}
-     ORDER BY a.created_at DESC`;
+           ${SEVERITY_RANK} AS sev_rank`;
+  // LABEL_FILTER goes in every arm, so a search finds matches among all of them.
+  const inner = `
+    SELECT u.id, u.severity, u.created_at, u.ip_role, u.by_asset, u.sev_rank
+      FROM (${latestAlerts(match.arms, columns, TOTAL_CAP + 1, `${windowOf(ctx, bind)} ${LABEL_FILTER}`)}) u
+     ORDER BY u.created_at DESC`;
   const result = await pagedSql(q, inner, params, alertOrder(page), page, 'a.title');
   return {
     items: result.rows.map((row) => {
@@ -275,10 +285,7 @@ export async function countAlertsNaming(q: Query, ctx: ResolverCtx): Promise<{ t
   if (!match) return null;
   const [row] = await q<{ n: string }>(
     `SELECT count(*) AS n FROM (
-       SELECT 1 FROM alerts a
-        WHERE ${match.pred}
-          AND a.created_at >= ${bind(ctx.window.from)}::timestamptz AND a.created_at < ${bind(ctx.window.to)}::timestamptz
-        LIMIT ${TOTAL_CAP + 1}) s`,
+       SELECT u.id FROM (${latestAlerts(match.arms, 'a.id', TOTAL_CAP + 1, windowOf(ctx, bind))}) u LIMIT ${TOTAL_CAP + 1}) s`,
     params
   );
   const n = Number(row?.n ?? 0);
@@ -304,7 +311,7 @@ export const ALERT_RELATIONS: RelationDef[] = [
   fromRow('alert_users', 'Users', 'user', (alert, row) => valueItems(alert, [row.md_user, row.md_target_user], 'user', canonicalUser, 'alert_users')),
   fromRow('alert_hosts', 'Hosts named in the log', 'host', (alert, row) => valueItems(alert, [row.md_host], 'host', logHost, 'alert_hosts')),
   fromRow('alert_domains', 'Domains', 'domain', (alert, row) =>
-    valueItems(alert, [row.md_domain, row.md_lookalike], 'domain', canonicalDomain, 'alert_domains')
+    valueItems(alert, [row.md_domain, row.source === 'domain-monitor' ? row.md_lookalike : null], 'domain', canonicalDomain, 'alert_domains')
   ),
   fromRow('alert_rule', 'Rule', 'rule', (alert, row) => {
     const id = canonicalId(row.rule_id);
@@ -387,6 +394,7 @@ export const ALERT_RELATIONS: RelationDef[] = [
     rel: 'alert_device',
     label: 'Logged by',
     center: 'alert',
+    // The syslog header host; the page says 'ip' when the device is the sender.
     neighborType: 'host',
     origin: 'logs',
     style: 'logs',
@@ -417,7 +425,8 @@ export const ALERT_RELATIONS: RelationDef[] = [
         const shipper = id !== undefined ? entityRef('shipper', String(id)) : entityRef('shipper_tag', tag);
         item.extra!.push({ ref: shipper, edge: edgeSpec('shipped_by', device, shipper, 'logs', 'logs') });
       }
-      return pageInMemory([item], page);
+      // The group says what the device is: a host, or the sender's ip.
+      return { ...pageInMemory([item], page), neighborType: device.type };
     },
   },
   {

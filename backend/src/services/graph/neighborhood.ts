@@ -22,7 +22,7 @@ import type { EntityRef } from './entityKey';
 import { hydrate } from './hydrate';
 import type { GraphCache, Semaphore } from './limits';
 import { findRelation, loadCenter, RELATIONS, relationsFor, VALUE_TYPES } from './relations';
-import { edgeId, type CenterInfo, type NeighborItem, type PageRequest, type RelationDef, type RelationPage, type ResolverCtx, type SortKey } from './resolvers/common';
+import { edgeId, filterByLabel, type CenterInfo, type NeighborItem, type PageRequest, type RelationDef, type RelationPage, type ResolverCtx, type SortKey } from './resolvers/common';
 import {
   MAX_RESPONSE_EDGES,
   MAX_RESPONSE_NODES,
@@ -171,7 +171,7 @@ async function computeNeighborhood(
         groups.push({
           rel: run.def.rel,
           label: run.def.label,
-          neighbor_type: run.def.neighborType,
+          neighbor_type: run.page.neighborType ?? run.def.neighborType,
           origin: run.def.origin,
           total: run.page.total,
           total_capped: run.page.totalCapped,
@@ -260,6 +260,8 @@ async function computeRelation(
         else status = step.status;
       }
       const facts = await hydrate(budget, caller.role, result.items.map((item) => item.ref), new Map(result.items.filter((i) => i.labelHint).map((i) => [i.ref.id, i.labelHint!])));
+      // A list paged in memory is searched now, on the labels the nodes have.
+      result = filterByLabel(result, page, (item) => (facts.missing.has(item.ref.id) ? null : (facts.nodes.get(item.ref.id)?.label ?? null)));
       const items: RelationResponse['items'] = [];
       for (const item of result.items) {
         if (facts.missing.has(item.ref.id)) continue;

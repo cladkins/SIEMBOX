@@ -55,6 +55,18 @@ export interface RelationPage {
   total: number;
   totalCapped: boolean;
   note?: string;
+  /**
+   * The neighbours' type when it isn't the definition's: a log's device is a
+   * host, or the sender's ip when the log named no host (alert_device).
+   */
+  neighborType?: NodeType;
+  /**
+   * The search box's filter is still to be applied: `items` is the whole
+   * (small, sorted) list, unpaged, because a record neighbour's label (a
+   * rule's name, an asset's host name) is known only once its node is loaded.
+   * The caller filters on the labels and pages it with filterByLabel().
+   */
+  labelFilterPending?: boolean;
 }
 
 export interface RelationDef {
@@ -104,13 +116,16 @@ const sortValue = (item: NeighborItem, sort: SortKey): number => {
   return at ? Date.parse(at) : 0;
 };
 
-/** Page a small, already-complete list in memory (the relations read off one row). */
+const counted = (n: number) => ({ total: Math.min(n, TOTAL_CAP), totalCapped: n > TOTAL_CAP });
+
+/**
+ * Page a small, already-complete list in memory (the relations read off one
+ * row). With a search (`q`) the list comes back whole and sorted, marked
+ * labelFilterPending: the filter applies to the neighbours' labels, which
+ * the caller has only once it has loaded the nodes (filterByLabel()).
+ */
 export function pageInMemory(all: NeighborItem[], page: PageRequest, note?: string): RelationPage {
   let items = all;
-  if (page.q) {
-    const needle = page.q;
-    items = items.filter((item) => `${item.ref.key} ${item.labelHint ?? ''}`.toLowerCase().includes(needle));
-  }
   if (page.sort) {
     const dir = page.order === 'asc' ? 1 : -1;
     const sort = page.sort;
@@ -118,12 +133,26 @@ export function pageInMemory(all: NeighborItem[], page: PageRequest, note?: stri
   } else if (page.order === 'asc') {
     items = [...items].reverse();
   }
-  const total = Math.min(items.length, TOTAL_CAP);
+  const extra = note ? { note } : {};
+  if (page.q) return { items, ...counted(items.length), ...extra, labelFilterPending: true };
+  return { items: items.slice(page.offset, page.offset + page.limit), ...counted(items.length), ...extra };
+}
+
+/**
+ * The page of a labelFilterPending list: the items whose label (`labelOf`;
+ * null leaves the item out, e.g. a record that no longer exists) holds the
+ * search text, then `offset` and `limit`, as pagedSql() filters on the label
+ * in SQL. Anything else passes through unchanged.
+ */
+export function filterByLabel(result: RelationPage, page: PageRequest, labelOf: (item: NeighborItem) => string | null): RelationPage {
+  if (!result.labelFilterPending) return result;
+  const needle = (page.q ?? '').toLowerCase();
+  const matched = result.items.filter((item) => labelOf(item)?.toLowerCase().includes(needle) ?? false);
   return {
-    items: items.slice(page.offset, page.offset + page.limit),
-    total,
-    totalCapped: items.length > TOTAL_CAP,
-    ...(note ? { note } : {}),
+    items: matched.slice(page.offset, page.offset + page.limit),
+    ...counted(matched.length),
+    ...(result.note ? { note: result.note } : {}),
+    ...(result.neighborType ? { neighborType: result.neighborType } : {}),
   };
 }
 
@@ -139,9 +168,9 @@ export const LABEL_FILTER = '/*label filter*/';
 /**
  * Page a relation in SQL. `inner` selects the neighbours, ordered so its first
  * TOTAL_CAP + 1 rows are the ones that count, and holds LABEL_FILTER in its
- * WHERE clause: the search box's filter on `label` (the neighbour's label as
- * an SQL expression) goes there, before the cap, so a search finds matches
- * among all of them. `orderBy` orders the page over `c`, the capped rows.
+ * WHERE clause (once per arm of a union): the search box's filter on `label`
+ * (the neighbour's label as an SQL expression) goes there, before the cap, so
+ * a search finds matches among all of them. `orderBy` orders the page over `c`, the capped rows.
  * Params of `inner` are $1..$n; this adds the rest.
  */
 export async function pagedSql<T extends Record<string, unknown>>(
@@ -159,7 +188,8 @@ export async function pagedSql<T extends Record<string, unknown>>(
     return `$${all.length}`;
   };
   const filter = page.q ? `AND (${label}) ILIKE ${bind(containsPattern(page.q))} ESCAPE '\\'` : '';
-  const base = `WITH c AS MATERIALIZED (${inner.replace(LABEL_FILTER, filter)} LIMIT ${TOTAL_CAP + 1})`;
+  // Every LABEL_FILTER gets it (a union of arms has one per arm), all with the same parameter.
+  const base = `WITH c AS MATERIALIZED (${inner.split(LABEL_FILTER).join(filter)} LIMIT ${TOTAL_CAP + 1})`;
   const countParams = [...all];
   const rows = await q<T & { graph_total: string }>(
     `${base}
@@ -167,7 +197,6 @@ export async function pagedSql<T extends Record<string, unknown>>(
        FROM c ORDER BY ${orderBy} LIMIT ${bind(page.limit)} OFFSET ${bind(page.offset)}`,
     all
   );
-  const counted = (n: number) => ({ total: Math.min(n, TOTAL_CAP), totalCapped: n > TOTAL_CAP });
   if (rows.length > 0) return { rows, ...counted(Number(rows[0].graph_total)) };
   if (page.offset === 0) return { rows: [], total: 0, totalCapped: false };
   // Past the end: count without a page.

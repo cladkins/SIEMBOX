@@ -6089,6 +6089,14 @@ So that the graph can't crowd out the rest of SIEMBox:
   ip_address, version, last_seen (never a key); `shipper_tag` tag; `endpoint`
   hostname, os, agent_version, status, last_seen; `account` username, and for
   admins role, enabled, mfa_enabled, last_login.
+- A shipper's and an endpoint agent's `status` is the live one, worked out
+  from `last_seen` as the rest of SIEMBox does: a shipper is `pending` (never
+  heard from), `offline` (no heartbeat for 3 minutes), `error` or `online`, as
+  [`GET /api/shippers/:id`](#get-apishippersid) says; an agent is `online`
+  when seen in the last 5 minutes, else `offline`, as the Endpoints page and
+  the asset's `agent_status` say. The stored status column is never shown: it
+  says `online` long after a shipper (a revoked or ghost one, say) or an agent
+  has stopped reporting.
 - `flags`: `threat_feed`, `foreign` (outside `GEOIP_HOME_COUNTRIES`), `private`,
   `critical` (asset criticality), `open_vulns`, `closed` (a closed or
   false-positive alert).
@@ -6104,7 +6112,10 @@ So that the graph can't crowd out the rest of SIEMBox:
   or `heuristic` (a match by name or address: dotted).
 - A **group** describes one relation of the centre: `{rel, label,
   neighbor_type, origin, total, total_capped, shown, very_common, status,
-  note?}`. `shown` of `total` neighbours are in `nodes`; `very_common` means
+  note?}`. `neighbor_type` is the type of the neighbours it holds; for
+  `alert_device` that is `host` (the log's syslog header host) or `ip` (its
+  sender, when the header named no host), and `host` when there is none to
+  show. `shown` of `total` neighbours are in `nodes`; `very_common` means
   200 or more ("likely infrastructure"). `status` is `ok`, `timeout` or
   `unavailable`. `note: "log_expired"`: the log an alert was raised on has
   been deleted by retention.
@@ -6116,7 +6127,7 @@ So that the graph can't crowd out the rest of SIEMBox:
 | `alert_ips` | alert | ip | alerts, solid | `matched_data` `source_ip`, `client_ip`, `dest_ip`, with `role` |
 | `alert_users` | alert | user | alerts, solid | `matched_data` `user`, `target_user` |
 | `alert_hosts` | alert | host | alerts, solid | `matched_data.host` ("host named in the log") |
-| `alert_domains` | alert | domain | alerts, solid | `matched_data` `domain`, `lookalike` |
+| `alert_domains` | alert | domain | alerts, solid | `matched_data.domain`; and `matched_data.lookalike` on Digital Risk lookalike alerts (`source` `domain-monitor`) only, the same rule as finding the alerts from the domain |
 | `alert_rule` | alert | rule | alerts, solid | `rule_id` |
 | `alert_asset` | alert | asset | alerts, solid | `asset_id` (endpoint detections) |
 | `alert_finding` | alert, finding | finding, alert | risk, solid | the finding that raised the alert |
@@ -6229,9 +6240,10 @@ One relation of an entity, paged and searchable: the table behind a group.
 
 **Query:** `entity`, `rel` (a `groups[].rel` of that entity), the window,
 `limit` (1-50, default 50), `offset` (0-1000), `q` (at most 100 characters,
-matched anywhere in the neighbour's label, case-insensitively, among all the
-neighbours in the window; `%` and `_` are literal; `total` then counts the
-matches), `sort`
+no control or bidi characters, matched anywhere in the neighbour's label,
+case-insensitively, among all the neighbours in the window: a rule by its
+name, an asset by its host name, an alert by its title; `%` and `_` are
+literal; `total` then counts the matches), `sort`
 (`count`, `last_seen` or `first_seen`; default: the relation's own order, for
 alerts severity then recency), `order` (`desc` or `asc`), `vuln_status`.
 

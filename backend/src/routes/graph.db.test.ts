@@ -7,14 +7,17 @@
  *
  * Covers: every centre type; caps (the 6th neighbour is in the group's exact
  * total; "1,000+"); window edges and `around`; sender versus actor IPs; the
- * device and shipper (or ghost tag) a log came from; per-role answers (a
+ * device and shipper (or ghost tag) a log came from, and the group saying
+ * which type the device is; a rule alert's lookalike field read the same way
+ * from either side; live shipper and agent status (a stale one is offline);
+ * relation searches on the neighbour's label; per-role answers (a
  * viewer gets no endpoint, account-detail or sign-in nodes) and that an
  * admin's cached answer never reaches a viewer; unknown entity -> 200
- * exists:false; bad input -> 400, never 401; a restricted session -> 403
+ * exists:false; bad input (a NUL or bidi mark in q too) -> 400, never 401; a restricted session -> 403
  * PASSWORD_CHANGE_REQUIRED; a forced timeout (a test-only resolver running
  * pg_sleep) -> 200 with that source partial; an exhausted semaphore -> 503
  * GRAPH_BUSY with Retry-After; and migration 043 re-run on the populated
- * database changes nothing. Skips itself without Postgres. Run with `npm test`.
+ * database changes nothing and leaves its statistics filled. Skips itself without Postgres. Run with `npm test`.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -53,6 +56,7 @@ const IP = {
 const HOST = `Host-${tag}`;
 const USER = `root-${tag}`;
 const AGENT_ID = crypto.randomUUID();
+const STALE_AGENT_ID = crypto.randomUUID();
 const SHIPPER_KEY = crypto.randomBytes(16).toString('hex');
 const GHOST_TAG = crypto.randomBytes(4).toString('hex');
 
@@ -66,6 +70,7 @@ const ids = {
   asset: 0,
   vuln: 0,
   shipper: 0,
+  staleShipper: 0,
   raw: [] as number[],
   parsed: 0,
   ghostParsed: 0,
@@ -153,6 +158,17 @@ before(async () => {
     ids.asset,
     `asset-${tag}`,
   ]);
+  // A shipper and an agent that stopped reporting two days ago: their stored status still says 'online'.
+  ids.staleShipper = (
+    await pool.query(
+      `INSERT INTO log_shippers (name, api_key, status, last_seen) VALUES ($1, $2, 'online', NOW() - INTERVAL '2 days') RETURNING id`,
+      [`stale-shipper-${tag}`, crypto.randomBytes(16).toString('hex')]
+    )
+  ).rows[0].id;
+  await pool.query(`INSERT INTO edr_agents (agent_id, api_key_hash, hostname, status, last_seen) VALUES ($1, 'x', $2, 'online', NOW() - INTERVAL '2 days')`, [
+    STALE_AGENT_ID,
+    `stale-agent-${tag}`,
+  ]);
 
   // Two logs: one shipped by the shipper above (its md5 tag), one by a ghost.
   const md5Tag = crypto.createHash('md5').update(Buffer.from(SHIPPER_KEY, 'hex')).digest('hex').slice(0, 8);
@@ -227,6 +243,8 @@ before(async () => {
     )
   ).rows[0].id;
   await insertAlert('aliceLogin', { matched: { source_ip: IP.attacker, user: `Alice-${tag}@Acme.test` } });
+  // A rule alert whose log happened to carry a field named lookalike: not a Digital Risk lookalike.
+  await insertAlert('ruleLookalike', { matched: { domain: `rule-${tag}.example`, lookalike: `rule-${tag}.test` } });
 
   server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -239,10 +257,10 @@ after(async () => {
     await pool.query(`DELETE FROM audit_logs WHERE user_id = ANY($1)`, [userIds]);
     await pool.query(`DELETE FROM alerts WHERE title LIKE $1`, [`${tag} %`]);
     await pool.query(`DELETE FROM detection_rules WHERE id = $1`, [ids.rule]);
-    await pool.query(`DELETE FROM edr_agents WHERE agent_id = $1`, [AGENT_ID]);
+    await pool.query(`DELETE FROM edr_agents WHERE agent_id = ANY($1::uuid[])`, [[AGENT_ID, STALE_AGENT_ID]]);
     await pool.query(`DELETE FROM assets WHERE id = $1`, [ids.asset]);
     await pool.query(`DELETE FROM vulnerabilities WHERE id = $1`, [ids.vuln]);
-    await pool.query(`DELETE FROM log_shippers WHERE id = $1`, [ids.shipper]);
+    await pool.query(`DELETE FROM log_shippers WHERE id = ANY($1::int[])`, [[ids.shipper, ids.staleShipper]]);
     await pool.query(`DELETE FROM raw_logs WHERE id = ANY($1)`, [ids.raw]);
     await pool.query(`DELETE FROM monitored_identities WHERE id = $1`, [ids.identity]);
     await pool.query(`DELETE FROM watched_domains WHERE id = $1`, [ids.domain]);
@@ -285,6 +303,7 @@ test('an alert: its IPs (source and sender roles), user, host, rule, same-event 
   const device = edge(json, 'alert_device', alertId('brute'), `host:${HOST.toLowerCase()}`);
   assert.equal(device?.style, 'logs', 'the device is the syslog header host, dashed');
   assert.ok(edge(json, 'shipped_by', `host:${HOST.toLowerCase()}`, `shipper:${ids.shipper}`), 'mapped to its shipper');
+  assert.equal(group(json, 'alert_device').neighbor_type, 'host');
   assert.deepEqual(json.sources, { alerts: { status: 'ok' }, risk: { status: 'ok' }, logs: { status: 'ok' } });
 
   // The junk user '-' of the same-event alert is no node; a sender-only alert's IP is a sender.
@@ -295,6 +314,7 @@ test('an alert: its IPs (source and sender roles), user, host, rule, same-event 
   assert.ok(sender.center.flags.includes('closed'));
   // No header host: the device is the sender IP, and an unmatched tag is a ghost shipper.
   assert.ok(edge(sender, 'alert_device', alertId('senderOnly'), `ip:${IP.sender}`));
+  assert.equal(group(sender, 'alert_device').neighbor_type, 'ip', 'the group says the device is the sender ip, not a host');
   assert.ok(edge(sender, 'shipped_by', `ip:${IP.sender}`, `shipper_tag:${GHOST_TAG}`));
   // A rule alert whose log is gone says so.
   assert.equal(group((await nbr('analyst', alertId('logGone'))).json, 'alert_device').note, 'log_expired');
@@ -441,6 +461,12 @@ test('Digital Risk: a lookalike domain, its finding and alert; an email identity
   assert.ok(edge(f, 'alert_finding', alertId('lookalike'), `finding:${ids.finding}`));
   const watched = (await nbr('viewer', `domain:acme-${tag}.test`)).json;
   assert.equal(watched.center.facts.watched, 'own');
+  // A rule alert whose log carried a field named lookalike: read the same way from both sides (not at all).
+  const ruleAlert = (await nbr('viewer', alertId('ruleLookalike'))).json;
+  assert.ok(edge(ruleAlert, 'alert_domains', alertId('ruleLookalike'), `domain:rule-${tag}.example`), 'its domain is a domain');
+  assert.ok(!ruleAlert.nodes.some((n) => n.id === `domain:rule-${tag}.test`), 'its lookalike field is no lookalike');
+  assert.equal(group(ruleAlert, 'alert_domains').total, 1);
+  assert.equal((await nbr('viewer', `domain:rule-${tag}.test`)).json.center.exists, false, 'nor is the alert found from that domain');
   const identity = (await nbr('viewer', `identity:${ids.identity}`)).json;
   const user = `user:Alice-${tag}@Acme.test`;
   assert.equal(edge(identity, 'identity_user', `identity:${ids.identity}`, user)?.style, 'heuristic', 'matched in lower case, dotted');
@@ -491,6 +517,8 @@ test('answers: unknown entity -> 200 exists:false; bad input -> 400 (never 401);
     '/api/graph/neighborhood?entity[a]=1',
     '/api/graph/relation?entity=ip:1.2.3.4&rel=nope',
     '/api/graph/relation?entity=ip:1.2.3.4&rel=entity_alerts&offset=1001',
+    '/api/graph/relation?entity=ip:1.2.3.4&rel=entity_alerts&q=a%00b',
+    '/api/graph/relation?entity=ip:1.2.3.4&rel=entity_alerts&q=a%E2%80%AEb',
     `/api/graph/search?q=${'x'.repeat(201)}`,
   ]) {
     const r = await call('viewer', bad);
@@ -505,6 +533,46 @@ test('answers: unknown entity -> 200 exists:false; bad input -> 400 (never 401);
   // include limits the origins that run.
   const onlyInventory = (await nbr('admin', `ip:${IP.attacker}`, '&include=inventory')).json;
   assert.deepEqual(Object.keys(onlyInventory.sources), ['inventory']);
+});
+
+test('shippers and endpoints carry their live status: stale is offline, never seen is pending, whatever was stored', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  graphCache.clear();
+  const stale = (await nbr('viewer', `shipper:${ids.staleShipper}`)).json;
+  assert.equal(stale.center.facts.status, 'offline', 'no heartbeat for two days, though its row says online');
+  assert.equal((await call('viewer', `/api/shippers/${ids.staleShipper}`)).json.status, 'offline', 'as GET /api/shippers/:id says');
+  const search = (await call('viewer', `/api/graph/search?q=stale-shipper-${tag}`)).json;
+  assert.equal(search.candidates.find((c: Json) => c.entity === `shipper:${ids.staleShipper}`)?.hint, 'shipper · offline');
+  assert.equal((await nbr('viewer', `shipper:${ids.shipper}`)).json.center.facts.status, 'pending', 'never heard from');
+  assert.equal((await nbr('admin', `endpoint:${STALE_AGENT_ID}`)).json.center.facts.status, 'offline');
+  const live = (await nbr('admin', `endpoint:${AGENT_ID}`)).json;
+  assert.equal(live.center.facts.status, 'online');
+  const asset = (await nbr('admin', `asset:${ids.asset}`)).json;
+  assert.equal(asset.nodes.find((n) => n.id === `endpoint:${AGENT_ID}`)?.facts.status, asset.center.facts.agent_status, 'the endpoint node agrees with its asset');
+});
+
+test('a relation table searched in memory: q matches the neighbour label (a rule name, a host name), not its id', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  graphCache.clear();
+  const rel = async (who: Role, entity: string, relId: string, q: string) =>
+    (await call(who, `/api/graph/relation?entity=${encodeURIComponent(entity)}&rel=${relId}&q=${encodeURIComponent(q)}`)).json;
+  const rule = await rel('viewer', alertId('brute'), 'alert_rule', `graph-test-${tag}`);
+  assert.deepEqual([rule.total, rule.items.map((i: Json) => i.node.id)], [1, [`rule:${ids.rule}`]]);
+  // By the label alone: the id matches only where the label happens to hold it (the tag is hex).
+  const byId = await rel('viewer', alertId('brute'), 'alert_rule', String(ids.rule));
+  assert.equal(byId.total, String(rule.items[0].node.label).includes(String(ids.rule)) ? 1 : 0, 'not by its id');
+  const asset = await rel('viewer', alertId('edr'), 'alert_asset', `ASSET-${tag}`);
+  assert.deepEqual(asset.items.map((i: Json) => i.node.id), [`asset:${ids.asset}`], 'case-insensitive, on the host name');
+  assert.equal((await rel('viewer', alertId('edr'), 'alert_asset', 'no-such-host')).total, 0);
+  const finding = await rel('viewer', `finding:${ids.finding}`, 'alert_finding', 'lookalike');
+  assert.deepEqual(finding.items.map((i: Json) => i.node.id), [alertId('lookalike')], "an alert by its title");
+  // A non-admin's account node is labelled with the username its alert showed.
+  const account = await rel('viewer', alertId('auth'), 'alert_account', `graph-${tag}-admin`);
+  assert.equal(account.total, 1);
+  // Value neighbours: their label is their key.
+  assert.equal((await rel('viewer', alertId('brute'), 'alert_ips', IP.attacker)).total, 1);
+  const paged = await rel('viewer', alertId('brute'), 'alert_ips', '');
+  assert.ok(paged.total >= 1, 'an empty q is no filter');
 });
 
 /** A test-only source for IPs that sleeps past the statement timeout. */
@@ -602,4 +670,8 @@ test('migration 043 re-runs on the populated database without changing anything'
   );
   assert.equal(rows.length, 12);
   assert.ok(rows.every((row) => row.indisvalid));
+  // Its statistics exist and hold data: the first-fill ANALYZE ran (alerts isn't empty here).
+  const stats = await pool.query(`SELECT statistics_name, null_frac FROM pg_stats_ext_exprs WHERE statistics_name LIKE 'graph\\_alerts\\_%' ORDER BY 1`);
+  assert.equal(stats.rows.length, 10);
+  assert.ok(stats.rows.every((row) => row.null_frac !== null), JSON.stringify(stats.rows));
 });

@@ -14,6 +14,7 @@
 import { Router, type Request, type Response } from 'express';
 import { badParam, GRAPH_BUSY_RETRY_AFTER_SECONDS, GraphBusyError, GraphError } from '../services/graph/errors';
 import { parseEntity } from '../services/graph/entityKey';
+import { hasUnsafeChars } from '../services/graph/labels';
 import { getNeighborhood, getRelation, type Caller } from '../services/graph/neighborhood';
 import { knownRel } from '../services/graph/relations';
 import type { SortKey } from '../services/graph/resolvers/common';
@@ -108,6 +109,8 @@ router.get('/relation', (req: Request, res: Response) =>
     if (!rel || !knownRel(rel)) throw badParam('rel must name a relation (see GET /api/graph/neighborhood groups[].rel)');
     const q = single(req, 'q');
     if (q !== undefined && q.length > 100) throw badParam('q must be at most 100 characters');
+    // As /search refuses them: a NUL would reach the ILIKE parameter and fail the statement.
+    if (q !== undefined && hasUnsafeChars(q)) throw badParam('q may not contain control or bidi characters');
     return getRelation(graphDeps, caller(req), {
       center: parseEntity(single(req, 'entity')),
       rel,

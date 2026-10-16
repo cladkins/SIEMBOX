@@ -36,6 +36,41 @@ CREATE INDEX IF NOT EXISTS idx_graph_alerts_edr_agent_id ON alerts ((lower(match
 -- Digital Risk lookalike alerts name the lookalike domain in matched_data.lookalike.
 CREATE INDEX IF NOT EXISTS idx_graph_alerts_dm_lookalike ON alerts ((rtrim(lower(btrim(matched_data->>'lookalike')), '.')), created_at DESC) WHERE source = 'domain-monitor' AND octet_length(rtrim(lower(btrim(matched_data->>'lookalike')), '.')) <= 2000;
 
+-- The planner's statistics on the same expressions: Postgres keeps them for a
+-- full index's expression but not a partial one's, and without them it takes
+-- any value for 0.5% of alerts, rare or common alike. Lookups never OR these
+-- keys (one ordered scan per key, alertKeys.ts latestAlerts()), so a bad guess
+-- can't send them walking idx_alerts_created_at; with real frequencies a
+-- common value's scan also stops at its limit instead of reading every alert
+-- that names it. Expression statistics need PostgreSQL 14 or later; SIEMBox
+-- runs on 15. Also written in alertKeys.ts (alertKeyStatsSql).
+CREATE STATISTICS IF NOT EXISTS graph_alerts_md_source_ip_stats ON (matched_data->>'source_ip') FROM alerts;
+CREATE STATISTICS IF NOT EXISTS graph_alerts_md_client_ip_stats ON (matched_data->>'client_ip') FROM alerts;
+CREATE STATISTICS IF NOT EXISTS graph_alerts_md_dest_ip_stats ON (matched_data->>'dest_ip') FROM alerts;
+CREATE STATISTICS IF NOT EXISTS graph_alerts_md_user_stats ON (btrim(matched_data->>'user')) FROM alerts;
+CREATE STATISTICS IF NOT EXISTS graph_alerts_md_target_user_stats ON (btrim(matched_data->>'target_user')) FROM alerts;
+CREATE STATISTICS IF NOT EXISTS graph_alerts_md_host_stats ON (lower(btrim(matched_data->>'host'))) FROM alerts;
+CREATE STATISTICS IF NOT EXISTS graph_alerts_md_domain_stats ON (rtrim(lower(btrim(matched_data->>'domain')), '.')) FROM alerts;
+CREATE STATISTICS IF NOT EXISTS graph_alerts_auth_user_id_stats ON (matched_data->>'user_id') FROM alerts;
+CREATE STATISTICS IF NOT EXISTS graph_alerts_edr_agent_id_stats ON (lower(matched_data->>'agent_id')) FROM alerts;
+CREATE STATISTICS IF NOT EXISTS graph_alerts_dm_lookalike_stats ON (rtrim(lower(btrim(matched_data->>'lookalike')), '.')) FROM alerts;
+
+-- Fill them now rather than whenever autoanalyze next gets to alerts, and only
+-- while one of them has no data yet: the first start after the upgrade (and
+-- starts while alerts is empty, when there is nothing to read). Later starts
+-- skip it. ANALYZE reads a sample of at most 30,000 rows: about 1.5 s on 1.6
+-- million alerts, far less than building the indexes above. It reads
+-- pg_stats_ext_exprs, not the catalog under it, which only a superuser may read.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_stats_ext_exprs e
+     WHERE e.tablename = 'alerts' AND e.statistics_name LIKE 'graph\_alerts\_%' AND e.null_frac IS NULL
+  ) THEN
+    ANALYZE alerts;
+  END IF;
+END $$;
+
 -- A rule's latest alerts, without sorting all of a noisy rule's alerts.
 CREATE INDEX IF NOT EXISTS idx_graph_alerts_rule_created ON alerts (rule_id, created_at DESC) WHERE rule_id IS NOT NULL;
 

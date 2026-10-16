@@ -3,15 +3,30 @@ import { isIP } from 'net';
 import { query } from '../config/database';
 import { ApiError } from '../middleware/errorHandler';
 import { geoipService } from '../services/geoip/geoipService';
-import { alertIpMatch } from '../services/graph/alertKeys';
+import { alertIpArms, alertIpMatch, latestAlerts } from '../services/graph/alertKeys';
 
 const router = Router();
+
+/**
+ * An IP's latest 50 alerts: one ordered scan per IP key (alertKeys.ts
+ * latestAlerts()), each reading at most 50 rows, so an IP with no alerts is as
+ * quick as a common one at any table size. An OR of the keys under this ORDER
+ * BY ... LIMIT walked idx_alerts_created_at back through every alert instead.
+ */
+export const IP_ALERTS_SQL = `SELECT a.id, a.created_at, a.severity, a.title, a.status, a.matched_data,
+            r.name AS rule_name
+       FROM alerts a
+       LEFT JOIN detection_rules r ON a.rule_id = r.id
+      WHERE a.id IN (${latestAlerts(alertIpArms('$1'), 'a.id', 50)})
+      ORDER BY a.created_at DESC
+      LIMIT 50`;
 
 /**
  * GET /ip/:ip — everything we know about an IP: its GeoIP country, recent parsed
  * log events from it, and recent alerts that referenced it. All three IP-keyed
  * queries are index-/key-filtered, so they stay fast: the alert ones on
- * migration 043's matched_data IP indexes (alertIpMatch states their guard).
+ * migration 043's matched_data IP indexes (IP_ALERTS_SQL; the count is an OR
+ * over the same three, alertIpMatch, which also states their guard).
  */
 router.get('/ip/:ip', async (req: Request, res: Response) => {
   const ip = ((req.params.ip as string) || '').trim();
@@ -31,16 +46,7 @@ router.get('/ip/:ip', async (req: Request, res: Response) => {
     [ip]
   );
 
-  const alerts = await query(
-    `SELECT a.id, a.created_at, a.severity, a.title, a.status, a.matched_data,
-            r.name AS rule_name
-       FROM alerts a
-       LEFT JOIN detection_rules r ON a.rule_id = r.id
-      WHERE ${alertIpMatch('$1')}
-      ORDER BY a.created_at DESC
-      LIMIT 50`,
-    [ip]
-  );
+  const alerts = await query(IP_ALERTS_SQL, [ip]);
 
   const counts = await query(
     `SELECT

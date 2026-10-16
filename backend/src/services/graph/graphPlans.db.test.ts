@@ -1,27 +1,48 @@
 /**
- * Query plans: the alert lookups the graph sends use migration 043's indexes.
+ * Query plans: the alert lookups the graph, Threat Intel's IP view and
+ * Asset-360 send, as they send them (ORDER BY created_at DESC LIMIT n), use
+ * migration 043's indexes and read a bounded number of rows.
  *
- * The SQL is captured from the real resolvers (a recording query function),
- * then EXPLAINed on a dedicated connection inside one transaction that seeds
- * 20,000 alerts and runs ANALYZE, so the planner sees realistic statistics;
- * everything is rolled back (statistics included), so other tests see nothing.
- * Skips itself without Postgres. Run with `npm test`.
+ * The SQL is captured from the real resolvers (a recording query function) or
+ * is the statement the route exports, then EXPLAINed on a dedicated
+ * connection inside one transaction that seeds 20,000 alerts (plus 4,500
+ * naming one hot IP, user and host) and runs ANALYZE, so the planner sees
+ * realistic statistics; everything is rolled back (statistics included), so
+ * other tests see nothing. Skips itself without Postgres. Run with `npm test`.
+ *
+ * Why: Postgres keeps no statistics for a partial index's expression, so it
+ * took any value for 0.5% of alerts. With an OR of keys under ORDER BY
+ * created_at DESC LIMIT n, that guess had it walk idx_alerts_created_at back
+ * through every alert for a value no alert names (seconds at a million
+ * alerts). Now each key is its own ordered scan (alertKeys.ts latestAlerts()),
+ * which no estimate turns into that walk, and 043 keeps statistics on each
+ * expression so a common value's scan stops at its limit. These tests check
+ * the shape, the statistics, and the bound where the table is big enough to
+ * show it (LIMIT 50 and 100); 24,500 rows are too few to show the walk itself.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'crypto';
 import type { PoolClient } from 'pg';
 import pool, { closePools } from '../../config/database';
+import { IP_ALERTS_SQL } from '../../routes/threatIntel';
+import { ASSET_ALERTS_SQL } from '../assets/assetContext';
 import type { Query } from './budget';
-import { alertIpMatch, alertKeyEquals } from './alertKeys';
 import { entityRef, type EntityRef } from './entityKey';
 import { RELATIONS } from './relations';
+import { ALERT_KEY_INDEXES, alertKeyEquals, alertKeyStatsName, type AlertKey } from './alertKeys';
+import { countAlertsNaming } from './resolvers/alerts';
 import type { CenterInfo, RelationDef, ResolverCtx } from './resolvers/common';
+import { TOTAL_CAP } from './types';
 import { resolveWindow } from './window';
 
 const SKIP = 'Postgres with the SIEMBox schema is not reachable';
 let db: PoolClient | undefined;
 const tag = crypto.randomBytes(3).toString('hex');
+/** Named by 4,500 alerts in the last 30 days (more than any LIMIT here). */
+const HOT = { ip: '198.19.250.250', user: `hot-${tag}`, host: `hothost-${tag}` };
+/** Named by no alert. */
+const RARE_IP = '198.19.251.251';
 
 before(async () => {
   try {
@@ -33,7 +54,7 @@ before(async () => {
     return;
   }
   await db.query('BEGIN');
-  // 20,000 alerts over 30 days: 2,000 distinct source IPs, users and hosts, a
+  // 20,000 alerts over 30 days: 1,000 distinct source IPs, 2,000 users and hosts, a
   // few EDR, sign-in and Digital Risk alerts, and 500 sign-in audit rows.
   await db.query(
     `INSERT INTO alerts (severity, title, matched_data, status, created_at, source)
@@ -51,10 +72,27 @@ before(async () => {
     [tag]
   );
   await db.query(
-    `INSERT INTO audit_logs (action, ip_address, timestamp)
-     SELECT 'auth.login.failure', ('198.18.' || (g % 250) || '.' || (g % 8))::inet, NOW() - make_interval(mins => g)
-       FROM generate_series(1, 500) g`
+    `INSERT INTO alerts (severity, title, matched_data, status, created_at)
+     SELECT 'low', 'plan ' || $1, jsonb_build_object('source_ip', $2::text, 'user', $3::text, 'host', $4::text),
+            'new', NOW() - make_interval(mins => g * 9)
+       FROM generate_series(1, 4500) g`,
+    [tag, HOT.ip, HOT.user, HOT.host]
   );
+  // Sign-ins name their account, as real ones do: with user_id NULL and one
+  // user, reading every row of that user was the planner's cheapest way in.
+  const [{ id: userId }] = (
+    await db.query(`INSERT INTO users (username, email, password_hash, role) VALUES ($1, $2, 'x', 'admin') RETURNING id`, [
+      `plan-${tag}`,
+      `plan-${tag}@siembox.invalid`,
+    ])
+  ).rows;
+  await db.query(
+    `INSERT INTO audit_logs (user_id, action, ip_address, timestamp)
+     SELECT $1, 'auth.login.failure', ('198.18.' || (g % 250) || '.' || (g % 8))::inet, NOW() - make_interval(mins => g)
+       FROM generate_series(1, 500) g`,
+    [userId]
+  );
+  await db.query('ANALYZE users');
   await db.query('ANALYZE alerts');
   await db.query('ANALYZE audit_logs');
 });
@@ -67,42 +105,106 @@ after(async () => {
   await closePools();
 });
 
-/** The statements a relation sends for `center`, captured instead of run. */
-async function captured(def: RelationDef, center: EntityRef, row: Record<string, unknown> | null = null) {
-  const statements: Array<{ sql: string; params: unknown[] }> = [];
+type Statement = { sql: string; params: unknown[] };
+
+function recorder(): { q: Query; statements: Statement[] } {
+  const statements: Statement[] = [];
   const q: Query = async <T>(sql: string, params: unknown[] = []) => {
     statements.push({ sql, params });
     return [] as T[];
   };
+  return { q, statements };
+}
+
+function ctxFor(center: EntityRef, row: Record<string, unknown> | null, window = '7d'): ResolverCtx {
   const centerInfo: CenterInfo = { exists: true, row };
-  const ctx: ResolverCtx = { role: 'admin', window: resolveWindow({ window: '7d' }, Date.now()), vulnStatus: 'open', center, centerInfo };
-  await def.fetch(q, ctx, { limit: 5, offset: 0 });
+  return { role: 'admin', window: resolveWindow({ window }, Date.now()), vulnStatus: 'open', center, centerInfo };
+}
+
+/** The statement a relation sends for `center`, captured instead of run. */
+async function captured(def: RelationDef, center: EntityRef, row: Record<string, unknown> | null = null, window = '7d'): Promise<Statement> {
+  const { q, statements } = recorder();
+  await def.fetch(q, ctxFor(center, row, window), { limit: 5, offset: 0 });
   assert.ok(statements.length >= 1, `${def.center} ${def.rel} sent its query`);
   return statements[0];
 }
 
-async function plannedIndexes(statement: { sql: string; params: unknown[] }): Promise<string[]> {
-  const { rows } = await db!.query(`EXPLAIN (FORMAT JSON) ${statement.sql}`, statement.params);
-  const names = new Set<string>();
-  const walk = (node: { 'Index Name'?: string; Plans?: unknown[] }) => {
-    if (node['Index Name']) names.add(node['Index Name']);
-    for (const child of node.Plans ?? []) walk(child as typeof node);
-  };
-  walk(rows[0]['QUERY PLAN'][0].Plan);
-  return [...names].sort();
+interface PlanNode {
+  'Node Type': string;
+  'Index Name'?: string;
+  'Relation Name'?: string;
+  'Actual Rows'?: number;
+  'Actual Loops'?: number;
+  'Rows Removed by Filter'?: number;
+  'Rows Removed by Index Recheck'?: number;
+  Plans?: PlanNode[];
+}
+
+/** Every node of a plan, with its parent's type. */
+function nodes(plan: PlanNode, parent = ''): Array<PlanNode & { parent: string }> {
+  return [{ ...plan, parent }, ...(plan.Plans ?? []).flatMap((child) => nodes(child, plan['Node Type']))];
+}
+
+async function plan(statement: Statement, analyze = false): Promise<Array<PlanNode & { parent: string }>> {
+  const { rows } = await db!.query(`EXPLAIN (${analyze ? 'ANALYZE, ' : ''}FORMAT JSON) ${statement.sql}`, statement.params);
+  return nodes(rows[0]['QUERY PLAN'][0].Plan);
+}
+
+async function plannedIndexes(statement: Statement): Promise<string[]> {
+  return [...new Set((await plan(statement)).map((n) => n['Index Name']).filter((name): name is string => Boolean(name)))].sort();
+}
+
+/**
+ * The shape of an "alerts naming X" plan: one scan per arm, each on its key's
+ * index; never an OR of keys (a BitmapOr, which the planner can trade for a walk
+ * of idx_alerts_created_at when it misjudges the value), that walk, or a
+ * sequential scan of alerts.
+ */
+async function assertOrderedArms(label: string, statement: Statement, expected: string[]) {
+  const all = await plan(statement);
+  const used = all.filter((n) => n['Index Name']);
+  assert.ok(!all.some((n) => n['Node Type'] === 'BitmapOr'), `${label}: no OR of keys`);
+  assert.ok(!used.some((n) => n['Index Name'] === 'idx_alerts_created_at'), `${label}: no walk of idx_alerts_created_at`);
+  assert.ok(!all.some((n) => n['Node Type'] === 'Seq Scan' && n['Relation Name'] === 'alerts'), `${label}: no sequential scan`);
+  for (const name of expected) assert.ok(used.some((n) => n['Index Name'] === name), `${label}: ${name} in ${used.map((n) => n['Index Name']).join(', ')}`);
+}
+
+/** Rows each scan of `alerts` read (kept, filtered out, rechecked), over all its loops. */
+async function rowsRead(statement: Statement): Promise<Array<{ index: string; read: number }>> {
+  return (await plan(statement, true))
+    .filter((n) => n['Relation Name'] === 'alerts')
+    .map((n) => ({
+      index: n['Index Name'] ?? n['Node Type'],
+      read: ((n['Actual Rows'] ?? 0) + (n['Rows Removed by Filter'] ?? 0) + (n['Rows Removed by Index Recheck'] ?? 0)) * (n['Actual Loops'] ?? 1),
+    }));
+}
+
+/**
+ * No scan of alerts reads more than `limit` rows, except the primary-key
+ * lookups of what the arms found: for a common value (which the planner knows
+ * from 043's statistics), each arm stops at its limit instead of reading every
+ * alert that names it.
+ */
+async function assertBounded(label: string, statement: Statement, limit: number, arms: number) {
+  for (const { index, read } of await rowsRead(statement)) {
+    const bound = index === 'alerts_pkey' ? arms * limit : limit;
+    assert.ok(read <= bound, `${label}: ${index} read ${read} rows (at most ${bound})`);
+  }
 }
 
 const def = (center: string, rel: string) => RELATIONS.find((d) => d.center === center && d.rel === rel)!;
+const IP_INDEXES = ['idx_graph_alerts_md_source_ip', 'idx_graph_alerts_md_client_ip', 'idx_graph_alerts_md_dest_ip'];
 
-test('alerts naming an IP: a BitmapOr over the three IP indexes', async (t) => {
+test('alerts naming an IP (7 d and the 30 d of the Threat Intel entry point): one ordered scan per key and spelling', async (t) => {
   if (!db) return t.skip(SKIP);
-  const indexes = await plannedIndexes(await captured(def('ip', 'entity_alerts'), entityRef('ip', '198.18.7.3')));
-  for (const name of ['idx_graph_alerts_md_source_ip', 'idx_graph_alerts_md_client_ip', 'idx_graph_alerts_md_dest_ip']) {
-    assert.ok(indexes.includes(name), `${name} in ${indexes.join(', ')}`);
+  for (const window of ['7d', '30d']) {
+    for (const ip of ['198.18.7.3', RARE_IP, HOT.ip, '2001:db8::2']) {
+      await assertOrderedArms(`ip:${ip} ${window}`, await captured(def('ip', 'entity_alerts'), entityRef('ip', ip), null, window), IP_INDEXES);
+    }
   }
 });
 
-test('alerts naming a user, host or domain; a rule, account or endpoint: their own indexes', async (t) => {
+test('alerts naming a user, host or domain; a rule, account or endpoint: their own indexes, ordered', async (t) => {
   if (!db) return t.skip(SKIP);
   const cases: Array<[string, EntityRef, string[]]> = [
     ['user', entityRef('user', 'user17'), ['idx_graph_alerts_md_user', 'idx_graph_alerts_md_target_user']],
@@ -112,8 +214,7 @@ test('alerts naming a user, host or domain; a rule, account or endpoint: their o
     ['endpoint', entityRef('endpoint', '3f2504e0-4f89-11d3-9a0c-0305e82c3301'), ['idx_graph_alerts_edr_agent_id']],
   ];
   for (const [center, ref, expected] of cases) {
-    const indexes = await plannedIndexes(await captured(def(center, 'entity_alerts'), ref));
-    for (const name of expected) assert.ok(indexes.includes(name), `${center}: ${name} in ${indexes.join(', ')}`);
+    await assertOrderedArms(center, await captured(def(center, 'entity_alerts'), ref, null, '30d'), expected);
   }
   // A noisy rule (half the seeded alerts): its latest alerts come straight off
   // (rule_id, created_at DESC), with no sort of all of them.
@@ -122,29 +223,66 @@ test('alerts naming a user, host or domain; a rule, account or endpoint: their o
   ).rows;
   await db.query(`UPDATE alerts SET rule_id = $1 WHERE title = $2 AND id % 2 = 0`, [ruleId, `plan ${tag}`]);
   await db.query('ANALYZE alerts');
-  const rule = await plannedIndexes(await captured(def('rule', 'rule_alerts'), entityRef('rule', String(ruleId))));
-  assert.ok(rule.includes('idx_graph_alerts_rule_created'), rule.join(', '));
+  const rule = await captured(def('rule', 'rule_alerts'), entityRef('rule', String(ruleId)), null, '30d');
+  await assertOrderedArms('rule', rule, ['idx_graph_alerts_rule_created']);
+  await assertBounded('rule', rule, TOTAL_CAP + 1, 1);
 });
 
-test("an asset's alerts: asset_id or its current IP", async (t) => {
+test("an asset's alerts: asset_id, and its current IP under each key", async (t) => {
   if (!db) return t.skip(SKIP);
-  const indexes = await plannedIndexes(await captured(def('asset', 'entity_alerts'), entityRef('asset', '1'), { ip: '198.18.7.3', hostname: 'x' }));
-  for (const name of ['idx_alerts_asset_id', 'idx_graph_alerts_md_source_ip', 'idx_graph_alerts_md_dest_ip']) {
-    assert.ok(indexes.includes(name), `${name} in ${indexes.join(', ')}`);
+  for (const window of ['7d', '30d']) {
+    await assertOrderedArms(
+      `asset ${window}`,
+      await captured(def('asset', 'entity_alerts'), entityRef('asset', '1'), { ip: '198.18.7.3', hostname: 'x' }, window),
+      ['idx_alerts_asset_id', ...IP_INDEXES]
+    );
   }
 });
 
-test("Threat Intel's IP view and Asset-360 use the same indexes (alertKeys.ts)", async (t) => {
+test("migration 043's statistics: the planner tells a common value from a rare one", async (t) => {
   if (!db) return t.skip(SKIP);
-  const threatIntel = await plannedIndexes({ sql: `SELECT id FROM alerts WHERE ${alertIpMatch('$1', { column: 'matched_data' })}`, params: ['198.18.7.3'] });
-  for (const name of ['idx_graph_alerts_md_source_ip', 'idx_graph_alerts_md_client_ip', 'idx_graph_alerts_md_dest_ip']) {
-    assert.ok(threatIntel.includes(name), `${name} in ${threatIntel.join(', ')}`);
+  // Without them it takes every value for 0.5% of alerts, so both estimates were the same.
+  const estimate = async (key: AlertKey, value: string) => {
+    const { rows } = await db!.query(`EXPLAIN (FORMAT JSON) SELECT 1 FROM alerts a WHERE ${alertKeyEquals(key, '$1')}`, [value]);
+    return Number(rows[0]['QUERY PLAN'][0].Plan['Plan Rows']);
+  };
+  for (const [key, hot, rare] of [
+    ['source_ip', HOT.ip, RARE_IP],
+    ['user', HOT.user, `nobody-${tag}`],
+    ['host', HOT.host, `nohost-${tag}`],
+  ] as const) {
+    const [common, uncommon] = [await estimate(key, hot), await estimate(key, rare)];
+    assert.ok(common >= 20 * uncommon, `${key}: ${common} estimated for the common value, ${uncommon} for the rare one`);
   }
-  const asset360 = await plannedIndexes({
-    sql: `SELECT id FROM alerts WHERE asset_id = $1 OR ($2::text IS NOT NULL AND ${alertKeyEquals('source_ip', '$2', { column: 'matched_data' })})`,
-    params: [1, '198.18.7.3'],
-  });
-  assert.ok(asset360.includes('idx_graph_alerts_md_source_ip'), asset360.join(', '));
+  for (const entry of ALERT_KEY_INDEXES) {
+    const { rows } = await db.query(`SELECT null_frac FROM pg_stats_ext_exprs WHERE statistics_name = $1`, [alertKeyStatsName(entry)]);
+    assert.ok(rows.length === 1 && rows[0].null_frac !== null, `${alertKeyStatsName(entry)} exists and holds data`);
+  }
+});
+
+test("a common value's search hint: the same arms, and still capped at 1,000+", async (t) => {
+  if (!db) return t.skip(SKIP);
+  const { q, statements } = recorder();
+  await countAlertsNaming(q, ctxFor(entityRef('ip', HOT.ip), null, '30d'));
+  await assertOrderedArms('search hint', statements[0], IP_INDEXES);
+  const [{ n }] = (await db.query(statements[0].sql, statements[0].params)).rows;
+  assert.equal(Number(n), TOTAL_CAP + 1, '4,500 alerts name it');
+});
+
+test("Threat Intel's IP view and Asset-360, as they send them (LIMIT 50 and 100): the same ordered arms", async (t) => {
+  if (!db) return t.skip(SKIP);
+  for (const ip of [RARE_IP, HOT.ip]) {
+    await assertOrderedArms(`threat intel ${ip}`, { sql: IP_ALERTS_SQL, params: [ip] }, IP_INDEXES);
+    await assertBounded(`threat intel ${ip}`, { sql: IP_ALERTS_SQL, params: [ip] }, 50, 3);
+    await assertOrderedArms(`asset-360 ${ip}`, { sql: ASSET_ALERTS_SQL, params: [1, ip] }, ['idx_alerts_asset_id', 'idx_graph_alerts_md_source_ip']);
+    await assertBounded(`asset-360 ${ip}`, { sql: ASSET_ALERTS_SQL, params: [1, ip] }, 100, 2);
+  }
+  const hot = (await db.query(IP_ALERTS_SQL, [HOT.ip])).rows;
+  assert.equal(hot.length, 50);
+  const newest = (await db.query(`SELECT max(created_at) AS at FROM alerts WHERE matched_data->>'source_ip' = $1`, [HOT.ip])).rows[0].at;
+  assert.equal(hot[0].created_at.getTime(), newest.getTime(), 'the latest first');
+  // An asset with no IP: the asset_id arm alone (a NULL $2 must not fail the statement).
+  await db.query(ASSET_ALERTS_SQL, [1, null]);
 });
 
 test('SIEMBox sign-ins from an IP (admin): idx_graph_audit_logs_ip_time', async (t) => {

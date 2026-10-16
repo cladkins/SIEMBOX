@@ -16,7 +16,19 @@ import { AssetRepository } from './assetRepository';
 import { VulnerabilityRepository } from '../vulnerabilities/vulnerabilityRepository';
 import { geoipService } from '../geoip/geoipService';
 import { OFFLINE_THRESHOLD_MINUTES } from '../../models/EdrAgent';
-import { alertKeyEquals } from '../graph/alertKeys';
+import { alertKeyEquals, latestAlerts } from '../graph/alertKeys';
+
+/**
+ * The asset's latest 100 alerts: linked by asset_id, or naming its IP as
+ * source_ip. One ordered scan per arm (alertKeys.ts latestAlerts()), so an IP
+ * no alert names doesn't send Postgres back through every alert by created_at.
+ */
+export const ASSET_ALERTS_SQL = `SELECT a.id, a.rule_id, a.severity, a.title, a.description, a.status, a.source, a.event_id,
+              a.matched_data, a.created_at
+         FROM alerts a
+        WHERE a.id IN (${latestAlerts(['a.asset_id = $1', `($2::text IS NOT NULL AND ${alertKeyEquals('source_ip', '$2')})`], 'a.id', 100)})
+        ORDER BY a.created_at DESC
+        LIMIT 100`;
 
 export interface AssetContext {
   agent: Record<string, any> | null;
@@ -58,17 +70,8 @@ export async function getAssetContext(assetId: number): Promise<AssetContext | n
       [hostname, ip]
     ),
     // Alerts linked to the asset, or whose extracted source_ip matches the IP
-    // (on migration 043's source_ip index: alertKeyEquals states its guard).
-    query(
-      `SELECT id, rule_id, severity, title, description, status, source, event_id,
-              matched_data, created_at
-         FROM alerts
-        WHERE asset_id = $1
-           OR ($2::text IS NOT NULL AND ${alertKeyEquals('source_ip', '$2', { column: 'matched_data' })})
-        ORDER BY created_at DESC
-        LIMIT 100`,
-      [assetId, ip]
-    ),
+    // (on migration 043's source_ip index, one ordered scan per arm).
+    query(ASSET_ALERTS_SQL, [assetId, ip]),
     // Reuse the existing nested asset-vuln shape (vulnerability.* fields).
     VulnerabilityRepository.getAssetVulnerabilities(assetId),
   ]);

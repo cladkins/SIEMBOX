@@ -19,6 +19,7 @@ import { sanitizeFact, sanitizeLabel } from './labels';
 import { canSeeAccountDetails, canSeeType } from './visibility';
 import { geoipService } from '../geoip/geoipService';
 import { OFFLINE_THRESHOLD_MINUTES } from '../../models/EdrAgent';
+import { SHIPPER_OFFLINE_THRESHOLD_MINUTES } from '../../models/LogShipper';
 import type { FactValue, GraphNode, NodeFlag, NodeType, Role } from './types';
 
 const PRIVATE_RANGES = new net.BlockList();
@@ -72,11 +73,14 @@ function baseNode(ref: EntityRef, label: string, facts: Record<string, FactValue
 }
 
 interface TypeLoader {
+  /** $1 is the ids; `params` follow as $2... */
   sql: string;
   /** The id column's value as the node key. */
   key: (row: Row) => string;
   /** pg array type of the ids. */
   cast: string;
+  /** Parameters after the ids (the offline thresholds). */
+  params?: () => unknown[];
   build: (ref: EntityRef, row: Row, role: Role) => GraphNode;
 }
 
@@ -125,6 +129,7 @@ const LOADERS: Partial<Record<NodeType, TypeLoader>> = {
            WHERE a.id = ANY($1::int[])`,
     key: (row) => String(row.id),
     cast: 'int',
+    params: () => [OFFLINE_THRESHOLD_MINUTES],
     build: (ref, row) => {
       const openVulns = num(row.open_vulns) ?? 0;
       const flags: NodeFlag[] = [];
@@ -184,10 +189,18 @@ const LOADERS: Partial<Record<NodeType, TypeLoader>> = {
     build: (ref, row) => baseNode(ref, String(row.value ?? `Identity #${ref.key}`), { kind: text(row.kind), value: text(row.value) }),
   },
   shipper: {
-    sql: `SELECT s.id, s.name, s.status, s.hostname, s.ip_address, s.version, s.last_seen
+    // The live status, as GET /api/shippers works it out (calculateStatus):
+    // the stored column only ever says 'online', so a shipper that stopped
+    // reporting (a revoked or ghost one, say) would read as online.
+    sql: `SELECT s.id, s.name, s.hostname, s.ip_address, s.version, s.last_seen,
+                 CASE WHEN s.last_seen IS NULL THEN 'pending'
+                      WHEN s.last_seen < NOW() - ($2::int * INTERVAL '1 minute') THEN 'offline'
+                      WHEN s.status = 'error' THEN 'error'
+                      ELSE 'online' END AS status
             FROM log_shippers s WHERE s.id = ANY($1::int[])`,
     key: (row) => String(row.id),
     cast: 'int',
+    params: () => [SHIPPER_OFFLINE_THRESHOLD_MINUTES],
     build: (ref, row) =>
       baseNode(ref, String(row.name ?? `Shipper #${ref.key}`), {
         name: text(row.name),
@@ -199,10 +212,16 @@ const LOADERS: Partial<Record<NodeType, TypeLoader>> = {
       }),
   },
   endpoint: {
-    sql: `SELECT e.agent_id::text AS agent_id, e.hostname, e.os, e.agent_version, e.status, e.last_seen
+    // The live status, as the Endpoints page shows it (EdrAgentModel's
+    // live_status) and the asset's agent_status above: online when seen
+    // within OFFLINE_THRESHOLD_MINUTES, else offline, whatever was stored.
+    sql: `SELECT e.agent_id::text AS agent_id, e.hostname, e.os, e.agent_version, e.last_seen,
+                 CASE WHEN e.last_seen IS NOT NULL AND e.last_seen > NOW() - ($2::int * INTERVAL '1 minute')
+                      THEN 'online' ELSE 'offline' END AS status
             FROM edr_agents e WHERE e.agent_id = ANY($1::uuid[])`,
     key: (row) => String(row.agent_id).toLowerCase(),
     cast: 'uuid',
+    params: () => [OFFLINE_THRESHOLD_MINUTES],
     build: (ref, row) =>
       baseNode(ref, String(row.hostname || ref.key), {
         hostname: text(row.hostname),
@@ -264,9 +283,8 @@ function keyNode(ref: EntityRef, hint: string | undefined): GraphNode {
 
 async function loadType(q: Query, type: NodeType, keys: string[]): Promise<Row[]> {
   const loader = LOADERS[type]!;
-  const params: unknown[] = [loader.cast === 'int' || loader.cast === 'bigint' ? keys.map(Number) : keys];
-  if (type === 'asset') params.push(OFFLINE_THRESHOLD_MINUTES);
-  return q<Row>(loader.sql, params);
+  const ids = loader.cast === 'int' || loader.cast === 'bigint' ? keys.map(Number) : keys;
+  return q<Row>(loader.sql, [ids, ...(loader.params?.() ?? [])]);
 }
 
 /**

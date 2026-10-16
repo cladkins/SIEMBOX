@@ -133,6 +133,11 @@ export type GroupStatus = 'ok' | 'timeout' | 'unavailable';
 export interface RelationGroup {
   rel: RelId;
   label: string;
+  /**
+   * The type of the neighbours in the group. alert_device's device is a host
+   * (the syslog header host) or, when the log named none, an ip (the sender):
+   * it says which; 'host' when there is no device to show.
+   */
   neighbor_type: NodeType;
   origin: Origin;
   /** Distinct neighbours (in the window, where the relation is windowed). */

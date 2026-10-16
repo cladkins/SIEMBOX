@@ -1,14 +1,27 @@
 /**
- * The alert lookup expressions: migration 043 holds exactly the indexes
- * alertKeys.ts describes (so every lookup is served by one), each lookup
- * carries its index's size guard, and the IP spellings cover how logs write
- * addresses. Run with `npm test` (tsx --test).
+ * The alert lookup expressions: migration 043 holds exactly the indexes and
+ * statistics alertKeys.ts describes (so every lookup is served by one), each
+ * lookup carries its index's size guard, "the latest alerts naming X" is one
+ * ordered scan per key (never an OR), and the IP spellings cover how logs
+ * write addresses. Run with `npm test` (tsx --test).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ALERT_KEY_INDEXES, alertIpMatch, alertKeyEquals, alertKeyExpr, alertKeyIndexSql, MAX_INDEXED_BYTES } from './alertKeys';
+import {
+  ALERT_KEY_INDEXES,
+  alertIpArms,
+  alertIpMatch,
+  alertKeyEquals,
+  alertKeyExpr,
+  alertKeyIndexSql,
+  alertKeyStatsName,
+  alertKeyStatsSql,
+  IP_KEYS,
+  latestAlerts,
+  MAX_INDEXED_BYTES,
+} from './alertKeys';
 import { ipForms } from './resolvers/alerts';
 import { canonicalDomain, canonicalHost, canonicalIp, canonicalUser } from './entityKey';
 import { UNKNOWN_SOURCES_SQL } from '../shippers/unknownSources';
@@ -26,6 +39,13 @@ test('migration 043 holds exactly the alert key indexes alertKeys.ts describes',
   for (const line of MIGRATION.split('\n').filter((l) => l.startsWith('CREATE INDEX') && l.includes('matched_data'))) {
     assert.match(line, new RegExp(`WHERE .*octet_length\\(.*\\) <= ${MAX_INDEXED_BYTES};$`), line);
   }
+  // And statistics on each index's expression, which Postgres keeps for no partial index.
+  for (const entry of ALERT_KEY_INDEXES) {
+    assert.ok(MIGRATION.includes(alertKeyStatsSql(entry)), `043 has: ${alertKeyStatsSql(entry)}`);
+  }
+  const stats = [...MIGRATION.matchAll(/^CREATE STATISTICS IF NOT EXISTS (\w+)/gm)].map((m) => m[1]);
+  assert.deepEqual(stats.sort(), ALERT_KEY_INDEXES.map(alertKeyStatsName).sort());
+  assert.ok(stats.every((name) => name.startsWith('graph_alerts_')), 'the first-fill ANALYZE finds them by that prefix');
 });
 
 test('every lookup states its index guard, so the planner can use the partial index', () => {
@@ -39,6 +59,21 @@ test('every lookup states its index guard, so the planner can use the partial in
   }
   // No canonical key comes near the guard: nothing a lookup can match is left out.
   assert.ok(253 * 4 < MAX_INDEXED_BYTES);
+});
+
+test('latestAlerts: one ordered scan per arm, each stopping at the limit; never an OR of keys', () => {
+  const sql = latestAlerts(alertIpArms('$1'), 'a.id', 50, 'a.created_at >= $2');
+  const arms = sql.split(' UNION ');
+  assert.equal(arms.length, IP_KEYS.length);
+  IP_KEYS.forEach((key, i) => {
+    assert.equal(arms[i], `(SELECT a.id FROM alerts a WHERE ${alertKeyEquals(key, '$1')} AND a.created_at >= $2 ORDER BY a.created_at DESC LIMIT 50)`);
+  });
+  assert.ok(!sql.includes(' OR '), sql);
+  // A single value per arm (not ANY): only then does the (key, created_at DESC) index return it in order.
+  assert.ok(!sql.includes('ANY('), sql);
+  assert.throws(() => latestAlerts([], 'a.id', 50), /no arms/);
+  assert.throws(() => latestAlerts(['true'], 'a.id', 0), /positive integer/);
+  assert.throws(() => latestAlerts(['true'], 'a.id', 1.5), /positive integer/);
 });
 
 test('the SQL expressions apply the same text rules as entityKey.ts (ASCII inputs)', () => {

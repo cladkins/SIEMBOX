@@ -287,6 +287,38 @@ test('drain() timeout does not leak its waiter (a later completion does not doub
   assert.equal(await q.drain(5), true);
 });
 
+test('close(): nothing not yet started ever starts, waiting callers are released, running tasks finish', async () => {
+  const q = new IngestQueue({ concurrency: 2, maxQueued: 3 });
+  const hold = gate();
+  const ran: string[] = [];
+  const task = (name: string) => () => {
+    ran.push(name);
+    return hold.promise;
+  };
+  q.trySubmit(task('run-1'));
+  q.trySubmit(task('run-2'));
+  for (let i = 0; i < 3; i++) q.trySubmit(task(`queued-${i}`));
+  let admitted = false;
+  let submitted = false;
+  void q.admit(task('blocked-admit')).then(() => (admitted = true));
+  void q.submit(task('blocked-submit')).then(() => (submitted = true));
+  await tick();
+  assert.deepEqual(q.stats(), { active: 2, queued: 3, blocked: 2, dropped: 0, processed: 0, failed: 0 });
+  const drained = q.drain(1000);
+
+  assert.equal(q.close(), 5, 'three queued and two blocked');
+  await tick();
+  assert.equal(admitted && submitted, true, 'their callers do not hang');
+  assert.equal(q.trySubmit(task('late-udp')), false);
+  await q.admit(task('late-admit'));
+  await q.submit(task('late-submit'));
+  assert.deepEqual(q.stats(), { active: 2, queued: 0, blocked: 0, dropped: 0, processed: 0, failed: 0 }, 'late ones are not overload drops');
+
+  hold.release();
+  assert.equal(await drained, true, 'idle once the running ones finish');
+  assert.deepEqual(ran, ['run-1', 'run-2'], 'only the two already running ever ran');
+});
+
 test('survives a large burst: 20,000 tasks, accounting exact, internals empty afterwards', async () => {
   const q = new IngestQueue({ concurrency: 24, maxQueued: 50_000 });
   let ran = 0;

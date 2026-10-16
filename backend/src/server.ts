@@ -6,9 +6,11 @@ import { logCorsPolicy } from './net/cors';
 import { clientAddressSummary } from './net/diagnostics';
 import { trustedProxies } from './net/trustedProxies';
 import { logger } from './utils/logger';
-import pool, { closePools } from './config/database';
+import pool, { closeIngestPool, closePools } from './config/database';
 import { diagnoseDbConnectionError } from './config/dbDiagnostics';
 import { SyslogServer } from './services/syslog/syslogServer';
+import { registerIngestStats } from './services/syslog/ingestStats';
+import { ingestCounter } from './services/ingest/ingestCounter';
 import { CleanupService } from './services/cleanup/cleanupService';
 import { importRules } from './scripts/import-rules';
 import { startAutoDiscoveryJob, stopAutoDiscoveryJob } from './jobs/autoDiscovery';
@@ -126,9 +128,16 @@ const startServer = async () => {
       );
     }
 
+    // The sources the per-minute ingest counts track one by one, as they were
+    // before this start, so a restart doesn't reset them (one small read;
+    // never fails the start).
+    await ingestCounter.restore();
+
     // Start syslog server
     syslogServer = new SyslogServer(SYSLOG_PORT);
     await syslogServer.start();
+    // Its queue counters (UDP drops among them), for code without a handle on it.
+    registerIngestStats(() => syslogServer.getIngestStats());
 
     // Start cleanup service
     cleanupService = new CleanupService(CLEANUP_INTERVAL_HOURS);
@@ -269,6 +278,7 @@ const shutdown = async (signal: string) => {
     } catch (error) {
       logger.error('Error stopping syslog server:', error);
     }
+    registerIngestStats(null);
   }
   if (cleanupService) {
     cleanupService.stop();
@@ -286,6 +296,12 @@ const shutdown = async (signal: string) => {
   stopSignInHousekeepingJob();
   stopRefusalSummary();
   await Promise.all([closeRegexScanPool(), closeRegexTestPool()]).catch(() => undefined);
+  // The per-minute ingest counts not yet written. Ingest can still be storing
+  // logs here (an HTTP push batch in flight, syslog messages that were running
+  // when the drain gave up), so close() writes what it has, keeps counting
+  // while it closes the ingest pool (after which nothing more can be stored),
+  // and then writes the rest on the main pool. Waits at most 5 s; never throws.
+  await ingestCounter.close(closeIngestPool);
   await closePools();
   logger.info('Database pools closed');
   process.exit(0);

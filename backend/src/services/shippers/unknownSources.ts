@@ -57,22 +57,34 @@ export const UNKNOWN_SOURCES_FAILURE_COOLDOWN_MS = 20_000;
 export const UNKNOWN_SOURCES_MAX_DISTINCT_IDS = 5000;
 
 /**
- * $1 = window hours (int), $2 = max distinct ids (int).
+ * The registered shippers' ids as they appear in raw_logs.shipper_id (and in
+ * ingest_source_minute's shipper keys): the 8-hex MD5 or SHA-256 prefix of the
+ * API key, or the HTTP push key hash's prefix. A CTE definition named
+ * shipper_hashes, for a WITH clause; the Big Display's sources and shippers
+ * panels (services/display/panels.ts) use it too, so the two agree on which
+ * ids are ghosts.
  *
- * shipper_hashes is MATERIALIZED on purpose: it guarantees the api_key ~ hex
- * filter runs before decode(), so one malformed api_key can never abort the
- * whole query (issue #17) regardless of how the planner would otherwise inline
- * the CTE.
+ * MATERIALIZED on purpose: it guarantees the api_key ~ hex filter runs before
+ * decode(), so one malformed api_key can never abort the whole query (issue
+ * #17) regardless of how the planner would otherwise inline the CTE.
  */
-export const UNKNOWN_SOURCES_SQL = `
-  WITH RECURSIVE shipper_hashes AS MATERIALIZED (
+export const SHIPPER_HASHES_SQL = `shipper_hashes AS MATERIALIZED (
     SELECT
+      id,
+      name,
       LOWER(SUBSTRING(MD5(decode(api_key, 'hex')), 1, 8)) AS md5_id,
       LOWER(SUBSTRING(ENCODE(SHA256(decode(api_key, 'hex')), 'hex'), 1, 8)) AS sha256_id,
       LOWER(SUBSTRING(http_push_key_hash, 1, 8)) AS http_push_id
     FROM log_shippers
     WHERE api_key ~ '^([0-9a-fA-F]{2})+$'
-  ),
+  )`;
+
+/**
+ * $1 = window hours (int), $2 = max distinct ids (int). shipper_hashes is
+ * SHIPPER_HASHES_SQL above.
+ */
+export const UNKNOWN_SOURCES_SQL = `
+  WITH RECURSIVE ${SHIPPER_HASHES_SQL},
   ids(shipper_id, n) AS (
     (SELECT shipper_id, 1 FROM raw_logs WHERE shipper_id IS NOT NULL ORDER BY shipper_id LIMIT 1)
     UNION ALL

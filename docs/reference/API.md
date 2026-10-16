@@ -6423,17 +6423,101 @@ screen reloads when it changes), and each panel's data.
     "burn_in_shift": true,
     "views": [{ "title": "SOC overview", "panels": ["open_alerts", "recent_alerts:high", "ingest"] }]
   },
-  "alarms": [],
+  "alarms": [{ "key": "new_critical", "level": "critical", "text": "◆ 2 NEW CRITICAL", "panel": "open_alerts" }],
   "attributions": [],
-  "panels": {}
+  "panels": {
+    "open_alerts": {
+      "state": "ok",
+      "as_of": "2026-10-16T03:43:50.112Z",
+      "data": {
+        "total": 7,
+        "by_severity": {
+          "critical": { "open": 2, "untouched": 2, "oldest_at": "2026-10-16T01:12:09.000Z" },
+          "high": { "open": 5, "untouched": 1, "oldest_at": "2026-10-15T22:40:31.000Z" },
+          "medium": { "open": 0, "untouched": 0, "oldest_at": null },
+          "low": { "open": 0, "untouched": 0, "oldest_at": null }
+        }
+      }
+    },
+    "recent_alerts:high": {
+      "state": "ok",
+      "as_of": "2026-10-16T03:43:50.112Z",
+      "data": {
+        "min_severity": "high", "more": false,
+        "items": [{ "severity": "critical", "status": "new", "category": "rule", "label": "SSH brute force", "at": "2026-10-16T03:41:02.000Z" }]
+      }
+    },
+    "ingest": { "state": "stale", "as_of": "2026-10-16T03:43:20.004Z", "reason": "busy", "data": { "…": "…" } }
+  }
 }
 ```
 
 `config_version` goes up whenever an admin changes the layout, so a screen
-applies the new one at its next refresh. **`panels`, `alarms` and
-`attributions` are empty in this version**: the panel data arrives with the
-snapshot builder (Big Display PR 3). Refusals: see
-[Display link tokens](#display-link-tokens-x-display-token).
+applies the new one at its next refresh. Refusals: see
+[Display link tokens](#display-link-tokens-x-display-token). `Cache-Control: no-store`.
+
+#### Panels
+
+`panels` has one entry per distinct panel key in `display.views` (a key is the
+panel id plus its option: `recent_alerts:high`, `top_rules:24`, `sources:15`,
+`threat_map:7`). Each is an envelope:
+
+| `state` | Fields | Meaning |
+|---|---|---|
+| `ok` | `as_of`, `data` | Current data, fetched at `as_of` |
+| `stale` | `as_of`, `reason` (`busy` or `error`), `data` | The last data: a refresh failed, or didn't finish within the snapshot's 8 s budget |
+| `unavailable` | `reason` | No data to show (also when a panel failed the privacy check below) |
+| `not_configured` | `message` | Nothing to show yet: "No shippers registered", "No endpoint agents enrolled", "Digital Risk is not set up", "No scans yet" |
+| `forbidden` | — | Signed-in board only: the user's role may not see it (the screen drops it) |
+
+A failing panel never fails the response: it is still `200`. Panel data is
+cached per panel key and shared by every screen (15 s to 5 min depending on
+the panel), so many screens cost the database what one does.
+
+Every string in `data` is an enum, an ISO timestamp, or a label. Labels are
+rule names (operations only; otherwise the alert's category label:
+"Detection rule", "Sign-in protection", "Leaked credentials", "Domain
+monitoring", "Endpoint detection", "Other"), shipper names, host names and IP
+addresses (operations only), and ISO 3166 country codes. **Never in any
+mode:** alert titles or descriptions, usernames, email addresses, account or
+breach names, lookalike domains, raw log text. Each panel is checked against
+its declared shape before it is sent; one holding anything else goes out
+`unavailable` (and the server logs which field).
+
+| Key | `data` |
+|---|---|
+| `open_alerts` | `total`; `by_severity.{critical,high,medium,low}`: `{ open, untouched (still new), oldest_at }`. Open = `new` or `investigating`. |
+| `alert_pulse` | `total_24h`, `prev_24h` (the 24 h before), `last_hour`, `by_severity_24h`, `hourly`: 24 `{ total, critical }`, oldest first, the last is the current hour |
+| `recent_alerts:*` | `min_severity`, `more`, `items` (≤ 6, newest first, open alerts in 24 h at or above the floor): `{ severity, status, category, label, at }` |
+| `top_rules:*` | `window_hours`, `total` (alerts in the window), `items` (≤ 6): `{ category, label, worst_severity, count }` |
+| `ingest` | `state` (`flowing`, `slow`, `stalled`, `idle`), `last_log_at`, `stall_minutes`, `logs_last_minute`, `per_minute` (60, oldest first, the last is the current minute; `null` until the per-minute counter holds 2 minutes), `rate_15m_per_minute`, `baseline_per_minute` (the 24 h median; `null` under an hour of data), `hourly` (24 `{ total, unparsed }` from the parser counters), `parsed_pct_24h`, `udp_dropped_15m` (`null` without a syslog receiver), `rollup_since` |
+| `sources:*` | `silent_after_minutes`, counts `active`, `silent`, `quiet`, `unknown`, `unknown_shippers` (ghost shippers: information, never an alarm), `since` (set while the counter holds under 24 h: "collecting since"), `more_active`, `rows` (≤ 8, silent first, then unknown, then the busiest; `[]` in public): `{ kind, label, state, logs_per_minute, last_seen_at, silent_minutes }` |
+| `shippers` | `total`, `online`, `offline`, `pending`, `error` (as the Shippers page works them out), `unknown_shippers_24h`, `offline_list` (≤ 6, longest offline first; `[]` in public): `{ name, last_seen_at }` |
+| `endpoints` | Signed-in admins only: `total`, `online`, `offline`, `detections_24h`, `offline_list` (≤ 6): `{ hostname, last_seen_at }` |
+| `threat_map:*` | `window_days`, `located`, `total_in_window` ("N of M alerts had a public address"), `countries` (≤ 50): `{ code, count }` |
+| `top_sources` | `items` (≤ 6, 24 h): `{ ip, country_code, alerts, worst_severity, last_at }` |
+| `digital_risk` | `configured`, `open_total`, `open_by_severity`, `new_7d`, `accounts_to_reset` (a count), `impersonation_open` |
+| `vulnerabilities` | `scanned`, `open_by_severity`, `affected_assets` |
+
+**Sources.** A source is a shipper, a Log Discovery poller or a direct syslog
+sender, from the per-minute ingest counter. It is **silent** when it averaged
+at least a log a minute over 24 h, logged in at least half of those minutes
+(a source that writes in occasional batches is exempt), and has logged
+nothing for `silent_after_minutes`; **quiet** when it is lower-volume or
+bursty and between writes (never alarmed); **unknown** when, since its last
+log, the counter had to put some sources' logs into its shared overflow row
+while this source wasn't sure of a row of its own, so its silence can't be
+told. Nothing is called silent until the counter holds an hour.
+
+**Alarms** (at most 4, critical first), only from panels in the display's
+views: `new_critical` ("◆ 2 NEW CRITICAL"), `ingest_stalled` ("✕ NO LOGS FOR
+18 MIN"), `udp_drops`, `ingest_slow`, `sources_silent`, `shippers_offline`,
+`endpoints_offline` (signed-in admins), `data_delayed` (a panel is `stale` or
+`unavailable`). `panel` is the key it came from.
+
+**Attributions:** `dbip` when a view shows `threat_map` or `top_sources`
+("IP Geolocation by DB-IP (db-ip.com)"), `hibp` when one shows
+`digital_risk` ("Breach data: Have I Been Pwned (CC BY 4.0)").
 
 A screen's use is recorded at most once a minute per device: the link's
 `last_used_at`, and the device's address and user agent (the 20 most recently
@@ -6553,6 +6637,28 @@ screen shows "not valid any more" at its next refresh). The devices seen and
 `last_used_at` belonged to the old secret and are cleared. **Response:**
 `{ "link", "token", "path" }`, as on create; the new secret is shown only
 here. Audit: `display_link.rotated`.
+
+### POST /api/display-links/preview
+
+**Who:** admin. **Body:** `{ "config": { … } }` (validated as on create). The
+snapshot that layout would show, exactly as a screen would get it
+(`display.name` is `"Preview"`). Nothing is stored and no link is used.
+
+### GET /api/display-links/:id/snapshot
+
+**Who:** admin. The saved link's snapshot, exactly as its screen gets it,
+without the secret. It doesn't count as the link's use (`last_used_at` and
+the devices seen are untouched). `404` for no such link, `409
+DISPLAY_LINK_REVOKED` for a revoked one.
+
+### GET /api/big-display/snapshot
+
+**Who:** any signed-in role (`Authorization: Bearer`; a session that must
+change its password gets `403 PASSWORD_CHANGE_REQUIRED`). Big Display on the
+user's own session: the default views SOC overview, Threats and Health,
+rotating every 30 s, in `operations` privacy (`display.name` is `"Big
+Display"`). `endpoints` (in Health) is `forbidden` for every role but admin,
+and no alarm comes from it.
 
 ### Audit and recovery
 

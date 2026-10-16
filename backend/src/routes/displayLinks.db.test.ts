@@ -6,7 +6,7 @@
  * - create answers the secret once (no-store); no column but token_hash, and
  *   no list, get or audit row, holds it or its hash; lookup by hash;
  * - the screen's snapshot: the layout from the link's own row, the server's
- *   clock and version, and (until the snapshot builder lands) no panels;
+ *   clock and version, and one envelope per panel;
  * - rotate stops the old secret at once (INVALID) and forgets its devices;
  *   pause is 403 and resume restores it; an expiry that passed is EXPIRED and
  *   extending it revives the link; revoke is REVOKED, can't be undone or
@@ -301,7 +301,7 @@ test('create answers the secret once; nothing stored or listed holds it or its h
   assert.equal(await DisplayLinkModel.findForAuth(sha(token + 'x'), '100.64.0.1'), null);
 });
 
-test("the screen's snapshot: its layout, the server's clock and version, and no panels yet", async (t) => {
+test("the screen's snapshot: its layout, the server's clock and version, and its panels", async (t) => {
   if (!dbReady) return t.skip(SKIP);
   const { token } = await createLink('snapshot', {
     config: { privacy: 'public', refresh_seconds: 60, timezone: 'Europe/London', views: [{ title: 'Lobby', panels: [{ id: 'open_alerts' }, { id: 'threat_map', window_days: 7 }] }] },
@@ -321,9 +321,12 @@ test("the screen's snapshot: its layout, the server's clock and version, and no 
     burn_in_shift: true,
     views: [{ title: 'Lobby', panels: ['open_alerts', 'threat_map:7'] }],
   });
-  assert.deepEqual(res.body.panels, {});
-  assert.deepEqual(res.body.alarms, []);
-  assert.deepEqual(res.body.attributions, []);
+  // The panels themselves are covered by displayPrivacy.db.test.ts and services/display/*.test.ts.
+  assert.deepEqual(Object.keys(res.body.panels).sort(), ['open_alerts', 'threat_map:7']);
+  assert.equal(res.body.panels.open_alerts.state, 'ok', JSON.stringify(res.body.panels.open_alerts));
+  assert.equal(res.body.panels['threat_map:7'].data.window_days, 7);
+  assert.ok(Array.isArray(res.body.alarms) && res.body.alarms.length <= 4);
+  assert.deepEqual(res.body.attributions, ['dbip']);
   assert.equal(res.body.app_version, appVersion);
   const serverTime = Date.parse(res.body.server_time);
   assert.ok(serverTime >= before - 1000 && serverTime <= Date.now() + 1000, res.body.server_time);

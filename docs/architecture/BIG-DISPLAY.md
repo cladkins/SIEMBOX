@@ -259,13 +259,15 @@ compared in IPv4 form).
 A panel's **key** is its id plus its option (`recent_alerts:high`,
 `top_rules:24`, `sources:15`, `threat_map:7`); variant-free ids are bare.
 Display links may only use `minRole: 'viewer'` kinds: a link never shows what
-some signed-in role can't read. PR 3 adds the registry cross-check against the
-route inventory (each kind's `viewerRoutes` must be ANY_ROLE rows).
+some signed-in role can't read. The route inventory test checks the registry
+(`services/display/panels.ts`): each viewer kind's `viewerRoutes` must be
+ANY_ROLE rows, and every other kind must be refused in a link's config.
 
 ### Adding a panel kind
 
-One row in `PANEL_KINDS` (its option, `minRole`, whether a public display may
-show it), its fetch and shape in the snapshot builder, and its component on
+One row in `PANEL_KINDS` in `config.ts` (its option, `minRole`, whether a
+public display may show it); its `viewerRoutes`, TTL, fixed SQL and fold in
+`panels.ts`; its declared shape in `redact.ts`; and its component on
 the board. A future **graph** view on a board (the Context Graph) is such a
 kind: it rides on the same links, secret, gate, audit trail and admin UI, with
 no second token system. Its `minRole` and privacy rules decide where it may
@@ -285,11 +287,12 @@ appear, the same way as for every other kind.
 Never read for a display: `alerts.title` and `.description` (titles embed
 usernames and email addresses), any `matched_data` key but `source_ip` and
 `country_code`, raw or parsed log text, usernames, account names, breach
-names, lookalike domains. PR 2 enforces the config side (the `endpoints`
-refusal, the public-area refusals of `top_rules` and `top_sources`); PR 3 adds
-the fixed SQL that never selects those columns, `safeLabel()`, and
-`assertDisplaySafe()`, which makes a panel `unavailable` rather than send a
-string outside its declared shape, with a canary database test.
+names, lookalike domains. The config validator refuses `endpoints` on a link
+and `top_rules` and `top_sources` on a public one; the panels' fixed SQL never
+selects those columns; `safeLabel()` cleans labels; and `assertDisplaySafe()`
+makes a panel `unavailable` rather than send a string outside its declared
+shape. `routes/displayPrivacy.db.test.ts` seeds canaries in every one of those
+places and checks no display, in either mode, carries them.
 
 ## Roles
 

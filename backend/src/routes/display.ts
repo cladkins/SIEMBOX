@@ -8,14 +8,13 @@
  *
  * The snapshot carries the link's layout (`display`), the server's clock and
  * version (for the screen's clock offset and its reload on upgrade), and the
- * panels' data. Panel data is built by the snapshot builder, which arrives
- * separately (Big Display PR 3): until then `panels`, `alarms` and
- * `attributions` are empty.
+ * panels' data at the link's privacy level, built by
+ * services/display/snapshot.ts from caches every screen shares.
  */
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { authenticateDisplay, displayTokenLimiter } from '../middleware/displayAuth';
-import { describeDisplay, parseDisplayConfig } from '../services/display/config';
-import { APP_VERSION } from '../utils/appVersion';
+import { parseDisplayConfig } from '../services/display/config';
+import { snapshotBuilder } from '../services/display/snapshot';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -30,7 +29,7 @@ router.use(function noStore(_req: Request, res: Response, next: NextFunction) {
 const invalidConfigLogged = new Map<number, number>();
 const INVALID_CONFIG_LOG_MS = 60 * 60 * 1000;
 
-router.get('/snapshot', displayTokenLimiter, authenticateDisplay, (req: Request, res: Response) => {
+router.get('/snapshot', displayTokenLimiter, authenticateDisplay, async (req: Request, res: Response) => {
   const link = req.displayLink!;
   // The row's config was validated when it was saved; read it back the same
   // way, so a row changed by hand (or left by a newer version with a panel
@@ -54,16 +53,7 @@ router.get('/snapshot', displayTokenLimiter, authenticateDisplay, (req: Request,
     });
     return;
   }
-  const now = new Date().toISOString();
-  res.json({
-    generated_at: now,
-    server_time: now,
-    app_version: APP_VERSION,
-    display: describeDisplay(link.name, link.config_version, config.value),
-    alarms: [],
-    attributions: [],
-    panels: {},
-  });
+  res.json(await snapshotBuilder.build({ name: link.name, configVersion: link.config_version, config: config.value }));
 });
 
 export default router;

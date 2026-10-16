@@ -172,8 +172,8 @@ const offlineSince = computed(() =>
 }
 .bd-strip-title {
   flex: 0 1 auto;
-  min-width: 12vw;
-  max-width: 30vw;
+  min-width: 8vw;
+  max-width: 26vw;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -183,6 +183,12 @@ const offlineSince = computed(() =>
 .bd-alarms {
   flex: 1 1 0;
   display: flex;
+  /* One row of whole chips: a chip that doesn't fit wraps onto a hidden second
+     row (they come critical first, so the least urgent go). */
+  flex-wrap: wrap;
+  justify-content: center;
+  align-content: flex-start;
+  max-height: calc(var(--bd-chip) * 1.25 + 1.2vh);
   gap: 1vh;
   list-style: none;
   margin: 0;
@@ -191,22 +197,30 @@ const offlineSince = computed(() =>
   overflow: hidden;
 }
 .bd-alarm {
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: 0 0 auto;
+  line-height: 1.25;
   padding: 0.6vh 1.2vh;
   border-radius: 0.6vh;
   font-weight: 800;
-  font-size: 2.5vh;
+  font-size: var(--bd-chip);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
-/* Centred while they fit; when they don't, they shrink from the right, never off the left edge. */
-.bd-alarm:first-child {
-  margin-left: auto;
-}
-.bd-alarm:last-child {
-  margin-right: auto;
+/* Portrait: the alarm chips get a row of their own under the name and clock. */
+@media (max-aspect-ratio: 4/5) {
+  .bd-strip {
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    padding: 1.5vh 0 0;
+    row-gap: 1vh;
+  }
+  .bd-strip-title {
+    flex: 1 1 0;
+    max-width: none;
+  }
+  .bd-alarms {
+    order: 3;
+    flex: 1 0 100%;
+  }
 }
 .bd-strip-meta {
   flex: 0 0 auto;

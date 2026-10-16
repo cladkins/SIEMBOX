@@ -16,6 +16,7 @@ Comprehensive troubleshooting guide for diagnosing and resolving common issues i
 - [Performance Issues](#performance-issues)
 - [Network & Connectivity](#network--connectivity)
 - [Frontend Issues](#frontend-issues)
+- [Wall displays (Big Display)](#wall-displays-big-display)
 - [Container Issues](#container-issues)
 - [Data Cleanup](#data-cleanup)
 - [Advanced Diagnostics](#advanced-diagnostics)
@@ -2071,6 +2072,97 @@ attempts ...", `code: "SIGNIN_PAUSED"`) is something else: see
   `EDR_AGENT_RATE_MAX`); EDR enrollment counts toward the general limit.
 
 ---
+
+## Wall displays (Big Display)
+
+A wall screen opened with a display link (`/display#k=…`) never shows the
+sign-in page and never navigates away: whatever goes wrong, it says so on the
+screen and keeps checking by itself. Setup: [DEPLOYMENT.md → Wall screens](../../DEPLOYMENT.md#wall-screens-big-display).
+An administrator can list links and their state with
+`docker exec siembox-backend node dist/scripts/auth-admin.js display-links`.
+
+### Issue: "This page needs a display link"
+
+The address has no `#k=…` part. Usually the kiosk command line cut it off: in a
+shell an unquoted `#` starts a comment. Quote the whole URL
+(`'https://…/display#k=sbd1_…'`), or paste the full link again. The screen
+offers no input box on purpose: nobody should type a secret on a shared screen.
+
+### Issue: "This display link isn't valid any more"
+
+The link was rotated (its old secret stops at once) or never existed in this
+database. Give the screen the new link from the rotate response. The screen
+checks again every 10 minutes, so restoring a backup that has the old link
+brings it back by itself.
+
+### Issue: "This display link was revoked"
+
+Revoking is final and the screen stops polling. Create a new link for the
+screen and open it there.
+
+### Issue: "This display link expired on …"
+
+The link had an expiry date. Clear or extend it (`PUT /api/display-links/:id`
+with `expires_at`); the screen checks every 10 minutes and resumes by itself,
+with the same link.
+
+### Issue: "Paused by an administrator"
+
+Someone paused the link (for instance to hide the wall during an incident).
+Resume it; the screen checks every minute and comes back by itself.
+
+### Issue: "This screen's network isn't allowed to use this link"
+
+The link has a network allow-list and the address SIEMBox sees for the screen
+is outside it. Behind a reverse proxy, every screen looks like the proxy until
+the proxy is in `TRUSTED_PROXIES` (DEPLOYMENT.md, *Client addresses and
+reverse proxies*). The screen re-checks every 5 minutes.
+
+### Issue: The freshness chip turns amber, or "NO CONNECTION TO SIEMBOX SINCE …" and STALE panels
+
+The screen can't reach the API. It keeps the last numbers on screen: amber
+"Data … old · reconnecting" after two missed refreshes, then after 5 minutes
+a red band and every panel marked *STALE*. It retries after 5, 10, 20 and 40 s,
+then every minute, and at once when the network comes back. Check the screen's
+network and that `curl -sI https://<host>/display` answers; when SIEMBox is
+back the band goes away by itself. A single panel saying *Data from 14:02 —
+database busy* (and the *SOME DATA DELAYED* chip) means the server answered but
+that panel's query timed out: see [Slow Query Response](#issue-slow-query-response).
+
+### Issue: The screen goes to sleep
+
+The page asks for a screen wake lock, which browsers only grant over HTTPS (or
+on `localhost`); on plain HTTP the first-load hint says so. Serve SIEMBox over
+HTTPS, or set the device's own power settings never to sleep or blank the
+screen (on a Raspberry Pi, also disable console blanking).
+
+### Issue: A device shows SILENT although it is fine (bursty source)
+
+A source is *silent* when a steady sender stops for longer than the panel's
+threshold (5, 15, 30 or 60 minutes). A source that only logs now and then is
+shown as *quiet* and never alarmed, but one that is usually steady and then
+pauses for longer than the threshold is flagged. Pick a longer threshold for
+that view's Sources panel.
+
+### Issue: The Sources panel says "Collecting since …" after upgrading
+
+The per-minute counts it uses started with this release. Until they cover 24
+hours the panel says when collecting began; nothing needs doing.
+
+### Issue: The display asks for an SSO sign-in
+
+A forward-auth proxy (Authelia, Authentik, oauth2-proxy, Cloudflare Access) is
+intercepting the page. Exempt `/display`, `/assets/*`, `/favicon.svg` and
+`/api/display/snapshot` from it; the link's own token protects the data.
+
+### Issue: 429 on the wall, or several screens go stale together
+
+All screens behind one address share the general API limit
+(`API_RATE_LIMIT_MAX`, 1000 per 15 minutes per address); at a 30 s refresh each
+screen uses 30. Raise the limit, lengthen the links' refresh, or make sure
+`TRUSTED_PROXIES` lets SIEMBox see each screen's own address. A screen that
+keeps opening a wrong or revoked link is also limited after 30 failed lookups
+in 15 minutes; it waits for `Retry-After` and tries again.
 
 ## Frontend Issues
 

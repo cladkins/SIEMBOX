@@ -1,8 +1,11 @@
 /*
  * The wall's own theme (BIG-DISPLAY.md §5.1): scoped --bd-* tokens on the
- * board root, never the app's theme store or Element Plus variables. Sizes are
- * in vh so one layout reads the same at 720p, 1080p and 4K; nothing is smaller
- * than the 2.2 vh floor. board/theme.test.ts checks every text and fill pair
+ * board root, never the app's theme store or Element Plus variables. Type is
+ * sized in --bd-u, which is 1vh on any landscape or square screen, so one
+ * layout reads the same at 720p, 1080p and 4K; nothing is smaller than the
+ * 2.2 vh floor. On a portrait screen (narrower than 4 : 5) the unit follows
+ * the width instead (1.25vw), or text sized by the tall side would not fit
+ * the narrow columns. board/theme.test.ts checks every text and fill pair
  * below against WCAG 4.5 : 1.
  */
 .bd-root {
@@ -17,11 +20,13 @@
   --bd-on-fill: #0b0f14;
   --bd-highlight: #24364a;
 
-  --bd-hero: 10vh;
-  --bd-number: 5vh;
-  --bd-title: 3vh;
-  --bd-label: 2.8vh;
-  --bd-floor: 2.2vh;
+  --bd-u: min(1vh, 1.25vw);
+  --bd-hero: calc(10 * var(--bd-u));
+  --bd-number: calc(5 * var(--bd-u));
+  --bd-title: calc(3 * var(--bd-u));
+  --bd-label: calc(2.8 * var(--bd-u));
+  --bd-chip: calc(2.5 * var(--bd-u));
+  --bd-floor: calc(2.2 * var(--bd-u));
 
   background: var(--bd-bg);
   color: var(--bd-text);

@@ -16,15 +16,13 @@ defineProps<{ data: TopSources; now: number }>();
       }}</span>
       <span class="bd-row-label">{{ item.ip }}<span v-if="item.country_code" class="bd-muted"> · {{ item.country_code }}</span></span>
       <span class="bd-row-value"><Num :value="item.alerts" /></span>
-      <span class="bd-row-value bd-muted bd-age">{{ ageOf(item.last_at, now) }}</span>
+      <span class="bd-row-value bd-muted bd-age">· {{ ageOf(item.last_at, now) }}</span>
     </li>
   </ul>
 </template>
 
 <style scoped>
 .bd-age {
-  min-width: 5.5em;
-  text-align: right;
   font-weight: 400;
 }
 .bd-empty {

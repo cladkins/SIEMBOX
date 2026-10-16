@@ -30,15 +30,15 @@ const page = join(dist, 'display.html');
 if (!existsSync(page)) fail(`${page} not found; run the build first.`);
 const html = readFileSync(page, 'utf8');
 
-const attr = (tag, name) => new RegExp(`\\b${name}="([^"]+)"`).exec(tag)?.[1];
+const attr = (tag, name) => new RegExp(`\\b${name}="([^"]+)"`, 'i').exec(tag)?.[1];
 const roots = [];
-for (const [tag] of html.matchAll(/<(script|link)\b[^>]*>/g)) {
-  if (tag.startsWith('<script') && /type="module"/.test(tag)) roots.push(attr(tag, 'src'));
-  else if (/rel="(modulepreload|stylesheet)"/.test(tag)) roots.push(attr(tag, 'href'));
+for (const [tag] of html.matchAll(/<(script|link)\b[^>]*>/gi)) {
+  if (tag.toLowerCase().startsWith('<script') && /type="module"/i.test(tag)) roots.push(attr(tag, 'src'));
+  else if (/rel="(modulepreload|stylesheet)"/i.test(tag)) roots.push(attr(tag, 'href'));
 }
 if (!roots.some((r) => r?.endsWith('.js'))) fail('display.html has no module script.');
 
-const mainEntry = /<script type="module"[^>]*src="([^"]+)"/.exec(readFileSync(join(dist, 'index.html'), 'utf8'))?.[1];
+const mainEntry = /<script type="module"[^>]*src="([^"]+)"/i.exec(readFileSync(join(dist, 'index.html'), 'utf8'))?.[1];
 
 // Static imports between chunks: `import{a}from"./vue-x.js"` and `import"./x.js"`; `import("./x.js")` is lazy.
 const STATIC_IMPORT = /\b(?:import|export)\s*(?:[\w$*{}\s,]*?\bfrom\s*)?["'](\.{1,2}\/[^"']+\.js)["']/g;

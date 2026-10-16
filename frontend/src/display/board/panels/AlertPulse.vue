@@ -45,10 +45,12 @@ const change = computed(() => changeText(props.data.total_24h, props.data.prev_2
   flex-wrap: wrap;
 }
 .bd-pulse-foot {
+  flex: 0 0 auto;
   display: flex;
   gap: 2.5vh;
   margin: 0;
   white-space: nowrap;
-  flex-wrap: wrap;
+  /* One line: on a narrow tile "last hour" is cut first. */
+  overflow: hidden;
 }
 </style>

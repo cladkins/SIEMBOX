@@ -38,8 +38,8 @@ const bars = computed(() =>
 .bd-bars {
   display: block;
   width: 100%;
-  flex: 1 1 auto;
-  min-height: 4vh;
+  flex: 1 1 0;
+  min-height: 3vh;
 }
 .bd-bars-bar {
   fill: var(--bd-bar);

@@ -23,8 +23,8 @@ The feature ships in five pull requests; each leaves `main` working.
 |---|---|---|
 | 1. Ingest rollup | Migration 041 `ingest_source_minute`, kept at ingest by `services/ingest/ingestCounter.ts`; the UDP drop accessor | Merged |
 | 2. Display links and their auth | Migration 042; `services/display/{token,config,linkStatus}.ts`; `models/DisplayLink.ts`; `middleware/displayAuth.ts` (gate, failed-lookup limiter, use tracking); `routes/displayLinks.ts` (admin CRUD, pause, rotate, revoke); `routes/display.ts` (`GET /api/display/snapshot` with the layout and **empty panels**); audit; the route inventory's `DISPLAY` kind; `auth-admin display-links` / `revoke-display-link` | This document's first version |
-| 3. Snapshot builder | The panel registry, SQL and shared caches; privacy redaction; alarms; fills `panels`; adds `/api/big-display/snapshot`, `/api/display-links/:id/snapshot` and `/api/display-links/preview` | Planned |
-| 4. Display page | `frontend/display.html` and `src/display/**`, a separate Vite entry served by nginx at `/display`; isolation lint rules; bundle check | Planned |
+| 3. Snapshot builder | The panel registry, SQL and shared caches; privacy redaction; alarms; fills `panels`; adds `/api/big-display/snapshot`, `/api/display-links/:id/snapshot` and `/api/display-links/preview` | Merged |
+| 4. Display page | `frontend/display.html` and `src/display/**`, a separate Vite entry served by nginx at `/display`; isolation lint rules; bundle check; `frontend/scripts/verify-display.mjs` (Playwright) | Built |
 | 5. Admin UI and signed-in Big Display | Settings → Display links (editor with live preview, shown-once dialog with QR code, devices seen); `/big-display`; the Dashboard button | Planned |
 
 ## Owner decisions

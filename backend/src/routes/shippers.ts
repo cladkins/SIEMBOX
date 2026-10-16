@@ -5,7 +5,6 @@ import {
   ShipperSourceModel,
   ShipperVolumeModel,
   ShipperActivityModel,
-  SHIPPER_OFFLINE_THRESHOLD_MINUTES,
   withHttpPushStatus,
   type LogShipper,
   type ShipperSource,
@@ -21,6 +20,7 @@ import { rateLimitedHandler, requestLimitKey } from '../net/requestLimits';
 import { sha256hex } from '../models/EdrAgent';
 import { ingestPushedLogs, MAX_LOG_PUSH_BATCH_SIZE } from '../services/shippers/logPushService';
 import { unknownSources, isDatabaseBusy } from '../services/shippers/unknownSources';
+import { calculateStatus } from '../services/shippers/status';
 import { directSyslogSources } from '../services/shippers/directSyslogSources';
 import { NmapScanner } from '../services/scanner/nmapScanner';
 import { NucleiScanner } from '../services/scanner/nucleiScanner';
@@ -129,24 +129,6 @@ async function getSyslogSettings(): Promise<{ siem_host: string; siem_port: numb
   } catch {
     return { siem_host: '', siem_port: 514 };
   }
-}
-
-// Calculate shipper status based on last_seen timestamp
-function calculateStatus(lastSeen: Date | null, currentStatus: string): 'pending' | 'online' | 'offline' | 'error' {
-  if (!lastSeen) {
-    return 'pending';
-  }
-
-  const now = new Date();
-  const lastSeenTime = new Date(lastSeen);
-  const minutesSinceLastSeen = (now.getTime() - lastSeenTime.getTime()) / 1000 / 60;
-
-  // Consider offline if no heartbeat for 3 minutes (2x heartbeat interval + buffer)
-  if (minutesSinceLastSeen > SHIPPER_OFFLINE_THRESHOLD_MINUTES) {
-    return 'offline';
-  }
-
-  return currentStatus === 'error' ? 'error' : 'online';
 }
 
 // Get all shippers

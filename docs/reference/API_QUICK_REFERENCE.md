@@ -309,6 +309,14 @@ curl -X POST http://localhost:8421/api/display-links \
 # What the screen reads: its display link in X-Display-Token, never a login
 curl -H "X-Display-Token: $DISPLAY_TOKEN" "http://localhost:8421/api/display/snapshot"
 
+# The same board while signed in (any role; endpoint health for admins only)
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8421/api/big-display/snapshot"
+
+# What a saved link shows, or an unsaved layout would show (admins)
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8421/api/display-links/7/snapshot"
+curl -X POST http://localhost:8421/api/display-links/preview -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"config":{"views":[{"title":"Lobby","panels":[{"id":"open_alerts"}]}]}}'
+
 # Pause, resume, rotate (a new secret; the old one stops at once), revoke
 curl -X PUT http://localhost:8421/api/display-links/7 -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" -d '{"enabled": false}'

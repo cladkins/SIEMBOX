@@ -35,6 +35,7 @@ import exposureRoutes from './routes/exposure';
 import graphRoutes from './routes/graph';
 import displayRoutes from './routes/display';
 import displayLinksRoutes from './routes/displayLinks';
+import bigDisplayRoutes from './routes/bigDisplay';
 
 const app: Application = express();
 
@@ -190,9 +191,11 @@ app.use('/api/graph', authenticate, graphRoutes); // Context Graph: read-only pi
 
 // Big Display (docs/architecture/BIG-DISPLAY.md). A wall screen's read takes
 // its display link in X-Display-Token, never a login: each route gates itself
-// (routes/display.ts). Display links themselves are configured by admins.
+// (routes/display.ts). Display links themselves are configured by admins; the
+// signed-in board uses the user's own session and role.
 app.use('/api/display', displayRoutes);
 app.use('/api/display-links', authenticate, requireAdmin, displayLinksRoutes);
+app.use('/api/big-display', authenticate, bigDisplayRoutes);
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

@@ -388,10 +388,15 @@ const INVENTORY: Row[] = [
   // routes/displayLinks.ts: Settings > Display links (admins create, configure and revoke)
   ['GET', '/api/display-links', ADMIN_ONLY],
   ['POST', '/api/display-links', ADMIN_ONLY],
+  ['POST', '/api/display-links/preview', ADMIN_ONLY],
   ['GET', '/api/display-links/:id', ADMIN_ONLY],
   ['PUT', '/api/display-links/:id', ADMIN_ONLY],
   ['DELETE', '/api/display-links/:id', ADMIN_ONLY],
   ['POST', '/api/display-links/:id/rotate', ADMIN_ONLY],
+  ['GET', '/api/display-links/:id/snapshot', ADMIN_ONLY],
+
+  // routes/bigDisplay.ts: Big Display while signed in (endpoint health admin-only inside)
+  ['GET', '/api/big-display/snapshot', ANY_ROLE],
 ];
 
 /**
@@ -898,6 +903,31 @@ test('the Context Graph shows a role nothing the routes it mirrors refuse that r
   // The graph's own routes are open to every role that sees anything in it.
   for (const path of ['/api/graph/search', '/api/graph/neighborhood', '/api/graph/relation']) {
     assert.deepEqual(whoOf.get(`GET ${path}`), ANY_ROLE, path);
+  }
+});
+
+test('display links show only what every role can read', async () => {
+  // services/display/panels.ts names, for each panel kind, the routes whose
+  // data it mirrors. A kind a display link may hold (minRole 'viewer') must
+  // mirror only routes every signed-in role reads; any other kind must be
+  // refused in a link's config. So a panel backed by an admin-only route can't
+  // reach a wall screen without failing here.
+  const { PANEL_KINDS } = await import('../services/display/panels');
+  const { parseDisplayConfig } = await import('../services/display/config');
+  const whoOf = new Map(INVENTORY.map(([method, path, who]) => [`${method} ${path}`, who]));
+  const kinds = Object.values(PANEL_KINDS);
+  assert.ok(kinds.length >= 12, `found ${kinds.length} panel kinds`);
+  for (const kind of kinds) {
+    assert.ok(kind.viewerRoutes.length > 0, `${kind.id}: name the routes it mirrors`);
+    for (const id of kind.viewerRoutes) assert.ok(whoOf.has(id), `${kind.id} mirrors ${id}, which INVENTORY does not list`);
+    const linkConfig = { views: [{ title: 'T', panels: [{ id: kind.id }] }] };
+    if (kind.minRole === 'viewer') {
+      for (const id of kind.viewerRoutes) assert.deepEqual(whoOf.get(id), ANY_ROLE, `${kind.id} is allowed on display links but mirrors ${id}`);
+      assert.equal(parseDisplayConfig(linkConfig).ok, true, `${kind.id}: allowed in a link config`);
+    } else {
+      assert.equal(parseDisplayConfig(linkConfig).ok, false, `${kind.id} (minRole ${kind.minRole}) must be refused in a link config`);
+      assert.equal(parseDisplayConfig(linkConfig, { forLink: false }).ok, true, `${kind.id}: allowed on the signed-in board`);
+    }
   }
 });
 

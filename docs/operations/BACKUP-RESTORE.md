@@ -34,6 +34,15 @@ Overrides: `COMPOSE_FILE` (default `compose.prod.yaml`), `OUT_DIR` (default
 docker compose -f compose.prod.yaml restart backend
 ```
 
+### Display links after a restore
+
+Display links (Settings → Display links) keep working after a restore: only
+each link's secret hash is stored, and it is in the dump, so wall screens carry
+on with the URL they already have. A restore brings back the links as they were
+when the dump was taken, so a link rotated or revoked after that is live again
+with its old secret. If you restore an older backup, review **Settings →
+Display links** and rotate or revoke what shouldn't be live.
+
 ## Upgrades
 
 Database migrations run automatically on backend startup and are idempotent, so

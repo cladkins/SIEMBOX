@@ -73,6 +73,15 @@ A lightweight agent that collects logs from various sources (files, Docker conta
 ### Ghost Shipper
 A log shipper that continues sending logs with an invalid or expired API key, using cached configuration. Ghost shippers are visible in the UI for administrators to identify and fix.
 
+### Big Display
+SIEMBox's full-screen wall board (`/big-display` when signed in, `/display` on a wall screen): a few large panels per view, rotating, with alarm chips for what needs attention now. Signed in, it shows what the user's role may read and ends with their session.
+
+### Display Link
+A read-only link for one wall screen or TV (Settings → Display links, admins only). It is not a user account: it shows a fixed board at a chosen privacy level (Operations room, or Public area with counts only), can't change anything, and keeps working until an admin pauses, rotates or revokes it or its expiry date passes. Only a hash of its secret is stored; the link is shown once.
+
+### Silent Source
+A log source (a host or collector) that sent logs before but none within the board's silence threshold (5 to 60 minutes). The Big Display's Sources panel lists silent sources; a bursty source can read as silent between bursts.
+
 ### Syslog Server
 The component that receives log messages via UDP or TCP on port 514, following RFC 3164/5424 syslog protocol standards.
 

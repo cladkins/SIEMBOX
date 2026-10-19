@@ -1,6 +1,6 @@
 import type { Component } from 'vue';
 import type { RouteRecordSingleView } from 'vue-router';
-import { Bell, Clock, Download, Filter, Lock, MagicStick, Odometer, Search, User, View } from '@element-plus/icons-vue';
+import { Bell, Clock, Download, Filter, Lock, MagicStick, Monitor, Odometer, Search, User, View } from '@element-plus/icons-vue';
 
 /**
  * One functional area of the Settings hub.
@@ -113,6 +113,15 @@ export const settingsAreas: SettingsArea[] = [
       'Configuration: watched and lookalike domains, breach-monitored identities, the Have I Been Pwned key, notifications and check schedules. Findings and the password check are on the Digital Risk page.',
     adminOnly: true,
     component: () => import('./DigitalRiskSettings.vue'),
+  },
+  {
+    key: 'display-links',
+    path: 'display-links',
+    title: 'Display links',
+    icon: Monitor,
+    description: 'Read-only links for wall screens and TVs',
+    adminOnly: true,
+    component: () => import('./DisplayLinksSettings.vue'),
   },
   {
     key: 'system',

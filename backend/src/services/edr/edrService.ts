@@ -33,6 +33,7 @@ import {
   VULN_SCAN_INTERVAL_SECONDS,
 } from '../../models/EdrAgent';
 import { getCurrentYaraVersion } from './yaraService';
+import type { AgentUpdateConfig } from './agentUpdate';
 import { NotificationService } from '../notifications/notificationService';
 import { maybeTriageAlert } from '../ai/triageService';
 
@@ -55,7 +56,11 @@ function parseTimestamp(value: unknown): Date | null {
  * `yara_rules_version` is the version the agent compares against; 0 means "use the
  * embedded baseline only" (no server bundle published yet).
  */
-export function buildAgentConfig(baseConfigVersion: number, yaraRulesVersion = 0) {
+export function buildAgentConfig(
+  baseConfigVersion: number,
+  yaraRulesVersion = 0,
+  agentUpdate: AgentUpdateConfig | null = null
+) {
   return {
     config_version: baseConfigVersion + yaraRulesVersion,
     yara_rules_version: yaraRulesVersion,
@@ -67,6 +72,9 @@ export function buildAgentConfig(baseConfigVersion: number, yaraRulesVersion = 0
     rule_set_version: 1,
     // Server-pushed Sigma rules. Empty for now; wire to /api/rules (endpoint/Sigma) later.
     rules: [] as string[],
+    // Outstanding self-update request ({version, request_id}), or null. The
+    // agent attempts a given request_id at most once.
+    agent_update: agentUpdate,
   };
 }
 

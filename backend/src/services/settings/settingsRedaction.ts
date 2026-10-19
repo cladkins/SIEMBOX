@@ -122,6 +122,11 @@ export const READABLE_SETTING_KEYS: ReadonlySet<string> = new Set([
   'onboarding_completed',
   // Log Discovery scan scope (services/logDiscovery/discoveryScanService.ts)
   'log_discovery_manual_cidrs',
+  // Endpoint agent self-update (migration 044, services/edr/agentUpdateService.ts)
+  'edr_agent_auto_update',
+  'edr_agent_latest_version',
+  'edr_agent_latest_checked_at',
+  'edr_agent_latest_error',
 ]);
 
 /**

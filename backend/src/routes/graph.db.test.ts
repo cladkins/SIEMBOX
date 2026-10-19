@@ -51,8 +51,13 @@ const IP = {
   windowed: `198.19.${octet(2)}.${octet(3)}`,
   sender: `10.${octet(0)}.${octet(1)}.${octet(2)}`,
   asset: `10.${octet(3)}.${octet(1)}.${octet(0)}`,
-  unknown: `198.18.${octet(1)}.${octet(0)}`,
+  unknown: '',
 };
+// Never one of the addresses above: with octet(0) === octet(1), 198.18.b.a is the attacker's address.
+{
+  const used = new Set(Object.values(IP));
+  for (let k = 0; !IP.unknown || used.has(IP.unknown); k++) IP.unknown = `198.18.${octet(1)}.${(octet(0) + k) % 256}`;
+}
 const HOST = `Host-${tag}`;
 const USER = `root-${tag}`;
 const AGENT_ID = crypto.randomUUID();

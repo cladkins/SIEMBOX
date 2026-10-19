@@ -26,6 +26,16 @@ import {
   getYaraStatus,
 } from '../services/edr/yaraService';
 import { refreshYaraForge } from '../services/edr/yaraForgeService';
+import { buildAgentUpdateConfig, parseHeartbeatUpdate, sanitizeAgentVersion } from '../services/edr/agentUpdate';
+import {
+  getAgentUpdateStatus,
+  checkForAgentRelease,
+  setAutoUpdate,
+  requestAgentUpdate,
+  cancelAgentUpdate,
+  requestUpdatesForOutdated,
+} from '../services/edr/agentUpdateService';
+import { AuditService } from '../services/audit/auditService';
 import { rateLimitedHandler, requestLimitKey } from '../net/requestLimits';
 
 const router = Router();
@@ -59,8 +69,15 @@ router.post('/agents/enroll', async (req: Request, res: Response) => {
 // config_version is composite (agent row + current YARA version) so a new YARA
 // bundle makes it rise and the agent re-pulls config. See buildAgentConfig.
 router.post('/agents/:id/heartbeat', edrAgentLimiter, authenticateAgent, requireAgentMatchesParam, async (req: Request, res: Response) => {
-  const { status, agent_version } = req.body ?? {};
-  const base = await EdrAgentModel.heartbeat(req.params.id as string, status, agent_version);
+  const { status, agent_version, update } = req.body ?? {};
+  // `update` is the agent's self-update progress. A malformed one is dropped, not
+  // rejected: liveness must not depend on an optional field.
+  const base = await EdrAgentModel.heartbeat(
+    req.params.id as string,
+    status,
+    sanitizeAgentVersion(agent_version),
+    parseHeartbeatUpdate(update)
+  );
   const yaraVersion = await getCurrentYaraVersion();
   res.status(200).json({ config_version: (base ?? req.edrAgent!.config_version) + yaraVersion });
 });
@@ -68,7 +85,7 @@ router.post('/agents/:id/heartbeat', edrAgentLimiter, authenticateAgent, require
 // Config pull — agent auth.
 router.get('/agents/:id/config', edrAgentLimiter, authenticateAgent, requireAgentMatchesParam, async (req: Request, res: Response) => {
   const yaraVersion = await getCurrentYaraVersion();
-  res.status(200).json(buildAgentConfig(req.edrAgent!.config_version, yaraVersion));
+  res.status(200).json(buildAgentConfig(req.edrAgent!.config_version, yaraVersion, buildAgentUpdateConfig(req.edrAgent)));
 });
 
 // YARA rule pull — agent auth. Returns the curated bundle (highest version) as
@@ -152,6 +169,66 @@ router.get('/yara', authenticate, authorize('admin'), async (_req: Request, res:
 router.post('/yara/refresh', authenticate, authorize('admin'), async (_req: Request, res: Response) => {
   const version = await refreshYaraForge();
   res.json({ updated: version !== null, version: version ?? (await getCurrentYaraVersion()) });
+});
+
+// ---- Agent updates (admin) --------------------------------------------------
+// Static paths (/agents/update-outdated) are declared before /agents/:id.
+
+/** Audit an admin write; AuditService.log never throws. */
+async function auditEdr(req: Request, action: string, details: Record<string, unknown>) {
+  await AuditService.log({
+    userId: req.user!.id,
+    action,
+    resourceType: 'edr_agent',
+    ipAddress: req.ip ?? null,
+    userAgent: req.get('user-agent') ?? null,
+    responseStatus: 200,
+    details,
+  });
+}
+
+// Latest known release, last check, and the auto-update switch.
+router.get('/agent-updates', authenticate, authorize('admin'), async (_req: Request, res: Response) => {
+  res.json(await getAgentUpdateStatus());
+});
+
+// Run the GitHub release check now (failures come back in `error`, not as a 5xx).
+router.post('/agent-updates/check', authenticate, authorize('admin'), async (req: Request, res: Response) => {
+  const status = await checkForAgentRelease();
+  await auditEdr(req, 'edr.agent_update.check', { latest_version: status.latest_version, error: status.error });
+  res.json(status);
+});
+
+// Fleet-wide auto-update. Turning it on immediately targets outdated agents.
+router.put('/agent-updates/settings', authenticate, authorize('admin'), async (req: Request, res: Response) => {
+  const { auto_update } = req.body ?? {};
+  if (typeof auto_update !== 'boolean') throw new ApiError(400, 'auto_update must be a boolean');
+  const { status, requested } = await setAutoUpdate(auto_update);
+  await auditEdr(req, 'edr.agent_update.auto_update', { auto_update, requested });
+  res.json(status);
+});
+
+// Request an update for every outdated (semver) agent.
+router.post('/agents/update-outdated', authenticate, authorize('admin'), async (req: Request, res: Response) => {
+  const requested = await requestUpdatesForOutdated('manual-bulk');
+  await auditEdr(req, 'edr.agent_update.request_all', { requested });
+  res.json({ requested });
+});
+
+// Request an update to the latest version for one agent.
+router.post('/agents/:id/update', authenticate, authorize('admin'), async (req: Request, res: Response) => {
+  const agentId = req.params.id as string;
+  const { target_version } = await requestAgentUpdate(agentId);
+  await auditEdr(req, 'edr.agent_update.request', { agent_id: agentId, target_version });
+  res.json({ requested: true, target_version });
+});
+
+// Cancel an outstanding update request.
+router.delete('/agents/:id/update', authenticate, authorize('admin'), async (req: Request, res: Response) => {
+  const agentId = req.params.id as string;
+  await cancelAgentUpdate(agentId);
+  await auditEdr(req, 'edr.agent_update.cancel', { agent_id: agentId });
+  res.json({ cancelled: true });
 });
 
 // Endpoint detail.

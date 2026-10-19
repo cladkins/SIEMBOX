@@ -20,6 +20,7 @@ import { startThreatFeedsJob, stopThreatFeedsJob } from './jobs/threatFeeds';
 import { startDiscoveryApiPollerJob, stopDiscoveryApiPollerJob } from './jobs/discoveryApiPoller';
 import { startGeoipUpdateJob, stopGeoipUpdateJob } from './jobs/geoipUpdate';
 import { startYaraRulesJob, stopYaraRulesJob } from './jobs/yaraRules';
+import { startEdrAgentReleaseJob, stopEdrAgentReleaseJob } from './jobs/edrAgentRelease';
 import { startTriageReconcilerJob, stopTriageReconcilerJob } from './jobs/triageReconciler';
 import { startLeakedCredsJob, stopLeakedCredsJob } from './jobs/leakedCreds';
 import { startDomainMonitorJob, stopDomainMonitorJob } from './jobs/domainMonitor';
@@ -167,6 +168,10 @@ const startServer = async () => {
     // Start the EDR YARA-Forge refresher (opt-in via EDR_YARA_FORGE_ENABLED).
     startYaraRulesJob();
 
+    // Check GitHub for new endpoint-agent releases (feeds the Endpoints page's
+    // update-available state and, when enabled, auto-update).
+    startEdrAgentReleaseJob();
+
     // Start the AI triage reconciler (requeues runs orphaned by a restart;
     // backfills missed eligible alerts). No-ops on each tick while triage is
     // disabled in settings.
@@ -294,6 +299,7 @@ const shutdown = async (signal: string) => {
   stopDiscoveryApiPollerJob();
   stopGeoipUpdateJob();
   stopYaraRulesJob();
+  stopEdrAgentReleaseJob();
   stopTriageReconcilerJob();
   stopLeakedCredsJob();
   stopDomainMonitorJob();

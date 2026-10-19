@@ -492,6 +492,13 @@ export const api = {
   revokeEnrollmentToken: (tokenHash: string) => apiClient.delete(`/edr/tokens/${tokenHash}`),
   getYaraStatus: () => apiClient.get('/edr/yara'),
   refreshYaraForge: () => apiClient.post('/edr/yara/refresh'),
+  getAgentUpdateStatus: () => apiClient.get('/edr/agent-updates'),
+  checkAgentRelease: () => apiClient.post('/edr/agent-updates/check'),
+  setAgentAutoUpdate: (autoUpdate: boolean) =>
+    apiClient.put('/edr/agent-updates/settings', { auto_update: autoUpdate }),
+  updateEndpoint: (id: string) => apiClient.post(`/edr/agents/${id}/update`),
+  cancelEndpointUpdate: (id: string) => apiClient.delete(`/edr/agents/${id}/update`),
+  updateOutdatedEndpoints: () => apiClient.post('/edr/agents/update-outdated'),
 
   // Context Graph (GET only, every role). The graph page shows every failure
   // inline (a busy answer retries once), so nothing toasts; an 8 s timeout and

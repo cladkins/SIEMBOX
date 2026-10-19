@@ -8,6 +8,7 @@ Comprehensive troubleshooting guide for diagnosing and resolving common issues i
 - [Deployment Issues](#deployment-issues)
 - [Syslog & Log Ingestion](#syslog--log-ingestion)
 - [Log Shipper Issues](#log-shipper-issues)
+- [Endpoint Agent Issues](#endpoint-agent-issues)
 - [Log Discovery & API-Polled Sources](#log-discovery--api-polled-sources)
 - [Parser Problems](#parser-problems)
 - [Detection Rules](#detection-rules)
@@ -723,6 +724,98 @@ curl -X PUT http://localhost:8421/api/shippers/sources/<source-id> \
   -H "Content-Type: application/json" \
   -d '{"enabled": true}'
 ```
+
+---
+
+## Endpoint Agent Issues
+
+### Issue: Endpoint Agent Installed but Never Appears on the Endpoints Page
+
+**Symptoms:**
+- The agent service runs on the host, but the endpoint is missing from *Endpoints*
+- No `identity.json` in the agent's state directory (`/etc/siembox-agent` on Linux)
+
+An endpoint appears only after the agent enrolls. Until then it retries in the
+background and logs each failure.
+
+**Diagnosis:**
+```bash
+# On the endpoint (Linux)
+sudo journalctl -u siembox-agent -n 50 --no-pager | grep -i "not enrolled"
+sudo cat /etc/siembox-agent/agent.json
+```
+
+**Common causes, by the `err` in the "not enrolled yet; will retry" line:**
+
+1. **`server gave HTTP response to HTTPS client` or a TLS handshake error.**
+   The API on port 8421 serves plain HTTP. Set
+   `"server_url": "http://<siembox-host>:8421"`. Use `https://` only when a TLS
+   reverse proxy fronts the API.
+2. **`401 Invalid, expired, or already-used enrollment token`.** Tokens work
+   once and can expire. Generate a new one on *Endpoints* and paste it into
+   `enrollment_token`.
+3. **`no enrollment_token configured`, or a `CHANGE-ME` host.** The installer
+   writes a placeholder `agent.json` and starts the service anyway. Fill in
+   `server_url` and `enrollment_token`.
+4. **Timeout or `connection refused`.** Check the network path from the
+   endpoint: a 401 from the command below means the server is reachable.
+   ```bash
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+     http://<siembox-host>:8421/api/edr/agents/enroll \
+     -H 'Content-Type: application/json' -d '{}'
+   ```
+
+**Solution:** after fixing `agent.json`, restart and watch for `enrolled`:
+```bash
+sudo siembox-agent -dir /etc/siembox-agent restart
+sudo journalctl -u siembox-agent -f
+```
+The endpoint shows up within a minute, on its first heartbeat. If
+`identity.json` exists but the endpoint is still missing, the agent enrolled
+against a different server: delete `identity.json`, add a new token, and
+restart.
+
+---
+
+### Issue: An Endpoint Update Stays Pending or Fails
+
+**Symptoms:**
+- On *Endpoints*, the agent's update tag stays `pending` (or `downloading` / `installing`) for more than a few minutes, or turns `failed` (hover it for the agent's error)
+- The agent keeps its old version after the installer should have run
+
+**Diagnosis:**
+```bash
+# On the endpoint (Linux): the agent log and the installer output
+sudo journalctl -u siembox-agent -n 100 --no-pager | grep -i update
+sudo tail -n 50 /etc/siembox-agent/update.log
+```
+On the server, *Check now* on *Endpoints* shows `Last release check failed: ...`,
+and `GET /api/edr/agent-updates` returns the same `error`.
+
+**Common causes:**
+
+1. **Stays `pending`: the agent cannot self-update.** Agents released before this
+   feature ignore the update request. Upgrade each one by hand once (reinstall
+   the current release); later updates work from the console. An offline
+   endpoint also stays pending until it checks in.
+2. **`failed` with a download or TLS error: no GitHub egress.** The endpoint
+   downloads straight from `github.com` over HTTPS, using its system CA store
+   (not the SIEMBox CA settings). Allow `github.com` and the release CDN
+   through its proxy or firewall.
+3. **`failed` mentioning `SHA256SUMS`: the release has no checksum file.** The
+   agent refuses releases it cannot verify, and the server only offers a release
+   that has an asset named exactly `SHA256SUMS`. Releases published before the
+   checksum step cannot be update targets; publish a new release, or install
+   that version by hand.
+4. **Release check fails, no latest version.** The server cannot reach
+   `api.github.com`, or GitHub rate-limited the request (set `GITHUB_TOKEN`
+   in the backend environment), or the latest tag is not `vX.Y.Z`.
+5. **No Update button on a development build or a current agent.** Only an
+   agent behind the latest `X.Y.Z` release, or a development build (manual
+   only), can be updated; auto-update skips development builds.
+
+**Solution:** fix the cause, then press *Update* again (a failed update is
+retried with a new request; *Cancel update* clears a stuck one).
 
 ---
 

@@ -36,8 +36,18 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="Agent" width="100">
-          <template #default="{ row }"><span class="muted">{{ row.agent_version || '—' }}</span></template>
+        <el-table-column label="Agent" min-width="210">
+          <template #default="{ row }">
+            <span class="muted">{{ row.agent_version || '—' }}</span>
+            <el-tag v-if="isOutdated(row)" type="warning" size="small" style="margin-left: 6px">update available</el-tag>
+            <div v-if="row.update_state" class="update-state">
+              <el-tooltip :disabled="!row.update_error" :content="row.update_error || ''" placement="top">
+                <el-tag :type="updateStateType(row.update_state)" size="small">
+                  {{ row.update_state }}<template v-if="row.update_target_version"> → {{ row.update_target_version }}</template>
+                </el-tag>
+              </el-tooltip>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column label="Open vulns" width="110" align="center">
           <template #default="{ row }">
@@ -63,14 +73,78 @@
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column label="" width="150" align="right">
+        <el-table-column label="" width="290" align="right">
           <template #default="{ row }">
+            <el-button
+              v-if="row.update_request_id"
+              size="small"
+              plain
+              :loading="busyAgent === row.agent_id"
+              @click="cancelUpdate(row)"
+            >Cancel update</el-button>
+            <el-button
+              v-else-if="canUpdate(row)"
+              size="small"
+              type="warning"
+              plain
+              :loading="busyAgent === row.agent_id"
+              @click="requestUpdate(row)"
+            >Update</el-button>
             <el-button size="small" @click="openDetail(row)">Details</el-button>
             <el-button size="small" type="danger" plain @click="removeEndpoint(row)">Remove</el-button>
           </template>
         </el-table-column>
         <template #empty>No endpoints enrolled yet. Click <strong>Enroll an endpoint</strong> to generate a token.</template>
       </el-table>
+    </el-card>
+
+    <!-- Agent updates -->
+    <el-card style="margin-top: 16px">
+      <template #header>
+        <div class="card-header-row">
+          <span>Agent updates</span>
+          <div class="actions">
+            <el-button size="small" :loading="updates.checking" @click="checkRelease">Check now</el-button>
+            <el-button
+              size="small"
+              type="warning"
+              :disabled="!outdatedCount"
+              :loading="updates.bulkBusy"
+              @click="updateAllOutdated"
+            >Update all outdated<template v-if="outdatedCount"> ({{ outdatedCount }})</template></el-button>
+          </div>
+        </div>
+      </template>
+      <el-descriptions :column="3" size="small" border>
+        <el-descriptions-item label="Latest version">
+          <el-tag v-if="updates.status?.latest_version" type="success" size="small">v{{ updates.status.latest_version }}</el-tag>
+          <span v-else class="muted">unknown</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="Last checked">
+          {{ updates.status?.checked_at ? formatDate(updates.status.checked_at) : 'never' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="Auto-update">
+          <el-switch
+            :model-value="!!updates.status?.auto_update"
+            :loading="updates.autoBusy"
+            @change="toggleAutoUpdate"
+          />
+        </el-descriptions-item>
+      </el-descriptions>
+      <el-alert
+        v-if="updates.status?.error"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="`Last release check failed: ${updates.status.error}`"
+        style="margin-top: 8px"
+      />
+      <p class="muted" style="margin: 8px 0 0">
+        Endpoints download the release from GitHub themselves and verify it against the release's
+        <code>SHA256SUMS</code>; they need HTTPS access to github.com. Agents on a development build
+        (a version that is not <code>X.Y.Z</code>) can be updated by hand but are skipped by
+        auto-update and <strong>Update all outdated</strong>.
+      </p>
     </el-card>
 
     <!-- YARA rules status -->
@@ -172,7 +246,10 @@
           <el-descriptions-item label="IP">{{ detail.agent.ip || '—' }}</el-descriptions-item>
           <el-descriptions-item label="OS">{{ detail.agent.os }} {{ detail.agent.os_version }}</el-descriptions-item>
           <el-descriptions-item label="Arch">{{ detail.agent.arch || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="Agent version">{{ detail.agent.agent_version || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="Agent version">
+            {{ detail.agent.agent_version || '—' }}
+            <el-tag v-if="isOutdated(detail.agent)" type="warning" size="small" style="margin-left: 6px">update available</el-tag>
+          </el-descriptions-item>
           <el-descriptions-item label="Last seen">{{ detail.agent.last_seen ? formatDate(detail.agent.last_seen) : 'never' }}</el-descriptions-item>
           <el-descriptions-item label="Last scan">
             <template v-if="detail.agent.last_scan_completed_at || detail.agent.last_scan_at">
@@ -237,6 +314,14 @@ const endpoints = ref<any[]>([]);
 const tokens = ref<any[]>([]);
 const yara = reactive<{ status: any | null; refreshing: boolean }>({ status: null, refreshing: false });
 
+const updates = reactive<{
+  status: { latest_version: string | null; checked_at: string | null; error: string | null; auto_update: boolean } | null;
+  checking: boolean;
+  autoBusy: boolean;
+  bulkBusy: boolean;
+}>({ status: null, checking: false, autoBusy: false, bulkBusy: false });
+const busyAgent = ref('');
+
 const tokenDialog = ref(false);
 const generating = ref(false);
 const generated = ref('');
@@ -248,7 +333,8 @@ const detail = reactive<{ agent: any; detections: any[]; vulns: any[]; loading: 
   agent: null, detections: [], vulns: [], loading: false,
 });
 
-const serverUrl = computed(() => `https://${window.location.hostname}:8421`);
+// The API on 8421 serves plain HTTP; an https URL here fails every enrollment.
+const serverUrl = computed(() => `http://${window.location.hostname}:8421`);
 const installSnippet = computed(() =>
   `# agent.json on the endpoint\n{\n  "server_url": "${serverUrl.value}",\n  "enrollment_token": "${generated.value}"\n}\n\n# then run the agent:\nsiembox-agent -dir /etc/siembox-agent run`
 );
@@ -265,9 +351,13 @@ async function fetchYaraStatus() {
   const res = await api.getYaraStatus();
   yara.status = res.data;
 }
+async function fetchUpdateStatus() {
+  const res = await api.getAgentUpdateStatus();
+  updates.status = res.data;
+}
 async function refresh() {
   loading.value = true;
-  try { await Promise.all([fetchEndpoints(), fetchTokens(), fetchYaraStatus()]); }
+  try { await Promise.all([fetchEndpoints(), fetchTokens(), fetchYaraStatus(), fetchUpdateStatus()]); }
   catch { ElMessage.error('Failed to load endpoints'); }
   finally { loading.value = false; }
 }
@@ -288,6 +378,108 @@ async function pullYaraForge() {
     await fetchYaraStatus();
   } catch { ElMessage.error('YARA-Forge refresh failed (check server egress and logs)'); }
   finally { yara.refreshing = false; }
+}
+
+// ---- Agent updates ---------------------------------------------------------
+const SEMVER = /^\d+\.\d+\.\d+$/;
+/** -1/0/1 numeric X.Y.Z compare, or null if either side is not plain X.Y.Z. */
+type VersionRow = { agent_version?: string | null };
+function cmpVersion(a?: string | null, b?: string | null): number | null {
+  if (!a || !b || !SEMVER.test(a) || !SEMVER.test(b)) return null;
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1;
+  return 0;
+}
+/** Behind the latest release (semver agents only; dev builds never show the tag). */
+function isOutdated(row: VersionRow): boolean {
+  return cmpVersion(row.agent_version, updates.status?.latest_version) === -1;
+}
+/** Update button: behind latest, or a dev build (manual update is allowed for those). */
+function canUpdate(row: VersionRow): boolean {
+  const latest = updates.status?.latest_version;
+  if (!latest) return false;
+  return isOutdated(row) || !SEMVER.test(row.agent_version || '');
+}
+const outdatedCount = computed(() => endpoints.value.filter(isOutdated).length);
+function updateStateType(state: string): string {
+  if (state === 'succeeded') return 'success';
+  if (state === 'failed') return 'danger';
+  return 'info';
+}
+function errorMessage(e: unknown, fallback: string): string {
+  const data = (e as { response?: { data?: { message?: string } } })?.response?.data;
+  return data?.message || fallback;
+}
+
+async function checkRelease() {
+  updates.checking = true;
+  try {
+    const res = await api.checkAgentRelease();
+    updates.status = res.data;
+    if (res.data.error) ElMessage.warning('Release check failed: ' + res.data.error);
+    else ElMessage.success(`Latest agent release: v${res.data.latest_version}`);
+    await fetchEndpoints();
+  } catch (e) { ElMessage.error(errorMessage(e, 'Release check failed')); }
+  finally { updates.checking = false; }
+}
+
+async function toggleAutoUpdate(enabled: boolean | string | number) {
+  const on = enabled === true;
+  try {
+    await ElMessageBox.confirm(
+      on
+        ? 'Automatically update every endpoint to each new SIEMBOX Endpoint release? New GitHub releases are pushed fleet-wide as soon as they are detected (checked every 6 hours), and outdated endpoints are updated immediately. Endpoints on development builds are skipped.'
+        : 'Stop automatically updating endpoints? Updates already requested are not cancelled.',
+      on ? 'Enable auto-update' : 'Disable auto-update',
+      { type: 'warning', confirmButtonText: on ? 'Enable' : 'Disable', cancelButtonText: 'Cancel' }
+    );
+  } catch { return; }
+  updates.autoBusy = true;
+  try {
+    const res = await api.setAgentAutoUpdate(on);
+    updates.status = res.data;
+    ElMessage.success(on ? 'Auto-update enabled' : 'Auto-update disabled');
+    await fetchEndpoints();
+  } catch (e) { ElMessage.error(errorMessage(e, 'Failed to change auto-update')); }
+  finally { updates.autoBusy = false; }
+}
+
+async function requestUpdate(row: { agent_id: string }) {
+  busyAgent.value = row.agent_id;
+  try {
+    const res = await api.updateEndpoint(row.agent_id);
+    ElMessage.success(`Update to v${res.data.target_version} requested`);
+    await fetchEndpoints();
+  } catch (e) { ElMessage.error(errorMessage(e, 'Failed to request update')); }
+  finally { busyAgent.value = ''; }
+}
+
+async function cancelUpdate(row: { agent_id: string }) {
+  busyAgent.value = row.agent_id;
+  try {
+    await api.cancelEndpointUpdate(row.agent_id);
+    ElMessage.success('Update request cancelled');
+    await fetchEndpoints();
+  } catch (e) { ElMessage.error(errorMessage(e, 'Failed to cancel update')); }
+  finally { busyAgent.value = ''; }
+}
+
+async function updateAllOutdated() {
+  try {
+    await ElMessageBox.confirm(
+      `Request an update to v${updates.status?.latest_version} for ${outdatedCount.value} outdated endpoint(s)? ` +
+        'Each downloads the release from GitHub and restarts its agent service.',
+      'Update all outdated', { type: 'warning', confirmButtonText: 'Update all', cancelButtonText: 'Cancel' }
+    );
+  } catch { return; }
+  updates.bulkBusy = true;
+  try {
+    const res = await api.updateOutdatedEndpoints();
+    ElMessage.success(`Update requested for ${res.data.requested} endpoint(s)`);
+    await fetchEndpoints();
+  } catch (e) { ElMessage.error(errorMessage(e, 'Failed to request updates')); }
+  finally { updates.bulkBusy = false; }
 }
 
 function openTokenDialog() {
@@ -395,6 +587,8 @@ function severityType(sev: string): string {
 .card-header-row { display: flex; justify-content: space-between; align-items: center; }
 .page-header h2 { margin: 0; }
 .subtitle { margin: 4px 0 0; color: var(--el-text-color-secondary); font-size: 13px; }
+.actions { display: flex; gap: 8px; }
+.update-state { margin-top: 4px; }
 .muted { color: var(--el-text-color-secondary); font-size: 12px; }
 .token-row { display: flex; gap: 8px; }
 .install {

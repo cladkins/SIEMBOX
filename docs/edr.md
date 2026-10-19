@@ -25,13 +25,14 @@ unique index on `event_id` for replay dedup).
 
 **Agent-facing** (per-agent key: `Authorization: Bearer <key>` + `X-Agent-ID`):
 - `POST /agents/enroll` — exchange a one-time enrollment token for `{agent_id, agent_api_key, config}` (key returned once; only its sha256 is stored).
-- `POST /agents/:id/heartbeat` → `{config_version}`
-- `GET  /agents/:id/config` → `AgentConfig` (includes `yara_rules_version`)
+- `POST /agents/:id/heartbeat` → `{config_version}` (optional `update` progress report, see [Agent updates](#agent-updates))
+- `GET  /agents/:id/config` → `AgentConfig` (includes `yara_rules_version` and `agent_update`)
 - `GET  /agents/:id/yara` → curated YARA bundle as raw `text/plain` (empty body valid)
 - `POST /inventory` · `POST /events` · `POST /vulnerabilities` → `202 Accepted`
 
 **Admin-facing** (JWT + admin role):
 - `GET /agents`, `GET /agents/:id`, `GET /agents/:id/vulnerabilities`, `GET /agents/:id/detections`, `DELETE /agents/:id`
+- Agent updates: `GET /agent-updates`, `POST /agent-updates/check`, `PUT /agent-updates/settings`, `POST /agents/:id/update`, `DELETE /agents/:id/update`, `POST /agents/update-outdated` (see [Agent updates](#agent-updates) and `docs/reference/API.md`)
 - `POST /tokens` (generate, plaintext shown once), `GET /tokens`, `DELETE /tokens/:hash` (revoke)
 - `GET /yara` (current bundle version/sha/size), `POST /yara/refresh` (pull YARA-Forge now)
 
@@ -81,6 +82,47 @@ contract: `docs/SERVER_YARA_ADDON.md` in the agent repo.
   the agent always pulls the highest version. Pruning never reuses version numbers,
   so the agent's version comparison is unaffected.
 
+## Agent updates
+
+Admins can update endpoint agents from the Endpoints page. The server never
+serves the binary: it names a target version and a fresh `request_id`, and the
+agent downloads that release from `github.com/cladkins/siembox-endpoint` itself,
+verifies it against the release's `SHA256SUMS`, and runs the native installer
+for the way it was installed (deb, rpm, pkg, MSI, or a binary swap).
+
+**Flow.** The `edr-agent-release` job checks the latest GitHub release at
+startup and every 6 hours (*Check now* does it on demand; set `GITHUB_TOKEN` to
+raise the GitHub rate limit). A release counts only if its tag is `vX.Y.Z` and
+it has a `SHA256SUMS` asset. *Update* (per endpoint) or *Update all outdated*
+stores the request on the agent (`update_request_id`, `update_target_version`,
+state `pending`) and bumps its `config_version`; the agent sees
+`agent_update: {version, request_id}` on its next config pull (within about a
+minute), attempts each `request_id` at most once, and reports
+`downloading` / `installing` / `succeeded` / `failed` in its heartbeat. The
+request completes when the agent reports `succeeded` or its heartbeat
+`agent_version` reaches or passes the target; a failure shows the agent's error as a
+tooltip on the state tag, and *Update* issues a new request to retry.
+*Cancel update* drops a request that has not started.
+
+**Auto-update** is off by default. Turning it on (it asks for confirmation,
+because it pushes every new release fleet-wide) immediately requests the latest
+known version for all outdated endpoints, and does the same after each release
+check. An endpoint with a request already outstanding for that version is not
+asked again, including after a failure; use *Update* to retry.
+
+**Rules.** Only plain `X.Y.Z` versions are targets and are compared numerically.
+An agent on any other version (`dev`, `a8922f4-dirty`) is a development build:
+manual *Update* is allowed, auto-update and *Update all outdated* skip it. A
+downgrade or same-version update is never requested.
+
+**Requirements.** Endpoints need HTTPS egress to `github.com` (and the release
+asset CDN it redirects to) with system CA trust; the SIEMBox server needs
+`api.github.com` for the release check. Agents older than this feature cannot
+self-update: upgrade them by hand once. Updates are self-maintenance of the
+agent; it still takes no remediation action on the host. See
+[Troubleshooting](operations/TROUBLESHOOTING.md#endpoint-agent-issues) when an
+update stays pending or fails.
+
 ## Known follow-ups
 
 - Endpoint alerts are inserted directly, so they don't yet fire Email/Slack/NTFY notifications (rule-based alerts still do).
@@ -96,7 +138,7 @@ contract: `docs/SERVER_YARA_ADDON.md` in the agent repo.
 go build -o /tmp/siembox-agent ./cmd/siembox-agent
 mkdir -p /tmp/agentdir
 cat > /tmp/agentdir/agent.json <<EOF
-{"server_url":"https://<server>:8421","enrollment_token":"<TOKEN_FROM_UI>","insecure_skip_verify":true}
+{"server_url":"http://<server>:8421","enrollment_token":"<TOKEN_FROM_UI>"}
 EOF
 /tmp/siembox-agent -dir /tmp/agentdir -v run
 ```

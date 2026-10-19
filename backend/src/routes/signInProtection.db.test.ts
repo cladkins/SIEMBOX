@@ -300,7 +300,7 @@ after(async () => {
     await clearOurCounters();
     await pool.query(
       `DELETE FROM audit_logs WHERE timestamp >= $1 AND (
-         user_id = ANY($2) OR resource_id = ANY($2) OR ip_address <<= ANY($3::inet[])
+         user_id = ANY($2) OR (resource_type = 'user' AND resource_id = ANY($2)) OR ip_address <<= ANY($3::inet[])
          OR details->>'usernameHash' = ANY($4) OR (ip_address = '127.0.0.1' AND action LIKE 'auth.%')
          OR (details->>'by' = 'cli' AND action IN ('auth.unlock', 'user.password_reset', 'auth.mfa.disabled')))`,
       [startedAt, userIds, TEST_NETS, usernames.map((name) => policy.auditUsernameHash(name)).concat(probeHashes)]

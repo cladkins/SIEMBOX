@@ -63,6 +63,21 @@ export interface EdrAgent {
   last_scan_started_at: Date | null;
   last_scan_completed_at: Date | null;
   created_at: Date;
+  /** Outstanding update request (served as AgentConfig.agent_update); null when none. */
+  update_request_id: string | null;
+  update_target_version: string | null;
+  /** pending | downloading | installing | succeeded | failed; kept after the request clears. */
+  update_state: string | null;
+  update_error: string | null;
+  update_requested_at: Date | null;
+  update_updated_at: Date | null;
+}
+
+/** An already-validated heartbeat `update` report (see parseHeartbeatUpdate). */
+export interface HeartbeatUpdateReport {
+  request_id: string;
+  state: string;
+  error: string | null;
 }
 
 export interface CreateEdrAgentParams {
@@ -95,16 +110,62 @@ export class EdrAgentModel {
     return result.rows[0] || null;
   }
 
-  /** Heartbeat: refresh last_seen / status / version; returns current config_version. */
-  static async heartbeat(agentId: string, status: string, agentVersion?: string): Promise<number | null> {
+  /**
+   * Heartbeat: refresh last_seen / status / version and apply any update report;
+   * returns the current config_version. One UPDATE, so the heartbeat stays cheap.
+   *
+   * The update columns change only for the agent's CURRENT request: a report
+   * whose request_id differs (or when no request is outstanding) is ignored.
+   * Success is either the agent reporting `succeeded` for the current request or
+   * the heartbeat's agent_version equalling the target version; it clears the
+   * request (agent_update becomes null), keeps state/target for display and bumps
+   * config_version so the agent re-pulls config. Every expression in a SET list
+   * reads the row's OLD values, which is what the conditions below rely on.
+   */
+  static async heartbeat(
+    agentId: string,
+    status: string,
+    agentVersion?: string,
+    update?: HeartbeatUpdateReport | null
+  ): Promise<number | null> {
+    const matched = `($4::uuid IS NOT NULL AND update_request_id = $4::uuid)`;
+    // Reaching the target OR passing it (an admin upgraded the host by hand)
+    // completes the request; otherwise it would stay pending forever.
+    const semver = `'^[0-9]{1,9}[.][0-9]{1,9}[.][0-9]{1,9}$'`;
+    const reached = `($3::text = update_target_version
+         OR ($3::text ~ ${semver} AND update_target_version ~ ${semver}
+             AND string_to_array($3::text, '.')::int[] >= string_to_array(update_target_version, '.')::int[]))`;
+    const success = `(update_request_id IS NOT NULL AND (
+         (${matched} AND $5::text = 'succeeded')
+         OR ($3::text IS NOT NULL AND ${reached})))`;
     const result = await query(
       `UPDATE edr_agents
          SET last_seen = NOW(),
              status = $2,
-             agent_version = COALESCE($3, agent_version)
+             agent_version = COALESCE($3::text, agent_version),
+             update_state = CASE WHEN ${success} THEN 'succeeded'
+                                 WHEN ${matched} AND $5::text IS NOT NULL THEN $5::text
+                                 ELSE update_state END,
+             update_error = CASE WHEN ${success} THEN NULL
+                                 WHEN ${matched} AND $5::text IS NOT NULL THEN $6::text
+                                 ELSE update_error END,
+             update_updated_at = CASE WHEN ${success}
+                                        OR (${matched} AND $5::text IS NOT NULL
+                                            AND (update_state IS DISTINCT FROM $5::text
+                                                 OR update_error IS DISTINCT FROM $6::text))
+                                      THEN NOW() ELSE update_updated_at END,
+             config_version = COALESCE(config_version, 1) + CASE WHEN ${success} THEN 1 ELSE 0 END,
+             update_request_id = CASE WHEN ${success} THEN NULL ELSE update_request_id END
        WHERE agent_id = $1
        RETURNING config_version`,
-      [agentId, status || 'online', agentVersion ?? null]
+      [
+        agentId,
+        status || 'online',
+        agentVersion ?? null,
+        update?.request_id ?? null,
+        update?.state ?? null,
+        update?.error ?? null,
+      ]
     );
     return result.rows[0]?.config_version ?? null;
   }

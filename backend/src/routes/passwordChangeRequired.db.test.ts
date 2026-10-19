@@ -328,7 +328,7 @@ after(async () => {
     );
     await pool.query('DELETE FROM log_shippers WHERE id = ANY($1)', [shipperIds]);
     await pool.query('DELETE FROM application_errors WHERE user_id = ANY($1)', [userIds]);
-    await pool.query(`DELETE FROM audit_logs WHERE timestamp >= $1 AND (user_id = ANY($2) OR resource_id = ANY($2))`, [startedAt, userIds]);
+    await pool.query(`DELETE FROM audit_logs WHERE timestamp >= $1 AND (user_id = ANY($2) OR (resource_type = 'user' AND resource_id = ANY($2)))`, [startedAt, userIds]);
     // Sessions and recognized browsers go with the users (ON DELETE CASCADE).
     await pool.query(
       `DELETE FROM users WHERE id = ANY($1)

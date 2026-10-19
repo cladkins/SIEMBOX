@@ -39,7 +39,8 @@ import {
   TOTAL_CAP,
 } from './types';
 import { canExpandType, filterGraph, visibilityClass } from './visibility';
-import { windowCacheKey, type ResolvedWindow } from './window';
+import { dayRange, windowCacheKey, type ResolvedWindow } from './window';
+import { logSourceStatus, readLogEdgeState, type LogEdgeState } from './logEdgeRollup';
 
 export interface GraphDeps {
   acquire: () => Promise<QueryClient>;
@@ -99,6 +100,26 @@ async function readCenter(budget: BudgetContext, center: EntityRef): Promise<Cen
 
 const fallbackNode = (ref: EntityRef): GraphNode => ({ id: ref.id, type: ref.type, key: ref.key, label: ref.key, facts: {}, flags: [], expandable: true });
 
+/**
+ * The rollup's state, when the plan reads it: one small step. Unreadable (a
+ * timeout, or the table missing) leaves it undefined: the log relations run
+ * as they are and say nothing about lag.
+ */
+async function readLogs(budget: BudgetContext, plan: RelationDef[]): Promise<LogEdgeState | undefined> {
+  if (!plan.some((def) => def.rollup)) return undefined;
+  const result = await budget.step('log_state', (q) => readLogEdgeState(q));
+  return result.status === 'ok' ? result.value : undefined;
+}
+
+/** sources.logs: the groups' own status, then what the rollup says (disabled, building, behind, incomplete days). */
+function withRollup(base: SourceStatus, logs: LogEdgeState | undefined, win: ResolvedWindow, nowMs: number): SourceStatus {
+  if (!logs) return base;
+  const rollup = logSourceStatus(logs, dayRange(win), nowMs);
+  const { status, ...facts } = rollup;
+  if (status === 'disabled') return base.status === 'ok' || base.status === 'disabled' ? { status: 'disabled' } : base;
+  return { ...facts, status: base.status === 'ok' ? status : base.status };
+}
+
 function sourceStatus(statuses: GroupStatus[], partialFacts: boolean): SourceStatus {
   if (statuses.length > 0 && statuses.every((s) => s === 'timeout')) return { status: 'timeout' };
   if (statuses.some((s) => s !== 'ok') || partialFacts) return { status: 'partial' };
@@ -122,7 +143,8 @@ async function computeNeighborhood(
     deps.acquire,
     async (budget) => {
       const centerInfo = await readCenter(budget, params.center);
-      const ctx: ResolverCtx = { role: caller.role, window: params.window, vulnStatus: params.vulnStatus, center: params.center, centerInfo };
+      const logs = await readLogs(budget, plan);
+      const ctx: ResolverCtx = { role: caller.role, window: params.window, vulnStatus: params.vulnStatus, center: params.center, centerInfo, logs };
       const isValue = VALUE_TYPES.has(params.center.type);
       const runs: Array<{ def: RelationDef; status: GroupStatus; page: RelationPage }> = [];
       if (isValue || centerInfo.exists) {
@@ -194,10 +216,11 @@ async function computeNeighborhood(
 
       const sources: Partial<Record<Origin, SourceStatus>> = {};
       for (const origin of new Set(plan.map((def) => def.origin))) {
-        sources[origin] = sourceStatus(
+        const base = sourceStatus(
           groups.filter((group) => group.origin === origin).map((group) => group.status),
           facts.partial
         );
+        sources[origin] = origin === 'logs' ? withRollup(base, logs, params.window, deps.now()) : base;
       }
 
       const value: Omit<NeighborhoodResponse, 'cached'> = {
@@ -249,7 +272,8 @@ async function computeRelation(
     deps.acquire,
     async (budget) => {
       const centerInfo = await readCenter(budget, params.center);
-      const ctx: ResolverCtx = { role: caller.role, window: params.window, vulnStatus: params.vulnStatus, center: params.center, centerInfo };
+      const logs = await readLogs(budget, [def]);
+      const ctx: ResolverCtx = { role: caller.role, window: params.window, vulnStatus: params.vulnStatus, center: params.center, centerInfo, logs };
       const page: PageRequest = { limit: params.limit, offset: params.offset, q: params.q, sort: params.sort, order: params.order };
       let status: GroupStatus = 'ok';
       let result: RelationPage = { items: [], total: 0, totalCapped: false };

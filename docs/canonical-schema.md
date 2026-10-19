@@ -51,5 +51,22 @@ Normalization happens in three layers (see `backend/src/services/`):
 | `geo_foreign` | boolean: `source_ip` country not in `GEOIP_HOME_COUNTRIES` |
 | `message` | the raw/cleaned log message |
 
+## Fields the Context Graph uses
+The graph's dashed "seen in logs" links come from a background rollup of
+parsed logs (`backend/src/services/graph/logEdgeRollup.ts`). It reads only:
+
+| Field | Used for |
+|---|---|
+| `source_ip` | the actor IP, **only when it differs from `observer_ip`** (the normalizer fills `source_ip` with the sender when the parser found no IP, so that value says nothing about who acted) and the log was parsed |
+| `user` | who signed in, and which device a user was seen on (junk values such as `-`, `unknown`, `null` are dropped) |
+| `auth_outcome` | the failure and success counts on sign-in links (`failure` / `success`) |
+| `dest_ip` | actor → destination links (firewall and IDS logs) |
+| `domain` | actor → domain links (DNS). Not canonical: only the Pi-hole parsers emit it today, and the normalizer has no aliases for it |
+| `raw_logs.hostname`, `raw_logs.source_ip`, `raw_logs.shipper_id` | the device that logged it (the syslog header host, else the sender) and its shipper, for every log, parsed or not |
+
+Values are canonicalized as the graph keys them (IPs in one spelling, hosts and
+domains lower-cased, users trimmed with case kept); a value with a control or
+bidi character is dropped.
+
 New parsers should map to these names; new canonical fields should be added here
 first, then to `fieldNormalizer` (alias) and this doc.

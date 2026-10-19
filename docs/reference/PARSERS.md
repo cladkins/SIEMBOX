@@ -1115,6 +1115,7 @@ only** (not in the catalog yet).
 - **Documentation**: Clearly explain what the parser does and when to use it
 - **Performance**: Avoid complex regex that could cause slowdowns
 - **Compatibility**: Ensure pattern works with extracted messages (not full syslog lines)
+- **Context Graph**: map the client to `source_ip`, the principal to `user`, the target to `dest_ip`, DNS names to `domain`, and set `auth_outcome` (or an `event` the normalizer derives it from) to light up the graph's "seen in logs" links: who signed in from where, with failed and successful counts. A `source_ip` equal to the sender (`observer_ip`) is not used. See [canonical-schema.md](../canonical-schema.md#fields-the-context-graph-uses). Parser content is authored in `cladkins/siembox-catalog`.
 
 ### Submission Tips
 

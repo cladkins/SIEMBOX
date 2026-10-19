@@ -346,14 +346,16 @@ test('a stored config that no longer validates: the screen gets DISPLAY_CONFIG_I
   const { id, token } = await createLink('broken');
   // As a newer version's panel kind would read after a downgrade.
   await pool.query(`UPDATE display_links SET config = '{"views":[{"title":"A","panels":[{"id":"future_graph"}]}]}' WHERE id = $1`, [id]);
-  const errorsBefore = (await pool.query('SELECT COUNT(*)::int AS n FROM application_errors')).rows[0].n;
+  // Only display rows: other test files run in parallel against this database and log their own errors.
+  const displayErrors = `SELECT COUNT(*)::int AS n FROM application_errors WHERE endpoint ILIKE '%display%'`;
+  const errorsBefore = (await pool.query(displayErrors)).rows[0].n;
   for (let i = 0; i < 5; i++) {
     const res = await snapshot(token);
     assert.equal(res.status, 500);
     assert.equal(res.body.code, 'DISPLAY_CONFIG_INVALID');
     assert.equal(res.headers['cache-control'], 'no-store');
   }
-  const errorsAfter = (await pool.query('SELECT COUNT(*)::int AS n FROM application_errors')).rows[0].n;
+  const errorsAfter = (await pool.query(displayErrors)).rows[0].n;
   assert.equal(errorsAfter, errorsBefore, 'a polling screen adds no application_errors rows');
   const link = (await admin('GET', `/api/display-links/${id}`)).body.link;
   assert.deepEqual([link.config, link.view_count, link.panel_keys, link.privacy], [null, 0, [], 'operations']);

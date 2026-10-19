@@ -12,6 +12,7 @@ import type { EntityRef } from '../entityKey';
 import type { ResolvedWindow } from '../window';
 import type { EdgeStyle, GraphEdge, NodeType, Origin, RelId, Role } from '../types';
 import { TOTAL_CAP } from '../types';
+import type { LogEdgeState } from '../logEdgeRollup';
 
 export type SortKey = 'count' | 'last_seen' | 'first_seen';
 
@@ -36,6 +37,8 @@ export interface ResolverCtx {
   vulnStatus: 'open' | 'all';
   center: EntityRef;
   centerInfo: CenterInfo;
+  /** The rollup's state, read once per request when a log relationship runs. */
+  logs?: LogEdgeState;
 }
 
 export type EdgeSpec = Omit<GraphEdge, 'id'>;
@@ -79,6 +82,8 @@ export interface RelationDef {
   style: EdgeStyle;
   /** Roles that may run it, beyond seeing the neighbour type (the sign-in relations: admin). */
   roles?: readonly Role[];
+  /** Read from graph_log_edges: the request reads the rollup's state first. */
+  rollup?: boolean;
   fetch(q: Query, ctx: ResolverCtx, page: PageRequest): Promise<RelationPage>;
 }
 

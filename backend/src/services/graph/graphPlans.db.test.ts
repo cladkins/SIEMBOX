@@ -1,5 +1,5 @@
 /**
- * Query plans: the alert lookups the graph, Threat Intel's IP view and
+ * Query plans (the log relationships' at the end): the alert lookups the graph, Threat Intel's IP view and
  * Asset-360 send, as they send them (ORDER BY key, created_at DESC LIMIT n),
  * use migration 043's indexes and read a bounded number of rows.
  *
@@ -50,6 +50,7 @@ import { countAlertsNaming } from './resolvers/alerts';
 import type { CenterInfo, RelationDef, ResolverCtx } from './resolvers/common';
 import { TOTAL_CAP } from './types';
 import { resolveWindow } from './window';
+import { UPPER_BOUND_SQL } from './logEdgeRollup';
 
 const SKIP = 'Postgres with the SIEMBox schema is not reachable';
 let db: PoolClient | undefined;
@@ -380,4 +381,25 @@ test('a key holding most alerts, nearly all older than the window (an EDR host a
   } finally {
     await db.query('ROLLBACK TO SAVEPOINT noisy');
   }
+});
+
+test('log relationships: the a side reads the PK, the b side idx_graph_log_edges_b, the cursor idx_parsed_logs_created_at', async (t) => {
+  if (!db) return t.skip(SKIP);
+  // 30,000 edges over 30 days: 1,000 IPs signing in as 300 users.
+  await db.query(
+    `INSERT INTO graph_log_edges (day, rel, a_type, a_value, b_type, b_value, events, first_seen, last_seen)
+     SELECT CURRENT_DATE - (g % 30), 'signed_in_as', 'ip', '198.18.' || (g % 250) || '.' || (g % 4), 'user', 'plan-' || $1 || '-' || (g % 300),
+            1 + g % 7, NOW() - make_interval(days => g % 30), NOW() - make_interval(days => g % 30)
+       FROM generate_series(1, 30000) g
+     ON CONFLICT DO NOTHING`,
+    [tag]
+  );
+  await db.query('ANALYZE graph_log_edges');
+  const find = (center: string, rel: string) => RELATIONS.find((d) => d.center === center && d.rel === rel)!;
+  const aSide = await captured(find('ip', 'signed_in_as'), entityRef('ip', '198.18.7.3'), null, '30d');
+  assert.ok((await plannedIndexes(aSide)).includes('graph_log_edges_pkey'), 'a side: the primary key');
+  const bSide = await captured(find('user', 'signed_in_from'), entityRef('user', `plan-${tag}-7`), null, '30d');
+  assert.ok((await plannedIndexes(bSide)).includes('idx_graph_log_edges_b'), 'b side: idx_graph_log_edges_b');
+  const cursor = await plannedIndexes({ sql: UPPER_BOUND_SQL, params: ['2 minutes'] });
+  assert.ok(cursor.includes('idx_parsed_logs_created_at'), `the cursor bound: ${cursor.join(', ')}`);
 });

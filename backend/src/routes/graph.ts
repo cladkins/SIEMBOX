@@ -5,6 +5,7 @@
  *   GET /search?q=                       what a typed string could mean
  *   GET /neighborhood?entity=type:key    an entity and what is linked to it
  *   GET /relation?entity=&rel=           one relation of it, paged and searchable
+ *   GET /evidence?rel=&a=&b=&day=        the logs behind a relationship seen in logs
  *
  * Answers: 200 (partial results and unknown entities included), 400
  * GRAPH_BAD_ENTITY / GRAPH_BAD_PARAM, 404 GRAPH_NOT_AVAILABLE, 503 GRAPH_BUSY
@@ -19,6 +20,7 @@ import { getNeighborhood, getRelation, type Caller } from '../services/graph/nei
 import { knownRel } from '../services/graph/relations';
 import type { SortKey } from '../services/graph/resolvers/common';
 import { search } from '../services/graph/search';
+import { getEvidence, isLogEdgeRel, MAX_EVIDENCE, parseDay } from '../services/graph/evidence';
 import { graphDeps } from '../services/graph/service';
 import { ORIGINS, type Origin } from '../services/graph/types';
 import { resolveWindow } from '../services/graph/window';
@@ -121,6 +123,20 @@ router.get('/relation', (req: Request, res: Response) =>
       sort: oneOf<SortKey>(req, 'sort', ['count', 'last_seen', 'first_seen']),
       order: oneOf(req, 'order', ['desc', 'asc'] as const),
       vulnStatus: oneOf(req, 'vuln_status', ['open', 'all'] as const) ?? 'open',
+    });
+  })
+);
+
+router.get('/evidence', (req: Request, res: Response) =>
+  answer(res, () => {
+    const rel = single(req, 'rel');
+    if (!isLogEdgeRel(rel)) throw badParam('rel must name a relationship seen in logs (an edge rel whose origin is logs)');
+    return getEvidence(graphDeps, caller(req), {
+      rel,
+      a: parseEntity(single(req, 'a')),
+      b: parseEntity(single(req, 'b')),
+      day: parseDay(single(req, 'day')),
+      limit: intParam(req, 'limit', 1, MAX_EVIDENCE, MAX_EVIDENCE),
     });
   })
 );

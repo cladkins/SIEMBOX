@@ -1,7 +1,7 @@
 /**
  * The relation catalog: the server-side whitelist of what can be asked. A
  * (centre type, rel) pair names one definition; nothing else is queryable.
- * These are PR 1's record relations; the log relationships (PR 3) join them.
+ * The record relations, then the log relationships (resolvers/logEdges.ts).
  *
  * A role runs a relation only when it may expand the centre, see the
  * neighbour type, and is among the relation's own roles (the sign-in
@@ -19,6 +19,7 @@ import { RISK_RELATIONS, loadFindingCenter, loadIdentityCenter } from './resolve
 import { ACCOUNT_RELATIONS, loadAccountCenter } from './resolvers/accounts';
 import { ENDPOINT_RELATIONS, loadEndpointCenter } from './resolvers/endpoints';
 import { loadRuleCenter } from './resolvers/rules';
+import { LOG_EDGE_RELATIONS } from './resolvers/logEdges';
 
 export const RELATIONS: readonly RelationDef[] = [
   ...ALERT_RELATIONS,
@@ -27,6 +28,7 @@ export const RELATIONS: readonly RelationDef[] = [
   ...ENDPOINT_RELATIONS,
   ...RISK_RELATIONS,
   ...ACCOUNT_RELATIONS,
+  ...LOG_EDGE_RELATIONS,
 ];
 
 export function relationAllowed(def: RelationDef, role: Role): boolean {

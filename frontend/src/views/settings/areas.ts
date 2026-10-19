@@ -1,6 +1,6 @@
 import type { Component } from 'vue';
 import type { RouteRecordSingleView } from 'vue-router';
-import { Bell, Clock, Download, Filter, Lock, MagicStick, Odometer, Search, User, View } from '@element-plus/icons-vue';
+import { Bell, Clock, Connection, Download, Filter, Lock, MagicStick, Monitor, Odometer, Search, User, View } from '@element-plus/icons-vue';
 
 /**
  * One functional area of the Settings hub.
@@ -60,6 +60,15 @@ export const settingsAreas: SettingsArea[] = [
     component: () => import('./RetentionSettings.vue'),
   },
   {
+    key: 'context-graph',
+    path: 'context-graph',
+    title: 'Context Graph',
+    icon: Connection,
+    description: 'The relationships seen in logs behind the Context Graph: on or off, how long they are kept, and the daily cap.',
+    adminOnly: true,
+    component: () => import('./ContextGraphSettings.vue'),
+  },
+  {
     key: 'ingestion',
     path: 'ingestion',
     title: 'Log Ingestion',
@@ -113,6 +122,15 @@ export const settingsAreas: SettingsArea[] = [
       'Configuration: watched and lookalike domains, breach-monitored identities, the Have I Been Pwned key, notifications and check schedules. Findings and the password check are on the Digital Risk page.',
     adminOnly: true,
     component: () => import('./DigitalRiskSettings.vue'),
+  },
+  {
+    key: 'display-links',
+    path: 'display-links',
+    title: 'Display links',
+    icon: Monitor,
+    description: 'Read-only links for wall screens and TVs',
+    adminOnly: true,
+    component: () => import('./DisplayLinksSettings.vue'),
   },
   {
     key: 'system',

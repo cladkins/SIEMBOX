@@ -90,7 +90,7 @@ export interface GraphEdge {
   /** ISO */
   first_seen?: string;
   last_seen?: string;
-  /** Log relationships (a later release): a pair first seen in the window. */
+  /** signed_in_as: a pair first seen in the window. */
   new?: boolean;
   success_after_failures?: boolean;
 }
@@ -196,3 +196,29 @@ export type RelationLimit = (typeof RELATION_LIMITS)[number];
 export const DEFAULT_LIMIT: RelationLimit = 5;
 /** Rows per page of a relation table. */
 export const RELATION_PAGE_SIZE = 50;
+
+export interface EvidenceLog {
+  id: number;
+  created_at: string | null;
+  timestamp: string | null;
+  event_type: string | null;
+  parser: string | null;
+  service: string | null;
+  hostname: string | null;
+  sender_ip: string | null;
+  /** ≤ 500 characters, sanitized by the server. Render as text only. */
+  message: string;
+}
+
+/** GET /api/graph/evidence */
+export interface EvidenceResponse {
+  day: string | null;
+  /** The pair's days, newest first. */
+  days: string[];
+  logs: EvidenceLog[];
+  partial: boolean;
+  expired: boolean;
+}
+
+/** The relations GET /api/graph/evidence lists logs for (an edge's canonical rel). */
+export const EVIDENCE_RELS: ReadonlySet<string> = new Set(['signed_in_as', 'seen_on', 'user_on', 'connected_to', 'queried', 'sent_by', 'shipped_by']);

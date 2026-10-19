@@ -77,7 +77,8 @@ from the API, and the UI hides or disables the matching control.
 | Refresh threat feeds | no | no | yes | yes |
 | Delete alerts | no | no | no | yes |
 | AI parser and detection builders, Sigma import, Content Pack install | no | no | no | yes |
-| Users, Settings areas (other than Account), Endpoints (EDR), Admin dashboard | no | no | no | yes |
+| Big Display (Dashboard → **Big Display**), on your own session; endpoint health only for admins | yes | yes | yes | yes |
+| Users, Settings areas (other than Account) including Display links, Endpoints (EDR), Admin dashboard | no | no | no | yes |
 | Shipper key regeneration and HTTP push keys; Log Discovery scope, manual sources, editing a source's poll target, and poll credentials; threat feed and Digital Risk configuration; resolving Digital Risk findings and running a check now | no | no | no | yes |
 
 The pages a role can't open only hide data from the UI: every signed-in role can read assets,
@@ -207,6 +208,34 @@ TROUBLESHOOTING.md, "Locked out of SIEMBox" (the `auth-admin` command line).
 - The Delete button is disabled for the currently logged-in user
 - Deletion is permanent and cannot be undone
 - All user sessions, recognized browsers and sign-in counters are removed upon deletion
+
+## Display links are not accounts
+
+A display link (Settings → Display links, admins only) lets a wall screen or
+TV show a read-only Big Display without anyone signing in. It is not a user
+and does not belong to one:
+
+- It keeps working when the admin who created it changes or resets their
+  password, is disabled, or is deleted (the list then says "deleted user"), and
+  when sessions expire or the server restarts.
+- It can only read its own board, at its own privacy level; no other route
+  accepts it, and it never shows alert titles, usernames, email addresses or
+  log text.
+- **When an admin leaves**, review Settings → Display links and rotate any link
+  they could have copied: the screen using it shows "not valid any more" until
+  you put the new link on it. Revoke links for screens you no longer use.
+- Use one link per screen, so taking one screen off is rotating or revoking
+  that screen's link. The list shows each link's last use and the devices that
+  used it; more than one address for a one-screen link is worth a look.
+
+Big Display by role:
+
+| | Viewer, Analyst, Operator | Admin | Display link (no user) |
+|---|---|---|---|
+| Dashboard → **Big Display** (`/big-display`) | Yes: SOC overview, Threats and Health, without endpoint health | Yes, with endpoint health | — |
+| Settings → Display links | No | Yes: create, edit, pause, rotate, revoke, preview | — |
+| What it shows | What the role may read | Everything | Only its configured panels, at its privacy level |
+| Ends | With the session | With the session | When paused, rotated, revoked or expired |
 
 ## Security Considerations
 

@@ -25,6 +25,7 @@ import { startTriageReconcilerJob, stopTriageReconcilerJob } from './jobs/triage
 import { startLeakedCredsJob, stopLeakedCredsJob } from './jobs/leakedCreds';
 import { startDomainMonitorJob, stopDomainMonitorJob } from './jobs/domainMonitor';
 import { startSignInHousekeepingJob, stopSignInHousekeepingJob } from './jobs/signInHousekeeping';
+import { startGraphLogEdgesJob, stopGraphLogEdgesJob } from './jobs/graphLogEdges';
 import { signInSettings } from './services/auth/signInPolicy';
 import { getDummyHash } from './services/auth/signInService';
 import { stopRefusalSummary } from './services/auth/authEvents';
@@ -218,6 +219,9 @@ const startServer = async () => {
     await getDummyHash();
     // Idle counters, unused browsers, expired sessions, old failure audit rows.
     startSignInHousekeepingJob();
+    // Context Graph: the relationships logs show, rolled up every minute off
+    // the ingest path (services/graph/logEdgeRollup.ts).
+    startGraphLogEdgesJob();
 
     // Regex safety: give every stored parser and rule regex a ReDoS verdict
     // (cached in regex_safety_verdicts, so only new regexes cost anything) and
@@ -300,6 +304,7 @@ const shutdown = async (signal: string) => {
   stopLeakedCredsJob();
   stopDomainMonitorJob();
   stopSignInHousekeepingJob();
+  stopGraphLogEdgesJob();
   stopRefusalSummary();
   await Promise.all([closeRegexScanPool(), closeRegexTestPool()]).catch(() => undefined);
   // The per-minute ingest counts not yet written. Ingest can still be storing

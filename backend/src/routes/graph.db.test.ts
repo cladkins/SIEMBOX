@@ -671,7 +671,7 @@ test('migration 043 re-runs on the populated database without changing anything'
   await pool.query(sql);
   assert.equal(await count(), before);
   const { rows } = await pool.query(
-    `SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname LIKE 'idx_graph_%' ORDER BY 1`
+    `SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname LIKE 'idx_graph_%' AND c.relname NOT LIKE 'idx_graph_log_edges%' ORDER BY 1`
   );
   assert.equal(rows.length, 13);
   assert.ok(rows.every((row) => row.indisvalid));

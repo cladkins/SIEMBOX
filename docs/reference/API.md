@@ -6285,6 +6285,29 @@ An entity and its nearest neighbours.
 IP, user, host or domain nothing links to in the window, or a ghost shipper
 tag no retained log carries. `sources` has one entry per origin that ran:
 `ok`, `partial` (a group timed out, or some facts are missing) or `timeout`.
+For `logs`, the rollup behind the relationships seen in logs (migration 044)
+adds `building` (still processing existing logs after the upgrade),
+`behind` (not caught up for over 5 minutes) or `disabled` (switched off in
+Settings → Context Graph), plus `covered_from` (first day), `covered_until`
+(newest log consumed) and `incomplete_days` (days in the window the daily cap
+cut short).
+
+**Relationships seen in logs** (dashed, `origin: "logs"`; counts per whole
+ingest day, a few minutes behind ingestion). Edges carry the a → b relation;
+the b side names the group:
+
+| a → b (edge `rel`) | Group from the b side | Notes |
+|---|---|---|
+| ip → user (`signed_in_as`) | `signed_in_from` | `failures`, `successes`; `new` (first seen in the window, when the rollup covers the time before it); `success_after_failures` |
+| ip → device (`seen_on`) | `actors_seen` (host, ip, asset) | the device is the syslog header host, else the sender IP |
+| user → device (`user_on`) | `users_seen` (host, ip, asset) | |
+| ip → ip (`connected_to`) | `connected_from` | |
+| ip → domain (`queried`) | `queried_by` | |
+| host → ip (`sent_by`) | `sent_hosts` | every log with a header host, parsed or not |
+| device → shipper or shipper_tag (`shipped_by`) | `shipped_devices` (shipper, shipper_tag) | every log with a shipper tag |
+
+The actor IP is used only when the log was parsed and its `source_ip` differs
+from `observer_ip`.
 
 ### GET /api/graph/relation
 
@@ -6321,6 +6344,62 @@ alerts severity then recency), `order` (`desc` or `asc`), `vuln_status`.
 
 `next_offset` is `null` on the last page. A relation that times out is
 `503 GRAPH_BUSY`.
+
+### GET /api/graph/evidence
+
+The logs behind one relationship seen in logs, on one ingest day (**Show
+logs** on a dashed link). Every role.
+
+**Query:** `rel` (an edge `rel` of the table above: `signed_in_as`,
+`seen_on`, `user_on`, `connected_to`, `queried`, `sent_by`, `shipped_by`),
+`a` and `b` (the edge's `source` and `target` entity keys; a type the
+relation doesn't join is `400 GRAPH_BAD_PARAM`), `day` (`YYYY-MM-DD`;
+default: the pair's latest day), `limit` (1-20, default 20).
+
+**Response:**
+
+```json
+{
+  "day": "2026-10-19",
+  "days": ["2026-10-19", "2026-09-29"],
+  "logs": [
+    { "id": 812345, "created_at": "2026-10-19T09:12:01.000Z", "timestamp": "2026-10-19T09:12:00.000Z",
+      "event_type": "ssh_auth", "parser": "ssh", "service": "sshd", "hostname": "nas",
+      "sender_ip": "10.0.0.5", "message": "Failed password for root from 198.51.100.7 port 52144 ssh2" }
+  ],
+  "partial": false,
+  "expired": false,
+  "elapsed_ms": 14
+}
+```
+
+`days` lists the pair's days, newest first (at most 90). `message` is at
+most 500 characters with control and bidi characters removed. `partial: true`
+when that day's lookup ran out of its 2 s (too many events to list);
+`expired: true` when the day is older than the log retention (its logs are
+deleted).
+
+---
+
+### GET/PUT /api/settings/context-graph
+
+Admin only. The log-relationship rollup behind the Context Graph.
+
+**GET response:**
+
+```json
+{
+  "log_edges": { "enabled": true, "retention_days": 0, "backfill_days": 7, "daily_new_cap": 500000 },
+  "status": { "status": "ok", "covered_from": "2026-10-12", "covered_until": "2026-10-19T09:10:00.000Z",
+              "effective_retention_days": 30, "raw_logs_retention_days": 30, "rows": 182000, "bytes": 41000000 }
+}
+```
+
+**PUT body:** `{ "log_edges": { ... } }` with any of `enabled` (boolean),
+`retention_days` (0-3650; 0 = as long as raw logs), `backfill_days` (0-90;
+used only before the rollup's first run), `daily_new_cap` (10,000 -
+10,000,000). Answers as GET; an out-of-range value is `400`. The job applies
+a change at its next minute.
 
 ---
 

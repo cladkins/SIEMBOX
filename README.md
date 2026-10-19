@@ -24,6 +24,7 @@ A lightweight, self-hosted Security Information and Event Management (SIEM) syst
 - **Log retention**: Configurable retention policies with automated cleanup.
 - **User management**: Role-based access control (Admin, Operator, Analyst, Viewer).
 - **Dashboard**: Real-time visualization of logs, alerts, assets, and vulnerabilities.
+- **Big Display**: A full-screen wall board for a SOC room or a TV: open alerts, the alert pulse, log ingestion, silent sources, shippers, recent alerts, an alert-origins map and more, readable from across the room. Anyone signed in can open it from the Dashboard (**Big Display**), on their own session and role. For an always-on screen, an admin creates a read-only **display link** (*Settings → Display links*): one per screen, no account needed, shown once with a QR code, and paused, rotated or revoked at any time. Display links never show alert titles, usernames, email addresses or log text; a public-area link shows counts only.
 
 ## Quick Start
 

@@ -35,6 +35,8 @@ interface TagRow {
 export interface ShipperTagMap {
   /** The shipper id a tag belongs to, using `q` to refresh the map when it is stale. */
   lookup(q: Query, tags: string[]): Promise<Map<string, number>>;
+  /** The tags of shipper `id` (its logs' raw_logs.shipper_id values), for the log relationships. */
+  tagsOf(q: Query, id: number): Promise<string[]>;
   invalidate(): void;
 }
 
@@ -66,6 +68,10 @@ export function createShipperTagMap(now: () => number = () => Date.now(), ttlMs 
         if (id !== undefined) out.set(tag, id);
       }
       return out;
+    },
+    async tagsOf(q, id) {
+      const map = await load(q);
+      return [...map].filter(([, shipper]) => shipper === id).map(([tag]) => tag);
     },
     invalidate() {
       cached = null;

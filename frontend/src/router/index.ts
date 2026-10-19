@@ -28,6 +28,14 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/ChangePassword.vue'),
     meta: { requiresAuth: true },
   },
+  // Big Display on the user's own session and role (BIG-DISPLAY.md §8.4):
+  // full screen, outside Layout. Admins add ?link=<id> to see a display link's board.
+  {
+    path: '/big-display',
+    name: 'BigDisplay',
+    component: () => import('@/views/BigDisplay.vue'),
+    meta: { requiresAuth: true },
+  },
   {
     path: '/',
     component: () => import('@/views/Layout.vue'),

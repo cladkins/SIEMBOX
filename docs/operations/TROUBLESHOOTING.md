@@ -2285,6 +2285,31 @@ in 15 minutes; it waits for `Retry-After` and tries again.
 - If it is busy often, check database load (see [Database Issues](#database-issues)).
 - A failed expansion keeps the graph you had; only that node's expansion is missing.
 
+### Issue: Context Graph log relationships are behind, being built, incomplete or off
+
+**Symptoms:** a banner on the graph: "Log relationships are N min behind",
+"still being built (covering from <date>)", "incomplete for <day>: too many
+distinct values", or "switched off by an administrator".
+
+**What it means:** the dashed "seen in logs" links come from a background
+job, **Context Graph log relationships** (*Admin → Background Jobs*), that
+rolls up parsed logs every minute, a few minutes behind ingestion.
+- *Being built*: the job is still working through existing logs after the
+  upgrade (the last 7 days by default). It catches up on its own.
+- *Behind*: it has not caught up for over 5 minutes. Check the job's status
+  and last error on *Admin → Background Jobs* and in *Errors*; a large backlog
+  (after it was switched off for a while) drains at several thousand logs a
+  second.
+- *Incomplete for a day*: that day reached the daily cap of new relationships
+  (usually a spraying scanner). Existing links still count; new pairs that day
+  are not added. Raise the cap in *Settings → Context Graph* if it is genuine.
+- *Switched off*: turn it back on in *Settings → Context Graph*; the job
+  resumes within a minute.
+
+**Show logs** on a dashed link lists that day's logs behind it. "Past the
+retention period" means the logs were deleted; "too many events that day to
+list" means the lookup ran out of time: try another day.
+
 ### Issue: The Context Graph canvas is blank
 
 The canvas (Cytoscape, a separate `graph-*.js` file) loads only on the graph

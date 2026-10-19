@@ -36,7 +36,8 @@ describe('visual encoding', () => {
     assert.equal(outcomeLabel({ failures: 4118, successes: 2 }), '4,118 failed / 2 succeeded');
     assert.equal(outcomeLabel({}), '');
     assert.equal(edgeLabel('alert_hosts'), 'Host named in the log');
-    assert.equal(edgeLabel('signed_in_as'), 'signed in as');
+    assert.equal(edgeLabel('signed_in_as'), 'Signed in as (seen in logs)');
+    assert.equal(edgeLabel('some_future_rel'), 'some future rel', 'an unknown id shows as written');
   });
 
   it('draws glyphs as an inline SVG image (no request)', () => {

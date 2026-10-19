@@ -435,6 +435,32 @@ and takes under 1 ms now. The new read-only `/api/graph` routes are described
 in [API.md](docs/reference/API.md#context-graph-endpoints); the graph page
 comes in a later release.
 
+**Updating to the release with log relationships in the Context Graph**
+(migration `044_context_graph_log_edges.sql` runs on its own; no `.env` or
+compose change): the migration only creates the empty `graph_log_edges` table,
+its state row, four small SQL functions and four settings, so the start is not
+slowed. Nothing changes on the ingest path. A background job,
+**Context Graph log relationships** on *Admin → Background Jobs*, then rolls
+up parsed logs every minute on the main database pool, about two to three
+minutes behind ingestion:
+
+- **Backfill.** Its first run starts 7 days back (`graph_log_edges_backfill_days`)
+  and works through the existing logs in small batches with rests between
+  them, so ingestion keeps its pace (about 3,500 logs a second on a 4-core
+  test box); a busy install takes minutes to tens of minutes; until then the graph says relationships are "still being built".
+- **Retention.** Relationships are kept as long as raw logs (30 days by
+  default, *Settings → Data Retention*) and pruned by the job itself, hourly,
+  even with auto-cleanup off. *Settings → Context Graph* can set a different
+  number of days, switch the rollup off, and set the daily cap.
+- **Disk.** One row per distinct pair per day, about 300 bytes with its
+  indexes. Scanner-heavy logs make up to one new row per two or three logs
+  (the bench's 400,000 logs made 170,000 rows, 48 MB); quiet sources far
+  fewer. The daily cap (500,000 new rows by default, about 100 MB)
+  bounds a spraying attacker: past it the day only updates the rows it has and
+  the graph marks it incomplete.
+
+Time it on a scratch database with `backend/scripts/graph-bench.sql`.
+
 ## Database Migrations and Seeding
 
 ### Automatic Initialization

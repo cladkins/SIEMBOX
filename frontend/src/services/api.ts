@@ -1,6 +1,8 @@
 import axios, { AxiosInstance, AxiosError, type AxiosRequestConfig } from 'axios';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores/auth';
+import type { DisplaySnapshot } from '@/display/types';
+import type { DisplayConfig, DisplayLinkDetail, DisplayLinkSecret, DisplayLinkSummary } from '@/utils/displayLinks';
 
 const apiClient: AxiosInstance = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
@@ -140,6 +142,9 @@ const REGEX_GATE = { skipErrorToast: true, timeout: 120000 } as const;
 
 /** Context Graph calls: every failure shown inline, 8 s at most. */
 const GRAPH_CALL = { ...SHOWN_INLINE, timeout: 8000 } as const;
+
+/** Big Display boards poll and show a lost connection on the board itself: nothing toasts (a 401 still signs out). */
+const BOARD_CALL = { ...SHOWN_INLINE, timeout: 20000 } as const;
 
 export interface GraphNeighborhoodParams {
   entity: string;
@@ -445,6 +450,31 @@ export const api = {
   getSignInProtection: () => apiClient.get('/admin/sign-in-protection'),
   clearSignInCounters: (target: { key: string } | { userId: number } | { network: string } | { all: true }) =>
     apiClient.post('/admin/sign-in-protection/clear', target),
+
+  // How the API sees the caller (Settings -> Display links shows the address)
+  getClientAddress: () => apiClient.get('/admin/client-address'),
+
+  // Settings -> Display links (admin). The editor shows 400s by their field
+  // and 409s at the top, so those calls don't toast.
+  listDisplayLinks: (includeRevoked = false) =>
+    apiClient.get<{ links: DisplayLinkSummary[]; limit: number }>('/display-links', {
+      params: includeRevoked ? { include_revoked: 'true' } : undefined,
+    }),
+  getDisplayLink: (id: number) => apiClient.get<{ link: DisplayLinkDetail }>(`/display-links/${id}`),
+  createDisplayLink: (body: { name: string; config: DisplayConfig; expires_at: string | null; allowed_cidrs: string[] }) =>
+    apiClient.post<DisplayLinkSecret>('/display-links', body, { skipErrorToast: true }),
+  updateDisplayLink: (
+    id: number,
+    patch: Partial<{ name: string; config: DisplayConfig; enabled: boolean; expires_at: string | null; allowed_cidrs: string[] }>
+  ) => apiClient.put<{ link: DisplayLinkDetail }>(`/display-links/${id}`, patch, { skipErrorToast: true }),
+  rotateDisplayLink: (id: number) => apiClient.post<DisplayLinkSecret>(`/display-links/${id}/rotate`),
+  revokeDisplayLink: (id: number) => apiClient.delete(`/display-links/${id}`),
+  // What an unsaved layout would show (the editor's live preview), and a saved link's board.
+  previewDisplayLink: (config: DisplayConfig, signal?: AbortSignal) =>
+    apiClient.post<DisplaySnapshot>('/display-links/preview', { config }, { ...BOARD_CALL, signal }),
+  getDisplayLinkSnapshot: (id: number) => apiClient.get<DisplaySnapshot>(`/display-links/${id}/snapshot`, BOARD_CALL),
+  // Big Display on the user's own session and role. A 401 signs out as anywhere else.
+  getBigDisplaySnapshot: () => apiClient.get<DisplaySnapshot>('/big-display/snapshot', BOARD_CALL),
 
   // SIEMBOX Endpoint agents
   getEndpoints: () => apiClient.get('/edr/agents'),

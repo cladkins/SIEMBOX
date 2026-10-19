@@ -1,5 +1,25 @@
 <template>
   <div class="dashboard">
+    <!-- Big Display: this dashboard's board full screen, on this session (every role). -->
+    <div class="dashboard-toolbar">
+      <el-dropdown
+        v-if="authStore.isAdmin"
+        split-button
+        type="primary"
+        data-testid="big-display-button"
+        @click="openBigDisplay"
+        @command="onBigDisplayCommand"
+      >
+        <el-icon class="toolbar-icon"><FullScreen /></el-icon>Big Display
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="links">Display links…</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+      <el-button v-else type="primary" :icon="FullScreen" data-testid="big-display-button" @click="openBigDisplay">Big Display</el-button>
+    </div>
+
     <el-alert
       v-if="showGettingStarted"
       type="info"
@@ -219,7 +239,7 @@ import { useRouter } from 'vue-router';
 import { useAlertsStore } from '@/stores/alerts';
 import { api } from '@/services/api';
 import { format } from 'date-fns';
-import { Monitor, CircleCheck, WarningFilled, Hide } from '@element-plus/icons-vue';
+import { Monitor, CircleCheck, WarningFilled, Hide, FullScreen } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import AlertsCountryMap from '@/components/AlertsCountryMap.vue';
 import HibpAttribution from '@/components/HibpAttribution.vue';
@@ -246,6 +266,13 @@ const recentAlerts = computed(() => alertsStore.alerts.slice(0, 10));
 const showsHibpAlerts = computed(() => recentAlerts.value.some(isHibpAlert));
 const loading = ref(false);
 const authStore = useAuthStore();
+
+function openBigDisplay() {
+  void router.push({ name: 'BigDisplay' });
+}
+function onBigDisplayCommand(command: string) {
+  if (command === 'links') void router.push('/settings/display-links');
+}
 
 // Getting Started reminder: for administrators, until one of them marks setup
 // done (stored server-side, install-wide). Shown only once the server says it
@@ -459,6 +486,16 @@ const viewAlert = (alert: any) => {
 <style scoped>
 .dashboard {
   padding: 0;
+}
+
+.dashboard-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.toolbar-icon {
+  margin-right: 6px;
 }
 
 .section-header {

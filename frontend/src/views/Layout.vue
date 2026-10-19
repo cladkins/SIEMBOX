@@ -34,6 +34,11 @@
           <span>Threat Intel</span>
         </el-menu-item>
 
+        <el-menu-item index="/graph">
+          <el-icon><Share /></el-icon>
+          <span>Context Graph</span>
+        </el-menu-item>
+
         <el-menu-item index="/digital-risk">
           <el-icon><View /></el-icon>
           <span>Digital Risk</span>
@@ -208,7 +213,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
 import { useChatStore } from '@/stores/chat';
 import AnalystChat from '@/components/AnalystChat.vue';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim, Cpu, ChatDotRound, Compass, Connection, MagicStick, View } from '@element-plus/icons-vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim, Cpu, ChatDotRound, Compass, Connection, MagicStick, View, Share } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();
@@ -261,6 +266,7 @@ const pageTitle = computed(() => {
     '/ai-analyst': 'AI Analyst',
     '/getting-started': 'Getting Started',
     '/threat-intel': 'Threat Intel',
+    '/graph': 'Context Graph',
     '/digital-risk': 'Digital Risk',
     '/alerts': 'Alerts',
     '/soc-triage': 'SOC Triage',

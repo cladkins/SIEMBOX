@@ -50,6 +50,40 @@ export async function runReadOnly(
   }
 }
 
+/** Runs one statement inside runReadOnlyWork's transaction and returns its rows. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- rows are whatever the caller's SQL returns
+export type ReadOnlyQuery = (sql: string, params?: any[]) => Promise<any[]>;
+
+/**
+ * As runReadOnly, for several statements on one client in one READ ONLY
+ * transaction: `work` gets a query function, and the LOCAL statement timeout
+ * applies to each statement.
+ */
+export async function runReadOnlyWork<R>(
+  acquire: () => Promise<QueryClient>,
+  timeoutMs: number,
+  work: (q: ReadOnlyQuery) => Promise<R>
+): Promise<R> {
+  const client = await acquire();
+  let releaseArg: Error | undefined;
+  try {
+    await client.query('BEGIN READ ONLY');
+    await client.query("SELECT set_config('statement_timeout', $1, true)", [String(Math.trunc(timeoutMs))]);
+    const result = await work(async (sql, params = []) => (await client.query(sql, params)).rows);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackErr) {
+      releaseArg = rollbackErr instanceof Error ? rollbackErr : new Error(String(rollbackErr));
+    }
+    throw err;
+  } finally {
+    client.release(releaseArg);
+  }
+}
+
 export interface SnapshotCacheDeps<T> {
   fetch: () => Promise<T>;
   now: () => number;
@@ -63,9 +97,24 @@ export interface SnapshotCacheOptions {
   failureCooldownMs: number;
 }
 
+/** A value with when it was fetched, and whether it is being served because a refresh failed. */
+export interface SnapshotMeta<T> {
+  value: T;
+  /** deps.now() when the value was fetched. */
+  at: number;
+  /** True when a refresh failed and this is the previous result. */
+  stale: boolean;
+  /** The failure that made it stale. */
+  error?: unknown;
+}
+
 export interface SnapshotCache<T> {
   /** Current value (cached; concurrent callers share one fetch). */
   get(): Promise<T>;
+  /** As get(), with when the value was fetched and whether it is stale (the Big Display's panel envelopes). */
+  getWithMeta(): Promise<SnapshotMeta<T>>;
+  /** The last value fetched, if any, without fetching (for an answer that can't wait for get()). */
+  peek(): { value: T; at: number } | null;
   /** Drop the cached value so the next get() re-fetches. */
   invalidate(): void;
 }
@@ -73,27 +122,28 @@ export interface SnapshotCache<T> {
 export function createSnapshotCache<T>(deps: SnapshotCacheDeps<T>, opts: SnapshotCacheOptions): SnapshotCache<T> {
   let cache: { at: number; generation: number; value: T } | null = null;
   let generation = 0;
-  let inflight: Promise<T> | null = null;
+  let inflight: Promise<SnapshotMeta<T>> | null = null;
   let lastFailure: { at: number; error: unknown } | null = null;
 
-  async function refresh(): Promise<T> {
+  async function refresh(): Promise<SnapshotMeta<T>> {
     // A result computed before an invalidate() may already be out of date, so
     // it is returned to the callers that were waiting on it but never cached.
     const startedGeneration = generation;
     try {
       const value = await deps.fetch();
+      const at = deps.now();
       if (startedGeneration === generation) {
-        cache = { at: deps.now(), generation, value };
+        cache = { at, generation, value };
       }
       lastFailure = null;
-      return value;
+      return { value, at, stale: false };
     } catch (error) {
       lastFailure = { at: deps.now(), error };
       if (cache) {
         deps.log.warn(`${deps.label}: refresh failed, serving the previous result`, {
           error: error instanceof Error ? error.message : String(error),
         });
-        return cache.value;
+        return { value: cache.value, at: cache.at, stale: true, error };
       }
       deps.log.error(`${deps.label}: query failed`, {
         error: error instanceof Error ? error.message : String(error),
@@ -102,28 +152,37 @@ export function createSnapshotCache<T>(deps: SnapshotCacheDeps<T>, opts: Snapsho
     }
   }
 
+  async function getWithMeta(): Promise<SnapshotMeta<T>> {
+    const t = deps.now();
+    if (cache && cache.generation === generation && t - cache.at < opts.ttlMs) {
+      return { value: cache.value, at: cache.at, stale: false };
+    }
+    if (inflight) return inflight;
+    if (lastFailure && t - lastFailure.at < opts.failureCooldownMs) {
+      // stale beats an error while the database recovers
+      if (cache) return { value: cache.value, at: cache.at, stale: true, error: lastFailure.error };
+      throw lastFailure.error; // fail fast rather than start another doomed scan
+    }
+    const run = refresh();
+    inflight = run;
+    // Cleared from a chained handler (always a later microtask) rather than a
+    // `finally` inside refresh(), so a fetcher that throws synchronously can't
+    // clear `inflight` before it has been assigned and leave it pinned to a
+    // rejected promise.
+    const clear = () => {
+      if (inflight === run) inflight = null;
+    };
+    run.then(clear, clear);
+    return run;
+  }
+
   return {
     async get(): Promise<T> {
-      const t = deps.now();
-      if (cache && cache.generation === generation && t - cache.at < opts.ttlMs) {
-        return cache.value;
-      }
-      if (inflight) return inflight;
-      if (lastFailure && t - lastFailure.at < opts.failureCooldownMs) {
-        if (cache) return cache.value; // stale beats an error while the database recovers
-        throw lastFailure.error; // fail fast rather than start another doomed scan
-      }
-      const run = refresh();
-      inflight = run;
-      // Cleared from a chained handler (always a later microtask) rather than a
-      // `finally` inside refresh(), so a fetcher that throws synchronously can't
-      // clear `inflight` before it has been assigned and leave it pinned to a
-      // rejected promise.
-      const clear = () => {
-        if (inflight === run) inflight = null;
-      };
-      run.then(clear, clear);
-      return run;
+      return (await getWithMeta()).value;
+    },
+    getWithMeta,
+    peek() {
+      return cache ? { value: cache.value, at: cache.at } : null;
     },
     invalidate(): void {
       generation++;

@@ -65,7 +65,14 @@
     </div>
 
     <template #footer>
-      <el-button v-if="authStore.canAnalyst" type="success" @click="alert && emit('edit-status', alert)">Update Status</el-button>
+      <OpenInGraphButton
+        v-if="alert"
+        type="alert"
+        :value="alert.id"
+        :around="alert.created_at"
+        @navigate="emit('update:modelValue', false)"
+      />
+      <el-button v-if="authStore.canAnalyst && !readonly" type="success" @click="alert && emit('edit-status', alert)">Update Status</el-button>
       <el-button @click="emit('update:modelValue', false)">Close</el-button>
     </template>
   </el-dialog>
@@ -80,14 +87,17 @@ import AlertTriagePanel from '@/components/AlertTriagePanel.vue';
 import HibpAttribution from '@/components/HibpAttribution.vue';
 import { isHibpAlert } from '@/utils/exposure';
 import { useAuthStore } from '@/stores/auth';
+import OpenInGraphButton from '@/components/graph/OpenInGraphButton.vue';
 
 const props = withDefaults(
   defineProps<{
     modelValue: boolean;
     alert: Alert | null;
     initialTab?: 'details' | 'triage';
+    /** No status changes from here (the Context Graph opens it read-only). */
+    readonly?: boolean;
   }>(),
-  { initialTab: 'details' }
+  { initialTab: 'details', readonly: false }
 );
 
 const emit = defineEmits<{

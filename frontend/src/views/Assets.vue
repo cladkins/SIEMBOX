@@ -216,6 +216,9 @@
         </el-descriptions>
 
         <!-- Linked entities: Endpoint agent, log shipper, exposure counts -->
+        <div class="graph-entry">
+          <OpenInGraphButton type="asset" :value="selectedAsset.id" window="7d" size="small" @navigate="showDetailsDialog = false" />
+        </div>
         <div class="related-summary" v-loading="loadingRelated">
           <div class="related-card">
             <div class="related-label">
@@ -445,6 +448,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
+import OpenInGraphButton from '@/components/graph/OpenInGraphButton.vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Refresh, Cpu, Connection, Warning } from '@element-plus/icons-vue';
 import assetService, { type Asset, type AssetWithServices, type AssetRelated, type ShipperSummary } from '@/services/assetService';
@@ -741,6 +745,12 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.graph-entry {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
 .assets-container {
   padding: 20px;
 }

@@ -5,7 +5,8 @@
  * ADDING, REMOVING OR CHANGING A ROUTE IS A ONE-LINE CHANGE TO `INVENTORY` BELOW:
  *   [method, full path as the router declares it (with :params), who, AUDITED?]
  * `who` is PUBLIC (no login: sign-in and /health), AGENT (a shipper or EDR
- * agent's own key, never a login), or the roles that may call it: the roles of
+ * agent's own key, never a login), DISPLAY (a wall screen's display link in
+ * X-Display-Token, never a login), or the roles that may call it: the roles of
  * the UI page(s) that make the call (allowedRoles in frontend/src/router/index.ts).
  * Viewers are read-only: a POST, PUT, PATCH or DELETE open to them must also be
  * in VIEWER_SAFE_WRITES, with the reason it changes nothing shared. AUDITED
@@ -33,7 +34,8 @@
  * Hermetic: before app.ts (and so config/database.ts) is loaded, DB_HOST and
  * DB_PORT point at a local port nothing listens on; the pool is also mocked to
  * throw. Sessions come from stubbed SessionModel/UserModel lookups, agent and
- * shipper key lookups find nothing, and AuditService.log and
+ * shipper key lookups find nothing, display links are three stubbed ones (live,
+ * paused, revoked; DisplayLinkModel), and AuditService.log and
  * ErrorLogService.logError are recorded instead of written.
  * Run with `npm test` (tsx --test).
  */
@@ -59,10 +61,12 @@ const ADMIN_ONLY: Role[] = ['admin'];
 const PUBLIC = 'public';
 /** A shipper's or EDR agent's own key (in a header, the body or the URL), never a login. */
 const AGENT = 'agent';
+/** A wall screen's display link secret in X-Display-Token (middleware/displayAuth.ts), never a login. */
+const DISPLAY = 'display';
 /** The gate writes each refusal to audit_logs (middleware/scanPermissions.ts). */
 const AUDITED = true;
 
-type Who = Role[] | typeof PUBLIC | typeof AGENT;
+type Who = Role[] | typeof PUBLIC | typeof AGENT | typeof DISPLAY;
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 type Row = [method: Method, path: string, who: Who, audited?: boolean];
 
@@ -383,6 +387,22 @@ const INVENTORY: Row[] = [
   ['GET', '/api/graph/search', ANY_ROLE],
   ['GET', '/api/graph/neighborhood', ANY_ROLE],
   ['GET', '/api/graph/relation', ANY_ROLE],
+
+  // routes/display.ts: a wall screen's own read (its display link in X-Display-Token, never a login)
+  ['GET', '/api/display/snapshot', DISPLAY],
+
+  // routes/displayLinks.ts: Settings > Display links (admins create, configure and revoke)
+  ['GET', '/api/display-links', ADMIN_ONLY],
+  ['POST', '/api/display-links', ADMIN_ONLY],
+  ['POST', '/api/display-links/preview', ADMIN_ONLY],
+  ['GET', '/api/display-links/:id', ADMIN_ONLY],
+  ['PUT', '/api/display-links/:id', ADMIN_ONLY],
+  ['DELETE', '/api/display-links/:id', ADMIN_ONLY],
+  ['POST', '/api/display-links/:id/rotate', ADMIN_ONLY],
+  ['GET', '/api/display-links/:id/snapshot', ADMIN_ONLY],
+
+  // routes/bigDisplay.ts: Big Display while signed in (endpoint health admin-only inside)
+  ['GET', '/api/big-display/snapshot', ANY_ROLE],
 ];
 
 /**
@@ -650,6 +670,28 @@ before(async () => {
   mock.method(EdrAgentModel, 'findById', async () => null);
   const { LogShipperModel } = await import('../models/LogShipper');
   mock.method(LogShipperModel, 'findById', async () => null);
+  // Three display links, found by the hash of their secret; recording a use does nothing.
+  const { DisplayLinkModel } = await import('../models/DisplayLink');
+  const { sha256hex } = await import('../models/EdrAgent');
+  const displayLink = (id: number, fields: { enabled?: boolean; revoked_at?: Date | null }) => ({
+    id,
+    name: `inventory-display-${id}`,
+    config: { views: [{ title: 'Inventory', panels: [{ id: 'open_alerts' }] }] },
+    config_version: 1,
+    enabled: fields.enabled ?? true,
+    expires_at: null,
+    revoked_at: fields.revoked_at ?? null,
+    address_allowed: true,
+  });
+  const displayLinks = new Map([
+    [sha256hex(DISPLAY_TOKENS.live), displayLink(1, {})],
+    [sha256hex(DISPLAY_TOKENS.paused), displayLink(2, { enabled: false })],
+    [sha256hex(DISPLAY_TOKENS.revoked), displayLink(3, { revoked_at: new Date(Date.now() - 1000) })],
+  ]);
+  mock.method(DisplayLinkModel, 'findForAuth', async (hash: string) => displayLinks.get(hash) ?? null);
+  mock.method(DisplayLinkModel, 'touch', async () => false);
+  mock.method(DisplayLinkModel, 'touchLastUsed', async () => undefined);
+  mock.method(DisplayLinkModel, 'trimClients', async () => 0);
 
   const app = (await import('../app')).default;
   const stack = (app.router as unknown as { stack?: Layer[] }).stack;
@@ -702,6 +744,11 @@ async function call(method: string, path: string, headers: Record<string, string
   return { status: res.status, reached: json?.reached, message: json?.message, code: json?.code, reason: json?.reason };
 }
 
+/** Display link secrets the stubbed DisplayLinkModel.findForAuth knows: live, paused and revoked. */
+const DISPLAY_TOKENS = { live: 'sbd1_' + 'L'.repeat(43), paused: 'sbd1_' + 'P'.repeat(43), revoked: 'sbd1_' + 'R'.repeat(43) };
+/** Well formed, and no link has it. */
+const UNKNOWN_DISPLAY_TOKEN = 'sbd1_' + 'U'.repeat(43);
+
 const asRole = (role: Role) => ({ Authorization: `Bearer ${TOKENS[role]}` });
 /** A session whose account must change its password. */
 const asRestricted = (who: keyof typeof RESTRICTED = 'admin') => ({ Authorization: `Bearer ${RESTRICTED[who].token}` });
@@ -711,6 +758,7 @@ const urlOf = (path: string) => path.replace(/:\w+/g, '1');
 function describeWho(who: Who): string {
   if (who === PUBLIC) return 'no login';
   if (who === AGENT) return 'agent key, never a login';
+  if (who === DISPLAY) return 'display link token, never a login';
   return who === ANY_ROLE ? 'any role' : who.join(', ');
 }
 
@@ -864,6 +912,31 @@ test('the Context Graph shows a role nothing the routes it mirrors refuse that r
   }
 });
 
+test('display links show only what every role can read', async () => {
+  // services/display/panels.ts names, for each panel kind, the routes whose
+  // data it mirrors. A kind a display link may hold (minRole 'viewer') must
+  // mirror only routes every signed-in role reads; any other kind must be
+  // refused in a link's config. So a panel backed by an admin-only route can't
+  // reach a wall screen without failing here.
+  const { PANEL_KINDS } = await import('../services/display/panels');
+  const { parseDisplayConfig } = await import('../services/display/config');
+  const whoOf = new Map(INVENTORY.map(([method, path, who]) => [`${method} ${path}`, who]));
+  const kinds = Object.values(PANEL_KINDS);
+  assert.ok(kinds.length >= 12, `found ${kinds.length} panel kinds`);
+  for (const kind of kinds) {
+    assert.ok(kind.viewerRoutes.length > 0, `${kind.id}: name the routes it mirrors`);
+    for (const id of kind.viewerRoutes) assert.ok(whoOf.has(id), `${kind.id} mirrors ${id}, which INVENTORY does not list`);
+    const linkConfig = { views: [{ title: 'T', panels: [{ id: kind.id }] }] };
+    if (kind.minRole === 'viewer') {
+      for (const id of kind.viewerRoutes) assert.deepEqual(whoOf.get(id), ANY_ROLE, `${kind.id} is allowed on display links but mirrors ${id}`);
+      assert.equal(parseDisplayConfig(linkConfig).ok, true, `${kind.id}: allowed in a link config`);
+    } else {
+      assert.equal(parseDisplayConfig(linkConfig).ok, false, `${kind.id} (minRole ${kind.minRole}) must be refused in a link config`);
+      assert.equal(parseDisplayConfig(linkConfig, { forLink: false }).ok, true, `${kind.id}: allowed on the signed-in board`);
+    }
+  }
+});
+
 test('the rate limiters were found and set aside', () => {
   // The general /api limiter at least; scan, agent and log-push routes have their own.
   assert.ok(swappedLimiters >= 1, 'no express-rate-limit middleware found: did the way limiters are recognized change?');
@@ -877,6 +950,49 @@ for (const [method, path, who, audited = false] of INVENTORY) {
     if (who === PUBLIC) {
       assert.equal((await call(method, url)).reached, id, 'reachable without a login');
       assert.equal((await call(method, url, asRestricted())).reached, id, 'and with a session that must change its password');
+      return;
+    }
+
+    if (who === DISPLAY) {
+      // The display link's gate answers, never the login check; refusals are
+      // neither audited nor written to application_errors.
+      auditLog!.mock.resetCalls();
+      errorLog!.mock.resetCalls();
+      const anonymous = await call(method, url);
+      assert.deepEqual(
+        { status: anonymous.status, code: anonymous.code, reached: anonymous.reached },
+        { status: 401, code: 'DISPLAY_TOKEN_REQUIRED', reached: undefined },
+        'without a display token'
+      );
+      assert.notEqual(anonymous.message, 'Authentication required', 'does not ask for a login');
+      const invalid = await call(method, url, { 'X-Display-Token': 'not-a-display-token' });
+      assert.deepEqual({ status: invalid.status, code: invalid.code, reached: invalid.reached }, { status: 401, code: 'DISPLAY_LINK_INVALID', reached: undefined });
+      const unknown = await call(method, url, { 'X-Display-Token': UNKNOWN_DISPLAY_TOKEN });
+      assert.deepEqual({ status: unknown.status, code: unknown.code, reached: unknown.reached }, { status: 401, code: 'DISPLAY_LINK_INVALID', reached: undefined });
+
+      // A login neither unlocks a display route nor is refused by role: every
+      // role's session, and both restricted ones, get exactly what no token
+      // (as Authorization) or a wrong one (as X-Display-Token) gets.
+      const sessions = [
+        ...ROLES.map((role) => [role, TOKENS[role]] as const),
+        ...Object.entries(RESTRICTED).map(([who, { token }]) => [`restricted ${who}`, token] as const),
+      ];
+      for (const [name, token] of sessions) {
+        const asBearer = await call(method, url, { Authorization: `Bearer ${token}` });
+        assert.deepEqual({ status: asBearer.status, reached: asBearer.reached }, { status: anonymous.status, reached: undefined }, `${name}'s session as Authorization`);
+        assert.equal(asBearer.code, 'DISPLAY_TOKEN_REQUIRED');
+        const asDisplay = await call(method, url, { 'X-Display-Token': token });
+        assert.deepEqual({ status: asDisplay.status, reached: asDisplay.reached }, { status: invalid.status, reached: undefined }, `${name}'s session as X-Display-Token`);
+        assert.equal(asDisplay.code, 'DISPLAY_LINK_INVALID');
+      }
+
+      assert.equal((await call(method, url, { 'X-Display-Token': DISPLAY_TOKENS.live })).reached, id, 'a live display link gets through');
+      const paused = await call(method, url, { 'X-Display-Token': DISPLAY_TOKENS.paused });
+      assert.deepEqual({ status: paused.status, code: paused.code, reached: paused.reached }, { status: 403, code: 'DISPLAY_LINK_PAUSED', reached: undefined });
+      const revoked = await call(method, url, { 'X-Display-Token': DISPLAY_TOKENS.revoked });
+      assert.deepEqual({ status: revoked.status, code: revoked.code, reached: revoked.reached }, { status: 401, code: 'DISPLAY_LINK_REVOKED', reached: undefined });
+      assert.equal(auditLog!.mock.callCount(), 0, 'no refusal is audited');
+      assert.equal(errorLog!.mock.callCount(), 0, 'no refusal writes an application_errors row');
       return;
     }
 
@@ -957,6 +1073,45 @@ for (const [method, path, who, audited = false] of INVENTORY) {
     }
   });
 }
+
+test('a display token is never a login: no route that takes a session, or an agent key, accepts one', async () => {
+  const valid = DISPLAY_TOKENS.live;
+  const agentHeaders = { 'X-Agent-ID': '1', 'X-Shipper-ID': '1' };
+  let checked = 0;
+  for (const [method, path, who] of INVENTORY) {
+    if (who === DISPLAY) continue;
+    const id = `${method} ${path}`;
+    const url = urlOf(path);
+    if (who === PUBLIC) {
+      assert.equal((await call(method, url, { 'X-Display-Token': valid })).reached, id, `${id}: still reachable`);
+      continue;
+    }
+    if (who === AGENT) {
+      // Exactly what a stranger's credentials get.
+      const plain = await call(method, url, agentHeaders);
+      const withDisplay = await call(method, url, { ...agentHeaders, 'X-Display-Token': valid });
+      assert.deepEqual({ status: withDisplay.status, reached: withDisplay.reached }, { status: plain.status, reached: plain.reached }, `${id}: X-Display-Token`);
+      const stranger = await call(method, url, { ...agentHeaders, Authorization: 'Bearer not-an-agent-key' });
+      const asBearer = await call(method, url, { ...agentHeaders, Authorization: `Bearer ${valid}` });
+      assert.deepEqual({ status: asBearer.status, reached: asBearer.reached }, { status: stranger.status, reached: stranger.reached }, `${id}: as Bearer`);
+      continue;
+    }
+    const asHeader = await call(method, url, { 'X-Display-Token': valid });
+    assert.deepEqual(
+      { status: asHeader.status, message: asHeader.message, reached: asHeader.reached },
+      { status: 401, message: 'Authentication required', reached: undefined },
+      `${id}: X-Display-Token is not a login`
+    );
+    const asBearer = await call(method, url, { Authorization: `Bearer ${valid}` });
+    assert.deepEqual(
+      { status: asBearer.status, message: asBearer.message, reached: asBearer.reached },
+      { status: 401, message: 'Invalid or expired session', reached: undefined },
+      `${id}: a display token as Bearer is no session`
+    );
+    checked++;
+  }
+  assert.ok(checked > 200, `checked ${checked} routes that take a login`);
+});
 
 // Keep last: proves the file stayed hermetic.
 test('nothing in this file reached the database', () => {

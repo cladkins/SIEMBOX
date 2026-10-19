@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { RouteLocationRaw } from 'vue-router';
 import { api } from '@/services/api';
-import router from '@/router';
+import router, { redirectTarget } from '@/router';
 
 /** Why the account must change its password (backend services/auth/passwordChange.ts). */
 export type PasswordChangeReason = 'initial' | 'default' | 'admin' | 'cli';
@@ -41,6 +41,31 @@ function rememberBrowserToken(username: string, token: string): void {
     localStorage.setItem(BROWSER_TOKENS_KEY, JSON.stringify(tokens));
   } catch {
     // Storage full or blocked: this browser just stays unrecognized.
+  }
+}
+
+/**
+ * Where to go after signing in, held through a forced password change: the
+ * change ends the session, so the target outlives two page navigations
+ * (sign-in → change → sign-in). Per tab (sessionStorage), and always re-checked
+ * with redirectTarget before use.
+ */
+const POST_LOGIN_REDIRECT_KEY = 'siembox.postLoginRedirect';
+
+function holdTarget(target: string | null): void {
+  try {
+    if (target) sessionStorage.setItem(POST_LOGIN_REDIRECT_KEY, target);
+    else sessionStorage.removeItem(POST_LOGIN_REDIRECT_KEY);
+  } catch {
+    // Storage blocked: the user lands on the Dashboard instead.
+  }
+}
+
+function heldTarget(): string | null {
+  try {
+    return redirectTarget(sessionStorage.getItem(POST_LOGIN_REDIRECT_KEY));
+  } catch {
+    return null;
   }
 }
 
@@ -93,7 +118,16 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = response.data.user;
     localStorage.setItem('token', token.value!);
     localStorage.setItem('user', JSON.stringify(user.value));
-    navigate(response.data.passwordChangeRequired ? { name: 'ChangePassword' } : '/', 'push');
+    // Back to the page that sent the user here (?redirect=, or the target held
+    // through a password change), never to another site.
+    const target = redirectTarget(router.currentRoute.value.query.redirect) ?? heldTarget();
+    if (response.data.passwordChangeRequired) {
+      holdTarget(target);
+      navigate({ name: 'ChangePassword' }, 'push');
+    } else {
+      holdTarget(null);
+      navigate(target ?? '/', 'push');
+    }
   };
 
   /**
@@ -119,7 +153,11 @@ export const useAuthStore = defineStore('auth', () => {
     if (!token.value || !profile || typeof profile !== 'object') return;
     user.value = { ...(user.value ?? {}), ...profile };
     localStorage.setItem('user', JSON.stringify(user.value));
-    if (!mustChangePassword.value && router.currentRoute.value.name === 'ChangePassword') navigate('/', 'replace');
+    if (!mustChangePassword.value && router.currentRoute.value.name === 'ChangePassword') {
+      const target = heldTarget();
+      holdTarget(null);
+      navigate(target ?? '/', 'replace');
+    }
   };
 
   /**
@@ -139,12 +177,26 @@ export const useAuthStore = defineStore('auth', () => {
     }
   };
 
-  const logout = () => {
+  /**
+   * Sign out here. `keepTarget`: the session ended under the user (a 401, or
+   * the password change that ends every session), so the sign-in page gets
+   * ?redirect= back to where they were: the current page, or on the change
+   * screen the target held since sign-in. An explicit sign-out keeps none.
+   */
+  const logout = (options: { keepTarget?: boolean } = {}) => {
+    const current = router.currentRoute.value;
+    let redirect: string | null = null;
+    if (options.keepTarget) {
+      redirect = current.name === 'ChangePassword' ? heldTarget() : current.name === 'Login' ? null : redirectTarget(current.fullPath);
+      if (redirect === '/') redirect = null;
+    }
+    holdTarget(null);
     token.value = null;
     user.value = null;
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    router.push('/login');
+    // Already on the sign-in page: it keeps its own ?redirect=.
+    if (current.name !== 'Login') void router.push(redirect ? { path: '/login', query: { redirect } } : '/login');
   };
 
   /** Sign out on the server too (best effort, no toasts), then here. */

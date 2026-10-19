@@ -1098,6 +1098,77 @@ curl -si -X OPTIONS http://<host>:8421/api/auth/login \
 curl -si http://<host>:8421/health -H 'Origin: https://dash.example.com' | grep -i '^access-control-allow-origin'
 ```
 
+## Wall screens (Big Display)
+
+A **display link** shows SIEMBox's live board (open alerts, alert pulse, log
+ingestion, silent sources, shippers, recent alerts, threat map, ...) on an
+unattended TV or monitor, read-only and without signing in. An administrator
+creates one link per screen (the API now, Settings → Display links in a later
+release, or `node dist/scripts/auth-admin.js display-links` in the backend container to list them); its URL looks like
+`https://siembox.example.com/display#k=sbd1_…`. Design and security model:
+[docs/architecture/BIG-DISPLAY.md](docs/architecture/BIG-DISPLAY.md).
+
+- **Never a login.** The link's secret is in the URL fragment (after `#`),
+  which browsers never send to a server, so it never lands in nginx's or a
+  proxy's access log. The page sends it to the API as an `X-Display-Token`
+  header. The display page is a separate page (`display.html`) that shares no
+  code, storage or session with the app: opening a link in a browser where
+  someone is signed in never reads, replaces or signs out their session, even
+  an expired one.
+- **It runs for months.** It refreshes every 15-120 s (per link), keeps the
+  last data on screen through outages (with a *NO CONNECTION* band after 5
+  minutes), reloads itself after an upgrade and once a day at 04:00, and
+  resumes by itself when a paused link is resumed. Pausing, rotating or
+  revoking a link takes effect at the screen's next refresh.
+
+### Kiosk setup
+
+The page needs no mouse or keyboard. Arrow keys change the view, Space pauses
+rotation, `F` or Enter toggles full screen, `R` refreshes now.
+
+- **Chromium / Raspberry Pi.** Quote the URL: an unquoted `#` starts a shell
+  comment and the link loses its key.
+
+  ```bash
+  chromium-browser --kiosk --noerrdialogs --disable-session-crashed-bubble \
+    --incognito 'https://siembox.example.com/display#k=sbd1_…'
+  ```
+
+  `--incognito` is optional: the page stores nothing in the browser.
+- **Fire TV, Android TV, smart-TV browsers.** Open the link once and bookmark
+  it, or use a kiosk browser app (Fully Kiosk Browser and similar) with the
+  link as its start page. The browser keeps the fragment in the bookmark.
+- **Keep the screen awake.** The page asks the browser for a screen wake lock,
+  which browsers only grant on HTTPS (or `localhost`). On plain HTTP, set the
+  device itself never to sleep.
+- **Burn-in.** The board shifts by up to 4 px every 10 minutes (per link,
+  on by default) and stays mostly grey; colour appears only when something
+  needs attention.
+
+### HTTPS, reverse proxies and forward auth
+
+- **Use HTTPS** for screens outside a trusted LAN: the link is a bearer secret
+  for a read-only view. HTTPS also enables the wake lock above.
+- **Proxies pass it through.** nginx in the frontend image serves the page at
+  `location = /display` (with its own Content-Security-Policy and
+  `Referrer-Policy: no-referrer`), redirects `/display/` to `/display`, and
+  forwards the `X-Display-Token` header to the API unchanged. An outer reverse
+  proxy needs no special rule; just don't strip custom headers.
+- **Forward auth / SSO in front of SIEMBox** (Authelia, Authentik, oauth2-proxy,
+  Cloudflare Access): a TV can't complete an SSO sign-in. Exempt `/display`,
+  `/assets/*`, `/favicon.svg` and `/api/display/snapshot` from the forward-auth
+  rule; the link's own token protects the snapshot.
+- **Network allow-lists** on a link compare against the client address the
+  backend sees, so a proxy in front must be listed in `TRUSTED_PROXIES` (see
+  [Client addresses and reverse proxies](#client-addresses-and-reverse-proxies)).
+  Otherwise every screen appears to come from the proxy.
+- **Many screens behind one address** (one NAT, one proxy) share the general
+  API rate limit: each screen makes 30 requests per 15 minutes at the default
+  30 s refresh, besides whatever people at that address do. Raise
+  `API_RATE_LIMIT_MAX` if screens show *429* or go stale together.
+
+Problems: see [Troubleshooting → Wall displays](docs/operations/TROUBLESHOOTING.md#wall-displays-big-display).
+
 ## Monitoring
 
 Monitor SIEMBox to ensure smooth operation and capacity planning.

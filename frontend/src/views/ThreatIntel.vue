@@ -143,7 +143,10 @@
       <template #header>
         <div class="card-header">
           <span>{{ detail.ip }}</span>
-          <ExplainWithAI kind="ip" :data="detail" label="Explain this IP" />
+          <span class="header-actions">
+            <OpenInGraphButton type="ip" :value="detail.ip" window="30d" size="small" />
+            <ExplainWithAI kind="ip" :data="detail" label="Explain this IP" />
+          </span>
         </div>
       </template>
 
@@ -326,6 +329,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
+import OpenInGraphButton from '@/components/graph/OpenInGraphButton.vue';
 import { ElMessage } from 'element-plus';
 import { Search, Refresh, Warning, InfoFilled } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
@@ -546,6 +550,13 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.header-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 .threat-intel { padding: 0; }
 .page-header { margin-bottom: 16px; }
 .page-header h2 { margin: 0 0 4px; }

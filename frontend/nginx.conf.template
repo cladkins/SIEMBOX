@@ -61,6 +61,30 @@ server {
         add_header X-XSS-Protection "1; mode=block" always;
     }
 
+    # Wall displays (src/display): their own page, never the SPA's index.html,
+    # so the main app's router guard and session handling never run on a
+    # display link (docs/architecture/BIG-DISPLAY.md §4.4). The link's secret is
+    # in the URL fragment (/display#k=...), which browsers never send, so it
+    # never reaches nginx or its access log; the page sends it to the API in
+    # the X-Display-Token header, which proxy_pass below forwards unchanged.
+    # The nested add_header replaces the inherited ones, so the security
+    # headers are re-declared, plus a CSP: the page loads only its own hashed
+    # scripts and styles and talks only to this origin.
+    location = /display {
+        try_files /display.html =404;
+        add_header Cache-Control "no-cache" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'" always;
+    }
+    # /display/#k=... (trailing slash) must not fall through to the SPA; the
+    # browser keeps the fragment across the redirect.
+    location ^~ /display/ { return 301 /display; }
+    # The page only ever loads through /display, with the headers above.
+    location = /display.html { return 404; }
+
     # Proxy API requests to the backend (the siembox_api upstream above).
     location /api {
         proxy_pass http://siembox_api;

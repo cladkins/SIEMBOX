@@ -677,6 +677,58 @@ const BREACH_KEY_SQL = `COALESCE(f.detail->>'breach_name', f.detail->>'breach_ti
 const OPEN_BREACH_SQL = `f.source = 'leaked-creds' AND f.event_type = 'breach' AND f.resolved_at IS NULL
    AND jsonb_typeof(f.detail->'account') = 'string'`;
 
+// ---- Digital Risk headline (the Big Display) -------------------------------------------
+
+export interface ExposureHeadline {
+  /** Any enabled identity or watched domain: Digital Risk is set up. */
+  configured: boolean;
+  open_total: number;
+  open_by_severity: Record<ExposureSeverity, number>;
+  new_7d: number;
+  /** Distinct accounts whose credentials are in an open breach (as the summary's "to reset"). */
+  accounts_to_reset: number;
+  /** Open domain-monitor (impersonation) findings. */
+  impersonation_open: number;
+}
+
+/**
+ * Counts only, for the Big Display's digital_risk panel
+ * (services/display/panels.ts). Never builds the account, breach or domain
+ * lists getExposureSummary() does: no name, address, breach or domain is read
+ * out of the database. `run` executes one statement (the display runs it in
+ * its read-only transaction); by default the main pool.
+ */
+export async function getExposureHeadline(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- rows of the fixed SQL below
+  run: (sql: string, params?: unknown[]) => Promise<any[]> = async (sql, params) => (await query(sql, params as any[])).rows
+): Promise<ExposureHeadline> {
+  const [totals] = await run(
+    `SELECT (SELECT COUNT(*) FROM monitored_identities WHERE enabled)::int AS identities_enabled,
+            (SELECT COUNT(*) FROM watched_domains WHERE enabled)::int AS domains_enabled,
+            (SELECT COUNT(*) FROM exposure_findings WHERE resolved_at IS NULL)::int AS open_total,
+            (SELECT COUNT(*) FROM exposure_findings WHERE first_seen >= NOW() - INTERVAL '7 days')::int AS new_7d,
+            (SELECT COUNT(*) FROM exposure_findings WHERE resolved_at IS NULL AND source = 'domain-monitor')::int AS impersonation_open`
+  );
+  const bySeverity = await run(`SELECT severity, COUNT(*)::int AS n FROM exposure_findings WHERE resolved_at IS NULL GROUP BY severity`);
+  const [reset] = await run(
+    `SELECT (COUNT(DISTINCT lower(f.detail->>'account')) FILTER (WHERE ${credExposedSql('$1')}))::int AS to_reset
+       FROM exposure_findings f WHERE ${OPEN_BREACH_SQL}`,
+    [[...CREDENTIAL_DATA_CLASSES]]
+  );
+  const open_by_severity: Record<ExposureSeverity, number> = { critical: 0, high: 0, medium: 0, low: 0 };
+  for (const row of bySeverity) {
+    if (row.severity in open_by_severity) open_by_severity[row.severity as ExposureSeverity] = Number(row.n);
+  }
+  return {
+    configured: Number(totals.identities_enabled) + Number(totals.domains_enabled) > 0,
+    open_total: Number(totals.open_total),
+    open_by_severity,
+    new_7d: Number(totals.new_7d),
+    accounts_to_reset: Number(reset?.to_reset ?? 0),
+    impersonation_open: Number(totals.impersonation_open),
+  };
+}
+
 /**
  * The summary window at `at` (default: the transaction's NOW()): `since` is
  * the start of the UTC bucket holding `at` minus WINDOW_BACK, so the window

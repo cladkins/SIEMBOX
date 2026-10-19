@@ -3,7 +3,7 @@ import qs from 'qs';
 import rateLimit from 'express-rate-limit';
 import { bodyParserErrorHandler, errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requestTimeoutLogger } from './middleware/requestTimeoutLogger';
-import { authenticate } from './middleware/auth';
+import { authenticate, requireAdmin } from './middleware/auth';
 import { query } from './config/database';
 import { corsHeaders, parseCorsOrigin } from './net/cors';
 import { ignoredForwardedForTracker, trustedProxies } from './net/trustedProxies';
@@ -33,6 +33,9 @@ import packsRoutes from './routes/packs';
 import logDiscoveryRoutes from './routes/logDiscovery';
 import exposureRoutes from './routes/exposure';
 import graphRoutes from './routes/graph';
+import displayRoutes from './routes/display';
+import displayLinksRoutes from './routes/displayLinks';
+import bigDisplayRoutes from './routes/bigDisplay';
 
 const app: Application = express();
 
@@ -102,6 +105,12 @@ app.use('/api/', apiRateLimiter);
 // 16 kB (larger ones get 413) before the general 10 MB parsers, which then
 // skip the already-parsed body.
 app.use('/api/auth', express.json({ limit: '16kb' }), express.urlencoded({ extended: true, limit: '16kb' }));
+// Display links carry a name and a board layout (at most 16 kB of config,
+// services/display/config.ts), and a screen's read carries no body: cap both
+// at 32 kB. Mount paths match whole segments, so /api/display never covers
+// /api/display-links.
+app.use('/api/display', express.json({ limit: '32kb' }), express.urlencoded({ extended: true, limit: '32kb' }));
+app.use('/api/display-links', express.json({ limit: '32kb' }), express.urlencoded({ extended: true, limit: '32kb' }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -179,6 +188,14 @@ app.use('/api/packs', authenticate, packsRoutes); // Content Packs (curated pars
 app.use('/api/log-discovery', authenticate, logDiscoveryRoutes); // Log source discovery, fingerprinting + onboarding
 app.use('/api/exposure', authenticate, exposureRoutes); // Digital Risk: leaked credentials, watched domains, findings
 app.use('/api/graph', authenticate, graphRoutes); // Context Graph: read-only pivots between alerts, IPs, assets, findings, rules
+
+// Big Display (docs/architecture/BIG-DISPLAY.md). A wall screen's read takes
+// its display link in X-Display-Token, never a login: each route gates itself
+// (routes/display.ts). Display links themselves are configured by admins; the
+// signed-in board uses the user's own session and role.
+app.use('/api/display', displayRoutes);
+app.use('/api/display-links', authenticate, requireAdmin, displayLinksRoutes);
+app.use('/api/big-display', authenticate, bigDisplayRoutes);
 
 // Error handlers (must be last)
 app.use(notFoundHandler);

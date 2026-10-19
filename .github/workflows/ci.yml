@@ -90,4 +90,12 @@ jobs:
       - run: npm run type-check
       - run: npm run build
       - run: npm run check:legal-comments
+      # Cytoscape (the Context Graph canvas) stays in its own lazy chunk.
+      - run: npm run check:graph-chunk
+      # The wall display (display.html) loads no Element Plus, Pinia or Vue
+      # Router and stays under 100 kB gzipped.
+      - run: npm run check:display-bundle
       - run: npm run lint
+      # The pure graph and display modules, safeRedirect, and the display's lint
+      # isolation rules, under node --test (Node 22 strips the types).
+      - run: npm run test:unit

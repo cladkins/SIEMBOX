@@ -17,6 +17,7 @@ Comprehensive troubleshooting guide for diagnosing and resolving common issues i
 - [Performance Issues](#performance-issues)
 - [Network & Connectivity](#network--connectivity)
 - [Frontend Issues](#frontend-issues)
+- [Wall displays (Big Display)](#wall-displays-big-display)
 - [Container Issues](#container-issues)
 - [Data Cleanup](#data-cleanup)
 - [Advanced Diagnostics](#advanced-diagnostics)
@@ -2165,7 +2166,142 @@ attempts ...", `code: "SIGNIN_PAUSED"`) is something else: see
 
 ---
 
+## Wall displays (Big Display)
+
+A wall screen opened with a display link (`/display#k=…`) never shows the
+sign-in page and never navigates away: whatever goes wrong, it says so on the
+screen and keeps checking by itself. Setup: [DEPLOYMENT.md → Wall screens](../../DEPLOYMENT.md#wall-screens-big-display).
+An administrator can list links and their state with
+`docker exec siembox-backend node dist/scripts/auth-admin.js display-links`.
+
+### Issue: "This page needs a display link"
+
+The address has no `#k=…` part. Usually the kiosk command line cut it off: in a
+shell an unquoted `#` starts a comment. Quote the whole URL
+(`'https://…/display#k=sbd1_…'`), or paste the full link again. The screen
+offers no input box on purpose: nobody should type a secret on a shared screen.
+
+### Issue: "This display link isn't valid any more"
+
+The link was rotated (its old secret stops at once) or never existed in this
+database. Give the screen the new link from the rotate response. The screen
+checks again every 10 minutes, so restoring a backup that has the old link
+brings it back by itself.
+
+### Issue: "This display link was revoked"
+
+Revoking is final and the screen stops polling. Create a new link for the
+screen and open it there.
+
+### Issue: "This display link expired on …"
+
+The link had an expiry date. Clear or extend it (`PUT /api/display-links/:id`
+with `expires_at`); the screen checks every 10 minutes and resumes by itself,
+with the same link.
+
+### Issue: "Paused by an administrator"
+
+Someone paused the link (for instance to hide the wall during an incident).
+Resume it; the screen checks every minute and comes back by itself.
+
+### Issue: "This screen's network isn't allowed to use this link"
+
+The link has a network allow-list and the address SIEMBox sees for the screen
+is outside it. Behind a reverse proxy, every screen looks like the proxy until
+the proxy is in `TRUSTED_PROXIES` (DEPLOYMENT.md, *Client addresses and
+reverse proxies*). The screen re-checks every 5 minutes.
+
+### Issue: The freshness chip turns amber, or "NO CONNECTION TO SIEMBOX SINCE …" and STALE panels
+
+The screen can't reach the API. It keeps the last numbers on screen: amber
+"Data … old · reconnecting" after two missed refreshes, then after 5 minutes
+a red band and every panel marked *STALE*. It retries after 5, 10, 20 and 40 s,
+then every minute, and at once when the network comes back. Check the screen's
+network and that `curl -sI https://<host>/display` answers; when SIEMBox is
+back the band goes away by itself. A single panel saying *Data from 14:02 —
+database busy* (and the *SOME DATA DELAYED* chip) means the server answered but
+that panel's query timed out: see [Slow Query Response](#issue-slow-query-response).
+
+### Issue: The screen goes to sleep
+
+The page asks for a screen wake lock, which browsers only grant over HTTPS (or
+on `localhost`); on plain HTTP the first-load hint says so. Serve SIEMBox over
+HTTPS, or set the device's own power settings never to sleep or blank the
+screen (on a Raspberry Pi, also disable console blanking).
+
+### Issue: A device shows SILENT although it is fine (bursty source)
+
+A source is *silent* when a steady sender stops for longer than the panel's
+threshold (5, 15, 30 or 60 minutes). A source that only logs now and then is
+shown as *quiet* and never alarmed, but one that is usually steady and then
+pauses for longer than the threshold is flagged. Pick a longer threshold for
+that view's Sources panel.
+
+### Issue: The Sources panel says "Collecting since …" after upgrading
+
+The per-minute counts it uses started with this release. Until they cover 24
+hours the panel says when collecting began; nothing needs doing.
+
+### Issue: The display asks for an SSO sign-in
+
+A forward-auth proxy (Authelia, Authentik, oauth2-proxy, Cloudflare Access) is
+intercepting the page. Exempt `/display`, `/assets/*`, `/favicon.svg` and
+`/api/display/snapshot` from it; the link's own token protects the data.
+
+### Issue: 429 on the wall, or several screens go stale together
+
+All screens behind one address share the general API limit
+(`API_RATE_LIMIT_MAX`, 1000 per 15 minutes per address); at a 30 s refresh each
+screen uses 30. Raise the limit, lengthen the links' refresh, or make sure
+`TRUSTED_PROXIES` lets SIEMBox see each screen's own address. A screen that
+keeps opening a wrong or revoked link is also limited after 30 failed lookups
+in 15 minutes; it waits for `Retry-After` and tries again.
+
 ## Frontend Issues
+
+### Issue: Context Graph is busy, partial or empty
+
+**Symptoms:**
+- "SIEMBox is busy, trying again in a few seconds", then a **Try again** button
+- A yellow banner such as "Alerts relationships took too long and were left out"
+- A relation shows a "timed out" badge
+- The graph shows alerts, assets and findings but no users or client IPs
+
+**What it means:**
+- The graph runs a bounded number of lookups at once, each with a time
+  budget (`GET /api/graph/neighborhood`, API.md "Context Graph"). When every
+  slot is taken it answers `503 GRAPH_BUSY` with `Retry-After`; the page waits
+  and retries once by itself. A source that runs out of time is left out and
+  named in a banner; the rest of the graph is complete.
+- No users or client IPs: the graph reads them from what alerts recorded,
+  which comes from parsers. With no parser installed the page says so
+  ("No parsers are installed…") and links to *Parsers*. Install parsers for
+  your sources from *Parsers → Browse Catalog*.
+- "Nothing is linked to … between … and …": nothing SIEMBox holds names that
+  entity in the window. Try **90 days**, or look the IP up in Threat Intel.
+
+**Solution:**
+- Press **Try again** or **Refresh** (the page never polls on its own).
+- If it is busy often, check database load (see [Database Issues](#database-issues)).
+- A failed expansion keeps the graph you had; only that node's expansion is missing.
+
+### Issue: The Context Graph canvas is blank
+
+The canvas (Cytoscape, a separate `graph-*.js` file) loads only on the graph
+page. If it can't start (an old browser, a blocked script), the page says so
+and shows the **List** view, a table of the same nodes and links. Check the
+browser console for a failed `graph-*.js` request: a proxy or cache serving an
+old `index.html` with new assets (or the reverse) causes it; reload without the
+cache.
+
+### Issue: A link to a SIEMBox page lands on the Dashboard after signing in
+
+A link opened while signed out keeps its target as `?redirect=` on the
+sign-in page and returns there after signing in (also through a forced
+password change, and after a session expires on that page). It lands on the
+Dashboard instead when the target isn't a SIEMBox page (another host, a path
+no page matches) or is a page the account's role can't open. That is
+deliberate: the sign-in page never sends anyone to another site.
 
 ### Issue: Blank Page or JavaScript Errors
 

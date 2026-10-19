@@ -469,6 +469,82 @@ docker exec siembox-postgres psql -U siembox -d siembox -c \
    WHERE s.expires_at > NOW();"
 ```
 
+### Display links (wall screens)
+
+A **display link** lets a wall screen or TV show the Big Display, a
+read-only board of aggregate panels, without anyone signing in on it. It is a
+credential of its own, not an account (design:
+docs/architecture/BIG-DISPLAY.md; API: API.md, "Display link tokens").
+
+**The secret.** `sbd1_` plus 256 random bits, shown once (when the link is
+created or rotated). SIEMBox stores only its sha256 and a 4-character hint,
+so a database dump or backup holds no usable secret. The screen's URL carries
+it in the fragment (`/display#k=sbd1_…`), which browsers never send to a
+server, so it never appears in nginx's access log, SIEMBox's error log or a
+`Referer`. On the wire it travels in `X-Display-Token`, on one route
+(`GET /api/display/snapshot`).
+
+**Never a login.** A display token opens no route that takes a login, and a
+login opens no display route; the route inventory test proves both
+directions. The token can change nothing: it reads one snapshot.
+
+**What a screen can show.** Aggregates only, from panels whose data every
+signed-in role can already read (endpoint health, which is admin-only, is
+refused on links). Each link has a privacy level:
+
+| Privacy | Shows |
+|---|---|
+| Operations room (the default) | Counts, plus labels from configuration: rule names, shipper names, source host names, the IP addresses alerts came from |
+| Public area | Counts only |
+
+Never shown in either: alert titles and descriptions (they can carry
+usernames and email addresses), usernames, email addresses, breach names,
+lookalike domains, raw log text.
+
+**Lifetime.** A link works until an admin pauses, rotates or revokes it, or
+until the expiry date the admin set (none by default). It is not tied to the
+admin who created it: a password change or reset, a required password change,
+their sessions ending and their account being deleted leave it working
+(its `created_by` then reads `null`: "deleted user"). Rotate the links an admin who
+leaves has seen. Pause, rotate and revoke act at the screen's next refresh.
+
+**Narrowing it.** Each link can have an expiry and a network allow-list
+(`allowed_cidrs`; behind another reverse proxy, set `TRUSTED_PROXIES` so
+SIEMBox sees the screen's real address). Use one link per screen, so cutting
+one screen off is rotating its link. Serve SIEMBox over HTTPS: on plain HTTP
+the secret crosses the network in clear on every refresh, as session tokens
+do.
+
+**Guessing and noise.** A malformed token is refused before any database
+work; an unknown one gets the same answer. 30 failed lookups per address per
+15 minutes, then `429`. Refusals are not audited or written to the error log
+one by one (a forgotten screen with a revoked link fills nothing), and they
+never touch sign-in protection's counters.
+
+**Audit trail.** Every admin action writes an `audit_logs` row
+(`resource_type = 'display_link'`): `display_link.created`, `.updated`,
+`.paused`, `.resumed`, `.rotated`, `.revoked`. Screens add
+`display_link.client_first_seen` (an address new to the link, at most 10 per
+link per hour) and `display_link.refused_network` (the secret used from
+outside its networks, once per address per hour: a leak signal). No row holds
+a secret or its hash.
+
+**Recovery from the command line**, when the UI can't be used:
+
+```bash
+# List links: id, name, status, last use, creator (--all: revoked ones too)
+docker exec siembox-backend node dist/scripts/auth-admin.js display-links
+# Revoke one, or every live link; screens stop at their next refresh
+docker exec siembox-backend node dist/scripts/auth-admin.js revoke-display-link <id|all>
+```
+
+```sql
+-- Who used which link, from where (GET /api/display-links/:id lists the same)
+SELECT l.id, l.name, host(c.ip) AS ip, c.user_agent, c.first_seen, c.last_seen
+  FROM display_link_clients c JOIN display_links l ON l.id = c.link_id
+ WHERE l.revoked_at IS NULL ORDER BY c.last_seen DESC;
+```
+
 ### Multi-Factor Authentication (Future)
 
 **Status:** Not currently supported
@@ -1415,11 +1491,19 @@ curl -X PUT http://localhost:8421/api/users/<user-id> \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"enabled": false}'
 
+# Review Display links: a compromised admin account can create a link that
+# keeps working after the account is disabled. Check each one's creator, the
+# devices seen (GET /api/display-links/:id) and its audit rows; revoke what you
+# don't recognize.
+docker exec siembox-backend node dist/scripts/auth-admin.js display-links
+docker exec siembox-backend node dist/scripts/auth-admin.js revoke-display-link <id|all>
+
 # Rotate all credentials
 # 1. Change database password
 # 2. Regenerate JWT secret
 # 3. Force all users to change passwords
 # 4. Regenerate shipper API keys
+# 5. Rotate the display links you keep (POST /api/display-links/:id/rotate)
 ```
 
 **Recovery:**
@@ -1507,6 +1591,7 @@ journalctl -u docker > docker-journal-$(date +%Y%m%d).log
 - [ ] Check disk space usage
 - [ ] Scan containers for vulnerabilities
 - [ ] Rotate API keys for shippers
+- [ ] Review Display links: revoke unused ones; a link seen from more addresses than it has screens may have leaked
 - [ ] Review detection rule effectiveness
 
 ### Quarterly Security Tasks

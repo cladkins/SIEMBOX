@@ -62,6 +62,8 @@ from the API, and the UI hides or disables the matching control.
 | Own account: password, MFA | yes | yes | yes | yes |
 | Test a saved parser, export or contribute a parser or rule, "Explain this" | yes | yes | yes | yes |
 | Digital Risk page: monitoring status, findings, trends, lookalikes, password breach check | yes | yes | yes | yes |
+| Context Graph page: search, expand, relation tables, list view, copy link (read-only for every role) | yes | yes | yes | yes |
+| Context Graph: endpoint-agent nodes, SIEMBox account details and sign-in IPs | no | no | no | yes |
 | Triage alerts (status, notes, assignee), re-run AI triage | no | yes | yes | yes |
 | AI Analyst chat, SOC Triage page | no | yes | yes | yes |
 | Create, edit, enable/disable, import or delete parsers; test an unsaved parser | no | yes | yes | yes |
@@ -235,6 +237,11 @@ TROUBLESHOOTING.md, "Locked out of SIEMBox" (the `auth-admin` command line).
   profile, change the password or sign out; the API answers everything else
   with `403 PASSWORD_CHANGE_REQUIRED` (API.md, "Password change required")
 - Users should be notified out-of-band when passwords are changed
+- A link into SIEMBox opened while signed out (a Context Graph link, say)
+  goes to the sign-in page with `?redirect=` and, once signed in, back to
+  that page. That holds through a forced password change, and when a session
+  expires on a page. Only paths inside SIEMBox are followed: anything else
+  (`//host`, `https://…`, an unknown path) lands on the Dashboard
 
 ### Audit Logging
 - User management actions are written to `audit_logs`: `user.created`,

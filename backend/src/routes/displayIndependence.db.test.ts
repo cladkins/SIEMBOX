@@ -186,8 +186,12 @@ after(async () => {
   if (dbReady) {
     await pool.query(`DELETE FROM audit_logs WHERE resource_type = 'display_link' AND resource_id = ANY($1)`, [linkIds]);
     await pool.query('DELETE FROM display_links WHERE id = ANY($1)', [linkIds]);
+    // resource_id = a user id only for rows about users: a display link with
+    // the same number belongs to another test file running at the same time.
     await pool.query(
-      `DELETE FROM audit_logs WHERE timestamp >= $1 AND (user_id = ANY($2) OR resource_id = ANY($2) OR ip_address <<= $3::inet)`,
+      `DELETE FROM audit_logs
+        WHERE timestamp >= $1
+          AND (user_id = ANY($2) OR (resource_id = ANY($2) AND resource_type IS DISTINCT FROM 'display_link') OR ip_address <<= $3::inet)`,
       [startedAt, userIds, TEST_NET]
     );
     await pool.query('DELETE FROM login_throttle WHERE user_id = ANY($1) OR network <<= $2::inet', [userIds, TEST_NET]);

@@ -54,6 +54,10 @@
       <div class="dp-head"><span class="dp-type">Link</span></div>
       <div class="dp-title">{{ edgeLabel(edge.rel) }}</div>
       <p class="small">{{ endLabel(edge.source) }} → {{ endLabel(edge.target) }}</p>
+      <div v-if="edge.new || edge.success_after_failures" class="dp-flags">
+        <el-tag v-if="edge.new" size="small" type="warning" title="First seen in this window">NEW</el-tag>
+        <el-tag v-if="edge.success_after_failures" size="small" type="danger">success after failures</el-tag>
+      </div>
       <el-descriptions :column="1" size="small" border class="dp-facts">
         <el-descriptions-item label="Kind">{{ STYLE_MEANINGS[edge.style] }}</el-descriptions-item>
         <el-descriptions-item label="From">{{ ORIGIN_LABELS[edge.origin] ?? edge.origin }}</el-descriptions-item>
@@ -65,7 +69,9 @@
       </el-descriptions>
       <div class="dp-actions">
         <el-button v-if="alertEnd" size="small" @click="emit('open-alert', alertEnd)">Open alert</el-button>
+        <el-button v-if="hasEvidence && !showLogs" size="small" data-testid="graph-show-logs" @click="showLogs = true">Show logs</el-button>
       </div>
+      <GraphEvidence v-if="hasEvidence && showLogs" :edge="edge" @close="showLogs = false" />
     </template>
 
     <div v-else class="dp-empty">
@@ -76,7 +82,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRouter, type RouteLocationRaw } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { CopyDocument } from '@element-plus/icons-vue';
@@ -84,7 +90,8 @@ import { format } from 'date-fns';
 import { factText, formatCount, fullLabel } from '@/graph/labels';
 import { ORIGIN_LABELS, STYLE_MEANINGS, TYPE_STYLES, edgeLabel, outcomeLabel, roleLabel } from '@/graph/style';
 import { keyOfId } from '@/graph/entityKey';
-import type { GraphEdge, GraphNode, NodeFlag, RelationGroup, RelId } from '@/graph/types';
+import { EVIDENCE_RELS, type GraphEdge, type GraphNode, type NodeFlag, type RelationGroup, type RelId } from '@/graph/types';
+import GraphEvidence from './GraphEvidence.vue';
 
 const props = defineProps<{
   node: GraphNode | null;
@@ -107,6 +114,16 @@ const emit = defineEmits<{
 }>();
 
 const router = useRouter();
+
+/** A dashed (seen in logs) edge of the rollup: its logs can be listed. */
+const hasEvidence = computed(() => !!props.edge && props.edge.style === 'logs' && EVIDENCE_RELS.has(props.edge.rel));
+const showLogs = ref(false);
+watch(
+  () => props.edge?.id,
+  () => {
+    showLogs.value = false;
+  }
+);
 
 const FLAG_LABELS: Partial<Record<NodeFlag, string>> = {
   threat_feed: 'on a threat feed',

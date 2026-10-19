@@ -87,6 +87,12 @@ export const EDGE_LABELS: Record<string, string> = {
   identity_user: 'User with this address',
   identity_domain: 'Email domain',
   account_signins: 'Signed in to SIEMBox from',
+  signed_in_as: 'Signed in as (seen in logs)',
+  seen_on: 'Seen on this device (in its logs)',
+  user_on: 'User seen on this device (in its logs)',
+  connected_to: 'Connected to (seen in logs)',
+  queried: 'Queried this domain (seen in logs)',
+  sent_by: 'Logs sent from this IP',
 };
 
 export const edgeLabel = (rel: string): string => EDGE_LABELS[rel] ?? rel.replace(/_/g, ' ');

@@ -339,6 +339,9 @@ export const api = {
   runManualCleanup: (data: any) => apiClient.post('/settings/retention/cleanup', data),
   getCleanupStatus: () => apiClient.get('/settings/retention/cleanup/status'),
   getRetentionStatistics: () => apiClient.get('/settings/retention/stats', { timeout: 30000 }),
+  getContextGraphSettings: () => apiClient.get('/settings/context-graph', INLINE),
+  updateContextGraphSettings: (logEdges: Record<string, number | boolean>) =>
+    apiClient.put('/settings/context-graph', { log_edges: logEdges }, INLINE),
 
   // Settings - Syslog
   getSyslogSettings: () => apiClient.get('/settings/syslog'),
@@ -501,6 +504,9 @@ export const api = {
     apiClient.get('/graph/neighborhood', { params: graphParams(params), ...GRAPH_CALL, signal }),
   graphRelation: (params: GraphRelationParams, signal?: AbortSignal) =>
     apiClient.get('/graph/relation', { params: graphParams(params), ...GRAPH_CALL, signal }),
+  // The logs behind a dashed (seen in logs) edge, for one ingest day.
+  graphEvidence: (params: { rel: string; a: string; b: string; day?: string; limit?: number }, signal?: AbortSignal) =>
+    apiClient.get('/graph/evidence', { params, ...GRAPH_CALL, signal }),
 
   // Generic methods
   get: (url: string, config?: any) => apiClient.get(url, config),

@@ -1,6 +1,6 @@
 import type { Component } from 'vue';
 import type { RouteRecordSingleView } from 'vue-router';
-import { Bell, Clock, Download, Filter, Lock, MagicStick, Monitor, Odometer, Search, User, View } from '@element-plus/icons-vue';
+import { Bell, Clock, Connection, Download, Filter, Lock, MagicStick, Monitor, Odometer, Search, User, View } from '@element-plus/icons-vue';
 
 /**
  * One functional area of the Settings hub.
@@ -58,6 +58,15 @@ export const settingsAreas: SettingsArea[] = [
     description: 'How long logs and alerts are kept, on-demand cleanup, and current table sizes.',
     adminOnly: true,
     component: () => import('./RetentionSettings.vue'),
+  },
+  {
+    key: 'context-graph',
+    path: 'context-graph',
+    title: 'Context Graph',
+    icon: Connection,
+    description: 'The relationships seen in logs behind the Context Graph: on or off, how long they are kept, and the daily cap.',
+    adminOnly: true,
+    component: () => import('./ContextGraphSettings.vue'),
   },
   {
     key: 'ingestion',

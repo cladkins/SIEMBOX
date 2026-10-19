@@ -20,6 +20,7 @@ import {
   MAX_BASE_URL_LENGTH,
 } from '../services/ai/aiService';
 import { logger } from '../utils/logger';
+import { logSourceStatus, readLogEdgeSettings, readLogEdgeState } from '../services/graph/logEdgeRollup';
 import {
   completeOnboarding,
   completeOnboardingIfNeverRecorded,
@@ -285,6 +286,70 @@ router.put('/retention', authorize('admin'), async (req: Request, res: Response)
   } catch {
     throw new ApiError(500, 'Failed to update retention settings');
   }
+});
+
+// Context Graph: the log-relationship rollup (jobs/graphLogEdges.ts). The
+// switch takes effect at the job's next tick (within a minute); backfill_days
+// only matters before the rollup's first run (the upgrade).
+const CONTEXT_GRAPH_FIELDS = {
+  retention_days: { key: 'graph_log_edges_retention_days', min: 0, max: 3650 },
+  backfill_days: { key: 'graph_log_edges_backfill_days', min: 0, max: 90 },
+  daily_new_cap: { key: 'graph_log_edges_daily_new_cap', min: 10_000, max: 10_000_000 },
+} as const;
+
+async function contextGraphSettings() {
+  const settings = await readLogEdgeSettings((sql, params) => query(sql, params as unknown[]));
+  const state = await readLogEdgeState(async (sql, params) => (await query(sql, params as unknown[])).rows);
+  const size = await query(
+    `SELECT pg_total_relation_size('graph_log_edges') AS bytes,
+            (SELECT reltuples FROM pg_class WHERE oid = 'graph_log_edges'::regclass) AS rows`
+  );
+  return {
+    log_edges: {
+      enabled: settings.enabled,
+      retention_days: settings.retentionDays,
+      backfill_days: settings.backfillDays,
+      daily_new_cap: settings.dailyNewCap,
+    },
+    status: {
+      ...logSourceStatus(state, { first: '0000-00-00', last: '9999-99-99' }, Date.now()),
+      effective_retention_days: state.retentionDays,
+      raw_logs_retention_days: settings.rawRetentionDays,
+      rows: Math.max(0, Math.round(Number(size.rows[0]?.rows ?? 0))),
+      bytes: Number(size.rows[0]?.bytes ?? 0),
+    },
+  };
+}
+
+router.get('/context-graph', authorize('admin'), async (_req: Request, res: Response) => {
+  res.json(await contextGraphSettings());
+});
+
+router.put('/context-graph', authorize('admin'), async (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as { log_edges?: Record<string, unknown> };
+  const input = body.log_edges;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ApiError(400, 'log_edges must be an object');
+  const writes: Array<[string, string]> = [];
+  if (input.enabled !== undefined) {
+    if (typeof input.enabled !== 'boolean') throw new ApiError(400, 'log_edges.enabled must be true or false');
+    writes.push(['graph_log_edges_enabled', String(input.enabled)]);
+  }
+  for (const [field, spec] of Object.entries(CONTEXT_GRAPH_FIELDS)) {
+    const value = input[field];
+    if (value === undefined) continue;
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < spec.min || value > spec.max) {
+      throw new ApiError(400, `log_edges.${field} must be a whole number from ${spec.min} to ${spec.max}`);
+    }
+    writes.push([spec.key, String(value)]);
+  }
+  for (const [key, value] of writes) {
+    await query(
+      `INSERT INTO system_settings (key, value) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+      [key, value]
+    );
+  }
+  res.json(await contextGraphSettings());
 });
 
 // Manual cleanup trigger

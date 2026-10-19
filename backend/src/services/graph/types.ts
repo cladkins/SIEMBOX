@@ -56,7 +56,7 @@ export type NodeFlag = 'threat_feed' | 'foreign' | 'private' | 'sender_only' | '
  * Relation ids: what a group (and /api/graph/relation) is about. Edges carry
  * the canonical one of a pair (entity_alerts from an IP draws alert_ips edges).
  * shipped_by is the edge a log's device has to its shipper (alert_device draws
- * it); the log relations of PR 3 add the rest.
+ * it, as do the log relationships of resolvers/logEdges.ts).
  */
 export type RelId =
   | 'alert_ips'
@@ -92,7 +92,21 @@ export type RelId =
   | 'identity_user'
   | 'identity_domain'
   | 'account_signins'
-  | 'ip_signins';
+  | 'ip_signins'
+  // Seen in logs (graph_log_edges, migration 044): a -> b, then the b side.
+  | 'signed_in_as'
+  | 'signed_in_from'
+  | 'seen_on'
+  | 'actors_seen'
+  | 'user_on'
+  | 'users_seen'
+  | 'connected_to'
+  | 'connected_from'
+  | 'queried'
+  | 'queried_by'
+  | 'sent_by'
+  | 'sent_hosts'
+  | 'shipped_devices';
 
 export type Role = 'admin' | 'operator' | 'analyst' | 'viewer';
 export type FactValue = string | number | boolean | null;
@@ -126,6 +140,10 @@ export interface GraphEdge {
   /** ISO */
   first_seen?: string;
   last_seen?: string;
+  /** signed_in_as only: the pair was first seen in the window (and the rollup covers the time before it). */
+  new?: boolean;
+  /** signed_in_as only: both failed and successful sign-ins were seen. */
+  success_after_failures?: boolean;
 }
 
 export type GroupStatus = 'ok' | 'timeout' | 'unavailable';
@@ -217,3 +235,30 @@ export const TOTAL_CAP = 1000;
 export const VERY_COMMON = 200;
 export const MAX_RESPONSE_NODES = 300;
 export const MAX_RESPONSE_EDGES = 600;
+
+export interface EvidenceLog {
+  id: number;
+  created_at: string | null;
+  timestamp: string | null;
+  event_type: string | null;
+  parser: string | null;
+  service: string | null;
+  hostname: string | null;
+  sender_ip: string | null;
+  /** ≤ 500 characters, sanitized. */
+  message: string;
+}
+
+/** GET /api/graph/evidence: the logs behind one log relationship on one ingest day. */
+export interface EvidenceResponse {
+  /** YYYY-MM-DD, or null when the pair has no day in the window. */
+  day: string | null;
+  /** The pair's days in the window, newest first (the day picker). */
+  days: string[];
+  logs: EvidenceLog[];
+  /** The query timed out: too many events that day to list. */
+  partial: boolean;
+  /** The day is past the log retention: its logs are deleted. */
+  expired: boolean;
+  elapsed_ms: number;
+}

@@ -140,6 +140,15 @@ const INVENTORY: Row[] = [
   ['PUT', '/api/rules/:id', ANALYST_UP, AUDITED],
   ['DELETE', '/api/rules/:id', ANALYST_UP, AUDITED],
 
+  // routes/attack.ts: ATT&CK Coverage page. Every role reads (viewers read-only;
+  // a viewer's ?refresh=1 is ignored in the handler); marking a technique not
+  // applicable is analyst and up.
+  ['GET', '/api/attack/matrix', ANY_ROLE],
+  ['GET', '/api/attack/coverage', ANY_ROLE],
+  ['GET', '/api/attack/navigator-layer', ANY_ROLE],
+  ['PUT', '/api/attack/exclusions/:techniqueId', ANALYST_UP, AUDITED],
+  ['DELETE', '/api/attack/exclusions/:techniqueId', ANALYST_UP, AUDITED],
+
   // routes/alerts.ts: Alerts and SOC Triage pages. Deleting destroys evidence.
   // The list and export take the ATT&CK ?technique= / ?tactic= filters (no route of their own).
   ['GET', '/api/alerts', ANY_ROLE],

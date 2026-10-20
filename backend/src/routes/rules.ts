@@ -15,6 +15,7 @@ import {
   ruleSignature,
 } from '../services/rules/detectionCatalog';
 import { RuleSourceSample, CandidateRule } from '../services/rules/detectionRecommendations';
+import { recentParserSamples } from '../services/rules/ruleSamples';
 import { generateDetection } from '../services/ai/aiService';
 import { authorize } from '../middleware/auth';
 import { hasRequiredRole, requireScanPermission, UserRole } from '../middleware/scanPermissions';
@@ -147,24 +148,11 @@ router.get('/recommendations', async (req: Request, res: Response) => {
     );
 
     // Recent parsed_data samples per parser — one pass over a 6h window.
-    const sampleRows = await query(
-      `SELECT parser_id, parsed_data FROM (
-         SELECT parser_id, parsed_data,
-                ROW_NUMBER() OVER (PARTITION BY parser_id ORDER BY id DESC) AS rn
-         FROM parsed_logs
-         WHERE created_at >= NOW() - INTERVAL '6 hours' AND parser_id IS NOT NULL
-       ) t WHERE rn <= 12`
-    );
-    const samplesByParser = new Map<number, Array<Record<string, any>>>();
-    for (const row of sampleRows.rows) {
-      const id = Number(row.parser_id);
-      if (!samplesByParser.has(id)) samplesByParser.set(id, []);
-      samplesByParser.get(id)!.push(row.parsed_data || {});
-    }
+    const samplesByParser = await recentParserSamples({ windowHours: 6, perPartition: 12 });
 
     const sources: RuleSourceSample[] = volumes.rows.map((v: any) => ({
       parser_name: v.name,
-      samples: samplesByParser.get(Number(v.parser_id)) || [],
+      samples: samplesByParser.get(Number(v.parser_id))?.samples || [],
       daily_volume: Number(v.daily_volume),
     }));
 

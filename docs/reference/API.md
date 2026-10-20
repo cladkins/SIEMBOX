@@ -16,6 +16,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Detection Rules](#detection-rules-endpoints)
   - [Catalog & AI Builder (v2)](#catalog--ai-builder-endpoints-v2)
   - [Alerts](#alerts-endpoints)
+  - [ATT&CK Coverage](#attck-coverage-endpoints)
   - [Users](#users-endpoints)
   - [Settings](#settings-endpoints)
   - [Notifications](#notifications-endpoints)
@@ -1905,6 +1906,194 @@ Delete alert. This destroys evidence, so it is admin-only; triage closes an aler
 
 **Errors:**
 - `404` - Alert not found
+
+---
+
+## ATT&CK Coverage Endpoints
+
+Which MITRE ATT&CK techniques your enabled rules and the logs you actually
+receive can detect. Levels, the dry run, roll-up, platform inference and
+exclusions are described in [RULES.md → ATT&CK Coverage](RULES.md#attck-coverage).
+Every role reads (viewers read-only); exclusions need analyst or higher.
+
+`platforms` (on every read) is a comma-separated list of ATT&CK platform names
+from the bundled dataset (`Containers`, `ESXi`, `IaaS`, `Identity Provider`,
+`Linux`, `macOS`, `Network Devices`, `Office Suite`, `PRE`, `SaaS`, `Windows`;
+any case; `network`, `mac`, `idp`, `office` as short forms) or `all`. Omitted
+or empty: the scope inferred from your data. An unknown name is
+`400 ATTACK_BAD_PLATFORM`.
+
+### GET /api/attack/matrix
+
+The matrix: the 15 tactics in column order, each with its in-scope live
+techniques (revoked and deprecated ones left out) and their sub-techniques.
+
+**Authentication:** Required (any role)
+
+**Query Parameters:** `platforms` (above)
+
+**Response (200):**
+```json
+{
+  "attack_version": "20.0",
+  "platforms": ["Containers", "Linux", "Network Devices"],
+  "tactics": [
+    {
+      "id": "TA0006", "shortname": "credential-access", "name": "Credential Access", "order": 9,
+      "techniques": [
+        { "id": "T1110", "name": "Brute Force", "platforms": ["Linux", "Windows", "..."],
+          "subtechniques": [{ "id": "T1110.001", "name": "Password Guessing", "platforms": ["..."] }] }
+      ]
+    }
+  ],
+  "scope": { "platforms": ["Containers", "Linux", "Network Devices"], "source": "inferred", "inferred": { "...": "as in /coverage" } }
+}
+```
+
+### GET /api/attack/coverage
+
+Per-technique coverage and the headline numbers. Cached for 10 minutes; any
+rule write and any exclusion change invalidate the cache.
+
+**Authentication:** Required (any role)
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `platforms` | string | inferred | Platform scope (above) |
+| `refresh` | `1` / `true` | - | Recompute instead of using the cache. Analyst and up; a viewer's `refresh` is ignored and they get the cached result |
+
+**Response (200):**
+```json
+{
+  "attack_version": "20.0",
+  "platforms": ["Linux", "Network Devices"],
+  "summary": {
+    "in_scope": 401, "excluded": 1, "counted": 400, "covered": 12, "proven": 3, "percent": 3,
+    "by_level": { "none": 385, "disabled": 1, "no_data": 2, "covered": 9, "proven": 3 }
+  },
+  "tactics": [
+    { "id": "TA0006", "shortname": "credential-access", "name": "Credential Access", "order": 9,
+      "in_scope": 17, "excluded": 0, "counted": 17, "covered": 2, "proven": 1, "percent": 11.8,
+      "by_level": { "none": 15, "disabled": 0, "no_data": 0, "covered": 1, "proven": 1 } }
+  ],
+  "techniques": [
+    {
+      "id": "T1110", "name": "Brute Force", "parent_id": null,
+      "tactics": ["credential-access"], "platforms": ["Linux", "..."],
+      "level": "proven", "proven_by": "alert",
+      "excluded": false, "exclusion": null,
+      "alerts_30d": 200, "last_alert": "2026-10-20T03:52:26.375Z",
+      "subtechniques": { "total": 4, "covered": 1, "excluded": 0, "ids": ["T1110.001", "T1110.002", "T1110.003", "T1110.004"] },
+      "rules": [
+        { "id": 1, "name": "SSH Brute Force Detection", "enabled": true, "level": "proven", "proven_by": "alert",
+          "technique_id": "T1110.001", "reason": "Raised 200 alerts in the last 30 days, last 2026-10-20T03:52:26.375Z." },
+        { "id": 3, "name": "Distributed Brute Force Attack", "enabled": true, "level": "covered", "proven_by": null,
+          "technique_id": "T1110",
+          "reason": "14 recent logs from ssh-authentication satisfy its conditions (925 logs sampled from 37 parsers over the last 24 h); it alerts at 10 matching logs per `user` within 15m." }
+      ]
+    },
+    { "id": "T1110.001", "name": "Password Guessing", "parent_id": "T1110", "level": "proven", "...": "..." }
+  ],
+  "rules": { "tagged": 14, "by_level": { "disabled": 1, "no_data": 3, "covered": 8, "proven": 2 } },
+  "scope": {
+    "platforms": ["Linux", "Network Devices"],
+    "source": "inferred",
+    "inferred": {
+      "platforms": ["Linux", "Network Devices"],
+      "inferred_from": [
+        { "platform": "Linux", "source": "parsers", "items": ["linux-sudo", "ssh-authentication"] },
+        { "platform": "Network Devices", "source": "parsers", "items": ["netfilter-firewall", "pihole-query"] }
+      ],
+      "unmapped_parsers": ["plex"]
+    }
+  },
+  "sample": { "window_hours": 24, "parsers": 37, "logs": 925 },
+  "computed_at": "2026-10-20T04:52:30.000Z",
+  "cached": false,
+  "timings_ms": { "load": 168, "dry_run": 17 }
+}
+```
+
+- `techniques` lists every in-scope parent technique followed by its
+  in-scope sub-techniques. A parent's `rules` include its sub-techniques'
+  rules (`technique_id` says which ID the rule is tagged with), its `level` is
+  the best of them, and `alerts_30d` counts its sub-techniques' alerts too.
+- `exclusion` is `{ technique_id, note, created_by, created_at }`, plus
+  `inherited_from` on a sub-technique excluded with its parent.
+- `inferred_from[].source` is `parsers`, `assets`, `endpoint_agents`,
+  `shipper_containers` or `default`. `scope.source` is `query` when
+  `platforms` chose the scope.
+- `percent` is `covered / counted × 100` (one decimal), `null` when nothing is
+  counted. `cached` is `true` when the answer came from the cache.
+
+**Errors:** `400 ATTACK_BAD_PLATFORM`
+
+### GET /api/attack/navigator-layer
+
+The coverage as an [ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)
+layer file (layer format 4.5, domain `enterprise-attack`, `versions.attack` the
+dataset's major version), served with
+`Content-Disposition: attachment; filename="siembox-attack-coverage.json"`.
+One entry per in-scope technique that has rules or is excluded: `score`
+1 (`disabled`), 2 (`no_data`), 3 (`covered`), 4 (`proven`) with a matching
+`color`, a `comment` with the level, "n of m sub-techniques covered" and the
+rule names; excluded techniques have `enabled: false` and the note in the
+comment. Uses the coverage cache.
+
+**Authentication:** Required (any role)
+
+**Query Parameters:** `platforms` (above)
+
+```json
+{
+  "name": "SIEMBox ATT&CK coverage",
+  "versions": { "attack": "20", "navigator": "5.1.0", "layer": "4.5" },
+  "domain": "enterprise-attack",
+  "filters": { "platforms": ["Linux", "Network Devices"] },
+  "techniques": [
+    { "techniqueID": "T1110.001", "score": 4, "color": "#1a9641", "enabled": true, "showSubtechniques": false,
+      "comment": "Proven (alerted in 30 days). Rules: SSH Brute Force Detection (proven)",
+      "metadata": [{ "name": "level", "value": "proven" }] },
+    { "techniqueID": "T1505", "enabled": false, "comment": "Not applicable: no web servers", "...": "..." }
+  ],
+  "gradient": { "colors": ["#bdbdbd", "#fdae61", "#a6d96a", "#1a9641"], "minValue": 1, "maxValue": 4 },
+  "legendItems": [{ "label": "Proven (alerted in 30 days)", "color": "#1a9641" }]
+}
+```
+
+**Errors:** `400 ATTACK_BAD_PLATFORM`
+
+### PUT /api/attack/exclusions/:techniqueId
+
+Mark a technique not applicable (it keeps its level, shows `excluded: true`,
+and leaves the percentages; a parent's exclusion covers its sub-techniques).
+Upserts; invalidates the coverage cache.
+
+**Authentication:** Required (analyst or higher; a refusal is written to the audit log)
+
+**Request Body:** `{ "note": "No web servers on this network" }` (`note` optional, text, at most 1000 characters)
+
+**Response (200):**
+```json
+{ "technique_id": "T1505", "name": "Server Software Component", "excluded": true,
+  "note": "No web servers on this network", "created_by": "alice", "created_at": "2026-10-20T05:00:00.000Z" }
+```
+
+**Errors:**
+- `400 ATTACK_UNKNOWN_TECHNIQUE` - not a technique ID (`T1110`, `T1110.001`, any case), not in the bundled dataset, or revoked/deprecated (the message names the replacement)
+- `400 ATTACK_BAD_NOTE` - `note` is not text or is too long
+- `403` - viewer
+
+### DELETE /api/attack/exclusions/:techniqueId
+
+Undo an exclusion; invalidates the coverage cache.
+
+**Authentication:** Required (analyst or higher)
+
+**Response (200):** `{ "technique_id": "T1505", "excluded": false }`
+
+**Errors:** `400 ATTACK_UNKNOWN_TECHNIQUE`, `403` (viewer), `404 ATTACK_NOT_EXCLUDED`
 
 ---
 

@@ -1353,6 +1353,47 @@ with a warning instead of refusing the rule. See
 
 ---
 
+### Issue: An ATT&CK technique shows `no_data` although the rule is enabled
+
+**Symptoms:** `GET /api/attack/coverage` (the ATT&CK Coverage page) puts a
+technique at `no_data`; its rule's `reason` reads
+``Enabled, but no recent log from your parsers has the field `…` `` or
+``Enabled, but no recent log satisfies `event contains "Failed password"` ``.
+
+**Cause:** `no_data` means the rule's conditions were dry-run against recent
+parsed logs (up to 25 per parser and event type from the last 24 hours) and none
+satisfied them. The reason names the first condition nothing satisfied:
+
+- **"has the field `x`"**: no parser you receive logs from produces that field.
+  The source is not being sent, or its parser is not installed, or the log is
+  stored unparsed. Parsers match only the message part of a syslog line
+  (see [Parser Problems](#parser-problems)).
+- **"satisfies `field op value`" (the field is in N logs)**: the source
+  arrives, but no recent log has that value. Often the event is simply rare
+  (no failed SSH login in the last day); sometimes the value differs from what
+  the rule expects (`sshd` vs `ssh`, a different case).
+- **"no single recent log satisfies all N conditions together"**: each
+  condition is met by some log, never all by the same one, often two fields
+  from different parsers.
+- **"No parsed logs in the last 24 h"**: nothing was parsed at all; check
+  ingestion first.
+- **"Not dry-run: a regex condition is flagged unsafe"**: fix the rule's regex
+  ([Regex Safety](../reference/RULES.md#regex-safety)).
+
+**Solution:**
+1. Search the logs for the field and value in the reason
+   (`GET /api/logs/parsed/search`). If they exist only in raw logs, install or
+   fix the parser.
+2. If the event is just rare, generate one (a failed login, a test DNS TXT
+   query) and recompute: `GET /api/attack/coverage?refresh=1` (analyst and up;
+   otherwise wait for the 10-minute cache). An alert from the rule in the last
+   30 days makes it `proven` whatever the sample shows.
+3. If the technique cannot happen in your environment, mark it not
+   applicable (`PUT /api/attack/exclusions/:techniqueId`); it then leaves the
+   percentages. See [ATT&CK coverage](../reference/RULES.md#attck-coverage).
+
+---
+
 ## Database Issues
 
 ### Issue: "Too Many Connections" Error

@@ -1,4 +1,5 @@
 import { query } from '../config/database';
+import { invalidateAttackCoverage } from '../services/attack/coverageCache';
 
 export interface DetectionRule {
   id: number;
@@ -39,7 +40,7 @@ export class DetectionRuleModel {
         params.tags ?? [],
       ]
     );
-
+    invalidateAttackCoverage();
     return result.rows[0];
   }
 
@@ -111,12 +112,14 @@ export class DetectionRuleModel {
       `UPDATE detection_rules SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
       values
     );
-
+    // ATT&CK coverage depends on tags, conditions and enabled.
+    invalidateAttackCoverage();
     return result.rows[0] || null;
   }
 
   static async delete(id: number): Promise<boolean> {
     const result = await query('DELETE FROM detection_rules WHERE id = $1', [id]);
+    invalidateAttackCoverage();
     return (result.rowCount || 0) > 0;
   }
 }

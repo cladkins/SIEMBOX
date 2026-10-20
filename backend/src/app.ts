@@ -17,6 +17,7 @@ import logsRoutes from './routes/logs';
 import parsersRoutes from './routes/parsers';
 import rulesRoutes from './routes/rules';
 import alertsRoutes from './routes/alerts';
+import attackRoutes from './routes/attack';
 import settingsRoutes from './routes/settings';
 import shippersRoutes from './routes/shippers';
 import assetsRoutes from './routes/assets';
@@ -169,6 +170,7 @@ app.use('/api/logs', authenticate, logsRoutes);
 app.use('/api/parsers', authenticate, parsersRoutes);
 app.use('/api/rules', authenticate, rulesRoutes);
 app.use('/api/alerts', authenticate, alertsRoutes);
+app.use('/api/attack', authenticate, attackRoutes); // ATT&CK matrix, coverage, exclusions, Navigator layer
 app.use('/api/settings', authenticate, settingsRoutes);
 // Not gated here: the shipper agent's own endpoints (register, config, scan-jobs,
 // results, HTTP log push) authenticate with the shipper's key instead of a login.

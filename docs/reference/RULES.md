@@ -54,6 +54,7 @@ Detection rules in SIEMBox are organized by severity to help you prioritize resp
 - [Rule Management](#rule-management)
   - [Regex Safety](#regex-safety)
   - [MITRE ATT&CK Tagging](#mitre-attck-tagging)
+  - [ATT&CK Coverage](#attck-coverage)
 - [Response Playbooks](#response-playbooks)
 - [Tuning Guidance](#tuning-guidance)
 - [Contributing Rules](#contributing-rules)
@@ -1175,6 +1176,84 @@ node backend/scripts/update-attack.mjs enterprise-attack.json
 
 Review the diff (renamed, revoked and new techniques) and re-run
 `validate-detections` against the catalog before merging.
+
+### ATT&CK Coverage
+
+`GET /api/attack/coverage` answers "which techniques can I actually detect
+today, given my rules **and** the logs I really receive?" (endpoints in
+[API.md](API.md#attck-coverage-endpoints)). Each technique gets the best level
+among the rules tagged with it:
+
+| Level | Meaning |
+|-------|---------|
+| `none` | no rule is tagged with the technique |
+| `disabled` | tagged rules exist, all disabled |
+| `no_data` | an enabled rule, but no recent log satisfies its conditions |
+| `covered` | an enabled rule whose conditions some recent log satisfies |
+| `proven` | an enabled rule that raised an alert in the last 30 days (`proven_by: "alert"`; `"test"` is reserved for rule tests, which SIEMBox does not have yet) |
+
+`no_data` and `covered` come from a dry run of each rule's conditions with the
+real condition evaluator (the one rule recommendations use) against recent
+parsed logs: up to 25 per parser and event type from the last 24 hours. Like
+the recommendations, operators that need runtime context (`not_in_whitelist`,
+threat-feed checks) count as satisfied when the field is present, and the
+aggregation threshold is not simulated: `covered` means matching logs arrive,
+not that the threshold was reached. An alert proves the data arrives, so an
+enabled rule that alerted in 30 days is `proven` even when the current sample
+has no matching log. Every rule entry carries a `reason`, for example
+``Enabled, but no recent log satisfies `query_type equals "TXT"` (the field is in 25 sampled logs from pihole-query)``
+([TROUBLESHOOTING](../operations/TROUBLESHOOTING.md#issue-an-attck-technique-shows-no_data-although-the-rule-is-enabled)).
+
+**Sub-techniques roll up.** A parent technique's level is the best of its own
+rules and its sub-techniques', and it reports `subtechniques.covered` of
+`subtechniques.total` ("2 of 4 sub-techniques"). Tagging only the parent
+(`attack.t1110`) covers the parent, never its sub-techniques.
+
+**Platform scope.** Only techniques for the chosen ATT&CK platforms count. By
+default the scope is inferred from your data and returned in
+`scope.inferred.inferred_from` with what implied each platform:
+
+| Evidence | Platform |
+|----------|----------|
+| a parser with logs in the last 7 days whose name or event type mentions syslog, linux, sudo, ssh, auditd, journal, systemd, cron, kernel, fail2ban, pam, nginx, apache, caddy, traefik, haproxy | Linux |
+| ... firewall, netfilter, iptables, nftables, ufw, pfsense, opnsense, unifi/ubiquiti, ids/ips, suricata, snort, zeek, dns, pihole, dnsmasq, hostapd, wifi, router, fortigate, palo alto, mikrotik, cisco | Network Devices |
+| ... docker, container, kubernetes/k8s/kube, podman, containerd, portainer, komodo | Containers |
+| ... windows, winevent, sysmon, evtx, powershell, active directory | Windows |
+| ... macos, darwin, osx | macOS |
+| ... authelia, authentik, keycloak, okta, entra/azure ad, ldap, sso, oidc, saml | Identity Provider |
+| ... aws, cloudtrail, gcp/google cloud, azure activity, ec2 | IaaS |
+| ... office 365/m365, exchange, google workspace | Office Suite |
+| an active asset (seen in 30 days) or an endpoint agent whose OS is Windows / macOS / a Linux or BSD distribution / ESXi | that platform |
+| container images reported by log shippers | Containers |
+| none of the above | Linux, Network Devices, Containers (the default) |
+
+Parsers with logs that imply no platform (Plex, Jellyfin, Vaultwarden...) are
+listed in `scope.inferred.unmapped_parsers`; they still feed the dry run.
+Override the scope with `?platforms=Linux,Windows` (dataset names, any case;
+`network`, `mac`, `idp` and `office` are accepted as short forms; `all` for
+every platform).
+
+**Not applicable.** An analyst can mark a technique not applicable with a note
+(`PUT /api/attack/exclusions/T1505`, stored in `attack_technique_exclusions`).
+It keeps its level but shows `excluded: true` and leaves the percentages;
+excluding a parent excludes its sub-techniques.
+
+**Headline numbers.** Per tactic and overall: the share of in-scope,
+non-excluded matrix techniques (parent techniques, with roll-up) at `covered`
+or `proven`. A technique listed under several tactics counts once overall.
+`percent` is `null` when nothing is in scope.
+
+**Caching.** Coverage is cached for 10 minutes. A rule create, edit,
+enable/disable or delete (from any path: the editor, catalog and content-pack
+installs, Sigma import) and an exclusion change drop the cache at once; new
+alerts and logs show up within the 10 minutes, or immediately with
+`?refresh=1` (analyst and up; ignored for viewers).
+
+**ATT&CK Navigator.** `GET /api/attack/navigator-layer` exports the same
+coverage as a [Navigator](https://mitre-attack.github.io/attack-navigator/)
+layer (open it with *Open Existing Layer → Upload from local*): score 1-4 and a
+colour per level (`disabled` → `proven`), the rule names in each comment, and
+excluded techniques disabled.
 
 ATT&CK® is a registered trademark of The MITRE Corporation. The dataset is
 © The MITRE Corporation and is reproduced and distributed under the

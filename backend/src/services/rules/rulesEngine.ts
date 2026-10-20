@@ -52,6 +52,8 @@ interface RuleAggregation {
 
 interface RuleLogic {
   conditions: RuleCondition[];
+  /** Exclusion groups: a log matching every condition of any one group is skipped. */
+  exclude?: RuleCondition[][];
   aggregation?: RuleAggregation;
 }
 
@@ -123,7 +125,7 @@ export class RulesEngine {
     const ruleLogic: RuleLogic = rule.rule_logic;
 
     // Evaluate conditions (now async)
-    const conditionsMatch = await this.evaluateConditions(ruleLogic.conditions, parsedLog.parsed_data);
+    const conditionsMatch = await this.matchesRuleLogic(ruleLogic, parsedLog.parsed_data);
 
     if (!conditionsMatch) {
       return null;
@@ -146,6 +148,17 @@ export class RulesEngine {
       // No aggregation, create alert immediately
       return this.createAlert(rule, parsedLog);
     }
+  }
+
+  /** The rule's conditions all match and no exclusion group matches. */
+  private async matchesRuleLogic(logic: RuleLogic, data: Record<string, any>): Promise<boolean> {
+    if (!(await this.evaluateConditions(logic.conditions || [], data))) return false;
+    for (const group of Array.isArray(logic.exclude) ? logic.exclude : []) {
+      // A group's missing field fails it (evaluateConditions), so it excludes
+      // nothing, as Sigma's `not filter` does for a log without that field.
+      if (Array.isArray(group) && group.length > 0 && (await this.evaluateConditions(group, data))) return false;
+    }
+    return true;
   }
 
   private async evaluateConditions(
@@ -354,7 +367,7 @@ export class RulesEngine {
     fieldValue: any,
     startTime: Date
   ): Promise<{ total: number; distinct: number }> {
-    const conditions = (rule.rule_logic as RuleLogic).conditions || [];
+    const logic = rule.rule_logic as RuleLogic;
 
     let distinctField: string | null = null;
     if (aggregation.distinct_count) {
@@ -376,7 +389,7 @@ export class RulesEngine {
 
     for (const row of result.rows) {
       const data: Record<string, any> = row.parsed_data || {};
-      if (await this.evaluateConditions(conditions, data)) {
+      if (await this.matchesRuleLogic(logic, data)) {
         total++;
         if (distinctField && data[distinctField] !== undefined && data[distinctField] !== null) {
           distinctValues.add(String(data[distinctField]));

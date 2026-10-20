@@ -43,6 +43,12 @@ export interface PortableRule {
   enabled?: boolean;
   tags?: string[];
   conditions: RuleCondition[];
+  /**
+   * Optional exclusions: the rule does not fire on a log when every condition
+   * of any one group matches it (Sigma's `selection and not filter`). A group
+   * whose field is missing from the log does not match, so it excludes nothing.
+   */
+  exclude?: RuleCondition[][];
   aggregation?: {
     field: string;
     timeframe: string;
@@ -88,41 +94,58 @@ export function validateRule(obj: unknown, opts: { strict?: boolean } = {}): Rul
     warnings.push(...attack.warnings);
   }
 
+  function checkCondition(c: any, at: string): void {
+    if (!isPlainObject(c)) { errors.push(`${at} must be an object`); return; }
+    if (typeof c.field !== 'string' || c.field.trim() === '') errors.push(`${at}.field is required`);
+    if (!RULE_OPERATORS.includes(c.operator)) {
+      errors.push(`${at}.operator "${c.operator}" is not supported (one of ${RULE_OPERATORS.join(', ')})`);
+    }
+    // value requirements per operator
+    if (c.operator === 'exists') {
+      if (c.value !== undefined && typeof c.value !== 'boolean') {
+        note(`${at}.value for "exists" should be true/false`);
+      }
+    } else if (c.value === undefined || c.value === null || c.value === '') {
+      errors.push(`${at}.value is required for operator "${c.operator}"`);
+    }
+    if ((c.operator === 'in' || c.operator === 'not_in') && typeof c.value === 'string' && !c.value.includes(',')) {
+      note(`${at}.value for "${c.operator}" is usually a comma-separated list or array`);
+    }
+    if ((c.operator === 'greater_than' || c.operator === 'less_than') && c.value !== undefined && isNaN(Number(c.value))) {
+      errors.push(`${at}.value for "${c.operator}" must be numeric`);
+    }
+    if (c.operator === 'regex' && typeof c.value === 'string') {
+      // Validated through the engine's own compiler, so CI accepts exactly
+      // what runtime accepts — including inline (?i) and an explicit `flags`.
+      const err = validateUserRegex(c.value, typeof c.flags === 'string' ? c.flags : undefined);
+      if (err) errors.push(`${at}.value is not a valid regex: ${err}`);
+    }
+    if (c.flags !== undefined && typeof c.flags !== 'string') {
+      errors.push(`${at}.flags must be a string (e.g. "i")`);
+    }
+  }
+
   // conditions
   if (!Array.isArray(r.conditions) || r.conditions.length === 0) {
     errors.push('conditions must be a non-empty array');
   } else {
-    r.conditions.forEach((c: any, i: number) => {
-      const at = `conditions[${i}]`;
-      if (!isPlainObject(c)) { errors.push(`${at} must be an object`); return; }
-      if (typeof c.field !== 'string' || c.field.trim() === '') errors.push(`${at}.field is required`);
-      if (!RULE_OPERATORS.includes(c.operator)) {
-        errors.push(`${at}.operator "${c.operator}" is not supported (one of ${RULE_OPERATORS.join(', ')})`);
-      }
-      // value requirements per operator
-      if (c.operator === 'exists') {
-        if (c.value !== undefined && typeof c.value !== 'boolean') {
-          note(`${at}.value for "exists" should be true/false`);
+    r.conditions.forEach((c: any, i: number) => checkCondition(c, `conditions[${i}]`));
+  }
+
+  // exclude (optional): groups of conditions; the rule does not fire when
+  // every condition of any one group matches (Sigma's `and not filter`).
+  if (r.exclude !== undefined) {
+    if (!Array.isArray(r.exclude)) {
+      errors.push('exclude must be a list of condition lists');
+    } else {
+      r.exclude.forEach((group: any, g: number) => {
+        if (!Array.isArray(group) || group.length === 0) {
+          errors.push(`exclude[${g}] must be a non-empty list of conditions`);
+          return;
         }
-      } else if (c.value === undefined || c.value === null || c.value === '') {
-        errors.push(`${at}.value is required for operator "${c.operator}"`);
-      }
-      if ((c.operator === 'in' || c.operator === 'not_in') && typeof c.value === 'string' && !c.value.includes(',')) {
-        note(`${at}.value for "${c.operator}" is usually a comma-separated list or array`);
-      }
-      if ((c.operator === 'greater_than' || c.operator === 'less_than') && c.value !== undefined && isNaN(Number(c.value))) {
-        errors.push(`${at}.value for "${c.operator}" must be numeric`);
-      }
-      if (c.operator === 'regex' && typeof c.value === 'string') {
-        // Validated through the engine's own compiler, so CI accepts exactly
-        // what runtime accepts — including inline (?i) and an explicit `flags`.
-        const err = validateUserRegex(c.value, typeof c.flags === 'string' ? c.flags : undefined);
-        if (err) errors.push(`${at}.value is not a valid regex: ${err}`);
-      }
-      if (c.flags !== undefined && typeof c.flags !== 'string') {
-        errors.push(`${at}.flags must be a string (e.g. "i")`);
-      }
-    });
+        group.forEach((c: any, i: number) => checkCondition(c, `exclude[${g}][${i}]`));
+      });
+    }
   }
 
   // aggregation (optional)
@@ -171,9 +194,43 @@ export function toPortableRule(rule: any): PortableRule {
   };
   if (rule?.description) portable.description = rule.description;
   if (Array.isArray(rule?.tags) && rule.tags.length) portable.tags = rule.tags;
+  const exclude = rl.exclude ?? rule?.exclude;
+  if (Array.isArray(exclude) && exclude.length) portable.exclude = exclude;
   const agg = rl.aggregation ?? rule?.aggregation;
   if (agg) portable.aggregation = agg;
   return portable;
+}
+
+/**
+ * The engine's rule_logic for a parsed rule (YAML or portable): what every
+ * install/import path stores, so none of them drops a part the engine reads.
+ */
+export function ruleLogicOf(parsed: any): Record<string, any> {
+  const logic: Record<string, any> = {
+    conditions: parsed?.conditions,
+    aggregation: parsed?.aggregation,
+    alert: parsed?.alert,
+  };
+  if (Array.isArray(parsed?.exclude) && parsed.exclude.length) logic.exclude = parsed.exclude;
+  return logic;
+}
+
+/**
+ * Every condition of a rule with its location: `conditions[i]`, then each
+ * `exclude[g][i]`. Accepts a portable rule, a rule_logic object, or a DB row.
+ */
+export function ruleConditionSites(rule: any): Array<{ condition: any; at: string }> {
+  const source = Array.isArray(rule?.conditions) ? rule : rule?.rule_logic ?? {};
+  const sites: Array<{ condition: any; at: string }> = [];
+  if (Array.isArray(source.conditions)) {
+    source.conditions.forEach((c: any, i: number) => sites.push({ condition: c, at: `conditions[${i}]` }));
+  }
+  if (Array.isArray(source.exclude)) {
+    source.exclude.forEach((group: any, g: number) => {
+      if (Array.isArray(group)) group.forEach((c: any, i: number) => sites.push({ condition: c, at: `exclude[${g}][${i}]` }));
+    });
+  }
+  return sites;
 }
 
 /** Serialize a stored rule to the catalog's portable YAML. */
@@ -187,20 +244,29 @@ export function portableRuleToYaml(rule: any): string {
  * catalog checks): a `regex` condition's `flags` must be a string, and its
  * `value` a scalar. An array or object there is never what the author meant
  * (`flags: [i]`, `value: [...]`), and the gate and the engine must read the
- * same thing. Returns one message per problem; empty when fine.
+ * same thing. `exclude`, when present, must be a list of non-empty condition
+ * lists. Returns one message per problem; empty when fine.
  */
 export function ruleRegexTypeErrors(rule: unknown): string[] {
-  const conditions: unknown[] = Array.isArray((rule as any)?.conditions) ? (rule as any).conditions : [];
   const errors: string[] = [];
-  conditions.forEach((c, i) => {
-    if (!isPlainObject(c) || c.operator !== 'regex') return;
+  if (!Array.isArray((rule as any)?.conditions)) return errors;
+  const exclude = (rule as any).exclude;
+  if (exclude !== undefined && exclude !== null) {
+    // The engine reads exclude as groups of conditions; any other shape would
+    // be ignored there, silently dropping the exclusion the author wrote.
+    if (!Array.isArray(exclude) || exclude.some((g: unknown) => !Array.isArray(g) || g.length === 0 || g.some((c) => !isPlainObject(c)))) {
+      errors.push('exclude must be a list of non-empty condition lists');
+    }
+  }
+  for (const { condition: c, at } of ruleConditionSites(rule)) {
+    if (!isPlainObject(c) || c.operator !== 'regex') continue;
     if (c.flags !== undefined && c.flags !== null && typeof c.flags !== 'string') {
-      errors.push(`conditions[${i}].flags must be a string (e.g. "i")`);
+      errors.push(`${at}.flags must be a string (e.g. "i")`);
     }
     if (c.value !== null && typeof c.value === 'object') {
-      errors.push(`conditions[${i}].value for "regex" must be a string`);
+      errors.push(`${at}.value for "regex" must be a string`);
     }
-  });
+  }
   return errors;
 }
 
@@ -211,13 +277,8 @@ export function ruleRegexTypeErrors(rule: unknown): string[] {
  * a portable rule, a rule_logic object, or a DB row.
  */
 export function collectRuleRegexes(rule: any): RegexRef[] {
-  const conditions: any[] = Array.isArray(rule?.conditions)
-    ? rule.conditions
-    : Array.isArray(rule?.rule_logic?.conditions)
-      ? rule.rule_logic.conditions
-      : [];
   const refs: RegexRef[] = [];
-  conditions.forEach((c, i) => {
+  ruleConditionSites(rule).forEach(({ condition: c, at }) => {
     if (!c || typeof c !== 'object' || c.operator !== 'regex') return;
     if (c.value === undefined || c.value === null || c.value === '') return;
     try {
@@ -225,7 +286,7 @@ export function collectRuleRegexes(rule: any): RegexRef[] {
       // so the gate analyzes the flags that run: `flags: [i]` is not read as
       // "no flags" here while the engine applies "i".
       const { source, flags } = normalizeUserRegex(String(c.value), c.flags);
-      refs.push({ location: `conditions[${i}].value`, source, flags });
+      refs.push({ location: `${at}.value`, source, flags });
     } catch {
       // A bad or non-string flag never compiles, so it never runs; validateRule
       // and the rule routes (ruleRegexTypeErrors) refuse it.

@@ -44,6 +44,8 @@ export interface CandidateRule {
   severity?: string;
   tags?: string[];
   conditions?: Array<{ field: string; operator: string; value?: any }>;
+  /** Exclusion groups (see PortableRule.exclude). */
+  exclude?: Array<Array<{ field: string; operator: string; value?: any }>>;
   aggregation?: { field: string; timeframe: string; threshold: number; distinct_count?: string };
 }
 
@@ -80,6 +82,20 @@ const MAX_FIELD_LENGTH = 4000;
  * as satisfied when the field is present.
  */
 export function conditionsMatchSample(
+  conditions: Array<{ field: string; operator: string; value?: any }>,
+  data: Record<string, any>,
+  exclude?: Array<Array<{ field: string; operator: string; value?: any }>>
+): boolean {
+  if (!allConditionsMatchSample(conditions, data)) return false;
+  // Exclusion groups, as the engine applies them: a log matching every
+  // condition of any one group does not count.
+  for (const group of Array.isArray(exclude) ? exclude : []) {
+    if (Array.isArray(group) && group.length > 0 && allConditionsMatchSample(group, data)) return false;
+  }
+  return true;
+}
+
+function allConditionsMatchSample(
   conditions: Array<{ field: string; operator: string; value?: any }>,
   data: Record<string, any>
 ): boolean {
@@ -133,7 +149,7 @@ export function recommendRules(
       let hit = 0;
       for (const data of src.samples) {
         try {
-          if (conditionsMatchSample(conditions, data)) hit++;
+          if (conditionsMatchSample(conditions, data, rule.exclude)) hit++;
         } catch {
           /* a malformed condition never matches */
         }

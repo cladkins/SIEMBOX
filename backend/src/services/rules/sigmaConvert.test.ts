@@ -5,8 +5,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sigmaToPortable, convertSigmaYaml } from './sigmaConvert';
-import { validateRule, collectRuleRegexes } from './rulePortable';
+import { sigmaToPortable, sigmaToPortableAll, convertSigmaYaml, MAX_SIGMA_SPLIT } from './sigmaConvert';
+import { conditionsMatchSample } from './detectionRecommendations';
+import { validateRule, collectRuleRegexes, ruleRegexTypeErrors } from './rulePortable';
 import { scanRegexRefs } from '../parser/redos';
 
 /** Assert a converted rule is non-null and passes strict portable validation. */
@@ -147,15 +148,22 @@ test('null value means "field exists"', () => {
   assert.equal(r.rule!.conditions[0].value, true);
 });
 
-test('OR / NOT / 1-of conditions are rejected, not mistranslated', () => {
-  for (const condition of ['selection or filter', 'selection and not filter', '1 of selection*']) {
+test('OR splits into one rule per alternative; NOT inside NOT, bare NOT and | count are refused', () => {
+  const refused: Array<[string, RegExp]> = [
+    ['not (selection and not filter)', /NOT inside NOT/],
+    ['not filter', /at least one selection that must match/],
+    ['selection | count() > 5', /aggregation/],
+    ['selection and (filter', /unbalanced parentheses/],
+    ['selection and other', /unknown selection "other"/],
+  ];
+  for (const [condition, why] of refused) {
     const r = sigmaToPortable({
       title: 'Complex',
       level: 'high',
       detection: { selection: { a: 'x' }, filter: { b: 'y' }, condition },
     });
     assert.equal(r.rule, null, `condition "${condition}" should be unsupported`);
-    assert.ok(r.errors.length > 0);
+    assert.match(r.errors.join(' '), why);
   }
 });
 
@@ -272,13 +280,17 @@ test('wildcard conversions are linear: recheck proves them safe and a crafted li
   }
 });
 
-test('a selection that is a list of maps (OR) is rejected', () => {
-  const r = sigmaToPortable({
+test('a selection that is a list of maps (OR) splits into one rule per map', () => {
+  const rs = sigmaToPortableAll({
     title: 'List selection',
     level: 'high',
     detection: { selection: [{ a: 'x' }, { b: 'y' }], condition: 'selection' },
   });
-  assert.equal(r.rule, null);
+  assert.deepEqual(rs.map((r) => r.rule?.conditions), [
+    [{ field: 'a', operator: 'equals', value: 'x' }],
+    [{ field: 'b', operator: 'equals', value: 'y' }],
+  ]);
+  rs.forEach(assertValid);
 });
 
 test('gte/lte and unsupported modifiers are skipped with a warning', () => {
@@ -336,4 +348,146 @@ test('a pasted rule with wrapped quoted text and a wrapped tag list converts', (
   assert.equal(results[0].rule!.description, 'Detects requests to the admin area of the proxy');
   assert.ok(results[0].rule!.tags!.includes('attack.t1190'));
   assert.ok(results[0].rule!.tags!.includes('attack.initial_access'));
+});
+
+// ---- OR and NOT (rule splitting and exclude groups) -------------------------
+
+/** What the engine does with a converted rule on one log (conditions, then exclude). */
+function fires(rule: any, data: Record<string, any>): boolean {
+  return conditionsMatchSample(rule.conditions, data, rule.exclude);
+}
+
+test('"1 of selection_*" imports as one rule per selection, named by part', () => {
+  const rs = convertSigmaYaml(`
+title: Web shell access
+level: high
+detection:
+  selection_php:
+    uri|endswith: '.php'
+    status: 200
+  selection_jsp:
+    uri|endswith: '.jsp'
+  condition: 1 of selection_*
+`);
+  assert.equal(rs.length, 2);
+  assert.deepEqual(rs.map((r) => r.rule!.name), ['Web shell access (part 1 of 2)', 'Web shell access (part 2 of 2)']);
+  for (const r of rs) {
+    assertValid(r);
+    assert.equal(r.rule!.alert.title, 'Web shell access'); // alerts keep the Sigma title
+    assert.match(r.warnings[0], /imports as 2 rules, one per alternative/);
+  }
+  // Sigma's uri/status map to SIEMBox's path/status_code.
+  assert.equal(fires(rs[0].rule, { path: '/x/shell.php', status_code: '200' }), true);
+  assert.equal(fires(rs[0].rule, { path: '/x/shell.php', status_code: '404' }), false);
+  assert.equal(fires(rs[1].rule, { path: '/a.jsp' }), true);
+});
+
+test('or, parentheses and a list of conditions expand to the same alternatives', () => {
+  const detection = { a: { f: '1' }, b: { g: '2' }, c: { h: '3' } };
+  const viaParens = sigmaToPortableAll({ title: 'T', detection: { ...detection, condition: 'a and (b or c)' } });
+  const viaList = sigmaToPortableAll({ title: 'T', detection: { ...detection, condition: ['a and b', 'a and c'] } });
+  const shape = (rs: any[]) => rs.map((r) => r.rule.conditions.map((c: any) => c.field).join('+'));
+  assert.deepEqual(shape(viaParens), ['f+g', 'f+h']);
+  assert.deepEqual(shape(viaList), ['f+g', 'f+h']);
+  const oneOfThem = sigmaToPortableAll({ title: 'T', detection: { ...detection, condition: '1 of them' } });
+  assert.deepEqual(shape(oneOfThem), ['f', 'g', 'h']);
+});
+
+test(`more than ${MAX_SIGMA_SPLIT} alternatives is refused, not imported as a pile of rules`, () => {
+  const detection: Record<string, any> = { condition: '1 of sel*' };
+  for (let i = 0; i <= MAX_SIGMA_SPLIT; i++) detection[`sel${i}`] = { f: String(i) };
+  const rs = sigmaToPortableAll({ title: 'Many', detection });
+  assert.equal(rs.length, 1);
+  assert.equal(rs[0].rule, null);
+  assert.match(rs[0].errors.join(' '), new RegExp(`OR of ${MAX_SIGMA_SPLIT + 1} alternatives`));
+});
+
+test('"selection and not filter" becomes an exclude group with Sigma semantics', () => {
+  const r = sigmaToPortable({
+    title: 'Sudo to root outside admins',
+    level: 'medium',
+    detection: {
+      selection: { program: 'sudo', target_user: 'root' },
+      filter_admin: { user: ['alice', 'bob'] },
+      condition: 'selection and not filter_admin',
+    },
+  });
+  assertValid(r);
+  assert.deepEqual(r.rule!.exclude, [[{ field: 'user', operator: 'in', value: ['alice', 'bob'] }]]);
+  const base = { program: 'sudo', target_user: 'root' };
+  assert.equal(fires(r.rule, { ...base, user: 'mallory' }), true); // filter doesn't match
+  assert.equal(fires(r.rule, { ...base, user: 'alice' }), false); // filtered out
+  // A log without the filter's field is NOT filtered out (as in Sigma).
+  assert.equal(fires(r.rule, base), true);
+  assert.equal(fires(r.rule, { program: 'sudo', target_user: 'bob' }), false); // selection fails
+});
+
+test('NOT of an OR (1 of filter_*, a list of maps) excludes each alternative', () => {
+  const r = sigmaToPortable({
+    title: 'T',
+    detection: {
+      selection: { event: 'login' },
+      filter_a: { src: '10.0.0.1' },
+      filter_b: [{ user: 'svc' }, { user: 'backup', host: 'nas' }],
+      condition: 'selection and not 1 of filter_*',
+    },
+  });
+  assertValid(r);
+  assert.equal(r.rule!.exclude!.length, 3);
+  assert.equal(fires(r.rule, { event: 'login', src: '10.0.0.1' }), false);
+  assert.equal(fires(r.rule, { event: 'login', user: 'svc' }), false);
+  assert.equal(fires(r.rule, { event: 'login', user: 'backup', host: 'nas' }), false);
+  assert.equal(fires(r.rule, { event: 'login', user: 'backup', host: 'pc' }), true); // group needs both
+  assert.equal(fires(r.rule, { event: 'login', src: '10.0.0.2', user: 'eve' }), true);
+});
+
+test('OR-lists of contains/startswith/endswith/re become one regex condition', () => {
+  const r = sigmaToPortable({
+    title: 'T',
+    detection: {
+      selection: {
+        'cmd|contains': ['wget ', 'CURL '],
+        'path|startswith': ['/tmp/', '/dev/shm/'],
+        'file|endswith': ['.sh', '.py'],
+        'ua|re': ['^sqlmap', 'nikto'],
+      },
+      condition: 'selection',
+    },
+  });
+  assertValid(r);
+  assert.equal(r.rule!.conditions.length, 4);
+  assert.ok(r.rule!.conditions.every((c) => c.operator === 'regex'));
+  const hit = { cmd: 'curl http://x | sh', path: '/dev/shm/a', file: 'run.py', ua: 'Nikto/2.5' };
+  assert.equal(fires(r.rule, { ...hit, ua: 'nikto/2.5' }), true); // contains is case-insensitive
+  assert.equal(fires(r.rule, { ...hit, path: '/var/tmp/a', ua: 'nikto' }), false); // startswith anchors
+  assert.equal(fires(r.rule, { ...hit, file: 'run.pyc', ua: 'nikto' }), false); // endswith anchors
+  // The regex gate reads them (no rule can smuggle an unchecked pattern).
+  assert.equal(collectRuleRegexes(r.rule).length, 4);
+});
+
+test('exclude-group regexes reach the regex safety gate, and bad exclude shapes are refused', () => {
+  const rule = {
+    name: 'x',
+    severity: 'low',
+    conditions: [{ field: 'a', operator: 'equals', value: '1' }],
+    exclude: [[{ field: 'b', operator: 'regex', value: '^ok' }]],
+    alert: { title: 't', description: 'd' },
+  };
+  assert.deepEqual(
+    collectRuleRegexes(rule).map((r) => r.location),
+    ['exclude[0][0].value']
+  );
+  assert.ok(validateRule(rule, { strict: true }).ok);
+  for (const [exclude, msg] of [
+    [{}, /exclude must be a list/],
+    [[[]], /exclude\[0\] must be a non-empty list/],
+    [[[{ field: 'b', operator: 'nope', value: 1 }]], /exclude\[0\]\[0\]\.operator "nope"/],
+  ] as const) {
+    assert.match(validateRule({ ...rule, exclude }).errors.join(' '), msg);
+  }
+  // The rule routes' shape check (they store YAML as-is) refuses the same shapes.
+  assert.deepEqual(ruleRegexTypeErrors(rule), []);
+  for (const exclude of [{}, [[]], [['x']], [{ field: 'b' }]]) {
+    assert.deepEqual(ruleRegexTypeErrors({ ...rule, exclude }), ['exclude must be a list of non-empty condition lists']);
+  }
 });

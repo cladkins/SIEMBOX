@@ -3,22 +3,16 @@
  *
  * Sigma (https://sigmahq.io) is the community standard for shareable detections.
  * This turns a Sigma YAML rule into SIEMBox's PortableRule shape so the huge body
- * of public Sigma content can be imported. The SIEMBox engine evaluates a flat
- * AND-list of conditions, so this converter faithfully maps everything that fits
- * that model and is HONEST about what does not: constructs that need OR / NOT /
- * "1 of" / event counting are reported as warnings/errors instead of being
- * silently mistranslated into a rule that quietly never (or always) fires.
- *
- * Supported:
- *   - condition: a single selection, `A and B`, `all of them`, `all of sel*`
- *   - field modifiers: contains, startswith, endswith, re, plus `|all` (AND list)
- *     and numeric gt/lt
- *   - list values as OR membership (`in`), wildcard values (`*`,`?`) as regex
- *   - level -> severity, tags, description/references rollup
- *
- * Not representable in a flat AND-list (reported, never guessed):
- *   - `or`, `not`, `1 of ...`, `| count(...)`, parentheses
- *   - OR-lists combined with contains/startswith/endswith
+ * of public Sigma content can be imported. A SIEMBox rule is an AND-list of
+ * conditions plus optional `exclude` groups, so:
+ *   - OR in the condition (`or`, `1 of sel*`, a list of conditions, a selection
+ *     that is a list of mappings) becomes one rule per alternative, at most
+ *     MAX_SIGMA_SPLIT;
+ *   - NOT becomes `exclude` groups (a log matching every condition of a group is
+ *     skipped; a log missing the group's field is not, as in Sigma);
+ *   - OR-lists of values become one `in` or regex-alternation condition.
+ * What still doesn't fit is reported, never guessed: NOT inside NOT, `| count`
+ * aggregations, and some modifiers (base64, cidr, wide, gte/lte...).
  */
 import * as yaml from '../../utils/yaml';
 import { PortableRule, RuleCondition, RULE_SEVERITIES } from './rulePortable';
@@ -296,8 +290,23 @@ function convertEntry(
       const alt = values.map((v) => globToRegex(String(v))).join('|');
       return { conditions: [{ field, operator: 'regex', value: `(?:${alt})` }] };
     }
-    // OR of contains/startswith/endswith/re across a list can't be a single AND condition.
-    return { unsupported: `field "${rawField}" is an OR-list with "${valueMod}", which needs OR the engine can't express` };
+    // OR of contains/startswith/endswith/re across a list: one regex
+    // alternation. contains keeps Sigma's case-insensitivity (as the
+    // keyword fragments do); startswith/endswith match as the single-value
+    // forms above do.
+    if (valueMod === 'contains') {
+      return { conditions: [{ field, operator: 'regex', value: `(?:${values.map((v) => sigmaToRegexFragment(String(v))).join('|')})` }] };
+    }
+    if (valueMod === 'startswith') {
+      return { conditions: [{ field, operator: 'regex', value: `^(?:${values.map((v) => escapeRegex(String(v))).join('|')})` }] };
+    }
+    if (valueMod === 'endswith') {
+      return { conditions: [{ field, operator: 'regex', value: `(?:${values.map((v) => escapeRegex(String(v))).join('|')})$` }] };
+    }
+    if (valueMod === 're') {
+      return { conditions: [{ field, operator: 'regex', value: values.map((v) => `(?:${String(v)})`).join('|') }] };
+    }
+    return { unsupported: `field "${rawField}" is an OR-list with "${valueMod}", which a single condition can't express` };
   }
 
   const one = buildOne(values[0]);
@@ -305,59 +314,180 @@ function convertEntry(
   return { conditions: [one] };
 }
 
+/** The most SIEMBox rules one Sigma rule becomes when its condition is an OR. */
+export const MAX_SIGMA_SPLIT = 10;
+/** The most exclusion groups one converted rule carries. */
+const MAX_EXCLUDE_GROUPS = 32;
+
 /**
- * Decide which selection identifiers contribute to an AND-only condition, or
- * report why the condition can't be represented. Accepts: a single name,
- * `a and b and ...`, `all of them`, `all of <prefix>*`.
+ * One AND-term of a Sigma condition in disjunctive normal form: selections
+ * that must all match (`pos`), and negated sub-expressions (`neg`, each itself
+ * an OR of terms with no NOT inside) none of which may match.
  */
-function resolveSelections(
-  condition: string,
-  detection: Record<string, any>
-): { selections: string[] } | { unsupported: string } {
-  const cond = String(condition).trim();
-  const selectionNames = Object.keys(detection).filter((k) => k !== 'condition');
-  const lowered = cond.toLowerCase();
-
-  if (/\bor\b|\bnot\b|\b1 of\b|\bany of\b|\|/.test(lowered) || cond.includes('(') || cond.includes(')')) {
-    return { unsupported: `condition "${cond}" uses OR/NOT/"1 of"/count, which a flat AND-list can't express` };
-  }
-
-  // `all of them`
-  if (/^all of them$/.test(lowered)) {
-    return { selections: selectionNames };
-  }
-  // `all of <prefix>*`
-  const allOf = lowered.match(/^all of (\S+)$/);
-  if (allOf) {
-    const pat = allOf[1];
-    if (pat.endsWith('*')) {
-      const prefix = pat.slice(0, -1);
-      const matched = selectionNames.filter((n) => n.toLowerCase().startsWith(prefix));
-      if (matched.length === 0) return { unsupported: `condition "${cond}" matched no selections` };
-      return { selections: matched };
-    }
-    return selectionNames.includes(allOf[1])
-      ? { selections: [allOf[1]] }
-      : { unsupported: `condition references unknown selection "${allOf[1]}"` };
-  }
-
-  // `a and b and c`
-  const names = cond.split(/\s+and\s+/i).map((s) => s.trim());
-  for (const n of names) {
-    if (!selectionNames.includes(n)) {
-      return { unsupported: `condition references unknown selection "${n}"` };
-    }
-  }
-  return { selections: names };
+interface Term {
+  pos: string[];
+  neg: Term[][];
 }
 
-/** Convert a single parsed Sigma document object into a portable rule. */
-export function sigmaToPortable(doc: any): SigmaConvertResult {
+class ConditionError extends Error {}
+
+function andTerms(a: Term[], b: Term[]): Term[] {
+  const out: Term[] = [];
+  for (const x of a) {
+    for (const y of b) out.push({ pos: [...new Set([...x.pos, ...y.pos])], neg: [...x.neg, ...y.neg] });
+  }
+  if (out.length > 1000) throw new ConditionError('the condition expands to too many alternatives');
+  return out;
+}
+
+/**
+ * Parse a Sigma condition (`and`, `or`, `not`, parentheses, `1 of`/`all of`
+ * with `them` or a `prefix*`) into disjunctive normal form. Tokenized by
+ * splitting on whitespace (no regex over the condition), then recursive descent:
+ * `or` binds loosest, then `and`, then `not`.
+ */
+function parseCondition(cond: string, selectionNames: string[]): Term[] {
+  if (cond.includes('|')) {
+    throw new ConditionError(
+      `condition "${cond}" uses an aggregation ("| count" and the like); SIEMBox expresses counting with the rule's aggregation block, so add one after import`
+    );
+  }
+  const tokens = cond.split('(').join(' ( ').split(')').join(' ) ').trim().split(/\s+/).filter(Boolean);
+  let pos = 0;
+  const lower = (i: number) => (tokens[i] ?? '').toLowerCase();
+  const fail = (msg: string): never => {
+    throw new ConditionError(`condition "${cond}": ${msg}`);
+  };
+  const namesFor = (pattern: string): string[] => {
+    if (pattern.toLowerCase() === 'them') return selectionNames;
+    if (pattern.endsWith('*')) {
+      const prefix = pattern.slice(0, -1).toLowerCase();
+      const matched = selectionNames.filter((n) => n.toLowerCase().startsWith(prefix));
+      if (matched.length === 0) fail(`"${pattern}" matches no selection`);
+      return matched;
+    }
+    if (!selectionNames.includes(pattern)) fail(`unknown selection "${pattern}"`);
+    return [pattern];
+  };
+
+  const factor = (): Term[] => {
+    const t = tokens[pos];
+    if (t === undefined) return fail('it ends unexpectedly');
+    const lt = t.toLowerCase();
+    if (lt === 'not') {
+      pos++;
+      const inner = factor();
+      if (inner.some((term) => term.neg.length > 0)) fail('NOT inside NOT is not supported');
+      return [{ pos: [], neg: [inner] }];
+    }
+    if (t === '(') {
+      pos++;
+      const e = expr();
+      if (tokens[pos] !== ')') fail('unbalanced parentheses');
+      pos++;
+      return e;
+    }
+    if ((lt === '1' || lt === 'any' || lt === 'all') && lower(pos + 1) === 'of') {
+      const pattern = tokens[pos + 2];
+      if (pattern === undefined || pattern === '(' || pattern === ')') return fail(`"${t} of" needs a selection name`);
+      pos += 3;
+      const names = namesFor(pattern);
+      return lt === 'all' ? [{ pos: names, neg: [] }] : names.map((n) => ({ pos: [n], neg: [] }));
+    }
+    if (lt === 'and' || lt === 'or' || t === ')') return fail(`unexpected "${t}"`);
+    pos++;
+    if (!selectionNames.includes(t)) fail(`unknown selection "${t}"`);
+    return [{ pos: [t], neg: [] }];
+  };
+  const term = (): Term[] => {
+    let d = factor();
+    while (lower(pos) === 'and') {
+      pos++;
+      d = andTerms(d, factor());
+    }
+    return d;
+  };
+  const expr = (): Term[] => {
+    let d = term();
+    while (lower(pos) === 'or') {
+      pos++;
+      d = [...d, ...term()];
+    }
+    return d;
+  };
+
+  const result = expr();
+  if (pos !== tokens.length) fail(`unexpected "${tokens[pos]}"`);
+  return result;
+}
+
+/** One way a selection can match: an AND-list of conditions. */
+interface Variant {
+  conditions: RuleCondition[];
+  keywords: boolean;
+}
+
+/**
+ * The ways a selection can match. A mapping is one AND-list; a list of strings
+ * is one keyword regex on `message`; a list of mappings is an OR, one variant
+ * per mapping. Entries the converter can't express are skipped with a warning.
+ */
+function selectionVariants(name: string, sel: any, warnings: string[]): Variant[] {
+  const fromMap = (map: Record<string, any>): Variant => {
+    const conditions: RuleCondition[] = [];
+    for (const [rawField, value] of Object.entries(map)) {
+      const conv = convertEntry(rawField, value);
+      if ('unsupported' in conv) {
+        const w = `Skipped ${conv.unsupported}`;
+        if (!warnings.includes(w)) warnings.push(w);
+        continue;
+      }
+      conditions.push(...conv.conditions);
+    }
+    return { conditions, keywords: false };
+  };
+  if (Array.isArray(sel)) {
+    if (sel.length > 0 && sel.every((v) => v === null || typeof v !== 'object')) {
+      return [{ conditions: [keywordsToCondition(sel)], keywords: true }];
+    }
+    if (sel.length > 0 && sel.every((v) => v && typeof v === 'object' && !Array.isArray(v))) {
+      return sel.map(fromMap);
+    }
+    throw new ConditionError(`selection "${name}" must be a mapping, a list of strings, or a list of mappings`);
+  }
+  if (!sel || typeof sel !== 'object') {
+    throw new ConditionError(`selection "${name}" must be a mapping of field: value`);
+  }
+  return [fromMap(sel)];
+}
+
+/** Every way a set of selections can all match: the product of their variants. */
+function combine(names: string[], variants: Map<string, Variant[]>): Variant[] {
+  let out: Variant[] = [{ conditions: [], keywords: false }];
+  for (const n of names) {
+    const next: Variant[] = [];
+    for (const a of out) {
+      for (const b of variants.get(n)!) {
+        next.push({ conditions: [...a.conditions, ...b.conditions], keywords: a.keywords || b.keywords });
+      }
+    }
+    out = next;
+    if (out.length > 1000) throw new ConditionError('the condition expands to too many alternatives');
+  }
+  return out;
+}
+
+/**
+ * Convert a single parsed Sigma document. Returns one result per SIEMBox rule:
+ * a condition with OR in it becomes one rule per alternative (at most
+ * MAX_SIGMA_SPLIT), each an AND-list; NOT becomes the rule's `exclude` groups.
+ */
+export function sigmaToPortableAll(doc: any): SigmaConvertResult[] {
   const errors: string[] = [];
   const warnings: string[] = [];
 
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
-    return { rule: null, errors: ['not a Sigma rule mapping'], warnings };
+    return [{ rule: null, errors: ['not a Sigma rule mapping'], warnings }];
   }
 
   const title = typeof doc.title === 'string' ? doc.title : undefined;
@@ -366,58 +496,62 @@ export function sigmaToPortable(doc: any): SigmaConvertResult {
   const detection = doc.detection;
   if (!detection || typeof detection !== 'object') {
     errors.push('Sigma rule needs a detection block');
-    return { rule: null, errors, warnings, title };
+    return [{ rule: null, errors, warnings, title }];
   }
-  if (typeof detection.condition !== 'string') {
-    // Sigma also allows a list of conditions (implicit OR) — not representable.
-    errors.push('detection.condition must be a single string expression (lists/OR are unsupported)');
-    return { rule: null, errors, warnings, title };
+  const conditionList: unknown[] = Array.isArray(detection.condition) ? detection.condition : [detection.condition];
+  if (conditionList.length === 0 || conditionList.some((c) => typeof c !== 'string' || c.trim() === '')) {
+    errors.push('detection.condition must be a condition string (or a list of them)');
+    return [{ rule: null, errors, warnings, title }];
+  }
+  if (errors.length) return [{ rule: null, errors, warnings, title }];
+
+  const selectionNames = Object.keys(detection).filter((k) => k !== 'condition');
+  // Each converted rule: the AND-list it matches, and its exclusion groups.
+  const parts: Array<{ conditions: RuleCondition[]; exclude: RuleCondition[][]; keywords: boolean }> = [];
+  try {
+    // A list of conditions is an OR of them.
+    const dnf = conditionList.flatMap((c) => parseCondition(String(c).trim(), selectionNames));
+    const used = new Set<string>();
+    for (const t of dnf) {
+      t.pos.forEach((n) => used.add(n));
+      t.neg.forEach((inner) => inner.forEach((it) => it.pos.forEach((n) => used.add(n))));
+    }
+    const variants = new Map<string, Variant[]>();
+    for (const n of used) variants.set(n, selectionVariants(n, detection[n], warnings));
+
+    for (const t of dnf) {
+      if (t.pos.length === 0) {
+        throw new ConditionError('every alternative needs at least one selection that must match (a rule that is only "not ..." would match nearly every log)');
+      }
+      const exclude: RuleCondition[][] = [];
+      for (const inner of t.neg) {
+        for (const it of inner) {
+          for (const v of combine(it.pos, variants)) {
+            if (v.conditions.length === 0) {
+              const w = 'Dropped an exclusion with no convertible fields (it would have excluded every log)';
+              if (!warnings.includes(w)) warnings.push(w);
+              continue;
+            }
+            exclude.push(v.conditions);
+          }
+        }
+      }
+      if (exclude.length > MAX_EXCLUDE_GROUPS) {
+        throw new ConditionError(`the NOT part expands to ${exclude.length} exclusion groups (at most ${MAX_EXCLUDE_GROUPS})`);
+      }
+      for (const v of combine(t.pos, variants)) parts.push({ conditions: v.conditions, exclude, keywords: v.keywords });
+    }
+  } catch (e) {
+    if (!(e instanceof ConditionError)) throw e;
+    errors.push(e.message);
+    return [{ rule: null, errors, warnings, title }];
   }
 
-  const resolved = resolveSelections(detection.condition, detection);
-  if ('unsupported' in resolved) {
-    errors.push(resolved.unsupported);
-    return { rule: null, errors, warnings, title };
-  }
-
-  const conditions: RuleCondition[] = [];
-  const fieldsUsed = new Set<string>();
-  let usedKeywords = false;
-  for (const selName of resolved.selections) {
-    const sel = detection[selName];
-    if (Array.isArray(sel)) {
-      // A list of STRINGS is a Sigma "keywords" search (match any, anywhere) —
-      // representable as one regex alternation on `message`. A list of MAPS is a
-      // genuine OR of field-sets, which a flat AND-list can't express.
-      if (sel.length > 0 && sel.every((v) => v === null || typeof v !== 'object')) {
-        conditions.push(keywordsToCondition(sel));
-        fieldsUsed.add('message');
-        usedKeywords = true;
-        continue;
-      }
-      errors.push(`selection "${selName}" is a list of maps (OR), which a flat AND-list can't express`);
-      return { rule: null, errors, warnings, title };
-    }
-    if (!sel || typeof sel !== 'object') {
-      errors.push(`selection "${selName}" must be a mapping of field: value`);
-      return { rule: null, errors, warnings, title };
-    }
-    for (const [rawField, value] of Object.entries(sel)) {
-      const conv = convertEntry(rawField, value);
-      if ('unsupported' in conv) {
-        warnings.push(`Skipped ${conv.unsupported}`);
-        continue;
-      }
-      for (const c of conv.conditions) {
-        conditions.push(c);
-        fieldsUsed.add(c.field);
-      }
-    }
-  }
-
-  if (conditions.length === 0) {
-    errors.push('no representable conditions were produced from this Sigma rule');
-    return { rule: null, errors, warnings, title, fieldsUsed: [...fieldsUsed] };
+  if (parts.length > MAX_SIGMA_SPLIT) {
+    errors.push(
+      `the condition is an OR of ${parts.length} alternatives; SIEMBox imports at most ${MAX_SIGMA_SPLIT} rules from one Sigma rule`
+    );
+    return [{ rule: null, errors, warnings, title }];
   }
 
   // Roll references / falsepositives into the description so context isn't lost.
@@ -442,31 +576,57 @@ export function sigmaToPortable(doc: any): SigmaConvertResult {
   const attack = dropInvalidAttackTags(tags);
   warnings.push(...attack.warnings);
 
-  const rule: PortableRule = {
-    name: title!,
-    description,
-    severity: sigmaLevelToSeverity(doc.level),
-    enabled: false, // imported rules start disabled so the user reviews them first
-    tags: attack.tags,
-    conditions,
-    alert: {
-      title: title!,
-      description: description || `Sigma detection "${title}" matched`,
-    },
-  };
-
-  warnings.push(
-    `Verify these field names exist in your parsed logs: ${[...fieldsUsed].join(', ')}. ` +
-      `Sigma field names often differ from your parser output.`
-  );
-  if (usedKeywords) {
-    warnings.push(
-      `Keyword search matches against the raw "message" field (the whole log line). ` +
-        `Make sure your parser keeps the full message.`
+  const split = parts.length > 1;
+  return parts.map((part, i) => {
+    const name = split ? `${title} (part ${i + 1} of ${parts.length})` : title!;
+    const partWarnings = [...warnings];
+    if (split) {
+      partWarnings.unshift(
+        `The Sigma condition is an OR, so it imports as ${parts.length} rules, one per alternative. ` +
+          `A log matching more than one raises an alert from each.`
+      );
+    }
+    if (part.conditions.length === 0) {
+      return {
+        rule: null,
+        errors: ['no representable conditions were produced for this alternative'],
+        warnings: partWarnings,
+        title: name,
+      };
+    }
+    const fields = new Set<string>();
+    for (const c of part.conditions) fields.add(c.field);
+    for (const g of part.exclude) for (const c of g) fields.add(c.field);
+    partWarnings.push(
+      `Verify these field names exist in your parsed logs: ${[...fields].join(', ')}. ` +
+        `Sigma field names often differ from your parser output.`
     );
-  }
+    if (part.keywords) {
+      partWarnings.push(
+        `Keyword search matches against the raw "message" field (the whole log line). ` +
+          `Make sure your parser keeps the full message.`
+      );
+    }
+    const rule: PortableRule = {
+      name,
+      description,
+      severity: sigmaLevelToSeverity(doc.level),
+      enabled: false, // imported rules start disabled so the user reviews them first
+      tags: attack.tags,
+      conditions: part.conditions,
+      ...(part.exclude.length ? { exclude: part.exclude } : {}),
+      alert: {
+        title: title!,
+        description: description || `Sigma detection "${title}" matched`,
+      },
+    };
+    return { rule, errors: [], warnings: partWarnings, title: name, fieldsUsed: [...fields] };
+  });
+}
 
-  return { rule, errors, warnings, title, fieldsUsed: [...fieldsUsed] };
+/** Convert a single parsed Sigma document; the first rule when it splits (see sigmaToPortableAll). */
+export function sigmaToPortable(doc: any): SigmaConvertResult {
+  return sigmaToPortableAll(doc)[0];
 }
 
 /**
@@ -482,5 +642,5 @@ export function convertSigmaYaml(yamlText: string): SigmaConvertResult[] {
   }
   const real = docs.filter((d) => d !== null && d !== undefined);
   if (real.length === 0) return [{ rule: null, errors: ['no YAML documents found'], warnings: [] }];
-  return real.map(sigmaToPortable);
+  return real.flatMap(sigmaToPortableAll);
 }

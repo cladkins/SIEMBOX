@@ -3,7 +3,7 @@ import { DetectionRuleModel } from '../models/DetectionRule';
 import * as yaml from '../utils/yaml';
 import { ApiError } from '../middleware/errorHandler';
 import { RulesEngine } from '../services/rules/rulesEngine';
-import { validateRule, toPortableRule, portableRuleToYaml, ruleRegexTypeErrors } from '../services/rules/rulePortable';
+import { validateRule, toPortableRule, portableRuleToYaml, ruleRegexTypeErrors, ruleLogicOf } from '../services/rules/rulePortable';
 import { convertSigmaYaml } from '../services/rules/sigmaConvert';
 import { catalogNewFileUrl } from '../services/parser/catalogService';
 import {
@@ -255,11 +255,7 @@ router.post('/catalog/install', requireRuleWrite, async (req: Request, res: Resp
     const safety = await gateRule(res, `Catalog rule "${parsed.name}"`, parsed);
     if (!safety) return;
 
-    const rule_logic = {
-      conditions: parsed.conditions,
-      aggregation: parsed.aggregation,
-      alert: parsed.alert,
-    };
+    const rule_logic = ruleLogicOf(parsed);
     const existing = await DetectionRuleModel.findByName(parsed.name);
     const saved = existing
       ? await DetectionRuleModel.update(existing.id, {
@@ -326,11 +322,7 @@ router.post('/catalog/install-all', requireRuleWrite, async (req: Request, res: 
           continue;
         }
         if (gate.report.warnings.length > 0) results.warnings.push({ name: entry.name, warnings: gate.report.warnings });
-        const rule_logic = {
-          conditions: parsed.conditions,
-          aggregation: parsed.aggregation,
-          alert: parsed.alert,
-        };
+        const rule_logic = ruleLogicOf(parsed);
         const existing = await DetectionRuleModel.findByName(parsed.name);
         if (existing) {
           await DetectionRuleModel.update(existing.id, {
@@ -462,11 +454,7 @@ router.post('/import/sigma', authorize('admin'), async (req: Request, res: Respo
     }
     if (gate.report.warnings.length > 0) results.warnings.push({ title: c.title, warnings: gate.report.warnings });
     try {
-      const rule_logic = {
-        conditions: c.rule.conditions,
-        aggregation: c.rule.aggregation,
-        alert: c.rule.alert,
-      };
+      const rule_logic = ruleLogicOf(c.rule);
       const rule_yaml = portableRuleToYaml(c.rule);
       const existing = await DetectionRuleModel.findByName(c.rule.name);
       if (existing) {

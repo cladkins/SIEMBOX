@@ -129,6 +129,7 @@ function ruleInput(rule: DetectionRule, alerts: Map<number, TechniqueAlerts>) {
     enabled: !!rule.enabled,
     tags: Array.isArray(rule.tags) ? rule.tags : [],
     conditions: Array.isArray(logic.conditions) ? logic.conditions : [],
+    exclude: Array.isArray(logic.exclude) ? logic.exclude : null,
     aggregation: logic.aggregation ?? null,
     alerts_30d: a?.count ?? 0,
     last_alert: a?.last ?? null,

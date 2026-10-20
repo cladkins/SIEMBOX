@@ -47,6 +47,7 @@ const TITLES: Record<string, string> = {
   REGEX_TEST_FAILED: 'The pattern could not be run',
   SAMPLE_TOO_LARGE: 'The sample is too large',
   REGEX_BUSY: 'The regex checker is busy — try again in a moment',
+  ATTACK_TAG_INVALID: 'Not saved: an ATT&CK tag is not a valid technique or tactic',
 };
 
 /**
@@ -68,6 +69,18 @@ export function problemFromError(error: any, fallback: string): InlineProblem {
         ...(Array.isArray(safety.vulnerable) ? safety.vulnerable : []),
         ...(Array.isArray(safety.undecided) ? safety.undecided : []),
       ],
+    };
+  }
+  // 422 ATTACK_TAG_INVALID (rule create/update): one line per bad tag, as the
+  // validator words it ("attack.t1086: T1086 … was revoked …; use attack.t1059.001").
+  if (code === 'ATTACK_TAG_INVALID') {
+    const errors = Array.isArray(data.errors) ? data.errors.filter((e: unknown) => typeof e === 'string') : [];
+    return {
+      type: 'error',
+      code,
+      title: TITLES[code],
+      lines: errors.length ? errors : [typeof data.message === 'string' ? data.message : fallback],
+      findings: [],
     };
   }
   const message: string =

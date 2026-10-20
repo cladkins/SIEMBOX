@@ -97,7 +97,16 @@
         </div>
       </template>
 
-      <el-table :data="rules" v-loading="loading" stripe>
+      <div class="rules-filter" data-testid="rules-attack-filter">
+        <TechniqueSelect v-model="ruleTechniqueFilter" placeholder="ATT&CK technique" style="width: 280px" />
+        <TacticSelect v-model="ruleTacticFilter" placeholder="ATT&CK tactic" style="width: 200px" />
+        <span v-if="ruleTechniqueFilter || ruleTacticFilter" class="catalog-count">
+          {{ filteredRules.length }} / {{ rules.length }} rules
+        </span>
+        <router-link to="/attack" class="coverage-link">ATT&amp;CK coverage →</router-link>
+      </div>
+
+      <el-table :data="filteredRules" v-loading="loading" stripe>
         <el-table-column prop="name" label="Name" min-width="250">
           <template #default="{ row }">
             {{ row.name }}<UnsafeRegexTag :safety="row.regex_safety" />
@@ -144,9 +153,10 @@
             />
           </template>
         </el-table-column>
-        <el-table-column prop="tags" label="Tags" min-width="200">
+        <el-table-column prop="tags" label="Tags" min-width="220">
           <template #default="{ row }">
-            <el-tag v-for="tag in row.tags" :key="tag" size="small" style="margin-right: 5px">
+            <TechniqueChips :tags="row.tags" class="row-techniques" />
+            <el-tag v-for="tag in plainTagsOf(row.tags)" :key="tag" size="small" style="margin-right: 5px">
               {{ tag }}
             </el-tag>
           </template>
@@ -230,6 +240,29 @@
           </el-select>
         </el-form-item>
 
+        <!-- ATT&CK techniques: written into the same tags as attack.tNNNN[.NNN] (RULES.md "MITRE ATT&CK Tagging"). -->
+        <el-form-item label="ATT&CK" data-testid="attack-picker">
+          <div class="attack-picker">
+            <TechniqueSelect
+              v-if="canEdit"
+              :model-value="null"
+              placeholder="Add a technique: search ID or name (T1110, brute force)"
+              style="width: 100%"
+              @pick="addTechnique"
+            />
+            <TechniqueChips
+              :tags="ruleForm.tags"
+              show-names
+              :closable="canEdit"
+              class="attack-picker-chips"
+              @remove="removeTechnique"
+            />
+            <el-text v-if="!formTechniqueCount" size="small" type="info">
+              No technique tagged. Tag the most specific technique the rule detects; its tactics follow from it.
+            </el-text>
+          </div>
+        </el-form-item>
+
         <el-form-item label="Rule YAML" prop="rule_yaml">
           <div class="yaml-editor-container">
             <el-input
@@ -282,12 +315,15 @@
           <el-option label="Medium" value="medium" />
           <el-option label="Low" value="low" />
         </el-select>
+        <TechniqueSelect v-model="catalogTechniqueFilter" size="small" placeholder="Technique" style="width: 200px" />
+        <TacticSelect v-model="catalogTacticFilter" size="small" placeholder="Tactic" style="width: 150px" />
         <el-select v-model="catalogStatusFilter" size="small" style="width: 150px">
           <el-option label="All statuses" value="all" />
           <el-option label="Available" value="available" />
           <el-option label="Installed" value="installed" />
           <el-option label="Update available" value="update" />
           <el-option label="Invalid" value="invalid" />
+          <el-option label="Fills a gap" value="gap" />
         </el-select>
         <div style="flex: 1" />
         <span class="catalog-count">{{ filteredRuleCatalog.length }} / {{ catalog.length }}</span>
@@ -324,9 +360,10 @@
             <el-tag v-if="row.severity" :type="severityType(row.severity)" size="small">{{ row.severity }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="Tags" width="170">
+        <el-table-column label="Tags" width="200">
           <template #default="{ row }">
-            <el-tag v-for="t in row.tags" :key="t" size="small" class="catalog-tag">{{ t }}</el-tag>
+            <TechniqueChips :tags="row.tags" class="catalog-tag" />
+            <el-tag v-for="t in plainTagsOf(row.tags)" :key="t" size="small" class="catalog-tag">{{ t }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="Status" width="120">
@@ -335,6 +372,13 @@
             <el-tag v-else-if="row.update_available" type="warning" size="small">Update</el-tag>
             <el-tag v-else-if="row.installed" type="success" size="small">Installed</el-tag>
             <el-tag v-else type="info" size="small" effect="plain">Available</el-tag>
+            <el-tooltip
+              v-if="!row.installed && catalogGaps(row).length"
+              :content="`Tagged with ${catalogGaps(row).join(', ')}, which no rule of yours covers yet (ATT&CK coverage: none)`"
+              placement="top"
+            >
+              <el-tag type="success" size="small" class="catalog-gap" data-testid="fills-gap">Fills a gap</el-tag>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column v-if="canEdit" label="Action" width="130" fixed="right">
@@ -545,6 +589,21 @@ import yaml from 'js-yaml';
 import RegexProblemAlert from '@/components/RegexProblemAlert.vue';
 import UnsafeRegexTag from '@/components/UnsafeRegexTag.vue';
 import { batchProblem, problemFromError, storedUnsafeProblem, warningsProblem, type InlineProblem } from '@/utils/regexSafety';
+import { useRoute } from 'vue-router';
+import TechniqueChips from '@/components/attack/TechniqueChips.vue';
+import TechniqueSelect from '@/components/attack/TechniqueSelect.vue';
+import TacticSelect from '@/components/attack/TacticSelect.vue';
+import { useAttackIndex } from '@/composables/useAttackIndex';
+import {
+  addTechniqueTag,
+  gapsFilled,
+  isTechniqueId,
+  isTechniqueTag,
+  removeTechniqueTag,
+  tagsMatchAttackFilter,
+  techniqueIdsFromTags,
+  type CoverageTechnique,
+} from '@/utils/attack';
 
 // Viewers browse rules and contribute them. Changing rules (create, edit,
 // enable, catalog install, delete) is analyst and up; the AI builder and Sigma
@@ -554,6 +613,50 @@ const canEdit = computed(() => authStore.canAnalyst);
 const isAdmin = computed(() => authStore.isAdmin);
 
 const rules = ref<any[]>([]);
+
+// ATT&CK: technique names and tactics for the chips and filters, and the
+// coverage (loaded with the catalog) for its "Fills a gap" badge.
+const route = useRoute();
+const attackIndex = useAttackIndex();
+const queryTechnique =
+  typeof route.query.technique === 'string' && isTechniqueId(route.query.technique)
+    ? route.query.technique.toUpperCase()
+    : null;
+const ruleTechniqueFilter = ref<string | null>(queryTechnique);
+const ruleTacticFilter = ref<string | null>(typeof route.query.tactic === 'string' ? route.query.tactic : null);
+const filteredRules = computed(() =>
+  ruleTechniqueFilter.value || ruleTacticFilter.value
+    ? rules.value.filter((r) =>
+        tagsMatchAttackFilter(
+          r.tags,
+          { technique: ruleTechniqueFilter.value, tactic: ruleTacticFilter.value },
+          attackIndex.value
+        )
+      )
+    : rules.value
+);
+
+/** A rule's tags other than its ATT&CK technique tags (those show as technique chips). */
+function plainTagsOf(tags: unknown): string[] {
+  return Array.isArray(tags) ? tags.filter((t) => typeof t === 'string' && !isTechniqueTag(t)) : [];
+}
+
+const coverageById = ref(new Map<string, CoverageTechnique>());
+let coverageRequested = false;
+async function loadCoverageForGaps() {
+  if (coverageRequested) return;
+  coverageRequested = true;
+  try {
+    const { data } = await api.getAttackCoverage();
+    coverageById.value = new Map((data.techniques as CoverageTechnique[]).map((t) => [t.id, t]));
+  } catch {
+    // Best effort: without it the catalog simply shows no "Fills a gap" badge.
+    coverageRequested = false;
+  }
+}
+function catalogGaps(row: any): string[] {
+  return gapsFilled(row.tags, coverageById.value);
+}
 const recs = ref<any>(null);
 const recsLoading = ref(false);
 const loading = ref(false);
@@ -595,6 +698,8 @@ const installingAll = ref(false);
 const catalogSearch = ref('');
 const catalogStatusFilter = ref('all');
 const catalogSeverityFilter = ref('all');
+const catalogTechniqueFilter = ref<string | null>(null);
+const catalogTacticFilter = ref<string | null>(null);
 
 const SEV_RANK: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
 function sortBySeverity(a: any, b: any) {
@@ -607,7 +712,18 @@ function ruleStatus(r: any) {
 const filteredRuleCatalog = computed(() => {
   const q = catalogSearch.value.trim().toLowerCase();
   return catalog.value.filter((r) => {
-    if (catalogStatusFilter.value !== 'all' && ruleStatus(r) !== catalogStatusFilter.value) return false;
+    if (catalogStatusFilter.value === 'gap') {
+      if (r.installed || catalogGaps(r).length === 0) return false;
+    } else if (catalogStatusFilter.value !== 'all' && ruleStatus(r) !== catalogStatusFilter.value) return false;
+    if (
+      (catalogTechniqueFilter.value || catalogTacticFilter.value) &&
+      !tagsMatchAttackFilter(
+        r.tags,
+        { technique: catalogTechniqueFilter.value, tactic: catalogTacticFilter.value },
+        attackIndex.value
+      )
+    )
+      return false;
     if (catalogSeverityFilter.value !== 'all' && r.severity !== catalogSeverityFilter.value) return false;
     if (q) {
       const hay = [r.name, r.description, ...(r.tags || [])].join(' ').toLowerCase();
@@ -625,6 +741,7 @@ function openCatalog() {
   catalogProblem.value = null;
   catalogDialogVisible.value = true;
   if (catalog.value.length === 0) loadCatalog(false);
+  void loadCoverageForGaps();
 }
 
 async function loadCatalog(refresh: boolean) {
@@ -783,6 +900,17 @@ const ruleForm = reactive({
 const yamlError = ref('');
 const yamlValid = ref(false);
 
+// The ATT&CK picker adds attack.tNNNN tags to the same ruleForm.tags the Tags
+// select edits (a tag typed there by hand shows as a chip too), and its chips
+// remove them again.
+const formTechniqueCount = computed(() => techniqueIdsFromTags(ruleForm.tags).length);
+function addTechnique(id: string) {
+  ruleForm.tags = addTechniqueTag(ruleForm.tags, id);
+}
+function removeTechnique(id: string) {
+  ruleForm.tags = removeTechniqueTag(ruleForm.tags, id);
+}
+
 const formRules: FormRules = {
   name: [{ required: true, message: 'Name is required', trigger: 'blur' }],
   severity: [{ required: true, message: 'Severity is required', trigger: 'change' }],
@@ -912,6 +1040,12 @@ actions:
 
 onMounted(async () => {
   await fetchRules();
+  // /rules?rule=<id> (the ATT&CK Coverage panel's rule links) opens that rule;
+  // /rules?catalog=1 opens the catalog.
+  const linked = typeof route.query.rule === 'string' ? Number(route.query.rule) : NaN;
+  const linkedRule = Number.isInteger(linked) ? rules.value.find((r) => r.id === linked) : undefined;
+  if (linkedRule) editRule(linkedRule);
+  if (route.query.catalog === '1') openCatalog();
   loadRecommendations();
   // Not awaited: this hits GitHub, and the Catalog column is the only thing
   // waiting on it. The table renders immediately and the column appears when
@@ -1066,7 +1200,13 @@ async function saveRule() {
       fetchRules();
       // Saved, but a regex could not be proven safe: say so here and keep the
       // editor open on the saved rule, rather than closing over the warning.
-      const warned = warningsProblem(res.data?.warnings, 'Saved — but a regex could not be proven safe');
+      // ATT&CK tag notes (a tactic none of its techniques belongs to) come with the regex ones.
+      const saveWarnings: unknown[] = Array.isArray(res.data?.warnings) ? res.data.warnings : [];
+      const attackOnly = saveWarnings.length > 0 && saveWarnings.every((w) => /^attack\./i.test(String(w)));
+      const warned = warningsProblem(
+        saveWarnings,
+        attackOnly ? 'Saved — with a note about its ATT&CK tags' : 'Saved — with warnings (a regex could not be proven safe, or an ATT&CK tag note)'
+      );
       if (warned) {
         editMode.value = true;
         selectedRule.value = res.data;
@@ -1276,6 +1416,34 @@ async function runSigmaImport() {
 
 .catalog-tag {
   margin: 0 4px 4px 0;
+}
+
+.catalog-gap {
+  margin-left: 4px;
+}
+
+.rules-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.coverage-link {
+  margin-left: auto;
+  font-size: 13px;
+}
+
+.row-techniques {
+  margin-right: 5px;
+}
+
+.attack-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
 }
 
 .ai-preview {

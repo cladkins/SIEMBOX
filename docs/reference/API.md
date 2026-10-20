@@ -1432,6 +1432,10 @@ alert:
 **Errors:**
 - `400` - Missing fields, invalid YAML format, or `Invalid rule: conditions[0].flags must be a string (e.g. "i")` (a `regex` condition's `flags` must be a string and its `value` must not be a list or mapping)
 - `422` `REGEX_UNSAFE` - A `regex` condition is ReDoS-vulnerable; nothing saved ([Regex safety](#regex-safety-parsers-and-rules))
+- `422` `ATTACK_TAG_INVALID` - A `tags` entry is an unknown, malformed, revoked or deprecated ATT&CK technique, or an unknown tactic; nothing saved. Body: `{ "code": "ATTACK_TAG_INVALID", "message": "Rule \"…\" was not saved: attack.t1086: T1086 \"PowerShell\" was revoked in ATT&CK 20.0; use attack.t1059.001 (…)", "errors": [...], "warnings": [...] }` ([ATT&CK tagging](RULES.md#mitre-attck-tagging))
+
+A `201` carries `warnings` (indeterminate regexes, and ATT&CK notes such as a
+tactic tag that none of the rule's techniques belongs to).
 
 ---
 
@@ -1461,12 +1465,14 @@ Update detection rule.
 
 New rule logic (from `rule_yaml`, or a `rule_logic` sent directly) passes the
 regex check; an update that leaves the logic alone (enable/disable) is never
-refused for it.
+refused for it. New `tags` pass the ATT&CK tag check; a tag the stored rule
+already had is not refused again.
 
 **Errors:**
 - `400` - Invalid YAML format (if rule_yaml provided), or `Invalid rule: …` (as for `POST`)
 - `404` - Rule not found
 - `422` `REGEX_UNSAFE` - A `regex` condition is ReDoS-vulnerable; nothing changed
+- `422` `ATTACK_TAG_INVALID` - A tag the update adds is not a valid ATT&CK technique or tactic (as for `POST`); nothing changed
 
 ---
 
@@ -1518,7 +1524,7 @@ get `403`, and their `?refresh=true` on a catalog listing is ignored); see
 | `GET /api/rules/catalog` | Browse the detection catalog (same annotations, same `?refresh=true`). Returns `{ source, rules }`. |
 | `GET /api/rules/catalog/source` | The configured catalog source. |
 | `POST /api/rules/catalog/install` | Install or update a catalog detection by `name`. |
-| `POST /api/rules/catalog/install-all` | Install or update every catalog detection. Same `failed` / `warnings` shape. |
+| `POST /api/rules/catalog/install-all` | Install or update every catalog detection. Same `failed` / `warnings` shape; a rule that fails validation (e.g. a revoked ATT&CK technique tag) is in `failed` with `reason: "failed validation: …"` and the validator's messages. |
 | `POST /api/rules/catalog/refresh` | Force a catalog cache refresh. |
 
 Catalog source defaults to `cladkins/siembox-parsers` and is overridable via the
@@ -1680,6 +1686,8 @@ Get all alerts with filtering.
 | `triageStatus` | string | - | Filter by AI triage status (pending/analyzing/complete/failed/skipped) |
 | `triageVerdict` | string | - | Filter by AI triage verdict (true_positive/false_positive/suspicious/inconclusive) |
 | `minRiskScore` | integer | - | Minimum AI triage risk score (0-100) |
+| `technique` | string | - | ATT&CK technique ID (`T1110`, `T1110.001`, any case). A technique matches its sub-techniques too; a sub-technique matches only itself. `400` if malformed |
+| `tactic` | string | - | ATT&CK tactic shortname (`credential_access` or `credential-access`): alerts with any technique under it. With `technique`, both must hold. `400` if unknown |
 | `sortBy` | string | created_at | `risk_score` sorts highest-risk-first (used by the SOC Triage queue view); any other value sorts by `created_at` |
 
 **Example Request:**
@@ -1708,7 +1716,8 @@ GET /api/alerts?severity=high&status=new&limit=50
       "updated_at": "2025-11-30T19:35:00Z",
       "triage_status": "complete",
       "triage_verdict": "true_positive",
-      "triage_risk_score": 82
+      "triage_risk_score": 82,
+      "attack_techniques": ["T1110.001"]
     }
   ],
   "total": 87,
@@ -1716,6 +1725,11 @@ GET /api/alerts?severity=high&status=new&limit=50
   "offset": 0
 }
 ```
+
+`attack_techniques` are the raising rule's ATT&CK technique IDs when the alert
+was created (from its `attack.t…` tags, upper case), kept if the rule is
+re-tagged later; `[]` for untagged rules and non-rule alerts (EDR, exposure,
+sign-in). `GET /api/alerts/export` accepts `technique` and `tactic` too.
 
 `triage_status`/`triage_verdict`/`triage_risk_score` are `null` until [AI triage](../../wiki/AI-Security-Analyst.md#automated-triage) has run for an alert (or if it's disabled). Fetch the full verdict via `GET /api/alerts/:id/triage` below.
 

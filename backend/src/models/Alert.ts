@@ -18,6 +18,8 @@ export interface Alert {
   triage_risk_score?: number | null;
   /** What raised the alert outside the rules engine (e.g. 'edr', 'leaked-creds'); null for rule alerts. */
   source?: string | null;
+  /** The rule's ATT&CK technique IDs when the alert was raised (T1110.001); empty for non-rule alerts. */
+  attack_techniques: string[];
 }
 
 export interface AlertFilterOptions {
@@ -30,6 +32,12 @@ export interface AlertFilterOptions {
   triageStatus?: string;
   triageVerdict?: string;
   minRiskScore?: number;
+  /**
+   * ATT&CK filter: alerts carrying any of these technique IDs. The route
+   * expands ?technique= (with its sub-techniques) and ?tactic= (every
+   * technique under it) into this list, so the GIN index serves both.
+   */
+  attackTechniques?: string[];
 }
 
 /** One alert's summary as it appears inside a correlated group. */
@@ -61,6 +69,8 @@ export interface CreateAlertParams {
   matched_data: Record<string, any>;
   status?: 'new' | 'investigating' | 'closed' | 'false_positive';
   assigned_to?: number | null;
+  /** Canonical ATT&CK technique IDs copied from the rule (see attackTags.techniqueIdsFromTags). */
+  attack_techniques?: string[];
 }
 
 export class AlertModel {
@@ -70,8 +80,8 @@ export class AlertModel {
 
   static async create(params: CreateAlertParams): Promise<Alert> {
     const result = await query(
-      `INSERT INTO alerts (rule_id, parsed_log_id, severity, title, description, matched_data, status, assigned_to)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO alerts (rule_id, parsed_log_id, severity, title, description, matched_data, status, assigned_to, attack_techniques)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [
         params.rule_id,
@@ -82,6 +92,7 @@ export class AlertModel {
         JSON.stringify(params.matched_data),
         params.status ?? 'new',
         params.assigned_to ?? null,
+        params.attack_techniques ?? [],
       ]
     );
 
@@ -151,6 +162,11 @@ export class AlertModel {
     if (options?.minRiskScore !== undefined) {
       conditions.push(`t.risk_score >= $${paramIndex++}`);
       params.push(options.minRiskScore);
+    }
+
+    if (options?.attackTechniques) {
+      conditions.push(`a.attack_techniques && $${paramIndex++}::text[]`);
+      params.push(options.attackTechniques);
     }
 
     return {
@@ -256,13 +272,13 @@ export class AlertModel {
        representative AS (
          SELECT DISTINCT ON (group_key)
            id, rule_id, parsed_log_id, severity, title, description,
-           matched_data, status, assigned_to, created_at, updated_at, source, group_key,
+           matched_data, status, assigned_to, created_at, updated_at, source, attack_techniques, group_key,
            triage_status, triage_verdict, triage_risk_score
          FROM filtered
          ORDER BY group_key, sev_rank DESC, created_at DESC, id DESC
        )
        SELECT r.id, r.rule_id, r.parsed_log_id, r.severity, r.title, r.description,
-              r.matched_data, r.status, r.assigned_to, r.created_at, r.updated_at, r.source,
+              r.matched_data, r.status, r.assigned_to, r.created_at, r.updated_at, r.source, r.attack_techniques,
               r.triage_status, r.triage_verdict, r.triage_risk_score,
               g.correlated_count, g.correlated
        FROM representative r

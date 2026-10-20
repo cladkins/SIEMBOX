@@ -1,5 +1,6 @@
 import { DetectionRuleModel, DetectionRule } from '../../models/DetectionRule';
 import { AlertModel } from '../../models/Alert';
+import { techniqueIdsFromTags } from '../attack/attackTags';
 import { ParsedLog } from '../../models/ParsedLog';
 import { logger } from '../../utils/logger';
 import { query } from '../../config/database';
@@ -499,6 +500,7 @@ export class RulesEngine {
         title,
         description,
         matched_data: variables,
+        attack_techniques: techniqueIdsFromTags(rule.tags),
       });
 
       // Background AI triage (opt-in + severity-gated). Fire-and-forget on the

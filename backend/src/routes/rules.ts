@@ -32,6 +32,7 @@ import {
 } from '../services/regex/regexSafety';
 import { recommendRulesBounded, regexRunErrorResponse } from '../services/regex/boundedRegex';
 import { gateOrRefuse, sendRegexRunError } from '../services/regex/regexHttp';
+import { analyzeAttackTags } from '../services/attack/attackTags';
 
 const router = Router();
 
@@ -50,6 +51,30 @@ const requireRuleWrite = requireScanPermission(UserRole.Analyst, 'detection_rule
 /** The write-time regex gate for one rule (answers 422/503 itself and returns null). */
 function gateRule(res: Response, subject: string, rule: unknown): Promise<RegexSafetyReport | null> {
   return gateOrRefuse(res, subject, () => assessRuleRegexes(rule));
+}
+
+/**
+ * The ATT&CK tag check for a rule write: 422 ATTACK_TAG_INVALID (nothing saved)
+ * for an unknown, revoked or deprecated technique or an unknown tactic, with
+ * the validator's own messages. Tags in `previous` (the stored rule's) are not
+ * refused again, so an edit that keeps an old tag (enable/disable) still
+ * saves. Returns the warnings, or null when it answered the request.
+ */
+function gateAttackTags(res: Response, subject: string, tags: unknown, previous: unknown = []): string[] | null {
+  if (!Array.isArray(tags)) return [];
+  const report = analyzeAttackTags(tags);
+  const kept = new Set(Array.isArray(previous) ? previous : []);
+  const errors = report.errors.filter((_e, i) => !kept.has(report.invalidTags[i]));
+  if (errors.length > 0) {
+    res.status(422).json({
+      code: 'ATTACK_TAG_INVALID',
+      message: `${subject} was not saved: ${errors.join('; ')}`,
+      errors,
+      warnings: report.warnings,
+    });
+    return null;
+  }
+  return report.warnings;
 }
 
 type BatchGate = { ok: true; report: RegexSafetyReport } | { ok: false; reason: string; code: string };
@@ -304,7 +329,7 @@ router.post('/catalog/install-all', requireRuleWrite, async (req: Request, res: 
         const { rule_yaml, parsed } = found;
         const validation = validateRule(parsed, { strict: false });
         if (!validation.ok) {
-          results.failed.push({ name: entry.name, reason: 'failed validation' });
+          results.failed.push({ name: entry.name, reason: `failed validation: ${validation.errors.join('; ')}` });
           continue;
         }
         const gate = await batchGate(parsed);
@@ -580,6 +605,9 @@ router.post('/', requireRuleWrite, async (req: Request, res: Response) => {
       throw new ApiError(400, `Invalid rule: ${typeErrors.join('; ')}`);
     }
 
+    const attackWarnings = gateAttackTags(res, `Rule "${name}"`, tags);
+    if (!attackWarnings) return;
+
     const safety = await gateRule(res, `Rule "${name}"`, rule_logic);
     if (!safety) return;
 
@@ -593,7 +621,7 @@ router.post('/', requireRuleWrite, async (req: Request, res: Response) => {
       tags,
     });
 
-    res.status(201).json({ ...withRuleRegexSafety(rule), warnings: safety.warnings });
+    res.status(201).json({ ...withRuleRegexSafety(rule), warnings: [...attackWarnings, ...safety.warnings] });
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to create rule');
@@ -619,6 +647,13 @@ router.put('/:id', requireRuleWrite, async (req: Request, res: Response) => {
     // edit that leaves the logic alone (enable/disable, rename) is never refused
     // for a regex it does not touch: disabling is the mitigation for an unsafe one.
     let warnings: string[] = [];
+    if (Array.isArray(updateData.tags)) {
+      const subject = typeof updateData.name === 'string' ? `Rule "${updateData.name}"` : `Rule ${id}`;
+      const existing = await DetectionRuleModel.findById(id);
+      const attackWarnings = gateAttackTags(res, subject, updateData.tags, existing?.tags);
+      if (!attackWarnings) return;
+      warnings = attackWarnings;
+    }
     if (updateData.rule_logic !== undefined) {
       const typeErrors = ruleRegexTypeErrors(updateData.rule_logic);
       if (typeErrors.length > 0) {
@@ -627,7 +662,7 @@ router.put('/:id', requireRuleWrite, async (req: Request, res: Response) => {
       const subject = typeof updateData.name === 'string' ? `Rule "${updateData.name}"` : `Rule ${id}`;
       const safety = await gateRule(res, subject, updateData.rule_logic);
       if (!safety) return;
-      warnings = safety.warnings;
+      warnings = [...warnings, ...safety.warnings];
     }
 
     const rule = await DetectionRuleModel.update(id, updateData);

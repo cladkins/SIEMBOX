@@ -235,7 +235,7 @@ export async function installPack(id: string): Promise<PackInstallResult> {
       const { rule_yaml, parsed } = found;
       const validation = validateRule(parsed, { strict: false });
       if (!validation.ok) {
-        result.detections.failed.push({ name, reason: 'failed validation' });
+        result.detections.failed.push({ name, reason: `failed validation: ${validation.errors.join('; ')}` });
         continue;
       }
       const refused = await packItemRefusal(() => assessRuleRegexes(parsed), name, result.warnings);

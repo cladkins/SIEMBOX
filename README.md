@@ -183,6 +183,12 @@ We welcome parser and rule contributions! See [PARSERS.md](./PARSERS.md) for gui
 
 MIT License - See LICENSE file for details
 
+Third-party data shipped or downloaded by SIEMBox keeps its own terms; see
+[NOTICE](./NOTICE). In short: the bundled MITRE ATT&CK® dataset is © The MITRE
+Corporation, used under the
+[ATT&CK terms of use](https://attack.mitre.org/resources/legal-and-branding/terms-of-use/);
+the GeoIP database is DB-IP Lite (CC BY 4.0, [docs/geoip.md](docs/geoip.md)).
+
 ## Support
 
 - **Issues**: https://github.com/cladkins/SIEMBOX/issues

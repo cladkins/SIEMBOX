@@ -22,6 +22,7 @@
  */
 import * as yaml from '../../utils/yaml';
 import { PortableRule, RuleCondition, RULE_SEVERITIES } from './rulePortable';
+import { dropInvalidAttackTags } from '../attack/attackTags';
 
 export interface SigmaConvertResult {
   /** The converted rule, or null when conversion failed (see errors). */
@@ -435,13 +436,18 @@ export function sigmaToPortable(doc: any): SigmaConvertResult {
   if (Array.isArray(doc.tags)) {
     for (const t of doc.tags) if (typeof t === 'string') tags.push(t);
   }
+  // An unknown, revoked or deprecated ATT&CK technique (or an unknown tactic)
+  // would fail validateRule; drop it with a warning so a stale community rule
+  // still imports.
+  const attack = dropInvalidAttackTags(tags);
+  warnings.push(...attack.warnings);
 
   const rule: PortableRule = {
     name: title!,
     description,
     severity: sigmaLevelToSeverity(doc.level),
     enabled: false, // imported rules start disabled so the user reviews them first
-    tags,
+    tags: attack.tags,
     conditions,
     alert: {
       title: title!,

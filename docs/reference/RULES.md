@@ -53,6 +53,7 @@ Detection rules in SIEMBox are organized by severity to help you prioritize resp
 - [LOW Severity Rules](#low-severity-rules)
 - [Rule Management](#rule-management)
   - [Regex Safety](#regex-safety)
+  - [MITRE ATT&CK Tagging](#mitre-attck-tagging)
 - [Response Playbooks](#response-playbooks)
 - [Tuning Guidance](#tuning-guidance)
 - [Contributing Rules](#contributing-rules)
@@ -1109,6 +1110,75 @@ background: each vulnerable condition is logged as a `WARN` and the rule gets an
 disabled for you); fix the condition in the editor, disable the rule until you
 do (that toggle is never refused), or reinstall the fixed catalog version. See
 [Troubleshooting: Unsafe regex tag](../operations/TROUBLESHOOTING.md#issue-a-parser-or-rule-shows-an-unsafe-regex-tag).
+
+### MITRE ATT&CK Tagging
+
+A rule says which [MITRE ATT&CK](https://attack.mitre.org/) Enterprise
+techniques it detects with Sigma-style tags in its ordinary `tags` list. There
+is no separate field:
+
+```yaml
+tags:
+  - ssh
+  - attack.t1110.001          # technique or sub-technique (lower case, as in Sigma)
+  - attack.credential_access  # tactic (optional; ATT&CK shortname, underscores)
+```
+
+| Tag | Meaning |
+|-----|---------|
+| `attack.t1110` | technique T1110 (Brute Force) |
+| `attack.t1110.001` | sub-technique T1110.001 (Brute Force: Password Guessing) |
+| `attack.credential_access` | tactic TA0006; the 15 tactics of the bundled release are `reconnaissance`, `resource_development`, `initial_access`, `execution`, `persistence`, `privilege_escalation`, `stealth`, `defense_impairment`, `credential_access`, `discovery`, `lateral_movement`, `collection`, `command_and_control`, `exfiltration`, `impact` |
+| `attack.g0016`, `attack.s0002` | Sigma group / software tags: accepted, not checked |
+
+Tag the most specific technique you detect. A rule's tactics come from its
+techniques, so a tactic tag is never required; tag the sub-technique rather
+than the parent when you know it (a sub-technique counts toward its parent,
+the parent alone does not cover its sub-techniques).
+
+**Checked against the bundled dataset.** SIEMBox ships a trimmed copy of the
+ATT&CK Enterprise release (`backend/src/data/attack/enterprise.json`, no
+network access at runtime). `validate-detections`, the catalog and content-pack
+installs and the rule editor (`POST`/`PUT /api/rules`) check every `attack.*`
+tag:
+
+| Tag | Result |
+|-----|--------|
+| malformed or unknown technique (`attack.t1110.01`, `attack.t9999`) | error |
+| revoked technique (`attack.t1086`) | error naming the replacement (`use attack.t1059.001`) |
+| deprecated technique | error (no replacement exists; remove the tag) |
+| unknown tactic (`attack.credentials`) | error |
+| tactic that none of the rule's techniques belongs to | warning |
+| `attack.defense_evasion` (split into `stealth` and `defense_impairment` in ATT&CK v20) | warning; still accepted |
+
+The routes answer an error with `422 ATTACK_TAG_INVALID` and the validator's
+message; nothing is saved. An edit that keeps a tag the stored rule already
+had (enable/disable, rename) is not refused, so a rule saved before this check
+can still be turned off. **Install all** and content packs skip a rule with a
+bad tag and list it in `failed` with the reason. **Sigma import** does not
+fail: unknown, revoked and deprecated technique tags and unknown tactic tags
+are dropped, each with a `Dropped ATT&CK tag …` warning in the preview.
+
+**Alerts keep their techniques.** When a rule raises an alert, its technique
+IDs are copied (upper case, `T1110.001`) into the alert's `attack_techniques`,
+so re-tagging the rule later does not rewrite history. Filter the alert list
+with `GET /api/alerts?technique=T1110` (the technique and its sub-techniques)
+or `?tactic=credential_access`. Alerts that existed before the upgrade were
+filled in once from their rule's tags at the time (migration 045).
+
+**Updating the dataset** (maintainers, at each ATT&CK release):
+
+```bash
+curl -sSfLO https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json
+node backend/scripts/update-attack.mjs enterprise-attack.json
+```
+
+Review the diff (renamed, revoked and new techniques) and re-run
+`validate-detections` against the catalog before merging.
+
+ATT&CK® is a registered trademark of The MITRE Corporation. The dataset is
+© The MITRE Corporation and is reproduced and distributed under the
+[ATT&CK terms of use](https://attack.mitre.org/resources/legal-and-branding/terms-of-use/).
 
 ---
 

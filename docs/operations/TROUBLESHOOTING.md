@@ -1327,6 +1327,32 @@ conditions:
 
 ---
 
+### Issue: Saving a rule is refused with `422 ATTACK_TAG_INVALID` (or Install all lists it as "failed validation: attack.…")
+
+**Symptoms:** the rule editor (or `POST`/`PUT /api/rules`) answers
+`Rule "…" was not saved: attack.t1086: T1086 "PowerShell" was revoked in ATT&CK 20.0; use attack.t1059.001 (…)`;
+`validate-detections` prints the same line as an `error:`; **Install all** or a
+content pack skips the rule with `failed validation: attack.…`.
+
+**Cause:** a `tags` entry starting with `attack.` is checked against the
+bundled MITRE ATT&CK Enterprise dataset. It is refused when it is:
+
+- malformed (`attack.t1110.01`: technique IDs are `tNNNN` or `tNNNN.NNN`);
+- not a technique in the bundled release (`attack.t9999`);
+- revoked (the message names the replacement) or deprecated (no replacement);
+- not a tactic (`attack.credentials`; the message lists the valid shortnames).
+
+**Solution:** use the replacement the message names, fix the ID, or remove the
+tag; non-`attack.` tags are never checked. An edit that keeps a tag the rule
+already had (enable/disable) is not refused, so you can always disable an old
+rule first. Warnings (a tactic tag none of the techniques belongs to,
+`attack.defense_evasion`, which ATT&CK v20 split into `attack.stealth` and
+`attack.defense_impairment`) never block a save. Sigma import drops these tags
+with a warning instead of refusing the rule. See
+[ATT&CK tagging](../reference/RULES.md#mitre-attck-tagging).
+
+---
+
 ## Database Issues
 
 ### Issue: "Too Many Connections" Error

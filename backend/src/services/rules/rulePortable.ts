@@ -6,6 +6,7 @@
  */
 import * as yaml from '../../utils/yaml';
 import { normalizeUserRegex, validateUserRegex } from './userRegex';
+import { analyzeAttackTags } from '../attack/attackTags';
 import type { RegexRef } from '../parser/redos';
 
 /** Condition operators the rules engine implements (see rulesEngine.ts). */
@@ -78,6 +79,13 @@ export function validateRule(obj: unknown, opts: { strict?: boolean } = {}): Rul
   if (r.enabled !== undefined && typeof r.enabled !== 'boolean') errors.push('enabled must be a boolean');
   if (r.tags !== undefined && (!Array.isArray(r.tags) || r.tags.some((t: any) => typeof t !== 'string'))) {
     errors.push('tags must be an array of strings');
+  } else if (Array.isArray(r.tags)) {
+    // ATT&CK tags (attack.t1110.001, attack.credential_access): an unknown,
+    // revoked or deprecated technique and an unknown tactic are errors in
+    // either mode, so CI, installs and the rule routes agree.
+    const attack = analyzeAttackTags(r.tags);
+    errors.push(...attack.errors);
+    warnings.push(...attack.warnings);
   }
 
   // conditions

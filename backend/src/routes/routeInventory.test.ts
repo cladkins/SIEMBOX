@@ -141,6 +141,7 @@ const INVENTORY: Row[] = [
   ['DELETE', '/api/rules/:id', ANALYST_UP, AUDITED],
 
   // routes/alerts.ts: Alerts and SOC Triage pages. Deleting destroys evidence.
+  // The list and export take the ATT&CK ?technique= / ?tactic= filters (no route of their own).
   ['GET', '/api/alerts', ANY_ROLE],
   ['GET', '/api/alerts/export', ANY_ROLE],
   ['GET', '/api/alerts/statistics', ANY_ROLE],

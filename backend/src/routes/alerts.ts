@@ -6,6 +6,8 @@ import { getTriageOperationalConfig } from '../services/ai/aiService';
 import { ApiError } from '../middleware/errorHandler';
 import { authorize } from '../middleware/auth';
 import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
+import { resolveTacticName } from '../services/attack/attackTags';
+import { techniqueAndSubtechniques, techniquesForTactic } from '../services/attack/attackData';
 
 const router = Router();
 
@@ -35,8 +37,37 @@ function allowRerun(userId: number): boolean {
   return true;
 }
 
+const TECHNIQUE_ID = /^T\d{4}(?:\.\d{3})?$/i;
+
+/**
+ * ?technique=T1110 (the technique or any of its sub-techniques; T1110.001 is
+ * that sub-technique only) and ?tactic=credential_access (any technique under
+ * the tactic) as one list of technique IDs for AlertModel's `&&` filter. Both
+ * given: alerts matching both. 400 on a malformed technique or unknown tactic.
+ */
+function attackFilter(req: Request): string[] | undefined {
+  const technique = typeof req.query.technique === 'string' ? req.query.technique.trim() : '';
+  const tactic = typeof req.query.tactic === 'string' ? req.query.tactic.trim() : '';
+  if (!technique && !tactic) return undefined;
+  let ids: string[] | undefined;
+  if (technique) {
+    if (!TECHNIQUE_ID.test(technique)) {
+      throw new ApiError(400, 'technique must be an ATT&CK technique ID such as T1110 or T1110.001');
+    }
+    ids = techniqueAndSubtechniques(technique.toUpperCase());
+  }
+  if (tactic) {
+    const shortname = resolveTacticName(tactic);
+    if (!shortname) throw new ApiError(400, `Unknown ATT&CK tactic "${tactic.slice(0, 64)}"`);
+    const under = new Set(techniquesForTactic(shortname));
+    ids = ids ? ids.filter((id) => under.has(id)) : [...under];
+  }
+  return ids;
+}
+
 // Get all alerts
 router.get('/', async (req: Request, res: Response) => {
+  const attackTechniques = attackFilter(req);
   try {
     const limit = parseInt(req.query.limit as string) || 100;
     const offset = parseInt(req.query.offset as string) || 0;
@@ -68,6 +99,7 @@ router.get('/', async (req: Request, res: Response) => {
       triageStatus,
       triageVerdict,
       minRiskScore,
+      attackTechniques,
     };
     const result = groupByEvent
       ? await AlertModel.findAllGrouped(filters)
@@ -93,6 +125,7 @@ function csvCell(value: unknown): string {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 router.get('/export', async (req: Request, res: Response) => {
+  const attackTechniques = attackFilter(req);
   try {
     const format = (req.query.format as string) === 'json' ? 'json' : 'csv';
     const severity = req.query.severity as string;
@@ -111,6 +144,7 @@ router.get('/export', async (req: Request, res: Response) => {
       startTime,
       endTime,
       search,
+      attackTechniques,
     });
 
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');

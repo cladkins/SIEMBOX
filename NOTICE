@@ -1,0 +1,19 @@
+SIEMBox
+Copyright (c) 2025 SIEMBox Contributors. Licensed under the MIT License (LICENSE).
+
+This product includes third-party data, distributed under its own terms:
+
+MITRE ATT&CK(R) Enterprise
+  File:    backend/src/data/attack/enterprise.json (a trimmed export: technique
+           and tactic IDs, names, tactics, platforms, revoked/deprecated status;
+           built by backend/scripts/update-attack.mjs)
+  Source:  https://github.com/mitre-attack/attack-stix-data
+  (c) The MITRE Corporation. This work is reproduced and distributed with the
+  permission of The MITRE Corporation, under the ATT&CK terms of use:
+  https://attack.mitre.org/resources/legal-and-branding/terms-of-use/
+  ATT&CK(R) is a registered trademark of The MITRE Corporation.
+
+DB-IP IP-to-Country Lite (downloaded at runtime, not bundled)
+  IP Geolocation by DB-IP (https://db-ip.com), licensed under Creative Commons
+  Attribution 4.0 International (https://creativecommons.org/licenses/by/4.0/).
+  See docs/geoip.md.

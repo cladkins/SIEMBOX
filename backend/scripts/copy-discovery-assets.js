@@ -16,3 +16,8 @@ for (const asset of ASSETS) {
 }
 
 console.log(`[copy-discovery-assets] copied ${ASSETS.join(', ')} into dist/services/logDiscovery`);
+
+// The bundled MITRE ATT&CK dataset: services/attack/attackData reads it
+// relative to its own __dirname, like the fingerprint library.
+fs.cpSync(path.join(__dirname, '../src/data'), path.join(__dirname, '../dist/data'), { recursive: true });
+console.log('[copy-discovery-assets] copied data/ (ATT&CK dataset) into dist/data');

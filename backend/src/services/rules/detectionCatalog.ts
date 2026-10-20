@@ -54,6 +54,8 @@ export function ruleSignature(r: any): string {
     description: r?.description ?? null,
     tags: (Array.isArray(r?.tags) ? r.tags.slice().sort() : []),
     conditions: r?.conditions ?? rl.conditions ?? null,
+    // Only when present, so a rule without exclusions keeps its old signature.
+    ...((r?.exclude ?? rl.exclude) ? { exclude: r?.exclude ?? rl.exclude } : {}),
     aggregation: r?.aggregation ?? rl.aggregation ?? null,
     alert: r?.alert ?? rl.alert ?? null,
   });

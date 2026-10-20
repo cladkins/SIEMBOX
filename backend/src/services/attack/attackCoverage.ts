@@ -69,6 +69,8 @@ export interface CoverageRuleInput {
   enabled: boolean;
   tags: string[];
   conditions: RuleCondition[];
+  /** Exclusion groups (see PortableRule.exclude). */
+  exclude?: RuleCondition[][] | null;
   aggregation?: { field: string; timeframe: string; threshold: number } | null;
   /** Alerts the rule raised in the last PROVEN_WINDOW_DAYS. */
   alerts_30d: number;
@@ -120,9 +122,9 @@ export function describeCondition(c: RuleCondition): string {
   return `\`${c.field} ${c.operator}${value}\``;
 }
 
-function matches(conditions: RuleCondition[], data: Record<string, any>): boolean {
+function matches(conditions: RuleCondition[], data: Record<string, any>, exclude?: RuleCondition[][] | null): boolean {
   try {
-    return conditionsMatchSample(conditions, data);
+    return conditionsMatchSample(conditions, data, exclude ?? undefined);
   } catch {
     return false; // a malformed condition never matches
   }
@@ -217,7 +219,7 @@ export function evaluateRule(rule: CoverageRuleInput, sources: CoverageSampleSou
     let hit = 0;
     for (const src of withSamples) {
       let srcHit = 0;
-      for (const data of src.samples) if (matches(conditions, data)) srcHit++;
+      for (const data of src.samples) if (matches(conditions, data, rule.exclude)) srcHit++;
       if (srcHit > 0) matched.push(src.parser_name);
       hit += srcHit;
     }

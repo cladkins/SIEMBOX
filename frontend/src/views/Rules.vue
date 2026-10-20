@@ -276,6 +276,7 @@
               <el-text size="small" type="info">
                 <strong>YAML Rule Format:</strong><br>
                 conditions: List of field conditions to match<br>
+                exclude: Groups of conditions; a log matching every condition of a group doesn't fire (optional)<br>
                 aggregation: Count events over timeframe (optional)<br>
                 actions: Define alert title and description with variables
               </el-text>
@@ -516,8 +517,10 @@
         Paste one or more <a href="https://sigmahq.io" target="_blank" rel="noopener">Sigma</a> rules
         (YAML, <code>---</code> separated for multiple). They're converted to SIEMBox detections.
         Imported rules are created <strong>disabled</strong> so you can review them first.
-        SIEMBox evaluates a flat AND-list of conditions, so rules needing OR/NOT/"1 of"/count are
-        reported and skipped rather than mistranslated.
+        A condition with OR (<code>or</code>, <code>1 of selection_*</code>) imports as one rule per
+        alternative (at most 10); NOT (<code>and not filter</code>) becomes the rule's
+        <code>exclude</code> list. Anything else that doesn't fit (NOT inside NOT, <code>| count</code>)
+        is reported and skipped rather than mistranslated.
       </p>
 
       <el-input
@@ -1146,6 +1149,20 @@ function validateYaml() {
     for (const condition of parsed.conditions) {
       if (!condition.field || !condition.operator || condition.value === undefined) {
         yamlError.value = 'Each condition must have field, operator, and value';
+        return;
+      }
+    }
+
+    // Validate exclude groups if present: a list of non-empty condition lists
+    if (parsed.exclude !== undefined) {
+      const groups = parsed.exclude;
+      const ok =
+        Array.isArray(groups) &&
+        groups.every(
+          (g: any) => Array.isArray(g) && g.length > 0 && g.every((c: any) => c && c.field && c.operator && c.value !== undefined)
+        );
+      if (!ok) {
+        yamlError.value = 'exclude must be a list of condition lists, each condition with field, operator, and value';
         return;
       }
     }

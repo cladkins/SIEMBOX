@@ -16,6 +16,7 @@ import * as yaml from '../utils/yaml';
 import { DetectionRuleModel } from '../models/DetectionRule';
 import { logger } from '../utils/logger';
 import { assessRuleRegexes, isRefused } from '../services/regex/regexSafety';
+import { ruleLogicOf } from '../services/rules/rulePortable';
 
 interface YAMLRule {
   name: string;
@@ -69,11 +70,7 @@ function findYAMLFiles(dir: string): string[] {
  * Convert YAML rule to database format
  */
 function convertYAMLToRuleLogic(yamlRule: YAMLRule): any {
-  return {
-    conditions: yamlRule.conditions,
-    aggregation: yamlRule.aggregation,
-    alert: yamlRule.alert,
-  };
+  return ruleLogicOf(yamlRule);
 }
 
 /**

@@ -1001,6 +1001,12 @@ conditions:
     operator: equals|contains|regex
     value: "match_value"
 
+# Optional: don't fire when every condition of any one group matches
+exclude:
+  - - field: user
+      operator: in
+      value: ["backup", "monitoring"]
+
 # Optional: aggregate events before alerting
 aggregation:
   field: field_to_group_by
@@ -1041,6 +1047,61 @@ alert:
   title: "Unauthorized Calendar Access by {user}"
   description: "{count} calendar file accesses by {user} from {source_ip}"
 ```
+
+#### Exclusions (`exclude`)
+
+`conditions` must all match. `exclude` is an optional list of **groups** of
+conditions; the rule does not fire on a log when **every** condition of **any
+one** group matches it. It is how you say "…but not for these":
+
+```yaml
+conditions:
+  - field: event_type
+    operator: equals
+    value: sudo_command
+  - field: target_user
+    operator: equals
+    value: root
+exclude:
+  - - field: user                # group 1: the admins
+      operator: in
+      value: ["alice", "bob"]
+  - - field: user                # group 2: the backup job, but only on the NAS
+      operator: equals
+      value: backup
+    - field: hostname
+      operator: equals
+      value: nas
+```
+
+A group whose field is **missing** from the log does not match, so it excludes
+nothing: above, a sudo-to-root log with no `user` field still alerts. That is
+how Sigma's `selection and not filter` behaves, and it is why `exclude` exists
+rather than turning a filter into `not_equals` conditions (a missing field fails
+every condition, including `not_equals`). Exclusions apply everywhere the rule is
+evaluated: live detection, aggregation counts, catalog recommendations and the
+ATT&CK coverage dry run. Their regexes go through the same safety check as the
+conditions' (locations read `exclude[0][1].value`).
+
+#### Importing Sigma rules
+
+Detection Rules → **Import Sigma** (admins) converts pasted Sigma YAML; imported
+rules are created disabled for review. A SIEMBox rule is an AND-list plus
+`exclude`, so the converter maps Sigma like this:
+
+| Sigma | SIEMBox |
+|---|---|
+| `selection`, `a and b`, `all of them`, `all of sel*` | one rule, conditions ANDed |
+| `a or b`, `1 of selection_*`, `1 of them`, a list of conditions, a selection that is a list of mappings, `a and (b or c)` | one rule per alternative, named `Title (part 1 of N)`; at most 10, more is refused |
+| `selection and not filter`, `not 1 of filter_*` | `exclude` groups |
+| a list of values (`user: [a, b]`) | `in`, or a regex alternation with wildcards |
+| `field|contains`/`startswith`/`endswith`/`re` with a list | one regex alternation (`contains` stays case-insensitive) |
+| NOT inside NOT, a rule that is only `not …`, `\| count()` and other aggregations | refused with the reason |
+| `base64`, `cidr`, `wide`, `gte`/`lte` modifiers | that field is skipped with a warning |
+
+Split rules keep the Sigma title as their alert title. A log that matches two
+alternatives raises an alert from each. Sigma field names often differ from your
+parser output, so the preview lists the fields each rule keys on.
 
 ### Regex Safety
 

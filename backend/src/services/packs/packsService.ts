@@ -11,7 +11,7 @@ import { getCatalogParser, fetchCatalog } from '../parser/catalogService';
 import { ParserEngine } from '../parser/parserEngine';
 import { validatePortableParser } from '../parser/parserPortable';
 import { fetchDetectionCatalog, getCatalogDetection } from '../rules/detectionCatalog';
-import { validateRule, portableRuleToYaml } from '../rules/rulePortable';
+import { validateRule, portableRuleToYaml, ruleLogicOf } from '../rules/rulePortable';
 import { RulesEngine } from '../rules/rulesEngine';
 import { logger } from '../../utils/logger';
 import { assessParserRegexes, assessRuleRegexes, isRefused, refusalReason, type RegexSafetyReport } from '../regex/regexSafety';
@@ -243,7 +243,7 @@ export async function installPack(id: string): Promise<PackInstallResult> {
         result.detections.failed.push({ name, reason: refused });
         continue;
       }
-      const rule_logic = { conditions: parsed.conditions, aggregation: parsed.aggregation, alert: parsed.alert };
+      const rule_logic = ruleLogicOf(parsed);
       const existing = await DetectionRuleModel.findByName(parsed.name);
       if (existing) {
         await DetectionRuleModel.update(existing.id, {

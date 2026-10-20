@@ -7,7 +7,7 @@ description: >
   or compromised user account attempting privilege escalation.
 severity: high
 enabled: true
-tags: [sudo, privilege-escalation, root, access-control, linux]
+tags: [sudo, privilege-escalation, root, access-control, linux, attack.t1548.003]
 
 conditions:
   - field: target_user

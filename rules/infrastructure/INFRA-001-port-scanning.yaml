@@ -5,7 +5,7 @@ description: >
   or zmap. Port scanning is reconnaissance phase before exploitation.
 severity: medium
 enabled: true
-tags: [port-scan, scanning, reconnaissance, infrastructure, network]
+tags: [port-scan, scanning, reconnaissance, infrastructure, network, attack.t1046, attack.t1595.001]
 
 conditions:
   - field: message

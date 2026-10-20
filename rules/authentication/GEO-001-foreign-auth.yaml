@@ -6,7 +6,7 @@ description: >
   nothing is considered foreign and this rule will not fire.
 severity: medium
 enabled: true
-tags: [authentication, geolocation, foreign, anomaly]
+tags: [authentication, geolocation, foreign, anomaly, attack.t1078]
 
 conditions:
   - field: geo_foreign

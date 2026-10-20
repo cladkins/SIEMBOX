@@ -5,7 +5,7 @@ description: >
   This is more sophisticated than single-source attacks.
 severity: high
 enabled: true
-tags: [authentication, brute-force, distributed-attack, botnet, credential-stuffing]
+tags: [authentication, brute-force, distributed-attack, botnet, credential-stuffing, attack.t1110.003, attack.t1110.004]
 
 conditions:
   - field: event

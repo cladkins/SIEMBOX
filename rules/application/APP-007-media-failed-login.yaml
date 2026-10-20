@@ -8,7 +8,7 @@ description: >
   event "login_failure" with source_ip.
 severity: high
 enabled: true
-tags: [plex, jellyfin, brute-force, authentication, media-streaming]
+tags: [plex, jellyfin, brute-force, authentication, media-streaming, attack.t1110]
 
 conditions:
   - field: service

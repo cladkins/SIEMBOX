@@ -6,7 +6,7 @@ description: >
   Mining processes consume CPU/GPU resources and often indicate broader compromise requiring full investigation.
 severity: high
 enabled: true
-tags: [cryptomining, malware, infrastructure, resource-theft, compromise]
+tags: [cryptomining, malware, infrastructure, resource-theft, compromise, attack.t1496]
 
 conditions:
   - field: message

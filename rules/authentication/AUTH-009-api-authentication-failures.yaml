@@ -5,7 +5,7 @@ description: >
   10 failures in 10 minutes indicates brute force or token guessing attempts.
 severity: medium
 enabled: true
-tags: [api, authentication, token-abuse, brute-force]
+tags: [api, authentication, token-abuse, brute-force, attack.t1110]
 
 conditions:
   - field: message

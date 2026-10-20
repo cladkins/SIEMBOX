@@ -8,7 +8,7 @@ description: >
   encoded mixed-case requests real tooling emits are caught.
 severity: high
 enabled: true
-tags: [web, command-injection, attack, reverse-proxy, exploitation]
+tags: [web, command-injection, attack, reverse-proxy, exploitation, attack.t1190, attack.t1059]
 
 conditions:
   - field: path

@@ -5,7 +5,7 @@ description: >
   Legitimate users know their username - this is attacker behavior.
 severity: medium
 enabled: true
-tags: [authentication, reconnaissance, enumeration, ssh, attack]
+tags: [authentication, reconnaissance, enumeration, ssh, attack, attack.t1110]
 
 conditions:
   - field: event

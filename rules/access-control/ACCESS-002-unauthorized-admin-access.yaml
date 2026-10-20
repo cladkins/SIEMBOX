@@ -6,7 +6,7 @@ description: >
   Requires maintaining admin IP whitelist configuration.
 severity: medium
 enabled: true
-tags: [admin-access, access-control, authentication, web, privilege]
+tags: [admin-access, access-control, authentication, web, privilege, attack.t1078]
 
 conditions:
   - field: path

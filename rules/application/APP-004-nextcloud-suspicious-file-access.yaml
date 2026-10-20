@@ -5,7 +5,7 @@ description: >
   and indicates automated access patterns or scanning activity.
 severity: high
 enabled: true
-tags: [nextcloud, file-access, data-scanning, bulk-access, exfiltration]
+tags: [nextcloud, file-access, data-scanning, bulk-access, exfiltration, attack.t1213]
 
 conditions:
   - field: path

@@ -8,7 +8,7 @@ description: >
   login_attempts_threshold is configured.
 severity: high
 enabled: true
-tags: [home-assistant, brute-force, authentication, iot, smart-home]
+tags: [home-assistant, brute-force, authentication, iot, smart-home, attack.t1110]
 
 conditions:
   - field: service

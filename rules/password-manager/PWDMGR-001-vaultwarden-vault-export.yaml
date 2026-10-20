@@ -8,7 +8,7 @@ severity: critical
 # operations to its log stream (only the org/Bitwarden DB event-log, which
 # SIEMBox does not ingest yet). Disabled until that source is available.
 enabled: false
-tags: [vaultwarden, password-manager, data-exfiltration, critical, credential-theft]
+tags: [vaultwarden, password-manager, data-exfiltration, critical, credential-theft, attack.t1555.005]
 
 conditions:
   - field: service

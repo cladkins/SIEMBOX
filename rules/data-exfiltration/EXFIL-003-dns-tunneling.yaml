@@ -6,7 +6,7 @@ description: >
   Also detects unusually long domain names which are common in DNS tunneling.
 severity: high
 enabled: true
-tags: [exfiltration, dns-tunneling, pihole, dns, covert-channel]
+tags: [exfiltration, dns-tunneling, pihole, dns, covert-channel, attack.t1071.004, attack.t1048]
 
 conditions:
   - field: query_type

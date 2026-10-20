@@ -5,7 +5,7 @@ description: >
   May indicate DoS attack, web scraping, automated attacks, or compromised API credentials.
 severity: high
 enabled: true
-tags: [web, dos, attack, reverse-proxy, availability, rate-limiting]
+tags: [web, dos, attack, reverse-proxy, availability, rate-limiting, attack.t1499]
 
 conditions:
   # method gates this to actual HTTP access logs. client_ip alone is NOT

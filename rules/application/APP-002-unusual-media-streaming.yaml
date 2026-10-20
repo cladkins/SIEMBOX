@@ -7,7 +7,7 @@ description: >
   Adjust threshold based on household size and typical usage.
 severity: low
 enabled: true
-tags: [plex, jellyfin, media-streaming, account-sharing, bandwidth]
+tags: [plex, jellyfin, media-streaming, account-sharing, bandwidth, attack.t1078]
 
 conditions:
   - field: event

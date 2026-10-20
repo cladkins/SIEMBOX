@@ -5,7 +5,7 @@ description: >
   Normal services restart infrequently except during updates or configuration changes.
 severity: medium
 enabled: true
-tags: [service-restart, availability, infrastructure, systemd, tampering]
+tags: [service-restart, availability, infrastructure, systemd, tampering, attack.t1543.002, attack.t1489]
 
 conditions:
   - field: message

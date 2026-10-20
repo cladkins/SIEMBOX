@@ -5,7 +5,7 @@ description: >
   Monitors for access to docker.sock, cgroup manipulation, namespace operations, and kernel exploitation techniques.
 severity: critical
 enabled: true
-tags: [container, docker, privilege-escalation, critical, infrastructure]
+tags: [container, docker, privilege-escalation, critical, infrastructure, attack.t1611]
 
 conditions:
   - field: message

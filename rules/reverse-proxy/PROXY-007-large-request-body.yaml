@@ -8,7 +8,7 @@ description: >
   request_length / request_size / bytes_received, which the normalizer maps to request_size.
 severity: medium
 enabled: true
-tags: [web, dos, upload-abuse, reverse-proxy, availability]
+tags: [web, dos, upload-abuse, reverse-proxy, availability, attack.t1499]
 
 conditions:
   - field: request_size

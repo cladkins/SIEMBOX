@@ -8,7 +8,7 @@ description: >
   Even failed attempts indicate active reconnaissance and should be investigated.
 severity: high
 enabled: true
-tags: [web, sql-injection, attack, reverse-proxy, exploitation]
+tags: [web, sql-injection, attack, reverse-proxy, exploitation, attack.t1190]
 
 conditions:
   - field: path

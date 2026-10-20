@@ -5,7 +5,7 @@ severity: high
 # to the log stream (only a "New Device" email + org DB event-log). Disabled
 # until an event-log feed is ingested.
 enabled: false
-tags: [vaultwarden, password-manager, device-registration, anomaly]
+tags: [vaultwarden, password-manager, device-registration, anomaly, attack.t1098.005]
 
 conditions:
   - field: service

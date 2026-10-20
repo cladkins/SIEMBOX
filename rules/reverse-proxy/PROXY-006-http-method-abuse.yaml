@@ -7,7 +7,7 @@ description: >
   These methods may reveal server information or enable attacks.
 severity: medium
 enabled: true
-tags: [web, http-methods, reconnaissance, reverse-proxy, vulnerability-research]
+tags: [web, http-methods, reconnaissance, reverse-proxy, vulnerability-research, attack.t1595.002]
 
 conditions:
   - field: method

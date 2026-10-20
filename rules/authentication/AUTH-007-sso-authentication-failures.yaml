@@ -5,7 +5,7 @@ description: >
   5 failures in 5 minutes indicates automated attack.
 severity: high
 enabled: true
-tags: [authentication, brute-force, sso, authelia, authentik, keycloak, attack]
+tags: [authentication, brute-force, sso, authelia, authentik, keycloak, attack, attack.t1110]
 
 conditions:
   - field: service

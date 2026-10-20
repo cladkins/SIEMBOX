@@ -5,7 +5,7 @@ description: >
   Can help establish baseline behavior and identify compromised accounts.
 severity: low
 enabled: true
-tags: [authentication, anomaly, after-hours, baseline, informational]
+tags: [authentication, anomaly, after-hours, baseline, informational, attack.t1078]
 
 conditions:
   - field: event

@@ -230,7 +230,7 @@
         </el-row>
 
         <el-form-item label="Tags" prop="tags">
-          <el-select v-model="plainFormTags" multiple placeholder="Add tags" allow-create filterable style="width: 100%">
+          <el-select v-model="ruleForm.tags" multiple placeholder="Add tags" allow-create filterable style="width: 100%">
             <el-option label="authentication" value="authentication" />
             <el-option label="ssh" value="ssh" />
             <el-option label="web" value="web" />
@@ -900,14 +900,9 @@ const ruleForm = reactive({
 const yamlError = ref('');
 const yamlValid = ref(false);
 
-// The Tags select edits the plain tags; the ATT&CK picker edits the technique
-// tags. Both live in ruleForm.tags, which is what is saved.
-const plainFormTags = computed({
-  get: () => plainTagsOf(ruleForm.tags),
-  set: (value: string[]) => {
-    ruleForm.tags = [...value, ...ruleForm.tags.filter((t) => isTechniqueTag(t))];
-  },
-});
+// The ATT&CK picker adds attack.tNNNN tags to the same ruleForm.tags the Tags
+// select edits (a tag typed there by hand shows as a chip too), and its chips
+// remove them again.
 const formTechniqueCount = computed(() => techniqueIdsFromTags(ruleForm.tags).length);
 function addTechnique(id: string) {
   ruleForm.tags = addTechniqueTag(ruleForm.tags, id);

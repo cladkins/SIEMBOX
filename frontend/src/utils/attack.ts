@@ -130,7 +130,7 @@ export const LEVELS: CoverageLevel[] = ['none', 'disabled', 'no_data', 'covered'
 
 export const LEVEL_INFO: Record<CoverageLevel, LevelInfo> = {
   none: { label: 'No rule', mark: '–', description: 'No rule is tagged with this technique.' },
-  disabled: { label: 'Disabled', mark: '⏸', description: 'Rules are tagged with it, but all of them are disabled.' },
+  disabled: { label: 'Disabled', mark: '‖', description: 'Rules are tagged with it, but all of them are disabled.' },
   no_data: {
     label: 'No data',
     mark: '!',

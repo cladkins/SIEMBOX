@@ -267,7 +267,9 @@ export const api = {
       timeout: 60000,
     }),
   // Detection catalog (browse/install rules from the GitHub repo, in-app)
-  getRuleCatalog: (refresh = false) => apiClient.get('/rules/catalog', { params: refresh ? { refresh: true } : {} }),
+  // `inline`: the caller shows a failure itself (the ATT&CK panel's catalog suggestions).
+  getRuleCatalog: (refresh = false, inline = false) =>
+    apiClient.get('/rules/catalog', { params: refresh ? { refresh: true } : {}, ...(inline ? SHOWN_INLINE : {}) }),
   installCatalogRule: (name: string) => apiClient.post('/rules/catalog/install', { name }, REGEX_GATE),
   getRuleRecommendations: (refresh = false) =>
     apiClient.get('/rules/recommendations', { params: refresh ? { refresh: 'true' } : {}, timeout: 60000 }),

@@ -94,7 +94,7 @@
         <template v-else>Scope inferred from your data:</template>
         <ul v-if="coverage.scope.inferred.inferred_from.length" class="scope-evidence">
           <li v-for="(e, i) in coverage.scope.inferred.inferred_from" :key="i">
-            <strong>{{ e.platform }}</strong> — {{ sourceLabel(e.source) }}<template v-if="e.items.length">:
+            <strong>{{ e.platform }}</strong> — {{ sourceLabel(e.source) }}<template v-if="e.items.length && e.source !== 'default'">:
               {{ shortList(e.items) }}</template>
           </li>
         </ul>
@@ -307,7 +307,7 @@ async function loadCatalog() {
   catalogLoading.value = true;
   catalogError.value = '';
   try {
-    const { data } = await api.getRuleCatalog(false);
+    const { data } = await api.getRuleCatalog(false, true);
     catalog.value = data.rules || [];
   } catch (e: any) {
     catalogError.value = e?.response?.data?.message || 'The detection catalog could not be loaded.';
@@ -369,7 +369,7 @@ const SOURCE_LABELS: Record<string, string> = {
   assets: 'assets',
   endpoint_agents: 'endpoint agents',
   shipper_containers: 'containers reported by log shippers',
-  default: 'default (nothing in your data implied a platform)',
+  default: 'the default scope: nothing in your data implies a platform yet',
 };
 function sourceLabel(source: string): string {
   return SOURCE_LABELS[source] ?? source;

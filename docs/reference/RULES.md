@@ -1255,6 +1255,34 @@ layer (open it with *Open Existing Layer → Upload from local*): score 1-4 and 
 colour per level (`disabled` → `proven`), the rule names in each comment, and
 excluded techniques disabled.
 
+**In the UI.**
+
+- **SIEM → ATT&CK Coverage** (`/attack`, every role) shows this coverage as
+  the matrix: one column per tactic with its percentage, one cell per
+  technique coloured by level and marked with a symbol (– no rule,
+  ‖ disabled, ! no data, ✓ covered, ★ proven, ⊘ not applicable), so the level
+  never rests on colour alone. The **Platforms** filter starts at the inferred
+  scope and lists what implied each platform; **Show sub-techniques**, the
+  search (ID or name) and the **Alerts (30 d)** heatmap change the view.
+  Clicking a cell opens the technique: its link on attack.mitre.org, its
+  sub-techniques, each tagged rule with its level and `reason`, catalog rules
+  tagged with it that you have not installed, its recent alerts (with a link
+  to the Alerts list filtered by technique) and **Mark not applicable** with a
+  note. Viewers read and **Export Navigator layer**; analysts and up also
+  mark techniques not applicable and **Refresh** (`?refresh=1`).
+- **Rule editor** (Detection Rules → Add Rule / Edit): the **ATT&CK** field
+  searches techniques by ID or name and adds the `attack.t…` tag to the
+  rule's tags; the chips under it name each technique and remove it. A save
+  refused with `422 ATTACK_TAG_INVALID` lists each bad tag and its
+  replacement at the top of the editor, like a refused regex.
+- **Rules list and catalog**: technique chips (the name on hover) and
+  technique / tactic filters (a technique matches its sub-techniques). The
+  catalog's **Fills a gap** badge (and status filter) marks a not-installed
+  rule tagged with a technique whose coverage is `none`.
+- **Alerts**: the list and the alert details show each alert's
+  `attack_techniques`; the technique and tactic filters use
+  `GET /api/alerts?technique=` / `?tactic=` and also apply to Export.
+
 ATT&CK® is a registered trademark of The MITRE Corporation. The dataset is
 © The MITRE Corporation and is reproduced and distributed under the
 [ATT&CK terms of use](https://attack.mitre.org/resources/legal-and-branding/terms-of-use/).

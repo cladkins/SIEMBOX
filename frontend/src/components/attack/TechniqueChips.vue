@@ -3,7 +3,7 @@
     <el-tooltip v-for="id in ids" :key="id" :content="techniqueLabel(index, id)" placement="top">
       <router-link v-if="link" :to="{ path: '/attack', query: { technique: id } }" class="technique-chip-link">
         <el-tag size="small" type="danger" effect="plain" class="technique-chip" data-testid="technique-chip">
-          {{ id }}<template v-if="showNames && name(id)"> {{ name(id) }}</template>
+          {{ chipText(id) }}
         </el-tag>
       </router-link>
       <el-tag
@@ -16,7 +16,7 @@
         :closable="closable"
         @close="emit('remove', id)"
       >
-        {{ id }}<template v-if="showNames && name(id)"> {{ name(id) }}</template>
+        {{ chipText(id) }}
       </el-tag>
     </el-tooltip>
   </span>
@@ -50,6 +50,7 @@ const ids = computed(() =>
   props.techniques ? [...new Set(props.techniques.map((t) => t.toUpperCase()))].sort() : techniqueIdsFromTags(props.tags)
 );
 const name = (id: string) => index.value?.byId.get(id)?.fullName ?? '';
+const chipText = (id: string) => (props.showNames && name(id) ? `${id} ${name(id)}` : id);
 </script>
 
 <style scoped>

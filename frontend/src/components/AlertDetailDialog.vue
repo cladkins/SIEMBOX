@@ -26,6 +26,17 @@
             <el-descriptions-item label="Description" :span="2">
               {{ alert.description || 'N/A' }}
             </el-descriptions-item>
+            <el-descriptions-item v-if="alert.attack_techniques?.length" label="ATT&CK" :span="2">
+              <TechniqueChips :techniques="alert.attack_techniques" show-names link @click="emit('update:modelValue', false)" />
+              <a
+                v-for="id in alert.attack_techniques"
+                :key="id"
+                :href="attackTechniqueUrl(id)"
+                target="_blank"
+                rel="noopener"
+                class="mitre-link"
+              >{{ id }} ↗</a>
+            </el-descriptions-item>
             <el-descriptions-item label="Created">
               {{ formatDate(alert.created_at) }}
             </el-descriptions-item>
@@ -88,6 +99,8 @@ import HibpAttribution from '@/components/HibpAttribution.vue';
 import { isHibpAlert } from '@/utils/exposure';
 import { useAuthStore } from '@/stores/auth';
 import OpenInGraphButton from '@/components/graph/OpenInGraphButton.vue';
+import TechniqueChips from '@/components/attack/TechniqueChips.vue';
+import { attackTechniqueUrl } from '@/utils/attack';
 
 const props = withDefaults(
   defineProps<{
@@ -141,6 +154,11 @@ const formatDate = (date: string) => format(new Date(date), 'MMM dd, yyyy HH:mm:
 </script>
 
 <style scoped>
+.mitre-link {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--el-color-primary);
+}
 .alert-detail {
   padding: 10px 0;
 }

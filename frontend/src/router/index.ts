@@ -97,6 +97,13 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/Rules.vue'),
       },
       {
+        // ATT&CK coverage: every role reads it (viewers read-only); the
+        // not-applicable controls and Refresh are analyst and up.
+        path: 'attack',
+        name: 'AttackCoverage',
+        component: () => import('@/views/AttackCoverage.vue'),
+      },
+      {
         path: 'content-packs',
         name: 'ContentPacks',
         component: () => import('@/views/ContentPacks.vue'),

@@ -245,6 +245,27 @@ export const api = {
   createRule: (data: any) => apiClient.post('/rules', data, REGEX_GATE),
   updateRule: (id: number, data: any) => apiClient.put(`/rules/${id}`, data, REGEX_GATE),
   deleteRule: (id: number) => apiClient.delete(`/rules/${id}`),
+  // MITRE ATT&CK (docs/reference/API.md "ATT&CK Coverage"). `platforms` is a
+  // comma-separated list or 'all'; omitted, the scope inferred from your data.
+  getAttackMatrix: (platforms?: string) =>
+    apiClient.get('/attack/matrix', { params: platforms ? { platforms } : {}, ...SHOWN_INLINE }),
+  getAttackCoverage: (platforms?: string, refresh = false) =>
+    apiClient.get('/attack/coverage', {
+      params: { ...(platforms ? { platforms } : {}), ...(refresh ? { refresh: 1 } : {}) },
+      ...SHOWN_INLINE,
+      timeout: 60000,
+    }),
+  setAttackExclusion: (techniqueId: string, note: string) =>
+    apiClient.put(`/attack/exclusions/${encodeURIComponent(techniqueId)}`, { note }, INLINE),
+  deleteAttackExclusion: (techniqueId: string) =>
+    apiClient.delete(`/attack/exclusions/${encodeURIComponent(techniqueId)}`, INLINE),
+  getAttackNavigatorLayer: (platforms?: string) =>
+    apiClient.get('/attack/navigator-layer', {
+      params: platforms ? { platforms } : {},
+      responseType: 'blob',
+      ...INLINE,
+      timeout: 60000,
+    }),
   // Detection catalog (browse/install rules from the GitHub repo, in-app)
   getRuleCatalog: (refresh = false) => apiClient.get('/rules/catalog', { params: refresh ? { refresh: true } : {} }),
   installCatalogRule: (name: string) => apiClient.post('/rules/catalog/install', { name }, REGEX_GATE),

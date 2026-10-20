@@ -16,6 +16,8 @@ export interface Alert {
   updated_at: string;
   /** What raised it outside the rules engine (e.g. 'edr', 'leaked-creds'); null for rule alerts. */
   source?: string | null;
+  /** The raising rule's ATT&CK technique IDs (T1110.001), copied when the alert was created. */
+  attack_techniques?: string[];
   // Joined from alert_triage — present once AI triage has run for this alert.
   triage_status?: 'pending' | 'analyzing' | 'complete' | 'failed' | 'skipped' | null;
   triage_verdict?: 'true_positive' | 'false_positive' | 'suspicious' | 'inconclusive' | null;

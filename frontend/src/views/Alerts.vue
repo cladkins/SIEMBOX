@@ -33,6 +33,23 @@
           </el-select>
         </el-form-item>
 
+        <el-form-item label="ATT&CK">
+          <TechniqueSelect
+            v-model="filters.technique"
+            placeholder="Technique"
+            style="width: 220px"
+            data-testid="alerts-technique-filter"
+            @update:model-value="applySearch"
+          />
+          <TacticSelect
+            v-model="filters.tactic"
+            placeholder="Tactic"
+            style="width: 170px; margin-left: 8px"
+            data-testid="alerts-tactic-filter"
+            @update:model-value="applySearch"
+          />
+        </el-form-item>
+
         <el-form-item>
           <el-tooltip
             content="One log can satisfy several detection rules, so a single event otherwise appears as several rows. Grouped shows one row per event, titled by its most severe detection."
@@ -139,6 +156,12 @@
           </template>
         </el-table-column>
 
+        <el-table-column label="ATT&CK" min-width="140">
+          <template #default="{ row }">
+            <TechniqueChips :techniques="row.attack_techniques" link />
+          </template>
+        </el-table-column>
+
         <el-table-column prop="status" label="Status" width="150">
           <template #default="{ row }">
             <el-tag :type="getStatusType(row.status)">
@@ -236,6 +259,10 @@ import { api } from '@/services/api';
 import AlertDetailDialog from '@/components/AlertDetailDialog.vue';
 import HibpAttribution from '@/components/HibpAttribution.vue';
 import { isHibpAlert } from '@/utils/exposure';
+import TechniqueChips from '@/components/attack/TechniqueChips.vue';
+import TechniqueSelect from '@/components/attack/TechniqueSelect.vue';
+import TacticSelect from '@/components/attack/TacticSelect.vue';
+import { isTechniqueId } from '@/utils/attack';
 
 const route = useRoute();
 const alertsStore = useAlertsStore();
@@ -248,6 +275,9 @@ const filters = ref({
   severity: '',
   status: '',
   search: '',
+  // ATT&CK (GET /api/alerts ?technique= / ?tactic=): a technique matches its sub-techniques too.
+  technique: null as string | null,
+  tactic: null as string | null,
 });
 
 // Deep-link support: the dashboard's severity/status panels click through
@@ -259,6 +289,13 @@ if (typeof initialSeverity === 'string') {
 const initialStatus = route.query.status;
 if (typeof initialStatus === 'string') {
   filters.value.status = initialStatus;
+}
+// /alerts?technique=T1110 (the ATT&CK Coverage panel) and ?tactic=credential_access.
+if (typeof route.query.technique === 'string' && isTechniqueId(route.query.technique)) {
+  filters.value.technique = route.query.technique.toUpperCase();
+}
+if (typeof route.query.tactic === 'string' && route.query.tactic) {
+  filters.value.tactic = route.query.tactic;
 }
 // /alerts?alert=<id> (a Digital Risk finding's alert) opens that alert's
 // details; ?id=<id> is what the dashboard's Recent Alerts "View" links to.
@@ -337,6 +374,8 @@ const fetchAlerts = async () => {
   if (filters.value.search && filters.value.search.trim()) {
     params.search = filters.value.search.trim();
   }
+  if (filters.value.technique) params.technique = filters.value.technique;
+  if (filters.value.tactic) params.tactic = filters.value.tactic;
   if (groupByEvent.value) {
     params.group = 'event';
   }
@@ -354,7 +393,7 @@ const applySearch = () => {
 };
 
 const resetFilters = () => {
-  filters.value = { severity: '', status: '', search: '' };
+  filters.value = { severity: '', status: '', search: '', technique: null, tactic: null };
   currentPage.value = 1;
   fetchAlerts();
 };
@@ -368,6 +407,8 @@ const exportAlerts = async (fmt: 'csv' | 'json') => {
     if (filters.value.severity) params.severity = filters.value.severity;
     if (filters.value.status) params.status = filters.value.status;
     if (filters.value.search && filters.value.search.trim()) params.search = filters.value.search.trim();
+    if (filters.value.technique) params.technique = filters.value.technique;
+    if (filters.value.tactic) params.tactic = filters.value.tactic;
 
     const res = await api.exportAlerts(params, fmt);
     const blob = new Blob([res.data], { type: fmt === 'json' ? 'application/json' : 'text/csv' });

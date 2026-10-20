@@ -7,7 +7,7 @@ description: >
   is configured (it defaults to -1 = disabled).
 severity: medium
 enabled: true
-tags: [home-assistant, authentication, ip-ban, iot, smart-home]
+tags: [home-assistant, authentication, ip-ban, iot, smart-home, attack.t1110]
 
 conditions:
   - field: service

@@ -6,7 +6,7 @@ description: >
   Any occurrence indicates either policy violation or potential compromise.
 severity: critical
 enabled: true
-tags: [ssh, root, authentication, privilege-escalation, critical, policy-violation]
+tags: [ssh, root, authentication, privilege-escalation, critical, policy-violation, attack.t1078.003, attack.t1021.004]
 
 conditions:
   - field: event

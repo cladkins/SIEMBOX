@@ -8,7 +8,7 @@ description: >
   while legitimate agents that merely contain a token (Zapier) are not.
 severity: medium
 enabled: true
-tags: [web, scanning, user-agent, reverse-proxy, reconnaissance]
+tags: [web, scanning, user-agent, reverse-proxy, reconnaissance, attack.t1595.002]
 
 conditions:
   - field: user_agent

@@ -6,7 +6,7 @@ description: >
   Legitimate users rarely generate this many missing page requests.
 severity: medium
 enabled: true
-tags: [web, scanning, reconnaissance, reverse-proxy, enumeration]
+tags: [web, scanning, reconnaissance, reverse-proxy, enumeration, attack.t1595.003]
 
 conditions:
   - field: status_code

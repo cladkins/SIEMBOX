@@ -6,7 +6,7 @@ description: >
   in current implementation.
 severity: high
 enabled: true
-tags: [exfiltration, data-transfer, bandwidth, nextcloud, immich]
+tags: [exfiltration, data-transfer, bandwidth, nextcloud, immich, attack.t1567]
 
 conditions:
   - field: response_size

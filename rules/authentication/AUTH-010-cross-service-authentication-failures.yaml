@@ -5,7 +5,7 @@ description: >
   to test credentials across your infrastructure.
 severity: high
 enabled: true
-tags: [authentication, credential-stuffing, brute-force, attack, lateral-movement]
+tags: [authentication, credential-stuffing, brute-force, attack, lateral-movement, attack.t1110.004]
 
 conditions:
   - field: message

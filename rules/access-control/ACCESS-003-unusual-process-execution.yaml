@@ -6,7 +6,7 @@ description: >
   These patterns are rarely legitimate and often indicate post-exploitation activity.
 severity: high
 enabled: true
-tags: [sudo, process-execution, exploitation, malware, access-control]
+tags: [sudo, process-execution, exploitation, malware, access-control, attack.t1059.004, attack.t1548.003, attack.t1105]
 
 conditions:
   - field: command

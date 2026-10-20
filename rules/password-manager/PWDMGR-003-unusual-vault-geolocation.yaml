@@ -6,7 +6,7 @@ description: >
   Requires GeoIP enrichment (DB-IP lite) and GEOIP_HOME_COUNTRIES to be set.
 severity: high
 enabled: true
-tags: [vaultwarden, password-manager, geolocation, anomaly, travel]
+tags: [vaultwarden, password-manager, geolocation, anomaly, travel, attack.t1078]
 
 conditions:
   - field: service

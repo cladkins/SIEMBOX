@@ -6,7 +6,7 @@ description: >
   Even failed attempts indicate reconnaissance.
 severity: medium
 enabled: true
-tags: [web, path-traversal, attack, reverse-proxy, file-access]
+tags: [web, path-traversal, attack, reverse-proxy, file-access, attack.t1190]
 
 conditions:
   - field: path

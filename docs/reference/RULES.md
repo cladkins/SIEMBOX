@@ -1167,6 +1167,14 @@ with `GET /api/alerts?technique=T1110` (the technique and its sub-techniques)
 or `?tactic=credential_access`. Alerts that existed before the upgrade were
 filled in once from their rule's tags at the time (migration 045).
 
+**Catalog rules come tagged.** 43 of the 51 catalog detections carry technique
+tags. A rule installed before the tags were added shows **Update available** in
+Detection Rules → Browse Catalog; updating it brings the tags in. Eight are
+left untagged on purpose: rules that match an indicator rather than a
+behaviour (TI-001, TI-002, PROXY-009, UNIFI-IPS-001, UNIFI-IPS-002, which
+fire on whatever the feed or IPS signature says) and rules with no fitting
+technique (APP-001, IOT-001, IOT-002, all disabled by default).
+
 **Updating the dataset** (maintainers, at each ATT&CK release):
 
 ```bash

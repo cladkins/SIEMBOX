@@ -113,8 +113,8 @@
       data-testid="nothing-tagged"
       title="No rule is tagged with an ATT&CK technique yet"
     >
-      Every technique is at "No rule". The catalog's detection rules get ATT&amp;CK technique tags in a coming update;
-      after that, reinstall them from Detection Rules → Browse Catalog.
+      Every technique is at "No rule". The catalog's detection rules carry ATT&amp;CK technique tags: install them, or
+      update installed ones, from Detection Rules → Browse Catalog (filter "Update available").
       <template v-if="canEdit">Until then you can tag your own rules in the rule editor (ATT&amp;CK techniques).</template>
     </el-alert>
 

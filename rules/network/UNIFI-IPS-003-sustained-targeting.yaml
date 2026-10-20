@@ -5,7 +5,7 @@ description: >
   escalates a repeat offender above the per-event alerts.
 severity: critical
 enabled: true
-tags: [network, unifi, ids-ips, threat, scanning, aggregation]
+tags: [network, unifi, ids-ips, threat, scanning, aggregation, attack.t1595]
 
 conditions:
   - field: UNIFIpolicyType

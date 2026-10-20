@@ -5,7 +5,7 @@ description: >
   and may indicate malware beaconing, DNS abuse, or compromised device.
 severity: medium
 enabled: true
-tags: [pihole, dns, malware, c2-beacon, anomaly-detection]
+tags: [pihole, dns, malware, c2-beacon, anomaly-detection, attack.t1071.004]
 
 conditions:
   - field: query_type

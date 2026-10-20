@@ -5,7 +5,7 @@ description: >
   Homelab environments have small user bases, so legitimate failures should be rare.
 severity: high
 enabled: true
-tags: [ssh, brute-force, authentication, attack]
+tags: [ssh, brute-force, authentication, attack, attack.t1110.001, attack.t1021.004]
 
 conditions:
   - field: event

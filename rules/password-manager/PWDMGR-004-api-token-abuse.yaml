@@ -5,7 +5,7 @@ description: >
   May indicate compromised API token being used to harvest credentials.
 severity: high
 enabled: true
-tags: [vaultwarden, password-manager, api, token-abuse, credential-theft]
+tags: [vaultwarden, password-manager, api, token-abuse, credential-theft, attack.t1550.001]
 
 conditions:
   - field: service

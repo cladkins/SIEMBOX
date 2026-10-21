@@ -1183,7 +1183,7 @@ export function domainFindingDetail(
       if (from || until) add('Valid', `${from || '?'} to ${until || '?'}`);
       if (d.new_issuer === true) add('Issuer history', 'the first certificate from this issuer for this domain');
       // Which CT source reported it: crt.sh, or the Cert Spotter fallback.
-      add('Seen via', textOf(d.source));
+      add('Seen via', textOf(d.ct_source));
       const link = certificateLink(d);
       if (link) lines.push({ label: 'Certificate', text: link.text, href: link.href });
       return lines;

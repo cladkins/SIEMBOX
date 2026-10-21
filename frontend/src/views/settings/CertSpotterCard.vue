@@ -22,9 +22,7 @@
       Used automatically when crt.sh fails, so new certificates are still seen while it is down.
       Without a key Cert Spotter allows only a few queries an hour, which a busy domain or several watched
       domains can use up.
-      <a :href="provider?.signupUrl ?? CERTSPOTTER_SIGNUP_URL" target="_blank" rel="noopener noreferrer">
-        Get a Cert Spotter API key
-      </a>
+      <a :href="provider?.signupUrl ?? CERTSPOTTER_SIGNUP_URL" target="_blank" rel="noopener noreferrer">Get a Cert Spotter API key</a>
       for a higher limit.
     </p>
 

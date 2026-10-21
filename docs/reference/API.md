@@ -5263,7 +5263,7 @@ check. Admins configure the feature under Settings → Digital Risk.
   it; one source knowing fewer certificates than the other is not a removal
   (the baseline is a union). Baselines recorded before the fallback existed
   (keyed on crt.sh's CA id) carry over without findings. Findings and their
-  `detail` say which source saw the certificate (`source`); a certificate seen
+  `detail` say which source saw the certificate (`ct_source`); a certificate seen
   through Cert Spotter has `crtsh_id: null`, `certspotter_id` and
   `cert_sha256`, and its `crtsh_url` looks it up on crt.sh by SHA-256.
 - **A/AAAA rotation** among addresses seen in the last 90 days (CDNs) is not

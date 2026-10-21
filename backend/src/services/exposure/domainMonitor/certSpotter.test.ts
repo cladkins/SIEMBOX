@@ -549,7 +549,7 @@ test('cross-source: a new certificate alerts once, whichever source sees it firs
   // A new host seen first through Cert Spotter (crt.sh down) ...
   const viaSpotter = await run(base.snapshot, sources('down', [...KNOWN, 'n1']));
   assert.deepEqual(
-    viaSpotter.findings.map((f) => [f.eventType, f.severity, f.detail.new_names, f.detail.source]),
+    viaSpotter.findings.map((f) => [f.eventType, f.severity, f.detail.new_names, f.detail.ct_source]),
     [['new_cert', 'low', ['new.example.com'], 'Cert Spotter']]
   );
   const finding = viaSpotter.findings[0];

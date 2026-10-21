@@ -716,7 +716,7 @@ function seenByAll(certs: readonly CtCertificate[]): string {
 
 function certSummary(cert: CtCertificate): Record<string, unknown> {
   return {
-    source: CT_SOURCE_LABELS[cert.source ?? 'crtsh'],
+    ct_source: CT_SOURCE_LABELS[cert.source ?? 'crtsh'],
     crtsh_id: cert.crtshId,
     crtsh_url: certificateUrl(cert),
     ...(cert.certspotterId ? { certspotter_id: cert.certspotterId } : {}),

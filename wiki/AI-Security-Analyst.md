@@ -40,7 +40,7 @@ Each turn, the model emits exactly one action — either a **tool call** or a **
 | `get_related_alerts` | Other recent alerts sharing the same rule, asset, or source IP as a given alert |
 | `get_alert_history_stats` | How a rule/title has historically been dispositioned (new/investigating/closed/false_positive counts) |
 
-The analyst typically gathers 2–4 results, then answers — it is tuned to stop investigating once it can respond.
+The analyst typically gathers 2–4 results, then answers — it is tuned to stop investigating once it can respond. How many lookups it may make, how long it may take and how long its answer may be are set under [AI budgets](#answer-length-lookups-and-time-ai-budgets).
 
 ## Configuration
 
@@ -54,6 +54,25 @@ The Analyst has its **own model configuration**, separate from the AI builder, u
 Leave a field blank to **inherit** the main AI builder config, so you can run the Analyst on the same provider with no extra setup, or point it at a different (e.g. cheaper, local) model. See [Configuration](Configuration#ai-analyst-optional).
 
 > Running a **local model** (Ollama) keeps your security data on your own infrastructure and avoids per-token cost — a good fit for a chatty analyst. Larger/cloud models tend to follow the tool protocol more reliably.
+
+## Answer length, lookups and time (AI budgets)
+
+**Settings → AI → AI budgets** (admin) sets how much the Analyst may write and how long it may work:
+
+| Setting | What it limits | Default |
+|---|---|---|
+| **Answer length** | Tokens in the written answer | 4000 |
+| **Working-step length** | Tokens in each step that picks a lookup (a short answer can come back in one) | 1500 |
+| **Max data lookups** | Read-only tool calls per question | 10 |
+| **Time budget** | Seconds of gathering before it must answer with what it has | 180 |
+
+The same card has AI Triage's verdict length, working-step length, lookups and time budget, the AI builders' output length (parser/rule generation, default 8000) and the **Explain with AI** answer length (default 3000).
+
+Higher limits give more complete answers, but they are slower, and with a paid provider every output token costs money. The model's own output limit still applies. A token is roughly ¾ of a word.
+
+**When a limit is reached, the answer says so.** An answer cut off at its length limit ends with *This answer hit the 4000-token output limit, so it may be cut off. An admin can raise "Answer length" in Settings → AI → AI budgets.* An answer written after the Analyst used all its lookups, or ran out of time, says which and names the setting. A working step that was cut off is not retried: the Analyst answers from what it had gathered. Triage verdicts carry the same notes at the end of their reasoning.
+
+The Analyst answers inside one web request: up to the time budget for gathering, plus up to 2 minutes to write the answer. If you run SIEMBox behind your own reverse proxy, give it a read timeout above that (the bundled frontend allows 420 s), or the browser shows a timeout while the answer is still being written. See [Troubleshooting: AI answer is cut off](Troubleshooting).
 
 ## Conversations
 

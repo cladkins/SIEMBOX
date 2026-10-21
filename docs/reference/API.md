@@ -1660,9 +1660,57 @@ Automatic, agentic per-alert analysis — see [AI Security Analyst → Automated
 
 | Method & Path | Purpose |
 |---|---|
-| `GET /api/settings/ai-triage` | Current triage config: provider/model/baseUrl (inherits AI Analyst if unset), `configured`, `keySource`, `keySaved`, `keyMismatch`, `keySavedFor`, `inheritsFrom` and `ownBaseUrl` as for `GET /api/settings/ai-chat` (the parent being the AI Analyst), plus operational settings (`enabled`, `minSeverity`, `dailyCap`, `maxConcurrent`, `dedupeHours`, `maxToolCalls`, `wallBudgetSeconds`). Key itself is never returned. |
-| `PUT /api/settings/ai-triage` | Update triage config. Body (all optional): `{ "provider": "anthropic" \| "openai" \| "ollama" \| "", "model": "…", "baseUrl": "…", "apiKey": "…", "enabled": true, "minSeverity": "medium", "dailyCap": 200, "maxConcurrent": 2, "dedupeHours": 6, "maxToolCalls": 6, "wallBudgetSeconds": 110 }`. Empty `provider` reverts to inheriting the AI Analyst config. A change of provider or base URL while a key is saved needs `apiKey` in the same request ([A saved key only goes where it was saved for](#a-saved-key-only-goes-where-it-was-saved-for)); a refused request saves none of its fields, the operational ones included. `maxToolCalls` (1-12) and `wallBudgetSeconds` (20-280) bound how deep/long a single alert's analysis can go before it's forced to synthesize a verdict from whatever it has. |
+| `GET /api/settings/ai-triage` | Current triage config: provider/model/baseUrl (inherits AI Analyst if unset), `configured`, `keySource`, `keySaved`, `keyMismatch`, `keySavedFor`, `inheritsFrom` and `ownBaseUrl` as for `GET /api/settings/ai-chat` (the parent being the AI Analyst), plus operational settings (`enabled`, `minSeverity`, `dailyCap`, `maxConcurrent`, `dedupeHours`, `maxToolCalls`, `wallBudgetSeconds`, `answerMaxTokens`, `stepMaxTokens`; the last four are the triage [AI budgets](#ai-budgets)). Key itself is never returned. |
+| `PUT /api/settings/ai-triage` | Update triage config. Body (all optional): `{ "provider": "anthropic" \| "openai" \| "ollama" \| "", "model": "…", "baseUrl": "…", "apiKey": "…", "enabled": true, "minSeverity": "medium", "dailyCap": 200, "maxConcurrent": 2, "dedupeHours": 6, "maxToolCalls": 6, "wallBudgetSeconds": 110 }`. Empty `provider` reverts to inheriting the AI Analyst config. A change of provider or base URL while a key is saved needs `apiKey` in the same request ([A saved key only goes where it was saved for](#a-saved-key-only-goes-where-it-was-saved-for)); a refused request saves none of its fields, the operational ones included. `maxToolCalls` (1-25) and `wallBudgetSeconds` (20-280) bound how deep/long a single alert's analysis can go before it's forced to synthesize a verdict from whatever it has; they are the same settings as `triage.maxToolCalls` and `triage.wallBudgetSeconds` under [AI Budgets](#ai-budgets), where the Settings page now edits them. |
 | `GET /api/ai/triage/health` | `{ "configured": bool, "enabled": bool, "minSeverity": "…" }` — lets the Alerts/SOC Triage UI know whether to render triage state. |
+
+### AI Budgets
+
+How much each AI feature may write (output tokens) and how long it may work.
+The Settings → AI → **AI budgets** card edits these.
+
+**Authentication:** Admin.
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /api/settings/ai-budgets` | `{ "budgets": { "analyst": {…}, "triage": {…}, "builder": {…}, "explain": {…} }, "bounds": { "analyst": { "answerMaxTokens": { "min": 256, "max": 32000, "default": 4000 }, … }, … } }`: the values in use and each one's bounds and default. |
+| `PUT /api/settings/ai-budgets` | Update any of them. Body: the same `budgets` shape, any subset, for example `{ "analyst": { "answerMaxTokens": 8000 }, "builder": { "maxTokens": 16000 } }`. Every value must be a whole number within its bounds; one that isn't (or an unknown section or field) is a `400` naming the field and its bounds, and nothing in the request is saved. A value equal to its default stores nothing, so it keeps following the default. Answers like the `GET`. |
+
+| Field | Meaning | Default | Bounds |
+|---|---|---|---|
+| `analyst.answerMaxTokens` | AI Analyst answer length (the plain-text answer call) | 4000 | 256-32000 |
+| `analyst.stepMaxTokens` | AI Analyst working-step length (each JSON step: a tool call, or a short final answer) | 1500 | 256-32000 |
+| `analyst.maxToolCalls` | AI Analyst data lookups per question | 10 | 1-25 |
+| `analyst.wallBudgetSeconds` | AI Analyst time budget for gathering | 180 | 30-240 |
+| `triage.answerMaxTokens` | AI Triage verdict length | 3000 | 256-32000 |
+| `triage.stepMaxTokens` | AI Triage working-step length | 1500 | 256-32000 |
+| `triage.maxToolCalls` | AI Triage data lookups per alert (same setting as `maxToolCalls` on `PUT /api/settings/ai-triage`) | 6 | 1-25 |
+| `triage.wallBudgetSeconds` | AI Triage time budget per alert (same setting as `wallBudgetSeconds` there) | 110 | 20-280 |
+| `builder.maxTokens` | Parser and detection-rule generation output | 8000 | 256-32000 |
+| `explain.maxTokens` | `POST /api/ai/explain` output | 3000 | 256-32000 |
+
+The model's own output limit still applies: a value above it is cut at the
+model's limit. The AI Analyst runs inside the `POST /api/ai/chat` request: its
+working steps stop at the time budget (a step's model call is cut off at what
+is left of it) and the answer call after that has up to 120 s, so the longest
+request is about 360 s. The bundled frontend's nginx allows 420 s
+(`proxy_read_timeout`) and the browser waits 415 s; a reverse proxy of your own
+in front of SIEMBox needs a read timeout above the run you allow (budget +
+120 s). The builders stop starting refine attempts at a 360 s deadline.
+
+**When a limit is hit, the answer says so.** A model call that stopped at its
+output cap (OpenAI-compatible `finish_reason: "length"`, Anthropic
+`stop_reason: "max_tokens"`, Ollama `done_reason: "length"`) adds a note to the
+Analyst answer, the triage verdict's reasoning or the Explain answer naming
+the limit and the setting to raise, and is logged once at info level
+(`[AI] … output hit its token limit`). A builder attempt cut off that way
+returns `"truncated": true` and an `error` naming the limit. A JSON working
+step that was cut off is not retried: the agent answers from what it gathered
+so far. An Analyst or triage run that stops because it used all its lookups or
+its time budget says that too. `POST /api/ai/chat` also answers
+`stop_reason` (`lookups`, `time`, `data`, `steps`, `step_truncated`,
+`malformed` or `null`), `output_truncated` and `notes` (the notes added to the
+answer); `POST /api/ai/explain` answers `truncated`.
 
 ---
 
@@ -1876,7 +1924,7 @@ Get an alert's [AI triage](../../wiki/AI-Security-Analyst.md#automated-triage) v
 
 ### POST /api/alerts/:id/triage/rerun
 
-Manually (re-)run AI triage for an alert, bypassing the severity and duplicate-alert gates (but not the daily cost cap or concurrency limit). Responds immediately; the analysis runs in the background (up to ~110s) — poll `GET /api/alerts/:id/triage` for the result.
+Manually (re-)run AI triage for an alert, bypassing the severity and duplicate-alert gates (but not the daily cost cap or concurrency limit). Responds immediately; the analysis runs in the background (up to its time budget, default 110 s, plus the verdict call) — poll `GET /api/alerts/:id/triage` for the result.
 
 **Authentication:** Required (admin, analyst, or operator role). Rate-limited per user (10 requests / 5 minutes).
 

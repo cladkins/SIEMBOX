@@ -139,6 +139,13 @@ const INLINE = { skipErrorToast: true } as const;
 
 /** A save that waits for the regex safety check: inline errors, and time for a first analysis. */
 const REGEX_GATE = { skipErrorToast: true, timeout: 120000 } as const;
+/**
+ * How long the browser waits for an AI answer (analyst chat, explain, the
+ * builders). The longest server-side run is the AI Analyst at its maximum
+ * 240 s time budget plus its 120 s answer call (backend aiBudgets.ts), and the
+ * builders' 360 s deadline; nginx allows 420 s (frontend/nginx.conf.template).
+ */
+const AI_CALL_TIMEOUT_MS = 415_000;
 
 /** Context Graph calls: every failure shown inline, 8 s at most. */
 const GRAPH_CALL = { ...SHOWN_INLINE, timeout: 8000 } as const;
@@ -285,20 +292,21 @@ export const api = {
   // AI builder
   getAiSettings: () => apiClient.get('/settings/ai'),
   updateAiSettings: (data: any) => apiClient.put('/settings/ai', data),
-  // Long timeout: generation runs an auto-refine loop of up to 3 model calls.
+  // Long timeouts (AI_CALL_TIMEOUT_MS): generation runs an auto-refine loop of
+  // up to 3 model calls within a 360 s deadline, and an explain call may take 240 s.
   generateParserAI: (sample: string, hints?: string) =>
-    apiClient.post('/parsers/ai/generate', { sample, hints }, { timeout: 240000 }),
+    apiClient.post('/parsers/ai/generate', { sample, hints }, { timeout: AI_CALL_TIMEOUT_MS }),
   generateDetectionAI: (description: string, context?: string) =>
-    apiClient.post('/rules/ai/generate', { description, context }, { timeout: 240000 }),
+    apiClient.post('/rules/ai/generate', { description, context }, { timeout: AI_CALL_TIMEOUT_MS }),
   explainWithAI: (kind: string, data: any, question?: string) =>
-    apiClient.post('/ai/explain', { kind, data, question }, { timeout: 240000 }),
+    apiClient.post('/ai/explain', { kind, data, question }, { timeout: AI_CALL_TIMEOUT_MS }),
 
   // AI Security Analyst (conversational, read-only tool loop)
   analystChat: (sessionId: number | null, message: string, context?: any) =>
     apiClient.post(
       '/ai/chat',
       { session_id: sessionId ?? undefined, message, context },
-      { timeout: 240000 }
+      { timeout: AI_CALL_TIMEOUT_MS }
     ),
   getAnalystHealth: () => apiClient.get('/ai/chat/health'),
   listChatSessions: () => apiClient.get('/ai/chat/sessions'),
@@ -316,6 +324,9 @@ export const api = {
   rerunAlertTriage: (id: number) => apiClient.post(`/alerts/${id}/triage/rerun`),
   getTriageAiSettings: () => apiClient.get('/settings/ai-triage'),
   updateTriageAiSettings: (data: any) => apiClient.put('/settings/ai-triage', data),
+  // AI budgets: output lengths, data lookups and time budgets (admin)
+  getAiBudgets: () => apiClient.get('/settings/ai-budgets'),
+  updateAiBudgets: (data: any) => apiClient.put('/settings/ai-budgets', data),
   getTriageRiskSummary: () => apiClient.get('/alerts/triage-risk-summary'),
 
   // Alerts

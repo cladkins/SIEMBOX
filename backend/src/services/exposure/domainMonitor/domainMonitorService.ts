@@ -60,6 +60,7 @@ import {
 import { NotificationService, type ExposureNotice } from '../../notifications/notificationService';
 import { getExposureSetting, getExposureSettings } from '../settings';
 import { createCtCollector } from './ct';
+import { createDefaultCtSource } from './ctFallback';
 import { createDnsCollector } from './dns';
 import { createLookalikeCollector } from './lookalike';
 import { createRdapCollector } from './rdap';
@@ -203,7 +204,7 @@ function collectorsFor(overrides?: Partial<Record<CollectorName, Collector>>) {
     dns: createDnsCollector(),
     rdap: createRdapCollector(),
     lookalike: createLookalikeCollector(),
-    ct: createCtCollector(),
+    ct: createCtCollector({ createSource: () => createDefaultCtSource() }),
   };
   return { ...defaultCollectors, ...overrides };
 }

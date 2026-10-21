@@ -1,5 +1,6 @@
 /**
- * Certificate Transparency collector, backed by crt.sh's JSON output.
+ * Certificate Transparency collector, backed by crt.sh's JSON output, with
+ * SSLMate's Cert Spotter API as the fallback (certSpotter.ts, ctFallback.ts).
  *
  * Query (checked against crt.sh's source, certwatch_db web_apis.fnc, Oct 2026):
  *   https://crt.sh/?q=<name>&output=json&exclude=expired&deduplicate=Y&match=ILIKE
@@ -26,10 +27,23 @@
  * a week. Any other refusal, e.g. HTTP 403 from a proxy blocking crt.sh, fails
  * the collector, whichever name it was for.
  *
+ * Fallback (ctFallback.ts): when crt.sh fails transiently for a name, or
+ * refuses it as too large, the same name is asked of Cert Spotter. The run's
+ * note says which source answered and why crt.sh was not used.
+ *
+ * Certificate identity is source-independent: issuer organisation (issuerKey)
+ * + serial number, which crt.sh prints and Cert Spotter's DER encoding holds,
+ * and which a precertificate and its certificate share. Switching sources
+ * therefore never makes a known certificate look new. Snapshots written before
+ * the fallback existed keyed certificates on crt.sh's issuer CA id + serial:
+ * crt.sh certificates carry that key as an alias, and a certificate from a
+ * known issuer whose serial matches such a legacy entry is the same one.
+ *
  * Snapshot (per name): the certificates seen (key -> notAfter, pruned a week
  * after expiry), the host names they covered and the issuers that issued them.
  * Each run's certificates are UNIONED into it, so a partial answer can never
- * make a known certificate look new on the next run.
+ * make a known certificate look new on the next run — nor can one source
+ * knowing fewer certificates than the other.
  *
  * Findings
  *  - unexpected_ca (high): own scope with expected_cas set — a new certificate
@@ -78,7 +92,7 @@ export const MAX_CERTS_PER_NAME = 20_000;
 /** Names no current certificate covers any more are kept up to this many. */
 const MAX_SNAPSHOT_NAMES = 5_000;
 const MAX_SNAPSHOT_ISSUERS = 200;
-const MAX_NAMES_PER_CERT = 100;
+export const MAX_NAMES_PER_CERT = 100;
 const EXPIRED_GRACE_SECONDS = 7 * 86_400;
 const UNKNOWN_EXPIRY_TTL_SECONDS = 400 * 86_400;
 export const MAX_INDIVIDUAL_FINDINGS = 10;
@@ -98,10 +112,31 @@ export class CtTooLargeError extends CollectorError {
 
 // ---- Certificates ------------------------------------------------------------------
 
+/** Which service answered for a name. */
+export type CtSourceName = 'crtsh' | 'certspotter';
+
+export const CT_SOURCE_LABELS: Record<CtSourceName, string> = {
+  crtsh: 'crt.sh',
+  certspotter: 'Cert Spotter',
+};
+
 export interface CtCertificate {
-  /** Stable identity: issuer + serial number (shared by a precertificate and its certificate). */
+  /**
+   * Stable, source-independent identity: issuerKey + serial number (shared by
+   * a precertificate and its certificate, and by crt.sh and Cert Spotter).
+   * Without a serial: `crtsh:<id>` or `certspotter:<tbs_sha256>`.
+   */
   key: string;
-  crtshId: number;
+  /** Older keys an earlier snapshot may hold this certificate under (crt.sh: CA id + serial). */
+  aliases?: string[];
+  /** Where it came from (crt.sh when absent). */
+  source?: CtSourceName;
+  /** crt.sh's certificate id; null when Cert Spotter answered. */
+  crtshId: number | null;
+  /** Cert Spotter's issuance id. */
+  certspotterId?: string;
+  /** SHA-256 of the (pre)certificate, hex — Cert Spotter only; crt.sh can look it up. */
+  certSha256?: string | null;
   /** The issuer's distinguished name as crt.sh prints it. */
   issuer: string;
   /** Normalised issuer organisation (or CN) — what "new issuer" compares. */
@@ -144,13 +179,32 @@ export function parseDistinguishedName(dn: string): Array<[string, string]> {
     let value = part.slice(eq + 1).trim();
     if (value.length >= 2 && value.startsWith('"') && value.endsWith('"'))
       value = value.slice(1, -1);
-    value = value.replace(/\\(.)/g, '$1').trim();
+    // RFC 2253 escapes: a backslash before a special character, or before hex pairs (UTF-8 bytes).
+    value = value
+      .replace(/((?:\\[0-9a-fA-F]{2})+)|\\(.)/g, (_m, hex: string | undefined, ch: string) =>
+        hex ? Buffer.from(hex.replace(/\\/g, ''), 'hex').toString('utf8') : ch
+      )
+      .trim();
     if (type) out.push([type, value]);
   }
   return out;
 }
 
 const caKey = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * The serial number as both sources are normalised to: lowercase hex without
+ * leading zeros (crt.sh prints "03ab", the DER's INTEGER may carry a 00 byte).
+ */
+export function normalizeSerial(raw: unknown): string | null {
+  const value = typeof raw === 'string' ? raw.trim().replace(/:/g, '') : '';
+  return /^[0-9a-f]{1,128}$/i.test(value) ? value.toLowerCase().replace(/^0+(?=.)/, '') : null;
+}
+
+/** The source-independent certificate key (see CtCertificate.key). */
+export function certificateKey(issuerKey: string, serial: string): string {
+  return `${issuerKey}:${serial}`;
+}
 
 /** The issuer's organisation (else its CN) — for display and for "new issuer". */
 export function issuerIdentity(issuerDn: string): { key: string; label: string } {
@@ -229,10 +283,7 @@ export function parseCrtshResponse(body: unknown, domain: string): CtCertificate
       typeof row.issuer_ca_id === 'number' && Number.isSafeInteger(row.issuer_ca_id)
         ? row.issuer_ca_id
         : null;
-    const rawSerial = typeof row.serial_number === 'string' ? row.serial_number.trim() : '';
-    const serial = /^[0-9a-f]{1,128}$/i.test(rawSerial)
-      ? rawSerial.toLowerCase().replace(/^0+(?=.)/, '')
-      : null;
+    const serial = normalizeSerial(row.serial_number);
     const { key: issuerKey, label: issuerLabel } = issuerIdentity(issuer);
 
     const rawNames = [
@@ -246,10 +297,14 @@ export function parseCrtshResponse(body: unknown, domain: string): CtCertificate
     ).slice(0, MAX_NAMES_PER_CERT);
     if (names.length === 0) continue;
 
-    const key = serial ? `${caId ?? issuerKey}:${serial}` : `crtsh:${id}`;
+    const key = serial ? certificateKey(issuerKey, serial) : `crtsh:${id}`;
+    // The key snapshots written before the Cert Spotter fallback used.
+    const legacyKey = serial && caId !== null ? `${caId}:${serial}` : null;
     const commonName = typeof row.common_name === 'string' ? normalizeName(row.common_name) : null;
     const cert: CtCertificate = {
       key,
+      ...(legacyKey && legacyKey !== key ? { aliases: [legacyKey] } : {}),
+      source: 'crtsh',
       crtshId: id,
       issuer,
       issuerKey,
@@ -263,7 +318,8 @@ export function parseCrtshResponse(body: unknown, domain: string): CtCertificate
     const existing = byKey.get(key);
     if (existing) {
       existing.names = sortedUnique([...existing.names, ...names]).slice(0, MAX_NAMES_PER_CERT);
-      existing.crtshId = Math.min(existing.crtshId, id);
+      existing.crtshId = Math.min(existing.crtshId ?? id, id);
+      if (cert.aliases) existing.aliases = sortedUnique([...(existing.aliases ?? []), ...cert.aliases]);
     } else {
       byKey.set(key, cert);
     }
@@ -320,9 +376,25 @@ export interface CtClientOptions {
   pacer?: Pacer;
 }
 
+/** A source's answer, saying who answered (see ctFallback.ts). */
+export interface CtAnswer {
+  certs: CtCertificate[];
+  source: CtSourceName;
+  /** Set when the fallback answered: why crt.sh was not used. */
+  fallbackReason?: string;
+}
+
 export interface CertificateSource {
-  /** Unexpired certificates for `name` and its subdomains. Throws CollectorError. */
-  certificatesFor(name: string): Promise<CtCertificate[]>;
+  /**
+   * Unexpired certificates for `name` and its subdomains — a bare list is
+   * crt.sh's. Throws CollectorError.
+   */
+  certificatesFor(name: string): Promise<CtCertificate[] | CtAnswer>;
+}
+
+/** A source's result as a CtAnswer. */
+export function asAnswer(result: CtCertificate[] | CtAnswer): CtAnswer {
+  return Array.isArray(result) ? { certs: result, source: 'crtsh' } : result;
 }
 
 export class CtClient implements CertificateSource {
@@ -519,7 +591,34 @@ export function diffCertificates(
 ): CertificateDiff {
   const knownIssuers = new Set(previous?.issuers ?? []);
   const seen = previous?.certs ?? {};
-  const wasSeen = (cert: CtCertificate) => Object.prototype.hasOwnProperty.call(seen, cert.key);
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(seen, key);
+  // Entries from before the Cert Spotter fallback: "<crt.sh CA id>:<serial>".
+  const legacyBySerial = new Map<string, string>();
+  for (const key of Object.keys(seen)) {
+    const m = /^\d+:([0-9a-f]{1,128})$/.exec(key);
+    if (m) legacyBySerial.set(m[1], key);
+  }
+  /**
+   * The key the snapshot holds this certificate under, or null when it is new:
+   * its own key, an alias (crt.sh's legacy key), or — for a source that can't
+   * name crt.sh's CA id — a legacy entry with its serial, if its issuer is
+   * known for this name (a serial alone never vouches for an unknown CA).
+   */
+  const seenAs = (cert: CtCertificate): string | null => {
+    if (has(cert.key)) return cert.key;
+    for (const alias of cert.aliases ?? []) if (has(alias)) return alias;
+    if (cert.serial && knownIssuers.has(cert.issuerKey)) {
+      const legacy = legacyBySerial.get(cert.serial);
+      if (legacy !== undefined && legacy !== cert.key) return legacy;
+    }
+    return null;
+  };
+  const matched = new Map<CtCertificate, string>();
+  for (const cert of certs) {
+    const key = seenAs(cert);
+    if (key !== null) matched.set(cert, key);
+  }
+  const wasSeen = (cert: CtCertificate) => matched.has(cert);
   // Known names: the snapshot's, plus every name a certificate seen before
   // still covers, so a renewal is a renewal even when the snapshot's name list
   // had to be cut short.
@@ -543,7 +642,12 @@ export function diffCertificates(
 
   // Union with what was seen before, minus certificates long expired.
   const merged: Record<string, number> = {};
+  // An entry matched under an older key is stored under the certificate's own key from now on.
+  const renamed = new Set(
+    [...matched].filter(([cert, key]) => key !== cert.key).map(([, key]) => key)
+  );
   for (const [key, notAfter] of Object.entries(seen)) {
+    if (renamed.has(key)) continue;
     if (notAfter >= nowSeconds - EXPIRED_GRACE_SECONDS) merged[key] = notAfter;
   }
   for (const cert of certs) {
@@ -583,10 +687,40 @@ export function diffCertificates(
 
 // ---- Findings ------------------------------------------------------------------------------
 
+/** A link to the certificate on crt.sh: by id, else by SHA-256 (Cert Spotter answered). */
+export function certificateUrl(cert: CtCertificate): string | null {
+  if (cert.crtshId !== null && cert.crtshId > 0) return `https://crt.sh/?id=${cert.crtshId}`;
+  if (cert.certSha256 && /^[0-9a-f]{64}$/.test(cert.certSha256)) {
+    return `https://crt.sh/?sha256=${cert.certSha256}`;
+  }
+  return null;
+}
+
+/** "crt.sh logged" / "Cert Spotter found", for finding descriptions. */
+function seenBy(cert: CtCertificate): string {
+  return cert.source === 'certspotter' ? 'Cert Spotter found' : 'crt.sh logged';
+}
+
+/** " https://crt.sh/?id=…" or "" — the end of a finding description. */
+function linkSuffix(cert: CtCertificate): string {
+  const url = certificateUrl(cert);
+  return url ? ` ${url}` : '';
+}
+
+/** Where a batch of certificates came from, for grouped findings. */
+function seenByAll(certs: readonly CtCertificate[]): string {
+  const sources = new Set(certs.map((c) => c.source ?? 'crtsh'));
+  if (sources.size === 1 && sources.has('certspotter')) return 'Cert Spotter found';
+  return sources.size === 1 ? 'crt.sh logged' : 'Certificate Transparency logs show';
+}
+
 function certSummary(cert: CtCertificate): Record<string, unknown> {
   return {
+    ct_source: CT_SOURCE_LABELS[cert.source ?? 'crtsh'],
     crtsh_id: cert.crtshId,
-    crtsh_url: `https://crt.sh/?id=${cert.crtshId}`,
+    crtsh_url: certificateUrl(cert),
+    ...(cert.certspotterId ? { certspotter_id: cert.certspotterId } : {}),
+    ...(cert.certSha256 ? { cert_sha256: cert.certSha256 } : {}),
     issuer: cert.issuer,
     issuer_org: cert.issuerLabel,
     serial: cert.serial,
@@ -697,10 +831,10 @@ function ownDomainFindings(
           severity: 'high',
           title: `Certificate for ${cert.names[0]} issued by unexpected CA ${cert.issuerLabel}`,
           description:
-            `crt.sh logged a new certificate for ${cert.names.join(', ')} from ${cert.issuerLabel}, ` +
+            `${seenBy(cert)} a new certificate for ${cert.names.join(', ')} from ${cert.issuerLabel}, ` +
             `which is not in this domain's expected CAs (${expected.join(', ')}). If your organization did ` +
-            'not request it, revoke it with the CA and investigate how it was obtained. ' +
-            `https://crt.sh/?id=${cert.crtshId}`,
+            'not request it, revoke it with the CA and investigate how it was obtained.' +
+            linkSuffix(cert),
           detail: { collector: 'ct', domain, expected_cas: expected, ...certSummary(cert) },
         })
       ),
@@ -712,7 +846,7 @@ function ownDomainFindings(
           fingerprint: fp,
           severity: 'high',
           title: `${count} new certificates for ${domain} from unexpected CAs`,
-          description: `crt.sh logged ${count} new certificates for ${domain} from CAs outside this domain's expected CAs (${expected.join(', ')}).`,
+          description: `${seenByAll(unexpected.map((f) => f.cert))} ${count} new certificates for ${domain} from CAs outside this domain's expected CAs (${expected.join(', ')}).`,
           detail: {
             collector: 'ct',
             domain,
@@ -736,12 +870,13 @@ function ownDomainFindings(
             ? `New TLS certificate for ${newNames[0]}${newNames.length > 1 ? ` (+${newNames.length - 1} more)` : ''} from ${cert.issuerLabel}`
             : `First certificate from ${cert.issuerLabel} for ${cert.names[0]}`,
           description:
-            `crt.sh logged a new certificate for ${cert.names.join(', ')} from ${cert.issuerLabel}` +
+            `${seenBy(cert)} a new certificate for ${cert.names.join(', ')} from ${cert.issuerLabel}` +
             (newNames.length
               ? `; it covers host names not seen before (${newNames.join(', ')})`
               : '') +
             (newIssuer ? `; it is the first certificate from this issuer for ${domain}` : '') +
-            `. Confirm your organization requested it. https://crt.sh/?id=${cert.crtshId}`,
+            '. Confirm your organization requested it.' +
+            linkSuffix(cert),
           detail: {
             collector: 'ct',
             domain,
@@ -759,7 +894,7 @@ function ownDomainFindings(
           fingerprint: fp,
           severity: 'low',
           title: `${count} new TLS certificates for ${domain}`,
-          description: `crt.sh logged ${count} new certificates for ${domain} that cover new host names or come from new issuers.`,
+          description: `${seenByAll(interesting.map((f) => f.cert))} ${count} new certificates for ${domain} that cover new host names or come from new issuers.`,
           detail: { collector: 'ct', domain, certificate_count: count, certificates },
         })
     )
@@ -818,9 +953,9 @@ function lookalikeFindings(
         severity: 'medium',
         title: `TLS certificate issued for lookalike ${newNames[0] ?? cert.names[0]} (${cert.issuerLabel})`,
         description:
-          `crt.sh logged a certificate for ${cert.names.join(', ')}, a lookalike of ${watched}, from ` +
-          `${cert.issuerLabel}. A certificate usually means a site is going up; check what it serves. ` +
-          `https://crt.sh/?id=${cert.crtshId}`,
+          `${seenBy(cert)} a certificate for ${cert.names.join(', ')}, a lookalike of ${watched}, from ` +
+          `${cert.issuerLabel}. A certificate usually means a site is going up; check what it serves.` +
+          linkSuffix(cert),
         detail: {
           collector: 'ct',
           domain: watched,
@@ -838,7 +973,7 @@ function lookalikeFindings(
         fingerprint: fp,
         severity: 'medium',
         title: `${count} new TLS certificates for lookalike ${lookalike}`,
-        description: `crt.sh logged ${count} new certificates for ${lookalike}, a lookalike of ${watched}.`,
+        description: `${seenByAll(interesting.map((f) => f.cert))} ${count} new certificates for ${lookalike}, a lookalike of ${watched}.`,
         detail: {
           collector: 'ct',
           domain: watched,
@@ -930,11 +1065,59 @@ const normalizedPolicy = (cas: readonly string[]) => sortedUnique(cas.map(caKey)
 
 export interface CtCollectorDeps {
   source?: CertificateSource;
+  /**
+   * Builds each run's source when `source` isn't given (domainMonitorService:
+   * crt.sh with the Cert Spotter fallback). Default: crt.sh alone.
+   */
+  createSource?: () => Promise<CertificateSource>;
+}
+
+/** A source failure message without its "; will retry" tail, for a note. */
+const reasonText = (message: string) => message.replace(/;\s*will retry\.?$/i, '');
+
+/**
+ * Which source answered this run, for the note and details: "crt.sh",
+ * "Cert Spotter", or both, with why crt.sh was passed over.
+ */
+function sourceSummary(answers: readonly CtAnswer[]): {
+  note: string;
+  details: Record<string, unknown>;
+} | null {
+  if (answers.length === 0) return null;
+  const sources = sortedUnique(answers.map((a) => a.source)) as CtSourceName[];
+  const reasons = sortedUnique(
+    answers.flatMap((a) => (a.fallbackReason ? [reasonText(a.fallbackReason)] : []))
+  );
+  const fallbackCount = answers.filter((a) => a.source === 'certspotter').length;
+  const labels = sources.map((s) => CT_SOURCE_LABELS[s]);
+  let note = `source: ${labels.join(' and ')}`;
+  if (fallbackCount > 0) {
+    note +=
+      sources.length > 1
+        ? ` (Cert Spotter for ${plural(fallbackCount, 'name')}: crt.sh failed — ${capList(reasons, 2).join('; ')})`
+        : ` (crt.sh failed — ${capList(reasons, 2).join('; ')})`;
+  }
+  return {
+    note,
+    details: {
+      ct_sources: labels,
+      ...(fallbackCount > 0
+        ? { ct_fallback_used: fallbackCount, ct_fallback_reasons: capList(reasons, 3) }
+        : {}),
+    },
+  };
 }
 
 export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
   return async (ctx: CollectorContext): Promise<CollectorOutput> => {
-    const source = deps.source ?? new CtClient();
+    const source =
+      deps.source ?? (deps.createSource ? await deps.createSource() : new CtClient());
+    const answers: CtAnswer[] = [];
+    const certificatesFor = async (name: string): Promise<CtCertificate[]> => {
+      const answer = asAnswer(await source.certificatesFor(name));
+      answers.push(answer);
+      return answer.certs;
+    };
     const previous = parseCtSnapshot(ctx.previous);
     const nowSeconds = Math.floor(ctx.now.getTime() / 1000);
     const next: CtSnapshot = { v: 1 };
@@ -947,7 +1130,7 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
     let ownCerts: CtCertificate[] | null = null;
     if (ctx.domain.scope === 'own') {
       try {
-        ownCerts = await source.certificatesFor(ctx.domain.domain);
+        ownCerts = await certificatesFor(ctx.domain.domain);
       } catch (err) {
         // Only an answer too large to monitor is a warning: retrying won't fix
         // it, and it must not stop the lookalike checks below (the domain's own
@@ -1038,7 +1221,7 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
       for (const lookalike of selected) {
         const retry = pending.has(lookalike) && retriedAhead(failures[lookalike]);
         try {
-          const certs = await source.certificatesFor(lookalike);
+          const certs = await certificatesFor(lookalike);
           const before = storedLookalikes[lookalike] ?? null;
           const diff = diffCertificates(before, certs, nowSeconds);
           next.lookalikes[lookalike] = { ...diff.next, checked_at: nowSeconds };
@@ -1119,6 +1302,11 @@ export function createCtCollector(deps: CtCollectorDeps = {}): Collector {
       }
     }
 
+    const sources = sourceSummary(answers);
+    if (sources) {
+      notes.push(sources.note);
+      Object.assign(details, sources.details);
+    }
     return {
       snapshot: next,
       findings,

@@ -7,7 +7,8 @@
  * No GET calls HIBP: the verified-domain list is read from the snapshot the
  * leaked-credential job and the admin's re-check keep (hibpDomains.ts).
  *
- * Privacy: the HIBP API key is write-only (stored encrypted, never echoed), and
+ * Privacy: the HIBP and Cert Spotter API keys are write-only (stored
+ * encrypted, never echoed: only whether one is saved is reported), and
  * POST /password-check never logs or persists the password — the body is
  * dropped from the request as soon as it is read, the check is k-anonymous
  * (only 5 hex chars of a SHA-1 leave the server), and a strict per-IP rate
@@ -39,12 +40,14 @@ import {
   EXPIRY_WARNING_DAYS_RANGE,
   HIBP_API_KEY_RE,
   LOOKALIKE_CANDIDATES_RANGE,
+  getCertSpotterProviderPublic,
   getExposureSettings,
   getHibpApiKey,
   getHibpProviderPublic,
   isExposureSeverity,
   isSavedHibpKey,
   isValidResolverSetting,
+  saveCertSpotterKey,
   saveHibpProvider,
   updateExposureSettings,
   type ExposureSettings,
@@ -75,6 +78,7 @@ import {
 import { clearHibpDomainSnapshot, withHibpDomainStatus } from '../services/exposure/hibpDomains';
 import { HibpClient, HibpError } from '../services/exposure/hibpClient';
 import { checkPassword, type PwnedPasswordResult } from '../services/exposure/pwnedPasswords';
+import { CERTSPOTTER_API_KEY_RE } from '../services/exposure/domainMonitor/certSpotter';
 
 const router = Router();
 const adminOnly = authorize('admin');
@@ -428,6 +432,48 @@ router.post(
     }
   }
 );
+
+// ---- Cert Spotter (the CT collector's fallback source) -------------------------------
+
+// Whether a Cert Spotter API key is saved (never the key), and any rate-limit pause.
+router.get('/providers/certspotter', async (_req: Request, res: Response) => {
+  res.json(await getCertSpotterProviderPublic());
+});
+
+// Save the optional Cert Spotter API key (encrypted at rest), or remove it with
+// null / "". Write-only: the response is the public view, never the key.
+router.put('/providers/certspotter', adminOnly, async (req: Request, res: Response) => {
+  const body = bodyOf(req);
+  const raw = body.api_key;
+  let apiKey: string | null;
+  if (raw === null) apiKey = null;
+  else if (typeof raw === 'string') apiKey = raw.trim() || null;
+  else {
+    throw new ApiError(
+      400,
+      'api_key is required: a Cert Spotter API key, or null (or "") to remove the saved one'
+    );
+  }
+  if (apiKey !== null && !CERTSPOTTER_API_KEY_RE.test(apiKey)) {
+    throw new ApiError(
+      400,
+      'api_key must be a Cert Spotter API key: 8-256 characters, letters, digits and . _ ~ + / - only'
+    );
+  }
+  try {
+    await saveCertSpotterKey(apiKey);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (message.includes('CREDENTIAL_ENCRYPTION_KEY')) {
+      throw new ApiError(
+        400,
+        'Set a valid CREDENTIAL_ENCRYPTION_KEY (64 hex characters, e.g. `openssl rand -hex 32`) to store an API key.'
+      );
+    }
+    throw new ApiError(500, 'Failed to save the Cert Spotter API key');
+  }
+  res.json(await getCertSpotterProviderPublic());
+});
 
 // ---- Watched domains ---------------------------------------------------------------
 

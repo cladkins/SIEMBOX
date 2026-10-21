@@ -5161,7 +5161,7 @@ check. Admins configure the feature under Settings → Digital Risk.
 
 | Collector | Source | Finding (`event_type`) | Severity |
 |---|---|---|---|
-| `ct` | crt.sh (`output=json`, unexpired, de-duplicated) — one query per name (`match=ILIKE` covers the name, its subdomains and wildcards) | `unexpected_ca`: a certificate for the domain from a CA not in `expected_cas` (only when that list is set) | high |
+| `ct` | crt.sh (`output=json`, unexpired, de-duplicated) — one query per name (`match=ILIKE` covers the name, its subdomains and wildcards); [Cert Spotter](#certificate-transparency-sources-crtsh-and-the-cert-spotter-fallback) as the fallback when crt.sh fails | `unexpected_ca`: a certificate for the domain from a CA not in `expected_cas` (only when that list is set) | high |
 | | | `new_cert`: a certificate covering a host name never seen before, or from an issuer never seen before. Plain renewals are not findings | low |
 | | | `new_cert`: a certificate for a registered lookalike (up to 3 lookalikes per run, rotating; 2 for run-now) | medium |
 | `lookalike` | Built-in permutation engine (homoglyph, TLD swap, omission, transposition, repetition, QWERTY-adjacent replacement, hyphenation, vowel swap, addition, bitsquatting; plus `dnstwist` if installed), at most `exposure_lookalike_max_candidates` (default 300) candidates, checked with DNS | `lookalike_registered`: a candidate that was confirmed unregistered on an earlier run is now registered — high with an A/AAAA or MX record, else medium; a registered lookalike with no MX record gaining one — high | high / medium |
@@ -5234,6 +5234,38 @@ check. Admins configure the feature under Settings → Digital Risk.
   refusal, of the domain's own query or of a lookalike's (e.g. HTTP 403 from a
   proxy blocking crt.sh), fails `ct`, so it shows in `last_error`; no
   lookalike is left alone because of it.
+- **Certificate Transparency sources: crt.sh and the Cert Spotter fallback.**
+  <a id="certificate-transparency-sources-crtsh-and-the-cert-spotter-fallback"></a>
+  crt.sh is asked first. When it fails transiently for a name (timeouts, 5xx,
+  429, non-JSON) — or refuses it as too large to monitor — the same name is
+  asked of SSLMate's [Cert Spotter](https://sslmate.com/help/reference/ct_search_api_v1)
+  (`api.certspotter.com/v1/issuances`, all pages, unexpired issuances only).
+  After a transient crt.sh failure the rest of that run uses Cert Spotter; the
+  next run starts with crt.sh again. Any other crt.sh refusal (e.g. a proxy's
+  HTTP 403) gets no fallback and fails `ct` as before. Cert Spotter works
+  without an API key, within a small hourly limit; an optional key
+  ([`PUT /providers/certspotter`](#put-apiexposureproviderscertspotter)) raises
+  it. Its requests are spaced at least 1 second apart; a `429` is transient:
+  a `Retry-After` of up to 10 seconds is waited out once, a longer one pauses
+  every Cert Spotter request until it has passed (`rate_limited_until` in
+  [`GET /providers/certspotter`](#get-apiexposureproviderscertspotter)), and
+  the error suggests a key when none is saved. When both sources fail, `ct`
+  fails transiently with both reasons (`"crt.sh is temporarily unavailable
+  (HTTP 502); Cert Spotter fallback failed too: ...; will retry"`) and its
+  baseline is kept. The `ct` entry in `last_summary` says which source
+  answered: the note ends `source: crt.sh` or `source: Cert Spotter (crt.sh
+  failed — <reason>)`, and `details` has `ct_sources`, plus
+  `ct_fallback_used` / `ct_fallback_reasons` when the fallback answered.
+  **Switching sources never raises findings by itself:** a certificate is
+  identified by its issuer's organisation plus its serial number, which crt.sh
+  prints and Cert Spotter's DER encoding holds, so the same certificate has the
+  same identity (and the same finding fingerprint) whichever source reported
+  it; one source knowing fewer certificates than the other is not a removal
+  (the baseline is a union). Baselines recorded before the fallback existed
+  (keyed on crt.sh's CA id) carry over without findings. Findings and their
+  `detail` say which source saw the certificate (`ct_source`); a certificate seen
+  through Cert Spotter has `crtsh_id: null`, `certspotter_id` and
+  `cert_sha256`, and its `crtsh_url` looks it up on crt.sh by SHA-256.
 - **A/AAAA rotation** among addresses seen in the last 90 days (CDNs) is not
   drift; a never-seen address, or every address vanishing, is. Fields an RDAP
   server leaves out of a response are "not reported", never "removed"; grace
@@ -5241,7 +5273,8 @@ check. Admins configure the feature under Settings → Digital Risk.
 - **TLDs without RDAP** (or with only a plain-HTTP RDAP server, e.g. `.kg`)
   report `unsupported` for `rdap`, with the reason, and raise nothing.
 - **Network access.** The backend needs outbound HTTPS to `crt.sh`,
-  `data.iana.org` and the registries' RDAP servers, and DNS. Without it the
+  `api.certspotter.com` (the CT fallback), `data.iana.org` and the registries'
+  RDAP servers, and DNS. Without it the
   collectors fail (see `last_summary`) rather than report "no findings".
   Lookalike checks cost about one DNS query per candidate (four for a
   registered one), at most 10 candidates in flight.
@@ -5254,10 +5287,12 @@ check. Admins configure the feature under Settings → Digital Risk.
 
 **Outbound-request guarantees.** Every request is a single HTTPS GET with a
 descriptive User-Agent, a hard deadline and a response-size cap (crt.sh 10 MB,
-RDAP 1 MB, the bootstrap file 2 MB), and **redirects are never followed**.
-crt.sh and IANA are constant hosts; your domain only ever appears in an
-encoded query parameter (crt.sh) or one encoded path segment (RDAP), never in a
-host name. The RDAP server's URL comes from IANA's bootstrap file, so it is
+Cert Spotter 8 MB per page, RDAP 1 MB, the bootstrap file 2 MB), and
+**redirects are never followed**. crt.sh, Cert Spotter and IANA are constant
+hosts; your domain only ever appears in an encoded query parameter (crt.sh,
+Cert Spotter) or one encoded path segment (RDAP), never in a host name. The
+Cert Spotter key, when set, is sent only to `api.certspotter.com`, in the
+`Authorization` header. The RDAP server's URL comes from IANA's bootstrap file, so it is
 validated before use — `https` only, no credentials or explicit port, no
 IP-literal host, no internal-only names (`localhost`, `.local`, `.internal`,
 `.lan`, `.home.arpa`, …) — and its host must resolve only to public addresses
@@ -5270,7 +5305,9 @@ apart.
 
 - **The HIBP API key is write-only.** It is stored encrypted (AES-256-GCM via
   `CREDENTIAL_ENCRYPTION_KEY`, like the threat-intel provider keys) and no
-  endpoint ever returns it — only `configured` / `enabled` booleans.
+  endpoint ever returns it — only `configured` / `enabled` booleans. The
+  optional Cert Spotter key is handled the same way (`configured` / `usable`
+  only), and neither key is ever logged.
 - **Passwords never leave the server and are never stored or logged.**
   `POST /password-check` hashes locally (SHA-1, as the range API requires) and
   sends only the first 5 hex characters to `api.pwnedpasswords.com` with
@@ -5635,6 +5672,59 @@ it.)
 **Errors:**
 - `400` - `api_key` is not a 32-character hex key, `enabled` is not a boolean, or
   `CREDENTIAL_ENCRYPTION_KEY` is missing/invalid (the message says how to fix it)
+
+### GET /api/exposure/providers/certspotter
+
+Cert Spotter, the certificate monitor's fallback source (see
+[Certificate Transparency sources](#certificate-transparency-sources-crtsh-and-the-cert-spotter-fallback)),
+without its key:
+
+```json
+{
+  "name": "certspotter",
+  "label": "Cert Spotter (SSLMate)",
+  "docsUrl": "https://sslmate.com/help/reference/ct_search_api_v1",
+  "signupUrl": "https://sslmate.com/signup?for=ct_search_api",
+  "apiKeysUrl": "https://sslmate.com/account/api_keys",
+  "configured": true,
+  "usable": true,
+  "rate_limited_until": null
+}
+```
+- `configured` — an API key is saved. Without one Cert Spotter is still used,
+  unauthenticated, within its small hourly limit.
+- `usable` — the saved key decrypts with this backend's
+  `CREDENTIAL_ENCRYPTION_KEY` (when it doesn't, Cert Spotter is used
+  unauthenticated and a warning is logged; save the key again).
+- `rate_limited_until` — while a `429`'s `Retry-After` holds Cert Spotter
+  requests back (in memory: a restart forgets it), when they resume; else `null`.
+
+**Authentication:** Required
+
+### PUT /api/exposure/providers/certspotter
+
+Save or remove the optional Cert Spotter API key. It is encrypted at rest and
+never returned, by this or any other endpoint (`GET /api/settings` lists the
+`exposure_certspotter_key` row as `[redacted]`). It applies from the next
+domain run. Saving or removing a key lifts a rate-limit pause (Cert Spotter's
+limit belongs to the credentials).
+
+**Authentication:** Required (Admin)
+
+**Request Body:**
+```json
+{ "api_key": "123_yourcertspotterkey" }
+```
+- `api_key` (required) - the key (8-256 characters: letters, digits and
+  `. _ ~ + / -`; surrounding whitespace is trimmed), or `null` / `""` to remove
+  the saved key.
+
+**Response (200):** the object `GET /providers/certspotter` returns (never the key).
+
+**Errors:**
+- `400` - `api_key` missing, not a string or `null`, or not a valid key; or
+  `CREDENTIAL_ENCRYPTION_KEY` is missing/invalid (the message says how to fix it)
+- `403` - not an admin
 
 ### POST /api/exposure/providers/hibp/test
 

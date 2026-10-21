@@ -39,7 +39,7 @@ const CLOUDFLARE = 'C=US, O="Cloudflare, Inc.", CN=Cloudflare Inc ECC CA-3';
 
 // ---- parsing -----------------------------------------------------------------------------
 
-test('parse: crt.sh rows become certificates keyed on issuer + serial', () => {
+test('parse: crt.sh rows become certificates keyed on issuer organisation + serial', () => {
   const rows = [
     // A precertificate and its certificate: same issuer and serial, two crt.sh ids.
     {
@@ -78,15 +78,18 @@ test('parse: crt.sh rows become certificates keyed on issuer + serial', () => {
     { id: 4000, name_value: 'unrelated.org', issuer_name: LE, serial_number: '01' },
   ];
   const certs = parseCrtshResponse(rows, 'example.com');
+  // The key is source-independent (Cert Spotter gives the same); the alias is
+  // the CA-id key snapshots written before the Cert Spotter fallback hold.
   assert.deepEqual(
-    certs.map((c) => [c.key, c.crtshId, c.names]),
+    certs.map((c) => [c.key, c.aliases, c.crtshId, c.names]),
     [
-      ['1:ff', 2000, ['*.example.com']],
-      ['295814:3ab', 1001, ['example.com', 'www.example.com']],
-      ['crtsh:3000', 3000, ['shop.example.com']],
+      ['crtsh:3000', undefined, 3000, ['shop.example.com']],
+      ['letsencrypt:3ab', ['295814:3ab'], 1001, ['example.com', 'www.example.com']],
+      ['sectigolimited:ff', ['1:ff'], 2000, ['*.example.com']],
     ]
   );
-  const le = certs.find((c) => c.key === '295814:3ab') as CtCertificate;
+  assert.ok(certs.every((c) => c.source === 'crtsh'));
+  const le = certs.find((c) => c.key === 'letsencrypt:3ab') as CtCertificate;
   assert.equal(le.notAfter, '2026-11-30T09:00:00.000Z', 'zone-less timestamps are UTC');
   assert.equal(le.issuerLabel, "Let's Encrypt");
   assert.equal(certs.find((c) => c.crtshId === 3000)?.issuerLabel, 'Cloudflare, Inc.');
@@ -474,7 +477,12 @@ test('collector: later runs flag unexpected CAs (high) and new hosts (low); rene
       ['new_cert', 'low', 'a3'],
     ]
   );
-  assert.deepEqual(second.details, { certificates: 4, new_certificates: 3, renewals: 1 });
+  assert.deepEqual(second.details, {
+    certificates: 4,
+    new_certificates: 3,
+    renewals: 1,
+    ct_sources: ['crt.sh'],
+  });
   for (const finding of second.findings) {
     assert.equal(finding.source, 'domain-monitor');
     assert.deepEqual(

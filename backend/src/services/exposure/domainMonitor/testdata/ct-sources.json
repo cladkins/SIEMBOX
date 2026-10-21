@@ -1,0 +1,230 @@
+{
+  "_about": "Test fixtures for the CT sources. real_certspotter_page: two issuances exactly as api.certspotter.com returned them (Oct 2026, discord.com, expand=dns_names,issuer,cert_der). certspotter/crtsh: the same six test certificates (signed by throwaway CAs named like real ones) as each source describes them; c2 is a precertificate.",
+  "real_certspotter_page": [
+    {
+      "id": "16854101222",
+      "tbs_sha256": "3fb94935fd2312ad47a35fddbbc4dd13401936171ee8d8d985ff38c591bcf376",
+      "cert_sha256": "b42ac46c631584e66f5cebdb484a414e9d54eff0cf507d713b54ea90ba7873ef",
+      "dns_names": [
+        "*.discord.com",
+        "discord.com"
+      ],
+      "pubkey_sha256": "89933467565b64ed6632cb39f033a0e891b5236fe014ad5d9897f0a5adcebdc5",
+      "issuer": {
+        "friendly_name": "Google Trust Services",
+        "pubkey_sha256": "908769e8d34477cc2cba0632c88605b22d7294c0840f78596d247c645b1afc0e",
+        "name": "C=US, O=Google Trust Services, CN=WE1"
+      },
+      "not_before": "2026-08-28T22:54:14Z",
+      "not_after": "2026-11-26T23:53:56Z",
+      "revoked": false,
+      "cert_der": "MIICiDCCAi+gAwIBAgIRAPmLbSHt1BMaDvy8pD7h/4UwCgYIKoZIzj0EAwIwOzELMAkGA1UEBhMCVVMxHjAcBgNVBAoTFUdvb2dsZSBUcnVzdCBTZXJ2aWNlczEMMAoGA1UEAxMDV0UxMB4XDTI2MDgyODIyNTQxNFoXDTI2MTEyNjIzNTM1NlowFjEUMBIGA1UEAxMLZGlzY29yZC5jb20wWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQsF2AengcllU20BWHnHXS7BL8K3+qeSh69KXI5cNMfbwyUvvHxPNAr5hyNi5gD6vy7FnNgxSRmvId3idCHTg6Xo4IBNzCCATMwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMBMAwGA1UdEwEB/wQCMAAwHQYDVR0OBBYEFD+fD4Z1V4OzU7JKTRY7GDjW36LUMB8GA1UdIwQYMBaAFJB3kjVnxP+ozKnme9mAeXvMk/k4MDUGCCsGAQUFBwEBBCkwJzAlBggrBgEFBQcwAoYZaHR0cDovL2kucGtpLmdvb2cvd2UxLmNydDAlBgNVHREEHjAcggtkaXNjb3JkLmNvbYINKi5kaXNjb3JkLmNvbTATBgNVHSAEDDAKMAgGBmeBDAECATA2BgNVHR8ELzAtMCugKaAnhiVodHRwOi8vYy5wa2kuZ29vZy93ZTEvU085MG84d1hHUEEuY3JsMBMGCisGAQQB1nkCBAMBAf8EAgUAMAoGCCqGSM49BAMCA0cAMEQCIHrVi2AFTDu7bGl2Yj3awod3P+BCKhgCjMZ2icW1SQjkAiBL+TSlfEw7XKPCHSrFh+5EzYzgmLqGngEXdCUIIHFemg=="
+    },
+    {
+      "id": "16854101478",
+      "tbs_sha256": "ced855ca86051a654e9cd5c4f0e334365fc5f4b31bca06232b41bf5aec996026",
+      "cert_sha256": "896fa7276d88a2229e1ae8da0afb3ddad30bf375ff7f55bbae0e0ab77378e521",
+      "dns_names": [
+        "*.discord.com",
+        "discord.com"
+      ],
+      "pubkey_sha256": "da18dc47c241013619446ef7c4f28fbc87776c04c9937b36d67f093b5bfb82c3",
+      "issuer": {
+        "friendly_name": "Google Trust Services",
+        "pubkey_sha256": "c83bbda20db9e4d3791847fe0706bdad3aea150d04c9d674af514287d4dd016e",
+        "name": "C=US, O=Google Trust Services, CN=WR1"
+      },
+      "not_before": "2026-08-28T22:53:49Z",
+      "not_after": "2026-11-26T23:52:24Z",
+      "revoked": false,
+      "cert_der": "MIIEFDCCAvygAwIBAgIQK+mNTxI70xIORJ/uqDZcbDANBgkqhkiG9w0BAQsFADA7MQswCQYDVQQGEwJVUzEeMBwGA1UEChMVR29vZ2xlIFRydXN0IFNlcnZpY2VzMQwwCgYDVQQDEwNXUjEwHhcNMjYwODI4MjI1MzQ5WhcNMjYxMTI2MjM1MjI0WjAWMRQwEgYDVQQDEwtkaXNjb3JkLmNvbTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAL96WDZLyS0eOLKGwfF1GMxWvsjY+7faj5w+0JJ/Nxb4aVNfDkdnkfsSoBlOj/50aAzYtxLM5opJrEELU3iMDkM5IfM8BFTVbU2G/qvXnzRVXWMSseSn6U+emTrDG18i7s8j97/7gGFUp0uQn0meDL2jD7xZbZ+Gt4oCWL5lP7/MSmmXTekMh66aoEYhQYH8PFgHf3F2nGRLU5zqjsiBDDTaZ1C8ze/x+QV+tdTmYwA3HKADQfjIjAOWM5Uz8mhsrVmUHVt86AW6awDJ77Ub/se3xP1WaDGcHz0gm+EoROf93bPsSLsmIx+Fo/G7swRpGvi6Opvb9VjXSem6tHTrzdsCAwEAAaOCATcwggEzMA4GA1UdDwEB/wQEAwIFoDATBgNVHSUEDDAKBggrBgEFBQcDATAMBgNVHRMBAf8EAjAAMB0GA1UdDgQWBBQ1k8mrmXlwb/9qPnzqfkJVXIrd6zAfBgNVHSMEGDAWgBRmaUnU3iqckQPPiQ4kuA4wA26ILjA1BggrBgEFBQcBAQQpMCcwJQYIKwYBBQUHMAKGGWh0dHA6Ly9pLnBraS5nb29nL3dyMS5jcnQwJQYDVR0RBB4wHIILZGlzY29yZC5jb22CDSouZGlzY29yZC5jb20wEwYDVR0gBAwwCjAIBgZngQwBAgEwNgYDVR0fBC8wLTAroCmgJ4YlaHR0cDovL2MucGtpLmdvb2cvd3IxL1FuMDJNeGFVV19jLmNybDATBgorBgEEAdZ5AgQDAQH/BAIFADANBgkqhkiG9w0BAQsFAAOCAQEAO1Oa80V8LxIORCSQC8Irn1IItZioMg1QEOnP9Get/AsnkLonp0XQzsSgT+wDRsLjWGWw1dOLQskf6EuMmrjawkaMQHlDeX9fA41mmc1XlzBzxNHA3Y3ZzcD6rloXQKVcVnclSs+MrHIwqm4mpJCv7ehswAUhlBnhbYKcztMwvXqosPYiIhOJIgx5WL2Fcvh53VJCNwdNOMImTr0+fuOVNNghoPFSpMzNb4fkGZkPB9ocBl9udvS4RHgv1IEqIW/kbDpKM+GUEJreOJSRGDI7pIyaD/XC4hXho9L3qVG8BsbK+FL6yNZsMBjU1GM+rsSgwH2qpukpRILugf70wqdEDQ=="
+    }
+  ],
+  "certspotter": {
+    "c1": {
+      "id": "17893609701",
+      "tbs_sha256": "e51572200be7665e5a441f1b8783ad2688bf6124d4c4c783ebc4acf744d737dc",
+      "cert_sha256": "ff830ddb3a11501fcddb8c1a9effa08e42d5204befbcf47b326b1828bd51f91c",
+      "dns_names": [
+        "example.com",
+        "www.example.com"
+      ],
+      "pubkey_sha256": "25d3a8d281fb0af332e1248fbd0908c3cbb2cf1b166989da5aa012311bc12ccc",
+      "issuer": {
+        "friendly_name": "Let's Encrypt",
+        "pubkey_sha256": "78caa9c22fd61d5080cfbeb27b6d8d9b0cf10e3870aff7e36bf7e2e2cac44dce",
+        "name": "C=US, O=Let's Encrypt, CN=R11"
+      },
+      "not_before": "2026-10-21T14:11:08Z",
+      "not_after": "2027-01-19T14:11:08Z",
+      "revoked": false,
+      "cert_der": "MIIBtTCCAVqgAwIBAgISA6tfHi08S1ppeIeWpbTD0uHwMAoGCCqGSM49BAMCMDMxCzAJBgNVBAYTAlVTMRYwFAYDVQQKDA1MZXQncyBFbmNyeXB0MQwwCgYDVQQDDANSMTEwHhcNMjYxMDIxMTQxMTA4WhcNMjcwMTE5MTQxMTA4WjAWMRQwEgYDVQQDDAtleGFtcGxlLmNvbTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKrnwAyYMqylaER+1DkJA612cK2+EDFRklvb/yRl/UroaouE6Eq7URqvVq1W3ZPsOjmlCSkUwL3taDmCZwykfzejazBpMCcGA1UdEQQgMB6CC2V4YW1wbGUuY29tgg93d3cuZXhhbXBsZS5jb20wHQYDVR0OBBYEFHvUTvXOayilxrr3PBCXePMJIcB4MB8GA1UdIwQYMBaAFB0sQHuf71WPQrorFikOhP5i/tGXMAoGCCqGSM49BAMCA0kAMEYCIQChmWPYpIKTH7hUojNclEJa5IHR+2ATdUdBMmby0lKExwIhAMuJhSuSmMWaV5sIUJrPLsOIYEbDdbVZzihJLcSLpvoF"
+    },
+    "c2": {
+      "id": "17893609702",
+      "tbs_sha256": "a4ac5ca8ac3c63509ef3b9e6a420c1292c9cff5d8cbcc81b7f7dc88746bfe7be",
+      "cert_sha256": "34c77188f62f9cdbc4d6c01137ce1b8391c55ff37f98f8369d1907b63182c67c",
+      "dns_names": [
+        "example.com",
+        "www.example.com"
+      ],
+      "pubkey_sha256": "729436e639c90211f2ca226ef5768b39cc7f8204e9d04d4da2c1936b2606485f",
+      "issuer": {
+        "friendly_name": "Let's Encrypt",
+        "pubkey_sha256": "78caa9c22fd61d5080cfbeb27b6d8d9b0cf10e3870aff7e36bf7e2e2cac44dce",
+        "name": "C=US, O=Let's Encrypt, CN=R11"
+      },
+      "not_before": "2026-10-21T14:11:08Z",
+      "not_after": "2027-01-19T14:11:08Z",
+      "revoked": false,
+      "cert_der": "MIIByDCCAW+gAwIBAgIRAPHi08S1ppeId2ZVRDMiEaowCgYIKoZIzj0EAwIwMzELMAkGA1UEBhMCVVMxFjAUBgNVBAoMDUxldCdzIEVuY3J5cHQxDDAKBgNVBAMMA1IxMTAeFw0yNjEwMjExNDExMDhaFw0yNzAxMTkxNDExMDhaMBYxFDASBgNVBAMMC2V4YW1wbGUuY29tMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAAygct0zrPDgh+8Mg8+XTBYry4+YLVfYcczBxLPPdbyb97VnGT9t/XtBDzXVcTPG0oF+N+aSPcgjdn89pYtYMKOBgDB+MCcGA1UdEQQgMB6CC2V4YW1wbGUuY29tgg93d3cuZXhhbXBsZS5jb20wEwYKKwYBBAHWeQIEAwEB/wQCBQAwHQYDVR0OBBYEFDExcFnSzYn8qLgG9JcQ9241CqHuMB8GA1UdIwQYMBaAFB0sQHuf71WPQrorFikOhP5i/tGXMAoGCCqGSM49BAMCA0cAMEQCICR4yL8Lr5kXw/ipyX6w3vl/ydqcmXhTadF09nO85EyHAiAOCzm+IGQzkFO8aXYBX3kw1P2nFSvd+7gRFHVGQMlJTw=="
+    },
+    "c3": {
+      "id": "17893609703",
+      "tbs_sha256": "6e81b5a31d0a85253eb83aada527c5b913f0896fe8a75bf021dd9f7c05886531",
+      "cert_sha256": "27139a88cea91980a45101c6234d95c9ab772076d8b541f919879d9d3a01945f",
+      "dns_names": [
+        "mail.example.com"
+      ],
+      "pubkey_sha256": "380e76f5bb6740e0e5df896e83a9db2fb08142d393bb909d28492d151291ffc0",
+      "issuer": {
+        "friendly_name": "Sectigo",
+        "pubkey_sha256": "9d5f998ef8bbc39e619461ce0fde07e2342c3a9ac72bc3a31ea5ab6f40eafa19",
+        "name": "C=GB, ST=Greater Manchester, L=Salford, O=Sectigo Limited, CN=Sectigo RSA Domain Validation Secure Server CA"
+      },
+      "not_before": "2026-10-21T14:11:08Z",
+      "not_after": "2027-01-19T14:11:08Z",
+      "revoked": false,
+      "cert_der": "MIICCDCCAa6gAwIBAgIQfR8AAAAAAAAAAAAAAAAAwzAKBggqhkjOPQQDAjCBjzELMAkGA1UEBhMCR0IxGzAZBgNVBAgMEkdyZWF0ZXIgTWFuY2hlc3RlcjEQMA4GA1UEBwwHU2FsZm9yZDEYMBYGA1UECgwPU2VjdGlnbyBMaW1pdGVkMTcwNQYDVQQDDC5TZWN0aWdvIFJTQSBEb21haW4gVmFsaWRhdGlvbiBTZWN1cmUgU2VydmVyIENBMB4XDTI2MTAyMTE0MTEwOFoXDTI3MDExOTE0MTEwOFowGzEZMBcGA1UEAwwQbWFpbC5leGFtcGxlLmNvbTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABNHeHpPnKcfE8YjjCkGwph/QuJ+or2ltxBVhut6Nf+f2UHrJJb1DhSHQFuKb0Cqp7nzP6Z+N+utw7/Ipf2tJPwqjXzBdMBsGA1UdEQQUMBKCEG1haWwuZXhhbXBsZS5jb20wHQYDVR0OBBYEFCWJ/svqP+NG3lTeYyTpRNPCnGpfMB8GA1UdIwQYMBaAFMkiFqrUtCtMzbuS/vfrQXmMeDlOMAoGCCqGSM49BAMCA0gAMEUCID7afNIZKBY9dWrQ46uoORh3gInUBmgFUhBbm4jOOYw9AiEA/sfmP+YuHdJqUXRVTWsVa/tUNva11buf8n6BL5u6gbo="
+    },
+    "c4": {
+      "id": "17893609704",
+      "tbs_sha256": "dfb8415cefc334cba290ec5064b4b134570e44a5620dadc23c0781c86eeda432",
+      "cert_sha256": "c058e72a6367ef704e2872ba53282cba9316991cb70d6bc208f0026f9bbf79fb",
+      "dns_names": [
+        "shop.example.com",
+        "*.shop.example.com"
+      ],
+      "pubkey_sha256": "f1506a78d8b07f1daafe9cadab37d9be2a7942ab2c1ec638c277636ec038cf5d",
+      "issuer": {
+        "friendly_name": "Cloudflare",
+        "pubkey_sha256": "da78346d01844cb81a5347cc725151c35bcc2ac16a0a2edea37798afa5b67779",
+        "name": "C=US, O=Cloudflare\\, Inc., CN=Cloudflare Inc ECC CA-3"
+      },
+      "not_before": "2026-10-21T14:11:08Z",
+      "not_after": "2027-01-19T14:11:08Z",
+      "revoked": false,
+      "cert_der": "MIIB1zCCAXygAwIBAgIQCgsMDQ4PEBESExQVFhcYGTAKBggqhkjOPQQDAjBKMQswCQYDVQQGEwJVUzEZMBcGA1UECgwQQ2xvdWRmbGFyZSwgSW5jLjEgMB4GA1UEAwwXQ2xvdWRmbGFyZSBJbmMgRUNDIENBLTMwHhcNMjYxMDIxMTQxMTA4WhcNMjcwMTE5MTQxMTA4WjAbMRkwFwYDVQQDDBBzaG9wLmV4YW1wbGUuY29tMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEb6swpgkaHbFkqWgWn5x1x2I1Nmvw5v5QukJD7Yqmj0ImrYCot0+DcSD71aVWEvxw+76JxDo/A4NndLgBopWQnqNzMHEwLwYDVR0RBCgwJoIQc2hvcC5leGFtcGxlLmNvbYISKi5zaG9wLmV4YW1wbGUuY29tMB0GA1UdDgQWBBRFIgaBsS8JsMjx5AAjTJAvLhsJeTAfBgNVHSMEGDAWgBRfzDtN4bxNjk4S8nfRqWOobat1WzAKBggqhkjOPQQDAgNJADBGAiEApoHxLrkzK3AUNeVZ1f/BNtHlsmCCWkE4V0bGYSvgM6oCIQDGVz0u0krwNZbkbRC0ucwu2Hq36cXdr3TrZ1iEpGY5pQ=="
+    },
+    "n1": {
+      "id": "17893609705",
+      "tbs_sha256": "2bb793c29978c52a68421807e8cb29b812d5fd5d66671e514952a45e30e3d892",
+      "cert_sha256": "651dc27a3ba8f8d024e7fc282eb1caa2469bacd0fc25c2994088817cbaa665ee",
+      "dns_names": [
+        "new.example.com"
+      ],
+      "pubkey_sha256": "f87b141c8000e6e3bc29389543402f2bc393a2b94b14e05147ffbc94d13d2da7",
+      "issuer": {
+        "friendly_name": "Let's Encrypt",
+        "pubkey_sha256": "78caa9c22fd61d5080cfbeb27b6d8d9b0cf10e3870aff7e36bf7e2e2cac44dce",
+        "name": "C=US, O=Let's Encrypt, CN=R11"
+      },
+      "not_before": "2026-10-21T14:11:08Z",
+      "not_after": "2027-01-19T14:11:08Z",
+      "revoked": false,
+      "cert_der": "MIIBqzCCAVGgAwIBAgISBMr+AAAAAAAAAAAAAAAAAL7vMAoGCCqGSM49BAMCMDMxCzAJBgNVBAYTAlVTMRYwFAYDVQQKDA1MZXQncyBFbmNyeXB0MQwwCgYDVQQDDANSMTEwHhcNMjYxMDIxMTQxMTA4WhcNMjcwMTE5MTQxMTA4WjAaMRgwFgYDVQQDDA9uZXcuZXhhbXBsZS5jb20wWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAT5NPeXyatR8u4U4Yb304Arlc5LiaduBRAjP4lNRu5S4YoqGm+jezSggY6FRhuxngkaAZBNSDdkVzp65ePI0/b8o14wXDAaBgNVHREEEzARgg9uZXcuZXhhbXBsZS5jb20wHQYDVR0OBBYEFAPH/Eg7T40qgBbV75/zYzLGleQBMB8GA1UdIwQYMBaAFB0sQHuf71WPQrorFikOhP5i/tGXMAoGCCqGSM49BAMCA0gAMEUCIHICejDoique+gxyomh6xX6IilHR2aqIEDw01gtweWf3AiEA3YFoo6Mnr9BME0ZPFnvHAVmT82A+2/DHvTv3+n0w3K4="
+    },
+    "n2": {
+      "id": "17893609706",
+      "tbs_sha256": "10aedbdbbb810d40d430a980bf7b0850fbdb9f92e2616840b1d8a5717bddf657",
+      "cert_sha256": "6c4b3954a85d6e27dc1c02d09d8688b6a6cbcb5e7313734060af4fac63159eb2",
+      "dns_names": [
+        "example.com"
+      ],
+      "pubkey_sha256": "ebb89d518b1935628b3b8d9ae60a7166ac1486cb29394346b5482b9bc8241d3c",
+      "issuer": {
+        "friendly_name": "Google Trust Services",
+        "pubkey_sha256": "90f3fc4120550d8d99d07c57bacf06b3b508c3ff4a95037124d1fae0be13c62e",
+        "name": "C=US, O=Google Trust Services, CN=WE1"
+      },
+      "not_before": "2026-10-21T14:11:08Z",
+      "not_after": "2027-01-19T14:11:08Z",
+      "revoked": false,
+      "cert_der": "MIIBqTCCAU+gAwIBAgIQWlpaWlpaWlpaWlpaWlpaWjAKBggqhkjOPQQDAjA7MQswCQYDVQQGEwJVUzEeMBwGA1UECgwVR29vZ2xlIFRydXN0IFNlcnZpY2VzMQwwCgYDVQQDDANXRTEwHhcNMjYxMDIxMTQxMTA4WhcNMjcwMTE5MTQxMTA4WjAWMRQwEgYDVQQDDAtleGFtcGxlLmNvbTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABAx8oer6FII4d3JZYVaEnnGWcylLle65V8L6MsVcS6WSm4mlvXb3g/1xRsISbr27R+PoDOBhwgbWtq7mGF4y4DijWjBYMBYGA1UdEQQPMA2CC2V4YW1wbGUuY29tMB0GA1UdDgQWBBTtBuNqJax7vs/cripzEazx3zrFSTAfBgNVHSMEGDAWgBQIj5aVum3k7UhhIrGEX+VHAy9eKTAKBggqhkjOPQQDAgNIADBFAiBdPhwMAwuT14bI448QbMpk/Ivh+hljxwADXZcFUxg8qQIhAJImvBEpcfeo9AvzKcSKY4XmKGsEJ50yY19QLGhG8v90"
+    }
+  },
+  "crtsh": {
+    "c1": {
+      "issuer_ca_id": 295814,
+      "issuer_name": "C=US, O=Let's Encrypt, CN=R11",
+      "common_name": "example.com",
+      "name_value": "example.com\nwww.example.com",
+      "id": 15000000001,
+      "entry_timestamp": "2026-10-21T14:11:08.000",
+      "not_before": "2026-10-21T14:11:08",
+      "not_after": "2027-01-19T14:11:08",
+      "serial_number": "03ab5f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "result_count": 3
+    },
+    "c2": {
+      "issuer_ca_id": 295814,
+      "issuer_name": "C=US, O=Let's Encrypt, CN=R11",
+      "common_name": "example.com",
+      "name_value": "example.com\nwww.example.com",
+      "id": 15000000002,
+      "entry_timestamp": "2026-10-21T14:11:08.000",
+      "not_before": "2026-10-21T14:11:08",
+      "not_after": "2027-01-19T14:11:08",
+      "serial_number": "00f1e2d3c4b5a6978877665544332211aa",
+      "result_count": 3
+    },
+    "c3": {
+      "issuer_ca_id": 1,
+      "issuer_name": "C=GB, ST=Greater Manchester, L=Salford, O=Sectigo Limited, CN=Sectigo RSA Domain Validation Secure Server CA",
+      "common_name": "mail.example.com",
+      "name_value": "mail.example.com",
+      "id": 15000000003,
+      "entry_timestamp": "2026-10-21T14:11:08.000",
+      "not_before": "2026-10-21T14:11:08",
+      "not_after": "2027-01-19T14:11:08",
+      "serial_number": "7d1f00000000000000000000000000c3",
+      "result_count": 2
+    },
+    "c4": {
+      "issuer_ca_id": 157938,
+      "issuer_name": "C=US, O=\"Cloudflare, Inc.\", CN=Cloudflare Inc ECC CA-3",
+      "common_name": "shop.example.com",
+      "name_value": "shop.example.com\n*.shop.example.com",
+      "id": 15000000004,
+      "entry_timestamp": "2026-10-21T14:11:08.000",
+      "not_before": "2026-10-21T14:11:08",
+      "not_after": "2027-01-19T14:11:08",
+      "serial_number": "0a0b0c0d0e0f10111213141516171819",
+      "result_count": 3
+    },
+    "n1": {
+      "issuer_ca_id": 295814,
+      "issuer_name": "C=US, O=Let's Encrypt, CN=R11",
+      "common_name": "new.example.com",
+      "name_value": "new.example.com",
+      "id": 15000000005,
+      "entry_timestamp": "2026-10-21T14:11:08.000",
+      "not_before": "2026-10-21T14:11:08",
+      "not_after": "2027-01-19T14:11:08",
+      "serial_number": "04cafe00000000000000000000000000beef",
+      "result_count": 2
+    },
+    "n2": {
+      "issuer_ca_id": 183283,
+      "issuer_name": "C=US, O=Google Trust Services, CN=WE1",
+      "common_name": "example.com",
+      "name_value": "example.com",
+      "id": 15000000006,
+      "entry_timestamp": "2026-10-21T14:11:08.000",
+      "not_before": "2026-10-21T14:11:08",
+      "not_after": "2027-01-19T14:11:08",
+      "serial_number": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "result_count": 2
+    }
+  }
+}

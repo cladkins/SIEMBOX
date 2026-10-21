@@ -686,6 +686,17 @@ blocked, each feed simply records `last_status = error` and the rest of the app
 is unaffected. Enable/disable feeds or trigger a manual refresh from the *Threat
 Feeds & Reputation Providers* panel on the Threat Intel page.
 
+### Digital Risk domain monitoring (outbound hosts)
+
+Domain monitoring needs outbound HTTPS to `crt.sh` (Certificate Transparency),
+`api.certspotter.com` (SSLMate's Cert Spotter, the CT fallback used when
+crt.sh is down or overloaded), `data.iana.org` and the registries' RDAP servers,
+plus DNS. Cert Spotter works without an API key within a small hourly limit;
+an optional key can be saved under Settings → Digital Risk (encrypted with
+`CREDENTIAL_ENCRYPTION_KEY`, never shown again). Without egress the checks
+report errors rather than "no findings"; see
+[TROUBLESHOOTING.md](docs/operations/TROUBLESHOOTING.md#issue-digital-risk-domain-monitoring-shows-errors-or-never-finds-anything).
+
 ### Reputation providers (bring your own key)
 
 For richer per-IP reputation you can plug in keyed providers — **AbuseIPDB** and

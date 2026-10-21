@@ -1041,6 +1041,18 @@ function crtshHref(id: unknown): string | undefined {
   return Number.isSafeInteger(n) && n > 0 ? `https://crt.sh/?id=${n}` : undefined;
 }
 
+/**
+ * A certificate's crt.sh link and its label: by crt.sh id, else (Cert Spotter
+ * answered, so there is no crt.sh id) by the certificate's SHA-256 — built
+ * from those values, never from a URL in the detail.
+ */
+function certificateLink(d: Record<string, unknown>): { text: string; href: string } | undefined {
+  const byId = crtshHref(d.crtsh_id);
+  if (byId) return { text: `crt.sh #${textOf(d.crtsh_id)}`, href: byId };
+  const sha = typeof d.cert_sha256 === 'string' && /^[0-9a-f]{64}$/.test(d.cert_sha256) ? d.cert_sha256 : '';
+  return sha ? { text: `crt.sh (SHA-256 ${sha.slice(0, 12)}…)`, href: `https://crt.sh/?sha256=${sha}` } : undefined;
+}
+
 function marked(values: string[], changed: string[], change: 'added' | 'removed'): DetailItem[] {
   const set = new Set(changed);
   return values.map((text) => (set.has(text) ? { text, change } : { text }));
@@ -1080,7 +1092,7 @@ function certificateEntry(cert: unknown): { text: string; href?: string } {
   if (names.length) parts.push(names.slice(0, 3).join(', ') + (names.length > 3 ? ` (+${names.length - 3} more)` : ''));
   const until = formatDay(c.not_after);
   if (until) parts.push(`valid until ${until}`);
-  return { text: parts.join(' · '), href: crtshHref(c.crtsh_id) };
+  return { text: parts.join(' · '), href: certificateLink(c)?.href };
 }
 
 /**
@@ -1170,8 +1182,10 @@ export function domainFindingDetail(
       const until = formatDay(d.not_after);
       if (from || until) add('Valid', `${from || '?'} to ${until || '?'}`);
       if (d.new_issuer === true) add('Issuer history', 'the first certificate from this issuer for this domain');
-      const href = crtshHref(d.crtsh_id);
-      if (href) lines.push({ label: 'Certificate', text: `crt.sh #${textOf(d.crtsh_id)}`, href });
+      // Which CT source reported it: crt.sh, or the Cert Spotter fallback.
+      add('Seen via', textOf(d.ct_source));
+      const link = certificateLink(d);
+      if (link) lines.push({ label: 'Certificate', text: link.text, href: link.href });
       return lines;
     }
     default:

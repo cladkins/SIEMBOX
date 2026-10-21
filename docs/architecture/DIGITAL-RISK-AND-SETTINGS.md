@@ -109,7 +109,7 @@ Every collector compares its result against a stored baseline, and **only new ch
 
 | Collector | Data source | What it catches | Default severity |
 |---|---|---|---|
-| Certificate Transparency | crt.sh JSON (free) | A certificate for the org's own domain from an unexpected CA (mis-issuance); a certificate for a lookalike (a phishing site going up) | Unexpected CA: high · lookalike cert: medium |
+| Certificate Transparency | crt.sh JSON (free); SSLMate Cert Spotter as the fallback when crt.sh fails (free within a small hourly limit; optional API key) | A certificate for the org's own domain from an unexpected CA (mis-issuance); a certificate for a lookalike (a phishing site going up) | Unexpected CA: high · lookalike cert: medium |
 | Lookalikes / typosquats | A built-in TypeScript permutation engine (omission, repetition, transposition, keyboard-adjacent replacement, homoglyph, hyphenation, bitsquat, TLD swap) plus DNS resolution. `dnstwist` is used too if it's installed. | A newly registered lookalike. An MX record on one usually means someone is getting ready to send phishing mail. | high (medium if the lookalike has no A/MX record) |
 | RDAP / WHOIS | IANA RDAP bootstrap (`data.iana.org/rdap/dns.json`), then the registry's RDAP server | Registrar, nameserver, status, or registrant changes (signs of a hijack); expiry approaching | Change: high/critical · expiry within 30 days: medium |
 | DNS drift | Two independent resolvers; A/AAAA/MX/NS/TXT records | NS/MX changes; TXT changes (SPF/DKIM/DMARC tampering); A record changes | NS/MX: critical · TXT: high · A: medium |
@@ -118,7 +118,7 @@ Every collector compares its result against a stored baseline, and **only new ch
 
 - **Data model (migration `035`)**: `domain_baselines(domain_id, collector, snapshot JSONB)`. Findings reuse `exposure_findings` with `source = 'domain-monitor'` and an `event_type` of `new_cert`, `unexpected_ca`, `lookalike_registered`, `rdap_change`, `dns_drift`, or `expiry_warning`.
 - **Job**: `domain-monitor`. Each domain is polled on its own schedule, selected the same way `scheduledScans` picks due scans.
-- **Network access**: the collectors need outbound access to crt.sh, data.iana.org, the registries' RDAP servers, and DNS. Without it, the feature degrades gracefully, and a banner in the UI tells "no key", "network access blocked", and "no findings" apart.
+- **Network access**: the collectors need outbound access to crt.sh, api.certspotter.com, data.iana.org, the registries' RDAP servers, and DNS. Without it, the feature degrades gracefully, and a banner in the UI tells "no key", "network access blocked", and "no findings" apart.
 
 ---
 
@@ -242,7 +242,7 @@ Clicking a severity chip, a tile, a type, an account or a lookalike's findings f
 - **SSRF.** Domain and account lookups put user-supplied values into third-party URLs. They must use the constant-host pattern with strict validation; plain string concatenation is not allowed.
 - **Privacy.** Persisting a breached password or hash would be a serious data-handling failure. This is prevented by design: Pwned Passwords is only called through k-anonymity, and `sanitizeDetail()` runs on every finding.
 - **Terms of use.** Only org-owned domains and accounts may be queried. HIBP must be credited, its rate limits honored, and a descriptive User-Agent sent.
-- **Unreliable external sources.** crt.sh returns 502s, and HIBP enforces per-minute limits. Every watch records its last status and error, and the UI shows when the feature is degraded.
+- **Unreliable external sources.** crt.sh returns 502s (Cert Spotter then answers for it; certificates are identified by issuer organisation + serial in both, so switching sources raises nothing by itself), and HIBP enforces per-minute limits. Every watch records its last status and error, and the UI shows when the feature is degraded.
 - **Alert storms.** Deduplication depends entirely on stable fingerprints and `event_id`s.
 - **Too many lookalikes.** The permutation engine is tuned conservatively; lookalikes with an MX record or high page similarity are escalated.
 - **Installs without outbound network access** will produce no findings. This is why exposure notifications are off by default and the UI explains the cause.
@@ -258,5 +258,6 @@ Clicking a severity chip, a tile, a type, an account or a lookalike's findings f
 - HIBP plans — https://haveibeenpwned.com/Subscription
 - Pwned Passwords (k-anonymity) — https://haveibeenpwned.com/API/v3#PwnedPasswords
 - crt.sh — https://crt.sh
+- Cert Spotter CT search API — https://sslmate.com/help/reference/ct_search_api_v1
 - IANA RDAP bootstrap — https://data.iana.org/rdap/dns.json
 - dnstwist — https://github.com/elceef/dnstwist

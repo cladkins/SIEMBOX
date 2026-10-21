@@ -6,7 +6,9 @@
  * stored encrypted (AES-256-GCM via CredentialEncryption — the same scheme as
  * the threat-intel provider keys in reputationService.ts). Only getHibpApiKey()
  * ever decrypts it; every public view reports configured/enabled booleans and
- * never the key.
+ * never the key. The optional Cert Spotter API key (the CT collector's fallback
+ * source, domainMonitor/certSpotter.ts) is stored and guarded the same way:
+ * only getCertSpotterApiKey() decrypts it.
  */
 import { isIP } from 'net';
 import { query } from '../../config/database';
@@ -14,6 +16,11 @@ import { logger } from '../../utils/logger';
 import { CredentialEncryption } from '../credentials/credentialEncryption';
 import crypto from 'crypto';
 import type { ExposureSeverity } from '../../models/Exposure';
+import {
+  CERTSPOTTER_PROVIDER,
+  certSpotterPausedUntil,
+  resetCertSpotterRateLimit,
+} from './domainMonitor/certSpotter';
 
 /** Every key this subsystem owns, with the value used when the row is missing. */
 export const EXPOSURE_SETTING_DEFAULTS = {
@@ -30,6 +37,8 @@ export const EXPOSURE_SETTING_DEFAULTS = {
   exposure_domain_expiry_warning_days: '30',
   exposure_lookalike_max_candidates: '300',
   exposure_dns_secondary_resolver: '', // '' = off: only the system resolver is used
+  // Optional Cert Spotter API key (encrypted envelope; '' = none: unauthenticated, small limit).
+  exposure_certspotter_key: '',
 } as const;
 
 /** Bounds for the numeric domain-monitor settings (the route rejects anything outside). */
@@ -295,6 +304,11 @@ export async function getHibpApiKey(): Promise<string | undefined> {
 
 /** The key in a stored exposure_hibp_key value, or undefined when there is none this backend can decrypt. */
 function decryptStoredHibpKey(stored: string, warn: boolean): string | undefined {
+  return decryptStoredKey(stored, warn, 'HIBP');
+}
+
+/** The key in a stored key envelope, or undefined; `label` names the provider in warnings. */
+function decryptStoredKey(stored: string, warn: boolean, label: string): string | undefined {
   if (!stored) return undefined;
   let envelope: { encrypted?: string; iv?: string; authTag?: string };
   try {
@@ -302,7 +316,7 @@ function decryptStoredHibpKey(stored: string, warn: boolean): string | undefined
   } catch {
     // Deliberately not logging the parse error: V8 quotes the input in it, and
     // a hand-edited row could hold a plaintext key.
-    if (warn) logger.warn('[Exposure] the stored HIBP API key is not an encrypted value; re-enter it');
+    if (warn) logger.warn(`[Exposure] the stored ${label} API key is not an encrypted value; re-enter it`);
     return undefined;
   }
   try {
@@ -314,10 +328,63 @@ function decryptStoredHibpKey(stored: string, warn: boolean): string | undefined
   } catch (e) {
     // CredentialEncryption's messages are static (no key material).
     if (warn) {
-      logger.warn('[Exposure] the stored HIBP API key could not be decrypted; re-enter it', {
+      logger.warn(`[Exposure] the stored ${label} API key could not be decrypted; re-enter it`, {
         error: e instanceof Error ? e.message : String(e),
       });
     }
     return undefined;
   }
+}
+
+// ---- Cert Spotter (optional key for the CT fallback source) -----------------------
+
+export interface CertSpotterProviderPublic {
+  name: string;
+  label: string;
+  docsUrl: string;
+  signupUrl: string;
+  apiKeysUrl: string;
+  /** A key is saved. Without one Cert Spotter is still used, within its small unauthenticated limit. */
+  configured: boolean;
+  /** The saved key decrypts with the current CREDENTIAL_ENCRYPTION_KEY (see ExposureProviderPublic.usable). */
+  usable: boolean;
+  /** While a 429's Retry-After runs: when Cert Spotter requests resume (ISO), else null. */
+  rate_limited_until: string | null;
+}
+
+/** Public view for the UI — never exposes the key itself. */
+export async function getCertSpotterProviderPublic(): Promise<CertSpotterProviderPublic> {
+  const stored = await getExposureSetting('exposure_certspotter_key');
+  const paused = certSpotterPausedUntil();
+  return {
+    ...CERTSPOTTER_PROVIDER,
+    configured: stored !== '',
+    usable: stored !== '' && decryptStoredKey(stored, false, 'Cert Spotter') !== undefined,
+    rate_limited_until: paused === null ? null : new Date(paused).toISOString(),
+  };
+}
+
+/**
+ * Save the Cert Spotter key (encrypted; '' or null clears it). Throws
+ * CredentialEncryption's error when CREDENTIAL_ENCRYPTION_KEY is missing or
+ * malformed (the route maps it to a 400). A changed key gets a fresh start
+ * on the rate limit: Cert Spotter's limit belongs to the credentials.
+ */
+export async function saveCertSpotterKey(apiKey: string | null): Promise<void> {
+  if (apiKey === null || apiKey === '') {
+    await setExposureSetting('exposure_certspotter_key', '');
+  } else {
+    const encrypted = CredentialEncryption.encrypt(apiKey);
+    await setExposureSetting('exposure_certspotter_key', JSON.stringify(encrypted));
+  }
+  resetCertSpotterRateLimit();
+}
+
+/**
+ * The decrypted Cert Spotter key, for the HTTP client only. Never log, return
+ * or persist what this returns. Undefined when unset or undecryptable (then
+ * Cert Spotter is used unauthenticated).
+ */
+export async function getCertSpotterApiKey(): Promise<string | undefined> {
+  return decryptStoredKey(await getExposureSetting('exposure_certspotter_key'), true, 'Cert Spotter');
 }

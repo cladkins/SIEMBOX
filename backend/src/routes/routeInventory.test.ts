@@ -379,6 +379,8 @@ const INVENTORY: Row[] = [
   ['POST', '/api/exposure/providers/hibp/test', ADMIN_ONLY],
   ['GET', '/api/exposure/providers/hibp/verified-domains', ADMIN_ONLY],
   ['POST', '/api/exposure/providers/hibp/verified-domains/refresh', ADMIN_ONLY],
+  ['GET', '/api/exposure/providers/certspotter', ANY_ROLE],
+  ['PUT', '/api/exposure/providers/certspotter', ADMIN_ONLY],
   ['GET', '/api/exposure/domains', ANY_ROLE],
   ['POST', '/api/exposure/domains', ADMIN_ONLY],
   ['PUT', '/api/exposure/domains/:id', ADMIN_ONLY],

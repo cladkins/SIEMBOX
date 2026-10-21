@@ -106,7 +106,8 @@ export const READABLE_SETTING_KEYS: ReadonlySet<string> = new Set([
   // Reputation providers (services/threatintel/reputationService.ts). Not the ti_*_key rows.
   'ti_abuseipdb_enabled',
   'ti_otx_enabled',
-  // Digital Risk (migrations 034 and 035, services/exposure/settings.ts). Not exposure_hibp_key.
+  // Digital Risk (migrations 034 and 035, services/exposure/settings.ts). Not exposure_hibp_key
+  // or exposure_certspotter_key.
   'notify_exposure_enabled',
   'notify_exposure_min_severity',
   'exposure_leaked_creds_enabled',

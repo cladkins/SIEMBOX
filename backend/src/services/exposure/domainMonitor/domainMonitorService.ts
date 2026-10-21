@@ -204,7 +204,7 @@ function collectorsFor(overrides?: Partial<Record<CollectorName, Collector>>) {
     dns: createDnsCollector(),
     rdap: createRdapCollector(),
     lookalike: createLookalikeCollector(),
-    ct: createCtCollector({ createSource: createDefaultCtSource }),
+    ct: createCtCollector({ createSource: () => createDefaultCtSource() }),
   };
   return { ...defaultCollectors, ...overrides };
 }

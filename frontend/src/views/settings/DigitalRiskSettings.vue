@@ -51,6 +51,8 @@
       @changed="refreshStatus"
       @deleted="refreshStatus"
     />
+    <!-- Next to the watched domains: the certificate checks' fallback source and its optional key. -->
+    <CertSpotterCard ref="certSpotterCard" class="section" />
     <ExposureProviderCard
       ref="providerCard"
       class="section"
@@ -69,6 +71,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useExposureStatus } from '@/composables/useExposureStatus';
 import { EXPOSURE_SEVERITIES, type MonitoredIdentity } from '@/services/exposureService';
 import { describeExposureStatus, pluralize, statusContextFromIdentities } from '@/utils/exposure';
+import CertSpotterCard from './CertSpotterCard.vue';
 import ExposureChecksCard from './ExposureChecksCard.vue';
 import ExposureDomainsCard from './ExposureDomainsCard.vue';
 import ExposureIdentitiesCard from './ExposureIdentitiesCard.vue';
@@ -87,6 +90,7 @@ const identitiesCard = ref<InstanceType<typeof ExposureIdentitiesCard> | null>(n
 const ownDomainsCard = ref<InstanceType<typeof ExposureDomainsCard> | null>(null);
 const brandDomainsCard = ref<InstanceType<typeof ExposureDomainsCard> | null>(null);
 const providerCard = ref<InstanceType<typeof ExposureProviderCard> | null>(null);
+const certSpotterCard = ref<InstanceType<typeof CertSpotterCard> | null>(null);
 // The identities card's list as last loaded. A failed check is recorded on the
 // identity (last_status), which outlives the latest run's summary in /status
 // (kept in memory, so it resets when the backend restarts).
@@ -125,6 +129,7 @@ async function refreshBanner() {
     ownDomainsCard.value?.reload(),
     brandDomainsCard.value?.reload(),
     providerCard.value?.reload(),
+    certSpotterCard.value?.reload(),
   ]);
 }
 

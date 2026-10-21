@@ -38,6 +38,7 @@ const STORED_SECRETS: Array<[key: string, writer: string]> = [
   ['ti_abuseipdb_key', 'services/threatintel/reputationService.ts saveProvider'],
   ['ti_otx_key', 'services/threatintel/reputationService.ts saveProvider'],
   ['exposure_hibp_key', 'services/exposure/settings.ts saveHibpProvider'],
+  ['exposure_certspotter_key', 'services/exposure/settings.ts saveCertSpotterKey'],
 ];
 
 /** Every plain setting the code or a migration writes, with a typical value. */

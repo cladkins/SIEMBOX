@@ -239,6 +239,25 @@ export interface ExposureSettings {
   exposure_leaked_creds_enabled: boolean;
 }
 
+/**
+ * Cert Spotter, the certificate monitor's fallback when crt.sh is down, as the
+ * API shows it: never the key, only whether one is saved. Used with or without
+ * a key (without one, within a small hourly limit).
+ */
+export interface CertSpotterProvider {
+  name: 'certspotter';
+  label: string;
+  docsUrl: string;
+  signupUrl: string;
+  apiKeysUrl: string;
+  /** A key is saved. */
+  configured: boolean;
+  /** The backend can decrypt the saved key (see ExposureProvider.usable). */
+  usable: boolean;
+  /** While Cert Spotter's rate limit holds requests back: when they resume (ISO). */
+  rate_limited_until: string | null;
+}
+
 /** A breach-data provider as the API shows it: never the key, only whether one is saved. */
 export interface ExposureProvider {
   name: string;
@@ -540,6 +559,37 @@ class ExposureServiceClient {
   /** Update any subset of the settings; returns the full settings. Admin only. */
   async updateSettings(changes: Partial<ExposureSettings>): Promise<ExposureSettings> {
     const response = await apiClient.put('/exposure/settings', changes, HANDLED);
+    return response.data;
+  }
+
+  // ---- Cert Spotter (optional key for the certificate monitor's fallback) ----
+
+  async getCertSpotterProvider(): Promise<CertSpotterProvider> {
+    const response = await apiClient.get('/exposure/providers/certspotter', HANDLED);
+    return response.data;
+  }
+
+  /**
+   * Save a Cert Spotter API key (stored encrypted, never returned). Admin only.
+   * An empty key is refused here: clearing only ever happens through
+   * removeCertSpotterKey().
+   */
+  async saveCertSpotterKey(apiKey: string): Promise<CertSpotterProvider> {
+    const key = apiKey.trim();
+    if (!key) throw new Error('Enter an API key to save');
+    try {
+      const response = await apiClient.put('/exposure/providers/certspotter', { api_key: key }, HANDLED);
+      dropRequestBody(response);
+      return response.data;
+    } catch (error) {
+      dropRequestBody(error);
+      throw error;
+    }
+  }
+
+  /** Delete the stored Cert Spotter key; Cert Spotter is then used unauthenticated. Admin only. */
+  async removeCertSpotterKey(): Promise<CertSpotterProvider> {
+    const response = await apiClient.put('/exposure/providers/certspotter', { api_key: null }, HANDLED);
     return response.data;
   }
 

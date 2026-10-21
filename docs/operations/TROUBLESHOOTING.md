@@ -1939,7 +1939,8 @@ sudo tail -f /var/log/nginx/error.log
 ### Issue: Digital Risk domain monitoring shows errors (or never finds anything)
 
 The domain monitor (`domain-monitor` job) needs outbound HTTPS to `crt.sh`,
-`data.iana.org` and the registries' RDAP servers, plus working DNS. The
+`api.certspotter.com` (the certificate checks' fallback), `data.iana.org` and
+the registries' RDAP servers, plus working DNS. The
 Monitoring card on the **Digital Risk** page (every role) says whether domain
 monitoring as a whole is working and lists the domains that need a look; each
 domain's card under Settings → Digital Risk (admin) shows its own checks. Each
@@ -1960,11 +1961,38 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   registration data and DNS records are recorded silently, and only later
   changes alert (expiry warnings and certificates from a CA outside
   `expected_cas` are the exceptions).
-- `ct: crt.sh is temporarily unavailable (HTTP 502)` / `did not answer in time`:
-  crt.sh is a free, often overloaded service. These are transient — the failed
-  collectors are retried after 60 minutes (backing off), the others keep their
-  regular schedule, and nothing is lost: a newly registered lookalike crt.sh
-  failed on is checked first next time, and still counts as new.
+- `ct` note `source: Cert Spotter (crt.sh failed — crt.sh is temporarily
+  unavailable (HTTP 502))` — crt.sh (a free, often overloaded service) is down
+  or struggling, and the certificate checks used SSLMate's Cert Spotter instead.
+  Nothing to do: new certificates are still seen, the next run tries crt.sh
+  first again, and switching sources raises no findings by itself (a
+  certificate has the same identity in both). Check which source answered with
+  `jq '.[] | {domain, ct: .last_summary.collectors.ct | {note, details}}'` on
+  `/api/exposure/domains`.
+- `ct: crt.sh is temporarily unavailable (HTTP 502); Cert Spotter fallback
+  failed too: ...` / `crt.sh did not answer in time; ...`: neither source could
+  answer. These are transient — the failed collectors are retried after 60
+  minutes (backing off), the others keep their regular schedule, the baseline is
+  kept, and nothing is lost: a newly registered lookalike that failed is checked
+  first next time, and still counts as new. The second half says why Cert
+  Spotter failed:
+  - `Cert Spotter is rate-limiting requests (the small limit without an API key:
+    add one in Settings → Digital Risk); paused until <time>` — without a key
+    Cert Spotter allows only a few queries an hour, and each page of
+    certificates is one query, so a busy domain, several watched domains or a
+    long crt.sh outage use it up. Requests resume after the time shown (also on
+    the Cert Spotter card in Settings → Digital Risk); for a higher limit,
+    [get a Cert Spotter API key](https://sslmate.com/signup?for=ct_search_api)
+    and save it on that card (admin). With a key, `this API key's limit` means
+    the key's plan limit was reached.
+  - `Cert Spotter rejected the API key (HTTP 401)` (or `402`) — the saved key is
+    wrong, disabled, or its subscription lapsed: replace it, or remove it to use
+    Cert Spotter unauthenticated.
+  - `Cert Spotter refused the query for <name> (HTTP 403 ...)` — the name isn't
+    something Cert Spotter searches (e.g. not under a public suffix) or your plan
+    doesn't allow it.
+  - `Cert Spotter could not be reached` / `did not answer in time` — allow
+    outbound HTTPS to `api.certspotter.com`.
 - `ct: could not connect to crt.sh within 45 s (is outbound HTTPS blocked?)` (or
   the same for an RDAP server) — no connection was ever made (TCP or the TLS
   handshake never completed): an egress firewall, proxy or SNI filter is
@@ -1976,16 +2004,22 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   <name> ... too many to monitor reliably` (or `returned more than 10 MB`; also
   `details.own_domain_error`) — crt.sh stops at 10,000 matching names per
   query, picked in no particular order, so the domain's own certificates can't
-  be monitored; the certificates of its registered lookalikes still are. To
-  monitor your own certificates, watch a narrower name (e.g. a subdomain).
+  be monitored; the certificates of its registered lookalikes still are. Such a
+  name is asked of Cert Spotter, which pages through everything, so usually the
+  note then reads `source: Cert Spotter (crt.sh failed — crt.sh returned only
+  part ...)` and the domain is monitored after all; the warning stays only when
+  Cert Spotter can't answer either (`; Cert Spotter: ...`: more than 60 pages, or
+  rate-limited — an API key helps there). To monitor your own certificates
+  otherwise, watch a narrower name (e.g. a subdomain).
   Turning `ct` off for the domain would stop the lookalike certificate checks
   too.
 - `ct: crt.sh answered HTTP 403` (or another 4xx) — crt.sh, or more often an
   egress proxy or TLS-inspecting filter in between, refused the request (for
   the domain itself or for one of its lookalikes; brand domains query only
   lookalikes). It is not retried early, and no lookalike check is put off
-  because of it: allow outbound HTTPS to `crt.sh` and the next regular run
-  picks it up.
+  because of it, and Cert Spotter is not asked instead (a blocked egress
+  should be fixed, not papered over): allow outbound HTTPS to `crt.sh` (and
+  `api.certspotter.com`) and the next regular run picks it up.
 - `rdap: unsupported` — the TLD publishes no RDAP service, or only a plain-HTTP
   one (refused on purpose); registration changes can't be monitored there.
 - `rdap: refused to contact ...` — the RDAP server named by IANA's bootstrap

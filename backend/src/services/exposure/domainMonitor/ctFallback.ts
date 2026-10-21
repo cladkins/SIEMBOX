@@ -27,7 +27,9 @@ import {
   asAnswer,
   type CertificateSource,
   type CtAnswer,
+  type Pacer,
 } from './ct';
+import type { HttpGet } from './http';
 import { CertSpotterClient } from './certSpotter';
 import { CollectorError, errorMessage } from './types';
 import { getCertSpotterApiKey } from '../settings';
@@ -79,8 +81,27 @@ export class FallbackCertificateSource implements CertificateSource {
   }
 }
 
-/** crt.sh with the Cert Spotter fallback, using the saved Cert Spotter API key if there is one. */
-export async function createDefaultCtSource(): Promise<CertificateSource> {
+/** Test seams for createDefaultCtSource. */
+export interface DefaultCtSourceOptions {
+  crtshTransport?: HttpGet;
+  certSpotterTransport?: HttpGet;
+  pacer?: Pacer;
+}
+
+/**
+ * crt.sh with the Cert Spotter fallback, using the saved Cert Spotter API key
+ * if there is one (read once per run, so a new key applies from the next run).
+ */
+export async function createDefaultCtSource(
+  options: DefaultCtSourceOptions = {}
+): Promise<CertificateSource> {
   const apiKey = await getCertSpotterApiKey();
-  return new FallbackCertificateSource(new CtClient(), new CertSpotterClient({ apiKey }));
+  return new FallbackCertificateSource(
+    new CtClient({ transport: options.crtshTransport, pacer: options.pacer }),
+    new CertSpotterClient({
+      apiKey,
+      transport: options.certSpotterTransport,
+      pacer: options.pacer,
+    })
+  );
 }

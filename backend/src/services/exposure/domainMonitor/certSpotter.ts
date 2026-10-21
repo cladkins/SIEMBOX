@@ -117,7 +117,8 @@ export function parseRetryAfterSeconds(value: unknown, nowMs = Date.now()): numb
     const trimmed = raw.trim();
     let seconds = NaN;
     if (/^\d{1,9}$/.test(trimmed)) seconds = Number(trimmed);
-    else {
+    else if (/^[A-Za-z]{3},/.test(trimmed)) {
+      // An HTTP-date ("Wed, 21 Oct 2026 07:28:00 GMT").
       const at = Date.parse(trimmed);
       if (!Number.isNaN(at)) seconds = Math.ceil((at - nowMs) / 1000);
     }

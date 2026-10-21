@@ -99,18 +99,28 @@ engine):
 4. **Concurrency limit + bounded queue** — caps how many analyses run at
    once; on overflow, the newest alert is skipped (visibly, via
    `status='skipped'`) rather than growing unbounded.
-5. **Per-analysis budget** — `maxToolCalls` (default 6) and `wallBudgetSeconds`
-   (default 110) bound how deep and how long a single alert's analysis can go;
-   both are admin-configurable (Settings → AI Triage /
-   `TriageOperationalConfig`) and passed into `runAlertTriage` via
-   `TriageAgentDeps`. `triageAgent.ts`'s internal iteration cap is *derived*
+5. **Per-analysis budget** — `maxToolCalls` (default 6, 1-25) and
+   `wallBudgetSeconds` (default 110, 20-280) bound how deep and how long a
+   single alert's analysis can go, and `stepMaxTokens` (default 1500) and
+   `answerMaxTokens` (default 3000) how long each JSON working step and the
+   verdict may be; all are admin-configurable (Settings → AI → AI budgets,
+   `services/ai/aiBudgets.ts` / `TriageOperationalConfig`) and passed into
+   `runAlertTriage` via `TriageAgentDeps`. Each working step's model call is
+   cut off at what is left of the time budget; the verdict call has its own
+   120 s. `triageAgent.ts`'s internal iteration cap is *derived*
    from `maxToolCalls` (`+2`, for a reprompt and the final synthesis turn) so
-   it can never silently override a raised tool-call budget. `TOTAL_TOOL_BYTES`
-   (aggregate tool-result bytes fed back to the model) stays a fixed internal
-   safety rail, not exposed — it protects the model's context, not analysis
-   depth. Hitting either exposed cap forces `SYNTHESIS_PROMPT` to produce a
-   verdict from whatever was already gathered (`truncated: true` on the
-   result, surfaced in the UI as "stopped early at the analysis budget").
+   it can never silently override a raised tool-call budget. The aggregate
+   tool-result bytes fed back to the model (24 KB, or 4 KB per allowed lookup
+   when more than 6 are allowed) stay an internal safety rail, not exposed —
+   it protects the model's context, not analysis depth. Hitting a cap forces
+   `SYNTHESIS_PROMPT` to produce a verdict from whatever was already gathered
+   (`truncated: true` on the result, surfaced in the UI as "stopped early at
+   the analysis budget"), and the verdict's reasoning ends with a note saying
+   which cap and which setting raises it. A model call that stopped at its
+   output-token cap (`finish_reason` `length`, `stop_reason` `max_tokens`,
+   `done_reason` `length`) is noted the same way and logged once at info level;
+   a cut-off JSON working step is not reprompted (it would be cut off again)
+   but goes straight to the verdict synthesis.
 
 ## Threat model notes
 

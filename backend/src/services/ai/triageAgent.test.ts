@@ -163,3 +163,131 @@ test('normalizeVerdict: never throws on garbage input', () => {
     assert.doesNotThrow(() => normalizeVerdict(bad));
   }
 });
+
+// ---- Budgets (Settings -> AI -> AI budgets) and visible truncation -----------
+
+const TOOL_TURN = JSON.stringify({ action: 'tool', tool: 'get_alert', args: { id: 1 } });
+const SYNTH_VERDICT = JSON.stringify({ ...VALID_FINAL, action: undefined, reasoning: 'Gathered enough.' });
+
+test('the working-step and verdict output budgets are sent; defaults are 1500 and 3000', async () => {
+  const seen: Array<{ json?: boolean; maxTokens?: number }> = [];
+  await runAlertTriage(
+    { alert: ALERT },
+    {
+      ...baseDeps(async (_cfg, _m, opts) => {
+        seen.push(opts);
+        return opts.maxTokens === 3000 ? SYNTH_VERDICT : TOOL_TURN;
+      }),
+      maxToolCalls: 1,
+      executeTool: async () => ({ ok: true }),
+    }
+  );
+  assert.deepEqual(
+    seen.map((o) => o.maxTokens),
+    [1500, 3000],
+    'one working step at the step default, then the verdict at the verdict default'
+  );
+
+  seen.length = 0;
+  await runAlertTriage(
+    { alert: ALERT },
+    {
+      ...baseDeps(async (_cfg, _m, opts) => {
+        seen.push(opts);
+        return opts.maxTokens === 7000 ? SYNTH_VERDICT : TOOL_TURN;
+      }),
+      maxToolCalls: 1,
+      stepMaxTokens: 900,
+      answerMaxTokens: 7000,
+      executeTool: async () => ({ ok: true }),
+    }
+  );
+  assert.deepEqual(seen.map((o) => o.maxTokens), [900, 7000]);
+});
+
+test('lookup budget: the verdict says it stopped at N lookups and where to raise it', async () => {
+  let tools = 0;
+  const result = await runAlertTriage(
+    { alert: ALERT },
+    {
+      ...baseDeps(async (_cfg, _m, opts) => (opts.maxTokens === 3000 ? SYNTH_VERDICT : TOOL_TURN)),
+      maxToolCalls: 4,
+      executeTool: async () => {
+        tools++;
+        return { ok: true };
+      },
+    }
+  );
+  assert.equal(tools, 4);
+  assert.equal(result.stopReason, 'lookups');
+  assert.equal(result.degraded, false);
+  assert.match(result.verdict.reasoning, /^Gathered enough\./);
+  assert.match(result.verdict.reasoning, /Triage used all 4 data lookups/);
+  assert.match(result.verdict.reasoning, /"AI Triage max data lookups" in Settings → AI → AI budgets/);
+});
+
+test('time budget: steps are cut off at what is left, and the verdict says the budget ran out', async () => {
+  let clock = 0;
+  const timeouts: Array<number | undefined> = [];
+  const result = await runAlertTriage(
+    { alert: ALERT },
+    {
+      ...baseDeps(async (_cfg, _m, opts) => {
+        if (opts.maxTokens === 3000) return SYNTH_VERDICT;
+        timeouts.push(opts.timeoutMs);
+        clock += 30_000;
+        return TOOL_TURN;
+      }),
+      maxToolCalls: 25,
+      wallBudgetMs: 50_000,
+      now: () => clock,
+      executeTool: async () => ({ ok: true }),
+    }
+  );
+  assert.deepEqual(timeouts, [50_000, 20_000]);
+  assert.equal(result.stopReason, 'time');
+  assert.match(result.verdict.reasoning, /reached its 50-second time budget/);
+});
+
+test('a truncated JSON working step goes straight to the verdict synthesis (no reprompt, no error)', async () => {
+  let calls = 0;
+  const result = await runAlertTriage(
+    { alert: ALERT },
+    {
+      ...baseDeps(async (_cfg, _m, opts) => {
+        calls++;
+        if (opts.maxTokens === 3000) return { text: SYNTH_VERDICT, truncated: false };
+        return { text: '{"action":"final","verdict":"true_positive","reasoning":"The source', truncated: true };
+      }),
+    }
+  );
+  assert.equal(calls, 2);
+  assert.equal(result.degraded, false);
+  assert.equal(result.stopReason, 'step_truncated');
+  assert.equal(result.outputTruncated, true);
+  assert.match(result.verdict.reasoning, /A working step hit the 1500-token output limit/);
+  assert.match(result.verdict.reasoning, /"AI Triage working-step length"/);
+});
+
+test('a verdict cut off at its cap falls back safely and says which limit to raise', async () => {
+  const result = await runAlertTriage(
+    { alert: ALERT },
+    {
+      ...baseDeps(async (_cfg, _m, opts) =>
+        opts.maxTokens === 3000 ? { text: '{"verdict":"true_positive","summary":"Rep', truncated: true } : TOOL_TURN
+      ),
+      maxToolCalls: 1,
+      executeTool: async () => ({ ok: true }),
+    }
+  );
+  assert.equal(result.degraded, true, 'an unparsable verdict still yields the safe fallback');
+  assert.match(result.verdict.reasoning, /The verdict hit the 3000-token output limit/);
+  assert.match(result.verdict.reasoning, /"AI Triage verdict length" in Settings → AI → AI budgets/);
+  assert.ok(result.issues.some((i) => /3000-token output limit/.test(i)));
+});
+
+test('a clean verdict carries no notes', async () => {
+  const result = await runAlertTriage({ alert: ALERT }, baseDeps(async () => JSON.stringify(VALID_FINAL)));
+  assert.deepEqual(result.notes, []);
+  assert.equal(result.verdict.reasoning, VALID_FINAL.reasoning);
+});

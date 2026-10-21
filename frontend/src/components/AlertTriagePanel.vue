@@ -123,7 +123,7 @@
         <span v-if="row.degraded" class="degraded">⚠ analysis was incomplete — treat this verdict as low-confidence</span>
         <el-tooltip
           v-if="row.truncated"
-          content="Hit the per-alert tool-call or time budget before reaching a final answer, so this verdict was synthesized from whatever it had gathered so far. Both are adjustable in Settings → AI Triage."
+          content="Hit the per-alert lookup, time or output budget before reaching a final answer, so this verdict was synthesized from whatever it had gathered so far (the reasoning says which). All are adjustable in Settings → AI → AI budgets."
           placement="top"
         >
           <span class="degraded">⚠ stopped early at the analysis budget</span>

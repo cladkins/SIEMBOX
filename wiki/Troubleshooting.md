@@ -33,6 +33,13 @@ Start by checking container health: `docker compose -f compose.prod.yaml ps` and
 - For **Ollama**, the base URL must be reachable **from the backend container** — bind Ollama to `0.0.0.0` and use the host LAN IP or `http://host.docker.internal:11434`, not `localhost`.
 - If a generated artifact isn't fully valid, you can **Save anyway** and refine it manually.
 
+## An AI answer is cut off
+
+- An answer that hit a limit says so at the end (*This answer hit the N-token output limit...*, *I used all N data lookups...*, *I reached the N-second time budget...*) and names the setting. An admin raises it under **Settings → AI → AI budgets** — see [AI budgets](AI-Security-Analyst#answer-length-lookups-and-time-ai-budgets). Longer limits are slower and, with a paid provider, cost more.
+- Generation that fails with *The AI response hit the N-token output limit* needs a higher **Builder output length** there (or fewer sample lines).
+- If raising a length changes nothing, the model's own output limit is lower: use a model with a larger one (for Ollama, also check `num_ctx`).
+- A *Request timed out* while the Analyst works behind your own reverse proxy: allow a read timeout above the Analyst's time budget + 120 s (the bundled frontend allows 420 s).
+
 ## Threat feeds show `error`
 
 - The free blocklists need outbound **HTTPS**. If your environment blocks egress, feeds will report `last_status=error` and simply contribute no indicators — this is non-fatal.

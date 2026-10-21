@@ -87,6 +87,7 @@ The **[AI Security Analyst](AI-Security-Analyst)** has its own model configurati
 - **Enabled** — off until switched on.
 - **Minimum severity** — only alerts at or above this severity are analyzed automatically (default: medium).
 - **Daily cap** / **Max concurrent** — bound cost and load; a duplicate-alert dedupe window is also applied automatically.
+- **Data lookups, time budget, verdict length** — under **Settings → AI → AI budgets**, with the AI Analyst's answer length, lookups and time budget and the AI builders' output length. See [AI budgets](AI-Security-Analyst#answer-length-lookups-and-time-ai-budgets).
 - **Provider / Model / Base URL / API key** — a third independent model selection. Leave the provider blank to **inherit** the AI Analyst (chat) config above (which itself may inherit the AI builder config), or point triage at its own model.
 
 Applying a manual "Analyze now" / "Re-run" from the UI bypasses the severity gate (but not the daily cap or concurrency limit) and works even while automatic triage is disabled.

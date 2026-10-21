@@ -19,6 +19,13 @@ import {
   AiKeyRequiredError,
   MAX_BASE_URL_LENGTH,
 } from '../services/ai/aiService';
+import {
+  getAiBudgets,
+  saveAiBudgets,
+  aiBudgetBounds,
+  AiBudgetValidationError,
+  AI_BUDGET_FIELDS,
+} from '../services/ai/aiBudgets';
 import { logger } from '../utils/logger';
 import { logSourceStatus, readLogEdgeSettings, readLogEdgeState } from '../services/graph/logEdgeRollup';
 import {
@@ -180,14 +187,20 @@ router.put('/ai-triage', authorize('admin'), async (req: Request, res: Response)
     if (dedupeHours !== undefined && (!Number.isFinite(dedupeHours) || dedupeHours < 0 || dedupeHours > 168)) {
       throw new ApiError(400, 'dedupeHours must be between 0 and 168');
     }
-    if (maxToolCalls !== undefined && (!Number.isFinite(maxToolCalls) || maxToolCalls < 1 || maxToolCalls > 12)) {
-      throw new ApiError(400, 'maxToolCalls must be between 1 and 12');
+    // The same bounds as PUT /ai-budgets (triage.maxToolCalls, triage.wallBudgetSeconds): one setting row each.
+    const calls = AI_BUDGET_FIELDS.triage.maxToolCalls;
+    if (
+      maxToolCalls !== undefined &&
+      (!Number.isFinite(maxToolCalls) || maxToolCalls < calls.min || maxToolCalls > calls.max)
+    ) {
+      throw new ApiError(400, `maxToolCalls must be between ${calls.min} and ${calls.max}`);
     }
+    const wall = AI_BUDGET_FIELDS.triage.wallBudgetSeconds;
     if (
       wallBudgetSeconds !== undefined &&
-      (!Number.isFinite(wallBudgetSeconds) || wallBudgetSeconds < 20 || wallBudgetSeconds > 280)
+      (!Number.isFinite(wallBudgetSeconds) || wallBudgetSeconds < wall.min || wallBudgetSeconds > wall.max)
     ) {
-      throw new ApiError(400, 'wallBudgetSeconds must be between 20 and 280');
+      throw new ApiError(400, `wallBudgetSeconds must be between ${wall.min} and ${wall.max}`);
     }
     await saveTriageConfig({
       provider: provider as AiProvider | '',
@@ -207,6 +220,31 @@ router.put('/ai-triage', authorize('admin'), async (req: Request, res: Response)
     throw new ApiError(500, error?.message?.includes('CREDENTIAL_ENCRYPTION_KEY')
       ? 'Set CREDENTIAL_ENCRYPTION_KEY to store an API key, or use the ANTHROPIC_API_KEY/OPENAI_API_KEY env var instead.'
       : 'Failed to update AI triage settings');
+  }
+});
+
+// AI budgets (services/ai/aiBudgets.ts): output-token caps, data lookups and
+// time budgets for the AI Analyst, AI Triage, the AI builders and "Explain".
+// Answers the current values plus each one's bounds and default.
+router.get('/ai-budgets', authorize('admin'), async (_req: Request, res: Response) => {
+  try {
+    res.json({ budgets: await getAiBudgets(), bounds: aiBudgetBounds() });
+  } catch {
+    throw new ApiError(500, 'Failed to fetch AI budgets');
+  }
+});
+
+// Update AI budgets. A partial body is fine: { analyst?: {...}, triage?: {...},
+// builder?: { maxTokens }, explain?: { maxTokens } }. Every value must be a whole
+// number within its bounds (400 otherwise, and nothing is saved). A value equal
+// to its default is stored as "use the default".
+router.put('/ai-budgets', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    await saveAiBudgets(req.body);
+    res.json({ budgets: await getAiBudgets(), bounds: aiBudgetBounds() });
+  } catch (error) {
+    if (error instanceof AiBudgetValidationError) throw new ApiError(400, error.message);
+    throw new ApiError(500, 'Failed to update AI budgets');
   }
 });
 

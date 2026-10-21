@@ -169,6 +169,8 @@ const INVENTORY: Row[] = [
   ['PUT', '/api/settings/ai-chat', ADMIN_ONLY],
   ['GET', '/api/settings/ai-triage', ADMIN_ONLY],
   ['PUT', '/api/settings/ai-triage', ADMIN_ONLY],
+  ['GET', '/api/settings/ai-budgets', ADMIN_ONLY],
+  ['PUT', '/api/settings/ai-budgets', ADMIN_ONLY],
   ['GET', '/api/settings', ADMIN_ONLY],
   ['GET', '/api/settings/retention', ADMIN_ONLY],
   ['PUT', '/api/settings/retention', ADMIN_ONLY],

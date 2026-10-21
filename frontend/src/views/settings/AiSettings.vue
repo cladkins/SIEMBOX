@@ -172,17 +172,9 @@
           <el-input-number v-model="triageForm.maxConcurrent" :min="1" :max="10" style="width: 160px" />
         </el-form-item>
 
-        <el-form-item label="Max tool calls">
-          <el-input-number v-model="triageForm.maxToolCalls" :min="1" :max="12" style="width: 160px" />
-          <el-text size="small" type="info" style="margin-left: 10px">
-            per-alert depth cap — more calls dig deeper but cost more and take longer
-          </el-text>
-        </el-form-item>
-
-        <el-form-item label="Time budget">
-          <el-input-number v-model="triageForm.wallBudgetSeconds" :min="20" :max="280" :step="10" style="width: 160px" />
-          <el-text size="small" type="info" style="margin-left: 10px">
-            seconds per alert before the agent must wrap up with what it has gathered so far
+        <el-form-item label="Lookups, time, length">
+          <el-text size="small" type="info">
+            Per-alert data lookups, time budget and output lengths are under AI budgets below.
           </el-text>
         </el-form-item>
 
@@ -254,6 +246,94 @@
           is only sent to the provider and base URL it was saved for, so changing either asks for the key again.
           <span v-if="triageInheritsFrom === 'chat'"> Currently inheriting the AI Analyst config.</span>
         </el-text>
+      </el-form>
+    </el-card>
+
+    <el-card style="margin-top: 20px" data-test="ai-budgets">
+      <template #header>
+        <span>AI budgets <HelpTip text="How much each AI feature may write and how long it may work. Longer limits give more complete answers but take longer and, with a paid provider, cost more per answer. The model's own output limit still applies: a value above it is cut at the model's limit." /></span>
+      </template>
+
+      <el-form :model="budgetForm" label-width="200px" v-loading="budgetLoading">
+        <el-text size="small" type="info" tag="p" class="budget-intro">
+          When an answer hits one of these limits it says so and names the setting to raise. Output lengths are
+          in tokens (a token is roughly ¾ of a word). Higher limits give more complete answers, but they are
+          slower, and paid providers bill for every output token. The model's own maximum output still applies.
+        </el-text>
+
+        <el-divider content-position="left">AI Analyst (chat)</el-divider>
+        <el-form-item label="Answer length">
+          <el-input-number v-model="budgetForm.analyst.answerMaxTokens" v-bind="tokenInput('analyst', 'answerMaxTokens')" />
+          <el-text size="small" type="info" class="budget-hint">
+            tokens for the written answer {{ defaultHint('analyst', 'answerMaxTokens') }}
+          </el-text>
+        </el-form-item>
+        <el-form-item label="Working-step length">
+          <el-input-number v-model="budgetForm.analyst.stepMaxTokens" v-bind="tokenInput('analyst', 'stepMaxTokens')" />
+          <el-text size="small" type="info" class="budget-hint">
+            tokens for each step that picks a lookup (a short answer can come back in one) {{ defaultHint('analyst', 'stepMaxTokens') }}
+          </el-text>
+        </el-form-item>
+        <el-form-item label="Max data lookups">
+          <el-input-number v-model="budgetForm.analyst.maxToolCalls" v-bind="numInput('analyst', 'maxToolCalls', 1)" />
+          <el-text size="small" type="info" class="budget-hint">
+            read-only queries per question; more dig deeper, and each is another model call {{ defaultHint('analyst', 'maxToolCalls') }}
+          </el-text>
+        </el-form-item>
+        <el-form-item label="Time budget">
+          <el-input-number v-model="budgetForm.analyst.wallBudgetSeconds" v-bind="numInput('analyst', 'wallBudgetSeconds', 10)" />
+          <el-text size="small" type="info" class="budget-hint">
+            seconds of gathering before it must answer with what it has; writing the answer may take up to 2 more
+            minutes {{ defaultHint('analyst', 'wallBudgetSeconds') }}
+          </el-text>
+        </el-form-item>
+
+        <el-divider content-position="left">AI Triage (per alert)</el-divider>
+        <el-form-item label="Verdict length">
+          <el-input-number v-model="budgetForm.triage.answerMaxTokens" v-bind="tokenInput('triage', 'answerMaxTokens')" />
+          <el-text size="small" type="info" class="budget-hint">
+            tokens for the verdict, reasoning and remediation plan {{ defaultHint('triage', 'answerMaxTokens') }}
+          </el-text>
+        </el-form-item>
+        <el-form-item label="Working-step length">
+          <el-input-number v-model="budgetForm.triage.stepMaxTokens" v-bind="tokenInput('triage', 'stepMaxTokens')" />
+          <el-text size="small" type="info" class="budget-hint">
+            tokens for each step that picks a lookup {{ defaultHint('triage', 'stepMaxTokens') }}
+          </el-text>
+        </el-form-item>
+        <el-form-item label="Max data lookups">
+          <el-input-number v-model="budgetForm.triage.maxToolCalls" v-bind="numInput('triage', 'maxToolCalls', 1)" />
+          <el-text size="small" type="info" class="budget-hint">
+            per-alert depth; triage runs on every qualifying alert, so this multiplies cost {{ defaultHint('triage', 'maxToolCalls') }}
+          </el-text>
+        </el-form-item>
+        <el-form-item label="Time budget">
+          <el-input-number v-model="budgetForm.triage.wallBudgetSeconds" v-bind="numInput('triage', 'wallBudgetSeconds', 10)" />
+          <el-text size="small" type="info" class="budget-hint">
+            seconds per alert before it must wrap up with what it has gathered {{ defaultHint('triage', 'wallBudgetSeconds') }}
+          </el-text>
+        </el-form-item>
+
+        <el-divider content-position="left">AI builders and Explain</el-divider>
+        <el-form-item label="Builder output length">
+          <el-input-number v-model="budgetForm.builder.maxTokens" v-bind="tokenInput('builder', 'maxTokens')" />
+          <el-text size="small" type="info" class="budget-hint">
+            tokens for a generated parser or detection rule (many sample lines need more) {{ defaultHint('builder', 'maxTokens') }}
+          </el-text>
+        </el-form-item>
+        <el-form-item label="Explain answer length">
+          <el-input-number v-model="budgetForm.explain.maxTokens" v-bind="tokenInput('explain', 'maxTokens')" />
+          <el-text size="small" type="info" class="budget-hint">
+            tokens for an "Explain with AI" answer {{ defaultHint('explain', 'maxTokens') }}
+          </el-text>
+        </el-form-item>
+
+        <el-form-item>
+          <el-button type="primary" @click="saveBudgets" :loading="budgetSaving" data-test="save-ai-budgets">
+            <el-icon><Check /></el-icon> Save AI Budgets
+          </el-button>
+          <el-button @click="restoreBudgetDefaults">Restore defaults</el-button>
+        </el-form-item>
       </el-form>
     </el-card>
   </div>
@@ -486,8 +566,6 @@ const triageForm = reactive({
   minSeverity: 'medium',
   dailyCap: 200,
   maxConcurrent: 2,
-  maxToolCalls: 6,
-  wallBudgetSeconds: 110,
 });
 
 const triageModelPlaceholder = computed(() =>
@@ -531,8 +609,6 @@ async function fetchTriageSettings(resetForm = true) {
       triageForm.minSeverity = data.minSeverity || 'medium';
       triageForm.dailyCap = data.dailyCap ?? 200;
       triageForm.maxConcurrent = data.maxConcurrent ?? 2;
-      triageForm.maxToolCalls = data.maxToolCalls ?? 6;
-      triageForm.wallBudgetSeconds = data.wallBudgetSeconds ?? 110;
     }
     triageSaved.provider = data.provider || '';
     triageSaved.baseUrl = data.baseUrl || '';
@@ -562,8 +638,7 @@ async function saveTriageSettings() {
       minSeverity: triageForm.minSeverity,
       dailyCap: triageForm.dailyCap,
       maxConcurrent: triageForm.maxConcurrent,
-      maxToolCalls: triageForm.maxToolCalls,
-      wallBudgetSeconds: triageForm.wallBudgetSeconds,
+      // Lookups and time budget are saved with the AI budgets card (PUT /settings/ai-budgets).
     };
     if (own) {
       payload.model = triageForm.model;
@@ -586,14 +661,105 @@ async function saveTriageSettings() {
   }
 }
 
+// AI budgets — output lengths, data lookups and time budgets per feature
+// (GET/PUT /settings/ai-budgets). The server validates every value against the
+// bounds it reports; the inputs use the same bounds.
+type BudgetSection = 'analyst' | 'triage' | 'builder' | 'explain';
+interface Bound {
+  min: number;
+  max: number;
+  default: number;
+}
+const BUDGET_DEFAULTS = {
+  analyst: { answerMaxTokens: 4000, stepMaxTokens: 1500, maxToolCalls: 10, wallBudgetSeconds: 180 },
+  triage: { answerMaxTokens: 3000, stepMaxTokens: 1500, maxToolCalls: 6, wallBudgetSeconds: 110 },
+  builder: { maxTokens: 8000 },
+  explain: { maxTokens: 3000 },
+};
+const budgetLoading = ref(false);
+const budgetSaving = ref(false);
+const budgetForm = reactive(JSON.parse(JSON.stringify(BUDGET_DEFAULTS)) as typeof BUDGET_DEFAULTS);
+const budgetBounds = ref<Record<string, Record<string, Bound>>>({});
+
+function boundOf(section: BudgetSection, field: string): Bound {
+  const b = budgetBounds.value[section]?.[field];
+  if (b) return b;
+  const def = (BUDGET_DEFAULTS[section] as Record<string, number>)[field];
+  return /Tokens$/.test(field) ? { min: 256, max: 32000, default: def } : { min: 1, max: 1000, default: def };
+}
+function numInput(section: BudgetSection, field: string, step: number) {
+  const b = boundOf(section, field);
+  return { min: b.min, max: b.max, step, precision: 0, style: 'width: 160px' };
+}
+function tokenInput(section: BudgetSection, field: string) {
+  return numInput(section, field, 250);
+}
+function defaultHint(section: BudgetSection, field: string): string {
+  const b = boundOf(section, field);
+  return `(${b.min}–${b.max}, default ${b.default})`;
+}
+
+function applyBudgets(data: any) {
+  if (data?.bounds) budgetBounds.value = data.bounds;
+  for (const section of Object.keys(BUDGET_DEFAULTS) as BudgetSection[]) {
+    Object.assign(budgetForm[section], data?.budgets?.[section] ?? {});
+  }
+}
+
+async function fetchBudgets() {
+  budgetLoading.value = true;
+  try {
+    const { data } = await api.getAiBudgets();
+    applyBudgets(data);
+  } catch (error) {
+    // non-admins — leave defaults
+  } finally {
+    budgetLoading.value = false;
+  }
+}
+
+async function saveBudgets() {
+  budgetSaving.value = true;
+  try {
+    const { data } = await api.updateAiBudgets(JSON.parse(JSON.stringify(budgetForm)));
+    applyBudgets(data);
+    ElMessage.success('AI budgets saved');
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Failed to save AI budgets');
+  } finally {
+    budgetSaving.value = false;
+  }
+}
+
+/** Put the defaults in the form (saved with Save AI Budgets). */
+function restoreBudgetDefaults() {
+  for (const section of Object.keys(BUDGET_DEFAULTS) as BudgetSection[]) {
+    for (const field of Object.keys(budgetForm[section])) {
+      (budgetForm[section] as Record<string, number>)[field] = boundOf(section, field).default;
+    }
+  }
+}
+
 onMounted(() => {
   fetchAiSettings();
   fetchChatSettings();
   fetchTriageSettings();
+  fetchBudgets();
 });
 </script>
 
 <style scoped>
+.budget-intro {
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+/* The hint sits under its input, whatever its length, so the inputs line up. */
+.budget-hint {
+  display: block;
+  width: 100%;
+  margin-top: 2px;
+  line-height: 1.4;
+}
 .key-needed {
   display: flex;
   flex-direction: column;

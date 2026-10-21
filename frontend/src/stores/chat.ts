@@ -22,6 +22,8 @@ export interface ChatMessage {
   content: string;
   trace?: AnalystTraceEntry[];
   truncated?: boolean;
+  /** The answer itself carries notes on why it stopped early or was cut off (no generic banner needed). */
+  explained?: boolean;
 }
 
 export interface ChatSessionMeta {
@@ -104,6 +106,7 @@ export const useChatStore = defineStore('analystChat', () => {
         content: data.answer || '',
         trace: Array.isArray(data.trace) ? data.trace : [],
         truncated: !!data.truncated,
+        explained: Array.isArray(data.notes) && data.notes.length > 0,
       });
       notConfigured.value = false;
     } catch (e: any) {

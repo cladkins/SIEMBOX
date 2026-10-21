@@ -17,6 +17,7 @@ import {
 import { RuleSourceSample, CandidateRule } from '../services/rules/detectionRecommendations';
 import { recentParserSamples } from '../services/rules/ruleSamples';
 import { generateDetection } from '../services/ai/aiService';
+import { getAiBudgets } from '../services/ai/aiBudgets';
 import { authorize } from '../middleware/auth';
 import { hasRequiredRole, requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { query } from '../config/database';
@@ -114,7 +115,8 @@ router.post('/ai/generate', authorize('admin'), async (req: Request, res: Respon
     if (!description || typeof description !== 'string') {
       throw new ApiError(400, 'description is required');
     }
-    const result = await generateDetection({ description, context, maxAttempts });
+    const { builder } = await getAiBudgets();
+    const result = await generateDetection({ description, context, maxAttempts, maxTokens: builder.maxTokens });
     res.json(result);
   } catch (error) {
     if (error instanceof ApiError) throw error;

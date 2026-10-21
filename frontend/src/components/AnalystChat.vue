@@ -77,7 +77,7 @@
               </div>
             </el-collapse-item>
           </el-collapse>
-          <div v-if="m.truncated" class="truncated">Stopped early at the analysis budget — answer may be partial.</div>
+          <div v-if="m.truncated && !m.explained" class="truncated">Stopped early at the analysis budget — answer may be partial.</div>
         </div>
 
         <div v-if="store.loading" class="msg assistant">

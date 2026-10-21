@@ -1787,6 +1787,20 @@ SELECT a.created_at, u.username, a.resource_type, a.details->>'method' AS method
 ```
 `path` is relative to the route family (`resource_type`), for example `/12` for `PUT /api/parsers/12`.
 
+### Issue: AI Answer Is Cut Off
+
+**Symptoms:**
+- An AI Analyst answer, a triage verdict's reasoning or an *Explain with AI* answer stops mid-sentence, or ends with *This answer hit the N-token output limit, so it may be cut off*
+- An answer ends with *I used all N data lookups...* or *I reached the N-second time budget...*
+- Generate with AI (parsers, rules) fails with *The AI response hit the N-token output limit before it finished*
+- The backend log has `[AI] AI Analyst output hit its token limit` (or `AI Triage`, `explain`, `parser builder`, `detection builder`) at info level
+
+**Cause:** each AI feature has an output-token limit, and the Analyst and triage also a number of data lookups and a time budget. Before this setting existed the Analyst's answers were capped at 1400 tokens and its working steps at 800, which a long answer could hit. The note names the limit that was reached.
+
+**Solution:** an admin raises the named setting under **Settings → AI → AI budgets** (or `PUT /api/settings/ai-budgets`, see [API.md](../reference/API.md#ai-budgets)): *Answer length* / *Verdict length* for a cut-off answer, *Working-step length* when a working step was cut off, *Max data lookups* or *Time budget* when it stopped gathering early, *Builder output length* for generation. Longer limits make answers slower and, with a paid provider, cost more. If raising a length changes nothing, the model's own output limit is lower than the setting: use a model with a larger output limit (for Ollama, also check the model's context size, `num_ctx`, which bounds input plus output).
+
+If instead the browser shows *Request timed out* while the Analyst works, a proxy in front of SIEMBox gave up first: the Analyst may take the time budget plus up to 120 s for the answer (360 s at the 240 s maximum). The bundled frontend allows 420 s; a reverse proxy of your own needs a read timeout above the time budget + 120 s, or lower the *Time budget*.
+
 ### Issue: Saving AI Settings Asks for the API Key Again, or the AI Analyst Has No Key After Upgrading
 
 **Symptoms:**

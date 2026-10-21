@@ -626,8 +626,9 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
 
-        # Long-running requests (the AI builder)
-        proxy_read_timeout 300s;
+        # Long-running requests (the AI builder and the AI Analyst: up to
+        # 360 s at the largest AI budgets; the bundled frontend allows 420 s)
+        proxy_read_timeout 420s;
     }
 
     # Rate limiting (the matching zone goes in the http block:

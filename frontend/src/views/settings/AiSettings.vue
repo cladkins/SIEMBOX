@@ -753,8 +753,12 @@ onMounted(() => {
   margin: 0 0 8px;
   line-height: 1.5;
 }
+/* The hint sits under its input, whatever its length, so the inputs line up. */
 .budget-hint {
-  margin-left: 10px;
+  display: block;
+  width: 100%;
+  margin-top: 2px;
+  line-height: 1.4;
 }
 .key-needed {
   display: flex;

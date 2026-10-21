@@ -711,7 +711,7 @@ const GENERATION_MIN_ATTEMPT_MS = 15_000;
 function generationTruncatedError(limit: number): string {
   return (
     `The AI response hit the ${limit}-token output limit before it finished, so the JSON is incomplete. ` +
-    'An admin can raise "AI builders output length" in Settings → AI → AI budgets; fewer or shorter ' +
+    'An admin can raise "Builder output length" in Settings → AI → AI budgets; fewer or shorter ' +
     'sample lines also help.'
   );
 }

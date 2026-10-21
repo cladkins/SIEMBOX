@@ -82,7 +82,7 @@ export const AI_BUDGET_FIELDS: { [S in Section]: { [F in keyof AiBudgets[S]]: Fi
     wallBudgetSeconds: { key: 'ai_triage_wall_budget_seconds', min: 20, max: 280, def: 110, label: 'AI Triage time budget' },
   },
   builder: {
-    maxTokens: { key: 'ai_builder_max_output', ...TOKENS, def: 8000, label: 'AI builders output length' },
+    maxTokens: { key: 'ai_builder_max_output', ...TOKENS, def: 8000, label: 'Builder output length' },
   },
   explain: {
     maxTokens: { key: 'ai_explain_max_output', ...TOKENS, def: 3000, label: 'Explain answer length' },

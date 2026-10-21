@@ -130,7 +130,7 @@ test('parser builder: a reply cut off at the cap names the limit and the setting
   assert.equal(r.ok, false);
   assert.equal(r.truncated, true);
   assert.match(String(r.error), /hit the 9000-token output limit/);
-  assert.match(String(r.error), /"AI builders output length" in Settings → AI → AI budgets/);
+  assert.match(String(r.error), /"Builder output length" in Settings → AI → AI budgets/);
 });
 
 test('detection builder: same for a cut-off rule; an uncut parse error keeps its own message', async () => {

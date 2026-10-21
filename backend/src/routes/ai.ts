@@ -3,6 +3,7 @@ import { ApiError } from '../middleware/errorHandler';
 import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { explain, getChatAiPublicConfig, getTriagePublicConfig } from '../services/ai/aiService';
 import { runAnalystChat } from '../services/ai/analystChat';
+import { getAiBudgets } from '../services/ai/aiBudgets';
 import { ChatThreadModel } from '../models/ChatThread';
 import type { Role } from '../services/ai/analystTools';
 
@@ -26,10 +27,12 @@ router.post('/explain', async (req: Request, res: Response) => {
     if (empty) {
       throw new ApiError(400, 'data is required');
     }
+    const budgets = await getAiBudgets();
     const result = await explain({
       kind: typeof kind === 'string' && kind.trim() ? kind : 'artifact',
       data,
       question: typeof question === 'string' ? question : undefined,
+      maxTokens: budgets.explain.maxTokens,
     });
     res.json(result);
   } catch (error) {
@@ -187,7 +190,11 @@ router.post('/chat', requireAnalystChat, async (req: Request, res: Response) => 
 
     let result: Awaited<ReturnType<typeof runAnalystChat>>;
     try {
-      result = await runAnalystChat({ messages: convo, user: { id: userId, role }, context: ctx });
+      const budgets = await getAiBudgets();
+      result = await runAnalystChat(
+        { messages: convo, user: { id: userId, role }, context: ctx },
+        { budgets: budgets.analyst }
+      );
     } catch (e) {
       // Keep the persisted thread consistent: record the failure as the assistant
       // turn so a reload doesn't show a dangling user message with no reply. The
@@ -206,6 +213,9 @@ router.post('/chat', requireAnalystChat, async (req: Request, res: Response) => 
       trace: result.trace,
       iterations: result.iterations,
       truncated: result.truncated,
+      stop_reason: result.stopReason ?? null,
+      output_truncated: result.outputTruncated,
+      notes: result.notes,
     });
   } catch (error) {
     if (error instanceof ApiError) throw error;

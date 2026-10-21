@@ -103,6 +103,15 @@ export const READABLE_SETTING_KEYS: ReadonlySet<string> = new Set([
   'ai_triage_dedupe_hours',
   'ai_triage_max_tool_calls',
   'ai_triage_wall_budget_seconds',
+  // AI budgets (services/ai/aiBudgets.ts). Named *_max_output, not *_tokens: see SECRET_KEY_WORDS.
+  'ai_chat_answer_max_output',
+  'ai_chat_step_max_output',
+  'ai_chat_max_tool_calls',
+  'ai_chat_wall_budget_seconds',
+  'ai_triage_answer_max_output',
+  'ai_triage_step_max_output',
+  'ai_builder_max_output',
+  'ai_explain_max_output',
   // Reputation providers (services/threatintel/reputationService.ts). Not the ti_*_key rows.
   'ti_abuseipdb_enabled',
   'ti_otx_enabled',

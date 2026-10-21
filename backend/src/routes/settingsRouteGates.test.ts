@@ -43,6 +43,9 @@ const ROUTES: Array<[method: string, path: string, allowed: Role[]]> = [
   ['put', '/ai-chat', ADMIN_ONLY],
   ['get', '/ai-triage', ADMIN_ONLY],
   ['put', '/ai-triage', ADMIN_ONLY],
+  // AI budgets: output-token caps, lookups and time budgets.
+  ['get', '/ai-budgets', ADMIN_ONLY],
+  ['put', '/ai-budgets', ADMIN_ONLY],
   // Data retention
   ['get', '/retention', ADMIN_ONLY],
   ['put', '/retention', ADMIN_ONLY],

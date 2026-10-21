@@ -63,6 +63,7 @@ import {
 } from '../services/parser/catalogService';
 import { RecommendationResult, SourceSample, HIGH_SEVERITY_MAX } from '../services/parser/parserRecommendations';
 import { generateParser } from '../services/ai/aiService';
+import { getAiBudgets } from '../services/ai/aiBudgets';
 import { collectParserRegexes, redosErrorMessage, redosUndecidedMessage, redosWarningMessage } from '../services/parser/redos';
 import {
   assessParserRegexes,
@@ -391,7 +392,8 @@ router.post('/ai/generate', authorize('admin'), async (req: Request, res: Respon
     if (!sample || typeof sample !== 'string') {
       throw new ApiError(400, 'sample is required');
     }
-    const result = await generateParser({ sample, hints, maxAttempts });
+    const { builder } = await getAiBudgets();
+    const result = await generateParser({ sample, hints, maxAttempts, maxTokens: builder.maxTokens });
     res.json(result);
   } catch (error) {
     if (error instanceof ApiError) throw error;

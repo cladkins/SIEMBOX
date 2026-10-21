@@ -16,6 +16,7 @@ import { RedosFinding } from '../parser/redos';
 import { validateRule, RuleValidationResult, PortableRule } from '../rules/rulePortable';
 import { assessParserRegexes, assessRuleRegexes } from '../regex/regexSafety';
 import { regexRunErrorResponse, runSelfTestsBounded } from '../regex/boundedRegex';
+import { tokenLimitNote, getAiBudgets } from './aiBudgets';
 
 export type AiProvider = 'anthropic' | 'openai' | 'ollama';
 
@@ -557,6 +558,10 @@ export interface TriageOperationalConfig {
   maxToolCalls: number;
   /** Per-analysis wall-clock cap, in seconds, before the agent is forced to synthesize a verdict from what it has. */
   wallBudgetSeconds: number;
+  /** Output-token cap of the verdict synthesis call. */
+  answerMaxTokens: number;
+  /** Output-token cap of each JSON working step. */
+  stepMaxTokens: number;
 }
 
 /** Cheap operational-only read (no key decryption) — safe for the hot ingest path. */
@@ -567,19 +572,18 @@ export async function getTriageOperationalConfig(): Promise<TriageOperationalCon
   const dailyCap = parseInt((await getSetting('ai_triage_daily_cap')) || '200', 10);
   const maxConcurrent = parseInt((await getSetting('ai_triage_max_concurrent')) || '2', 10);
   const dedupeHours = parseInt((await getSetting('ai_triage_dedupe_hours')) || '6', 10);
-  const maxToolCalls = parseInt((await getSetting('ai_triage_max_tool_calls')) || '6', 10);
-  const wallBudgetSeconds = parseInt(
-    (await getSetting('ai_triage_wall_budget_seconds')) || '110',
-    10
-  );
+  // Lookups, time and output budgets: Settings -> AI -> AI budgets (aiBudgets.ts).
+  const budget = (await getAiBudgets()).triage;
   return {
     enabled,
     minSeverity,
     dailyCap: Number.isFinite(dailyCap) ? dailyCap : 200,
     maxConcurrent: Number.isFinite(maxConcurrent) ? maxConcurrent : 2,
     dedupeHours: Number.isFinite(dedupeHours) ? dedupeHours : 6,
-    maxToolCalls: Number.isFinite(maxToolCalls) ? maxToolCalls : 6,
-    wallBudgetSeconds: Number.isFinite(wallBudgetSeconds) ? wallBudgetSeconds : 110,
+    maxToolCalls: budget.maxToolCalls,
+    wallBudgetSeconds: budget.wallBudgetSeconds,
+    answerMaxTokens: budget.answerMaxTokens,
+    stepMaxTokens: budget.stepMaxTokens,
   };
 }
 
@@ -631,8 +635,56 @@ export type Completer = (
   cfg: AiConfig,
   system: string,
   user: string,
-  opts?: { json?: boolean; maxTokens?: number }
-) => Promise<string>;
+  opts?: CompletionOpts
+) => Promise<string | Completion>;
+
+/** Options of one model call. `timeoutMs` bounds the HTTP call (default LLM_CALL_TIMEOUT_MS). */
+export interface CompletionOpts {
+  json?: boolean;
+  maxTokens?: number;
+  timeoutMs?: number;
+}
+
+/**
+ * One model call's output. `truncated` is true when the provider says it
+ * stopped because it reached the output-token cap (OpenAI-compatible
+ * finish_reason "length", Anthropic stop_reason "max_tokens", Ollama
+ * done_reason "length"), so the text is cut off.
+ */
+export interface Completion {
+  text: string;
+  truncated: boolean;
+  /** The provider's own stop reason, as it reported it. */
+  stopReason?: string;
+}
+
+/** A completer's result as a Completion: test doubles (and old callers) may return plain text. */
+export function asCompletion(r: string | Completion | null | undefined): Completion {
+  if (r && typeof r === 'object') return { text: String(r.text ?? ''), truncated: !!r.truncated, stopReason: r.stopReason };
+  return { text: typeof r === 'string' ? r : '', truncated: false };
+}
+
+/** The stop reason a provider's response reports, and whether it means the output-token cap was hit. */
+export function providerStopReason(provider: AiProvider, json: any): { stopReason?: string; truncated: boolean } {
+  if (provider === 'anthropic') {
+    const r = json?.stop_reason;
+    return { stopReason: r ?? undefined, truncated: r === 'max_tokens' };
+  }
+  if (provider === 'openai') {
+    const r = json?.choices?.[0]?.finish_reason;
+    return { stopReason: r ?? undefined, truncated: r === 'length' };
+  }
+  const r = json?.done_reason;
+  return { stopReason: r ?? undefined, truncated: r === 'length' };
+}
+
+/**
+ * Log, once per answer, that an AI feature's output was cut off at its token
+ * cap (info level: a setting to raise, not a fault).
+ */
+export function logOutputTruncated(feature: string, details: Record<string, unknown>): void {
+  logger.info(`[AI] ${feature} output hit its token limit`, { feature, ...details });
+}
 
 /**
  * Output-token budget for parser/detection generation. The 2000 default was too
@@ -644,18 +696,50 @@ export type Completer = (
  */
 const GENERATION_MAX_TOKENS = 8000;
 
+/**
+ * The whole generate -> validate -> refine loop's time limit, so the request
+ * answers before the proxy in front of it gives up (frontend/nginx.conf.template
+ * proxy_read_timeout 420s; the browser waits 415s). Each attempt's model call
+ * may use what is left of it, so one long generation at a large output budget
+ * is not cut at the default 120s per call.
+ */
+export const GENERATION_DEADLINE_MS = 360_000;
+/** Below this much time left, a refine attempt is not started. */
+const GENERATION_MIN_ATTEMPT_MS = 15_000;
+
+/** The builders' error for an attempt whose JSON was cut off at the output-token cap. */
+function generationTruncatedError(limit: number): string {
+  return (
+    `The AI response hit the ${limit}-token output limit before it finished, so the JSON is incomplete. ` +
+    'An admin can raise "AI builders output length" in Settings → AI → AI budgets; fewer or shorter ' +
+    'sample lines also help.'
+  );
+}
+
 /** A message in a multi-turn conversation. */
 export type ChatMsg = { role: 'system' | 'user' | 'assistant'; content: string };
 
+/** The default bound on one model HTTP call. */
+export const LLM_CALL_TIMEOUT_MS = 120_000;
+
+/** A model call that ran past its timeout (the agents treat it as running out of time). */
+export class AiTimeoutError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'AiTimeoutError';
+  }
+}
+
 /** fetch with a hard timeout and a clear, actionable connection error. */
-async function llmFetch(url: string, options: any): Promise<Response> {
+async function llmFetch(url: string, options: any, timeoutMs = LLM_CALL_TIMEOUT_MS): Promise<Response> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 120_000);
+  const ms = Math.max(1000, Math.floor(timeoutMs));
+  const timer = setTimeout(() => ctrl.abort(), ms);
   try {
     return await fetch(url, { ...options, signal: ctrl.signal });
   } catch (e: any) {
     if (e?.name === 'AbortError')
-      throw new Error(`Request to ${url} timed out after 120s`, { cause: e });
+      throw new AiTimeoutError(`Request to ${url} timed out after ${Math.round(ms / 1000)}s`, { cause: e });
     throw new Error(
       `Could not reach ${url} (${e?.message || e}). The Base URL must be reachable from the SIEMBox backend CONTAINER — ` +
         `for a local Ollama, bind it to 0.0.0.0 (OLLAMA_HOST=0.0.0.0:11434) and use the host LAN IP or http://host.docker.internal:11434.`,
@@ -667,17 +751,30 @@ async function llmFetch(url: string, options: any): Promise<Response> {
 }
 
 /**
- * Multi-turn completion across providers. `messages` is the full conversation
- * (may include a leading `system` message). JSON mode defaults on. `maxTokens`
- * bounds the response (defaults to 2000, preserving the single-turn behaviour).
+ * Multi-turn completion across providers, as text. See callProviderChatDetailed.
  */
 export async function callProviderChat(
   cfg: AiConfig,
   messages: ChatMsg[],
-  opts: { json?: boolean; maxTokens?: number } = {}
+  opts: CompletionOpts = {}
 ): Promise<string> {
+  return (await callProviderChatDetailed(cfg, messages, opts)).text;
+}
+
+/**
+ * Multi-turn completion across providers. `messages` is the full conversation
+ * (may include a leading `system` message). JSON mode defaults on. `maxTokens`
+ * bounds the response (defaults to 2000, preserving the single-turn behaviour);
+ * the result says whether the provider stopped at that cap (`truncated`).
+ */
+export async function callProviderChatDetailed(
+  cfg: AiConfig,
+  messages: ChatMsg[],
+  opts: CompletionOpts = {}
+): Promise<Completion> {
   const jsonMode = opts.json !== false;
   const maxTokens = opts.maxTokens ?? 2000;
+  const timeoutMs = opts.timeoutMs ?? LLM_CALL_TIMEOUT_MS;
 
   if (cfg.provider === 'anthropic') {
     if (!cfg.apiKey) throw new Error('No Anthropic API key configured');
@@ -708,10 +805,13 @@ export async function callProviderChat(
         ...(systemText ? { system: systemText } : {}),
         messages: convo.length ? convo : [{ role: 'user', content: '' }],
       }),
-    });
+    }, timeoutMs);
     if (!res.ok) throw new Error(`Anthropic API ${res.status}: ${(await res.text()).slice(0, 300)}`);
     const json: any = await res.json();
-    return (json.content || []).map((b: any) => b.text || '').join('');
+    return {
+      text: (json.content || []).map((b: any) => b.text || '').join(''),
+      ...providerStopReason('anthropic', json),
+    };
   }
 
   if (cfg.provider === 'openai') {
@@ -725,10 +825,10 @@ export async function callProviderChat(
         max_tokens: maxTokens,
         ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
       }),
-    });
+    }, timeoutMs);
     if (!res.ok) throw new Error(`OpenAI API ${res.status}: ${(await res.text()).slice(0, 300)}`);
     const json: any = await res.json();
-    return json.choices?.[0]?.message?.content || '';
+    return { text: json.choices?.[0]?.message?.content || '', ...providerStopReason('openai', json) };
   }
 
   // ollama
@@ -743,10 +843,10 @@ export async function callProviderChat(
       ...(opts.maxTokens ? { options: { num_predict: opts.maxTokens } } : {}),
       messages,
     }),
-  });
+  }, timeoutMs);
   if (!res.ok) throw new Error(`Ollama API ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const json: any = await res.json();
-  return json.message?.content || '';
+  return { text: json.message?.content || '', ...providerStopReason('ollama', json) };
 }
 
 /** Single-turn wrapper (system + user) — preserves every existing caller. */
@@ -754,9 +854,9 @@ async function callProvider(
   cfg: AiConfig,
   system: string,
   user: string,
-  opts: { json?: boolean; maxTokens?: number } = {}
-): Promise<string> {
-  return callProviderChat(
+  opts: CompletionOpts = {}
+): Promise<Completion> {
+  return callProviderChatDetailed(
     cfg,
     [
       { role: 'system', content: system },
@@ -845,6 +945,8 @@ export interface GenerateResult {
   redos?: RedosFinding[];
   attempts: number;
   error?: string;
+  /** The model's output was cut off at the output-token cap (see `error`). */
+  truncated?: boolean;
 }
 
 /**
@@ -852,24 +954,36 @@ export interface GenerateResult {
  * feeding failures back to the model up to `maxAttempts` times.
  */
 export async function generateParser(
-  input: { sample: string; hints?: string; maxAttempts?: number },
+  input: { sample: string; hints?: string; maxAttempts?: number; maxTokens?: number },
   complete: Completer = callProvider,
   cfgOverride?: AiConfig
 ): Promise<GenerateResult> {
   const cfg = cfgOverride ?? (await getAiConfig());
   const maxAttempts = Math.max(1, Math.min(input.maxAttempts ?? 3, 5));
+  const maxTokens = input.maxTokens ?? GENERATION_MAX_TOKENS;
+  const deadline = Date.now() + GENERATION_DEADLINE_MS;
 
   let prev: { parser: any; errors: string[] } | undefined;
   let last: GenerateResult = { ok: false, parser: null, validation: null, self_test: null, attempts: 0 };
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const left = deadline - Date.now();
+    if (attempt > 1 && left < GENERATION_MIN_ATTEMPT_MS) return last;
     let parser: PortableParser;
+    let out: Completion | undefined;
     try {
-      const text = await complete(cfg, SYSTEM_PROMPT, buildUserPrompt(input.sample, input.hints, prev), {
-        maxTokens: GENERATION_MAX_TOKENS,
-      });
-      parser = extractJson(text);
+      out = asCompletion(
+        await complete(cfg, SYSTEM_PROMPT, buildUserPrompt(input.sample, input.hints, prev), {
+          maxTokens,
+          timeoutMs: left,
+        })
+      );
+      parser = extractJson(out.text);
     } catch (e) {
+      if (out?.truncated) {
+        logOutputTruncated('parser builder', { limit: maxTokens, provider: cfg.provider, model: cfg.model });
+        return { ...last, attempts: attempt, truncated: true, error: generationTruncatedError(maxTokens) };
+      }
       return { ...last, attempts: attempt, error: e instanceof Error ? e.message : String(e) };
     }
 
@@ -979,6 +1093,8 @@ export interface GenerateRuleResult {
   redos?: RedosFinding[];
   attempts: number;
   error?: string;
+  /** The model's output was cut off at the output-token cap (see `error`). */
+  truncated?: boolean;
 }
 
 /**
@@ -987,27 +1103,38 @@ export interface GenerateRuleResult {
  * contract and feeding failures back to the model.
  */
 export async function generateDetection(
-  input: { description: string; context?: string; maxAttempts?: number },
+  input: { description: string; context?: string; maxAttempts?: number; maxTokens?: number },
   complete: Completer = callProvider,
   cfgOverride?: AiConfig
 ): Promise<GenerateRuleResult> {
   const cfg = cfgOverride ?? (await getAiConfig());
   const maxAttempts = Math.max(1, Math.min(input.maxAttempts ?? 3, 5));
+  const maxTokens = input.maxTokens ?? GENERATION_MAX_TOKENS;
+  const deadline = Date.now() + GENERATION_DEADLINE_MS;
 
   let prev: { rule: any; errors: string[] } | undefined;
   let last: GenerateRuleResult = { ok: false, rule: null, validation: null, attempts: 0 };
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const left = deadline - Date.now();
+    if (attempt > 1 && left < GENERATION_MIN_ATTEMPT_MS) return last;
     let rule: PortableRule;
+    let out: Completion | undefined;
     try {
-      const text = await complete(
-        cfg,
-        DETECTION_SYSTEM_PROMPT,
-        buildDetectionUserPrompt(input.description, input.context, prev),
-        { maxTokens: GENERATION_MAX_TOKENS }
+      out = asCompletion(
+        await complete(
+          cfg,
+          DETECTION_SYSTEM_PROMPT,
+          buildDetectionUserPrompt(input.description, input.context, prev),
+          { maxTokens, timeoutMs: left }
+        )
       );
-      rule = extractJson(text);
+      rule = extractJson(out.text);
     } catch (e) {
+      if (out?.truncated) {
+        logOutputTruncated('detection builder', { limit: maxTokens, provider: cfg.provider, model: cfg.model });
+        return { ...last, attempts: attempt, truncated: true, error: generationTruncatedError(maxTokens) };
+      }
       return { ...last, attempts: attempt, error: e instanceof Error ? e.message : String(e) };
     }
 
@@ -1052,7 +1179,14 @@ export interface ExplainInput {
   data: unknown;
   /** Optional operator question to focus the explanation. */
   question?: string;
+  /** Output-token cap (Settings -> AI -> AI budgets, "Explain answer length"). */
+  maxTokens?: number;
 }
+
+/** "Explain this" output cap when the caller passes none (the AI budgets default). */
+const EXPLAIN_MAX_TOKENS = 3000;
+/** One explain call may take this long (the browser waits 300s for it). */
+const EXPLAIN_TIMEOUT_MS = 240_000;
 
 /**
  * Free-text "explain this" over any security artifact, reusing the configured
@@ -1062,8 +1196,9 @@ export interface ExplainInput {
  */
 export async function explain(
   input: ExplainInput,
-  cfgOverride?: AiConfig
-): Promise<{ explanation: string }> {
+  cfgOverride?: AiConfig,
+  complete: Completer = callProvider
+): Promise<{ explanation: string; truncated: boolean }> {
   const cfg = cfgOverride ?? (await getAiConfig());
 
   const dataStr =
@@ -1077,6 +1212,14 @@ export async function explain(
   }
   user += `\nExplain it.`;
 
-  const explanation = await callProvider(cfg, EXPLAIN_SYSTEM_PROMPT, user, { json: false });
-  return { explanation: (explanation || '').trim() };
+  const maxTokens = input.maxTokens ?? EXPLAIN_MAX_TOKENS;
+  const out = asCompletion(
+    await complete(cfg, EXPLAIN_SYSTEM_PROMPT, user, { json: false, maxTokens, timeoutMs: EXPLAIN_TIMEOUT_MS })
+  );
+  let explanation = (out.text || '').trim();
+  if (out.truncated) {
+    logOutputTruncated('explain', { limit: maxTokens, provider: cfg.provider, model: cfg.model });
+    explanation += `\n\n---\n_${tokenLimitNote(maxTokens, 'This explanation', 'Explain answer length')}_`;
+  }
+  return { explanation, truncated: out.truncated };
 }

@@ -150,5 +150,6 @@ Some configuration lives in **Settings** rather than env vars:
 - **Endpoints / YARA** — endpoint enrollment tokens and the server YARA bundle (incl. *Pull YARA-Forge now*). See [SIEMBOX Endpoint](SIEMBOX-Endpoint).
 - **Threat Feeds & Reputation** — enable/disable feeds, add AbuseIPDB/AlienVault OTX keys (admin-gated). See [Threat Intel](Threat-Intel).
 - **Notifications** — Email / Slack / NTFY alert delivery.
+- **System → Public URL** — the address people open SIEMBox at (e.g. `https://siem.example.com`), so notifications link straight to the alert. `SIEMBOX_PUBLIC_URL` in `.env` sets it too; the Settings value wins. Unset: notifications carry the `ALR-####` reference only.
 - **Retention** — log retention window and automated cleanup.
 - **Digital Risk** — breach-monitored email addresses and domains, watched domains, the HIBP key, notifications and checks (admin). What they find is on the Digital Risk page in the sidebar. See [Digital Risk](#digital-risk-optional).

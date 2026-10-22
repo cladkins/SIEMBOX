@@ -39,7 +39,7 @@
     </el-alert>
 
     <div v-if="config" class="preview" data-testid="public-url-preview">
-      <el-text size="small">{{ sourceText }}</el-text>
+      <div class="source-text">{{ sourceText }}</div>
       <div v-if="previewLink" class="preview-link">
         <el-text size="small" type="info">Test link (a notification for alert ALR-{{ PREVIEW_ALERT_ID }} links here):</el-text>
         <a :href="previewLink" target="_blank" rel="noopener noreferrer" data-testid="public-url-test-link">{{ previewLink }}</a>
@@ -148,7 +148,12 @@ onMounted(load);
 .preview {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 4px;
+}
+.source-text {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
 }
 .preview-link a {
   display: block;

@@ -141,7 +141,7 @@ Today `Settings.vue` is a single ~2,000-line page of unrelated cards, and its ro
 | Notifications | `/settings/notifications` | Channels (Slack/Email/NTFY) and event preferences | `/notifications/*` | admin |
 | Detections | `/settings/detections` | IP whitelist (alert suppression) | `/settings/ip-whitelist*` | admin |
 | Asset Discovery | `/settings/discovery` | Auto-discovery schedule, stale-asset threshold | `/settings/auto-discovery*` | admin |
-| System | `/settings/system` | Version and runtime info, table sizes | `/settings`, `/admin` | admin |
+| System | `/settings/system` | Public URL (links in notifications), version and runtime info, table sizes | `/settings/public-url`, `/settings`, `/admin` | admin |
 | **Digital Risk** | `/settings/digital-risk` | Configuration only (Part 4); findings, trends and the password check are on the Digital Risk page (Part 4b) | **`/api/exposure/*`** | admin |
 
 Every area page has the same structure: a header (title, HelpTip, and an admin badge where it applies), then `el-card` sections, each with its own Save button and a success/error toast.

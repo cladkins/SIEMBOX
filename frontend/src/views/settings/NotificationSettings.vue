@@ -35,7 +35,9 @@
         <template v-else>
           Notifications carry the alert reference (ALR-1234) but no link, because SIEMBox doesn't know its public address.
         </template>
-        <router-link to="/settings/system">Set the public URL in Settings &rarr; System</router-link>
+        <router-link to="/settings/system">
+          {{ publicUrl.source === 'setting' ? 'Change it' : 'Set the public URL' }} in Settings &rarr; System
+        </router-link>
       </el-alert>
 
       <el-table :data="notificationChannels" v-loading="notificationChannelsLoading" stripe>

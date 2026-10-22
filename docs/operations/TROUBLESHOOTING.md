@@ -18,6 +18,7 @@ Comprehensive troubleshooting guide for diagnosing and resolving common issues i
 - [Network & Connectivity](#network--connectivity)
 - [Frontend Issues](#frontend-issues)
 - [Wall displays (Big Display)](#wall-displays-big-display)
+- [Notifications](#notifications)
 - [Container Issues](#container-issues)
 - [Data Cleanup](#data-cleanup)
 - [Advanced Diagnostics](#advanced-diagnostics)
@@ -2371,6 +2372,42 @@ screen uses 30. Raise the limit, lengthen the links' refresh, or make sure
 `TRUSTED_PROXIES` lets SIEMBox see each screen's own address. A screen that
 keeps opening a wrong or revoked link is also limited after 30 failed lookups
 in 15 minutes; it waits for `Retry-After` and tries again.
+
+## Notifications
+
+### Issue: Notification links are missing or wrong
+
+Notifications name the alert (`ALR-4821`); they link to it only when SIEMBox
+knows its public address (DEPLOYMENT.md, "Public URL (links in notifications)").
+
+1. **Check what is in effect:** Settings → System → Public URL. The card says
+   whether links use the saved value, `SIEMBOX_PUBLIC_URL`, or nothing, and shows
+   the link a notification for ALR-1234 would carry. Settings → Notifications
+   says the same at the top. From a shell:
+   `curl -s -H "Authorization: Bearer <admin token>" http://<host>:8421/api/settings/public-url`.
+2. **No link at all:** neither is set. Save the address in Settings → System,
+   or set `SIEMBOX_PUBLIC_URL` in `.env` and recreate the backend container
+   (`docker compose up -d backend`). An invalid `SIEMBOX_PUBLIC_URL` is ignored:
+   the card shows why (`SIEMBOX_PUBLIC_URL is ignored: ...`).
+3. **The link points at the wrong place:** a saved value wins over
+   `SIEMBOX_PUBLIC_URL`, so changing only the env var does nothing while one is
+   saved; clear it in Settings → System to fall back to the env var. SIEMBox
+   never derives links from the address a request came in on, so
+   **Use this browser's address** saves whatever address *you* used (for
+   instance `http://localhost:8420` through an SSH tunnel); enter the address
+   your users open instead (your reverse proxy's).
+4. **The link opens the wrong page behind a reverse proxy:** if the proxy serves
+   SIEMBox under a sub-path, include it (`https://example.com/siembox`).
+5. **Test it:** Settings → Notifications → **Send test alert** (or a channel's
+   **Test**). The confirmation names the link the message carried, or says there
+   was none.
+6. **Saving is refused (400):** the message names the problem. Only absolute
+   `http://` / `https://` URLs with a host are accepted, with no `user:pass@`,
+   no `?query` and no `#fragment`, up to 2048 characters.
+
+A NTFY channel that never received the test alert before this release (the
+error mentioned `ByteString`) failed on the em dash in the test alert's title;
+titles beyond ASCII are now sent encoded and arrive intact.
 
 ## Frontend Issues
 

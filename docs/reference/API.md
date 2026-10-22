@@ -2702,6 +2702,54 @@ Mark setup done, or bring the Dashboard reminder back for every administrator.
 To bring the reminder back as if setup had never been recorded, delete the row:
 `DELETE FROM system_settings WHERE key = 'onboarding_completed';`
 
+### GET /api/settings/public-url
+
+The address people use to open SIEMBox in a browser, which notifications link
+to (Settings → System → Public URL). Stored in the `public_url` row of
+`system_settings`; the `SIEMBOX_PUBLIC_URL` environment variable is the
+fallback. Neither set: notifications carry the `ALR-####` reference but no link.
+
+**Authentication:** Required (Admin)
+
+**Response (200):**
+```json
+{
+  "public_url": "https://siem.example.com",
+  "env_public_url": "",
+  "effective_public_url": "https://siem.example.com",
+  "source": "setting"
+}
+```
+- `public_url` is the stored setting (`""` when not set).
+- `env_public_url` is `SIEMBOX_PUBLIC_URL`, normalised (`""` when unset). When it
+  is set but invalid it is ignored, and `env_error` says why.
+- `effective_public_url` is what notifications use: the setting when set, else
+  the env var, else `""`; `source` is `setting`, `env` or `none`.
+
+### PUT /api/settings/public-url
+
+Set or clear the public URL.
+
+**Authentication:** Required (Admin)
+
+**Request Body:** `{ "public_url": "https://siem.example.com" }`. `""` or `null`
+clears the setting (the env var then applies, if set).
+
+The value must be an absolute `http://` or `https://` URL with a host, at most
+2048 characters, with no username or password (`user:pass@`), no query string
+and no fragment. A path prefix is allowed for a reverse proxy that serves
+SIEMBox under a sub-path (`https://example.com/siembox`). It is stored
+normalised: surrounding whitespace and trailing slashes removed, scheme and host
+lowercased, a default port dropped.
+
+**Response (200):** the state, as `GET` returns it.
+
+**Errors:**
+- `400` - not a JSON object with `public_url`, or an invalid value, with a
+  message naming the problem (e.g. `"public_url must not contain a query string (?...)"`);
+  nothing is stored
+- `403` - not an admin; nothing changes
+
 ---
 
 ## Notifications Endpoints
@@ -2714,12 +2762,41 @@ Notification channels (where alerts are delivered: Slack, Email, NTFY) and the p
 | POST | `/api/notifications/channels` | Admin | Body: `{ name, channel_type: "slack"\|"email"\|"ntfy", enabled?, config }` |
 | PUT | `/api/notifications/channels/:id` | Admin | Partial update with the same fields |
 | DELETE | `/api/notifications/channels/:id` | Admin | |
-| POST | `/api/notifications/channels/:id/test` | Admin | Sends a test message through that channel |
-| POST | `/api/notifications/test-alert` | Admin | Sends a sample new-alert message to every enabled channel and reports the result for each |
+| POST | `/api/notifications/channels/:id/test` | Admin | Sends a test message through that channel. Answers `{ message, link }`: the link the message carried, or `null` without a public URL |
+| POST | `/api/notifications/test-alert` | Admin | Sends a sample new-alert message to every enabled channel and reports the result for each: `{ message, results, link }` (`link` as above, to the Alerts list) |
 | GET | `/api/notifications/settings` | Any authenticated user | The non-secret preference flags (`notify_alerts_enabled`, `notify_alerts_min_severity`, `notify_vuln_*`, `notify_ingestion_*`) |
 | PUT | `/api/notifications/settings` | Admin | Updates any of those preference keys |
 
 Non-admin requests to admin-only routes get `403 Access denied. Required role: admin`.
+
+### Links in notifications
+
+With a public URL set ([`PUT /api/settings/public-url`](#put-apisettingspublic-url),
+or `SIEMBOX_PUBLIC_URL`), every notification links into the web UI. Links are
+built only from that validated value, a fixed path and, for an alert, its
+number; never from a request's `Host` header or anything else a caller sends.
+
+| Notification | Links to |
+|---|---|
+| New alert (detection rule, endpoint, sign-in) | `<public URL>/alerts?alert=ALR-<id>` |
+| Several rules on one event (grouped) | Each alert (the worst first), then `<public URL>/alerts` |
+| Exposure finding (Digital Risk) | The alert the finding raised; `<public URL>/digital-risk` when it raised none. Grouped: each listed finding's alert, then Digital Risk |
+| Vulnerability scan | `<public URL>/vulnerability-management` |
+| Log ingestion stalled / resumed | `<public URL>/settings/system` |
+| Channel test / test alert | `<public URL>/settings/notifications` / `<public URL>/alerts` |
+
+How each channel shows them:
+- **Slack:** `<url|label>` link markup, one per line after the body. The title
+  and body are escaped (`&`, `<`, `>`), so an alert title can't add a link or a
+  mention.
+- **Email:** the text part ends with `label: url` lines; an HTML part is added
+  (only when there are links) with the title and body HTML-escaped and each link
+  as an escaped `href`.
+- **NTFY:** the body ends with `label: url` lines, and the first link is the
+  `Click` header (tapping the notification opens it). A title with characters
+  beyond ASCII is sent as an RFC 2047 encoded-word.
+
+Without a public URL the messages are unchanged: the `ALR-####` reference, no link.
 
 ---
 

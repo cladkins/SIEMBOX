@@ -18,6 +18,7 @@
  * that looks like it could hold a secret — at any depth — so a password, hash,
  * token or API key can't be persisted even if a caller passes one by mistake.
  */
+import { formatAlertRef } from '../alerts/alertRef';
 import crypto from 'crypto';
 import { getClient } from '../../config/database';
 import { logger } from '../../utils/logger';
@@ -99,8 +100,9 @@ export interface RecordFindingOptions {
   notify?: boolean;
 }
 
-export function toExposureNotice(input: FindingInput): ExposureNotice {
+export function toExposureNotice(input: FindingInput, alertId?: number | null): ExposureNotice {
   return {
+    ...(alertId ? { alertId } : {}),
     source: input.source,
     severity: input.severity,
     title: input.title,
@@ -196,11 +198,11 @@ export async function recordFinding(
 
   if (result.alertCreated) {
     logger.info(
-      `[Exposure] new ${input.severity} ${input.source} finding #${result.findingId} (alert #${result.alertId})`
+      `[Exposure] new ${input.severity} ${input.source} finding #${result.findingId} (alert ${result.alertId === null ? 'none' : formatAlertRef(result.alertId)})`
     );
     if (options.notify !== false) {
       // notifyExposure never throws; it applies the opt-in + min-severity gates.
-      await NotificationService.notifyExposure([toExposureNotice(input)]);
+      await NotificationService.notifyExposure([toExposureNotice(input, result.alertId)]);
     }
   }
   return result;

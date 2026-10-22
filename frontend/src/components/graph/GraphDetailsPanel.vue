@@ -4,7 +4,7 @@
     <template v-if="node">
       <div class="dp-head">
         <span class="dp-type">{{ typeLabel }}</span>
-        <el-button link size="small" :icon="CopyDocument" aria-label="Copy" @click="copy(node.key)">Copy</el-button>
+        <el-button link size="small" :icon="CopyDocument" aria-label="Copy" @click="copy(copyText)">Copy</el-button>
       </div>
       <div class="dp-title" :title="title">{{ title }}</div>
       <div class="dp-flags">
@@ -83,6 +83,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { alertRefPath, formatAlertRef, parseAlertRef } from '@/utils/alertRef';
 import { useRouter, type RouteLocationRaw } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { CopyDocument } from '@element-plus/icons-vue';
@@ -187,6 +188,14 @@ interface OpenLink {
   action?: () => void;
 }
 
+/** What Copy puts on the clipboard: an alert's ALR-#### reference, otherwise the key. */
+const copyText = computed(() => {
+  const n = props.node;
+  if (!n) return '';
+  const id = n.type === 'alert' ? parseAlertRef(n.key) : null;
+  return id !== null ? formatAlertRef(id) : n.key;
+});
+
 const openIn = computed<OpenLink[]>(() => {
   const n = props.node;
   if (!n) return [];
@@ -198,7 +207,7 @@ const openIn = computed<OpenLink[]>(() => {
       break;
     case 'alert':
       links.push({ label: 'Alert details', action: () => emit('open-alert', Number(n.key)) });
-      links.push({ label: 'Alerts', to: { path: '/alerts' } });
+      links.push({ label: 'Alerts', to: alertRefPath(Number(n.key)) });
       break;
     case 'asset':
       links.push({ label: 'Asset Inventory', to: { path: '/asset-inventory', query: { id: n.key } } });

@@ -6,7 +6,7 @@
           <el-input
             v-model="filters.search"
             clearable
-            placeholder="Keyword or IP…"
+            placeholder="Keyword, IP or ALR-…"
             style="width: 240px"
             @keyup.enter="applySearch"
             @clear="applySearch"
@@ -97,6 +97,9 @@
                 {{ groupSize(row) }} rules matched this event — one piece of evidence, {{ groupSize(row) }} independent detections.
               </div>
               <el-table :data="row.correlated" size="small" stripe>
+                <el-table-column label="Ref" width="130">
+                  <template #default="{ row: c }"><AlertRef :id="c.id" /></template>
+                </el-table-column>
                 <el-table-column label="Severity" width="110">
                   <template #default="{ row: c }">
                     <el-tag :type="getSeverityType(c.severity)" size="small">
@@ -133,6 +136,10 @@
               </el-table>
             </div>
           </template>
+        </el-table-column>
+
+        <el-table-column label="Ref" width="130" class-name="ref-col">
+          <template #default="{ row }"><AlertRef :id="row.id" /></template>
         </el-table-column>
 
         <el-table-column prop="severity" label="Severity" width="120" sortable>
@@ -247,7 +254,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAlertsStore, type Alert } from '@/stores/alerts';
 import { useTriageStore } from '@/stores/triage';
@@ -257,6 +264,8 @@ import { format } from 'date-fns';
 import { Search, Download, ArrowDown, Loading } from '@element-plus/icons-vue';
 import { api } from '@/services/api';
 import AlertDetailDialog from '@/components/AlertDetailDialog.vue';
+import AlertRef from '@/components/AlertRef.vue';
+import { parseAlertRef } from '@/utils/alertRef';
 import HibpAttribution from '@/components/HibpAttribution.vue';
 import { isHibpAlert } from '@/utils/exposure';
 import TechniqueChips from '@/components/attack/TechniqueChips.vue';
@@ -297,11 +306,24 @@ if (typeof route.query.technique === 'string' && isTechniqueId(route.query.techn
 if (typeof route.query.tactic === 'string' && route.query.tactic) {
   filters.value.tactic = route.query.tactic;
 }
-// /alerts?alert=<id> (a Digital Risk finding's alert) opens that alert's
-// details; ?id=<id> is what the dashboard's Recent Alerts "View" links to.
-// The list's own filters are left alone.
-const linkedAlertId = [route.query.alert, route.query.id].find(
-  (v): v is string => typeof v === 'string' && /^\d{1,10}$/.test(v)
+// /alerts?alert=ALR-4821 (or a bare id) opens that alert's details: the link
+// "Copy link" produces, AI answers and every other ALR-#### reference use it.
+// ?id=<id> is the older form. The list's own filters are left alone.
+function linkedAlertFrom(query: typeof route.query): number | null {
+  for (const v of [query.alert, query.id]) {
+    const id = typeof v === 'string' ? parseAlertRef(v) : null;
+    if (id !== null) return id;
+  }
+  return null;
+}
+const linkedAlertId = linkedAlertFrom(route.query);
+// Following an ALR-#### link while already on this page only changes the query.
+watch(
+  () => [route.query.alert, route.query.id],
+  () => {
+    const id = linkedAlertFrom(route.query);
+    if (id !== null && (!detailDialogVisible.value || selectedAlert.value?.id !== id)) void openLinkedAlert(id);
+  }
 );
 
 // One log can satisfy several rules — the engine evaluates all of them with no
@@ -342,7 +364,7 @@ let triagePollTimer: number | null = null;
 
 onMounted(() => {
   fetchAlerts();
-  if (linkedAlertId) void openLinkedAlert(Number(linkedAlertId));
+  if (linkedAlertId !== null) void openLinkedAlert(linkedAlertId);
   triageStore.checkHealth();
   // Only refetch the list while some visible row is still being analyzed —
   // mirrors ContainerScanning.vue's self-terminating poll (no websockets in

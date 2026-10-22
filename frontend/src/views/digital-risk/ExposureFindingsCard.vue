@@ -124,7 +124,7 @@
             <pre v-else class="detail-json">{{ JSON.stringify(row.detail, null, 2) }}</pre>
             <p v-if="row.alert_id">
               <strong>Alert:</strong>
-              <router-link :to="alertLink(row.alert_id)">#{{ row.alert_id }} in the alert queue</router-link>
+              <router-link :to="alertLink(row.alert_id)">{{ formatAlertRef(row.alert_id) }} in the alert queue</router-link>
             </p>
           </div>
         </template>
@@ -162,7 +162,7 @@
       <el-table-column label="Alert" width="140">
         <template #default="{ row }">
           <template v-if="row.alert_id">
-            <router-link :to="alertLink(row.alert_id)" class="alert-link" :aria-label="`Open alert ${row.alert_id}`">#{{ row.alert_id }}</router-link>
+            <router-link :to="alertLink(row.alert_id)" class="alert-link" :aria-label="`Open alert ${formatAlertRef(row.alert_id)}`">{{ formatAlertRef(row.alert_id) }}</router-link>
             <el-tag v-if="row.alert_status" size="small" effect="plain" :type="alertStatusTag(row.alert_status).type" class="alert-status">
               {{ alertStatusTag(row.alert_status).label }}
             </el-tag>
@@ -217,6 +217,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { alertRefPath, formatAlertRef } from '@/utils/alertRef';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, Search } from '@element-plus/icons-vue';
 import HelpTip from '@/components/HelpTip.vue';
@@ -386,7 +387,7 @@ const chips = computed(() => {
   if (lookalike.value) out.push({ key: 'lookalike', label: `Lookalike: ${lookalike.value}` });
   if (sinceDays.value !== undefined) out.push({ key: 'since_days', label: `Detected in the last ${sinceDays.value} days` });
   if (since.value) out.push({ key: 'since', label: `Detected since ${formatDay(since.value)}` });
-  if (alertId.value !== undefined) out.push({ key: 'alert_id', label: `Alert #${alertId.value}` });
+  if (alertId.value !== undefined) out.push({ key: 'alert_id', label: `Alert ${formatAlertRef(alertId.value)}` });
   if (source.value) out.push({ key: 'source', label: `Source: ${SOURCE_LABELS[source.value]}` });
   return out;
 });
@@ -549,7 +550,7 @@ function alertStatusTag(status: string): { type: TagType; label: string } {
   return ALERT_STATUS[status] ?? { type: 'info', label: status };
 }
 
-const alertLink = (id: number) => ({ path: '/alerts', query: { alert: String(id) } });
+const alertLink = (id: number) => alertRefPath(id);
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 

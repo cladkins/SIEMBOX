@@ -4,6 +4,7 @@ import { AlertTriageModel } from '../models/AlertTriage';
 import { triageAlert } from '../services/ai/triageService';
 import { getTriageOperationalConfig } from '../services/ai/aiService';
 import { ApiError } from '../middleware/errorHandler';
+import { parseAlertRef } from '../services/alerts/alertRef';
 import { authorize } from '../middleware/auth';
 import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { resolveTacticName } from '../services/attack/attackTags';
@@ -35,6 +36,16 @@ function allowRerun(userId: number): boolean {
   arr.push(now);
   rerunHits.set(userId, arr);
   return true;
+}
+
+/**
+ * The alert named by `:id`, which may be the numeric id (4821) or its
+ * reference (ALR-4821, #4821). Anything else is a 404: no alert has that name.
+ */
+function alertIdParam(req: Request): number {
+  const id = parseAlertRef(req.params.id);
+  if (id === null) throw new ApiError(404, 'Alert not found');
+  return id;
 }
 
 const TECHNIQUE_ID = /^T\d{4}(?:\.\d{3})?$/i;
@@ -156,12 +167,13 @@ router.get('/export', async (req: Request, res: Response) => {
       return;
     }
 
-    const cols = ['id', 'created_at', 'severity', 'status', 'source', 'title', 'source_ip', 'country_code', 'description'];
+    const cols = ['ref', 'id', 'created_at', 'severity', 'status', 'source', 'title', 'source_ip', 'country_code', 'description'];
     const lines = [cols.join(',')];
     for (const a of alerts as any[]) {
       const md = a.matched_data || {};
       lines.push(
         [
+          a.ref,
           a.id,
           a.created_at instanceof Date ? a.created_at.toISOString() : a.created_at,
           a.severity,
@@ -221,7 +233,7 @@ router.get('/triage-risk-summary', async (_req: Request, res: Response) => {
 // Get single alert
 router.get('/:id', async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id as string);
+    const id = alertIdParam(req);
     const alert = await AlertModel.findById(id);
 
     if (!alert) {
@@ -240,7 +252,7 @@ router.get('/:id', async (req: Request, res: Response) => {
 // so the frontend's poll never trips the axios error interceptor.
 router.get('/:id/triage', async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id as string);
+    const id = alertIdParam(req);
     const alert = await AlertModel.findById(id);
     if (!alert) throw new ApiError(404, 'Alert not found');
 
@@ -268,7 +280,7 @@ router.get('/:id/triage', async (req: Request, res: Response) => {
 router.post('/:id/triage/rerun', authorize('admin', 'analyst', 'operator'), async (req: Request, res: Response) => {
   try {
     if (!req.user) throw new ApiError(401, 'Authentication required');
-    const id = parseInt(req.params.id as string);
+    const id = alertIdParam(req);
     const alert = await AlertModel.findById(id);
     if (!alert) throw new ApiError(404, 'Alert not found');
 
@@ -287,7 +299,7 @@ router.post('/:id/triage/rerun', authorize('admin', 'analyst', 'operator'), asyn
 // Update alert (change status, assign user)
 router.put('/:id', requireAlertTriage, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id as string);
+    const id = alertIdParam(req);
     const { status, assigned_to, description } = req.body;
 
     const alert = await AlertModel.update(id, {
@@ -310,7 +322,7 @@ router.put('/:id', requireAlertTriage, async (req: Request, res: Response) => {
 // Delete alert
 router.delete('/:id', requireAlertDelete, async (req: Request, res: Response) => {
   try {
-    const id = parseInt(req.params.id as string);
+    const id = alertIdParam(req);
     const deleted = await AlertModel.delete(id);
 
     if (!deleted) {

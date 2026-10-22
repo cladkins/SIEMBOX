@@ -1166,7 +1166,7 @@ async function executeRun(options: RunOptions): Promise<LeakedCredentialRunSumma
       const finding = buildBreachFinding(source, identity, hit);
       const result = await store.recordFinding(finding);
       if (result.isNew) summary.newFindings++;
-      if (result.alertCreated) fresh.push(toExposureNotice(finding));
+      if (result.alertCreated) fresh.push(toExposureNotice(finding, result.alertId));
     }
     await store.markChecked(identity.id);
     summary.checked++;

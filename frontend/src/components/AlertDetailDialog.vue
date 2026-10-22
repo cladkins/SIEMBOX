@@ -2,10 +2,16 @@
   <el-dialog
     :model-value="modelValue"
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
-    title="Alert Details"
     width="900px"
     @closed="tab = initialTab"
   >
+    <template #header>
+      <span class="dialog-title">
+        Alert
+        <AlertRef v-if="alert" :id="alert.id" class="dialog-ref" />
+        <span v-else>Details</span>
+      </span>
+    </template>
     <div v-if="alert" class="alert-detail">
       <el-tabs v-model="tab">
         <el-tab-pane label="Details" name="details">
@@ -83,6 +89,7 @@
         :around="alert.created_at"
         @navigate="emit('update:modelValue', false)"
       />
+      <el-button v-if="alert" :icon="Link" @click="copyLink(alert.id)">Copy link</el-button>
       <el-button v-if="authStore.canAnalyst && !readonly" type="success" @click="alert && emit('edit-status', alert)">Update Status</el-button>
       <el-button @click="emit('update:modelValue', false)">Close</el-button>
     </template>
@@ -101,6 +108,10 @@ import { useAuthStore } from '@/stores/auth';
 import OpenInGraphButton from '@/components/graph/OpenInGraphButton.vue';
 import TechniqueChips from '@/components/attack/TechniqueChips.vue';
 import { attackTechniqueUrl } from '@/utils/attack';
+import AlertRef from '@/components/AlertRef.vue';
+import { alertRefUrl, formatAlertRef } from '@/utils/alertRef';
+import { ElMessage } from 'element-plus';
+import { Link } from '@element-plus/icons-vue';
 
 const props = withDefaults(
   defineProps<{
@@ -141,6 +152,16 @@ const explainPayload = (alert: Alert) => ({
   matched_data: alert.matched_data,
 });
 
+/** Copy the deep link that reopens this alert (/alerts?alert=ALR-4821). */
+async function copyLink(id: number) {
+  try {
+    await navigator.clipboard.writeText(alertRefUrl(id, window.location.origin));
+    ElMessage.success(`Link to ${formatAlertRef(id)} copied`);
+  } catch {
+    ElMessage.warning('Could not copy the link');
+  }
+}
+
 const getSeverityType = (severity: string) => {
   const types: Record<string, any> = { critical: 'danger', high: 'warning', medium: 'primary', low: 'success' };
   return types[severity] || 'info';
@@ -154,6 +175,13 @@ const formatDate = (date: string) => format(new Date(date), 'MMM dd, yyyy HH:mm:
 </script>
 
 <style scoped>
+.dialog-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  line-height: 24px;
+}
 .mitre-link {
   margin-left: 8px;
   font-size: 12px;

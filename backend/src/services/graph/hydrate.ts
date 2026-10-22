@@ -10,6 +10,7 @@
  * IP facts need no database except the local threat-feed names: GeoIP is an
  * in-process lookup, and nothing calls an external service.
  */
+import { formatAlertRef } from '../alerts/alertRef';
 import net from 'net';
 import { domainToUnicode } from 'url';
 import type { BudgetContext, Query } from './budget';
@@ -94,8 +95,9 @@ const LOADERS: Partial<Record<NodeType, TypeLoader>> = {
     build: (ref, row) =>
       baseNode(
         ref,
-        `#${ref.key} ${String(row.title ?? '')}`,
+        `${formatAlertRef(Number(ref.key))} ${String(row.title ?? '')}`,
         {
+          ref: formatAlertRef(Number(ref.key)),
           title: text(row.title),
           severity: text(row.severity),
           status: text(row.status),
@@ -273,7 +275,7 @@ function keyNode(ref: EntityRef, hint: string | undefined): GraphNode {
     case 'account':
       return baseNode(ref, hint ?? `Account #${ref.key}`, { username: hint ?? null });
     case 'alert':
-      return baseNode(ref, `Alert #${ref.key}`);
+      return baseNode(ref, formatAlertRef(Number(ref.key)));
     case 'host':
       return baseNode(ref, ref.key);
     default:

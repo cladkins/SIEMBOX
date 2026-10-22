@@ -1716,6 +1716,18 @@ answer); `POST /api/ai/explain` answers `truncated`.
 
 ## Alerts Endpoints
 
+**Alert references.** Every alert has a human-readable reference,
+`ALR-<id>` (for example `ALR-4821`), derived from its permanent id: alert ids
+are never reused, even after a delete, so a reference cited in an analysis,
+ticket or chat always names the same alert. Every alert object the API returns
+carries it as `ref` (lists, the grouped view and its `correlated` members,
+detail, update, exports, the AI Analyst's alert tools). Wherever an alert id
+goes in a path (`/api/alerts/:id`, `/:id/triage`, `/:id/triage/rerun`), the
+reference works too: `4821`, `ALR-4821`, `alr-4821` and `#4821` (URL-encoded
+as `%234821`) are the same alert. A malformed one (`ALR-0`, `ALR-abc`, an id
+beyond the int4 range) is a `404`. The UI deep link is
+`/alerts?alert=ALR-4821`.
+
 ### GET /api/alerts
 
 Get all alerts with filtering.
@@ -1737,6 +1749,8 @@ Get all alerts with filtering.
 | `minRiskScore` | integer | - | Minimum AI triage risk score (0-100) |
 | `technique` | string | - | ATT&CK technique ID (`T1110`, `T1110.001`, any case). A technique matches its sub-techniques too; a sub-technique matches only itself. `400` if malformed |
 | `tactic` | string | - | ATT&CK tactic shortname (`credential_access` or `credential-access`): alerts with any technique under it. With `technique`, both must hold. `400` if unknown |
+| `search` | string | - | Keyword or IP, matched case-insensitively in the title, description and matched data (first 200 characters). An alert reference (`ALR-4821` or `#4821`) matches exactly that alert and nothing else; a bare number (`4821`) matches the text and also the alert with that id |
+| `group` | string | - | `event` collapses the list to one row per triggering log, with every alert it raised in `correlated` (each with its own `ref`) |
 | `sortBy` | string | created_at | `risk_score` sorts highest-risk-first (used by the SOC Triage queue view); any other value sorts by `created_at` |
 
 **Example Request:**
@@ -1750,6 +1764,7 @@ GET /api/alerts?severity=high&status=new&limit=50
   "alerts": [
     {
       "id": 123,
+      "ref": "ALR-123",
       "rule_id": 1,
       "severity": "high",
       "title": "SSH Brute Force Detected from 192.168.1.100",
@@ -1779,6 +1794,10 @@ GET /api/alerts?severity=high&status=new&limit=50
 was created (from its `attack.t…` tags, upper case), kept if the rule is
 re-tagged later; `[]` for untagged rules and non-rule alerts (EDR, exposure,
 sign-in). `GET /api/alerts/export` accepts `technique` and `tactic` too.
+
+`GET /api/alerts/export` takes the same filters (including `search`) plus
+`format=csv|json`. JSON rows carry `ref`; the CSV's first column is `ref`,
+followed by `id`.
 
 `triage_status`/`triage_verdict`/`triage_risk_score` are `null` until [AI triage](../../wiki/AI-Security-Analyst.md#automated-triage) has run for an alert (or if it's disabled). Fetch the full verdict via `GET /api/alerts/:id/triage` below.
 
@@ -1821,7 +1840,8 @@ Get alert statistics and counts.
 
 ### GET /api/alerts/:id
 
-Get single alert details.
+Get single alert details. `:id` is the alert id or its reference:
+`/api/alerts/123` and `/api/alerts/ALR-123` return the same alert.
 
 **Authentication:** Required
 
@@ -1829,6 +1849,7 @@ Get single alert details.
 ```json
 {
   "id": 123,
+  "ref": "ALR-123",
   "rule_id": 1,
   "rule_name": "SSH Brute Force Detection",
   "severity": "high",
@@ -1847,7 +1868,7 @@ Get single alert details.
 ```
 
 **Errors:**
-- `404` - Alert not found
+- `404` - Alert not found, or `:id` is not a valid id or reference
 
 ---
 

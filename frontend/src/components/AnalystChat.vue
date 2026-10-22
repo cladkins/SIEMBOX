@@ -65,7 +65,7 @@
           </div>
           <!-- user content is plain text; assistant content is sanitized markdown -->
           <div v-if="m.role === 'user'" class="msg-body user-body">{{ m.content }}</div>
-          <div v-else class="msg-body md-body" v-html="renderMd(m.content)"></div>
+          <div v-else class="msg-body md-body" v-html="renderMd(m.content)" @click="onAnswerClick"></div>
 
           <el-collapse v-if="m.trace && m.trace.length" class="trace">
             <el-collapse-item :title="`Ran ${m.trace.length} tool${m.trace.length > 1 ? 's' : ''}`">
@@ -111,10 +111,13 @@ import { ChatDotRound, MagicStick, User, Plus, Delete, Loading } from '@element-
 import { useChatStore } from '@/stores/chat';
 import { useAuthStore } from '@/stores/auth';
 import { renderMarkdown } from '@/utils/markdown';
+import { useAlertRefLinks } from '@/composables/useAlertRefLinks';
 
 withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
 
 const store = useChatStore();
+// ALR-#### in an answer is a link to that alert.
+const onAnswerClick = useAlertRefLinks();
 const authStore = useAuthStore();
 const input = ref('');
 const scrollRef = ref<any>(null);

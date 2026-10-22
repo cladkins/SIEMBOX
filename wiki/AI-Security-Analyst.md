@@ -28,7 +28,7 @@ Each turn, the model emits exactly one action — either a **tool call** or a **
 |------|-----------------|
 | `get_system_overview` | High-level alert / vulnerability / asset summary |
 | `get_alert_stats` | Alert counts by status and severity |
-| `list_alerts` / `get_alert` | Recent alerts (filterable) / full alert detail |
+| `list_alerts` / `get_alert` | Recent alerts (filterable) / full alert detail, by id or reference (`ALR-4821`) |
 | `alerts_by_country` | Alerts grouped by source country (GeoIP) |
 | `get_vulnerability_stats` | Open/patched counts, unique CVEs |
 | `get_asset_vulnerabilities` | Vulnerabilities for one asset |
@@ -39,6 +39,12 @@ Each turn, the model emits exactly one action — either a **tool call** or a **
 | `get_asset_context` | Asset-360 for one host: EDR agent, log shipper, GeoIP, open vulns, recent alerts |
 | `get_related_alerts` | Other recent alerts sharing the same rule, asset, or source IP as a given alert |
 | `get_alert_history_stats` | How a rule/title has historically been dispositioned (new/investigating/closed/false_positive counts) |
+
+The alert tools take an alert id or its [reference](Detection-Rules#alert-references-alr-) and return each alert's `ref`.
+
+## Citing alerts
+
+Every alert has a reference such as **`ALR-4821`**. The analyst cites alerts by reference in its answers, and AI Triage does the same in its reasoning, so you can quote an answer and still know exactly which alert it meant. Ask about one directly — "What happened in ALR-4821?" or "Is ALR-4821 related to anything else?" — and the analyst looks it up. In the chat and in a triage verdict, each `ALR-####` is a link that opens the alert on the Alerts page (the link is built from the number alone, so model output can't point it anywhere else).
 
 The analyst typically gathers 2–4 results, then answers — it is tuned to stop investigating once it can respond. How many lookups it may make, how long it may take and how long its answer may be are set under [AI budgets](#answer-length-lookups-and-time-ai-budgets).
 
@@ -107,6 +113,7 @@ Configuration is a **third independent model selection** (provider/model/base UR
 - "Which assets have the most high/critical open vulnerabilities right now?"
 - "Look up 203.0.113.7 — is it on any threat feeds, and what did it do in our logs?"
 - "Given current alerts and vulnerabilities, what are my top three priorities?"
+- "Explain ALR-4821 and list anything related to it."
 
 ## Troubleshooting
 

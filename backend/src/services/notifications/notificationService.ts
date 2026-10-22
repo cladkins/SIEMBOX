@@ -13,6 +13,7 @@ import { NotificationChannelModel, NotificationChannel } from '../../models/Noti
 import { query } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { ErrorLogService } from '../errors/errorLogService';
+import { formatAlertRef } from '../alerts/alertRef';
 
 const SEVERITY_RANK: Record<string, number> = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
 
@@ -29,12 +30,28 @@ export interface ChannelResult {
   error?: string;
 }
 
+/** One alert to announce. `id` is the alert's id, so the message can carry its
+ *  ALR-#### reference; only the test-alert preview (no real alert) omits it. */
+export interface AlertNotification {
+  id?: number;
+  severity: string;
+  ruleName: string;
+  title: string;
+  description?: string;
+}
+
+/** `ALR-4821 ` (with the trailing space) or '' when the alert has no id. */
+function refPrefix(a: AlertNotification): string {
+  return a.id ? `${formatAlertRef(a.id)} ` : '';
+}
+
 /** Build the exact message a real new-alert notification produces (shared by the
  *  live alert path and the test-alert preview so the email is identical). */
-export function buildAlertMessage(params: { severity: string; ruleName: string; title: string; description?: string }): NotificationMessage {
+export function buildAlertMessage(params: AlertNotification): NotificationMessage {
+  const ref = params.id ? `Alert: ${formatAlertRef(params.id)}\n` : '';
   return {
-    title: `[SIEMBox] ${params.severity.toUpperCase()} alert: ${params.title}`,
-    body: `Rule: ${params.ruleName}\nSeverity: ${params.severity}\n${params.description || ''}`.trim(),
+    title: `[SIEMBox] ${params.severity.toUpperCase()} alert ${refPrefix(params)}`.trimEnd() + `: ${params.title}`,
+    body: `${ref}Rule: ${params.ruleName}\nSeverity: ${params.severity}\n${params.description || ''}`.trim(),
     severity: params.severity,
   };
 }
@@ -51,9 +68,7 @@ export function buildAlertMessage(params: { severity: string; ruleName: string; 
  * The worst severity leads, because that is what decides how urgently someone
  * has to look; the rest are listed as corroboration.
  */
-export function buildAlertGroupMessage(
-  alerts: Array<{ severity: string; ruleName: string; title: string; description?: string }>
-): NotificationMessage {
+export function buildAlertGroupMessage(alerts: AlertNotification[]): NotificationMessage {
   // One alert is not a group: fall through to the original message rather than
   // emitting "1 detection rules matched" and "(+0 more)". Held here rather than
   // in the caller so the guarantee cannot be lost by a future call site.
@@ -66,12 +81,12 @@ export function buildAlertGroupMessage(
   const lines = [
     `${alerts.length} detection rules matched a single event.`,
     '',
-    ...alerts.map((a) => `- [${(a.severity || '').toUpperCase()}] ${a.ruleName}: ${a.title}`),
+    ...alerts.map((a) => `- ${refPrefix(a)}[${(a.severity || '').toUpperCase()}] ${a.ruleName}: ${a.title}`),
   ];
   if (worst.description) lines.push('', worst.description);
 
   return {
-    title: `[SIEMBox] ${worst.severity.toUpperCase()} alert: ${worst.title} (+${alerts.length - 1} more)`,
+    title: `[SIEMBox] ${worst.severity.toUpperCase()} alert ${refPrefix(worst)}`.trimEnd() + `: ${worst.title} (+${alerts.length - 1} more)`,
     body: lines.join('\n').trim(),
     severity: worst.severity,
   };
@@ -79,6 +94,8 @@ export function buildAlertGroupMessage(
 
 /** A new exposure finding (leaked credential, domain-monitor hit) to announce. */
 export interface ExposureNotice {
+  /** The alert the finding raised, for its ALR-#### reference. */
+  alertId?: number;
   source: string;
   severity: string;
   title: string;
@@ -102,7 +119,7 @@ export function buildExposureMessage(findings: ExposureNotice[]): NotificationMe
   if (findings.length === 1) {
     return {
       title: `[SIEMBox] ${worst.severity.toUpperCase()} exposure: ${worst.title}`,
-      body: `Source: ${worst.source}\nSeverity: ${worst.severity}\n${worst.description || ''}`.trim(),
+      body: `${worst.alertId ? `Alert: ${formatAlertRef(worst.alertId)}\n` : ''}Source: ${worst.source}\nSeverity: ${worst.severity}\n${worst.description || ''}`.trim(),
       severity: worst.severity,
     };
   }
@@ -111,7 +128,7 @@ export function buildExposureMessage(findings: ExposureNotice[]): NotificationMe
   const lines = [
     `${findings.length} new exposure findings.`,
     '',
-    ...shown.map((f) => `- [${f.severity.toUpperCase()}] ${f.title}`),
+    ...shown.map((f) => `- ${f.alertId ? `${formatAlertRef(f.alertId)} ` : ''}[${f.severity.toUpperCase()}] ${f.title}`),
   ];
   if (findings.length > shown.length) lines.push(`- ...and ${findings.length - shown.length} more`);
   if (worst.description) lines.push('', worst.description);
@@ -239,7 +256,7 @@ export const NotificationService = {
     });
   },
 
-  async notifyAlert(params: { severity: string; ruleName: string; title: string; description?: string }): Promise<void> {
+  async notifyAlert(params: AlertNotification): Promise<void> {
     return NotificationService.notifyAlertGroup([params]);
   },
 
@@ -252,9 +269,7 @@ export const NotificationService = {
    * of one produces the identical message `notifyAlert` always sent, which is
    * what the EDR path and every single-rule event still get.
    */
-  async notifyAlertGroup(
-    alerts: Array<{ severity: string; ruleName: string; title: string; description?: string }>
-  ): Promise<void> {
+  async notifyAlertGroup(alerts: AlertNotification[]): Promise<void> {
     try {
       if (alerts.length === 0) return;
       if ((await getSetting('notify_alerts_enabled', 'false')) !== 'true') return;

@@ -4,6 +4,8 @@ import { api } from '@/services/api';
 
 export interface Alert {
   id: number;
+  /** ALR-#### reference (derived from id; use formatAlertRef to build one). */
+  ref?: string;
   rule_id: number;
   parsed_log_id: number | null;
   severity: 'low' | 'medium' | 'high' | 'critical';
@@ -29,6 +31,7 @@ export interface Alert {
   correlated_count?: number;
   correlated?: Array<{
     id: number;
+    ref?: string;
     rule_id: number;
     severity: Alert['severity'];
     title: string;

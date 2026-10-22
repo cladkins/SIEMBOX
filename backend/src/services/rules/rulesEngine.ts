@@ -13,6 +13,7 @@ import { PURE_CONDITION_OPERATORS, evaluatePureCondition } from './conditionMatc
 
 /** What one raised alert contributes to its event's single notification. */
 interface AlertNotice {
+  id: number;
   severity: string;
   ruleName: string;
   title: string;
@@ -525,7 +526,7 @@ export class RulesEngine {
       // Notification is NOT sent here: evaluateLog batches every alert raised by
       // this event into one message. Returning the payload keeps the decision
       // about what got suppressed (whitelist, cooldown) in one place.
-      return { severity: rule.severity, ruleName: rule.name, title, description };
+      return { id: alert.id, severity: rule.severity, ruleName: rule.name, title, description };
     } catch (error) {
       logger.error('Failed to create alert:', { error, rule: rule.name });
       return null;

@@ -9,6 +9,7 @@
  * data persisted to alert_triage — applying it (e.g. a status change) still
  * requires an explicit human action through the existing alert-update route.
  */
+import { formatAlertRef } from '../alerts/alertRef';
 import { AlertModel } from '../../models/Alert';
 import { AlertTriageModel, TriageTriggeredBy } from '../../models/AlertTriage';
 import { runAlertTriage, TriageAlertInput } from './triageAgent';
@@ -112,7 +113,7 @@ async function runOne(alertId: number, opts: TriageOpts): Promise<void> {
       if (dup) {
         await AlertTriageModel.markSkipped(
           alertId,
-          `duplicate of alert #${dup.alert_id} (verdict: ${dup.verdict}, triaged ${dup.created_at})`
+          `duplicate of ${formatAlertRef(dup.alert_id)} (verdict: ${dup.verdict}, triaged ${dup.created_at})`
         );
         return;
       }

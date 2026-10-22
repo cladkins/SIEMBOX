@@ -4,7 +4,7 @@
  *
  *   1. A literal `type:key`: that entity (nothing else, even when invalid).
  *   2. An IP: ip:<it>, and the asset with that ip_address.
- *   3. `#123` or `alert 123`: that alert, if it exists.
+ *   3. `ALR-123`, `#123` or `alert 123`: that alert, if it exists.
  *   4. CVE-... or NUCLEI-...: the vulnerability with that id.
  *   5. Contains @: user:<q> (exact), and a monitored email identity for it.
  *   6. Host- or domain-like: assets by host name prefix (5), shippers by name
@@ -16,6 +16,7 @@
  * over at most 1,001 rows) for IP, user, host and domain candidates, and facts
  * of the records. Every LIKE pattern is escaped.
  */
+import { MAX_ALERT_ID, parseAlertRef } from '../alerts/alertRef';
 import { runBudgeted } from './budget';
 import { badParam } from './errors';
 import { canonicalDomain, canonicalHost, canonicalIp, canonicalUser, entityRef, isNodeType, tryParseEntity, type EntityRef } from './entityKey';
@@ -127,10 +128,10 @@ async function computeSearch(deps: GraphDeps, caller: Caller, q: string) {
         // 2. An IP, and the asset that has it.
         add(entityRef('ip', ip));
         await lookup('asset-ip', `SELECT a.id FROM assets a WHERE a.ip_address = $1::inet LIMIT 1`, [ip], 'asset');
-      } else if (ALERT_ID.test(q)) {
-        // 3. #123 / alert 123.
-        const id = Number(ALERT_ID.exec(q)![1]);
-        if (id <= 2_147_483_647) await lookup('alert', `SELECT a.id FROM alerts a WHERE a.id = $1`, [id], 'alert');
+      } else if (ALERT_ID.test(q) || /^alr-/i.test(q)) {
+        // 3. ALR-123 / #123 / alert 123.
+        const id = ALERT_ID.test(q) ? Number(ALERT_ID.exec(q)![1]) : (parseAlertRef(q) ?? 0);
+        if (id >= 1 && id <= MAX_ALERT_ID) await lookup('alert', `SELECT a.id FROM alerts a WHERE a.id = $1`, [id], 'alert');
       } else if (VULN_ID.test(q)) {
         // 4. CVE-... / NUCLEI-...
         await lookup('vuln', `SELECT v.id FROM vulnerabilities v WHERE v.cve_id = $1 OR v.cve_id = upper($1) ORDER BY v.id LIMIT 5`, [q], 'vuln');

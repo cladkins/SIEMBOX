@@ -1296,13 +1296,23 @@ Get all detection rules.
     "tags": ["ssh", "brute-force", "authentication"],
     "created_at": "2025-01-01T00:00:00Z",
     "updated_at": "2025-01-01T00:00:00Z",
-    "regex_safety": { "status": "none", "vulnerable": [], "unknown": [] }
+    "regex_safety": { "status": "none", "vulnerable": [], "unknown": [] },
+    "triggers": { "total": 340, "last_24h": 23, "last_7d": 167, "last_triggered_at": "2026-10-22T16:10:00.000Z" }
   }
 ]
 ```
 
 `regex_safety` covers the rule's `regex` conditions; see
 [Regex safety](#regex-safety-parsers-and-rules).
+
+`triggers` is how often the rule has fired, counted from the alerts still
+stored (data retention removes older ones, so `total` is "since the oldest
+kept alert", not all time): `last_24h` and `last_7d` are rolling windows and
+`last_triggered_at` is the newest alert (`null`, with zero counts, for a rule
+that never fired). The counts are computed in one query over all rules and
+cached for up to 60 seconds. The Detection Rules page shows them in its
+**Triggered** column, which links to `/alerts?ruleId=<id>` (the same
+`ruleId` filter `GET /api/alerts` and `/api/alerts/export` take).
 
 **Severity Levels:** `low`, `medium`, `high`, `critical`
 

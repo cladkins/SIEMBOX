@@ -33,6 +33,12 @@
           </el-select>
         </el-form-item>
 
+        <el-form-item v-if="filters.ruleId" label="Rule">
+          <el-tag closable data-testid="alerts-rule-filter" @close="clearRuleFilter">
+            {{ ruleFilterName || `Rule ${filters.ruleId}` }}
+          </el-tag>
+        </el-form-item>
+
         <el-form-item label="ATT&CK">
           <TechniqueSelect
             v-model="filters.technique"
@@ -287,7 +293,10 @@ const filters = ref({
   // ATT&CK (GET /api/alerts ?technique= / ?tactic=): a technique matches its sub-techniques too.
   technique: null as string | null,
   tactic: null as string | null,
+  // Detection Rules → Triggered links here as /alerts?ruleId=<id>.
+  ruleId: null as number | null,
 });
+const ruleFilterName = ref('');
 
 // Deep-link support: the dashboard's severity/status panels click through
 // here as e.g. /alerts?severity=critical or /alerts?status=new.
@@ -305,6 +314,18 @@ if (typeof route.query.technique === 'string' && isTechniqueId(route.query.techn
 }
 if (typeof route.query.tactic === 'string' && route.query.tactic) {
   filters.value.tactic = route.query.tactic;
+}
+// /alerts?ruleId=12 (Detection Rules → Triggered): that rule's alerts.
+if (typeof route.query.ruleId === 'string' && /^[1-9][0-9]{0,8}$/.test(route.query.ruleId)) {
+  filters.value.ruleId = Number(route.query.ruleId);
+  api
+    .getRule(filters.value.ruleId)
+    .then((res) => {
+      ruleFilterName.value = typeof res.data?.name === 'string' ? res.data.name : '';
+    })
+    .catch(() => {
+      // A deleted rule still has alerts; the tag falls back to "Rule <id>".
+    });
 }
 // /alerts?alert=ALR-4821 (or a bare id) opens that alert's details: the link
 // "Copy link" produces, AI answers and every other ALR-#### reference use it.
@@ -398,6 +419,7 @@ const fetchAlerts = async () => {
   }
   if (filters.value.technique) params.technique = filters.value.technique;
   if (filters.value.tactic) params.tactic = filters.value.tactic;
+  if (filters.value.ruleId) params.ruleId = filters.value.ruleId;
   if (groupByEvent.value) {
     params.group = 'event';
   }
@@ -415,9 +437,16 @@ const applySearch = () => {
 };
 
 const resetFilters = () => {
-  filters.value = { severity: '', status: '', search: '', technique: null, tactic: null };
+  filters.value = { severity: '', status: '', search: '', technique: null, tactic: null, ruleId: null };
+  ruleFilterName.value = '';
   currentPage.value = 1;
   fetchAlerts();
+};
+
+const clearRuleFilter = () => {
+  filters.value.ruleId = null;
+  ruleFilterName.value = '';
+  applySearch();
 };
 
 const exporting = ref(false);
@@ -431,6 +460,7 @@ const exportAlerts = async (fmt: 'csv' | 'json') => {
     if (filters.value.search && filters.value.search.trim()) params.search = filters.value.search.trim();
     if (filters.value.technique) params.technique = filters.value.technique;
     if (filters.value.tactic) params.tactic = filters.value.tactic;
+    if (filters.value.ruleId) params.ruleId = filters.value.ruleId;
 
     const res = await api.exportAlerts(params, fmt);
     const blob = new Blob([res.data], { type: fmt === 'json' ? 'application/json' : 'text/csv' });

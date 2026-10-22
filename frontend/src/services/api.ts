@@ -382,6 +382,10 @@ export const api = {
   updateSyslogSettings: (data: any) => apiClient.put('/settings/syslog', data),
   getSyslogStatus: () => apiClient.get('/settings/syslog/status'),
 
+  // Settings - Public URL (links in notifications; admin only)
+  getPublicUrl: () => apiClient.get('/settings/public-url'),
+  updatePublicUrl: (publicUrl: string) => apiClient.put('/settings/public-url', { public_url: publicUrl }),
+
   // Settings - Auto-Discovery
   // Backend exposes a single JSON endpoint ({ enabled, interval_minutes,
   // stale_threshold_days }) — there are no per-key setting routes.

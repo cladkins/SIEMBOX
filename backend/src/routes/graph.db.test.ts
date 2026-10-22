@@ -299,6 +299,7 @@ test('an alert: its IPs (source and sender roles), user, host, rule, same-event 
   assert.equal(status, 200);
   assert.equal(json.center.exists, true);
   assert.equal(json.center.facts.severity, 'high');
+  assert.equal(json.center.facts.ref, `ALR-${ids.alerts.brute}`);
   assert.ok(!('matched_data' in json.center.facts), 'never the alert matched_data');
   assert.equal(edge(json, 'alert_ips', alertId('brute'), `ip:${IP.attacker}`)?.role, 'source');
   assert.ok(edge(json, 'alert_users', alertId('brute'), `user:${USER}`));
@@ -488,6 +489,12 @@ test('search: an IP and its asset; #id; a host prefix; a literal; never more tha
   assert.match(ip.candidates[0].hint, /alert/);
   const alert = (await call('viewer', `/api/graph/search?q=${encodeURIComponent(`#${ids.alerts.brute}`)}`)).json;
   assert.deepEqual(alert.candidates.map((c: Json) => c.entity), [alertId('brute')]);
+  for (const q of [`ALR-${ids.alerts.brute}`, `alr-${ids.alerts.brute}`]) {
+    const byRef = (await call('viewer', `/api/graph/search?q=${encodeURIComponent(q)}`)).json;
+    assert.deepEqual(byRef.candidates.map((c: Json) => c.entity), [alertId('brute')], q);
+    assert.ok(byRef.candidates[0].label.startsWith(`ALR-${ids.alerts.brute} `), 'the label leads with the reference');
+  }
+  assert.deepEqual((await call('viewer', '/api/graph/search?q=ALR-0')).json.candidates, []);
   const host = (await call('viewer', `/api/graph/search?q=asset-${tag.slice(0, 6)}`)).json;
   assert.ok(host.candidates.some((c: Json) => c.entity === `asset:${ids.asset}`));
   assert.ok(host.candidates.length <= 10);

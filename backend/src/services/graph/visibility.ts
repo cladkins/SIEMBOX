@@ -76,7 +76,7 @@ const FACTS: Readonly<Record<NodeType, readonly string[]>> = {
   host: [],
   user: ['is_email'],
   domain: ['watched', 'unicode'],
-  alert: ['title', 'severity', 'status', 'source', 'rule_id', 'created_at', 'verdict', 'risk_score'],
+  alert: ['ref', 'title', 'severity', 'status', 'source', 'rule_id', 'created_at', 'verdict', 'risk_score'],
   rule: ['name', 'severity', 'enabled'],
   asset: [
     'hostname',

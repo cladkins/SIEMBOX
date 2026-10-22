@@ -267,6 +267,7 @@
  * change are the only reloads, so an idle tab can't trip a 401.
  */
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { formatAlertRef } from '@/utils/alertRef';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Link, Refresh } from '@element-plus/icons-vue';
@@ -825,7 +826,7 @@ async function openAlert(id: number) {
     dialogAlert.value = data as Alert;
     alertDialogOpen.value = true;
   } catch {
-    actionError.value = `Couldn't open alert #${id}.`;
+    actionError.value = `Couldn't open alert ${formatAlertRef(id)}.`;
   }
 }
 

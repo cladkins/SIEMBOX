@@ -53,7 +53,7 @@
       </div>
       <div v-if="row.summary || row.reasoning" class="analysis-body">
         <p v-if="row.summary" class="summary-line">{{ row.summary }}</p>
-        <div v-if="row.reasoning" class="md-body" v-html="renderMarkdown(row.reasoning)"></div>
+        <div v-if="row.reasoning" class="md-body" v-html="renderMarkdown(row.reasoning)" @click="onReasoningClick"></div>
       </div>
 
       <div v-if="row.evidence && row.evidence.length" class="section">
@@ -142,6 +142,10 @@ import { useTriageStore, type TriageSuggestedQuery } from '@/stores/triage';
 import { useChatStore } from '@/stores/chat';
 import { useAuthStore } from '@/stores/auth';
 import { renderMarkdown } from '@/utils/markdown';
+import { useAlertRefLinks } from '@/composables/useAlertRefLinks';
+
+// ALR-#### the triage reasoning cites is a link to that alert.
+const onReasoningClick = useAlertRefLinks();
 
 const props = defineProps<{
   alertId: number;

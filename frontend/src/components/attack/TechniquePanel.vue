@@ -95,7 +95,8 @@
         <ul v-else class="alert-list">
           <li v-for="a in alerts" :key="a.id">
             <SeverityBadge :severity="a.severity" size="small" effect="plain" />
-            <router-link :to="{ path: '/alerts', query: { alert: String(a.id) } }">{{ a.title }}</router-link>
+            <router-link :to="alertRefPath(a.id)" class="alert-ref-link">{{ formatAlertRef(a.id) }}</router-link>
+            <router-link :to="alertRefPath(a.id)">{{ a.title }}</router-link>
             <span class="panel-count">{{ formatDate(a.created_at) }}</span>
           </li>
         </ul>
@@ -154,6 +155,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { alertRefPath, formatAlertRef } from '@/utils/alertRef';
 import { format } from 'date-fns';
 import { ElMessage } from 'element-plus';
 import { api } from '@/services/api';
@@ -286,6 +288,11 @@ function formatDate(d: string) {
 </script>
 
 <style scoped>
+.alert-ref-link {
+  font-family: var(--el-font-family-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 12px;
+  white-space: nowrap;
+}
 .panel-body {
   display: flex;
   flex-direction: column;

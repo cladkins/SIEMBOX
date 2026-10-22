@@ -56,8 +56,12 @@ export function alertIdFromHref(href: string | null | undefined): number | null 
   return m ? parseAlertRef(m[1]) : null;
 }
 
-// Where the next reference may start: the start of the text or after a
-// character that cannot be part of a word, so "XALR-5" is left alone.
+// A reference is a whole word: never glued to a letter, digit, "_" or "-"
+// on either side, so "XALR-5", "MY_ALR-5" and "ALR-5-6" stay plain text.
+const WORD_CHAR = /[0-9A-Za-z_-]$/;
+// Where marked should stop a text run to try the tokenizer. marked hands
+// start() the text after its first character, whose predecessor it cannot see,
+// so the tokenizer re-checks the preceding token itself.
 const REF_START = /(?:^|[^0-9A-Za-z_-])ALR-[1-9]/i;
 const REF_TOKEN = /^ALR-([1-9][0-9]{0,9})(?![0-9A-Za-z_-])/i;
 
@@ -72,12 +76,13 @@ export const alertRefMarkdown: TokenizerAndRendererExtension = {
   level: 'inline',
   start(src: string) {
     const m = REF_START.exec(src);
-    if (!m) return undefined;
     // m[0] is "ALR-1" at the very start, or one boundary character then "ALR-1".
-    return m.index + (m[0].length - 'ALR-1'.length);
+    return m ? m.index + m[0].length - 'ALR-1'.length : undefined;
   },
-  tokenizer(src: string) {
+  tokenizer(src: string, tokens) {
     if (this.lexer.state.inLink) return undefined;
+    const prev = tokens[tokens.length - 1];
+    if (prev && WORD_CHAR.test(prev.raw)) return undefined;
     const m = REF_TOKEN.exec(src);
     if (!m) return undefined;
     const id = parseAlertRef(m[1]);

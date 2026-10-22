@@ -197,6 +197,10 @@
       </template>
 
       <el-table :data="recentAlerts" v-loading="loading" stripe size="small">
+        <el-table-column label="Ref" width="130">
+          <template #default="{ row }"><AlertRef :id="row.id" link /></template>
+        </el-table-column>
+
         <el-table-column prop="severity" label="Severity" width="120">
           <template #default="{ row }">
             <el-tag :type="getSeverityType(row.severity)">
@@ -235,6 +239,8 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
+import AlertRef from '@/components/AlertRef.vue';
+import { alertRefPath } from '@/utils/alertRef';
 import { useRouter } from 'vue-router';
 import { useAlertsStore } from '@/stores/alerts';
 import { api } from '@/services/api';
@@ -479,7 +485,7 @@ const goToAlerts = () => {
 };
 
 const viewAlert = (alert: any) => {
-  router.push(`/alerts?id=${alert.id}`);
+  router.push(alertRefPath(alert.id));
 };
 </script>
 

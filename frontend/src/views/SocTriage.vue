@@ -49,6 +49,9 @@
 
     <el-card class="table-card">
       <el-table :data="rows" v-loading="loading" stripe @row-click="openRow">
+        <el-table-column label="Ref" width="130">
+          <template #default="{ row }"><AlertRef :id="row.id" /></template>
+        </el-table-column>
         <el-table-column label="Risk" width="90">
           <template #default="{ row }">
             <span v-if="row.triage_status === 'complete'" class="risk-score">{{ row.triage_risk_score ?? '—' }}</span>
@@ -135,6 +138,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
+import AlertRef from '@/components/AlertRef.vue';
 import { format } from 'date-fns';
 import { ElMessage } from 'element-plus';
 import { Loading } from '@element-plus/icons-vue';

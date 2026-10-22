@@ -58,6 +58,17 @@ Include `aggregation` for "N events in a window" detections; omit it for single-
 
 `alert.title` and `alert.description` may interpolate field placeholders — `{source_ip}`, `{user}`, `{count}`, etc. — filled from the matching event/aggregate. Alerts can be delivered via **Email / Slack / NTFY** (configure under *Settings → Notifications*).
 
+## Alert references (ALR-####)
+
+Every alert has a reference such as **`ALR-4821`**, made from its permanent id (ids are never reused, even after an alert is deleted), so you can cite it in notes, tickets, chat or an analysis and it always means the same alert.
+
+- **Alerts page** — the **Ref** column shows it; click the copy icon to copy it. The alert's details show it in the title (with a copy icon), and **Copy link** copies a link that opens that alert: `/alerts?alert=ALR-4821`.
+- **Search** — type `ALR-4821` (or `#4821`) in the Alerts search box to find exactly that alert. A bare number also finds the alert with that id, alongside any text match.
+- **Everywhere else an alert appears** — SOC Triage, Dashboard → Recent Alerts (the reference opens the alert), the ATT&CK coverage panel's recent alerts, Digital Risk findings, and Context Graph alert nodes (the label, the details panel's facts, and **Copy**; the graph's search accepts `ALR-4821` too).
+- **Notifications** — Email subjects, Slack messages and ntfy titles name the alert (`[SIEMBox] HIGH alert ALR-4821: …`) and the body starts with `Alert: ALR-4821`; a grouped notification lists each alert's reference. Exposure notifications name the alert their finding raised.
+- **AI Analyst and AI Triage** — both cite alerts by reference, and an `ALR-4821` in their answers is a link to the alert. See [AI Security Analyst](AI-Security-Analyst#citing-alerts).
+- **API** — every alert object carries `ref`, and `/api/alerts/ALR-4821` works wherever an alert id does. See the [API reference](https://github.com/cladkins/SIEMBOX/blob/main/docs/reference/API.md#alerts-endpoints).
+
 ## Installing from the catalog
 
 **Detection Rules → Browse Catalog** lists community rules (48 in the default catalog), each validated against the engine's operators/shape before install, with search, filters, and install/update status. Use **Install all**, or export/import any rule as portable JSON.

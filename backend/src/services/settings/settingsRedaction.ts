@@ -137,6 +137,8 @@ export const READABLE_SETTING_KEYS: ReadonlySet<string> = new Set([
   'edr_agent_latest_version',
   'edr_agent_latest_checked_at',
   'edr_agent_latest_error',
+  // Public URL for links in notifications (services/settings/publicUrl.ts, PUT /api/settings/public-url)
+  'public_url',
 ]);
 
 /**

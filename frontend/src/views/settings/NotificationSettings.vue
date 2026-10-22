@@ -21,6 +21,25 @@
         real new-alert email across all enabled channels (it ignores the enabled / severity preferences below).
       </el-alert>
 
+      <el-alert
+        v-if="publicUrl"
+        :type="publicUrl.effective_public_url ? 'success' : 'warning'"
+        :closable="false"
+        style="margin-bottom: 15px"
+        data-testid="notification-links-status"
+      >
+        <template v-if="publicUrl.effective_public_url">
+          Notifications link straight to each alert at <strong>{{ publicUrl.effective_public_url }}</strong>
+          <template v-if="publicUrl.source === 'env'"> (from SIEMBOX_PUBLIC_URL)</template>.
+        </template>
+        <template v-else>
+          Notifications carry the alert reference (ALR-1234) but no link, because SIEMBox doesn't know its public address.
+        </template>
+        <router-link to="/settings/system">
+          {{ publicUrl.source === 'setting' ? 'Change it' : 'Set the public URL' }} in Settings &rarr; System
+        </router-link>
+      </el-alert>
+
       <el-table :data="notificationChannels" v-loading="notificationChannelsLoading" stripe>
         <el-table-column prop="name" label="Name" min-width="150" />
 
@@ -272,6 +291,7 @@ import { api } from '@/services/api';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Check, Delete, Plus, Edit, VideoPlay } from '@element-plus/icons-vue';
 import HelpTip from '@/components/HelpTip.vue';
+import type { PublicUrlConfig } from '@/utils/publicUrl';
 
 // Notifications state
 const notificationChannelsLoading = ref(false);
@@ -315,7 +335,18 @@ const notificationSettingsForm = reactive({
 onMounted(() => {
   fetchNotificationChannels();
   fetchNotificationSettings();
+  fetchPublicUrl();
 });
+
+// Links in notifications come from Settings -> System -> Public URL.
+const publicUrl = ref<PublicUrlConfig | null>(null);
+async function fetchPublicUrl() {
+  try {
+    publicUrl.value = (await api.getPublicUrl()).data;
+  } catch {
+    publicUrl.value = null;
+  }
+}
 
 // Notification Channels Management Functions
 async function fetchNotificationChannels() {
@@ -486,7 +517,7 @@ async function testChannel(channel: any) {
     const response = await api.testNotificationChannel(channel.id);
     ElMessage.success(response.data?.message || 'Test message sent successfully');
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.error || 'Failed to send test message');
+    ElMessage.error(error.response?.data?.message || error.response?.data?.error || 'Failed to send test message');
   }
 }
 

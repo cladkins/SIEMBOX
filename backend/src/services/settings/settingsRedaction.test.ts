@@ -113,6 +113,7 @@ const PLAIN_SETTINGS: Array<[key: string, value: string]> = [
   ],
   ['onboarding_completed', '{"at":"2026-10-12T09:30:00.000Z","by":"admin"}'],
   ['log_discovery_manual_cidrs', '192.168.1.0/24,10.0.0.0/24'],
+  ['public_url', 'https://siem.example.com/siembox'],
 ];
 
 test('the inventory covers the readable list exactly', () => {

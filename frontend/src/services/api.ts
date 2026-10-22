@@ -382,6 +382,12 @@ export const api = {
   updateSyslogSettings: (data: any) => apiClient.put('/settings/syslog', data),
   getSyslogStatus: () => apiClient.get('/settings/syslog/status'),
 
+  // Settings - Public URL (links in notifications; admin only)
+  getPublicUrl: () => apiClient.get('/settings/public-url'),
+  // The card shows the server's message (a 400 names the problem) itself.
+  updatePublicUrl: (publicUrl: string) =>
+    apiClient.put('/settings/public-url', { public_url: publicUrl }, { skipErrorToast: true }),
+
   // Settings - Auto-Discovery
   // Backend exposes a single JSON endpoint ({ enabled, interval_minutes,
   // stale_threshold_days }) — there are no per-key setting routes.

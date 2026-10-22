@@ -14,6 +14,16 @@ import { query } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { ErrorLogService } from '../errors/errorLogService';
 import { formatAlertRef } from '../alerts/alertRef';
+import { getPublicUrl } from '../settings/publicUrl';
+import {
+  NotificationLink,
+  alertLink,
+  appLink,
+  compactLinks,
+  emailHtml,
+  plainTextWithLinks,
+  slackText,
+} from './notificationLinks';
 
 const SEVERITY_RANK: Record<string, number> = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
 
@@ -21,6 +31,18 @@ export interface NotificationMessage {
   title: string;
   body: string;
   severity?: string;
+  /**
+   * Links into the web UI, built from the public URL (none when it is unset).
+   * Each channel renders them its own way; the first is the primary one
+   * (ntfy's Click action).
+   */
+  links?: NotificationLink[];
+}
+
+/** `links` on the message only when there are some, so an unset public URL leaves the message as it was. */
+function withLinks(msg: NotificationMessage, links: Array<NotificationLink | null>): NotificationMessage {
+  const compact = compactLinks(links);
+  return compact.length > 0 ? { ...msg, links: compact } : msg;
 }
 
 export interface ChannelResult {
@@ -46,14 +68,19 @@ function refPrefix(a: AlertNotification): string {
 }
 
 /** Build the exact message a real new-alert notification produces (shared by the
- *  live alert path and the test-alert preview so the email is identical). */
-export function buildAlertMessage(params: AlertNotification): NotificationMessage {
+ *  live alert path and the test-alert preview so the email is identical). With a
+ *  public URL it links to the alert (or, for the preview, which has no alert, to
+ *  the Alerts list). */
+export function buildAlertMessage(params: AlertNotification, publicUrl?: string | null): NotificationMessage {
   const ref = params.id ? `Alert: ${formatAlertRef(params.id)}\n` : '';
-  return {
-    title: `[SIEMBox] ${params.severity.toUpperCase()} alert ${refPrefix(params)}`.trimEnd() + `: ${params.title}`,
-    body: `${ref}Rule: ${params.ruleName}\nSeverity: ${params.severity}\n${params.description || ''}`.trim(),
-    severity: params.severity,
-  };
+  return withLinks(
+    {
+      title: `[SIEMBox] ${params.severity.toUpperCase()} alert ${refPrefix(params)}`.trimEnd() + `: ${params.title}`,
+      body: `${ref}Rule: ${params.ruleName}\nSeverity: ${params.severity}\n${params.description || ''}`.trim(),
+      severity: params.severity,
+    },
+    [params.id ? alertLink(publicUrl, params.id) : appLink(publicUrl, 'alerts', 'All alerts')]
+  );
 }
 
 /**
@@ -68,11 +95,11 @@ export function buildAlertMessage(params: AlertNotification): NotificationMessag
  * The worst severity leads, because that is what decides how urgently someone
  * has to look; the rest are listed as corroboration.
  */
-export function buildAlertGroupMessage(alerts: AlertNotification[]): NotificationMessage {
+export function buildAlertGroupMessage(alerts: AlertNotification[], publicUrl?: string | null): NotificationMessage {
   // One alert is not a group: fall through to the original message rather than
   // emitting "1 detection rules matched" and "(+0 more)". Held here rather than
   // in the caller so the guarantee cannot be lost by a future call site.
-  if (alerts.length === 1) return buildAlertMessage(alerts[0]);
+  if (alerts.length === 1) return buildAlertMessage(alerts[0], publicUrl);
 
   const worst = [...alerts].sort(
     (a, b) => (SEVERITY_RANK[b.severity?.toLowerCase()] ?? 0) - (SEVERITY_RANK[a.severity?.toLowerCase()] ?? 0)
@@ -85,11 +112,20 @@ export function buildAlertGroupMessage(alerts: AlertNotification[]): Notificatio
   ];
   if (worst.description) lines.push('', worst.description);
 
-  return {
-    title: `[SIEMBox] ${worst.severity.toUpperCase()} alert ${refPrefix(worst)}`.trimEnd() + `: ${worst.title} (+${alerts.length - 1} more)`,
-    body: lines.join('\n').trim(),
-    severity: worst.severity,
-  };
+  // The worst alert first (the primary link), then the rest in listed order,
+  // then the Alerts list.
+  return withLinks(
+    {
+      title: `[SIEMBox] ${worst.severity.toUpperCase()} alert ${refPrefix(worst)}`.trimEnd() + `: ${worst.title} (+${alerts.length - 1} more)`,
+      body: lines.join('\n').trim(),
+      severity: worst.severity,
+    },
+    [
+      alertLink(publicUrl, worst.id),
+      ...alerts.map((a) => alertLink(publicUrl, a.id)),
+      appLink(publicUrl, 'alerts', 'All alerts'),
+    ]
+  );
 }
 
 /** A new exposure finding (leaked credential, domain-monitor hit) to announce. */
@@ -111,17 +147,22 @@ const EXPOSURE_GROUP_LIST_LIMIT = 10;
  * accounts at once) become ONE message led by the worst finding, so a large
  * first run cannot fan out into a burst of Slack/email/ntfy messages.
  */
-export function buildExposureMessage(findings: ExposureNotice[]): NotificationMessage {
+export function buildExposureMessage(findings: ExposureNotice[], publicUrl?: string | null): NotificationMessage {
   const rank = (f: ExposureNotice) => SEVERITY_RANK[f.severity?.toLowerCase()] ?? 0;
   const sorted = [...findings].sort((a, b) => rank(b) - rank(a));
   const worst = sorted[0];
 
+  const digitalRisk = appLink(publicUrl, 'digitalRisk', 'Digital Risk');
   if (findings.length === 1) {
-    return {
-      title: `[SIEMBox] ${worst.severity.toUpperCase()} exposure: ${worst.title}`,
-      body: `${worst.alertId ? `Alert: ${formatAlertRef(worst.alertId)}\n` : ''}Source: ${worst.source}\nSeverity: ${worst.severity}\n${worst.description || ''}`.trim(),
-      severity: worst.severity,
-    };
+    // The alert the finding raised, or the Digital Risk page when it raised none.
+    return withLinks(
+      {
+        title: `[SIEMBox] ${worst.severity.toUpperCase()} exposure: ${worst.title}`,
+        body: `${worst.alertId ? `Alert: ${formatAlertRef(worst.alertId)}\n` : ''}Source: ${worst.source}\nSeverity: ${worst.severity}\n${worst.description || ''}`.trim(),
+        severity: worst.severity,
+      },
+      [worst.alertId ? alertLink(publicUrl, worst.alertId) : digitalRisk]
+    );
   }
 
   const shown = sorted.slice(0, EXPOSURE_GROUP_LIST_LIMIT);
@@ -133,11 +174,65 @@ export function buildExposureMessage(findings: ExposureNotice[]): NotificationMe
   if (findings.length > shown.length) lines.push(`- ...and ${findings.length - shown.length} more`);
   if (worst.description) lines.push('', worst.description);
 
-  return {
-    title: `[SIEMBox] ${worst.severity.toUpperCase()} exposure: ${worst.title} (+${findings.length - 1} more)`,
-    body: lines.join('\n').trim(),
-    severity: worst.severity,
-  };
+  return withLinks(
+    {
+      title: `[SIEMBox] ${worst.severity.toUpperCase()} exposure: ${worst.title} (+${findings.length - 1} more)`,
+      body: lines.join('\n').trim(),
+      severity: worst.severity,
+    },
+    [...shown.map((f) => (f.alertId ? alertLink(publicUrl, f.alertId) : null)), digitalRisk]
+  );
+}
+
+/** A vulnerability scan's findings, linking to Vulnerability Management. */
+export function buildVulnScanMessage(
+  params: { target: string; summary: string; severity: string },
+  publicUrl?: string | null
+): NotificationMessage {
+  return withLinks(
+    {
+      title: `[SIEMBox] Vulnerabilities found on ${params.target}`,
+      body: `Scan of ${params.target} found: ${params.summary}.`,
+      severity: params.severity,
+    },
+    [appLink(publicUrl, 'vulnerabilities', 'Vulnerability Management')]
+  );
+}
+
+/** Log ingestion stalled or resumed, linking to Settings -> System (receiver health). */
+export function buildIngestionMessage(
+  params: { healthy: boolean; stallMinutes: number },
+  publicUrl?: string | null
+): NotificationMessage {
+  const msg: NotificationMessage = params.healthy
+    ? { title: '[SIEMBox] Log ingestion resumed', body: 'Logs are being received again.', severity: 'info' }
+    : {
+        title: '[SIEMBox] Log ingestion stalled',
+        body: `No logs received in the last ${params.stallMinutes} minutes.`,
+        severity: 'high',
+      };
+  return withLinks(msg, [appLink(publicUrl, 'system', 'System status')]);
+}
+
+/** The per-channel "Test" message, linking back to Settings -> Notifications. */
+export function buildChannelTestMessage(channelName: string, publicUrl?: string | null): NotificationMessage {
+  return withLinks(
+    {
+      title: 'SIEMBox test notification',
+      body: `This is a test from SIEMBox for the "${channelName}" channel.`,
+      severity: 'info',
+    },
+    [appLink(publicUrl, 'notifications', 'Open SIEMBox')]
+  );
+}
+
+/** The public URL, or null when it is unset or cannot be read (links are then left out). */
+async function publicUrlOrNull(): Promise<string | null> {
+  try {
+    return await getPublicUrl();
+  } catch {
+    return null;
+  }
 }
 
 async function getSetting(key: string, fallback: string): Promise<string> {
@@ -155,6 +250,42 @@ export function severityPasses(eventSeverity: string | undefined, minSeverity: s
   return ev >= min;
 }
 
+// ---- Per-channel payloads (pure, so tests can pin exactly what is sent) ----
+
+/** The Slack webhook body: escaped title and body, then `<url|label>` links. */
+export function slackPayload(msg: NotificationMessage): { text: string } {
+  return { text: slackText(msg.title, msg.body, msg.links) };
+}
+
+/** ntfy: the request headers (without Authorization) and the plain-text body. Links
+ *  are listed in the body; the first is the Click action (tapping the notification). */
+export function ntfyRequest(msg: NotificationMessage): { headers: Record<string, string>; body: string } {
+  // HTTP headers are bytes: a title with a character beyond ASCII (the test
+  // alert's em dash, a non-English alert title) made fetch throw, so the message
+  // never went out. ntfy decodes RFC 2047 encoded-words in headers.
+  const asciiTitle = /^[\x20-\x7e]*$/.test(msg.title);
+  const headers: Record<string, string> = {
+    Title: asciiTitle ? msg.title : `=?UTF-8?B?${Buffer.from(msg.title, 'utf8').toString('base64')}?=`,
+  };
+  if (msg.severity) {
+    const priority: Record<string, string> = { info: '2', low: '2', medium: '3', high: '4', critical: '5' };
+    headers.Priority = priority[msg.severity.toLowerCase()] || '3';
+    headers.Tags = 'warning';
+  }
+  if (msg.links && msg.links.length > 0) headers.Click = msg.links[0].url;
+  return { headers, body: plainTextWithLinks(msg.body, msg.links) };
+}
+
+/** Email: subject, text part (links as plain URLs) and, only when there are links, an HTML part. */
+export function emailContent(msg: NotificationMessage): { subject: string; text: string; html?: string } {
+  const content: { subject: string; text: string; html?: string } = {
+    subject: msg.title,
+    text: plainTextWithLinks(msg.body, msg.links),
+  };
+  if (msg.links && msg.links.length > 0) content.html = emailHtml(msg.title, msg.body, msg.links);
+  return content;
+}
+
 // ---- Per-channel senders ----
 
 async function sendSlack(channel: NotificationChannel, msg: NotificationMessage): Promise<void> {
@@ -163,7 +294,7 @@ async function sendSlack(channel: NotificationChannel, msg: NotificationMessage)
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: `*${msg.title}*\n${msg.body}` }),
+    body: JSON.stringify(slackPayload(msg)),
   });
   if (!res.ok) throw new Error(`Slack webhook returned HTTP ${res.status}`);
 }
@@ -172,14 +303,9 @@ async function sendNtfy(channel: NotificationChannel, msg: NotificationMessage):
   const server = String(channel.config.server_url || 'https://ntfy.sh').replace(/\/+$/, '');
   const topic = channel.config.topic;
   if (!topic) throw new Error('NTFY channel is missing topic');
-  const headers: Record<string, string> = { Title: msg.title };
-  if (msg.severity) {
-    const priority: Record<string, string> = { info: '2', low: '2', medium: '3', high: '4', critical: '5' };
-    headers.Priority = priority[msg.severity.toLowerCase()] || '3';
-    headers.Tags = 'warning';
-  }
+  const { headers, body } = ntfyRequest(msg);
   if (channel.config.token) headers.Authorization = `Bearer ${channel.config.token}`;
-  const res = await fetch(`${server}/${topic}`, { method: 'POST', headers, body: msg.body });
+  const res = await fetch(`${server}/${topic}`, { method: 'POST', headers, body });
   if (!res.ok) throw new Error(`NTFY returned HTTP ${res.status}`);
 }
 
@@ -196,8 +322,7 @@ async function sendEmail(channel: NotificationChannel, msg: NotificationMessage)
   await transport.sendMail({
     from: c.from || c.user || 'siembox@localhost',
     to: c.to,
-    subject: msg.title,
-    text: msg.body,
+    ...emailContent(msg),
   });
 }
 
@@ -248,12 +373,12 @@ async function dispatch(msg: NotificationMessage): Promise<void> {
 
 export const NotificationService = {
   // Used by the "Test" button — throws so the route can report the failure.
-  async testChannel(channel: NotificationChannel): Promise<void> {
-    await sendToChannel(channel, {
-      title: 'SIEMBox test notification',
-      body: `This is a test from SIEMBox for the "${channel.name}" channel.`,
-      severity: 'info',
-    });
+  // Answers the link the message carried (null when no public URL is set), so the
+  // Settings page can show it.
+  async testChannel(channel: NotificationChannel): Promise<{ link: string | null }> {
+    const msg = buildChannelTestMessage(channel.name, await publicUrlOrNull());
+    await sendToChannel(channel, msg);
+    return { link: msg.links?.[0]?.url ?? null };
   },
 
   async notifyAlert(params: AlertNotification): Promise<void> {
@@ -278,7 +403,7 @@ export const NotificationService = {
       const passing = alerts.filter((a) => severityPasses(a.severity, minSeverity));
       if (passing.length === 0) return;
 
-      await dispatch(buildAlertGroupMessage(passing));
+      await dispatch(buildAlertGroupMessage(passing, await publicUrlOrNull()));
     } catch (err) {
       logger.error('[Notifications] notifyAlert failed:', err);
       ErrorLogService.logBackgroundError('notifications', err, { dedupeKey: 'notifyAlert' });
@@ -288,16 +413,19 @@ export const NotificationService = {
   // Explicit admin preview of the new-alert email. Uses the exact alert format and
   // the configured channels, but bypasses the enabled / min-severity gates so the
   // email can be previewed regardless of the current notification preferences.
-  async sendTestAlert(): Promise<ChannelResult[]> {
-    return dispatchWithResults(
-      buildAlertMessage({
+  // Also answers the link the message carried (null when no public URL is set).
+  async sendTestAlert(): Promise<{ results: ChannelResult[]; link: string | null }> {
+    const msg = buildAlertMessage(
+      {
         severity: 'high',
         ruleName: 'SIEMBox Test Rule',
         title: 'Test alert — multiple failed logins from 203.0.113.10',
         description:
           'This is a TEST alert sent from Settings -> Notifications to preview the new-alert email. No real detection occurred.',
-      })
+      },
+      await publicUrlOrNull()
     );
+    return { results: await dispatchWithResults(msg), link: msg.links?.[0]?.url ?? null };
   },
 
   async notifyVulnScan(params: { target: string; severityCounts: Record<string, number> }): Promise<void> {
@@ -309,11 +437,7 @@ export const NotificationService = {
       const passing = order.filter((s) => (counts[s] || 0) > 0 && severityPasses(s, min));
       if (passing.length === 0) return;
       const summary = order.filter((s) => (counts[s] || 0) > 0).map((s) => `${counts[s]} ${s}`).join(', ');
-      await dispatch({
-        title: `[SIEMBox] Vulnerabilities found on ${params.target}`,
-        body: `Scan of ${params.target} found: ${summary}.`,
-        severity: passing[0],
-      });
+      await dispatch(buildVulnScanMessage({ target: params.target, summary, severity: passing[0] }, await publicUrlOrNull()));
     } catch (err) {
       logger.error('[Notifications] notifyVulnScan failed:', err);
       ErrorLogService.logBackgroundError('notifications', err, { dedupeKey: 'notifyVulnScan' });
@@ -333,7 +457,7 @@ export const NotificationService = {
       const min = await getSetting('notify_exposure_min_severity', 'medium');
       const passing = findings.filter((f) => severityPasses(f.severity, min));
       if (passing.length === 0) return;
-      await dispatch(buildExposureMessage(passing));
+      await dispatch(buildExposureMessage(passing, await publicUrlOrNull()));
     } catch (err) {
       logger.error('[Notifications] notifyExposure failed:', err);
       ErrorLogService.logBackgroundError('notifications', err, { dedupeKey: 'notifyExposure' });
@@ -343,15 +467,7 @@ export const NotificationService = {
   async notifyIngestion(params: { healthy: boolean; stallMinutes: number }): Promise<void> {
     try {
       if ((await getSetting('notify_ingestion_enabled', 'false')) !== 'true') return;
-      await dispatch(
-        params.healthy
-          ? { title: '[SIEMBox] Log ingestion resumed', body: 'Logs are being received again.', severity: 'info' }
-          : {
-              title: '[SIEMBox] Log ingestion stalled',
-              body: `No logs received in the last ${params.stallMinutes} minutes.`,
-              severity: 'high',
-            }
-      );
+      await dispatch(buildIngestionMessage(params, await publicUrlOrNull()));
     } catch (err) {
       logger.error('[Notifications] notifyIngestion failed:', err);
       ErrorLogService.logBackgroundError('notifications', err, { dedupeKey: 'notifyIngestion' });

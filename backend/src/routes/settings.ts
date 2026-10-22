@@ -36,6 +36,7 @@ import {
   toPublicOnboardingState,
   type OnboardingState,
 } from '../services/onboarding/onboardingState';
+import { getPublicUrlConfig, savePublicUrl, validatePublicUrl } from '../services/settings/publicUrl';
 
 const router = Router();
 
@@ -919,6 +920,30 @@ router.put('/onboarding', authorize('admin'), async (req: Request, res: Response
     logger.info(`[Onboarding] marked done by ${username}`);
   }
   res.json(toPublicOnboardingState(state, true));
+});
+
+// ===========================
+// Public URL (services/settings/publicUrl.ts)
+// ===========================
+// The address people open SIEMBox at, used for links in notifications. Admin
+// only. GET answers the stored setting, SIEMBOX_PUBLIC_URL (normalised) and
+// the effective value with where it came from. PUT {"public_url": "..."} stores
+// a validated, normalised value; "" (or null) clears it, after which the env
+// var applies if set. An invalid value is a 400 naming the problem.
+router.get('/public-url', authorize('admin'), async (_req: Request, res: Response) => {
+  res.json(await getPublicUrlConfig());
+});
+
+router.put('/public-url', authorize('admin'), async (req: Request, res: Response) => {
+  const body: unknown = req.body;
+  if (body === null || typeof body !== 'object' || Array.isArray(body) || !('public_url' in body)) {
+    throw new ApiError(400, 'Expected a JSON object such as {"public_url": "https://siem.example.com"}');
+  }
+  const result = validatePublicUrl((body as Record<string, unknown>).public_url);
+  if (!result.ok) throw new ApiError(400, result.error);
+  await savePublicUrl(result.value);
+  logger.info(`[Settings] public_url ${result.value ? 'set' : 'cleared'} by ${req.user?.username ?? 'unknown'}`);
+  res.json(await getPublicUrlConfig());
 });
 
 export default router;

@@ -137,7 +137,7 @@ export const settingsAreas: SettingsArea[] = [
     path: 'system',
     title: 'System',
     icon: Odometer,
-    description: 'Syslog receiver health and database statistics for this instance.',
+    description: 'The public URL notifications link to, syslog receiver health and database statistics for this instance.',
     adminOnly: true,
     component: () => import('./SystemSettings.vue'),
   },

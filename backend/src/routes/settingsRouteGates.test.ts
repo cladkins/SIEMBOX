@@ -71,6 +71,9 @@ const ROUTES: Array<[method: string, path: string, allowed: Role[]]> = [
   // Getting Started completion: every role reads it (admins also see who); admins change it.
   ['get', '/onboarding', ANY_ROLE],
   ['put', '/onboarding', ADMIN_ONLY],
+  // Public URL for links in notifications: admins read and change it.
+  ['get', '/public-url', ADMIN_ONLY],
+  ['put', '/public-url', ADMIN_ONLY],
 ];
 
 type Handler = (req: unknown, res: unknown, next: (err?: unknown) => void) => unknown;

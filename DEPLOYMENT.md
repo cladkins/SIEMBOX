@@ -1135,6 +1135,29 @@ curl -si -X OPTIONS http://<host>:8421/api/auth/login \
 curl -si http://<host>:8421/health -H 'Origin: https://dash.example.com' | grep -i '^access-control-allow-origin'
 ```
 
+## Public URL (links in notifications)
+
+Email, Slack and NTFY notifications name each alert by its reference
+(`ALR-4821`). To make them link straight to it
+(`https://siem.example.com/alerts?alert=ALR-4821`), tell SIEMBox the address
+people use to open it in a browser:
+
+- **Settings → System → Public URL** (admin). **Use this browser's address**
+  fills in the address you are using now; the card then shows the link a
+  notification would carry. **Clear** turns links off again.
+- Or `SIEMBOX_PUBLIC_URL` in `.env` (both Compose files pass it to the backend):
+  `SIEMBOX_PUBLIC_URL=https://siem.example.com`. A value saved in Settings wins
+  over it.
+
+It must be an absolute `http://` or `https://` URL with no username, password,
+query or fragment. Behind a reverse proxy that serves SIEMBox under a sub-path,
+include the path: `https://example.com/siembox`. Neither set: notifications
+carry the reference only, as before. SIEMBox never builds these links from the
+address a request came in on, so set it to the address your users actually
+open (the reverse proxy's, not `localhost:8420`). See
+[API.md, "Links in notifications"](docs/reference/API.md#links-in-notifications)
+for which notification links where.
+
 ## Wall screens (Big Display)
 
 A **display link** shows SIEMBox's live board (open alerts, alert pulse, log

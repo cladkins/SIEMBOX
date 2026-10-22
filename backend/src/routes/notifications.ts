@@ -79,20 +79,29 @@ router.post('/channels/:id/test', requireAdmin, async (req: Request, res: Respon
   if (isNaN(id)) throw new ApiError(400, 'Invalid id');
   const channel = await NotificationChannelModel.findById(id);
   if (!channel) throw new ApiError(404, 'Channel not found');
+  let link: string | null;
   try {
-    await NotificationService.testChannel(channel);
-    res.json({ message: 'Test notification sent' });
+    ({ link } = await NotificationService.testChannel(channel));
   } catch (err: any) {
     throw new ApiError(400, `Test failed: ${err.message}`);
   }
+  res.json({ message: `Test notification sent${linkNote(link)}`, link });
 });
 
+/** What the message said about its link: the URL, or that there is none until a public URL is set. */
+function linkNote(link: string | null): string {
+  return link
+    ? `, linking to ${link}`
+    : ' (no link: set the public URL in Settings -> System to link notifications to SIEMBox)';
+}
+
 // Preview the real new-alert email: dispatches a sample alert (in the exact
-// new-alert format) to every enabled channel and reports per-channel outcomes.
+// new-alert format) to every enabled channel and reports per-channel outcomes,
+// and the link it carried (null when no public URL is set).
 router.post('/test-alert', requireAdmin, async (_req: Request, res: Response) => {
-  const results = await NotificationService.sendTestAlert();
+  const { results, link } = await NotificationService.sendTestAlert();
   if (results.length === 0) {
-    res.json({ message: 'No enabled notification channels — add and enable one first.', results });
+    res.json({ message: 'No enabled notification channels — add and enable one first.', results, link });
     return;
   }
   const ok = results.filter((r) => r.ok).length;
@@ -100,8 +109,9 @@ router.post('/test-alert', requireAdmin, async (_req: Request, res: Response) =>
   res.json({
     message: failed.length
       ? `Test alert: ${ok}/${results.length} channel(s) sent. Failed: ${failed.map((f) => `${f.name} (${f.error})`).join('; ')}`
-      : `Test alert sent to ${ok} channel(s) — check your inbox.`,
+      : `Test alert sent to ${ok} channel(s)${linkNote(link)} — check your inbox.`,
     results,
+    link,
   });
 });
 

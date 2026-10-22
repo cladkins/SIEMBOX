@@ -63,6 +63,10 @@ services:
       # scripts. Set it only for your own page or app on another origin, as
       # exact origins, comma-separated: https://dash.example.com,http://localhost:5173
       CORS_ORIGIN: ${CORS_ORIGIN:-}
+      # The address people open SIEMBox at in a browser (https://siem.example.com),
+      # for links in notifications. Optional: Settings -> System -> Public URL
+      # sets it too and wins. Empty = no links (DEPLOYMENT.md, "Public URL").
+      SIEMBOX_PUBLIC_URL: ${SIEMBOX_PUBLIC_URL:-}
       # Client addresses (DEPLOYMENT.md, "Client addresses and reverse proxies").
       # X-Forwarded-For is believed only from the bundled frontend, over the
       # api-socket volume below or by its service name, and from what this

@@ -4,11 +4,19 @@
  * hook is registered once at module scope — extracted from AnalystChat.vue so
  * a second consumer doesn't register a duplicate global hook.
  */
-import { marked } from 'marked';
+import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
+import { alertIdFromHref, alertRefMarkdown } from './alertRef.ts';
+
+// ALR-#### in model output becomes a link to that alert (built from the parsed
+// number only; see alertRef.ts).
+const marked = new Marked({ extensions: [alertRefMarkdown] });
 
 DOMPurify.addHook('afterSanitizeAttributes', (node: any) => {
   if (node.tagName === 'A') {
+    // An in-app alert link opens in place (the chat intercepts the click);
+    // every other link opens in a new tab.
+    if (alertIdFromHref(node.getAttribute('href')) !== null && node.hasAttribute('data-alert-ref')) return;
     node.setAttribute('target', '_blank');
     node.setAttribute('rel', 'noopener noreferrer');
   }

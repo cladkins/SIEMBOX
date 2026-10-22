@@ -1,7 +1,10 @@
 import { query } from '../config/database';
+import { formatAlertRef, parseAlertRef, withAlertRef } from '../services/alerts/alertRef';
 
 export interface Alert {
   id: number;
+  /** Human-readable reference derived from id (ALR-4821); see services/alerts/alertRef. */
+  ref: string;
   rule_id: number;
   parsed_log_id: number | null;
   severity: 'low' | 'medium' | 'high' | 'critical';
@@ -43,6 +46,7 @@ export interface AlertFilterOptions {
 /** One alert's summary as it appears inside a correlated group. */
 export interface CorrelatedAlert {
   id: number;
+  ref: string;
   rule_id: number;
   severity: Alert['severity'];
   title: string;
@@ -96,12 +100,12 @@ export class AlertModel {
       ]
     );
 
-    return result.rows[0];
+    return withAlertRef(result.rows[0]);
   }
 
   static async findById(id: number): Promise<Alert | null> {
     const result = await query('SELECT * FROM alerts WHERE id = $1', [id]);
-    return result.rows[0] || null;
+    return result.rows[0] ? withAlertRef(result.rows[0]) : null;
   }
 
   /**
@@ -127,11 +131,27 @@ export class AlertModel {
     }
 
     if (options?.search) {
-      // Keyword / IP search across the alert title, description, and matched_data
-      // (where the source IP and other matched fields live). ILIKE = case-insensitive.
-      const p = paramIndex++;
-      conditions.push(`(a.title ILIKE $${p} OR a.description ILIKE $${p} OR a.matched_data::text ILIKE $${p})`);
-      params.push(`%${options.search}%`);
+      const search = options.search.trim();
+      const refId = parseAlertRef(search);
+      if (refId !== null && !/^[0-9]/.test(search)) {
+        // An explicit reference (ALR-4821, #4821) names exactly one alert.
+        conditions.push(`a.id = $${paramIndex++}`);
+        params.push(refId);
+      } else {
+        // Keyword / IP search across the alert title, description, and matched_data
+        // (where the source IP and other matched fields live). ILIKE = case-insensitive.
+        // A bare number also matches the alert with that id, since 4821 is
+        // a valid way to write ALR-4821.
+        const p = paramIndex++;
+        const text = `a.title ILIKE $${p} OR a.description ILIKE $${p} OR a.matched_data::text ILIKE $${p}`;
+        params.push(`%${search}%`);
+        if (refId !== null) {
+          conditions.push(`(${text} OR a.id = $${paramIndex++})`);
+          params.push(refId);
+        } else {
+          conditions.push(`(${text})`);
+        }
+      }
     }
 
     if (options?.ruleId) {
@@ -206,7 +226,7 @@ export class AlertModel {
     );
 
     return {
-      alerts: alertsResult.rows,
+      alerts: alertsResult.rows.map(withAlertRef),
       total,
     };
   }
@@ -288,7 +308,13 @@ export class AlertModel {
       listParams
     );
 
-    return { alerts: result.rows, total };
+    return {
+      alerts: result.rows.map((row: AlertGroup) => ({
+        ...withAlertRef(row),
+        correlated: (row.correlated || []).map((c) => ({ ...c, ref: formatAlertRef(c.id) })),
+      })),
+      total,
+    };
   }
 
   /**
@@ -327,7 +353,7 @@ export class AlertModel {
         LIMIT $3`,
       [options.alertId, sinceHours, limit]
     );
-    return r.rows;
+    return r.rows.map(withAlertRef);
   }
 
   /**
@@ -406,7 +432,7 @@ export class AlertModel {
       values
     );
 
-    return result.rows[0] || null;
+    return result.rows[0] ? withAlertRef(result.rows[0]) : null;
   }
 
   static async delete(id: number): Promise<boolean> {

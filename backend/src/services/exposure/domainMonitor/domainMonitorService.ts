@@ -341,7 +341,7 @@ async function checkDomain(domain: WatchedDomain, deps: CheckDeps): Promise<Doma
       for (const finding of output.findings) {
         const result = await deps.store.recordFinding(finding);
         if (result.isNew) fresh++;
-        if (result.alertCreated) notices.push(toExposureNotice(finding));
+        if (result.alertCreated) notices.push(toExposureNotice(finding, result.alertId));
       }
       if (output.snapshot !== undefined) {
         await deps.store.saveBaseline(domain.id, name, output.snapshot);

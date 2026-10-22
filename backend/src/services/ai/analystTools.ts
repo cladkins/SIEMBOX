@@ -10,6 +10,7 @@
  */
 import { isIP } from 'net';
 import { AlertModel } from '../../models/Alert';
+import { formatAlertRef, parseAlertRef } from '../alerts/alertRef';
 import { ParsedLogModel } from '../../models/ParsedLog';
 import { EdrAgentModel } from '../../models/EdrAgent';
 import { AssetRepository } from '../assets/assetRepository';
@@ -50,6 +51,14 @@ function str(v: any, maxLen = 64): string | undefined {
   if (typeof v !== 'string') return undefined;
   const s = v.trim();
   return s ? s.slice(0, maxLen) : undefined;
+}
+/** An alert id from the model: a number or a reference like "ALR-4821". 0 when invalid. */
+function alertIdArg(v: any): number {
+  return parseAlertRef(typeof v === 'string' ? v : Number(v)) ?? 0;
+}
+/** Short alert summary with its citable reference. */
+function alertSummary(al: any, keys: string[]): any {
+  return { ref: formatAlertRef(al.id), ...pick(al, keys) };
 }
 function sinceHoursToDate(hours: number): Date {
   return new Date(Date.now() - hours * 3600 * 1000);
@@ -107,6 +116,7 @@ const ALL_TOOLS: AnalystTool[] = [
       return {
         total,
         alerts: (alerts || []).map((al: any) => ({
+          ref: formatAlertRef(al.id),
           id: al.id,
           severity: al.severity,
           status: al.status,
@@ -120,14 +130,16 @@ const ALL_TOOLS: AnalystTool[] = [
   },
   {
     name: 'get_alert',
-    description: 'Full detail for one alert by id (title, description, matched data, status).',
-    args: 'id(number, required)',
+    description:
+      'Full detail for one alert by id or reference (title, description, matched data, status). Use it whenever the user names an alert such as ALR-4821.',
+    args: 'id(number or reference like "ALR-4821", required)',
     run: async (a) => {
-      const id = clampInt(a.id, 1, Number.MAX_SAFE_INTEGER, 0);
-      if (!id) return { error: 'id is required' };
+      const id = alertIdArg(a.id ?? a.ref ?? a.alertId);
+      if (!id) return { error: 'id is required: an alert id (4821) or reference (ALR-4821)' };
       const al: any = await AlertModel.findById(id);
-      if (!al) return { error: `alert ${id} not found` };
+      if (!al) return { error: `alert ${formatAlertRef(id)} not found` };
       return {
+        ref: formatAlertRef(al.id),
         id: al.id,
         severity: al.severity,
         status: al.status,
@@ -325,7 +337,7 @@ const ALL_TOOLS: AnalystTool[] = [
           .slice(0, 10)
           .map((v: any) => pick(v, ['cve_id', 'severity', 'cvss_score', 'status'])),
         recent_alerts: (ctx.alerts || []).slice(0, 10).map((al: any) =>
-          pick(al, ['id', 'severity', 'title', 'status', 'created_at'])
+          alertSummary(al, ['id', 'severity', 'title', 'status', 'created_at'])
         ),
         total_alerts: (ctx.alerts || []).length,
       };
@@ -335,9 +347,9 @@ const ALL_TOOLS: AnalystTool[] = [
     name: 'get_related_alerts',
     description:
       'Other recent alerts sharing the same rule, asset, or source IP as a given alert. Use to judge whether a detection is an isolated event or part of a burst/pattern.',
-    args: 'alertId(number, required), sinceHours?(1-168, default 24), limit?(1-20, default 10)',
+    args: 'alertId(number or reference like "ALR-4821", required), sinceHours?(1-168, default 24), limit?(1-20, default 10)',
     run: async (a) => {
-      const alertId = clampInt(a.alertId, 1, Number.MAX_SAFE_INTEGER, 0);
+      const alertId = alertIdArg(a.alertId);
       if (!alertId) return { error: 'alertId is required' };
       const sinceHours = clampInt(a.sinceHours, 1, 168, 24);
       const limit = clampInt(a.limit, 1, 20, 10);
@@ -345,7 +357,7 @@ const ALL_TOOLS: AnalystTool[] = [
       return {
         total: rows.length,
         related: rows.map((al: any) => ({
-          ...pick(al, ['id', 'severity', 'status', 'title', 'created_at']),
+          ...alertSummary(al, ['id', 'severity', 'status', 'title', 'created_at']),
           shares: al.shares,
         })),
       };
@@ -355,14 +367,17 @@ const ALL_TOOLS: AnalystTool[] = [
     name: 'get_alert_history_stats',
     description:
       'How this rule/title has historically been dispositioned (new/investigating/closed/false_positive counts). The single best signal for whether a detection is routine noise.',
-    args: 'alertId(number, required), days?(1-90, default 30)',
+    args: 'alertId(number or reference like "ALR-4821", required), days?(1-90, default 30)',
     run: async (a) => {
-      const alertId = clampInt(a.alertId, 1, Number.MAX_SAFE_INTEGER, 0);
+      const alertId = alertIdArg(a.alertId);
       if (!alertId) return { error: 'alertId is required' };
       const days = clampInt(a.days, 1, 90, 30);
       const al: any = await AlertModel.findById(alertId);
-      if (!al) return { error: `alert ${alertId} not found` };
-      return AlertModel.getDispositionHistory({ title: al.title, ruleId: al.rule_id, days });
+      if (!al) return { error: `alert ${formatAlertRef(alertId)} not found` };
+      return {
+        ref: formatAlertRef(al.id),
+        ...(await AlertModel.getDispositionHistory({ title: al.title, ruleId: al.rule_id, days })),
+      };
     },
   },
 ];

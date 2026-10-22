@@ -1,3 +1,4 @@
+import { formatAlertRef, parseAlertRef } from '../services/alerts/alertRef';
 import { Request, Response, NextFunction } from 'express';
 import { ApiError } from './errorHandler';
 import { AuditService, toInet } from '../services/audit/auditService';
@@ -71,10 +72,13 @@ export const requireScanPermission = (requiredRole: UserRole, resourceType?: str
       if (!hasRequiredRole(req.user.role, requiredRole)) {
         // Log unauthorized access attempt
         const source = auditSource(req);
+        // A refused alert change names the alert by its ALR-#### reference.
+        const alertId = resourceType === 'alert' ? parseAlertRef(req.params?.id) : null;
         await AuditService.log({
           userId: req.user.id,
           action: 'access.denied',
           resourceType: resourceType || 'scan',
+          ...(alertId ? { resourceId: alertId } : {}),
           ipAddress: source.ipAddress,
           userAgent: req.headers['user-agent'] || 'unknown',
           responseStatus: 403,
@@ -83,6 +87,7 @@ export const requireScanPermission = (requiredRole: UserRole, resourceType?: str
             userRole: req.user.role,
             path: req.path,
             method: req.method,
+            ...(alertId ? { alertRef: formatAlertRef(alertId) } : {}),
             ...(source.peerAddress ? { peerAddress: source.peerAddress } : {}),
           },
         });

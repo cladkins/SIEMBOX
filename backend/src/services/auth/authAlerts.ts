@@ -138,6 +138,7 @@ async function insert(alert: AuthAlert, eventId: string): Promise<boolean> {
   if (alertId === null) return false;
   logger.warn('Sign-in alert raised', { trigger: alert.trigger, severity: alert.severity, alertId });
   void NotificationService.notifyAlert({
+    id: alertId,
     severity: alert.severity,
     ruleName: RULE_NAME,
     title: alert.title,

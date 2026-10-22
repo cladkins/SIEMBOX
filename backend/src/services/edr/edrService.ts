@@ -312,6 +312,7 @@ export async function ingestEvents(agentId: string, events: any[]): Promise<numb
         // enabled + min-severity preferences, so endpoint detections no longer
         // silently skip Email/Slack/ntfy.
         void NotificationService.notifyAlert({
+          id: res.rows[0].id,
           severity,
           ruleName: (e.rule_name || e.source || 'Endpoint').toString(),
           title,

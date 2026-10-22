@@ -194,6 +194,9 @@ const INVENTORY: Row[] = [
   // it done or reopen it
   ['GET', '/api/settings/onboarding', ANY_ROLE],
   ['PUT', '/api/settings/onboarding', ADMIN_ONLY],
+  // Public URL for links in notifications (Settings -> System)
+  ['GET', '/api/settings/public-url', ADMIN_ONLY],
+  ['PUT', '/api/settings/public-url', ADMIN_ONLY],
 
   // routes/shippers.ts: Shippers page, then the shipper agent's own endpoints
   ['GET', '/api/shippers', ANY_ROLE],

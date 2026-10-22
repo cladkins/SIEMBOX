@@ -77,6 +77,14 @@ export interface CreateAlertParams {
   attack_techniques?: string[];
 }
 
+/** Per-rule alert counts for the Detection Rules page (see getRuleTriggerStats). */
+export interface RuleTriggerStats {
+  total: number;
+  last_24h: number;
+  last_7d: number;
+  last_triggered_at: string | null;
+}
+
 export class AlertModel {
   // Both findAll and findAllGrouped join alert_triage — alert_id is its PRIMARY
   // KEY (migration 028), so the join is always 1:1 and never multiplies rows.
@@ -438,6 +446,35 @@ export class AlertModel {
   static async delete(id: number): Promise<boolean> {
     const result = await query('DELETE FROM alerts WHERE id = $1', [id]);
     return (result.rowCount || 0) > 0;
+  }
+
+  /**
+   * How often each detection rule has fired, from the alerts still stored
+   * (retention prunes older ones): total, last 24 h, last 7 days and the
+   * newest alert. One grouped scan over idx_alerts_rule_id; rules that never
+   * fired are absent.
+   */
+  static async getRuleTriggerStats(): Promise<Map<number, RuleTriggerStats>> {
+    const result = await query(
+      `SELECT rule_id,
+              COUNT(*)::bigint AS total,
+              COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours')::bigint AS last_24h,
+              COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days')::bigint AS last_7d,
+              MAX(created_at) AS last_triggered_at
+         FROM alerts
+        WHERE rule_id IS NOT NULL
+        GROUP BY rule_id`
+    );
+    const stats = new Map<number, RuleTriggerStats>();
+    for (const r of result.rows) {
+      stats.set(Number(r.rule_id), {
+        total: Number(r.total),
+        last_24h: Number(r.last_24h),
+        last_7d: Number(r.last_7d),
+        last_triggered_at: r.last_triggered_at ? new Date(r.last_triggered_at).toISOString() : null,
+      });
+    }
+    return stats;
   }
 
   static async getStatistics(): Promise<any> {

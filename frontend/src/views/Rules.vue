@@ -153,6 +153,30 @@
             />
           </template>
         </el-table-column>
+        <el-table-column label="Triggered" width="150" sortable :sort-method="sortByTriggers">
+          <template #header>
+            Triggered
+            <el-tooltip
+              content="Alerts this rule raised, from the alerts still stored (data retention removes older ones). Click a count to see them. Updated within a minute."
+              placement="top"
+            >
+              <el-icon class="triggered-help"><InfoFilled /></el-icon>
+            </el-tooltip>
+          </template>
+          <template #default="{ row }">
+            <el-tooltip
+              v-if="row.triggers?.total"
+              :content="`Last triggered ${formatWhen(row.triggers.last_triggered_at)} (${formatRelative(row.triggers.last_triggered_at)})`"
+              placement="top"
+            >
+              <router-link :to="{ path: '/alerts', query: { ruleId: String(row.id) } }" class="trigger-count" data-testid="rule-trigger-count">
+                <span class="trigger-total">{{ row.triggers.total.toLocaleString() }}</span>
+                <span class="trigger-recent">24h {{ row.triggers.last_24h.toLocaleString() }} · 7d {{ row.triggers.last_7d.toLocaleString() }}</span>
+              </router-link>
+            </el-tooltip>
+            <span v-else class="trigger-never">Never</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="tags" label="Tags" min-width="220">
           <template #default="{ row }">
             <TechniqueChips :tags="row.tags" class="row-techniques" />
@@ -597,6 +621,7 @@ import TechniqueChips from '@/components/attack/TechniqueChips.vue';
 import TechniqueSelect from '@/components/attack/TechniqueSelect.vue';
 import TacticSelect from '@/components/attack/TacticSelect.vue';
 import { useAttackIndex } from '@/composables/useAttackIndex';
+import { formatRelative, formatWhen } from '@/utils/exposure';
 import {
   addTechniqueTag,
   gapsFilled,
@@ -619,6 +644,11 @@ const rules = ref<any[]>([]);
 
 // ATT&CK: technique names and tactics for the chips and filters, and the
 // coverage (loaded with the catalog) for its "Fills a gap" badge.
+/** Detection Rules → Triggered: most alerts first when sorted descending. */
+function sortByTriggers(a: any, b: any): number {
+  return (a.triggers?.total ?? 0) - (b.triggers?.total ?? 0);
+}
+
 const route = useRoute();
 const attackIndex = useAttackIndex();
 const queryTechnique =
@@ -1515,5 +1545,27 @@ async function runSigmaImport() {
 .sigma-cond-count {
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+.trigger-count {
+  display: inline-flex;
+  flex-direction: column;
+  line-height: 1.25;
+  text-decoration: none;
+  color: var(--el-color-primary);
+}
+.trigger-total {
+  font-weight: 600;
+}
+.trigger-recent {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.trigger-never {
+  color: var(--el-text-color-placeholder);
+}
+.triggered-help {
+  vertical-align: middle;
+  margin-left: 2px;
+  cursor: help;
 }
 </style>

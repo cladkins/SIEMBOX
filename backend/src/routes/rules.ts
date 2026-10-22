@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { DetectionRuleModel } from '../models/DetectionRule';
+import { AlertModel, type RuleTriggerStats } from '../models/Alert';
 import * as yaml from '../utils/yaml';
 import { ApiError } from '../middleware/errorHandler';
 import { RulesEngine } from '../services/rules/rulesEngine';
@@ -95,12 +96,28 @@ async function batchGate(rule: unknown): Promise<BatchGate> {
 }
 
 // Get all rules
+// Per-rule alert counts for the list, cached briefly: the Rules page polls
+// and re-fetches after every edit, and on a large alerts table the grouped
+// count is the expensive part of this response.
+const TRIGGER_STATS_TTL_MS = 60_000;
+let triggerStatsCache: { at: number; stats: Map<number, RuleTriggerStats> } | null = null;
+
+async function ruleTriggerStats(): Promise<Map<number, RuleTriggerStats>> {
+  if (triggerStatsCache && Date.now() - triggerStatsCache.at < TRIGGER_STATS_TTL_MS) return triggerStatsCache.stats;
+  const stats = await AlertModel.getRuleTriggerStats();
+  triggerStatsCache = { at: Date.now(), stats };
+  return stats;
+}
+
+const NEVER_TRIGGERED: RuleTriggerStats = { total: 0, last_24h: 0, last_7d: 0, last_triggered_at: null };
+
 router.get('/', async (_req: Request, res: Response) => {
   try {
-    const rules = await DetectionRuleModel.findAll();
+    const [rules, stats] = await Promise.all([DetectionRuleModel.findAll(), ruleTriggerStats()]);
     // `regex_safety` (cached verdicts only): status 'vulnerable' is the
-    // Detection Rules page's "Unsafe regex" tag.
-    res.json(rules.map(withRuleRegexSafety));
+    // Detection Rules page's "Unsafe regex" tag. `triggers`: how often the rule
+    // fired, from the alerts still stored (up to a minute old).
+    res.json(rules.map((r) => ({ ...withRuleRegexSafety(r), triggers: stats.get(r.id) ?? NEVER_TRIGGERED })));
   } catch {
     throw new ApiError(500, 'Failed to fetch rules');
   }

@@ -355,6 +355,7 @@ const INVENTORY: Row[] = [
   // routes/packs.ts: Content Packs page
   ['GET', '/api/packs', ANY_ROLE],
   ['POST', '/api/packs/:id/install', ADMIN_ONLY],
+  ['POST', '/api/packs/:id/install-new', ADMIN_ONLY],
 
   // routes/logDiscovery.ts: Log Discovery page. Scope, manual sources and poll
   // credentials are admin-only.

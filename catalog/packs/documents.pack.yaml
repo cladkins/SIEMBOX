@@ -1,0 +1,64 @@
+schema: siembox.pack/v1
+id: documents
+name: Document & File Sharing
+description: Nextcloud access parsing plus the data-exfiltration detections (bulk download / unusual access).
+icon: Files
+# Bump whenever parsers, detections or sigma change (installs show the difference as "What's new").
+version: 2
+parsers:
+  - nextcloud-access
+detections:
+  categories: [data-exfiltration]
+sigma:
+  # Web attack strings in requests to the Nextcloud web app.
+  - id: 65354b83-a2ea-4ea6-8414-3ab38be0d409
+    title: Cross Site Scripting Strings
+  - id: 5513deaf-f49a-46c2-a6c8-3f111b5cb453
+    title: SQL Injection Strings In URI
+  - id: ada3bc4f-f0fd-42b9-ba91-e105e8af7342
+    title: Server Side Template Injection Strings
+  - id: 583aa0a2-30b1-4d62-8bf3-ab73689efe6c
+    title: Java Payload Strings
+  - id: 412d55bc-7737-4d25-9542-5b396867ce55
+    title: JNDIExploit Pattern
+  - id: 953d460b-f810-420a-97a2-cfca4c98e602
+    title: Source Code Enumeration Detection by Keyword
+  - id: 7ff9db12-1b94-4a79-ba68-a2402c5d6729
+    title: Windows Webshell Strings
+setup:
+  - title: Nextcloud's log file
+    text: |
+      Nextcloud writes `nextcloud.log` (JSON lines) to its data directory, or to
+      the path in `logfile` in `config/config.php`. Keep `loglevel` at `2`
+      (warning) or lower so failed logins are written.
+    code: |
+      // config/config.php
+      'log_type' => 'file',
+      'logfile' => '/var/www/html/data/nextcloud.log',
+      'loglevel' => 2,
+    code_language: text
+  - title: Ship it
+    text: |
+      Mount the data directory (or just the log file) into a SIEMBox log shipper
+      and add a **File** source for it.
+    code: |
+      services:
+        siembox-shipper:
+          volumes:
+            - /srv/nextcloud/data/nextcloud.log:/logs/nextcloud/nextcloud.log:ro
+      # Shipper source (File): /logs/nextcloud/nextcloud.log
+    code_language: yaml
+  - title: Check that events arrive
+    text: |
+      Sign in once with a wrong password. On **Logs** the event shows with the
+      `nextcloud-access` parser, the user name and the remote IP.
+  - title: Paperless-ngx
+    text: |
+      Paperless-ngx does not have a parser yet; request or contribute one in the
+      [catalog repository](https://github.com/cladkins/siembox-catalog).
+  - title: About the SigmaHQ rules
+    text: |
+      Nextcloud is usually exposed to the internet, so the pack adds SigmaHQ's
+      web attack-string rules for requests that reach it. They install through
+      the SigmaHQ library, enabled; refresh the library on **Detection Rules >
+      SigmaHQ** if the pack shows them as pending.

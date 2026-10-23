@@ -109,8 +109,12 @@ export interface SigmaInstallResult {
   warnings: string[];
 }
 
-/** Add a library rule (every part, disabled). 409 when it is already added. */
-export async function installSigmaRule(sigmaId: string): Promise<SigmaInstallResult> {
+/**
+ * Add a library rule (every part). 409 when it is already added. Disabled
+ * unless `enabled` (a Content Pack install: the pack is the reviewed choice,
+ * and pack installs create their catalog detections enabled too).
+ */
+export async function installSigmaRule(sigmaId: string, opts: { enabled?: boolean } = {}): Promise<SigmaInstallResult> {
   const { entry, tag } = await libraryEntry(sigmaId);
   const existing = await DetectionRuleModel.findBySigmaId(sigmaId);
   if (existing.length > 0) {
@@ -126,7 +130,7 @@ export async function installSigmaRule(sigmaId: string): Promise<SigmaInstallRes
       created.push(
         await DetectionRuleModel.create({
           name: await freeName(entry.title, i, n, new Set()),
-          enabled: false, // added for review, like the Sigma import
+          enabled: opts.enabled === true, // by default added for review, like the Sigma import
           ...partFields(part),
           sigma_id: entry.sigma_id,
           sigma_release: tag,

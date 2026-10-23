@@ -1,0 +1,87 @@
+schema: siembox.pack/v1
+id: infrastructure
+name: Linux & Infrastructure
+description: "Host-level coverage: sudo, SSH, fail2ban, and generic syslog with the infrastructure detections."
+icon: Monitor
+# Bump whenever parsers, detections or sigma change (installs show the difference as "What's new").
+version: 2
+parsers:
+  - linux-sudo
+  - ssh-authentication
+  - generic-syslog
+  - fail2ban
+detections:
+  categories: [infrastructure]
+sigma:
+  # SigmaHQ linux keyword rules: they search the log message of sudo, sshd,
+  # cron and other syslog lines.
+  - id: 18b042f0-2ecd-4b6e-9f8d-aa7a7e7de781
+    title: Buffer Overflow Attempts
+  - id: 7e3c4651-c347-40c4-b1d4-d48590fdf684
+    title: Code Injection by ld.so Preload
+  - id: e09eb557-96d2-4de9-ba2d-30f712a5afd3
+    title: Commands to Clear or Remove the Syslog - Builtin
+  - id: 49f5dfc1-f92e-4d34-96fa-feba3f6acf36
+    title: Disabling Security Tools - Builtin
+  - id: af202fd3-7bff-4212-a25a-fb34606cfcbe
+    title: Modifying Crontab
+  - id: 0fadd880-6af3-4610-b1e5-008dc3a11b8a
+    title: Potential Suspicious BPF Activity - Linux
+  - id: 0ac15ec3-d24f-4246-aa2a-3077bb1cf90e
+    title: Privileged User Has Been Created
+  - id: c67e0c98-4d39-46ee-8f6b-437ebf6b950e
+    title: Shellshock Expression
+  - id: f64b6e9a-5d9d-48a5-8289-e1dd2b3876e1
+    title: Suspicious Log Entries
+  - id: c8e35e96-19ce-4f16-aeb6-fd5588dc5365
+    title: Suspicious Named Error
+  - id: e76b413a-83d0-4b94-8e4c-85db4a5b8bdc
+    title: Suspicious OpenSSH Daemon Error
+  - id: 738d9bcf-6999-4fdb-b4ac-3033037db8ab
+    title: Suspicious Reverse Shell Command Line
+  - id: 6cc5fceb-9a71-4c23-aeeb-963abe0b279c
+    title: Suspicious Use of /dev/tcp
+  - id: c67fc22a-0be5-4b4f-aad5-2b32c4b69523
+    title: Symlink Etc Passwd
+setup:
+  - title: Ship each host's system logs
+    text: |
+      Run a SIEMBox log shipper on each Linux host. On systemd hosts mount the
+      journal and add a **Systemd Journal** source with the unit left blank (the
+      whole journal). On rsyslog hosts mount `/var/log` and click **Add System
+      Log Files** on the shipper: it adds `/var/log/syslog`, `/var/log/messages`
+      and `/var/log/auth.log`, skipping the ones a host does not have.
+    code: |
+      services:
+        siembox-shipper:
+          volumes:
+            - /var/log/journal:/var/log/journal:ro   # journald hosts
+            - /var/log:/var/log:ro                   # rsyslog hosts
+    code_language: yaml
+  - title: Or forward syslog directly
+    text: |
+      A host (or a network appliance) can send syslog straight to SIEMBox on port
+      514 UDP/TCP instead. With rsyslog, one line in a drop-in file does it;
+      restart rsyslog afterwards.
+    code: |
+      # /etc/rsyslog.d/90-siembox.conf  (@@ = TCP, @ = UDP)
+      *.* @@siembox-host:514
+    code_language: conf
+  - title: fail2ban
+    text: |
+      fail2ban logs bans to `/var/log/fail2ban.log` by default. Add a **File**
+      source for it (it is inside the `/var/log` mount above).
+  - title: Check that events arrive
+    text: |
+      Run `sudo true` on a host. On **Logs** the line shows with the
+      `linux-sudo` parser, with the user and command. Lines no specific parser
+      knows land on `generic-syslog`, the catch-all, so nothing is dropped before
+      you add a parser for them.
+  - title: About the SigmaHQ rules
+    text: |
+      The pack adds SigmaHQ's Linux keyword rules (reverse shells, `/dev/tcp`,
+      log clearing, `ld.so` preload, crontab changes, new privileged users and
+      others). They search the message of each log line, so they need the
+      host's syslog or journal. They install through the SigmaHQ library,
+      enabled; refresh the library on **Detection Rules > SigmaHQ** if the pack
+      shows them as pending.

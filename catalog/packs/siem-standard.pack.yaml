@@ -1,0 +1,36 @@
+schema: siembox.pack/v1
+id: siem-standard
+name: CEF / Standard SIEM
+description: CEF and JSON ingestion for appliances and apps that already emit structured security events.
+icon: DataLine
+# Bump whenever parsers, detections or sigma change (installs show the difference as "What's new").
+version: 1
+parsers:
+  - cef-standard
+  - cef-syslog
+  - json-parser
+detections:
+  categories: [application]
+setup:
+  - title: CEF appliances
+    text: |
+      Firewalls, WAFs and security tools that speak Common Event Format can send
+      it to SIEMBox over syslog: set the appliance's syslog server to your
+      SIEMBox host, port 514 (UDP or TCP), format CEF. CEF with or without a
+      syslog header parses.
+    code: |
+      Server:  <siembox-host>
+      Port:    514
+      Format:  CEF
+    code_language: text
+  - title: Apps that log JSON
+    text: |
+      For an application that writes one JSON object per line, ship its log file
+      (a **File** source) or its container's stdout (a **Docker** source) with a
+      SIEMBox log shipper. Fields such as `source_ip`, `user` and `message` map to
+      SIEMBox's canonical fields.
+  - title: Check that events arrive
+    text: |
+      Trigger a test event on the appliance, or write a JSON line to the app's
+      log. On **Logs** it shows with the `cef-syslog`, `cef-standard` or
+      `json-parser` parser.

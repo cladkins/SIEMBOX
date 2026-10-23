@@ -1,0 +1,48 @@
+schema: siembox.pack/v1
+id: media
+name: Media Servers
+description: Plex and Jellyfin access parsing so playback, login, and admin activity become searchable events.
+icon: VideoPlay
+# Bump whenever parsers, detections or sigma change (installs show the difference as "What's new").
+version: 1
+parsers:
+  - plex
+  - jellyfin
+detections:
+  categories: []
+setup:
+  - title: Plex
+    text: |
+      Plex writes `Plex Media Server.log` inside its data directory, under
+      `Library/Application Support/Plex Media Server/Logs/`. Mount that directory
+      into a SIEMBox log shipper and add a **File** source for the log. Docker
+      images keep it under the volume you mapped to `/config`.
+    code: |
+      services:
+        siembox-shipper:
+          volumes:
+            - /srv/plex/config/Library/Application Support/Plex Media Server/Logs:/logs/plex:ro
+      # Shipper source (File): /logs/plex/Plex Media Server.log
+    code_language: yaml
+  - title: Jellyfin
+    text: |
+      Jellyfin writes daily `log_*.log` files in its log directory (`/config/log`
+      in the official image). Add a **File** source with a wildcard so each new
+      day's file is picked up.
+    code: |
+      services:
+        siembox-shipper:
+          volumes:
+            - /srv/jellyfin/config/log:/logs/jellyfin:ro
+      # Shipper source (File): /logs/jellyfin/log_*.log
+    code_language: yaml
+  - title: Check that events arrive
+    text: |
+      Start a playback and sign in once with a wrong password. On **Logs**, the
+      events show with the `plex` or `jellyfin` parser: playback starts and
+      denied authentications, with the client IP.
+  - title: Detections
+    text: |
+      No media-specific detections ship yet. This pack gives you parsed,
+      searchable media events to build rules on; the authentication rules in
+      **Auth & Identity** do not cover media servers.

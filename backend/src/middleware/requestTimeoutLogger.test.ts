@@ -9,8 +9,8 @@ import { EventEmitter } from 'node:events';
 import { requestTimeoutLogger } from './requestTimeoutLogger';
 import { ErrorLogService } from '../services/errors/errorLogService';
 
-function makeReqRes(path: string, writableEnded: boolean) {
-  const req: any = { path, method: 'GET', user: { id: 1 } };
+function makeReqRes(path: string, writableEnded: boolean, originalUrl = path) {
+  const req: any = { path, originalUrl, method: 'GET', user: { id: 1 } };
   const res: any = new EventEmitter();
   res.writableEnded = writableEnded;
   return { req, res };
@@ -72,6 +72,23 @@ test('ignores non-API paths entirely (next called, no close handler)', () => {
     res.emit('close');
     assert.equal(nexted, true);
     assert.equal(calls.length, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('logs the full path even after a mounted router rewrote req.path', () => {
+  const { calls, restore } = stubLogger();
+  try {
+    // app.use('/api/vulnerabilities', router): inside the router req.path is "/".
+    const { req, res } = makeReqRes('/api/vulnerabilities/', false, '/api/vulnerabilities/?limit=50&offset=0');
+    requestTimeoutLogger(0)(req, res, () => {});
+    req.path = '/';
+    res.emit('close');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].context.endpoint, '/api/vulnerabilities/', 'no query string, not the router-relative "/"');
+    assert.match(String(calls[0].error.message), /GET \/api\/vulnerabilities\/ responded/);
+    assert.equal(calls[0].context.dedupeKey, 'client-timeout:GET /api/vulnerabilities/');
   } finally {
     restore();
   }

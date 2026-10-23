@@ -778,6 +778,30 @@ restart.
 
 ---
 
+### Issue: "Operation timed out" for POST /api/edr/vulnerabilities
+
+**Symptoms:** Admin dashboard → Recent Errors shows `Request timeout: client
+closed the connection after ~30000ms before POST /api/edr/vulnerabilities
+responded`, repeating every few minutes; other pages may time out at the same
+time.
+
+**Cause:** an endpoint agent uploads its vulnerability scan (one row per
+package × match, often thousands) and gives up after 30 s. Before the release
+that batched this upload, the backend stored each finding with its own
+queries, which on a busy host took longer than that; the agent then re-sent the
+whole report while the backend was still working through the last one.
+
+**Fix:** update the images (`docker compose -f compose.prod.yaml pull && docker
+compose -f compose.prod.yaml up -d`). The backend now stores a report in batches
+of 500 (a 3,000-finding report takes well under a second on an idle database).
+The backend log line `[EDR] vuln ingest agent=… received=… unique=…` shows each
+upload. If timeouts continue, check database load (`docker stats`) and the
+**Slow Query Response** section below.
+
+Timeout entries in Recent Errors name the full API path (for example
+`GET /api/vulnerabilities/`); entries logged by older releases show only the
+part after the router's mount point (`GET /`, `POST /vulnerabilities`).
+
 ### Issue: An Endpoint Update Stays Pending or Fails
 
 **Symptoms:**

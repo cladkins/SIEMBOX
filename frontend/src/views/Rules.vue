@@ -84,6 +84,9 @@
             <el-button size="small" @click="openCatalog">
               <el-icon><Shop /></el-icon> Browse Catalog
             </el-button>
+            <el-button size="small" data-testid="open-sigma-library" @click="sigmaLibraryVisible = true">
+              <el-icon><Collection /></el-icon> SigmaHQ
+            </el-button>
             <el-button size="small" tag="a" href="https://github.com/cladkins/siembox-catalog" target="_blank" rel="noopener">
               Catalog repo ↗
             </el-button>
@@ -110,6 +113,25 @@
         <el-table-column prop="name" label="Name" min-width="250">
           <template #default="{ row }">
             {{ row.name }}<UnsafeRegexTag :safety="row.regex_safety" />
+            <span v-if="row.sigma" class="sigma-provenance">
+              <el-tooltip
+                :content="`Added from SigmaHQ (rule ${row.sigma.sigma_id}${row.sigma.author ? ` by ${row.sigma.author}` : ''}, release ${row.sigma.release}), Detection Rule License 1.1`"
+                placement="top"
+              >
+                <a v-if="row.sigma.url" :href="row.sigma.url" target="_blank" rel="noopener" data-testid="sigma-chip">
+                  <el-tag size="small" type="primary" effect="plain">SigmaHQ ↗</el-tag>
+                </a>
+                <el-tag v-else size="small" type="primary" effect="plain" data-testid="sigma-chip">SigmaHQ</el-tag>
+              </el-tooltip>
+              <el-tag
+                v-if="provenanceBadge(row.sigma)"
+                size="small"
+                :type="provenanceBadge(row.sigma)!.type"
+                class="sigma-badge"
+                data-testid="sigma-badge"
+                @click="sigmaLibraryVisible = true"
+              >{{ provenanceBadge(row.sigma)!.label }}</el-tag>
+            </span>
           </template>
         </el-table-column>
         <el-table-column prop="severity" label="Severity" width="120" sortable>
@@ -322,6 +344,9 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- SigmaHQ library: compatible community rules, one-click add (disabled) and update -->
+    <SigmaLibraryDialog v-model="sigmaLibraryVisible" :can-edit="canEdit" @changed="fetchRules" />
 
     <!-- Detection Catalog Dialog -->
     <el-dialog v-model="catalogDialogVisible" title="Detection Catalog" width="900px">
@@ -611,7 +636,9 @@ import { ref, onMounted, reactive, computed } from 'vue';
 import { api } from '@/services/api';
 import { useAuthStore } from '@/stores/auth';
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus';
-import { Plus, CircleCheck, Shop, Refresh, MagicStick, Download, Upload, Warning, InfoFilled } from '@element-plus/icons-vue';
+import { Plus, CircleCheck, Shop, Refresh, MagicStick, Download, Upload, Warning, InfoFilled, Collection } from '@element-plus/icons-vue';
+import SigmaLibraryDialog from '@/components/rules/SigmaLibraryDialog.vue';
+import { provenanceBadge } from '@/utils/sigmaLibrary';
 import yaml from 'js-yaml';
 import RegexProblemAlert from '@/components/RegexProblemAlert.vue';
 import UnsafeRegexTag from '@/components/UnsafeRegexTag.vue';
@@ -641,6 +668,7 @@ const canEdit = computed(() => authStore.canAnalyst);
 const isAdmin = computed(() => authStore.isAdmin);
 
 const rules = ref<any[]>([]);
+const sigmaLibraryVisible = ref(false);
 
 // ATT&CK: technique names and tactics for the chips and filters, and the
 // coverage (loaded with the catalog) for its "Fills a gap" badge.
@@ -1415,6 +1443,17 @@ async function runSigmaImport() {
 </script>
 
 <style scoped>
+.sigma-provenance {
+  margin-left: 6px;
+  white-space: nowrap;
+}
+.sigma-provenance a {
+  text-decoration: none;
+}
+.sigma-badge {
+  margin-left: 4px;
+  cursor: pointer;
+}
 .recommendations-card {
   margin-bottom: 20px;
 }

@@ -1393,6 +1393,62 @@ satisfied them. The reason names the first condition nothing satisfied:
    applicable (`PUT /api/attack/exclusions/:techniqueId`); it then leaves the
    percentages. See [ATT&CK coverage](../reference/RULES.md#attck-coverage).
 
+### Issue: The SigmaHQ library is empty, or says SigmaHQ is unreachable
+
+**Symptoms:** Detection Rules → **SigmaHQ** says *The SigmaHQ library is
+empty*, or *SigmaHQ is unreachable (…). Showing the cached release …*;
+**Refresh** answers `502 SIGMAHQ_UNREACHABLE`.
+
+**Cause:** The library is filled by its first refresh: a few minutes after the
+backend starts (then daily), or **Refresh** (analyst and up). The refresh needs
+outbound HTTPS to `github.com` and `release-assets.githubusercontent.com` (older
+releases: `objects.githubusercontent.com`); see
+[DEPLOYMENT.md](../../DEPLOYMENT.md#sigmahq-library-outbound-hosts). The message
+in brackets is the actual failure: a DNS or connection error or a timeout (no
+egress, a proxy), `HTTP 404`/`no asset …` (`SIGMAHQ_RELEASE_ASSET` names an
+asset the release does not have), or a refused redirect (something between you
+and GitHub rewrote the download to another host). `SIGMAHQ_AUTO_REFRESH=false`
+stops the daily check, so an install with it set stays empty until someone
+clicks **Refresh**.
+
+**Solution:**
+1. From the backend container, check egress:
+   `curl -sSI https://github.com/SigmaHQ/sigma/releases/latest/download/sigma_core%2B.zip`
+   should answer `302` with a `location` under `/releases/download/<tag>/`.
+2. Allow the two hosts above in your firewall or proxy, then click **Refresh**.
+3. Air-gapped: nothing else is needed; the page keeps showing the last release
+   it stored (a fresh install has none). Rules you already added keep working.
+   The backend log has one `[sigma] SigmaHQ library refresh failed` warning per
+   failed attempt.
+
+### Issue: A SigmaHQ rule shows "No matching logs yet" (or the Compatible list is empty)
+
+**Symptoms:** The SigmaHQ library's *Your logs* column says **No matching logs
+yet**, or **Compatible (0)**.
+
+**Cause:** Compatible means a parser's logs from the last 24 hours carry every
+field the rule needs **and** that parser fits the rule's Sigma log source (see
+[RULES.md](../reference/RULES.md#sigmahq-library)). The tooltip says which part
+is missing:
+
+- **No parser of yours emits "image"** (or `commandline`, `eventid`,
+  `targetobject` …): the rule is for a source you do not parse (most of SigmaHQ
+  is Windows Sysmon and Security events). It needs that source and a parser
+  that produces those field names.
+- **Your parsers have the fields, but none is a *product github* (or
+  *category webserver* …) source**: the fields exist, but only on parsers whose
+  name and `service` do not fit the rule's log source. A rule keyed on `action`
+  for GitHub audit logs is not compatible with a firewall that also has an
+  `action` field. If your parser is that source under another name, the rule
+  still works once added; add it from **All convertible**.
+- **No recent logs to compare with**: nothing was parsed in the last 24 hours.
+
+**Solution:** Install the parser for the source (Parsers → Browse Catalog), send
+its logs, then reopen the library (compatibility is cached for 5 minutes). Any
+convertible rule can be added from **All convertible**, compatible or not.
+A rule listed as **Cannot add** was refused by the regex safety gate or does not
+convert faithfully; the tooltip has the reason.
+
 ---
 
 ## Database Issues

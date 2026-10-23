@@ -17,3 +17,12 @@ DB-IP IP-to-Country Lite (downloaded at runtime, not bundled)
   IP Geolocation by DB-IP (https://db-ip.com), licensed under Creative Commons
   Attribution 4.0 International (https://creativecommons.org/licenses/by/4.0/).
   See docs/geoip.md.
+
+SigmaHQ detection rules (downloaded at runtime, not bundled)
+  Source:  https://github.com/SigmaHQ/sigma (release asset sigma_core+.zip by
+           default; see docs/reference/RULES.md, "SigmaHQ Library")
+  The rules are the work of their authors (named in each rule) and the SigmaHQ
+  project, licensed under the Detection Rule License (DRL) 1.1:
+  https://github.com/SigmaHQ/Detection-Rule-License
+  A rule added from the SigmaHQ library keeps its attribution: its description
+  names the Sigma rule id, its authors, the release and a link to the rule file.

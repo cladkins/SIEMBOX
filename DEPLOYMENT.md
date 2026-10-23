@@ -697,6 +697,26 @@ an optional key can be saved under Settings → Digital Risk (encrypted with
 report errors rather than "no findings"; see
 [TROUBLESHOOTING.md](docs/operations/TROUBLESHOOTING.md#issue-digital-risk-domain-monitoring-shows-errors-or-never-finds-anything).
 
+### SigmaHQ library (outbound hosts)
+
+Detection Rules → **SigmaHQ** downloads the SigmaHQ rule release from GitHub:
+`github.com` (the `releases/latest/download/<asset>` link, which names the
+release) and GitHub's release asset storage, `release-assets.githubusercontent.com`
+(older releases redirect to `objects.githubusercontent.com`). The backend
+follows those redirects itself and refuses any other host. It checks once a day
+(one small request; the ~2.5 MB archive is downloaded only for a new release)
+and when an analyst clicks **Refresh**; the parsed library is cached in the
+database, so restarts fetch nothing.
+
+| Variable | Default | |
+|---|---|---|
+| `SIGMAHQ_RELEASE_ASSET` | `sigma_core+.zip` | `sigma_core.zip`, `sigma_core+.zip`, `sigma_core++.zip`, `sigma_all_rules.zip` or `sigma_emerging_threats_addon.zip` (see RULES.md, "SigmaHQ Library") |
+| `SIGMAHQ_AUTO_REFRESH` | `true` | `false` turns the daily check off (air-gapped installs); **Refresh** still works |
+
+Without egress the library page says SigmaHQ is unreachable and keeps the last
+release it stored (a fresh install has none); see
+[TROUBLESHOOTING.md](docs/operations/TROUBLESHOOTING.md#issue-the-sigmahq-library-is-empty-or-says-sigmahq-is-unreachable).
+
 ### Reputation providers (bring your own key)
 
 For richer per-IP reputation you can plug in keyed providers — **AbuseIPDB** and

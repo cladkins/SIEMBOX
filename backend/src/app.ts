@@ -35,6 +35,7 @@ import packsRoutes from './routes/packs';
 import logDiscoveryRoutes from './routes/logDiscovery';
 import exposureRoutes from './routes/exposure';
 import graphRoutes from './routes/graph';
+import sigmaRoutes from './routes/sigma';
 import displayRoutes from './routes/display';
 import displayLinksRoutes from './routes/displayLinks';
 import bigDisplayRoutes from './routes/bigDisplay';
@@ -199,6 +200,7 @@ app.use('/api/edr', edrRoutes); // EDR endpoint agents (enroll + agent-auth inge
 app.use('/api/packs', authenticate, packsRoutes); // Content Packs (curated parser+detection bundles)
 app.use('/api/log-discovery', authenticate, logDiscoveryRoutes); // Log source discovery, fingerprinting + onboarding
 app.use('/api/exposure', authenticate, exposureRoutes); // Digital Risk: leaked credentials, watched domains, findings
+app.use('/api/sigma', authenticate, sigmaRoutes); // SigmaHQ library: browse, compatibility, one-click add
 app.use('/api/graph', authenticate, graphRoutes); // Context Graph: read-only pivots between alerts, IPs, assets, findings, rules
 
 // Big Display (docs/architecture/BIG-DISPLAY.md). A wall screen's read takes

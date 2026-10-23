@@ -52,6 +52,7 @@ Detection rules in SIEMBox are organized by severity to help you prioritize resp
 - [MEDIUM Severity Rules](#medium-severity-rules)
 - [LOW Severity Rules](#low-severity-rules)
 - [Rule Management](#rule-management)
+  - [SigmaHQ Library](#sigmahq-library)
   - [Regex Safety](#regex-safety)
   - [MITRE ATT&CK Tagging](#mitre-attck-tagging)
   - [ATT&CK Coverage](#attck-coverage)
@@ -1102,6 +1103,87 @@ rules are created disabled for review. A SIEMBox rule is an AND-list plus
 Split rules keep the Sigma title as their alert title. A log that matches two
 alternatives raises an alert from each. Sigma field names often differ from your
 parser output, so the preview lists the fields each rule keys on.
+
+### SigmaHQ Library
+
+Detection Rules → **SigmaHQ** lists the rules of the latest
+[SigmaHQ](https://github.com/SigmaHQ/sigma) release that SIEMBox can run, the
+ones your logs can feed first, and adds any of them with one click. It uses the
+same converter as **Import Sigma** (above), so OR and NOT convert the same way.
+
+**Where the rules come from.** SIEMBox downloads one release asset,
+`sigma_core+.zip` by default: SigmaHQ's stable set (status `stable` or `test`,
+level medium, high or critical; about 2,600 rules, 2.5 MB). Set
+`SIGMAHQ_RELEASE_ASSET` to `sigma_core.zip` (high and critical only),
+`sigma_core++.zip` (adds `experimental` rules) or `sigma_all_rules.zip` (adds
+the emerging-threats rules). Deprecated and unsupported rules are in none of
+them. The archive is unpacked in memory with size and entry caps, every file is
+read as YAML data with the backend's loader, and nothing in it is executed.
+
+**Which rules are listed.** A rule is *convertible* when every OR alternative
+converts and validates, and nothing of its detection had to be dropped: a rule
+using a modifier SIEMBox skips (`cidr`, `base64`, …) would match more than the
+Sigma rule does, so it is listed under "not convertible" with the reason
+instead. On r2026-07-01, 2,568 of 2,642 `sigma_core+` rules are convertible.
+
+**How compatibility is decided.** A convertible rule is *compatible* when, for
+one of its parts, a parser's logs from the last 24 hours carry every field the
+part's conditions use, **and** that parser fits the rule's Sigma log source.
+Fields decide rather than a match, because most Sigma rules detect attacks you
+hope not to have in the last day of logs. The log source check exists because a
+SIEMBox rule has no log source filter: a GitHub audit rule keyed on `action`
+would otherwise count as compatible with a firewall parser that also has an
+`action` field. A parser fits when its name, or the `service` its logs carry,
+contains a fragment for that log source (`category: webserver` → nginx, apache,
+caddy, traefik, haproxy, `*-access`; `product: linux` → linux, syslog, ssh,
+sudo, cron, audit, …; any other product → its own name, so `product: okta`
+fits a parser named `okta-*`). Everything else shows **No matching logs yet**
+with the first field none of your parsers emits (`image`, `commandline` for the
+Windows rules), or with the log source no parser fits. The same dry run as the
+catalog recommendations also counts how many sampled logs a rule would already
+fire on: a rule that matches routine traffic says so before you enable it.
+Compatibility is cached for 5 minutes.
+
+With every parser in the SIEMBox catalog and their test samples as the logs, 46
+of the 2,568 convertible rules are compatible: web and proxy rules (user agents,
+paths, injection strings) and Linux keyword rules (reverse shells, history
+tampering). The Windows, macOS and cloud rules wait for a parser that emits
+their fields.
+
+**Adding.** **Add** (analyst and up) creates the rule through the same path as
+the Sigma import (validate, ReDoS gate, save), **disabled**: you review it and
+click **Enable** in the library or switch it on in the list. A rule whose
+converted regex the [regex safety gate](#regex-safety) refuses is listed as
+"Cannot add" with the reason. A Sigma rule whose condition is an OR is added as
+`Title (part i of N)` rules. If another rule already has the name, the new one
+is named `Title (SigmaHQ)`; nothing that is not from SigmaHQ is ever
+overwritten. **Add all compatible** adds every compatible rule not added yet
+(disabled), skipping and reporting refused ones.
+
+**Updates.** Each added rule remembers its Sigma `id`, the release and the hash
+of the rule file. When a newer release changes the file, the library and the
+Rules list show **Update available**. **Update** replaces conditions, exclusions,
+alert, severity, tags and description, and keeps each rule's id (its alerts stay
+attached) and its enabled switch. If SigmaHQ changes the number of OR
+alternatives, parts are added (enabled when any part of the rule was) or removed;
+a removed part that has alerts is kept, disabled and renamed `(retired N)`, so no
+history is lost. A rule the release no longer contains is tagged **Deprecated in
+SigmaHQ** (SigmaHQ deprecates rules by moving them out of the release sets).
+
+**Refresh.** The cache (rules, conversions, release tag) is stored in the
+database, so restarts do not fetch anything. Once a day SIEMBox asks GitHub
+which release is latest (one small request) and downloads the archive only when
+it changed; **Refresh** does the same on demand (analyst and up; for a viewer it
+just reloads the cached state). `SIGMAHQ_AUTO_REFRESH=false` turns the daily
+check off. When GitHub is unreachable, the library says so and keeps showing
+the last release it stored.
+
+**Licence.** SigmaHQ rules are licensed under the
+[Detection Rule License (DRL) 1.1](https://github.com/SigmaHQ/Detection-Rule-License),
+which requires attribution. Every added rule's description names the Sigma rule
+id, its authors, the release and a link to the rule file, the Rules list shows a
+**SigmaHQ** chip linking to it, and SIEMBox's NOTICE file credits SigmaHQ. Keep
+the attribution if you edit or share the rule.
 
 ### Regex Safety
 

@@ -141,7 +141,7 @@ To let pages on other origins call the API, list their exact origins in `CORS_OR
 
 ### Roles
 
-Every signed-in user has one of four roles, each including the ones before it: `viewer` < `analyst` < `operator` < `admin` (see [User Management](../guides/USER-MANAGEMENT.md#user-roles)). A call a role may not make answers `403`. Viewers are read-only: the only non-GET calls open to them act on their own session or account, or compute an answer and store nothing (logout, `/api/auth/me/*`, `POST /api/parsers/:id/test`, `POST /api/ai/explain`, `POST /api/log-discovery/sources/:id/onboard/preview`, `POST /api/exposure/password-check`).
+Every signed-in user has one of four roles, each including the ones before it: `viewer` < `analyst` < `operator` < `admin` (see [User Management](../guides/USER-MANAGEMENT.md#user-roles)). A call a role may not make answers `403`. Viewers are read-only: the only non-GET calls open to them act on their own session or account, or compute an answer and store nothing (logout, `/api/auth/me/*`, `POST /api/parsers/:id/test`, `POST /api/ai/explain`, `POST /api/log-discovery/sources/:id/onboard/preview`, `POST /api/exposure/password-check`, and `POST /api/sigma/library/refresh`, which for a viewer fetches nothing and returns the cached state).
 
 Detection content, alert triage and the AI Analyst:
 
@@ -152,12 +152,13 @@ Detection content, alert triage and the AI Analyst:
 | `POST /api/parsers/catalog/install`, `/catalog/install-all`, `/catalog/refresh` | yes | yes | yes | no |
 | `POST /api/rules`, `PUT` / `DELETE /api/rules/:id` | yes | yes | yes | no |
 | `POST /api/rules/catalog/install`, `/catalog/install-all`, `/catalog/refresh` | yes | yes | yes | no |
+| `POST /api/sigma/library/:sigmaId/install`, `/:sigmaId/update`, `/install-bulk` | yes | yes | yes | no |
 | `PUT /api/alerts/:id`, `POST /api/alerts/:id/triage/rerun` | yes | yes | yes | no |
 | `DELETE /api/alerts/:id` | yes | no | no | no |
 | `POST /api/ai/chat`, `PATCH` / `DELETE /api/ai/chat/sessions/:id` | yes | yes | yes | no |
 | `POST /api/parsers/ai/generate`, `POST /api/rules/ai/generate`, `POST /api/rules/import/sigma`, `/import/sigma/preview`, `POST /api/packs/:id/install` | yes | no | no | no |
 
-The reads under these routes stay open to every role, but only analyst and up can force a catalog refetch with `GET /api/parsers/catalog?refresh=true` or `GET /api/rules/catalog?refresh=true`: a viewer's `refresh` flag is ignored and the cached listing comes back. `GET /api/ai/chat/health` answers only `{ "configured": true }` or `false`; the AI Analyst's provider, model and base URL are in the admin-only `GET /api/settings/ai-chat`. A refusal on the parser, rule, alert and AI Analyst writes above (all but the triage re-run and the last row) is recorded in `audit_logs` like a refused scan write (below). User management, settings and notification changes, Endpoints (EDR) and the admin dashboard are admin-only; shipper management has its own table under [Log Shippers](#log-shippers-endpoints). Every route and the roles it allows are listed in `backend/src/routes/routeInventory.test.ts`, which the test suite checks against the running API.
+The reads under these routes stay open to every role, but only analyst and up can force a catalog refetch with `GET /api/parsers/catalog?refresh=true` or `GET /api/rules/catalog?refresh=true`, or refresh the SigmaHQ library with `POST /api/sigma/library/refresh`: a viewer's `refresh` flag is ignored and the cached listing comes back. `GET /api/ai/chat/health` answers only `{ "configured": true }` or `false`; the AI Analyst's provider, model and base URL are in the admin-only `GET /api/settings/ai-chat`. A refusal on the parser, rule, alert and AI Analyst writes above (all but the triage re-run and the last row) is recorded in `audit_logs` like a refused scan write (below). User management, settings and notification changes, Endpoints (EDR) and the admin dashboard are admin-only; shipper management has its own table under [Log Shippers](#log-shippers-endpoints). Every route and the roles it allows are listed in `backend/src/routes/routeInventory.test.ts`, which the test suite checks against the running API.
 
 (Earlier versions let any logged-in role, viewers included, make every call in this table except the triage re-run and the last row, deleting alerts included. A script that used a viewer's token for these writes needs an analyst's, or an admin's to delete alerts.)
 
@@ -1297,7 +1298,8 @@ Get all detection rules.
     "created_at": "2025-01-01T00:00:00Z",
     "updated_at": "2025-01-01T00:00:00Z",
     "regex_safety": { "status": "none", "vulnerable": [], "unknown": [] },
-    "triggers": { "total": 340, "last_24h": 23, "last_7d": 167, "last_triggered_at": "2026-10-22T16:10:00.000Z" }
+    "triggers": { "total": 340, "last_24h": 23, "last_7d": 167, "last_triggered_at": "2026-10-22T16:10:00.000Z" },
+    "sigma": null
   }
 ]
 ```
@@ -1313,6 +1315,10 @@ that never fired). The counts are computed in one query over all rules and
 cached for up to 60 seconds. The Detection Rules page shows them in its
 **Triggered** column, which links to `/alerts?ruleId=<id>` (the same
 `ruleId` filter `GET /api/alerts` and `/api/alerts/export` take).
+
+`sigma` is set for a rule added from the SigmaHQ library: its upstream link,
+and whether the cached release has an update for it or no longer contains it
+(see [SigmaHQ library](#sigmahq-library)).
 
 **Severity Levels:** `low`, `medium`, `high`, `critical`
 
@@ -1544,6 +1550,59 @@ GitHub API rate limit). Each fetch of a catalog lists the repository through the
 GitHub API, which allows 60 unauthenticated requests an hour per IP; requests
 that arrive while a fetch is in progress wait for it rather than starting
 another.
+
+### SigmaHQ library
+
+The cached SigmaHQ release (Detection Rules → **SigmaHQ**; see RULES.md,
+"SigmaHQ Library"). Browsing is open to every role; adding and updating need
+analyst or higher (`403` otherwise, recorded in `audit_logs`).
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /api/sigma/library` | Browse. Query: `view` = `compatible` (default) / `convertible` / `not_convertible`; filters `q`, `product`, `category`, `service`, `level`, `status`, `tactic` (shortname), `technique` (`T1190`, also matches its sub-techniques), `installed` = `added` / `not_added` / `updates`; `page`, `page_size` (≤ 100, default 50); `recheck=true` recomputes compatibility (otherwise cached 5 minutes). Returns `{ source, state, counts, compatibility, facets, view, page, page_size, total, rules }`. |
+| `POST /api/sigma/library/refresh` | Fetch the latest release (analyst and up). Body `{ "force": true }` re-downloads even an unchanged release. Returns `{ refreshed: true, status: "updated" \| "unchanged", release_tag, stats?, state }`; `502 SIGMAHQ_UNREACHABLE` (cache kept, `state.last_error` set) when GitHub cannot be reached. A viewer's call fetches nothing and answers `200 { refreshed: false, reason, state }`. |
+| `POST /api/sigma/library/:sigmaId/install` | Add one rule (every OR part), disabled. `201 { action: "created", rules, warnings }`; `409 SIGMA_ALREADY_ADDED` (`rule_ids`), `404 SIGMA_NOT_FOUND`, `422 SIGMA_NOT_CONVERTIBLE`, `422 REGEX_UNSAFE` / `REGEX_UNDECIDED` (nothing saved), `400` for an id that is not a UUID. |
+| `POST /api/sigma/library/:sigmaId/update` | Update an added rule to the cached release, keeping each rule's id and `enabled`. `200 { action: "updated", rules, removed, retired, warnings }`; `404 SIGMA_NOT_ADDED`; the install's `422`s. |
+| `POST /api/sigma/library/install-bulk` | Add several: `{ "sigma_ids": [...] }` (at most 500) or `{ "all_compatible": true }`. Returns `{ total, added, rules_created, skipped, failed }`; already-added ids are in `skipped`, refused ones in `failed` with `code` and `reason`. |
+
+A row of `rules`:
+
+```json
+{
+  "sigma_id": "f6bfd1a2-…",
+  "title": "Hack Tool User Agent",
+  "level": "high",
+  "status": "test",
+  "logsource": { "product": null, "category": "proxy", "service": null },
+  "tags": ["attack.initial_access", "attack.t1190"],
+  "attack": { "techniques": ["T1190"], "tactics": ["initial-access"] },
+  "author": "Florian Roth (Nextron Systems)",
+  "url": "https://github.com/SigmaHQ/sigma/blob/r2026-07-01/rules/web/proxy_generic/proxy_ua_hacktool.yml",
+  "convertible": true,
+  "errors": [],
+  "parts": 1,
+  "fields": ["user_agent"],
+  "compatibility": {
+    "compatible": true,
+    "keyword": false,
+    "parsers": [{ "parser_name": "traefik-access", "parts": [0], "matched": 0, "sampled": 10 }],
+    "missing_field": null,
+    "logsource_mismatch": null
+  },
+  "installed": { "rule_ids": [41], "enabled": 0, "update_available": false },
+  "regex_safety": { "status": "safe", "vulnerable": [], "unknown": [] },
+  "installable": true,
+  "not_installable_reason": null
+}
+```
+
+`state` is `{ release_tag, asset, release_date, commit_hash, archive_bytes,
+rule_count, convertible_count, builder_version, fetched_at, last_attempt_at,
+last_error, last_error_at }`. Rules added from the library carry `sigma_id`,
+`sigma_release`, `sigma_hash` and `sigma_part` in `GET /api/rules`, plus a
+`sigma` object: `{ sigma_id, release, part, url, title, author,
+update_available, deprecated }` (`null` for other rules). `PUT /api/rules/:id`
+ignores the `sigma_*` fields.
 
 ### Export / Import (portable parsers)
 

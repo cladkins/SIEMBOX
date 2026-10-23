@@ -285,6 +285,15 @@ export const api = {
   previewSigmaImport: (sigma: string) => apiClient.post('/rules/import/sigma/preview', { sigma }, REGEX_GATE),
   importSigma: (sigma: string) => apiClient.post('/rules/import/sigma', { sigma }, { ...INLINE, timeout: 300000 }),
 
+  // SigmaHQ library: browse the cached release with compatibility, add/update rules
+  getSigmaLibrary: (params: Record<string, string | number | undefined>) =>
+    apiClient.get('/sigma/library', { params, ...INLINE, timeout: 60000 }),
+  refreshSigmaLibrary: (force = false) => apiClient.post('/sigma/library/refresh', { force }, { ...INLINE, timeout: 120000 }),
+  installSigmaRule: (sigmaId: string) => apiClient.post(`/sigma/library/${encodeURIComponent(sigmaId)}/install`, {}, REGEX_GATE),
+  updateSigmaRule: (sigmaId: string) => apiClient.post(`/sigma/library/${encodeURIComponent(sigmaId)}/update`, {}, REGEX_GATE),
+  installSigmaBulk: (body: { sigma_ids?: string[]; all_compatible?: boolean }) =>
+    apiClient.post('/sigma/library/install-bulk', body, { ...INLINE, timeout: 300000 }),
+
   // Content Packs (curated per-technology parser + detection bundles)
   getContentPacks: () => apiClient.get('/packs'),
   installContentPack: (id: string) => apiClient.post(`/packs/${id}/install`, {}, { timeout: 300000 }),

@@ -1,0 +1,115 @@
+schema: siembox.pack/v1
+id: reverse-proxy
+name: Reverse Proxy & Web
+description: nginx / Traefik / Caddy access + error logs with path-traversal, enumeration, bad-bot, and method-abuse rules.
+icon: Connection
+# Bump whenever parsers, detections or sigma change (installs show the difference as "What's new").
+version: 2
+parsers:
+  - standard-nginx-access
+  - standard-nginx-error
+  - traefik-access
+  - caddy-access
+  - apache-nginx-access-log
+  - nginx-komodo-ip-only
+  - nginx-komodo-timestamp-first
+  - nginx-komodo-error
+detections:
+  categories: [reverse-proxy]
+sigma:
+  # Web attack strings in the request line (webserver logsource).
+  - id: 65354b83-a2ea-4ea6-8414-3ab38be0d409
+    title: Cross Site Scripting Strings
+  - id: 5513deaf-f49a-46c2-a6c8-3f111b5cb453
+    title: SQL Injection Strings In URI
+  - id: ada3bc4f-f0fd-42b9-ba91-e105e8af7342
+    title: Server Side Template Injection Strings
+  - id: 583aa0a2-30b1-4d62-8bf3-ab73689efe6c
+    title: Java Payload Strings
+  - id: 412d55bc-7737-4d25-9542-5b396867ce55
+    title: JNDIExploit Pattern
+  - id: 953d460b-f810-420a-97a2-cfca4c98e602
+    title: Source Code Enumeration Detection by Keyword
+  - id: 7ff9db12-1b94-4a79-ba68-a2402c5d6729
+    title: Windows Webshell Strings
+  - id: b59c98c6-95e8-4d65-93ee-f594dfb96b17
+    title: F5 BIG-IP iControl Rest API Command Execution - Proxy
+  # Server faults that often follow exploitation attempts.
+  - id: 59ec40bb-322e-40ab-808d-84fa690d7e56
+    title: Nginx Core Dump
+  - id: 1da8ce0b-855d-4004-8860-7d64d42063b1
+    title: Apache Segmentation Fault
+  # Scanner, exploit-framework and malware user agents.
+  - id: 19aa4f58-94ca-45ff-bc34-92e533c0994a
+    title: Suspicious User-Agents Related To Recon Tools
+  - id: c42a3073-30fb-48ae-8c99-c23ada84b103
+    title: Hack Tool User Agent
+  - id: fdd1bfb5-f60b-4a35-910e-f36ed3d0b32f
+    title: Exploit Framework User Agent
+  - id: 7195a772-4b3f-43a4-a210-6a003d65caa1
+    title: Suspicious User Agent
+  - id: 6ec820f2-e963-4801-9127-d8b2dce4d31b
+    title: APT User Agent
+  - id: 5c84856b-55a5-45f1-826f-13f37250cf4e
+    title: Malware User Agent
+  - id: fa935401-513b-467b-81f4-f9e77aa0dd78
+    title: Crypto Miner User Agent
+  - id: 894a8613-cf12-48b3-8e57-9085f54aa0c3
+    title: Potential Base64 Encoded User-Agent
+  - id: d443095b-a221-4957-a2c4-cd1756c9b747
+    title: Suspicious Base64 Encoded User-Agent
+setup:
+  - title: Write the access log in a format SIEMBox parses
+    text: |
+      nginx and Apache: the default `combined` format. Traefik: JSON access logs.
+      Caddy: its structured JSON access log (`log` directive inside the site
+      block). Make sure the **real client IP** is logged, not the address of a
+      load balancer or tunnel in front, or geo and threat-feed enrichment will see
+      only that hop.
+    code: |
+      # Traefik (static configuration)
+      accessLog:
+        filePath: /var/log/traefik/access.log
+        format: json
+    code_language: yaml
+  - title: Ship the logs
+    text: |
+      Point a SIEMBox log shipper at the log files (a **File** source per path,
+      wildcards allowed) or, for a container that logs to stdout, add a **Docker**
+      source with the container name. Mount the log directory into the shipper
+      read-only. nginx error logs ship the same way; add them too, the error
+      parser and the core-dump rule read them.
+    code: |
+      services:
+        siembox-shipper:
+          volumes:
+            - /var/log/nginx:/var/log/nginx:ro
+            - /var/log/traefik:/var/log/traefik:ro
+      # Shipper sources: /var/log/nginx/access.log, /var/log/nginx/error.log,
+      #                  /var/log/traefik/access.log
+    code_language: yaml
+  - title: Behind Cloudflare or another proxy
+    text: |
+      If your proxy sits behind a CDN or tunnel, have nginx take the client IP
+      from the header that hop sets (`real_ip_header` with `set_real_ip_from`
+      for the hop's ranges), or set Traefik's `forwardedHeaders.trustedIPs` on the
+      entry point. Otherwise every request appears to come from the CDN.
+    code: |
+      # nginx (http block)
+      set_real_ip_from 173.245.48.0/20;   # one line per range of the hop in front
+      real_ip_header CF-Connecting-IP;
+    code_language: nginx
+  - title: Check that requests arrive
+    text: |
+      Request a page through the proxy, then open **Logs** and filter on the
+      parser (for example `traefik-access`). The event should carry the client
+      IP, method, path, status code and user agent. A request with
+      `curl -A sqlmap https://your-site/` should fire the hack-tool user-agent
+      rule once the pack is installed.
+  - title: About the SigmaHQ rules
+    text: |
+      The pack adds SigmaHQ's web attack-string rules (SQL injection, XSS,
+      template injection, JNDI and Java payloads, webshell strings, source-code
+      enumeration), scanner and malware user-agent rules, and server fault rules.
+      They install through the SigmaHQ library, enabled; refresh the library on
+      **Detection Rules > SigmaHQ** if the pack shows them as pending.

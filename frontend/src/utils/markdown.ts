@@ -7,6 +7,7 @@
 import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { alertIdFromHref, alertRefMarkdown } from './alertRef.ts';
+import { guideMarkdownHtml } from './guideMarkdown.ts';
 
 // ALR-#### in model output becomes a link to that alert (built from the parsed
 // number only; see alertRef.ts).
@@ -49,4 +50,13 @@ export function renderMarkdown(text: string): string {
   // async extension is ever registered globally.
   const html = marked.parse(fixInlineNumberedList(text || ''), { breaks: true, async: false });
   return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+}
+
+/**
+ * Content Pack setup guides (catalog content): rendered with raw HTML escaped
+ * and unsafe links dropped (guideMarkdown.ts), then sanitized here like LLM
+ * output, so a hostile guide renders as inert text.
+ */
+export function renderGuideMarkdown(text: string): string {
+  return DOMPurify.sanitize(guideMarkdownHtml(text), { USE_PROFILES: { html: true } });
 }

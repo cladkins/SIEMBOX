@@ -1,0 +1,38 @@
+schema: siembox.pack/v1
+id: home-iot
+name: Home & IoT
+description: Home Assistant parsing plus the IoT detections for suspicious automation and device activity.
+icon: House
+# Bump whenever parsers, detections or sigma change (installs show the difference as "What's new").
+version: 1
+parsers:
+  - home-assistant
+detections:
+  categories: [iot]
+setup:
+  - title: Turn on IP bans in Home Assistant
+    text: |
+      The parser surfaces Home Assistant's failed-login and IP-ban messages. They
+      are written when `ip_ban_enabled` is on in the `http` section of
+      `configuration.yaml`.
+    code: |
+      http:
+        ip_ban_enabled: true
+        login_attempts_threshold: 5
+    code_language: yaml
+  - title: Ship the log
+    text: |
+      Home Assistant writes `home-assistant.log` in its config directory, and the
+      container logs the same lines to stdout. Use a **File** source for the log
+      file, or a **Docker** source with the container name.
+    code: |
+      services:
+        siembox-shipper:
+          volumes:
+            - /srv/homeassistant/config/home-assistant.log:/logs/ha/home-assistant.log:ro
+      # Shipper source (File): /logs/ha/home-assistant.log
+    code_language: yaml
+  - title: Check that events arrive
+    text: |
+      Sign in once with a wrong password. On **Logs** the warning shows with the
+      `home-assistant` parser and the client IP.

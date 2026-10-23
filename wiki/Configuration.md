@@ -115,6 +115,7 @@ The banner at the top of Settings → Digital Risk, and the Monitoring card on t
 | `SIEMBOX_CATALOG_REF` | `main` | Branch/tag/ref to read. |
 | `SIEMBOX_CATALOG_PARSERS_PATH` | `parsers` | Directory in the catalog repo for parsers. |
 | `SIEMBOX_CATALOG_DETECTIONS_PATH` | `detections` | Directory in the catalog repo for detection rules. |
+| `SIEMBOX_CATALOG_PACKS_PATH` | `packs` | Directory in the catalog repo for content packs (`<id>.pack.yaml`). |
 | `GITHUB_TOKEN` | — | Optional, raises GitHub API rate limits for catalog browsing. |
 | `SEED_BUNDLED_CONTENT` | *(unset = catalog-only)* | Set `true` to opt back into auto-importing bundled detection rules on startup (legacy). Defaults to catalog-only. |
 

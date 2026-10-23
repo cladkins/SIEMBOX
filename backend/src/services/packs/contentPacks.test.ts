@@ -1,57 +1,78 @@
 /**
- * Unit tests for Content Pack manifests + the detection matcher. Run with
- * `npm test` (tsx --test). No database/network required.
+ * The bundled fallback packs and the catalog/packs mirror: both pass the pack
+ * validator, and the mirror's references resolve against this repo's mirror
+ * of the catalog (catalog/parsers, rules/). No database/network. Run with
+ * `npm test` (tsx --test).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CONTENT_PACKS, getContentPack, detectionMatchesPack } from './contentPacks';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as yaml from '../../utils/yaml';
+import { CONTENT_PACKS, getBundledPack, detectionMatchesPack } from './contentPacks';
+import { validatePack } from './packFormat';
 
-test('every pack has the required fields and at least one parser', () => {
+const ROOT = path.join(__dirname, '..', '..', '..', '..');
+const MIRROR = path.join(ROOT, 'catalog', 'packs');
+
+test('every bundled pack passes the strict pack validator', () => {
   const ids = new Set<string>();
   for (const p of CONTENT_PACKS) {
-    assert.ok(p.id && !ids.has(p.id), `pack id missing or duplicated: ${p.id}`);
+    const v = validatePack({ schema: 'siembox.pack/v1', ...p }, { strict: true });
+    assert.deepEqual(v.errors, [], `bundled pack ${p.id}`);
+    assert.ok(!ids.has(p.id), `duplicate bundled pack ${p.id}`);
     ids.add(p.id);
-    assert.ok(p.name && p.description && p.icon, `pack ${p.id} missing display fields`);
-    assert.ok(Array.isArray(p.parsers) && p.parsers.length > 0, `pack ${p.id} has no parsers`);
-    assert.ok(Array.isArray(p.setup) && p.setup.length > 0, `pack ${p.id} has no setup hints`);
+    assert.ok(p.parsers.length > 0, `pack ${p.id} has no parsers`);
+    assert.equal(p.version, 1, 'bundled packs stay at version 1 (the catalog versions start at 2 when they change)');
   }
+  assert.equal(CONTENT_PACKS.length, 8);
 });
 
-test('pack parser names are catalog-style slugs (not human-readable display names)', () => {
-  // The published catalog resolves parsers by a slug `name` (e.g. ssh-authentication),
-  // NOT a display name ("SSH Authentication"). Guard against referencing names that
-  // can't resolve at install time.
-  const slug = /^[a-z0-9][a-z0-9-]*$/;
-  for (const p of CONTENT_PACKS) {
-    for (const name of p.parsers) {
-      assert.ok(slug.test(name), `pack "${p.id}" references non-slug parser name "${name}"`);
+test('getBundledPack resolves by id', () => {
+  assert.equal(getBundledPack('auth-identity')?.name, 'Auth & Identity');
+  assert.equal(getBundledPack('nope'), undefined);
+});
+
+test('the bundled packs keep the items they had before packs moved to the catalog', () => {
+  // The fallback must not regress an install that cannot see catalog packs.
+  assert.deepEqual(getBundledPack('reverse-proxy')!.detections.categories, ['reverse-proxy']);
+  assert.deepEqual(getBundledPack('media')!.detections, { categories: [], tags: [], names: [] });
+  assert.ok(getBundledPack('infrastructure')!.parsers.includes('fail2ban'));
+  const media = getBundledPack('media')!;
+  assert.equal(detectionMatchesPack({ path: 'detections/anything/a.yaml', tags: ['media'] }, media), false);
+});
+
+test('the catalog/packs mirror passes strict validation with resolving references', { skip: !fs.existsSync(MIRROR) }, () => {
+  const parsers = new Set(
+    fs
+      .readdirSync(path.join(ROOT, 'catalog', 'parsers'))
+      .filter((f) => f.endsWith('.parser.json'))
+      .map((f) => JSON.parse(fs.readFileSync(path.join(ROOT, 'catalog', 'parsers', f), 'utf8')).name)
+  );
+  const detections: Array<{ name: string; path: string; tags: string[] }> = [];
+  const rulesDir = path.join(ROOT, 'rules');
+  for (const cat of fs.readdirSync(rulesDir, { withFileTypes: true }).filter((d) => d.isDirectory())) {
+    for (const f of fs.readdirSync(path.join(rulesDir, cat.name)).filter((x) => x.endsWith('.yaml'))) {
+      const r = yaml.load(fs.readFileSync(path.join(rulesDir, cat.name, f), 'utf8')) as any;
+      if (r?.name) detections.push({ name: r.name, path: `detections/${cat.name}/${f}`, tags: r.tags ?? [] });
     }
   }
-});
-
-test('getContentPack resolves by id', () => {
-  assert.equal(getContentPack('auth-identity')?.name, 'Auth & Identity');
-  assert.equal(getContentPack('nope'), undefined);
-});
-
-test('detectionMatchesPack matches by category path segment', () => {
-  const pack = getContentPack('reverse-proxy')!;
-  assert.equal(detectionMatchesPack({ path: 'detections/reverse-proxy/PROXY-003.yaml' }, pack), true);
-  assert.equal(detectionMatchesPack({ path: 'reverse-proxy/PROXY-003.yaml' }, pack), true);
-  // A different category must not match.
-  assert.equal(detectionMatchesPack({ path: 'detections/authentication/AUTH-002.yaml' }, pack), false);
-  // Substring that isn't a path segment must not match.
-  assert.equal(detectionMatchesPack({ path: 'detections/x-reverse-proxy-y/a.yaml' }, pack), false);
-});
-
-test('detectionMatchesPack matches by tag when configured', () => {
-  const pack = { id: 't', name: 't', description: '', icon: '', parsers: ['x'], detectionTags: ['media'], setup: ['s'] };
-  assert.equal(detectionMatchesPack({ path: 'detections/other/a.yaml', tags: ['media', 'plex'] }, pack), true);
-  assert.equal(detectionMatchesPack({ path: 'detections/other/a.yaml', tags: ['network'] }, pack), false);
-});
-
-test('a pack with no detection selectors matches no detections', () => {
-  const media = getContentPack('media')!;
-  assert.deepEqual(media.detectionCategories, []);
-  assert.equal(detectionMatchesPack({ path: 'detections/anything/a.yaml', tags: ['media'] }, media), false);
+  const files = fs.readdirSync(MIRROR).filter((f) => f.endsWith('.pack.yaml'));
+  assert.ok(files.length >= 8);
+  for (const f of files) {
+    const v = validatePack(yaml.load(fs.readFileSync(path.join(MIRROR, f), 'utf8')), {
+      strict: true,
+      index: { parsers, detections },
+      expectId: f.replace(/\.pack\.yaml$/, ''),
+    });
+    assert.deepEqual(v.errors, [], f);
+    // The catalog's pack carries every item its bundled version had.
+    const bundled = getBundledPack(v.pack!.id);
+    if (bundled) {
+      for (const p of bundled.parsers) assert.ok(v.pack!.parsers.includes(p), `${f} dropped parser ${p}`);
+      for (const c of bundled.detections.categories) assert.ok(v.pack!.detections.categories.includes(c), `${f} dropped ${c}`);
+      assert.ok(v.pack!.version >= bundled.version);
+      if (v.pack!.sigma.length > 0) assert.ok(v.pack!.version > bundled.version, `${f} adds Sigma rules: bump its version`);
+    }
+  }
 });

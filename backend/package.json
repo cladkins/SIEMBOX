@@ -14,7 +14,8 @@
     "validate-parsers": "node dist/scripts/validate-parsers.js",
     "lint": "eslint src",
     "format": "prettier --write \"src/**/*.ts\"",
-    "validate-detections": "node dist/scripts/validate-detections.js"
+    "validate-detections": "node dist/scripts/validate-detections.js",
+    "validate-packs": "node dist/scripts/validate-packs.js"
   },
   "keywords": [
     "siem",

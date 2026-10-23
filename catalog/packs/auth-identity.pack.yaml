@@ -1,0 +1,75 @@
+schema: siembox.pack/v1
+id: auth-identity
+name: Auth & Identity
+description: SSO / login platforms and the brute-force, impossible-travel, and account-abuse detections that watch them.
+icon: Key
+# Bump whenever parsers, detections or sigma change (installs show the difference as "What's new").
+version: 2
+parsers:
+  - authelia-access
+  - authentik-audit
+  - keycloak-event
+  - ssh-authentication
+  - vaultwarden-access
+detections:
+  categories: [authentication, access-control, password-manager]
+sigma:
+  - id: e76b413a-83d0-4b94-8e4c-85db4a5b8bdc
+    title: Suspicious OpenSSH Daemon Error
+  - id: 0ac15ec3-d24f-4246-aa2a-3077bb1cf90e
+    title: Privileged User Has Been Created
+setup:
+  - title: Forward your identity provider's logs
+    text: |
+      Authelia, Authentik and Keycloak all log to their container's stdout. The
+      simplest path is a **Docker** source on a SIEMBox log shipper running on the
+      same host: open **Log Shippers**, pick the shipper, **Add Source**, type
+      *Docker container*, and enter the container name.
+
+      Authelia must log in its default text (logfmt) format; Authentik's audit
+      events are JSON; Keycloak needs the `org.keycloak.events` logger at `INFO`
+      or lower (it is by default).
+    code: |
+      # Log shipper compose file: give it the Docker socket (read-only)
+      services:
+        siembox-shipper:
+          volumes:
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+    code_language: yaml
+  - title: Ship SSH logs from every host
+    text: |
+      On each Linux host, ship sshd's log. With the systemd journal, add a
+      **Systemd Journal** source with unit `ssh.service` (Debian/Ubuntu) or
+      `sshd.service` (RHEL/Fedora). With rsyslog text files, mount `/var/log` and use
+      **Add System Log Files** on the shipper, which adds `/var/log/auth.log`.
+    code: |
+      services:
+        siembox-shipper:
+          volumes:
+            - /var/log/journal:/var/log/journal:ro   # journald hosts
+            - /var/log:/var/log:ro                   # rsyslog hosts
+    code_language: yaml
+  - title: Vaultwarden
+    text: |
+      The parser reads Vaultwarden's extended log format (1.30 and later). Keep
+      `EXTENDED_LOGGING` on (the default) and `LOG_LEVEL` at `warn` or more verbose,
+      then forward the container's logs like the identity providers above. Failed
+      unlocks and vault exports are what the password-manager detections watch.
+    code: |
+      environment:
+        - EXTENDED_LOGGING=true
+        - LOG_LEVEL=warn
+    code_language: yaml
+  - title: Check that events arrive
+    text: |
+      Fail one login on purpose (a wrong password on the SSO portal, or
+      `ssh nobody@your-host`). Within a minute it should show on **Logs** with the
+      matching parser name (for example `ssh-authentication`). If it shows as
+      unparsed, open the raw line and compare it with the parser's samples in the
+      catalog.
+  - title: About the SigmaHQ rules
+    text: |
+      This pack adds two SigmaHQ rules that read sshd and auth logs (an OpenSSH
+      daemon error that signals exploitation attempts, and a new privileged user).
+      They install through the SigmaHQ library: refresh it once on **Detection
+      Rules > SigmaHQ** if the pack shows them as pending.

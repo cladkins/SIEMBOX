@@ -5,9 +5,12 @@
 #
 #   published  parsers/           -> this repo  catalog/parsers/
 #   published  detections/<cat>/  -> this repo  rules/<cat>/
+#   published  packs/             -> this repo  catalog/packs/
 #
-# It is a true mirror: parser/detection files that no longer exist upstream are
-# removed locally. Run manually (`./scripts/sync-catalog.sh`) or on a schedule via
+# It is a true mirror: parser/detection/pack files that no longer exist upstream
+# are removed locally. One exception, for the move of Content Packs into the
+# catalog: while the published catalog has no packs/ at all, catalog/packs/ is
+# left as it is (an older catalog is not "every pack deleted"). Run manually (`./scripts/sync-catalog.sh`) or on a schedule via
 # .github/workflows/sync-catalog.yml.
 #
 # Env: CATALOG_REPO (default cladkins/siembox-catalog), CATALOG_REF (default main),
@@ -25,7 +28,7 @@ AUTH=()
 
 echo "Syncing catalog from ${REPO}@${REF} ..."
 tree="$(curl -fsSL "${AUTH[@]}" -H 'Accept: application/vnd.github+json' "$API")"
-paths="$(printf '%s' "$tree" | python3 -c "import sys,json;[print(t['path']) for t in json.load(sys.stdin)['tree'] if t['type']=='blob' and (t['path'].startswith('parsers/') or t['path'].startswith('detections/'))]")"
+paths="$(printf '%s' "$tree" | python3 -c "import sys,json;[print(t['path']) for t in json.load(sys.stdin)['tree'] if t['type']=='blob' and (t['path'].startswith('parsers/') or t['path'].startswith('detections/') or t['path'].startswith('packs/'))]")"
 [ -n "$paths" ] || { echo 'No parser/detection files found upstream — aborting (not wiping local).' >&2; exit 1; }
 
 # Stage all downloads first; only swap into place if every file fetched cleanly,
@@ -36,6 +39,7 @@ while IFS= read -r p; do
   case "$p" in
     parsers/*)    dest="$stage/catalog/$p" ;;                 # parsers/x        -> catalog/parsers/x
     detections/*) dest="$stage/rules/${p#detections/}" ;;     # detections/cat/x -> rules/cat/x
+    packs/*)      dest="$stage/catalog/$p" ;;                 # packs/x          -> catalog/packs/x
     *) continue ;;
   esac
   mkdir -p "$(dirname "$dest")"
@@ -51,5 +55,11 @@ rm -rf "$ROOT/catalog/parsers" "$ROOT/rules"
 mkdir -p "$ROOT/catalog"
 mv "$stage/catalog/parsers" "$ROOT/catalog/parsers"
 mv "$stage/rules" "$ROOT/rules"
+if [ -d "$stage/catalog/packs" ]; then
+  rm -rf "$ROOT/catalog/packs"
+  mv "$stage/catalog/packs" "$ROOT/catalog/packs"
+else
+  echo 'The published catalog has no packs/ yet: catalog/packs/ left as it is.'
+fi
 
-echo "Synced $(find "$ROOT/catalog/parsers" -name '*.parser.json' | wc -l | tr -d ' ') parsers, $(find "$ROOT/rules" -name '*.yaml' | wc -l | tr -d ' ') detections from ${REPO}@${REF}."
+echo "Synced $(find "$ROOT/catalog/parsers" -name '*.parser.json' | wc -l | tr -d ' ') parsers, $(find "$ROOT/rules" -name '*.yaml' | wc -l | tr -d ' ') detections, $(find "$ROOT/catalog/packs" -name '*.pack.yaml' 2>/dev/null | wc -l | tr -d ' ') packs from ${REPO}@${REF}."

@@ -1,0 +1,46 @@
+schema: siembox.pack/v1
+id: dns-network
+name: DNS & Network
+description: Pi-hole queries / ad-block and UniFi firewall-audit + IDS-IPS logs with the network-anomaly detections.
+icon: Share
+# Bump whenever parsers, detections or sigma change (installs show the difference as "What's new").
+version: 1
+parsers:
+  - pihole-query
+  - pihole-dns-adblock
+  - ubiquiti-unifi-cef-audit
+  - ubiquiti-unifi-ids-ips
+detections:
+  categories: [network]
+setup:
+  - title: Pi-hole
+    text: |
+      Ship Pi-hole's query log: mount `/var/log/pihole` (bare metal) or the
+      container's log volume into a SIEMBox log shipper and add a **File** source
+      for `pihole.log`. Query logging must be on (**Settings > Privacy** in the
+      Pi-hole admin).
+    code: |
+      services:
+        siembox-shipper:
+          volumes:
+            - /srv/pihole/var-log:/logs/pihole:ro
+      # Shipper source (File): /logs/pihole/pihole.log
+    code_language: yaml
+  - title: UniFi gateway
+    text: |
+      In UniFi Network open **Settings > Control Plane > Integrations** (older
+      versions: **System > Advanced**), turn on **Activity Logging (Syslog)** in
+      CEF format, choose the categories (Security Detections for IDS/IPS, Admin
+      Activity for the audit log) and set the server to your SIEMBox host,
+      port 514. SIEMBox receives syslog directly; no shipper is needed.
+    code: |
+      Server:  <siembox-host>
+      Port:    514
+      Format:  CEF
+    code_language: text
+  - title: Check that events arrive
+    text: |
+      Look up a blocked domain from a client (Pi-hole), and change a setting in
+      UniFi (an audit event). On **Logs** they show with the `pihole-query` and
+      `ubiquiti-unifi-cef-audit` parsers. IDS/IPS events arrive when the gateway
+      blocks a threat.

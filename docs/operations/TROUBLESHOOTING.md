@@ -1393,6 +1393,28 @@ satisfied them. The reason names the first condition nothing satisfied:
    applicable (`PUT /api/attack/exclusions/:techniqueId`); it then leaves the
    percentages. See [ATT&CK coverage](../reference/RULES.md#attck-coverage).
 
+### Issue: Content Packs show "the packs built into SIEMBox", or Sigma rules stay pending
+
+**Symptoms:** The Content Packs page says *Showing the packs built into SIEMBox*
+or *Catalog unreachable*; a pack's SigmaHQ rules show **Pending**; a pack shows
+**What's new** you did not expect.
+
+**Cause and solution:**
+- *Showing the packs built into SIEMBox*: the catalog has no `packs/` yet, or it
+  could not be reached and nothing was cached (the banner gives the reason). The
+  built-in packs still install from the catalog's parsers and detections. Check
+  egress to `api.github.com` and `raw.githubusercontent.com` (as for the parser
+  catalog), then **Refresh**. `SIEMBOX_CATALOG_PACKS_PATH` must name the packs
+  directory if your catalog fork moved it.
+- *Some catalog packs were left out*: a pack file failed validation (listed in
+  `GET /api/packs` → `source.invalid`); run `npm run validate-packs` on the
+  catalog.
+- *Pending* Sigma rules: the SigmaHQ library is not loaded, or its cached
+  release lacks the rule. Load it (next issue), then install the pack again.
+- *What's new* after the first catalog read: an install made from the built-in
+  packs (version 1) is compared with the catalog's version, which may add
+  SigmaHQ rules. **Install what's new** installs only those.
+
 ### Issue: The SigmaHQ library is empty, or says SigmaHQ is unreachable
 
 **Symptoms:** Detection Rules → **SigmaHQ** says *The SigmaHQ library is

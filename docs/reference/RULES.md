@@ -1185,6 +1185,63 @@ id, its authors, the release and a link to the rule file, the Rules list shows a
 **SigmaHQ** chip linking to it, and SIEMBox's NOTICE file credits SigmaHQ. Keep
 the attribution if you edit or share the rule.
 
+### Content Packs
+
+The **Content Packs** page bundles what one technology needs: the catalog
+parsers for its logs, the catalog detections that watch them, the SigmaHQ rules
+that fit those logs, and a setup guide (which log to ship, a shipper or compose
+snippet, how to check that events arrive). Installing a pack (admin) runs the
+normal install for each item.
+
+**Where packs come from.** Packs are catalog content, like parsers and
+detections: `packs/<id>.pack.yaml` in
+[siembox-catalog](https://github.com/cladkins/siembox-catalog), read with the same
+fetch and 5-minute cache. A pack references content, it does not carry it:
+parsers by catalog name, detections by category (`detections/<category>/`),
+tag or exact name, and SigmaHQ rules by Sigma id. While the catalog has no
+`packs/` (an older catalog), or cannot be reached and nothing is cached, the
+page shows the eight packs built into SIEMBox (version 1, no Sigma rules) and
+says so; when the catalog becomes unreachable after a good read, the last read
+is kept.
+
+**What an install does.** Parsers and catalog detections go through the same
+validate → [regex safety](#regex-safety) gate → save path as a catalog install;
+detections are created enabled (unless the rule says otherwise). SigmaHQ rules
+go through the [SigmaHQ library](#sigmahq-library) install and are created
+**enabled** too: a pack install is the explicit "turn this on" choice, made after
+reading the guide, so its Sigma rules behave like its catalog detections rather
+than like a one-off **Add** from the library (which adds them disabled for
+review). A Sigma rule you already added from the library keeps your on/off
+choice. While the SigmaHQ library is not loaded (never refreshed, or SigmaHQ is
+unreachable) the pack's Sigma rules show as **Pending** with the reason, and
+everything else installs; install the pack again after a **Refresh** of the
+library. Uninstalling a pack is not offered: remove or disable its items on the
+Parsers and Detection Rules pages.
+
+**Updates: What's new.** Each install records the pack version and its item
+list at that moment. When the catalog adds items to a pack you installed (and
+bumps its version), the pack shows a **What's new** badge listing them, and
+**Install what's new** installs only those: items you already have, including
+ones you edited, are not touched. Every item is listed with its status:
+installed, not installed, missing from the catalog (the pack names something the
+catalog no longer has), Sigma pending, or not compatible; a Sigma rule whose
+fields no parser emits yet also says *no matching logs yet*.
+
+**Setup guides** are markdown shown before install. They are rendered with raw
+HTML escaped and only http(s), mailto and relative links kept, then sanitized
+like the AI Analyst's output; the catalog's validator refuses HTML, images and
+other link schemes in the first place.
+
+**Authoring a pack** happens in siembox-catalog (format and checks in its
+CONTRIBUTING.md). Validate before opening the PR, with the catalog's parsers and
+detections so references are checked:
+
+```bash
+cd backend && npm run build
+npm run validate-packs -- <siembox-catalog>/packs        # finds ../parsers and ../detections
+npm run validate-packs -- ../catalog/packs --parsers ../catalog/parsers --detections ../rules
+```
+
 ### Regex Safety
 
 A `regex` condition runs against every parsed log, on the thread that also

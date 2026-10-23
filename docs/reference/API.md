@@ -156,7 +156,7 @@ Detection content, alert triage and the AI Analyst:
 | `PUT /api/alerts/:id`, `POST /api/alerts/:id/triage/rerun` | yes | yes | yes | no |
 | `DELETE /api/alerts/:id` | yes | no | no | no |
 | `POST /api/ai/chat`, `PATCH` / `DELETE /api/ai/chat/sessions/:id` | yes | yes | yes | no |
-| `POST /api/parsers/ai/generate`, `POST /api/rules/ai/generate`, `POST /api/rules/import/sigma`, `/import/sigma/preview`, `POST /api/packs/:id/install` | yes | no | no | no |
+| `POST /api/parsers/ai/generate`, `POST /api/rules/ai/generate`, `POST /api/rules/import/sigma`, `/import/sigma/preview`, `POST /api/packs/:id/install`, `/install-new` | yes | no | no | no |
 
 The reads under these routes stay open to every role, but only analyst and up can force a catalog refetch with `GET /api/parsers/catalog?refresh=true` or `GET /api/rules/catalog?refresh=true`, or refresh the SigmaHQ library with `POST /api/sigma/library/refresh`: a viewer's `refresh` flag is ignored and the cached listing comes back. `GET /api/ai/chat/health` answers only `{ "configured": true }` or `false`; the AI Analyst's provider, model and base URL are in the admin-only `GET /api/settings/ai-chat`. A refusal on the parser, rule, alert and AI Analyst writes above (all but the triage re-run and the last row) is recorded in `audit_logs` like a refused scan write (below). User management, settings and notification changes, Endpoints (EDR) and the admin dashboard are admin-only; shipper management has its own table under [Log Shippers](#log-shippers-endpoints). Every route and the roles it allows are listed in `backend/src/routes/routeInventory.test.ts`, which the test suite checks against the running API.
 
@@ -1603,6 +1603,72 @@ last_error, last_error_at }`. Rules added from the library carry `sigma_id`,
 `sigma` object: `{ sigma_id, release, part, url, title, author,
 update_available, deprecated }` (`null` for other rules). `PUT /api/rules/:id`
 ignores the `sigma_*` fields.
+
+### Content Packs
+
+Per-technology bundles of catalog parsers, catalog detections and SigmaHQ rules,
+with a setup guide (Content Packs page; see RULES.md, "Content Packs"). Packs are
+read from the catalog's `packs/` (same repo, ref and cache as the parser and
+detection catalogs; `SIEMBOX_CATALOG_PACKS_PATH`, default `packs`). Listing is
+open to every role; installing is admin-only.
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /api/packs` | Every pack with per-item status, its install record and what's new. `?refresh=true` re-reads the catalog (analyst and up; a viewer gets the cache). Returns `{ source, sigma_library, packs }`. |
+| `POST /api/packs/:id/install` | Install every item of the pack (parsers and detections through the catalog install path, Sigma rules through the SigmaHQ library, all created enabled; a Sigma rule already added is left as it is) and record the install. `404 PACK_NOT_FOUND`. |
+| `POST /api/packs/:id/install-new` | Install only the items the catalog added to the pack since it was installed, and add them to the record. `409 PACK_NOT_INSTALLED` before a first install. |
+
+`source` says where the packs came from: `{ source: "catalog" | "cache" | "bundled",
+repo, ref, invalid, fetched_at, error }`. `cache` is the last good read while the
+catalog is unreachable; `bundled` is the set built into SIEMBox, used while the
+catalog has no `packs/` or is unreachable with nothing cached (`error` says
+which). `invalid` lists catalog pack files that failed validation and were left
+out. `sigma_library` is `{ loaded, release, last_error }`.
+
+A pack:
+
+```json
+{
+  "id": "reverse-proxy",
+  "name": "Reverse Proxy & Web",
+  "version": 2,
+  "setup": [{ "title": "Ship the logs", "text": "markdown…", "code": "services: …", "code_language": "yaml" }],
+  "status": "partial",
+  "parserTotal": 8, "parserInstalled": 8,
+  "detectionTotal": 9, "detectionInstalled": 9,
+  "sigmaTotal": 19, "sigmaInstalled": 0,
+  "parsers": [{ "name": "traefik-access", "installed": true, "inCatalog": true, "new": false }],
+  "detections": [{ "name": "SQL Injection Attempt", "installed": true, "inCatalog": true, "new": false }],
+  "sigma": [{
+    "id": "65354b83-a2ea-4ea6-8414-3ab38be0d409", "title": "Cross Site Scripting Strings",
+    "installed": false, "enabled_parts": 0,
+    "state": "available", "reason": null,
+    "compatible": false, "missing_field": "method", "level": "high", "new": true
+  }],
+  "install": { "version": 1, "installed_at": "2026-10-23T16:00:41.000Z", "installed_by_username": "admin", "source": "catalog", "pending": [] },
+  "whats_new": { "from_version": 1, "to_version": 2, "version_bumped": true, "parsers": [], "detections": [],
+                 "sigma": [{ "id": "65354b83-…", "title": "Cross Site Scripting Strings" }], "count": 19 }
+}
+```
+
+A Sigma item's `state` is `installed`, `available`, `pending` (the SigmaHQ
+library is not loaded, or its release lacks the rule; `reason` says which) or
+`not_convertible`. `whats_new` is `null` unless the catalog's pack has items the
+install record does not. An install answers:
+
+```json
+{
+  "pack": "reverse-proxy", "version": 2, "mode": "full",
+  "parsers": { "installed": 0, "updated": 8, "failed": [] },
+  "detections": { "installed": 0, "updated": 9, "failed": [] },
+  "sigma": { "installed": 19, "already": 0, "pending": [], "failed": [] },
+  "warnings": []
+}
+```
+
+`failed` items name the reason (not in the catalog, failed validation, a regex
+the [regex safety](#regex-safety-parsers-and-rules) gate refused); `pending`
+Sigma items install with the next install once the SigmaHQ library is loaded.
 
 ### Export / Import (portable parsers)
 

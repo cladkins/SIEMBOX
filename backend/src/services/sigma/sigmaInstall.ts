@@ -4,7 +4,9 @@
  * The same path as the Sigma import (routes/rules.ts POST /import/sigma):
  * validate -> regex gate (every converted regex; a vulnerable or undecided one
  * refuses the whole Sigma rule, nothing saved) -> upsert. Added rules start
- * DISABLED, as imported ones do, so the user reviews and enables them.
+ * DISABLED, as imported ones do, so the user reviews and enables them; a
+ * Content Pack install (services/packs) adds its Sigma rules enabled, as it
+ * does its catalog detections.
  *
  * Provenance: detection_rules.sigma_id / sigma_release / sigma_hash /
  * sigma_part (migration 046). A name already taken by any other rule is never
@@ -109,8 +111,12 @@ export interface SigmaInstallResult {
   warnings: string[];
 }
 
-/** Add a library rule (every part, disabled). 409 when it is already added. */
-export async function installSigmaRule(sigmaId: string): Promise<SigmaInstallResult> {
+/**
+ * Add a library rule (every part). 409 when it is already added. Disabled
+ * unless `enabled` (a Content Pack install: the pack is the reviewed choice,
+ * and pack installs create their catalog detections enabled too).
+ */
+export async function installSigmaRule(sigmaId: string, opts: { enabled?: boolean } = {}): Promise<SigmaInstallResult> {
   const { entry, tag } = await libraryEntry(sigmaId);
   const existing = await DetectionRuleModel.findBySigmaId(sigmaId);
   if (existing.length > 0) {
@@ -126,7 +132,7 @@ export async function installSigmaRule(sigmaId: string): Promise<SigmaInstallRes
       created.push(
         await DetectionRuleModel.create({
           name: await freeName(entry.title, i, n, new Set()),
-          enabled: false, // added for review, like the Sigma import
+          enabled: opts.enabled === true, // by default added for review, like the Sigma import
           ...partFields(part),
           sigma_id: entry.sigma_id,
           sigma_release: tag,

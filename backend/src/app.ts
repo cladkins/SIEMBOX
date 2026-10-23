@@ -2,6 +2,7 @@ import express, { Application, NextFunction, Request, Response } from 'express';
 import qs from 'qs';
 import rateLimit from 'express-rate-limit';
 import { bodyParserErrorHandler, errorHandler, notFoundHandler } from './middleware/errorHandler';
+import { rejectBrotliBodies } from './middleware/rejectBrotliBodies';
 import { requestTimeoutLogger } from './middleware/requestTimeoutLogger';
 import { authenticate, requireAdmin } from './middleware/auth';
 import { query } from './config/database';
@@ -101,6 +102,15 @@ export const apiRateLimiter = rateLimit({
 });
 
 app.use('/api/', apiRateLimiter);
+
+// Refuse Brotli-encoded request bodies before any body parser runs. Express 5's
+// parsers decompress `Content-Encoding: br` by default, so an unauthenticated
+// sign-in request could feed attacker-chosen data to the Brotli decoder, the
+// code CVE-2026-111497 ("Node2Shell") turns into remote code execution on Node
+// before 22.23.4. The images ship a fixed Node; this keeps the decoder off the
+// request path anyway. Nothing that talks to SIEMBox sends Brotli bodies
+// (shippers and agents send plain or gzip), and gzip/deflate are unaffected.
+app.use(rejectBrotliBodies);
 
 // Sign-in and account requests carry a few short fields: cap their bodies at
 // 16 kB (larger ones get 413) before the general 10 MB parsers, which then

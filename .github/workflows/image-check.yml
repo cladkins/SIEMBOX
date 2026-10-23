@@ -214,6 +214,15 @@ jobs:
         run: |
           docker run --rm siembox-log-shipper:check node --version | tee node-version.txt
           grep -q '^v22\.' node-version.txt
+          # At least 22.23.4: the fix for CVE-2026-111497 (Brotli decoder RCE).
+          # The discovery agent fetches from hosts on the network, so it decodes
+          # responses it does not control.
+          docker run --rm siembox-log-shipper:check node -e '
+            const [a, b, c] = process.versions.node.split(".").map(Number);
+            if (!(a === 22 && (b > 23 || (b === 23 && c >= 4)))) {
+              console.error(`Node ${process.version} predates 22.23.4 (CVE-2026-111497)`);
+              process.exit(1);
+            }'
           # An HTTPS target with a self-signed certificate, as homelab admin UIs
           # serve, so the agent's TLS handshake, certificate read and HTTPS GET
           # run in the shipper's Node and its bundled OpenSSL. The backend only

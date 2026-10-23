@@ -559,6 +559,7 @@ function mountPathOf(layer: Layer): string {
 const PASS_THROUGH = new Set([
   'ignoredForwardedForTracker',
   'corsHeaders',
+  'rejectBrotliBodies',
   'jsonParser',
   'urlencodedParser',
   'emptyBodyDefault',

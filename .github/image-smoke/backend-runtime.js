@@ -17,6 +17,20 @@ const { spawnSync } = require('node:child_process');
 const appDir = process.cwd();
 const appRequire = createRequire(path.join(appDir, 'package.json'));
 
+// The oldest Node 22 release with the fix for CVE-2026-111497 ("Node2Shell":
+// remote code execution in the bundled Brotli decoder, reachable through any
+// Brotli-decoded request body or fetched response). The base image tag floats
+// (node:22-alpine), so this stops a stale or rolled-back base from shipping.
+const MIN_NODE_22 = [22, 23, 4];
+
+function assertPatchedNode() {
+  const have = process.versions.node.split('.').map(Number);
+  const ok = have[0] === MIN_NODE_22[0] &&
+    (have[1] > MIN_NODE_22[1] || (have[1] === MIN_NODE_22[1] && have[2] >= MIN_NODE_22[2]));
+  assert.ok(ok, `Node ${process.version} predates ${MIN_NODE_22.join('.')} (CVE-2026-111497); rebuild on a newer node:22 base`);
+  console.log(`Node ${process.version} includes the CVE-2026-111497 fix (>= ${MIN_NODE_22.join('.')})`);
+}
+
 const checks = {
   node() {
     const libc = process.report.getReport().header.glibcVersionRuntime;
@@ -24,6 +38,7 @@ const checks = {
       `node ${process.version} (V8 ${process.versions.v8}, ${process.platform}/${process.arch}, ${libc ? `glibc ${libc}` : 'musl'})`
     );
     assert.equal(Number(process.versions.node.split('.')[0]), 22, 'the image runs Node 22');
+    assertPatchedNode();
   },
 
   async bcrypt() {

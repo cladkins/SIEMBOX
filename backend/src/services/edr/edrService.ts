@@ -11,7 +11,7 @@
  */
 import crypto from 'crypto';
 import { isIP } from 'net';
-import { query } from '../../config/database';
+import pool, { query } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { ApiError } from '../../middleware/errorHandler';
 import { AssetRepository } from '../assets/assetRepository';
@@ -220,45 +220,33 @@ export async function ingestVulnerabilities(agentId: string, payload: any): Prom
   // Track the breakdown so the agent's grype count (one row per package×match)
   // can be reconciled with what we store (unique vuln-id per host). Logged below.
   const seen = new Set<string>();
-  let stored = 0;
   let duplicate = 0;
   let skippedNoId = 0;
+  // One row per identifier: a single INSERT ... ON CONFLICT cannot touch a row
+  // twice. Merged as the per-item upserts applied them in turn: a later report
+  // wins, except that its missing cvss/description keep an earlier one's
+  // (those columns update with COALESCE).
+  const rows = new Map<string, EdrVulnRow>();
   for (const v of items) {
     // Primary field is `cve`; fall back to a generic advisory id (GHSA/ELSA/…)
     // if the agent sends one, so non-CVE findings aren't silently dropped.
     const ident = (v?.cve ?? v?.id ?? v?.vulnerability_id ?? '').toString().trim();
     if (!ident) { skippedNoId++; continue; }
     if (seen.has(ident)) duplicate++; else seen.add(ident);
-    const severity = SEVERITY[(v?.severity ?? '').toString().toLowerCase()] ?? VulnerabilitySeverity.MEDIUM;
-    try {
-      const vuln = await VulnerabilityRepository.upsertVulnerability({
-        cve_id: ident.slice(0, 64),
-        severity,
-        title: v?.package ? `${ident} — ${v.package}` : ident,
-        description: v?.description ?? null,
-        cvss_score: typeof v?.cvss === 'number' ? v.cvss : null,
-        metadata: {
-          source: v?.source || 'edr',
-          package: v?.package,
-          installed_version: v?.installed_version,
-          fixed_version: v?.fixed_version,
-        } as any,
-      });
-      await VulnerabilityRepository.createAssetVulnerability({
-        asset_id: agent.asset_id,
-        vulnerability_id: vuln.id,
-        status: VulnerabilityStatus.OPEN,
-        evidence: [
-          v?.package && `package=${v.package}`,
-          v?.installed_version && `installed=${v.installed_version}`,
-          v?.fixed_version && `fixed=${v.fixed_version}`,
-          `source=${v?.source || 'edr'}`,
-        ].filter(Boolean).join(' '),
-      });
-      stored++;
-    } catch (e) {
-      logger.warn('EDR vuln upsert failed', { agentId, ident, error: e instanceof Error ? e.message : String(e) });
+    const key = ident.slice(0, 64);
+    const row = edrVulnRow(key, ident, v);
+    const earlier = rows.get(key);
+    if (earlier) {
+      row.cvss_score ??= earlier.cvss_score;
+      row.description ??= earlier.description;
     }
+    rows.set(key, row);
+  }
+
+  let stored = 0;
+  const all = [...rows.values()];
+  for (let i = 0; i < all.length; i += EDR_VULN_BATCH) {
+    stored += await storeEdrVulnBatch(agentId, agent.asset_id, all.slice(i, i + EDR_VULN_BATCH));
   }
   // received = grype's count; unique = what the host shows as "Open vulns".
   // received - unique = duplicate_id (same id, multiple packages) + skipped_no_id.
@@ -267,6 +255,129 @@ export async function ingestVulnerabilities(agentId: string, payload: any): Prom
     `duplicate_id=${duplicate} skipped_no_id=${skippedNoId}`
   );
   return stored;
+}
+
+/**
+ * Rows per statement when storing an agent's vulnerability report. A host can
+ * report thousands of findings; one upsert per finding (plus the risk-score
+ * trigger's lookups) took longer than the agent's 30 s request timeout, so the
+ * agent gave up and re-sent the whole report while the server was still
+ * working through the last one. Two statements per batch instead.
+ */
+const EDR_VULN_BATCH = 500;
+
+interface EdrVulnRow {
+  cve_id: string;
+  severity: string;
+  title: string;
+  description: string | null;
+  cvss_score: number | null;
+  metadata: Record<string, unknown>;
+  evidence: string;
+}
+
+function edrVulnRow(key: string, ident: string, v: any): EdrVulnRow {
+  const severity = SEVERITY[(v?.severity ?? '').toString().toLowerCase()] ?? VulnerabilitySeverity.MEDIUM;
+  return {
+    cve_id: key,
+    severity,
+    title: (v?.package ? `${ident} — ${v.package}` : ident).slice(0, 500),
+    description: v?.description ?? null,
+    cvss_score: typeof v?.cvss === 'number' ? v.cvss : null,
+    metadata: {
+      source: v?.source || 'edr',
+      package: v?.package,
+      installed_version: v?.installed_version,
+      fixed_version: v?.fixed_version,
+    },
+    evidence: [
+      v?.package && `package=${v.package}`,
+      v?.installed_version && `installed=${v.installed_version}`,
+      v?.fixed_version && `fixed=${v.fixed_version}`,
+      `source=${v?.source || 'edr'}`,
+    ].filter(Boolean).join(' '),
+  };
+}
+
+/**
+ * Upsert one batch of findings and link them to the asset, with the same
+ * column semantics as VulnerabilityRepository.upsertVulnerability +
+ * createAssetVulnerability, in one transaction. If the batch fails (a value
+ * a column refuses, say), it is retried row by row so one bad finding costs
+ * only itself, as before. Returns the findings stored.
+ */
+async function storeEdrVulnBatch(agentId: string, assetId: number, batch: EdrVulnRow[]): Promise<number> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const upserted = await client.query(
+      `INSERT INTO vulnerabilities (cve_id, severity, title, description, cvss_score, metadata)
+       SELECT * FROM UNNEST($1::varchar[], $2::varchar[], $3::varchar[], $4::text[], $5::numeric[], $6::jsonb[])
+       ON CONFLICT (cve_id) DO UPDATE SET
+         cvss_score = COALESCE(EXCLUDED.cvss_score, vulnerabilities.cvss_score),
+         severity = EXCLUDED.severity,
+         title = EXCLUDED.title,
+         description = COALESCE(EXCLUDED.description, vulnerabilities.description),
+         last_modified_date = EXCLUDED.last_modified_date,
+         metadata = COALESCE(EXCLUDED.metadata, vulnerabilities.metadata),
+         updated_at = NOW()
+       RETURNING id, cve_id`,
+      [
+        batch.map((r) => r.cve_id),
+        batch.map((r) => r.severity),
+        batch.map((r) => r.title),
+        batch.map((r) => r.description),
+        batch.map((r) => r.cvss_score),
+        batch.map((r) => JSON.stringify(r.metadata)),
+      ]
+    );
+    const idOf = new Map<string, number>(upserted.rows.map((r: any) => [r.cve_id, r.id]));
+    const linked = batch.filter((r) => idOf.has(r.cve_id));
+    await client.query(
+      `INSERT INTO asset_vulnerabilities (asset_id, vulnerability_id, status, evidence, first_detected, last_detected)
+       SELECT $1, t.vulnerability_id, $2, t.evidence, NOW(), NOW()
+         FROM UNNEST($3::int[], $4::text[]) AS t(vulnerability_id, evidence)
+       ON CONFLICT (asset_id, vulnerability_id) DO UPDATE SET
+         last_detected = NOW(),
+         evidence = COALESCE(EXCLUDED.evidence, asset_vulnerabilities.evidence),
+         updated_at = NOW()`,
+      [assetId, VulnerabilityStatus.OPEN, linked.map((r) => idOf.get(r.cve_id)), linked.map((r) => r.evidence)]
+    );
+    await client.query('COMMIT');
+    return linked.length;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    logger.warn('EDR vuln batch failed; storing its findings one by one', {
+      agentId,
+      size: batch.length,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    let stored = 0;
+    for (const r of batch) {
+      try {
+        const vuln = await VulnerabilityRepository.upsertVulnerability({
+          cve_id: r.cve_id,
+          severity: r.severity as any,
+          title: r.title,
+          description: r.description,
+          cvss_score: r.cvss_score,
+          metadata: r.metadata as any,
+        });
+        await VulnerabilityRepository.createAssetVulnerability({
+          asset_id: assetId,
+          vulnerability_id: vuln.id,
+          status: VulnerabilityStatus.OPEN,
+          evidence: r.evidence,
+        });
+        stored++;
+      } catch (e) {
+        logger.warn('EDR vuln upsert failed', { agentId, ident: r.cve_id, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    return stored;
+  } finally {
+    client.release();
+  }
 }
 
 // ---- Events (detections -> alerts) -----------------------------------------

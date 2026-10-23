@@ -25,6 +25,10 @@ export function requestTimeoutLogger(minElapsedMs = 5000) {
     if (!req.path.startsWith('/api')) return next();
 
     const start = Date.now();
+    // The full path, taken now: by the time the response closes, a mounted
+    // router has rewritten req.path to the part after its mount point, so a
+    // slow GET /api/vulnerabilities/ would be logged as just "GET /".
+    const path = req.originalUrl.split('?')[0];
     res.on('close', () => {
       // A finished response has writableEnded === true. If it's false, the
       // socket closed before the server sent the reply — the client gave up.
@@ -34,13 +38,13 @@ export function requestTimeoutLogger(minElapsedMs = 5000) {
 
       const err = new Error(
         `Request timeout: client closed the connection after ${elapsed}ms before ` +
-          `${req.method} ${req.path} responded (the endpoint was too slow).`
+          `${req.method} ${path} responded (the endpoint was too slow).`
       );
       err.name = 'RequestTimeoutError';
       // 'timeout' in the message → categorized network/warning, not a crash.
       ErrorLogService.logBackgroundError('http', err, {
-        dedupeKey: `client-timeout:${req.method} ${req.path}`,
-        endpoint: req.path,
+        dedupeKey: `client-timeout:${req.method} ${path}`,
+        endpoint: path,
         method: req.method,
         userId: req.user?.id,
       });

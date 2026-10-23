@@ -87,11 +87,18 @@
               What's new since you installed (v{{ pack.whats_new.from_version }} → v{{ pack.whats_new.to_version }}):
               {{ whatsNewSummary(pack.whats_new) }}
             </div>
-            <ul class="pack-items">
-              <li v-for="n in pack.whats_new.parsers" :key="'np' + n"><span class="kind">parser</span> {{ n }}</li>
-              <li v-for="n in pack.whats_new.detections" :key="'nd' + n"><span class="kind">detection</span> {{ n }}</li>
-              <li v-for="s in pack.whats_new.sigma" :key="'ns' + s.id"><span class="kind">Sigma</span> {{ s.title }}</li>
+            <ul class="new-items">
+              <li v-for="item in newItems(pack)" :key="item.key"><span class="kind">{{ item.kind }}</span>{{ item.name }}</li>
             </ul>
+            <el-button
+              v-if="newItemsAll(pack).length > NEW_PREVIEW"
+              link
+              size="small"
+              class="new-more"
+              @click="toggleNew(pack.id)"
+            >
+              {{ expandedNew.has(pack.id) ? 'Show fewer' : `Show all ${newItemsAll(pack).length}` }}
+            </el-button>
             <el-button
               v-if="authStore.isAdmin"
               type="danger"
@@ -252,6 +259,29 @@ const sigmaPending = computed(
   () => !!overview.value && !overview.value.sigma_library.loaded && packs.value.some((p) => p.sigma.some((s) => s.state === 'pending'))
 );
 
+// What's new: the first few items, all on request.
+const NEW_PREVIEW = 6;
+const expandedNew = ref(new Set<string>());
+function newItemsAll(p: PackStatus) {
+  const w = p.whats_new;
+  if (!w) return [];
+  return [
+    ...w.parsers.map((n) => ({ key: `p:${n}`, kind: 'parser', name: n })),
+    ...w.detections.map((n) => ({ key: `d:${n}`, kind: 'detection', name: n })),
+    ...w.sigma.map((x) => ({ key: `s:${x.id}`, kind: 'Sigma', name: x.title })),
+  ];
+}
+function newItems(p: PackStatus) {
+  const all = newItemsAll(p);
+  return expandedNew.value.has(p.id) ? all : all.slice(0, NEW_PREVIEW);
+}
+function toggleNew(id: string) {
+  const next = new Set(expandedNew.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  expandedNew.value = next;
+}
+
 function totalCount(p: PackStatus) {
   return p.parserTotal + p.detectionTotal + p.sigmaTotal;
 }
@@ -366,6 +396,7 @@ onMounted(() => load());
 .pack-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .pack-icon {
@@ -373,7 +404,7 @@ onMounted(() => load());
 }
 .pack-title {
   font-weight: 600;
-  flex: 1;
+  flex: 1 1 140px;
 }
 .pack-desc {
   font-size: 13px;
@@ -409,11 +440,24 @@ onMounted(() => load());
   font-weight: 600;
   margin-bottom: 4px;
 }
+.new-items {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+}
+.new-items li {
+  padding: 1px 0;
+  word-break: break-word;
+}
 .kind {
   display: inline-block;
-  min-width: 64px;
+  min-width: 70px;
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+.new-more {
+  display: block;
+  margin-bottom: 6px;
 }
 .pack-setup :deep(.el-collapse-item__content) {
   font-size: 13px;
@@ -469,6 +513,9 @@ onMounted(() => load());
 .guide-step-title {
   font-weight: 600;
   margin-bottom: 4px;
+}
+.guide-step-text {
+  line-height: 1.6;
 }
 .guide-step-text :deep(p) {
   margin: 4px 0;

@@ -4,7 +4,9 @@
  * The same path as the Sigma import (routes/rules.ts POST /import/sigma):
  * validate -> regex gate (every converted regex; a vulnerable or undecided one
  * refuses the whole Sigma rule, nothing saved) -> upsert. Added rules start
- * DISABLED, as imported ones do, so the user reviews and enables them.
+ * DISABLED, as imported ones do, so the user reviews and enables them; a
+ * Content Pack install (services/packs) adds its Sigma rules enabled, as it
+ * does its catalog detections.
  *
  * Provenance: detection_rules.sigma_id / sigma_release / sigma_hash /
  * sigma_part (migration 046). A name already taken by any other rule is never

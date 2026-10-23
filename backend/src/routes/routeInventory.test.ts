@@ -140,6 +140,13 @@ const INVENTORY: Row[] = [
   ['PUT', '/api/rules/:id', ANALYST_UP, AUDITED],
   ['DELETE', '/api/rules/:id', ANALYST_UP, AUDITED],
 
+  // routes/sigma.ts: Detection Rules page, SigmaHQ library
+  ['GET', '/api/sigma/library', ANY_ROLE],
+  ['POST', '/api/sigma/library/refresh', ANY_ROLE],
+  ['POST', '/api/sigma/library/:sigmaId/install', ANALYST_UP, AUDITED],
+  ['POST', '/api/sigma/library/:sigmaId/update', ANALYST_UP, AUDITED],
+  ['POST', '/api/sigma/library/install-bulk', ANALYST_UP, AUDITED],
+
   // routes/attack.ts: ATT&CK Coverage page. Every role reads (viewers read-only;
   // a viewer's ?refresh=1 is ignored in the handler); marking a technique not
   // applicable is analyst and up.
@@ -440,6 +447,7 @@ const VIEWER_SAFE_WRITES = new Set([
   'POST /api/ai/explain', // explains what the caller can already see; stores nothing
   'POST /api/log-discovery/sources/:id/onboard/preview', // renders instructions; stores nothing
   'POST /api/exposure/password-check', // k-anonymity lookup; stores nothing
+  'POST /api/sigma/library/refresh', // a viewer's call fetches nothing and answers with the cache
 ]);
 
 /**

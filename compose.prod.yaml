@@ -128,6 +128,10 @@ services:
       # change). EDR_YARA_KEEP_VERSIONS caps stored bundle history (default 10).
       EDR_YARA_FORGE_ENABLED: ${EDR_YARA_FORGE_ENABLED:-}
       EDR_YARA_KEEP_VERSIONS: ${EDR_YARA_KEEP_VERSIONS:-}
+      # SigmaHQ library (Detection Rules > SigmaHQ): which release asset, and
+      # SIGMAHQ_AUTO_REFRESH=false to stop the daily check (air-gapped installs).
+      SIGMAHQ_RELEASE_ASSET: ${SIGMAHQ_RELEASE_ASSET:-}
+      SIGMAHQ_AUTO_REFRESH: ${SIGMAHQ_AUTO_REFRESH:-}
     volumes:
       - ./rules:/app/rules:ro
       - ./data/geoip:/app/data

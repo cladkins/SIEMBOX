@@ -21,6 +21,7 @@ import { startDiscoveryApiPollerJob, stopDiscoveryApiPollerJob } from './jobs/di
 import { startGeoipUpdateJob, stopGeoipUpdateJob } from './jobs/geoipUpdate';
 import { startYaraRulesJob, stopYaraRulesJob } from './jobs/yaraRules';
 import { startEdrAgentReleaseJob, stopEdrAgentReleaseJob } from './jobs/edrAgentRelease';
+import { startSigmaLibraryJob, stopSigmaLibraryJob } from './jobs/sigmaLibrary';
 import { startTriageReconcilerJob, stopTriageReconcilerJob } from './jobs/triageReconciler';
 import { startLeakedCredsJob, stopLeakedCredsJob } from './jobs/leakedCreds';
 import { startDomainMonitorJob, stopDomainMonitorJob } from './jobs/domainMonitor';
@@ -172,6 +173,9 @@ const startServer = async () => {
     // update-available state and, when enabled, auto-update).
     startEdrAgentReleaseJob();
 
+    // Keep the SigmaHQ library current (daily; SIGMAHQ_AUTO_REFRESH=false turns it off).
+    startSigmaLibraryJob();
+
     // Start the AI triage reconciler (requeues runs orphaned by a restart;
     // backfills missed eligible alerts). No-ops on each tick while triage is
     // disabled in settings.
@@ -300,6 +304,7 @@ const shutdown = async (signal: string) => {
   stopGeoipUpdateJob();
   stopYaraRulesJob();
   stopEdrAgentReleaseJob();
+  stopSigmaLibraryJob();
   stopTriageReconcilerJob();
   stopLeakedCredsJob();
   stopDomainMonitorJob();

@@ -15,6 +15,7 @@ import { runParser } from '../parser/runParser';
 import { runSelfTests } from '../parser/parserPortable';
 import { recommendParsers } from '../parser/parserRecommendations';
 import { recommendRules } from '../rules/detectionRecommendations';
+import { countSigmaMatches } from '../sigma/sigmaCompat';
 import { analysisFlags, needsFuzzPass, recheckParams, verdictFromDiagnostics, type RegexVerdict } from '../parser/redos';
 
 type Handler = (payload: any) => unknown | Promise<unknown>;
@@ -56,6 +57,7 @@ const handlers: Record<string, Handler> = {
   selfTest: (p) => runSelfTests(p.parser),
   recommendParsers: (p) => recommendParsers(p.samples, p.candidates),
   recommendRules: (p) => recommendRules(p.sources, p.candidates),
+  sigmaMatches: (p) => countSigmaMatches(p.sources, p.work),
   scan,
 };
 

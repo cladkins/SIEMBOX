@@ -21,6 +21,7 @@ import type { ParserDef, RunContext, RunResult } from '../parser/runParser';
 import type { PortableParser, SelfTestResult } from '../parser/parserPortable';
 import type { RecommendationResult, SourceSample } from '../parser/parserRecommendations';
 import type { CandidateRule, RuleSourceSample, RuleRecommendation } from '../rules/detectionRecommendations';
+import type { CompatPairs, CompatSource } from '../sigma/sigmaCompat';
 
 /** Largest sample a caller may test a pattern on: the HTTP log-push message cap. */
 export const MAX_SAMPLE_BYTES = 64 * 1024;
@@ -100,6 +101,15 @@ export function recommendRulesBounded(
   return regexTestPool().run<{ recommendations: RuleRecommendation[] }>(
     'recommendRules',
     { sources, candidates },
+    { timeoutMs: RECOMMENDATION_TIMEOUT_MS }
+  );
+}
+
+/** The SigmaHQ library dry run (converted Sigma regexes × live parsed samples) in the test pool. */
+export function sigmaMatchesBounded(sources: CompatSource[], work: CompatPairs[]): Promise<Record<string, Record<string, number>>> {
+  return regexTestPool().run<Record<string, Record<string, number>>>(
+    'sigmaMatches',
+    { sources, work },
     { timeoutMs: RECOMMENDATION_TIMEOUT_MS }
   );
 }

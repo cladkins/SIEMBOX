@@ -36,6 +36,7 @@ import {
 import { recommendRulesBounded, regexRunErrorResponse } from '../services/regex/boundedRegex';
 import { gateOrRefuse, sendRegexRunError } from '../services/regex/regexHttp';
 import { analyzeAttackTags } from '../services/attack/attackTags';
+import { sigmaProvenance } from '../services/sigma/sigmaStore';
 
 const router = Router();
 
@@ -116,8 +117,17 @@ router.get('/', async (_req: Request, res: Response) => {
     const [rules, stats] = await Promise.all([DetectionRuleModel.findAll(), ruleTriggerStats()]);
     // `regex_safety` (cached verdicts only): status 'vulnerable' is the
     // Detection Rules page's "Unsafe regex" tag. `triggers`: how often the rule
-    // fired, from the alerts still stored (up to a minute old).
-    res.json(rules.map((r) => ({ ...withRuleRegexSafety(r), triggers: stats.get(r.id) ?? NEVER_TRIGGERED })));
+    // fired, from the alerts still stored (up to a minute old). `sigma`: for a
+    // rule added from the SigmaHQ library, its upstream link and whether the
+    // cached release updates or no longer has it.
+    const sigma = await sigmaProvenance(rules);
+    res.json(
+      rules.map((r) => ({
+        ...withRuleRegexSafety(r),
+        triggers: stats.get(r.id) ?? NEVER_TRIGGERED,
+        sigma: sigma.get(r.id) ?? null,
+      }))
+    );
   } catch {
     throw new ApiError(500, 'Failed to fetch rules');
   }
@@ -627,7 +637,9 @@ router.post('/', requireRuleWrite, async (req: Request, res: Response) => {
 router.put('/:id', requireRuleWrite, async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id as string);
-    const updateData = req.body;
+    const updateData = { ...(req.body ?? {}) };
+    // SigmaHQ provenance is set by the library's add/update only.
+    for (const key of ['sigma_id', 'sigma_release', 'sigma_hash', 'sigma_part']) delete updateData[key];
 
     // If rule_yaml is being updated, parse it
     if (updateData.rule_yaml) {

@@ -162,6 +162,25 @@ Keep the container images current — `git pull && docker compose -f
 compose.prod.yaml pull && up -d` ships the latest dependency fixes. Dependabot is
 enabled on the repository; review and merge its security PRs promptly.
 
+**Node.js runtime.** The backend and log-shipper images run Node 22 from the
+floating `node:22-alpine` / `node:22-bookworm-slim` base tags, so every image
+build picks up the latest Node 22 patch release. The PR image check refuses an
+image older than the newest security floor (currently **22.23.4**, the fix for
+CVE-2026-111497 "Node2Shell", remote code execution in Node's bundled Brotli
+decoder). Images published from 22 October 2026 17:17 UTC onwards carry it;
+pull to get them. Check a running install with:
+
+```bash
+docker compose -f compose.prod.yaml exec backend node --version   # v22.23.4 or later
+docker compose -f compose.prod.yaml exec log-shipper node --version
+```
+
+The backend also refuses Brotli-encoded request bodies (`Content-Encoding: br`,
+415) before any body parser runs, so the decoder is never fed request data even
+on an unpatched runtime; plain, gzip and deflate bodies are unaffected. Responses
+SIEMBox fetches (threat feeds, crt.sh, Cert Spotter, HIBP, the catalog) are still
+decoded by Node's `fetch`, which is why the runtime upgrade is the actual fix.
+
 ### Host System Hardening
 
 **Update System:**

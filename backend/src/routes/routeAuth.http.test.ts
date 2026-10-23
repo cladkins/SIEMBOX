@@ -233,7 +233,7 @@ test('the 16 kB cap is only for /api/auth: other routes keep the general limit',
   assert.equal(r.message, 'API key is required');
 });
 
-test('a compressed body that does not decompress is a 400, not a 500 written to application_errors', async () => {
+test('a compressed body that does not decompress is a 400 (Brotli: 415 unread), not a 500 written to application_errors', async () => {
   const { ErrorLogService } = await import('../services/errors/errorLogService');
   const logError = mock.method(ErrorLogService, 'logError', async () => undefined);
   try {
@@ -253,8 +253,15 @@ test('a compressed body that does not decompress is a 400, not a 500 written to 
           headers: { 'Content-Type': 'application/json', 'Content-Encoding': encoding },
           body: data,
         });
-        assert.equal(res.status, 400, `${path} ${encoding}`);
-        assert.equal(((await res.json()) as { message?: string }).message, 'Invalid request body');
+        const message = ((await res.json()) as { message?: string }).message;
+        if (encoding === 'br') {
+          // Refused before any parser reads it (CVE-2026-111497, middleware/rejectBrotliBodies).
+          assert.equal(res.status, 415, `${path} ${encoding}`);
+          assert.match(String(message), /Brotli-encoded request bodies are not accepted/);
+        } else {
+          assert.equal(res.status, 400, `${path} ${encoding}`);
+          assert.equal(message, 'Invalid request body');
+        }
       }
     }
     assert.equal(logError.mock.callCount(), 0, 'no application_errors row');

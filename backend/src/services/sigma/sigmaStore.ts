@@ -154,6 +154,15 @@ export async function loadSigmaLibrary(): Promise<LoadedLibrary> {
   return loading;
 }
 
+/**
+ * Test seam: serve `rules` (release `tag`; null = never loaded) from memory as
+ * if read from the DB, without writing the shared library tables.
+ */
+export function setSigmaMemoryForTests(rules: SigmaLibraryRule[], tag: string | null): void {
+  loaded = { version: `test:${tag ?? ''}:${Date.now()}`, tag, rules, byId: new Map(rules.map((x) => [x.sigma_id, x])) };
+  compat = null;
+}
+
 /** Test seam and refresh hook: forget the in-memory library and compatibility. */
 export function clearSigmaMemory(): void {
   loaded = null;

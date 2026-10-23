@@ -93,7 +93,15 @@ async function loadPackCatalog(src: CatalogSource, key: string, get: HttpGetter)
         invalid.push({ path: src.path, errors: [`more than ${MAX_PACK_FILES} pack files; the rest were not read`] });
       }
       for (const i of invalid) logger.warn('[Packs] catalog pack left out', i);
-      if (packs.length === 0) throw new Error(`none of the catalog's ${paths.length} pack file(s) is valid`);
+      if (packs.length === 0) {
+        const why = `none of the catalog's ${paths.length} pack file(s) is valid`;
+        value =
+          lastGood && lastGood.key === key
+            ? { ...lastGood.value, source: 'cache', invalid, error: `${why}; showing the packs read at ${lastGood.value.fetched_at}` }
+            : { ...bundled(src, `${why}; using the packs built into SIEMBox`), invalid };
+        cache = { key, at: Date.now(), value };
+        return value;
+      }
       value = {
         source: 'catalog',
         repo: src.repo,

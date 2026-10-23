@@ -1,8 +1,8 @@
 name: Sync Catalog
 
-# Mirror the published siembox-catalog repo (the source of truth for parsers and
-# detections, and what users install from) into this repo's catalog/parsers/ +
-# rules/, so the in-repo copy, the validate-catalog gate, and Content Packs all
+# Mirror the published siembox-catalog repo (the source of truth for parsers,
+# detections and content packs, and what users install from) into this repo's
+# catalog/parsers/ + rules/ + catalog/packs/, so the in-repo copy, the validate-catalog gate, and Content Packs all
 # agree. Author content in siembox-catalog: this copy is exact, so a change made
 # only here is reverted by the next sync.
 #
@@ -66,19 +66,28 @@ jobs:
         working-directory: backend
         run: npm run validate-detections -- ../rules
 
+      - name: Validate synced content packs (strict, references resolve)
+        working-directory: backend
+        run: |
+          if [ -d ../catalog/packs ]; then
+            npm run validate-packs -- ../catalog/packs --parsers ../catalog/parsers --detections ../rules
+          else
+            echo "No packs to validate."
+          fi
+
       - name: Open a PR if the catalog drifted
         uses: peter-evans/create-pull-request@v8
         with:
           branch: chore/catalog-sync
           delete-branch: true
-          commit-message: 'chore(catalog): sync parsers + detections from published catalog'
+          commit-message: 'chore(catalog): sync parsers, detections + packs from published catalog'
           title: 'chore(catalog): sync from published siembox-catalog'
           body: |
-            Automated mirror of the published **siembox-catalog** into `catalog/parsers/`
-            and `rules/` (run by `.github/workflows/sync-catalog.yml`).
+            Automated mirror of the published **siembox-catalog** into `catalog/parsers/`,
+            `rules/` and `catalog/packs/` (run by `.github/workflows/sync-catalog.yml`).
 
-            The synced parsers + detections already passed strict validation +
-            self-tests in this job. Merging keeps the in-repo source, the
+            The synced parsers, detections and packs already passed strict
+            validation + self-tests in this job. Merging keeps the in-repo source, the
             `validate-catalog` gate, and what users install from Browse Catalog /
             Content Packs all in agreement.
           labels: |

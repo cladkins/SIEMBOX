@@ -403,7 +403,9 @@ export async function listPacksWithStatus(opts: { refresh?: boolean } = {}): Pro
       install: rec
         ? { version: rec.version, installed_at: rec.installed_at, installed_by_username: rec.installed_by_username, pending: rec.pending, source: rec.source }
         : null,
-      whats_new: whatsNew && (whatsNew.count > 0 || whatsNew.version_bumped) ? whatsNew : null,
+      // Only when there is something to install: a version bump alone (a guide
+      // edit) shows as the version, not as a badge.
+      whats_new: whatsNew && whatsNew.count > 0 ? whatsNew : null,
     };
   });
 

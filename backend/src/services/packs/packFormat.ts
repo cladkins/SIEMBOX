@@ -191,7 +191,7 @@ export function stripCode(md: string): string {
   return out;
 }
 
-const SAFE_LINK_RE = /^(?:https?:\/\/|mailto:|\/(?!\/)|#|\.{0,2}\/)/i;
+const SAFE_LINK_RE = /^(?:https?:\/\/|mailto:|\/(?!\/)|#|\.{1,2}\/)/i;
 
 /**
  * Markup problems in guide markdown: raw HTML, images, and link targets that

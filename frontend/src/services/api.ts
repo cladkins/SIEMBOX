@@ -295,8 +295,10 @@ export const api = {
     apiClient.post('/sigma/library/install-bulk', body, { ...INLINE, timeout: 300000 }),
 
   // Content Packs (curated per-technology parser + detection bundles)
-  getContentPacks: () => apiClient.get('/packs'),
-  installContentPack: (id: string) => apiClient.post(`/packs/${id}/install`, {}, { timeout: 300000 }),
+  getContentPacks: (refresh = false) => apiClient.get('/packs', { params: refresh ? { refresh: 'true' } : {} }),
+  installContentPack: (id: string) => apiClient.post(`/packs/${encodeURIComponent(id)}/install`, {}, { timeout: 300000 }),
+  installContentPackNew: (id: string) =>
+    apiClient.post(`/packs/${encodeURIComponent(id)}/install-new`, {}, { timeout: 300000 }),
 
   // AI builder
   getAiSettings: () => apiClient.get('/settings/ai'),

@@ -9,9 +9,14 @@
           your logs, matched against the catalog's application signatures.
         </p>
       </div>
-      <el-button v-if="canRefresh" :loading="refreshing" @click="refresh">
-        <el-icon><Refresh /></el-icon> Refresh now
-      </el-button>
+      <div class="header-actions">
+        <el-button v-if="canWrite" type="primary" data-test="create-signature" @click="openEditor({ doc: null })">
+          <el-icon><Plus /></el-icon> Create signature
+        </el-button>
+        <el-button v-if="canRefresh" :loading="refreshing" @click="refresh">
+          <el-icon><Refresh /></el-icon> Refresh now
+        </el-button>
+      </div>
     </div>
 
     <el-alert v-if="loadError" type="error" :closable="false" :title="loadError" show-icon class="block" />
@@ -22,6 +27,9 @@
       <span>{{ signatureSourceText(status.signatures.source, status.signatures.count) }}</span>
       <span v-if="status.covered_until">· logs up to {{ ageLabel(status.covered_until) }}</span>
       <span>· listed for {{ status.retention_days }} days after last seen</span>
+      <el-tooltip v-if="rescanText" content="New or changed signatures are matched against the logs already processed (the backfill window), newest first." placement="bottom">
+        <el-tag size="small" type="warning" data-test="rescan">{{ rescanText }}</el-tag>
+      </el-tooltip>
       <el-tooltip v-if="status.signatures.error || status.signatures.refused.length" placement="bottom">
         <template #content>
           <div v-if="status.signatures.error">{{ status.signatures.error }}</div>
@@ -170,33 +178,106 @@
           </el-table>
         </el-tab-pane>
 
-        <el-tab-pane :label="`Not identified (${unmatched.length})`" name="unmatched">
+        <el-tab-pane :label="`Not identified (${unmatchedTotal})`" name="unmatched">
           <p class="intro">
-            The most frequent program names, container images and user-agent products no signature matches. If one is an
-            application, <strong>Suggest signature</strong> opens a pre-filled file in the
-            <a :href="`https://github.com/${status?.catalog_repo ?? 'cladkins/siembox-catalog'}`" target="_blank" rel="noopener noreferrer">catalog</a>
-            (fill in the TODOs; its CI checks it).
+            What SIEMBox sees that no signature identifies: log programs, parsers, container images, installed packages,
+            network services, user-agent products and DNS domains, most frequent first. If one is an application,
+            <template v-if="canWrite"><strong>Create signature</strong> opens it pre-filled in the editor (select several rows to make one signature
+              of them); a local signature applies at once, evidence already collected included, and you can then
+              <strong>Contribute</strong> it to the</template>
+            <template v-else><strong>Suggest</strong> opens a pre-filled file in the</template>
+            <a :href="`https://github.com/${status?.catalog_repo ?? 'cladkins/siembox-catalog'}`" target="_blank" rel="noopener noreferrer">catalog</a>.
           </p>
-          <el-table v-loading="unmatchedLoading" :data="unmatched" size="small" empty-text="Everything seen is identified">
+          <div class="filters">
+            <el-select v-model="gapFilters.source" placeholder="All kinds" clearable class="f-select" data-test="gap-kind" @change="loadUnmatched">
+              <el-option v-for="k in UNMATCHED_KINDS" :key="k" :label="`${unmatchedKindLabel(k)} (${unmatchedCounts[k]?.listed ?? 0})`" :value="k" />
+            </el-select>
+            <el-input v-model="gapFilters.search" placeholder="Search values" clearable class="f-search" @input="debouncedGaps">
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
+            <el-tooltip content="Operating-system and library packages, CDN and telemetry domains, generic nmap services" placement="top">
+              <el-checkbox v-model="gapFilters.noise" @change="loadUnmatched">Show system packages &amp; noise ({{ noiseTotal }})</el-checkbox>
+            </el-tooltip>
+            <el-checkbox v-model="gapFilters.ignored" @change="loadUnmatched">Show ignored ({{ ignoredTotal }})</el-checkbox>
+            <el-button v-if="canWrite && gapSelection.length" size="small" type="primary" @click="createFromGaps(gapSelection)">
+              Create signature from {{ gapSelection.length }} selected
+            </el-button>
+          </div>
+          <el-table v-loading="unmatchedLoading" :data="unmatched" size="small" empty-text="Everything seen is identified" data-test="gaps" @selection-change="(rows: Unmatched[]) => (gapSelection = rows)">
+            <el-table-column v-if="canWrite" type="selection" width="36" />
             <el-table-column label="Kind" width="140">
-              <template #default="{ row }">{{ UNMATCHED_KIND[row.source] ?? row.source }}</template>
+              <template #default="{ row }">
+                {{ unmatchedKindLabel(row.source) }}
+                <el-tag v-if="row.noise" size="small" type="info" effect="plain" class="chip">system</el-tag>
+                <el-tag v-if="row.ignored" size="small" type="info" class="chip">ignored</el-tag>
+                <el-tag v-if="row.detail?.vulnerable" size="small" type="danger" effect="plain" class="chip">EDR finding</el-tag>
+              </template>
             </el-table-column>
-            <el-table-column label="Value" min-width="200">
+            <el-table-column label="Value" min-width="220">
               <template #default="{ row }">
                 <code>{{ row.value }}</code>
                 <div v-if="row.sample && row.sample !== row.value" class="muted sample">{{ row.sample }}</div>
               </template>
             </el-table-column>
-            <el-table-column label="Seen" width="110">
+            <el-table-column label="Seen" width="90">
               <template #default="{ row }">{{ row.events.toLocaleString('en-US') }}</template>
             </el-table-column>
-            <el-table-column label="Example location" prop="sample_location" width="160" />
-            <el-table-column label="Last seen" width="110">
+            <el-table-column label="Locations" width="90" prop="locations" />
+            <el-table-column label="Example location" width="160">
+              <template #default="{ row }">{{ row.location_label ?? row.sample_location ?? '—' }}</template>
+            </el-table-column>
+            <el-table-column label="Last seen" width="100">
               <template #default="{ row }">{{ ageLabel(row.last_seen) }}</template>
             </el-table-column>
-            <el-table-column width="150">
+            <el-table-column :width="canWrite ? 250 : 130" fixed="right">
               <template #default="{ row }">
-                <el-link :href="row.suggest_url" target="_blank" rel="noopener noreferrer" type="primary">Suggest signature</el-link>
+                <el-button v-if="canWrite" size="small" type="primary" link data-test="gap-create" @click="createFromGaps([row])">Create signature</el-button>
+                <el-button v-if="canWrite && !row.ignored" size="small" link @click="setIgnored(row, true)">Ignore</el-button>
+                <el-button v-if="canWrite && row.ignored" size="small" link @click="setIgnored(row, false)">Unignore</el-button>
+                <el-link :href="row.suggest_url" target="_blank" rel="noopener noreferrer" type="info" class="suggest">Suggest</el-link>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+
+        <el-tab-pane :label="`Signatures (${localSigs.length})`" name="signatures">
+          <p class="intro">
+            Local signatures: written here in the catalog's format and used next to its {{ sigCatalog?.count ?? '' }} signatures
+            (a local one with a catalog id overrides it). <strong>Contribute</strong> checks one with the catalog's CI rules and
+            opens a pre-filled pull request in your browser.
+          </p>
+          <el-table v-loading="sigsLoading" :data="localSigs" size="small" empty-text="No local signatures yet: create one from the Not identified list" data-test="signatures">
+            <el-table-column label="Signature" min-width="200">
+              <template #default="{ row }">
+                <div class="app-name">{{ row.name }}</div>
+                <div class="muted"><code>{{ row.id }}</code> · {{ row.vendor }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="Category" width="140">
+              <template #default="{ row }"><el-tag size="small" effect="plain">{{ categoryLabel(row.category) }}</el-tag></template>
+            </el-table-column>
+            <el-table-column label="Catalog" width="170">
+              <template #default="{ row }">
+                <el-tooltip :content="CATALOG_STATUS[row.catalog_status as CatalogStatus]?.hint ?? ''" placement="top">
+                  <el-tag size="small" :type="CATALOG_STATUS[row.catalog_status as CatalogStatus]?.type ?? 'info'">{{ CATALOG_STATUS[row.catalog_status as CatalogStatus]?.label ?? row.catalog_status }}</el-tag>
+                </el-tooltip>
+                <el-tag v-if="row.origin === 'override'" size="small" type="warning" effect="plain" class="chip">local override</el-tag>
+                <el-tooltip v-if="!row.valid" :content="row.errors.join('; ')" placement="top"><el-tag size="small" type="danger" class="chip">invalid</el-tag></el-tooltip>
+              </template>
+            </el-table-column>
+            <el-table-column label="Enabled" width="90">
+              <template #default="{ row }">
+                <el-switch v-model="row.enabled" :disabled="!canWrite" size="small" @change="toggleSig(row)" />
+              </template>
+            </el-table-column>
+            <el-table-column label="Updated" width="150">
+              <template #default="{ row }">{{ ageLabel(row.updated_at) }}<div class="muted">{{ row.updated_by ?? '' }}</div></template>
+            </el-table-column>
+            <el-table-column label="" width="250" fixed="right">
+              <template #default="{ row }">
+                <el-button size="small" @click="editSig(row.id)">{{ canWrite ? 'Edit' : 'View' }}</el-button>
+                <el-button size="small" data-test="contribute" @click="contribute(row.id)">Contribute</el-button>
+                <el-button v-if="canWrite" size="small" type="danger" @click="deleteSig(row)">Delete</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -212,7 +293,11 @@
             <template v-if="detail.website"> · <a :href="detail.website" target="_blank" rel="noopener noreferrer">website</a></template>
           </p>
           <p v-if="detail.description">{{ detail.description }}</p>
-          <OpenInGraphButton type="application" :value="detail.id" window="30d" size="small" @navigate="detailOpen = false" />
+          <div class="detail-actions">
+            <OpenInGraphButton type="application" :value="detail.id" window="30d" size="small" @navigate="detailOpen = false" />
+            <el-tag v-if="localSigs.some((l) => l.id === detail?.id)" size="small" type="warning">local signature</el-tag>
+            <el-button size="small" @click="editSig(detail.id)">{{ canWrite ? (localSigs.some((l) => l.id === detail?.id) ? 'Edit signature' : 'Override signature') : 'View signature' }}</el-button>
+          </div>
           <el-descriptions :column="2" size="small" border class="block">
             <el-descriptions-item label="Where">{{ whereLabel(detail) }}</el-descriptions-item>
             <el-descriptions-item label="Evidence">{{ detail.sources.map(sourceLabel).join(', ') || '—' }}</el-descriptions-item>
@@ -272,18 +357,61 @@
         </template>
       </div>
     </el-drawer>
+
+    <SignatureEditor
+      v-model="editorOpen"
+      :initial-doc="editor.doc"
+      :initial-yaml="editor.yaml"
+      :editing-id="editor.editingId"
+      :origin="editor.origin"
+      :gap-items="editor.gaps"
+      :can-ai="isAdmin"
+      :ai-available="aiAvailable"
+      @saved="afterSave"
+    />
+
+    <!-- Contribute to the community catalog (browser hand-off, no token needed), as on the Parsers page -->
+    <el-dialog v-model="contributeOpen" title="Contribute to the community catalog" width="660px">
+      <div v-loading="contributeLoading" style="min-height: 60px">
+        <template v-if="contribution">
+          <el-alert v-if="contribution.ready" type="success" :closable="false" show-icon title="Validated and its tests pass: ready to propose." class="block" />
+          <el-alert v-else type="error" :closable="false" show-icon title="Not ready: fix the issues below, then try again." class="block" />
+          <p class="intro">
+            This opens GitHub's pre-filled <strong>"propose new file"</strong> page for <code>{{ contribution.path }}</code>. You finish the fork and
+            pull request in your browser, signed in as you; SIEMBox never touches your GitHub credentials. A maintainer reviews it and the
+            catalog's CI runs these same checks before it can merge.
+          </p>
+          <div v-if="contribution.tests?.total" class="intro">
+            Tests:
+            <el-tag :type="contribution.tests.failures.length ? 'danger' : 'success'" size="small">
+              {{ contribution.tests.total - contribution.tests.failures.length }}/{{ contribution.tests.total }} passed
+            </el-tag>
+          </div>
+          <ul v-if="contribution.errors?.length" class="contrib-issues error"><li v-for="(e, i) in contribution.errors" :key="'e' + i">{{ e }}</li></ul>
+          <ul v-if="contribution.warnings?.length" class="contrib-issues warn"><li v-for="(w, i) in contribution.warnings" :key="'w' + i">{{ w }}</li></ul>
+          <pre class="contrib-preview">{{ contribution.content }}</pre>
+        </template>
+      </div>
+      <template #footer>
+        <el-button @click="contributeOpen = false">Close</el-button>
+        <el-button v-if="contribution" @click="copyContribution">Copy YAML</el-button>
+        <el-button type="primary" :disabled="!contribution?.ready" data-test="open-pr" @click="openContribution">Open GitHub PR</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { ElMessage } from 'element-plus';
-import { Refresh, Search } from '@element-plus/icons-vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { Plus, Refresh, Search } from '@element-plus/icons-vue';
 import { api } from '@/services/api';
 import { useAuthStore } from '@/stores/auth';
 import SeverityBadge from '@/components/SeverityBadge.vue';
 import OpenInGraphButton from '@/components/graph/OpenInGraphButton.vue';
+import SignatureEditor, { type GapItem } from '@/components/applications/SignatureEditor.vue';
+import { CATALOG_STATUS, mergeDrafts, unmatchedKindLabel, UNMATCHED_KINDS, type CatalogStatus } from '@/utils/applicationSignatures';
 import {
   ageLabel,
   categoryLabel,
@@ -318,8 +446,26 @@ interface Unmatched {
   locations: number;
   last_seen: string;
   sample_location: string | null;
+  location_label: string | null;
   sample: string | null;
+  detail: Record<string, unknown> | null;
+  noise: boolean;
+  ignored: boolean;
+  draft: Record<string, unknown>;
   suggest_url: string;
+}
+interface LocalSig {
+  id: string;
+  name: string;
+  vendor: string;
+  category: string;
+  enabled: boolean;
+  origin: 'local' | 'override';
+  catalog_status: string;
+  valid: boolean;
+  errors: string[];
+  updated_by: string | null;
+  updated_at: string;
 }
 interface VulnRow {
   app_id: string;
@@ -347,7 +493,6 @@ interface Detail extends ApplicationRow {
   vulnerability_list: Array<{ cve_id: string; title: string | null; severity: string | null; asset: string; match: string; version: string }>;
 }
 
-const UNMATCHED_KIND: Record<string, string> = { syslog_program: 'Log program', container: 'Container image', user_agent: 'User-agent product' };
 const CATEGORIES = [
   'auth', 'automation', 'backup', 'browser', 'container-runtime', 'database', 'dev-tools', 'dns', 'file-sharing', 'game', 'home-automation',
   'http-client', 'mail', 'media-server', 'messaging', 'monitoring', 'network', 'operating-system', 'os-component', 'password-manager',
@@ -359,6 +504,9 @@ const role = computed(() => authStore.user?.role ?? 'viewer');
 const canRefresh = computed(() => ['admin', 'operator', 'analyst'].includes(role.value));
 const canSeeVulnMgmt = computed(() => ['admin', 'operator'].includes(role.value));
 const canSeeAssets = computed(() => ['admin', 'operator', 'analyst'].includes(role.value));
+// Local signatures, ignoring values and the editor's checks: analyst and up (as parsers); the AI draft: admin.
+const canWrite = computed(() => authStore.canAnalyst);
+const isAdmin = computed(() => authStore.isAdmin);
 
 const tab = ref('inventory');
 const filters = reactive({ search: '', category: '', source: '', host: '' });
@@ -372,6 +520,21 @@ const vulns = ref<VulnRow[]>([]);
 const vulnsLoading = ref(false);
 const unmatched = ref<Unmatched[]>([]);
 const unmatchedLoading = ref(false);
+const unmatchedCounts = ref<Record<string, { listed: number; noise: number; ignored: number; total: number }>>({});
+const gapFilters = reactive({ source: '', search: '', noise: false, ignored: false });
+const gapSelection = ref<Unmatched[]>([]);
+const localSigs = ref<LocalSig[]>([]);
+const sigsLoading = ref(false);
+const sigCatalog = ref<{ count: number; source: string; repo: string } | null>(null);
+const aiAvailable = ref(false);
+const rescan = ref<{ apps: string[]; pending: string[]; progress: number | null } | null>(null);
+const editorOpen = ref(false);
+const editor = reactive<{ doc: Record<string, unknown> | null; yaml: string | null; editingId: string | null; origin: 'local' | 'override' | 'catalog' | null; gaps: GapItem[] }>({
+  doc: null, yaml: null, editingId: null, origin: null, gaps: [],
+});
+const contributeOpen = ref(false);
+const contributeLoading = ref(false);
+const contribution = ref<any>(null);
 const detailOpen = ref(false);
 const detailLoading = ref(false);
 const detail = ref<Detail | null>(null);
@@ -382,6 +545,16 @@ const categories = computed(() => {
 });
 const drifting = computed(() => driftOrder(apps.value));
 const unmanaged = computed(() => apps.value.filter((a) => a.unmanaged));
+const unmatchedTotal = computed(() => Object.values(unmatchedCounts.value).reduce((n, c) => n + c.listed, 0) || unmatched.value.length);
+const noiseTotal = computed(() => Object.values(unmatchedCounts.value).reduce((n, c) => n + c.noise, 0));
+const ignoredTotal = computed(() => Object.values(unmatchedCounts.value).reduce((n, c) => n + c.ignored, 0));
+const rescanText = computed(() => {
+  const r = rescan.value;
+  if (!r) return '';
+  if (r.apps.length) return `Looking back over older logs for ${r.apps.length} signature(s)${r.progress !== null ? `: ${Math.round(r.progress * 100)}%` : ''}`;
+  if (r.pending.length) return `${r.pending.length} signature(s) queued to look back over older logs`;
+  return '';
+});
 
 function message(err: unknown, fallback: string): string {
   return (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? fallback;
@@ -426,12 +599,147 @@ async function loadVulns() {
 
 async function loadUnmatched() {
   unmatchedLoading.value = true;
+  const p: Record<string, string> = {};
+  if (gapFilters.source) p.source = gapFilters.source;
+  if (gapFilters.search.trim()) p.search = gapFilters.search.trim();
+  if (gapFilters.noise) p.noise = 'true';
+  if (gapFilters.ignored) p.ignored = 'true';
   try {
-    unmatched.value = (await api.getApplicationsUnmatched()).data.unmatched;
+    const { data } = await api.getApplicationsUnmatched(p);
+    unmatched.value = data.unmatched;
+    unmatchedCounts.value = data.counts ?? {};
   } catch (err) {
     ElMessage.error(message(err, 'Could not load the unidentified list.'));
   } finally {
     unmatchedLoading.value = false;
+  }
+}
+
+let gapTimer: ReturnType<typeof setTimeout> | null = null;
+function debouncedGaps() {
+  if (gapTimer) clearTimeout(gapTimer);
+  gapTimer = setTimeout(loadUnmatched, 300);
+}
+
+async function loadSignatures() {
+  sigsLoading.value = true;
+  try {
+    const { data } = await api.getApplicationSignatures();
+    localSigs.value = data.signatures;
+    sigCatalog.value = data.catalog;
+    aiAvailable.value = !!data.ai_available;
+    rescan.value = data.rescan;
+  } catch (err) {
+    ElMessage.error(message(err, 'Could not load the local signatures.'));
+  } finally {
+    sigsLoading.value = false;
+  }
+}
+
+function openEditor(opts: { doc: Record<string, unknown> | null; yaml?: string | null; editingId?: string | null; origin?: 'local' | 'override' | 'catalog' | null; gaps?: GapItem[] }) {
+  editor.doc = opts.doc;
+  editor.yaml = opts.yaml ?? null;
+  editor.editingId = opts.editingId ?? null;
+  editor.origin = opts.origin ?? null;
+  editor.gaps = opts.gaps ?? [];
+  editorOpen.value = true;
+}
+
+function createFromGaps(rows: Unmatched[]) {
+  if (!rows.length) return;
+  openEditor({
+    doc: mergeDrafts(rows.map((r) => r.draft)),
+    gaps: rows.slice(0, 10).map((r) => ({ source: r.source, value: r.value, sample: r.sample, detail: r.detail })),
+  });
+}
+
+async function editSig(id: string) {
+  try {
+    const { data } = await api.getApplicationSignature(id);
+    openEditor({
+      doc: data.definition,
+      yaml: data.origin === 'catalog' ? null : data.yaml,
+      editingId: data.origin === 'catalog' ? null : id,
+      origin: data.origin,
+    });
+  } catch (err) {
+    ElMessage.error(message(err, 'Could not load the signature.'));
+  }
+}
+
+async function afterSave() {
+  await Promise.all([loadSignatures(), loadUnmatched()]);
+  // The save started an inventory run: show its results when it is done.
+  setTimeout(() => void Promise.all([load(), loadUnmatched(), loadSignatures()]), 8000);
+}
+
+async function toggleSig(row: LocalSig) {
+  try {
+    await api.updateApplicationSignature(row.id, { enabled: row.enabled });
+    ElMessage.success(row.enabled ? `${row.name} is used again` : `${row.name} is switched off`);
+    await loadSignatures();
+  } catch (err) {
+    row.enabled = !row.enabled;
+    ElMessage.error(message(err, 'Could not change the signature.'));
+  }
+}
+
+async function deleteSig(row: LocalSig) {
+  try {
+    await ElMessageBox.confirm(
+      row.origin === 'override'
+        ? `Delete the local copy of "${row.name}"? The catalog's signature takes over again.`
+        : `Delete "${row.name}"? It is no longer identified (its inventory rows go too).`,
+      'Delete signature',
+      { type: 'warning', confirmButtonText: 'Delete' }
+    );
+  } catch {
+    return;
+  }
+  try {
+    await api.deleteApplicationSignature(row.id);
+    ElMessage.success('Signature deleted');
+    await Promise.all([loadSignatures(), load()]);
+  } catch (err) {
+    ElMessage.error(message(err, 'Could not delete the signature.'));
+  }
+}
+
+async function setIgnored(row: Unmatched, ignored: boolean) {
+  try {
+    if (ignored) await api.ignoreApplicationUnmatched(row.source, row.value);
+    else await api.unignoreApplicationUnmatched(row.source, row.value);
+    await loadUnmatched();
+  } catch (err) {
+    ElMessage.error(message(err, 'Could not change it.'));
+  }
+}
+
+async function contribute(id: string) {
+  contribution.value = null;
+  contributeLoading.value = true;
+  contributeOpen.value = true;
+  try {
+    contribution.value = (await api.getApplicationSignatureContribution(id)).data;
+  } catch (err) {
+    ElMessage.error(message(err, 'Could not prepare the contribution.'));
+    contributeOpen.value = false;
+  } finally {
+    contributeLoading.value = false;
+  }
+}
+
+function openContribution() {
+  if (contribution.value?.contribute_url) window.open(contribution.value.contribute_url, '_blank', 'noopener');
+}
+
+async function copyContribution() {
+  if (!contribution.value?.content) return;
+  try {
+    await navigator.clipboard.writeText(contribution.value.content);
+    ElMessage.success('YAML copied');
+  } catch {
+    ElMessage.warning('Could not copy: select the text in the preview instead');
   }
 }
 
@@ -453,7 +761,7 @@ async function refresh() {
   try {
     const { data } = await api.refreshApplications();
     ElMessage.success(`Inventory refreshed: ${data.summary}`);
-    await Promise.all([load(), loadVulns(), loadUnmatched()]);
+    await Promise.all([load(), loadVulns(), loadUnmatched(), loadSignatures()]);
   } catch (err) {
     ElMessage.warning(message(err, 'Could not refresh the inventory.'));
   } finally {
@@ -477,6 +785,7 @@ function evidenceText(e: Record<string, unknown> | null): string {
 watch(tab, (t) => {
   if (t === 'vulnerabilities' && !vulns.value.length) void loadVulns();
   if (t === 'unmatched' && !unmatched.value.length) void loadUnmatched();
+  if (t === 'signatures') void loadSignatures();
 });
 
 onMounted(async () => {
@@ -484,8 +793,11 @@ onMounted(async () => {
   const linked = typeof route.query.app === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(route.query.app) ? route.query.app : null;
   if (linked) void open({ id: linked });
   await load();
+  // ?tab=unmatched|signatures opens that tab.
+  if (typeof route.query.tab === 'string' && ['inventory', 'drift', 'vulnerabilities', 'unmanaged', 'unmatched', 'signatures'].includes(route.query.tab)) tab.value = route.query.tab;
   void loadVulns();
   void loadUnmatched();
+  void loadSignatures();
 });
 </script>
 
@@ -496,6 +808,39 @@ onMounted(async () => {
   align-items: flex-start;
   gap: 16px;
   margin-bottom: 12px;
+}
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+.detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.suggest {
+  margin-left: 8px;
+  font-size: 12px;
+}
+.contrib-issues {
+  margin: 6px 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+.contrib-issues.error {
+  color: var(--el-color-danger);
+}
+.contrib-issues.warn {
+  color: var(--el-color-warning);
+}
+.contrib-preview {
+  max-height: 260px;
+  overflow: auto;
+  background: var(--el-fill-color-light);
+  padding: 8px;
+  font-size: 12px;
+  border-radius: 4px;
 }
 .page-header h2 {
   margin: 0 0 4px;

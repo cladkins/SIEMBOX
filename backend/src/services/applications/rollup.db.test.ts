@@ -34,7 +34,7 @@ let ready = false;
 const TABLES = [
   'raw_logs', 'parsed_logs', 'parsers', 'assets', 'asset_services', 'log_shippers', 'shipper_containers', 'vulnerabilities',
   'asset_vulnerabilities', 'edr_agents', 'edr_agent_packages', 'edr_agent_package_snapshots', 'application_inventory', 'application_unmatched', 'application_vuln_links',
-  'application_signatures', 'application_inventory_state',
+  'application_signatures', 'application_inventory_state', 'custom_application_signatures', 'application_unmatched_ignores',
 ];
 
 async function connect(): Promise<RollupClient> {
@@ -192,6 +192,7 @@ test('log evidence: programs and parsers on the logging host, user agents and DN
   assert.deepEqual(
     unmatched.map((u) => [u.source, u.value, u.events]),
     [
+      ['parser', 'pihole-query', 2],
       ['syslog_program', 'dnsmasq', 2],
       ['syslog_program', 'mystery-daemon', 2],
       ['syslog_program', 'nginx', 5],
@@ -393,4 +394,147 @@ test('switched off: nothing is read or written', async (t) => {
   assert.equal(result.status, 'disabled');
   assert.equal((await inventory()).length, 0);
   assert.equal((await state()).last_parsed_log_id, null);
+});
+
+// ---------------------------------------------------------------------------
+// Local signatures (migration 051): applied to evidence already rolled up.
+// ---------------------------------------------------------------------------
+
+const WIDGET = sig({
+  id: 'widget', name: 'Widget', category: 'automation',
+  match: { syslog_program: ['widgetd'], user_agent: ['^WidgetClient/(\\d+(?:\\.\\d+)*)'], package: ['widget-agent'], dns: ['widgetapp.io'] },
+});
+const unmatchedValues = async (source?: string) =>
+  (await pool.query(`SELECT source, value FROM ${schema}.application_unmatched ${source ? 'WHERE source = $1' : ''} ORDER BY 1, 2`, source ? [source] : [])).rows.map(
+    (r) => `${r.source}:${r.value}`
+  );
+
+test('a new local signature matches logs the cursor already passed (look back), counting each log once', async (t) => {
+  if (!ready) return t.skip(SKIP);
+  // (In created_at order, as ingestion writes them.)
+  await insertLogs([
+    ...[1, 2, 3].map(() => ({ app: 'widgetd', hostname: 'web01', ago: '2 days' })),
+    { app: 'nginx', parser: 2, data: { source_ip: '203.0.113.9', user_agent: 'WidgetClient/2.4.1' }, ago: '1 day' },
+    { app: 'dnsmasq', parser: 3, eventType: 'dns_query', data: { source_ip: '192.168.1.60', domain: 'api.widgetapp.io' }, ago: '5 hours' },
+    ...[1, 2].map(() => ({ app: 'widgetd', hostname: 'web02', ago: '3 hours' })),
+  ]);
+  await run();
+  assert.equal((await inventory()).filter((r) => r.app_id === 'widget').length, 0);
+  assert.deepEqual(await unmatchedValues('syslog_program'), ['syslog_program:dnsmasq', 'syslog_program:nginx', 'syslog_program:widgetd']);
+  assert.deepEqual(await unmatchedValues('dns'), ['dns:widgetapp.io'], 'the registrable domain of an unmatched query');
+  assert.deepEqual(await unmatchedValues('user_agent'), ['user_agent:WidgetClient']);
+
+  // The signature is saved; one more widgetd log arrives before the next run.
+  await insertLogs([{ app: 'widgetd', hostname: 'web01', ago: '1 minute' }]);
+  const result = await run({ local: [WIDGET] });
+  assert.equal(result.localSignatures, 1);
+  assert.deepEqual(result.rescan.apps, ['widget'], 'new to the set and without rows: looked back for');
+  const rows = await inventory();
+  assert.deepEqual(find(rows, 'widget', 'host:web01', 'syslog_program').map((r) => r.events), [4], 'the new log (main cursor) and the three old ones (look back), once each');
+  assert.deepEqual(find(rows, 'widget', 'host:web02', 'syslog_program').map((r) => r.events), [2]);
+  assert.deepEqual(find(rows, 'widget', 'client:203.0.113.9', 'user_agent').map((r) => [r.version, r.events]), [['2.4.1', 1]]);
+  assert.deepEqual(find(rows, 'widget', 'client:192.168.1.60', 'dns').map((r) => r.events), [1]);
+  assert.deepEqual(await unmatchedValues('syslog_program'), ['syslog_program:dnsmasq', 'syslog_program:nginx'], 'what the new set matches leaves the list');
+  assert.deepEqual(await unmatchedValues('dns'), []);
+  assert.deepEqual(await unmatchedValues('user_agent'), []);
+  const s = await state();
+  assert.deepEqual(s.rescan_apps, []);
+  assert.deepEqual(s.rescan_pending, []);
+  const { rows: stored } = await pool.query(`SELECT source FROM ${schema}.application_signatures WHERE id = 'widget'`);
+  assert.deepEqual(stored.map((r) => r.source), ['local']);
+
+  // Nothing new: nothing changes, nothing is counted again.
+  await run({ local: [WIDGET] });
+  assert.deepEqual(await inventory(), rows);
+});
+
+test('the look back walks the backfill window in batches, and an edit adds only new locations', async (t) => {
+  if (!ready) return t.skip(SKIP);
+  await insertLogs([
+    { app: 'sshd-session', hostname: 'old01', ago: '9 days' },
+    ...[1, 2].map(() => ({ app: 'sshd-session', hostname: 'web03', ago: '2 days' })),
+    ...[1, 2, 3, 4, 5].map(() => ({ app: 'sshd', hostname: 'web01', ago: '1 day' })),
+  ]);
+  await run();
+  assert.deepEqual(find(await inventory(), 'openssh', 'host:web01', 'syslog_program').map((r) => r.events), [5]);
+  // The backfill started 7 days back: old01's log is before the window.
+  assert.deepEqual(await unmatchedValues('syslog_program'), ['syslog_program:sshd-session']);
+
+  // A local override of openssh adds sshd-session; the save queues it.
+  const edited = sig({ ...SIGNATURES.find((a) => a.id === 'openssh')!, match: { ...SIGNATURES.find((a) => a.id === 'openssh')!.match, syslog_program: ['sshd', 'sshd-session'] } });
+  await pool.query(`UPDATE ${schema}.application_inventory_state SET rescan_pending = '{openssh}'`);
+  const r1 = await run({ local: [edited], batchSize: 2, budgetMs: 60_000 });
+  assert.deepEqual(r1.rescan.apps, ['openssh']);
+  assert.equal(r1.rescan.consumed, 7, 'the 7 logs of the window, in batches of two');
+  const rows = await inventory();
+  assert.deepEqual(find(rows, 'openssh', 'host:web01', 'syslog_program').map((r) => r.events), [5], 'a location it already had keeps its count');
+  assert.deepEqual(find(rows, 'openssh', 'host:web03', 'syslog_program').map((r) => r.events), [2], 'a new location gets its history');
+  assert.equal(find(rows, 'openssh', 'host:old01', 'syslog_program').length, 0, 'outside the backfill window');
+  assert.deepEqual(await unmatchedValues('syslog_program'), []);
+});
+
+test('the look back resumes across runs when the budget runs out, and none runs with the backfill off', async (t) => {
+  if (!ready) return t.skip(SKIP);
+  await insertLogs([...Array.from({ length: 6 }, () => ({ app: 'widgetd', hostname: 'web01', ago: '1 day' }))]);
+  await run();
+  let clock = 0;
+  // Each batch "takes" 10 ms of a 15 ms budget: one look-back batch per run.
+  const timed = (over: Partial<Parameters<typeof runInventoryRollup>[0]> = {}) =>
+    run({ local: [WIDGET], batchSize: 2, budgetMs: 15, now: () => (clock += 5), ...over });
+  const first = await timed();
+  assert.equal(first.rescan.more, true);
+  for (let i = 0; i < 10 && (await state()).rescan_apps.length > 0; i++) await timed();
+  assert.deepEqual(find(await inventory(), 'widget', 'host:web01', 'syslog_program').map((r) => r.events), [6]);
+
+  // Switched off (backfill 0 days): a queued signature is dropped, not looked back for.
+  await pool.query(`UPDATE ${schema}.application_inventory_state SET rescan_pending = '{widget}'`);
+  const off = await run({ local: [WIDGET], settings: settings({ backfillDays: 0 }) });
+  assert.deepEqual(off.rescan.apps, []);
+  const s = await state();
+  assert.deepEqual(s.rescan_pending, []);
+  assert.deepEqual(s.rescan_apps, []);
+});
+
+test('Not identified: parsers, nmap products, installed packages (system ones flagged), EDR findings; a local signature applies to snapshots at once', async (t) => {
+  if (!ready) return t.skip(SKIP);
+  await pool.query(`INSERT INTO ${schema}.assets (id, ip_address, hostname) VALUES (1, '10.0.0.2', 'web01'), (2, '10.0.0.3', 'db01')`);
+  await pool.query(
+    `INSERT INTO ${schema}.asset_services (asset_id, port, protocol, service_name, service_version, banner, state) VALUES
+       (1, 8080, 'tcp', 'http', 'Acme Server 4.2.1 (Linux)', NULL, 'open'), (2, 8080, 'tcp', 'http', 'Acme Server 4.2.0', NULL, 'open'),
+       (2, 9999, 'tcp', 'tcpwrapped', NULL, NULL, 'open'), (2, 5432, 'tcp', 'postgresql', NULL, NULL, 'open')`
+  );
+  const a1 = crypto.randomUUID();
+  const a2 = crypto.randomUUID();
+  await pool.query(`INSERT INTO ${schema}.edr_agents (agent_id, api_key_hash, asset_id) VALUES ($1, 'h', 1), ($2, 'h', 2)`, [a1, a2]);
+  await pool.query(
+    `INSERT INTO ${schema}.edr_agent_packages (agent_id, type, name, version) VALUES
+       ($1, 'deb', 'widget-agent', '3.1.0'), ($2, 'deb', 'widget-agent', '3.0.9'), ($1, 'deb', 'libc6', '2.39'), ($1, 'deb', 'openssh-server', '1:9.6p1')`,
+    [a1, a2]
+  );
+  await pool.query(`INSERT INTO ${schema}.vulnerabilities (id, cve_id, severity, title) VALUES (1, 'CVE-2099-1000', 'high', 'acme-lib flaw')`);
+  await pool.query(`INSERT INTO ${schema}.asset_vulnerabilities (asset_id, vulnerability_id, status, evidence) VALUES (2, 1, 'open', 'package=acme-lib installed=0.9 fixed=1.0 source=grype')`);
+  await insertLogs([{ app: 'acme', parser: 2, hostname: 'web01' }]);
+  await pool.query(`UPDATE ${schema}.parsers SET name = 'acme-access' WHERE id = 2`);
+  clearInventoryIndexCache();
+  await run();
+  const { rows: un } = await pool.query(`SELECT source, value, events::int AS events, locations, sample_location, detail FROM ${schema}.application_unmatched WHERE source IN ('service', 'package', 'parser') ORDER BY 1, 2`);
+  assert.deepEqual(un.map((u) => [u.source, u.value, u.events, u.locations]), [
+    ['package', 'acme-lib', 1, 1],
+    ['package', 'libc6', 1, 1],
+    ['package', 'widget-agent', 2, 2],
+    ['parser', 'acme-access', 1, 1],
+    ['service', 'Acme Server', 2, 2],
+  ]);
+  assert.equal(un.find((u) => u.value === 'acme-lib').detail.vulnerable, true, 'an EDR finding is marked');
+  assert.equal(un.find((u) => u.value === 'Acme Server').detail.port, 8080);
+
+  // The widget signature: the installed packages are identified on this run, with their versions.
+  const r = await run({ local: [WIDGET] });
+  assert.ok(r.resolvedUnmatched >= 1);
+  const rows = await inventory();
+  assert.deepEqual(rows.filter((x) => x.app_id === 'widget').map((x) => [x.loc, x.source, x.version]), [
+    ['asset:1', 'endpoint_sbom', '3.1.0'],
+    ['asset:2', 'endpoint_sbom', '3.0.9'],
+  ]);
+  assert.deepEqual(await unmatchedValues('package'), ['package:acme-lib', 'package:libc6']);
 });

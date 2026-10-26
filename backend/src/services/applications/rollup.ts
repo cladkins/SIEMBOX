@@ -34,6 +34,17 @@
  *   5. At most hourly, prune rows not seen for the retention
  *      (application_inventory_retention_days, 30 by default) and cap the
  *      unmatched list at UNMATCHED_CAP values per source.
+ *
+ * Local signatures (customSignatures.ts, migration 051) join the catalog's
+ * set in step 1 (a local id overrides the catalog's). A new or changed one is
+ * applied to evidence the cursor already passed by a look back (runRescan):
+ * a second cursor that walks parsed_logs of the last backfill days downward
+ * (newest first), matching only the queued signatures, within the same run
+ * budget. A row the main cursor inserts for a queued signature carries the
+ * look-back's generation (rescan_gen); the look back adds history only to
+ * rows of its own generation (or inserts them), so nothing counted before the
+ * change is counted twice. The Not identified list (application_unmatched)
+ * drops what the new set matches when the set changes.
  */
 import * as crypto from 'crypto';
 import { batchedDelete } from '../../utils/batchDelete';
@@ -42,6 +53,8 @@ import { stableStringify } from '../parser/catalogService';
 import { APP_SCHEMA, type AppSignature } from './appFormat';
 import { AppIndex, cleanDomain, parseImageRef, userAgentProduct, type AppMatch, MAX_MATCH_INPUT } from './matchers';
 import { fetchAppCatalog, gateSignatureRegexes, type AppCatalog, type RegexGateResult } from './appCatalog';
+import { loadCustomSignatures, mergeSignatures, type SignatureOrigin } from './customSignatures';
+import { isSystemPackage, registrableDomain, serviceKey, SNAPSHOT_UNMATCHED_KINDS, type UnmatchedKind } from './gaps';
 
 export const BATCH_SIZE = 2_500;
 export const MIN_BATCH_SIZE = 1_000;
@@ -58,6 +71,13 @@ export const PRUNE_EVERY_MS = 60 * 60_000;
  */
 export const PAUSE_RATIO = 6;
 export const UNMATCHED_CAP = 500;
+/** Distinct installed-package names read for the Not identified list (aggregated across agents). */
+export const PACKAGE_GAP_SCAN = 20_000;
+/** Of those: the application-looking ones kept, and the system/library ones kept for "Show system packages". */
+export const PACKAGE_GAP_KEEP = 400;
+export const PACKAGE_GAP_KEEP_NOISE = 100;
+/** The installed-package gap list is rebuilt at most this often (or when the signature set changes). */
+export const PACKAGE_GAP_EVERY_MS = 10 * 60_000;
 /** Rows a snapshot source reads at most (asset_services, shipper_containers, EDR findings, endpoint packages). */
 export const SNAPSHOT_LIMIT = 200_000;
 
@@ -114,7 +134,7 @@ export interface InventoryRow {
 }
 
 export interface UnmatchedRow {
-  source: 'syslog_program' | 'container' | 'user_agent';
+  source: UnmatchedKind;
   value: string;
   events: number;
   locations: number;
@@ -122,6 +142,8 @@ export interface UnmatchedRow {
   last_seen: Date;
   sample_location: string | null;
   sample: string | null;
+  /** Structured sample (a service's name/version/banner/port, a package's type/version). */
+  detail: Record<string, unknown> | null;
 }
 
 const rowKey = (r: Pick<InventoryRow, 'app_id' | 'loc_type' | 'loc_key' | 'source' | 'version'>) =>
@@ -157,13 +179,25 @@ export class RowSet {
 
 export class UnmatchedSet {
   readonly rows = new Map<string, UnmatchedRow & { locs: Set<string> }>();
-  add(source: UnmatchedRow['source'], value: string, n: number, first: Date, last: Date, location: string | null, sample: string | null): void {
+  add(
+    source: UnmatchedRow['source'],
+    value: string,
+    n: number,
+    first: Date,
+    last: Date,
+    location: string | null,
+    sample: string | null,
+    detail: Record<string, unknown> | null = null
+  ): void {
     const v = value.slice(0, 200);
     if (!v) return;
     const k = `${source}\u0000${v}`;
     const prev = this.rows.get(k);
     if (!prev) {
-      this.rows.set(k, { source, value: v, events: n, locations: 1, first_seen: first, last_seen: last, sample_location: location, sample: sample?.slice(0, MAX_MATCH_INPUT) ?? null, locs: new Set(location ? [location] : []) });
+      this.rows.set(k, {
+        source, value: v, events: n, locations: 1, first_seen: first, last_seen: last, sample_location: location,
+        sample: sample?.slice(0, MAX_MATCH_INPUT) ?? null, detail, locs: new Set(location ? [location] : []),
+      });
       return;
     }
     prev.events += n;
@@ -224,14 +258,31 @@ export const LOG_BATCH_SQL = `
     FROM src WHERE parser_id IS NOT NULL AND dom IS NOT NULL AND actor IS NOT NULL AND actor IS DISTINCT FROM observer
    GROUP BY dom, actor`;
 
+/** The main cursor's upsert: events add up; a new row takes the look-back generation of its application, if any ($10). */
 const UPSERT_LOG_ROWS_SQL = `
-  INSERT INTO application_inventory AS t (app_id, loc_type, loc_key, source, version, events, first_seen, last_seen, evidence)
-  SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::bigint[], $7::timestamptz[], $8::timestamptz[], $9::jsonb[])
+  INSERT INTO application_inventory AS t (app_id, loc_type, loc_key, source, version, events, first_seen, last_seen, evidence, rescan_gen)
+  SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::bigint[], $7::timestamptz[], $8::timestamptz[], $9::jsonb[], $10::bigint[])
   ON CONFLICT (app_id, loc_type, loc_key, source, version) DO UPDATE
      SET events = t.events + EXCLUDED.events,
          first_seen = LEAST(t.first_seen, EXCLUDED.first_seen),
          last_seen = GREATEST(t.last_seen, EXCLUDED.last_seen),
          evidence = CASE WHEN EXCLUDED.last_seen >= t.last_seen THEN EXCLUDED.evidence ELSE t.evidence END`;
+
+/**
+ * The look back's upsert: a new row is inserted with the generation; an
+ * existing row gets the history added only when it is of the same
+ * generation (inserted since the signature changed). A row from before the
+ * change already counted these logs, and is left alone.
+ */
+const UPSERT_RESCAN_ROWS_SQL = `
+  INSERT INTO application_inventory AS t (app_id, loc_type, loc_key, source, version, events, first_seen, last_seen, evidence, rescan_gen)
+  SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::bigint[], $7::timestamptz[], $8::timestamptz[], $9::jsonb[], $10::bigint[])
+  ON CONFLICT (app_id, loc_type, loc_key, source, version) DO UPDATE
+     SET events = t.events + EXCLUDED.events,
+         first_seen = LEAST(t.first_seen, EXCLUDED.first_seen),
+         last_seen = GREATEST(t.last_seen, EXCLUDED.last_seen),
+         evidence = CASE WHEN EXCLUDED.last_seen > t.last_seen THEN EXCLUDED.evidence ELSE t.evidence END
+   WHERE t.rescan_gen = EXCLUDED.rescan_gen`;
 
 const UPSERT_SNAPSHOT_ROWS_SQL = `
   INSERT INTO application_inventory AS t (app_id, loc_type, loc_key, source, version, events, first_seen, last_seen, evidence)
@@ -251,26 +302,27 @@ const DELETE_STALE_SNAPSHOT_SQL = `
         WHERE k.app_id = i.app_id AND k.loc_type = i.loc_type AND k.loc_key = i.loc_key AND k.source = i.source AND k.version = i.version)`;
 
 const UPSERT_UNMATCHED_LOG_SQL = `
-  INSERT INTO application_unmatched AS t (source, value, events, locations, first_seen, last_seen, sample_location, sample)
-  SELECT * FROM unnest($1::text[], $2::text[], $3::bigint[], $4::int[], $5::timestamptz[], $6::timestamptz[], $7::text[], $8::text[])
+  INSERT INTO application_unmatched AS t (source, value, events, locations, first_seen, last_seen, sample_location, sample, detail)
+  SELECT * FROM unnest($1::text[], $2::text[], $3::bigint[], $4::int[], $5::timestamptz[], $6::timestamptz[], $7::text[], $8::text[], $9::jsonb[])
   ON CONFLICT (source, value) DO UPDATE
      SET events = t.events + EXCLUDED.events, locations = GREATEST(t.locations, EXCLUDED.locations),
          first_seen = LEAST(t.first_seen, EXCLUDED.first_seen), last_seen = GREATEST(t.last_seen, EXCLUDED.last_seen),
-         sample_location = COALESCE(EXCLUDED.sample_location, t.sample_location), sample = COALESCE(EXCLUDED.sample, t.sample)`;
+         sample_location = COALESCE(EXCLUDED.sample_location, t.sample_location), sample = COALESCE(EXCLUDED.sample, t.sample),
+         detail = COALESCE(EXCLUDED.detail, t.detail)`;
 
 const REPLACE_UNMATCHED_SNAPSHOT_SQL = `
-  INSERT INTO application_unmatched AS t (source, value, events, locations, first_seen, last_seen, sample_location, sample)
-  SELECT * FROM unnest($1::text[], $2::text[], $3::bigint[], $4::int[], $5::timestamptz[], $6::timestamptz[], $7::text[], $8::text[])
+  INSERT INTO application_unmatched AS t (source, value, events, locations, first_seen, last_seen, sample_location, sample, detail)
+  SELECT * FROM unnest($1::text[], $2::text[], $3::bigint[], $4::int[], $5::timestamptz[], $6::timestamptz[], $7::text[], $8::text[], $9::jsonb[])
   ON CONFLICT (source, value) DO UPDATE
      SET events = EXCLUDED.events, locations = EXCLUDED.locations,
          first_seen = LEAST(t.first_seen, EXCLUDED.first_seen), last_seen = GREATEST(t.last_seen, EXCLUDED.last_seen),
-         sample_location = EXCLUDED.sample_location, sample = EXCLUDED.sample`;
+         sample_location = EXCLUDED.sample_location, sample = EXCLUDED.sample, detail = EXCLUDED.detail`;
 
 export const UPPER_BOUND_SQL = `SELECT id FROM parsed_logs WHERE created_at < NOW() - $1::interval ORDER BY created_at DESC LIMIT 1`;
 export const BACKFILL_START_SQL = `SELECT id FROM parsed_logs WHERE created_at >= NOW() - $1::int * interval '1 day' ORDER BY created_at ASC LIMIT 1`;
 
-function inventoryParams(rows: InventoryRow[]): unknown[] {
-  return [
+function inventoryParams(rows: InventoryRow[], gen?: (appId: string) => number | null): unknown[] {
+  const base: unknown[] = [
     rows.map((r) => r.app_id),
     rows.map((r) => r.loc_type),
     rows.map((r) => r.loc_key),
@@ -281,6 +333,8 @@ function inventoryParams(rows: InventoryRow[]): unknown[] {
     rows.map((r) => r.last_seen.toISOString()),
     rows.map((r) => JSON.stringify(r.evidence)),
   ];
+  if (gen) base.push(rows.map((r) => gen(r.app_id)));
+  return base;
 }
 
 function unmatchedParams(rows: UnmatchedRow[]): unknown[] {
@@ -293,12 +347,13 @@ function unmatchedParams(rows: UnmatchedRow[]): unknown[] {
     rows.map((r) => r.last_seen.toISOString()),
     rows.map((r) => r.sample_location),
     rows.map((r) => r.sample),
+    rows.map((r) => (r.detail ? JSON.stringify(r.detail) : null)),
   ];
 }
 
 const UPSERT_CHUNK = 5_000;
-async function upsertRows(client: RollupClient, sql: string, rows: InventoryRow[]): Promise<void> {
-  for (let i = 0; i < rows.length; i += UPSERT_CHUNK) await client.query(sql, inventoryParams(rows.slice(i, i + UPSERT_CHUNK)));
+async function upsertRows(client: RollupClient, sql: string, rows: InventoryRow[], gen?: (appId: string) => number | null): Promise<void> {
+  for (let i = 0; i < rows.length; i += UPSERT_CHUNK) await client.query(sql, inventoryParams(rows.slice(i, i + UPSERT_CHUNK), gen));
 }
 async function upsertUnmatched(client: RollupClient, sql: string, rows: UnmatchedRow[]): Promise<void> {
   for (let i = 0; i < rows.length; i += UPSERT_CHUNK) await client.query(sql, unmatchedParams(rows.slice(i, i + UPSERT_CHUNK)));
@@ -336,7 +391,9 @@ export function matchLogGroups(groups: LogGroup[], index: AppIndex, parserNames:
       case 'parser': {
         const name = parserNames.get(String(g.a));
         if (!name) break;
-        rows.addMatches(index.matchParser(name), { loc_type: 'host', loc_key: g.b, source: 'parser', events: g.n, first_seen: f, last_seen: l, evidence: { value: name, raw_log_id: rawLogId } });
+        const matches = index.matchParser(name);
+        if (matches.length === 0) unmatched.add('parser', name, g.n, f, l, g.b, null);
+        else rows.addMatches(matches, { loc_type: 'host', loc_key: g.b, source: 'parser', events: g.n, first_seen: f, last_seen: l, evidence: { value: name, raw_log_id: rawLogId } });
         break;
       }
       case 'ua': {
@@ -352,7 +409,13 @@ export function matchLogGroups(groups: LogGroup[], index: AppIndex, parserNames:
       case 'dns': {
         const d = cleanDomain(g.a);
         if (!d) break;
-        rows.addMatches(index.matchDomain(d), { loc_type: 'client', loc_key: g.b, source: 'dns', events: g.n, first_seen: f, last_seen: l, evidence: { value: d, raw_log_id: rawLogId } });
+        const matches = index.matchDomain(d);
+        if (matches.length === 0) {
+          const base = registrableDomain(d);
+          if (base) unmatched.add('dns', base, g.n, f, l, g.b, d);
+        } else {
+          rows.addMatches(matches, { loc_type: 'client', loc_key: g.b, source: 'dns', events: g.n, first_seen: f, last_seen: l, evidence: { value: d, raw_log_id: rawLogId } });
+        }
         break;
       }
     }
@@ -375,6 +438,14 @@ export function matchSnapshots(input: SnapshotInput, index: AppIndex): { rows: R
   const unmatched = new UnmatchedSet();
   for (const s of input.services) {
     const matches = index.matchService({ name: s.service_name, version: s.service_version, banner: s.banner });
+    if (matches.length === 0) {
+      const key = serviceKey(s);
+      if (key && key !== 'unknown' && key !== 'tcpwrapped') {
+        unmatched.add('service', key, 1, s.seen, s.seen, String(s.asset_id), s.service_version || s.banner || s.service_name, {
+          service_name: s.service_name, service_version: s.service_version, banner: s.banner?.slice(0, MAX_MATCH_INPUT) ?? null, port: s.port, protocol: s.protocol,
+        });
+      }
+    }
     for (const m of matches) {
       rows.add({
         app_id: m.appId, loc_type: 'asset', loc_key: String(s.asset_id), source: 'service_scan', version: m.version ?? '', events: 1,
@@ -398,7 +469,13 @@ export function matchSnapshots(input: SnapshotInput, index: AppIndex): { rows: R
     }
   }
   for (const p of input.packages) {
-    for (const m of index.matchPackage(p.package, p.installed)) {
+    const pm = index.matchPackage(p.package, p.installed);
+    if (pm.length === 0 && p.package) {
+      unmatched.add('package', p.package.toLowerCase(), 1, p.first, p.seen, String(p.asset_id), p.installed ? `${p.package} ${p.installed}` : p.package, {
+        version: p.installed, type: null, vulnerable: true,
+      });
+    }
+    for (const m of pm) {
       rows.add({
         app_id: m.appId, loc_type: 'asset', loc_key: String(p.asset_id), source: 'edr_package', version: m.version ?? '', events: p.findings,
         first_seen: p.first, last_seen: p.seen, evidence: { package: p.package, installed_version: p.installed },
@@ -421,7 +498,9 @@ export function matchSnapshots(input: SnapshotInput, index: AppIndex): { rows: R
       });
     }
   }
-  // Snapshot unmatched counts are "now", not cumulative: one row per image name.
+  // Snapshot unmatched counts are "now", not cumulative: one row per image
+  // name, service product and package name; events = the sightings
+  // (containers, open ports, findings), locations = the distinct places.
   return { rows, unmatched };
 }
 
@@ -458,6 +537,8 @@ export interface InventoryRunOptions {
   settings?: InventorySettings;
   /** The signature set (tests); otherwise fetchAppCatalog(). */
   catalog?: AppCatalog;
+  /** The local signatures (tests); otherwise the enabled rows of custom_application_signatures. */
+  local?: AppSignature[];
   forceCatalog?: boolean;
   /** The regex gate (tests inject one; the default asks services/regex/regexSafety). */
   gate?: (apps: AppSignature[]) => Promise<RegexGateResult>;
@@ -480,12 +561,18 @@ export interface InventoryRunResult {
   snapshotRows: number;
   vulnLinks: number;
   pruned: number;
+  /** Local signatures in the set. */
+  localSignatures: number;
+  /** The look back for new signatures: logs read this run, and whether it has more to do. */
+  rescan: { apps: string[]; consumed: number; rows: number; more: boolean };
+  /** Not identified values a changed signature set now matches. */
+  resolvedUnmatched: number;
   more: boolean;
   backedOff: boolean;
   batchSize: number;
   dbMs: number;
   /** Wall time of each step, ms (signatures includes the regex gate). */
-  timings: { signatures: number; logs: number; snapshots: number; vulnLinks: number; prune: number };
+  timings: { signatures: number; logs: number; rescan: number; snapshots: number; vulnLinks: number; prune: number };
 }
 
 async function inTransaction<T>(client: RollupClient, work: () => Promise<T>): Promise<T> {
@@ -502,11 +589,27 @@ async function inTransaction<T>(client: RollupClient, work: () => Promise<T>): P
 
 let indexCache: { hash: string; skipKey: string; index: AppIndex } | null = null;
 
-export function signaturesHash(apps: AppSignature[]): string {
-  return crypto.createHash('sha256').update(stableStringify(apps)).digest('hex');
+export function signaturesHash(apps: AppSignature[], origins?: Map<string, SignatureOrigin>): string {
+  const h = crypto.createHash('sha256').update(stableStringify(apps));
+  const own = origins ? [...origins.entries()].filter(([, o]) => o !== 'catalog').sort() : [];
+  if (own.length) h.update(stableStringify(own));
+  return h.digest('hex');
 }
 
-async function storeSignatures(client: RollupClient, catalog: AppCatalog, hash: string, gate: RegexGateResult): Promise<void> {
+/**
+ * Store the set in use (when it changed) and the run's notes. A signature
+ * new to the set (the catalog added it, or it was written here) with no
+ * inventory rows yet is queued for the look back, so it also matches the
+ * logs already passed; the very first run needs none (its backfill reads
+ * those logs). Returns whether the set changed.
+ */
+async function storeSignatures(
+  client: RollupClient,
+  catalog: AppCatalog,
+  origins: Map<string, SignatureOrigin>,
+  hash: string,
+  gate: RegexGateResult
+): Promise<boolean> {
   const { rows } = await client.query(`SELECT signatures_hash, signatures_source FROM application_inventory_state WHERE id = 1`);
   const fromCatalog = catalog.source !== 'bundled';
   const storedSource = fromCatalog ? 'catalog' : 'bundled';
@@ -514,15 +617,30 @@ async function storeSignatures(client: RollupClient, catalog: AppCatalog, hash: 
   await inTransaction(client, async () => {
     if (changed) {
       const apps = catalog.apps;
+      const before = new Set<string>((await client.query(`SELECT id FROM application_signatures`)).rows.map((r) => r.id));
       await client.query(`DELETE FROM application_signatures WHERE id <> ALL($1::text[])`, [apps.map((a) => a.id)]);
       await client.query(
         `INSERT INTO application_signatures AS s (id, name, vendor, category, definition, source, fetched_at, updated_at)
-         SELECT id, name, vendor, category, definition, $6, $7::timestamptz, NOW()
-           FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::jsonb[]) AS u(id, name, vendor, category, definition)
+         SELECT id, name, vendor, category, definition, src, $7::timestamptz, NOW()
+           FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::jsonb[], $6::text[]) AS u(id, name, vendor, category, definition, src)
          ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, vendor = EXCLUDED.vendor, category = EXCLUDED.category,
            definition = EXCLUDED.definition, source = EXCLUDED.source, fetched_at = EXCLUDED.fetched_at, updated_at = NOW()`,
-        [apps.map((a) => a.id), apps.map((a) => a.name), apps.map((a) => a.vendor), apps.map((a) => a.category), apps.map((a) => JSON.stringify({ schema: APP_SCHEMA, ...a })), storedSource, catalog.fetched_at]
+        [
+          apps.map((a) => a.id), apps.map((a) => a.name), apps.map((a) => a.vendor), apps.map((a) => a.category),
+          apps.map((a) => JSON.stringify({ schema: APP_SCHEMA, ...a })),
+          apps.map((a) => ((origins.get(a.id) ?? 'catalog') === 'catalog' ? storedSource : 'local')),
+          catalog.fetched_at,
+        ]
       );
+      const added = before.size === 0 ? [] : apps.map((a) => a.id).filter((id) => !before.has(id));
+      if (added.length > 0) {
+        const { rows: seen } = await client.query(`SELECT DISTINCT app_id FROM application_inventory WHERE app_id = ANY($1::text[])`, [added]);
+        const has = new Set(seen.map((r) => r.app_id));
+        const fresh = added.filter((id) => !has.has(id));
+        if (fresh.length > 0) {
+          await client.query(`UPDATE application_inventory_state SET rescan_pending = ARRAY(SELECT DISTINCT unnest(rescan_pending || $1::text[]) ORDER BY 1) WHERE id = 1`, [fresh]);
+        }
+      }
     }
     await client.query(
       `UPDATE application_inventory_state
@@ -531,6 +649,7 @@ async function storeSignatures(client: RollupClient, catalog: AppCatalog, hash: 
       [hash, catalog.source, catalog.apps.length, catalog.error, JSON.stringify([...gate.refused, ...catalog.invalid.map((i) => ({ appId: i.path, location: 'file', source: '', reason: i.errors.join('; ') }))].slice(0, 100))]
     );
   });
+  return changed;
 }
 
 /** The stored signature set, for appCatalog's fallback (only a set that came from the catalog). */
@@ -557,6 +676,17 @@ async function startCursor(client: RollupClient, settings: InventorySettings, hi
   });
 }
 
+/**
+ * The look-back generation a new row of this application takes: the running
+ * look back's when it is in it, the next one's when it is queued, else none.
+ */
+export function rescanTagger(state: { rescan_apps?: string[] | null; rescan_pending?: string[] | null; rescan_gen?: number | string | null }): (appId: string) => number | null {
+  const active = new Set(state.rescan_apps ?? []);
+  const pending = new Set(state.rescan_pending ?? []);
+  const gen = Number(state.rescan_gen ?? 0);
+  return (appId) => (active.has(appId) ? gen : pending.has(appId) ? gen + 1 : null);
+}
+
 async function runBatch(
   client: RollupClient,
   index: AppIndex,
@@ -566,8 +696,11 @@ async function runBatch(
   lag: string
 ): Promise<{ done: boolean; from: number; to: number; consumed: number; rows: number }> {
   return inTransaction(client, async () => {
-    const { rows } = await client.query(`SELECT last_parsed_log_id FROM application_inventory_state WHERE id = 1 FOR UPDATE`);
+    const { rows } = await client.query(
+      `SELECT last_parsed_log_id, rescan_apps, rescan_pending, rescan_gen FROM application_inventory_state WHERE id = 1 FOR UPDATE`
+    );
     const last = Number(rows[0]?.last_parsed_log_id ?? 0);
+    const tag = rescanTagger(rows[0] ?? {});
     if (last >= hi) {
       await client.query(
         `UPDATE application_inventory_state SET caught_up = true, covered_until = GREATEST(covered_until, NOW() - $1::interval), last_run_at = NOW() WHERE id = 1`,
@@ -588,7 +721,7 @@ async function runBatch(
       const { rows: groups } = await client.query(LOG_BATCH_SQL, [last, upper, b.raw_min ?? 0, b.raw_max ?? 0]);
       const matched = matchLogGroups(groups as LogGroup[], index, parserNames);
       const list = matched.rows.list();
-      await upsertRows(client, UPSERT_LOG_ROWS_SQL, list);
+      await upsertRows(client, UPSERT_LOG_ROWS_SQL, list, tag);
       await upsertUnmatched(client, UPSERT_UNMATCHED_LOG_SQL, matched.unmatched.list());
       written = list.length;
     }
@@ -602,6 +735,96 @@ async function runBatch(
       [upper, caughtUp, b.until, lag]
     );
     return { done: caughtUp, from: last, to: upper, consumed: b.n, rows: written };
+  });
+}
+
+/**
+ * Start the queued look back when none is running: the queued signatures
+ * still in the set, over parsed_logs ids (from, to], where `to` is the main
+ * cursor (everything above it the main cursor reads with the new set) and
+ * `from` the last id before the backfill window. Nothing to look at (no
+ * backfill window, no logs, or none of the ids in the set) clears the queue.
+ */
+async function startRescan(client: RollupClient, settings: InventorySettings, inSet: Set<string>): Promise<void> {
+  await inTransaction(client, async () => {
+    const { rows } = await client.query(
+      `SELECT last_parsed_log_id, rescan_apps, rescan_pending, rescan_gen FROM application_inventory_state WHERE id = 1 FOR UPDATE`
+    );
+    const st = rows[0];
+    if (!st || (st.rescan_apps ?? []).length > 0 || (st.rescan_pending ?? []).length === 0) return;
+    const apps = (st.rescan_pending as string[]).filter((id) => inSet.has(id));
+    const to = st.last_parsed_log_id === null || st.last_parsed_log_id === undefined ? null : Number(st.last_parsed_log_id);
+    let from: number | null = null;
+    if (apps.length > 0 && to !== null && settings.backfillDays > 0) {
+      const { rows: first } = await client.query(BACKFILL_START_SQL, [settings.backfillDays]);
+      if (first[0]) from = Number(first[0].id) - 1;
+    }
+    if (apps.length === 0 || to === null || from === null || from >= to) {
+      // Nothing to look back over: the pending ids would still tag rows with
+      // the next generation, which no look back would ever finish, so the
+      // generation moves on with them.
+      await client.query(`UPDATE application_inventory_state SET rescan_pending = '{}', rescan_gen = rescan_gen + 1 WHERE id = 1`);
+      return;
+    }
+    await client.query(
+      `UPDATE application_inventory_state
+          SET rescan_apps = $1::text[], rescan_pending = '{}', rescan_gen = rescan_gen + 1, rescan_from = $2::bigint, rescan_next = $3::bigint,
+              rescan_total = $3::bigint - $2::bigint, rescan_started_at = NOW()
+        WHERE id = 1`,
+      [apps, from, to]
+    );
+  });
+}
+
+/**
+ * One look-back batch: parsed_logs ids (max(from, next - size), next],
+ * newest first, aggregated as the main cursor's batches are, matched with the
+ * whole set (so supersedes still applies) and kept only for the signatures
+ * looked back for; rows upserted with the look back's generation. The
+ * position moves with the rows, in one transaction.
+ */
+async function runRescanBatch(
+  client: RollupClient,
+  index: AppIndex,
+  parserNames: Map<string, string>,
+  size: number
+): Promise<{ done: boolean; consumed: number; rows: number; apps: string[] }> {
+  return inTransaction(client, async () => {
+    const { rows } = await client.query(
+      `SELECT rescan_apps, rescan_gen, rescan_from, rescan_next FROM application_inventory_state WHERE id = 1 FOR UPDATE`
+    );
+    const st = rows[0];
+    const apps: string[] = st?.rescan_apps ?? [];
+    if (apps.length === 0 || st.rescan_next === null || st.rescan_from === null) return { done: true, consumed: 0, rows: 0, apps };
+    const from = Number(st.rescan_from);
+    const next = Number(st.rescan_next);
+    const gen = Number(st.rescan_gen);
+    const lo = Math.max(from, next - size);
+    let consumed = 0;
+    let written = 0;
+    if (next > from) {
+      const { rows: bounds } = await client.query(
+        `SELECT min(raw_log_id) AS raw_min, max(raw_log_id) AS raw_max, count(*)::int AS n FROM parsed_logs WHERE id > $1 AND id <= $2`,
+        [lo, next]
+      );
+      const b = bounds[0];
+      if (b.n > 0) {
+        await client.query("SELECT set_config('statement_timeout', $1, true), set_config('jit', 'off', true)", [String(BATCH_STATEMENT_TIMEOUT_MS)]);
+        const { rows: groups } = await client.query(LOG_BATCH_SQL, [lo, next, b.raw_min ?? 0, b.raw_max ?? 0]);
+        const wanted = new Set(apps);
+        const list = matchLogGroups(groups as LogGroup[], index, parserNames).rows.list().filter((r) => wanted.has(r.app_id));
+        await upsertRows(client, UPSERT_RESCAN_ROWS_SQL, list, () => gen);
+        written = list.length;
+        consumed = b.n;
+      }
+    }
+    const done = lo <= from;
+    if (done) {
+      await client.query(`UPDATE application_inventory_state SET rescan_apps = '{}', rescan_from = NULL, rescan_next = NULL WHERE id = 1`);
+    } else {
+      await client.query(`UPDATE application_inventory_state SET rescan_next = $1 WHERE id = 1`, [lo]);
+    }
+    return { done, consumed, rows: written, apps };
   });
 }
 
@@ -651,18 +874,140 @@ async function readSnapshots(client: RollupClient, packageNames: string[]): Prom
   };
 }
 
-async function refreshSnapshots(client: RollupClient, index: AppIndex): Promise<number> {
+/**
+ * The endpoints' installed packages no signature names, for the Not
+ * identified list: aggregated by name across agents in SQL (bounded to
+ * PACKAGE_GAP_SCAN names), then split into application-looking names and
+ * system/library ones (gaps.isSystemPackage), keeping the most widespread of
+ * each. Rows are "now": the newest snapshot of each agent.
+ */
+export const PACKAGE_GAPS_SQL = `
+  SELECT lower(p.name) AS name, count(DISTINCT p.agent_id)::int AS agents, min(p.first_seen) AS first,
+         max(GREATEST(p.last_seen, s.reported_at)) AS seen,
+         (array_agg(p.version ORDER BY p.last_seen DESC))[1] AS version,
+         (array_agg(p.type ORDER BY p.last_seen DESC))[1] AS type,
+         (array_agg(a.asset_id ORDER BY p.last_seen DESC))[1] AS asset_id,
+         (array_agg(p.name ORDER BY p.last_seen DESC))[1] AS display
+    FROM edr_agent_packages p
+    JOIN edr_agents a ON a.agent_id = p.agent_id
+    LEFT JOIN edr_agent_package_snapshots s ON s.agent_id = p.agent_id
+   WHERE a.asset_id IS NOT NULL AND NOT (lower(p.name) = ANY($1::text[]))
+   GROUP BY lower(p.name)
+   ORDER BY agents DESC, name
+   LIMIT $2`;
+
+export interface PackageGapRow {
+  name: string;
+  agents: number;
+  first: Date;
+  seen: Date;
+  version: string | null;
+  type: string | null;
+  asset_id: number | null;
+  display: string | null;
+}
+
+/** Keep the most widespread application-looking names and a few system ones. Pure. */
+export function selectPackageGaps(rows: PackageGapRow[], keep = PACKAGE_GAP_KEEP, keepNoise = PACKAGE_GAP_KEEP_NOISE): UnmatchedRow[] {
+  const out: UnmatchedRow[] = [];
+  let apps = 0;
+  let noise = 0;
+  for (const r of rows) {
+    const sys = isSystemPackage(r.name, r.type);
+    if (sys ? noise >= keepNoise : apps >= keep) continue;
+    if (sys) noise++;
+    else apps++;
+    out.push({
+      source: 'package',
+      value: r.name.slice(0, 200),
+      events: Number(r.agents),
+      locations: Number(r.agents),
+      first_seen: r.first,
+      last_seen: r.seen,
+      sample_location: r.asset_id === null || r.asset_id === undefined ? null : String(r.asset_id),
+      sample: `${r.display ?? r.name}${r.version ? ` ${r.version}` : ''}`.slice(0, MAX_MATCH_INPUT),
+      detail: { version: r.version || null, type: r.type || null },
+    });
+    if (apps >= keep && noise >= keepNoise) break;
+  }
+  return out;
+}
+
+async function refreshSnapshots(client: RollupClient, index: AppIndex, opts: { packageGaps: boolean }): Promise<{ rows: number; packageGaps: boolean }> {
   const input = await readSnapshots(client, index.packageNames());
   const { rows, unmatched } = matchSnapshots(input, index);
   const list = rows.list();
+  let gaps: UnmatchedRow[] | null = null;
+  if (opts.packageGaps) {
+    const date = (v: unknown) => (v instanceof Date ? v : new Date(String(v)));
+    const { rows: found } = await client.query(PACKAGE_GAPS_SQL, [index.packageNames(), PACKAGE_GAP_SCAN]);
+    gaps = selectPackageGaps(found.map((r) => ({ ...r, first: date(r.first ?? r.seen), seen: date(r.seen) })));
+  }
   await inTransaction(client, async () => {
     await client.query(DELETE_STALE_SNAPSHOT_SQL, [SNAPSHOT_SOURCES, list.map((r) => r.app_id), list.map((r) => r.loc_type), list.map((r) => r.loc_key), list.map((r) => r.source), list.map((r) => r.version)]);
     await upsertRows(client, UPSERT_SNAPSHOT_ROWS_SQL, list);
-    const un = unmatched.list();
-    await client.query(`DELETE FROM application_unmatched WHERE source = 'container' AND value <> ALL($1::text[])`, [un.map((u) => u.value)]);
+    let un = unmatched.list();
+    // Packages: the EDR findings' names (every run) merge into the installed
+    // list (when it was rebuilt); otherwise the stored package rows stay.
+    const findingPackages = un.filter((u) => u.source === 'package');
+    un = un.filter((u) => u.source !== 'package');
+    const kinds: UnmatchedKind[] = gaps ? SNAPSHOT_UNMATCHED_KINDS : SNAPSHOT_UNMATCHED_KINDS.filter((k) => k !== 'package');
+    if (gaps) {
+      const byName = new Map(gaps.map((g) => [g.value, g]));
+      for (const f of findingPackages) {
+        const g = byName.get(f.value);
+        if (g) g.detail = { ...(g.detail ?? {}), vulnerable: true };
+        else byName.set(f.value, f);
+      }
+      un.push(...byName.values());
+    }
+    for (const kind of kinds) {
+      await client.query(`DELETE FROM application_unmatched WHERE source = $1 AND value <> ALL($2::text[])`, [kind, un.filter((u) => u.source === kind).map((u) => u.value)]);
+    }
     await upsertUnmatched(client, REPLACE_UNMATCHED_SNAPSHOT_SQL, un);
+    if (gaps) await client.query(`UPDATE application_inventory_state SET unmatched_packages_at = NOW() WHERE id = 1`);
   });
-  return list.length;
+  return { rows: list.length, packageGaps: !!gaps };
+}
+
+/**
+ * Drop the Not identified values the current signature set matches (after
+ * it changed: a new signature takes them). The list is small (capped per
+ * kind), so it is read whole. Returns how many were dropped.
+ */
+export async function dropResolvedUnmatched(client: RollupClient, index: AppIndex): Promise<number> {
+  const { rows } = await client.query(`SELECT source, value, sample, detail FROM application_unmatched`);
+  const resolved: Array<[string, string]> = [];
+  for (const r of rows) if (unmatchedResolves(index, r)) resolved.push([r.source, r.value]);
+  if (resolved.length === 0) return 0;
+  const res = await client.query(
+    `DELETE FROM application_unmatched u USING unnest($1::text[], $2::text[]) AS d(source, value) WHERE u.source = d.source AND u.value = d.value`,
+    [resolved.map((r) => r[0]), resolved.map((r) => r[1])]
+  );
+  return res.rowCount ?? resolved.length;
+}
+
+/** Does a signature set match this Not identified value? Pure. */
+export function unmatchedResolves(index: AppIndex, r: { source: string; value: string; sample?: string | null; detail?: Record<string, any> | null }): boolean {
+  const d = r.detail ?? {};
+  switch (r.source) {
+    case 'syslog_program':
+      return index.matchProgram(r.value).length > 0;
+    case 'parser':
+      return index.matchParser(r.value).length > 0;
+    case 'container':
+      return index.matchImage(r.sample || r.value).length > 0;
+    case 'package':
+      return index.matchPackage(r.value).length > 0;
+    case 'service':
+      return index.matchService({ name: d.service_name ?? r.value, version: d.service_version ?? null, banner: d.banner ?? null }).length > 0;
+    case 'user_agent':
+      return index.matchUserAgent(r.sample || r.value).length > 0;
+    case 'dns':
+      return index.matchDomain(r.value).length > 0 || (!!r.sample && index.matchDomain(r.sample).length > 0);
+    default:
+      return false;
+  }
 }
 
 /**
@@ -732,14 +1077,15 @@ async function prune(client: RollupClient, settings: InventorySettings, nowMs: n
     pauseMs: 20,
     exec,
   });
-  deleted += (await client.query(`DELETE FROM application_unmatched WHERE last_seen < NOW() - $1::int * interval '1 day'`, [settings.retentionDays])).rowCount ?? 0;
+  deleted += (await client.query(`DELETE FROM application_unmatched WHERE last_seen < NOW() - $1::int * interval '1 day' AND source <> ALL($2::text[])`, [settings.retentionDays, SNAPSHOT_UNMATCHED_KINDS])).rowCount ?? 0;
   deleted +=
     (
       await client.query(
         `DELETE FROM application_unmatched u USING (
-           SELECT source, value, row_number() OVER (PARTITION BY source ORDER BY events DESC, last_seen DESC) AS rank FROM application_unmatched
+           SELECT source, value, row_number() OVER (PARTITION BY source ORDER BY events DESC, last_seen DESC) AS rank
+             FROM application_unmatched WHERE source <> ALL($2::text[])
          ) r WHERE r.source = u.source AND r.value = u.value AND r.rank > $1`,
-        [UNMATCHED_CAP]
+        [UNMATCHED_CAP, SNAPSHOT_UNMATCHED_KINDS]
       )
     ).rowCount ?? 0;
   await client.query(`UPDATE application_inventory_state SET last_pruned_at = NOW() WHERE id = 1`);
@@ -753,8 +1099,9 @@ export async function runInventoryRollup(options: InventoryRunOptions): Promise<
   let size = options.batchSize ?? BATCH_SIZE;
   const result: InventoryRunResult = {
     status: 'ok', signatures: 0, signatureSource: '', consumed: 0, batches: 0, rowsWritten: 0, snapshotRows: 0, vulnLinks: 0, pruned: 0,
+    localSignatures: 0, rescan: { apps: [], consumed: 0, rows: 0, more: false }, resolvedUnmatched: 0,
     more: false, backedOff: false, batchSize: size, dbMs: 0,
-    timings: { signatures: 0, logs: 0, snapshots: 0, vulnLinks: 0, prune: 0 },
+    timings: { signatures: 0, logs: 0, rescan: 0, snapshots: 0, vulnLinks: 0, prune: 0 },
   };
   let mark = now();
   const lap = (step: keyof InventoryRunResult['timings']) => {
@@ -771,9 +1118,13 @@ export async function runInventoryRollup(options: InventoryRunOptions): Promise<
       result.status = 'disabled';
       return result;
     }
-    const catalog = options.catalog ?? (await fetchAppCatalog({ force: options.forceCatalog, loadStored: () => loadStoredSignatures(q) }));
+    const fetched = options.catalog ?? (await fetchAppCatalog({ force: options.forceCatalog, loadStored: () => loadStoredSignatures(q) }));
+    // The local signatures join the catalog's (a local id overrides it).
+    const local = options.local ? { apps: options.local, invalid: [] } : await loadCustomSignatures(q);
+    const merged = mergeSignatures(fetched.apps, local.apps);
+    const catalog: AppCatalog = { ...fetched, apps: merged.apps, invalid: [...fetched.invalid, ...local.invalid] };
     const gate = await (options.gate ?? ((apps: AppSignature[]) => gateSignatureRegexes(apps)))(catalog.apps);
-    const hash = signaturesHash(catalog.apps);
+    const hash = signaturesHash(catalog.apps, merged.origins);
     const skipKey = [...gate.skip].sort().join('\u0000');
     if (!indexCache || indexCache.hash !== hash || indexCache.skipKey !== skipKey) {
       indexCache = { hash, skipKey, index: new AppIndex(catalog.apps, { skipRegex: gate.skip }) };
@@ -781,7 +1132,9 @@ export async function runInventoryRollup(options: InventoryRunOptions): Promise<
     const index = indexCache.index;
     result.signatures = catalog.apps.length;
     result.signatureSource = catalog.source;
-    await storeSignatures(client, catalog, hash, gate);
+    result.localSignatures = local.apps.length;
+    const setChanged = await storeSignatures(client, catalog, merged.origins, hash, gate);
+    if (setChanged) result.resolvedUnmatched = await dropResolvedUnmatched(client, index);
     lap('signatures');
 
     const parserNames = new Map<string, string>(((await client.query(`SELECT id::text AS id, name FROM parsers`)).rows as Array<{ id: string; name: string }>).map((r) => [r.id, r.name]));
@@ -789,6 +1142,9 @@ export async function runInventoryRollup(options: InventoryRunOptions): Promise<
     const { rows } = await client.query(UPPER_BOUND_SQL, [lag]);
     const hi = rows[0] ? Number(rows[0].id) : null;
     await startCursor(client, settings, hi);
+    // Before the main batches, so the rows they insert for a signature being
+    // looked back for carry its generation.
+    await startRescan(client, settings, new Set(catalog.apps.map((a) => a.id)));
 
     let spent = 0;
     if (hi !== null) {
@@ -825,8 +1181,40 @@ export async function runInventoryRollup(options: InventoryRunOptions): Promise<
       await client.query(`UPDATE application_inventory_state SET caught_up = true, covered_until = NOW(), last_run_at = NOW() WHERE id = 1`);
     }
     lap('logs');
+    // The look back for new signatures, in what is left of the budget.
+    for (;;) {
+      if (spent >= budget) {
+        const { rows: st } = await client.query(`SELECT rescan_apps FROM application_inventory_state WHERE id = 1`);
+        if ((st[0]?.rescan_apps ?? []).length > 0) result.rescan.more = true;
+        break;
+      }
+      const started = now();
+      let batch;
+      try {
+        batch = await runRescanBatch(client, index, parserNames, size);
+      } catch (err) {
+        if (isStatementTimeout(err) && size > MIN_BATCH_SIZE) {
+          size = Math.max(MIN_BATCH_SIZE, Math.floor(size / 2));
+          result.backedOff = true;
+          continue;
+        }
+        throw err;
+      } finally {
+        spent += now() - started;
+      }
+      if (batch.apps.length) result.rescan.apps = batch.apps;
+      result.rescan.consumed += batch.consumed;
+      result.rescan.rows += batch.rows;
+      if (batch.done) break;
+      const pause = (now() - started) * (options.pauseRatio ?? PAUSE_RATIO);
+      if (pause > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(pause, 5_000)));
+    }
+    lap('rescan');
     const snapStarted = now();
-    result.snapshotRows = await refreshSnapshots(client, index);
+    const { rows: gapState } = await client.query(`SELECT unmatched_packages_at FROM application_inventory_state WHERE id = 1`);
+    const gapsAt = gapState[0]?.unmatched_packages_at ? new Date(gapState[0].unmatched_packages_at).getTime() : 0;
+    const snap = await refreshSnapshots(client, index, { packageGaps: setChanged || now() - gapsAt >= PACKAGE_GAP_EVERY_MS || options.forcePrune === true });
+    result.snapshotRows = snap.rows;
     lap('snapshots');
     result.vulnLinks = await rebuildVulnLinks(client, catalog.apps);
     lap('vulnLinks');
@@ -853,6 +1241,10 @@ export function describeInventoryRun(r: InventoryRunResult): string {
     `${r.snapshotRows.toLocaleString('en-US')} rows from scans, containers and endpoints`,
     `${r.vulnLinks.toLocaleString('en-US')} vulnerability links`,
   ];
+  if (r.localSignatures) parts.splice(1, 0, `${r.localSignatures} local`);
+  if (r.rescan?.apps.length) {
+    parts.push(`looked back over ${r.rescan.consumed.toLocaleString('en-US')} older logs for ${r.rescan.apps.length} new signature(s)${r.rescan.more ? ' (more to do)' : ''}`);
+  }
   if (r.more) parts.push('more to do (backlog)');
   if (r.backedOff) parts.push(`batch size cut to ${r.batchSize.toLocaleString('en-US')} after a timeout`);
   if (r.pruned) parts.push(`pruned ${r.pruned.toLocaleString('en-US')} old rows`);

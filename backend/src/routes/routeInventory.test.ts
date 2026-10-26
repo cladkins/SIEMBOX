@@ -425,9 +425,21 @@ const INVENTORY: Row[] = [
   ['GET', '/api/graph/relation', ANY_ROLE],
   ['GET', '/api/graph/evidence', ANY_ROLE],
 
-  // routes/applications.ts: Application Monitoring (every role reads; refresh is analyst and up)
+  // routes/applications.ts: Application Monitoring (every role reads and prepares a contribution; local
+  // signatures, ignoring values, the editor's checks and refresh are analyst and up; the AI draft is admin)
   ['GET', '/api/applications', ANY_ROLE],
   ['GET', '/api/applications/unmatched', ANY_ROLE],
+  ['POST', '/api/applications/unmatched/ignore', ANALYST_UP, AUDITED],
+  ['POST', '/api/applications/unmatched/unignore', ANALYST_UP, AUDITED],
+  ['GET', '/api/applications/signatures', ANY_ROLE],
+  ['POST', '/api/applications/signatures/validate', ANALYST_UP, AUDITED],
+  ['POST', '/api/applications/signatures/test', ANALYST_UP, AUDITED],
+  ['POST', '/api/applications/signatures/ai-draft', ADMIN_ONLY],
+  ['GET', '/api/applications/signatures/:id', ANY_ROLE],
+  ['POST', '/api/applications/signatures', ANALYST_UP, AUDITED],
+  ['PUT', '/api/applications/signatures/:id', ANALYST_UP, AUDITED],
+  ['DELETE', '/api/applications/signatures/:id', ANALYST_UP, AUDITED],
+  ['GET', '/api/applications/signatures/:id/contribute', ANY_ROLE],
   ['GET', '/api/applications/vulnerabilities', ANY_ROLE],
   ['POST', '/api/applications/refresh', ANALYST_UP],
   ['GET', '/api/applications/:id', ANY_ROLE],

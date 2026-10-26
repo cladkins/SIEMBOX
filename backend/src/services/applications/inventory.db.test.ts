@@ -13,7 +13,9 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { closePools, query } from '../../config/database';
-import { compareVersions, getApplication, listApplications, listApplicationVulnerabilities, listUnmatched, suggestedSignature, summaryFromRow } from './inventory';
+import { compareVersions, getApplication, listApplications, listApplicationVulnerabilities, listUnmatched,
+  listUnmatchedWithCounts, suggestedSignature, summaryFromRow } from './inventory';
+import { ignoreUnmatched, unignoreUnmatched } from './customSignatures';
 import { validateApplication } from './appFormat';
 import * as yaml from '../../utils/yaml';
 
@@ -169,7 +171,43 @@ test('the unmatched list ranks by events and links to a pre-filled catalog file'
   const url = new URL(programs[0].suggest_url);
   assert.equal(url.hostname, 'github.com');
   assert.equal(url.searchParams.get('filename'), 'applications/zz-mystery.app.yaml');
-  assert.match(url.searchParams.get('value') ?? '', /syslog_program: \['zz-mystery'\]/);
+  assert.match(url.searchParams.get('value') ?? '', /syslog_program: \[zz-mystery\]/);
   const ua = await listUnmatched('user_agent', 1);
   assert.equal(ua[0].sample, 'ZZBot/1.0');
+  assert.equal(ua[0].draft.category, 'http-client', 'the draft the editor opens');
+});
+
+test('the unmatched list: new kinds, location names, system packages and ignored values hidden unless asked for', async (t) => {
+  if (!ready) return t.skip(SKIP);
+  await query(
+    `INSERT INTO application_unmatched (source, value, events, locations, first_seen, last_seen, sample_location, sample, detail) VALUES
+       ('package', 'zz-agent', 999997, 3, NOW(), NOW(), $1, 'zz-agent 1.0', '{"version": "1.0", "type": "deb"}'),
+       ('package', 'libzz1', 999996, 3, NOW(), NOW(), $1, 'libzz1 1.0', '{"version": "1.0", "type": "deb"}'),
+       ('service', 'ZZ Server', 999995, 1, NOW(), NOW(), $1, 'ZZ Server 2.0', '{"service_name": "http", "service_version": "ZZ Server 2.0", "port": 8080}')
+     ON CONFLICT DO NOTHING`,
+    [String(ids.assets[0])]
+  );
+  try {
+    let { unmatched, counts } = await listUnmatchedWithCounts('package', 10, { search: 'zz' });
+    assert.deepEqual(unmatched.map((u) => u.value), ['zz-agent'], 'a system package is hidden by default');
+    assert.equal(unmatched[0].location_label, 'zz-web01', 'the asset by name');
+    assert.equal(counts.package.noise, 1);
+    assert.deepEqual((unmatched[0].draft.match as Record<string, unknown>).package, ['zz-agent']);
+    ({ unmatched } = await listUnmatchedWithCounts('package', 10, { search: 'zz', noise: true }));
+    assert.deepEqual(unmatched.map((u) => [u.value, u.noise]), [['zz-agent', false], ['libzz1', true]]);
+
+    await ignoreUnmatched('package', 'zz-agent', 'tester');
+    ({ unmatched, counts } = await listUnmatchedWithCounts('package', 10, { search: 'zz' }));
+    assert.deepEqual(unmatched.map((u) => u.value), []);
+    assert.equal(counts.package.ignored, 1);
+    ({ unmatched } = await listUnmatchedWithCounts('package', 10, { search: 'zz', ignored: true }));
+    assert.deepEqual(unmatched.map((u) => [u.value, u.ignored]), [['zz-agent', true]]);
+    assert.equal(await unignoreUnmatched('package', 'zz-agent'), true);
+
+    const svc = await listUnmatched('service', 5, { search: 'ZZ Server' });
+    assert.deepEqual((svc[0].draft.match as any).service, { banner: ['^ZZ Server (\\d[\\w.~+-]*)'] });
+  } finally {
+    await query(`DELETE FROM application_unmatched WHERE value IN ('zz-agent', 'libzz1', 'ZZ Server')`);
+    await query(`DELETE FROM application_unmatched_ignores WHERE value = 'zz-agent'`);
+  }
 });

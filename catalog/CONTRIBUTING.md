@@ -120,3 +120,22 @@ Reproduce failures locally with the same command before pushing.
 - [ ] ≥1 `test_sample` per distinct event, using real (redacted) log lines.
 - [ ] `npm run validate-parsers -- ../catalog/parsers` passes locally.
 - [ ] `priority` chosen to not collide with an existing parser for the same log.
+
+## Application signatures
+
+Application Monitoring's signatures (`applications/<id>.app.yaml`, format
+`siembox.app/v1`) are contributed to
+[siembox-catalog](https://github.com/cladkins/siembox-catalog) the same way;
+`catalog/applications/` here is its mirror. The easiest route is SIEMBox itself:
+**Application Monitoring → Not identified → Create signature** opens the value
+pre-filled in an editor that runs the catalog CI's checks as you type and
+**Test against my evidence** shows what it would identify; save it (it applies
+locally at once), then **Signatures → Contribute** opens GitHub's pre-filled
+pull request page for `applications/<id>.app.yaml`. By hand, validate with:
+
+```bash
+cd backend && npm run build
+npm run validate-applications -- ../catalog/applications --parsers ../catalog/parsers
+```
+
+The format and its rules: the wiki's *Application Monitoring* page.

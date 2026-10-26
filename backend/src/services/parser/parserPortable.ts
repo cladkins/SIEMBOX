@@ -171,11 +171,36 @@ export interface SelfTestResult {
   failures: SampleFailure[];
 }
 
-function eq(actual: any, expected: any): boolean {
+/**
+ * Does a parsed field value satisfy a sample's `expect` entry? `null` asserts the
+ * field is absent; otherwise values compare as strings (booleans by truthiness).
+ * Shared with the cross-parser shadowing check so both agree on what "the
+ * sample's expected fields" means.
+ */
+export function expectedFieldMatches(actual: any, expected: any): boolean {
   if (expected === null) return actual === undefined || actual === null; // assert-absent
   if (actual === undefined || actual === null) return false;
   if (typeof expected === 'boolean') return Boolean(actual) === expected;
   return String(actual) === String(expected); // parser fields are strings; coerce
+}
+
+/**
+ * The text the parser engine will actually be handed for a sample. A sample
+ * written as a full syslog line (`<PRI>…` or `Mmm dd hh:mm:ss host tag…`) is
+ * stored header-stripped at ingest, so the engine sees only the message part —
+ * unless the sample opts out with `embedded_syslog: true` (the line arrives
+ * embedded in another envelope and the inner header survives). `stripped` says
+ * whether the returned input differs from `sample.input`.
+ */
+export function sampleEngineInput(sample: Pick<ParserTestSample, 'input' | 'embedded_syslog'>): {
+  input: string;
+  stripped: boolean;
+} {
+  const looksLikeSyslogLine =
+    /^<\d+>/.test(sample.input) || /^\w{3}\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\S+\s+\S/.test(sample.input);
+  if (sample.embedded_syslog || !looksLikeSyslogLine) return { input: sample.input, stripped: false };
+  const message = parseSyslogMessage(sample.input).message;
+  return message !== sample.input ? { input: message, stripped: true } : { input: sample.input, stripped: false };
 }
 
 /**
@@ -201,7 +226,7 @@ export function runSelfTests(parser: PortableParser): SelfTestResult {
     const matched = result !== null;
     const mismatches: SampleFailure['mismatches'] = [];
     for (const [field, expected] of Object.entries(s.expect || {})) {
-      if (!eq(fields[field], expected)) {
+      if (!expectedFieldMatches(fields[field], expected)) {
         mismatches.push({ field, expected, actual: fields[field] });
       }
     }
@@ -219,11 +244,9 @@ export function runSelfTests(parser: PortableParser): SelfTestResult {
     // production-dead for direct syslog transport — fail with a fix hint. Samples
     // that only ever arrive embedded via the shipper's file transport (the inner
     // header genuinely survives) can opt out with `embedded_syslog: true`.
-    const looksLikeSyslogLine =
-      /^<\d+>/.test(s.input) || /^\w{3}\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\S+\s+\S/.test(s.input);
-    if (matched && !s.embedded_syslog && looksLikeSyslogLine) {
-      const stripped = parseSyslogMessage(s.input);
-      if (stripped.message !== s.input && runParser(def, stripped.message, { packetSourceIp: s.packet_source_ip }) === null) {
+    const seen = sampleEngineInput(s);
+    if (matched && seen.stripped) {
+      if (runParser(def, seen.input, { packetSourceIp: s.packet_source_ip }) === null) {
         failures.push({
           index,
           description: s.description,
@@ -231,7 +254,7 @@ export function runSelfTests(parser: PortableParser): SelfTestResult {
           mismatches: [],
           note:
             `input is a full syslog line, but at ingest SIEMBox stores only the header-stripped message ` +
-            `(${JSON.stringify(stripped.message.slice(0, 80))}) — which this parser does NOT match. ` +
+            `(${JSON.stringify(seen.input.slice(0, 80))}) — which this parser does NOT match. ` +
             `Make the header optional in the pattern (or use the stripped message as the sample input; ` +
             `or set embedded_syslog: true if this line only ever arrives embedded via the shipper's file transport).`,
         });

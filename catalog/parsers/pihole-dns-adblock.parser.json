@@ -17,7 +17,7 @@
     "unix_milli_timestamp": "timestamp_ms"
   },
   "description": "Parses Pi-hole DNS ad-block JSON log events including blocked domain, client IP, category, and protocol details",
-  "priority": 200,
+  "priority": 45,
   "derivations": [
     {
       "set": {

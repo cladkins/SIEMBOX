@@ -149,9 +149,47 @@ Priority determines matching order (lower number = higher priority):
 - **1000+:** Fallback parsers (generic syslog)
 
 **Priority Strategy:**
-- Custom parsers should have **higher priority** than standard parsers
-- Example: `nginx-custom-timestamp-first` (45) before `standard-nginx-access` (40)
-- This prevents false matches on partial patterns
+- The engine tries enabled parsers in ascending priority and **stops at the
+  first match**; priority ties are broken by install order (database id). A
+  parser's self-tests run it alone, so they pass even when an earlier parser
+  claims the same lines in production and it never fires.
+- A specific parser must sort **before** (lower number than) any broader parser
+  that also matches its lines: `standard-nginx-access` (40) before the looser
+  `apache-nginx-access-log` (41), `nginx-komodo-error` (38) before
+  `standard-nginx-error` (39), every vendor JSON parser before the `json-parser`
+  catch-all (50).
+- A `json` parser with an empty pattern claims every JSON line whose keys it
+  maps. If it maps only generic keys (`host`, `message`, `service`, ...) it
+  matches nearly any JSON, so give it real discriminating keys or don't put it
+  ahead of other JSON parsers; for logs that arrive as syslog, match the message
+  line with a regex parser instead.
+- Don't give two parsers that match the same lines the same priority: which one
+  wins then depends on install order.
+
+**Cross-parser check (`validate-parsers`, catalog CI):** when it validates more
+than one parser, `npm run validate-parsers -- <dir>` also runs the whole set the
+way the engine does. For every sample of every parser with `field_mappings`, the
+first parser in engine order (priority, then name as a stand-in for install
+order) that matches the line the engine would see — the header-stripped message
+for a full syslog sample, the line as written for `embedded_syslog: true` — must
+be that parser, or an earlier one that still produces every field the sample
+`expect`s (a stricter parser yielding a superset may sit ahead). Catch-all
+parsers with no `field_mappings` (`json-parser`) are exempt as owners but count
+as claimers. A failure reads:
+
+```
+✗ pihole-dns-adblock sample[0] is claimed by json-parser (priority 50) before pihole-dns-adblock (priority 200)
+    engine input: "{\"timestamp\":\"2026-06-28T11:18:09-05:00\",...}"
+    host: expected "firebaselogging-pa.googleapis.com", json-parser gives undefined
+    event: expected "dns_blocked", json-parser gives undefined
+    Fix: give pihole-dns-adblock a lower priority number than json-parser, or make json-parser's pattern stop matching this line (or make it produce these fields).
+```
+
+That is: the first parser named owns the sample; the claimer matched first and
+the listed fields are what users lose. Lower the owner's priority number below
+the claimer's, or tighten whichever pattern is over-matching. If the owner
+itself is the over-broad one, the same command shows it claiming *other*
+parsers' samples.
 
 #### 5. Add Parser to Database
 
@@ -318,7 +356,10 @@ ORDER BY priority ASC;
 ```
 
 **Solutions:**
-1. Adjust priority - lower numbers match first
+1. Adjust priority - lower numbers match first (see
+   [Set Parser Priority](#4-set-parser-priority); for parser files,
+   `npm run validate-parsers -- <dir>` reports every sample another parser
+   claims first)
 2. Make patterns more specific to avoid false matches
 3. Use anchors (`^` and `$`) to match exact formats
 4. Add unique identifiers to patterns

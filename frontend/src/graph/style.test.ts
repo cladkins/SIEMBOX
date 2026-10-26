@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { placeAround, MIN_GAP } from './layout.ts';
 import { emptyModel, mergeNeighborhood, visibleGraph } from './model.ts';
-import { edgeLabel, edgeWidth, glyphImage, nodeColor, outcomeLabel, stylesheet, toElements, TYPE_STYLES } from './style.ts';
+import { applicationEdgeLabel, edgeLabel, edgeWidth, glyphImage, nodeColor, outcomeLabel, stylesheet, toElements, typeColor, TYPE_STYLES, versionsLabel } from './style.ts';
 import { NODE_TYPES, type NeighborhoodResponse } from './types.ts';
 import { SEVERITY_COLORS } from '../utils/severity.ts';
 
@@ -98,6 +98,69 @@ describe('canvas elements', () => {
     assert.equal(find('edge.s-logs')?.['line-style'], 'dashed');
     assert.equal(find('edge.s-heuristic')?.['line-style'], 'dotted');
     assert.equal(find('node.f-threat_feed')?.['border-color'], '#f56c6c');
+  });
+});
+
+describe('application nodes', () => {
+  const response: NeighborhoodResponse = {
+    center: { id: 'application:nginx', type: 'application', key: 'nginx', label: 'nginx', facts: { vendor: 'F5', versions: '1.24.0, 1.25.3' }, flags: ['open_vulns'], expandable: true, exists: true },
+    window: { from: '2026-10-08T00:00:00.000Z', to: '2026-10-15T00:00:00.000Z', preset: '7d' },
+    nodes: [
+      { id: 'asset:4', type: 'asset', key: '4', label: 'nas', facts: {}, flags: [], expandable: true },
+      { id: 'ip:198.51.100.9', type: 'ip', key: '198.51.100.9', label: '198.51.100.9', facts: {}, flags: [], expandable: true },
+      { id: 'vuln:7', type: 'vuln', key: '7', label: 'CVE-2024-1', facts: { severity: 'high' }, flags: [], expandable: true },
+      { id: 'application:zoom', type: 'application', key: 'zoom', label: 'Zoom', facts: {}, flags: ['unmanaged'], expandable: true },
+    ],
+    edges: [
+      { id: 'runs_app|asset:4|application:nginx', source: 'asset:4', target: 'application:nginx', rel: 'runs_app', origin: 'inventory', style: 'recorded', versions: ['1.24.0', '1.25.3'], sources: ['service_scan'], count: 2 },
+      { id: 'uses_app|ip:198.51.100.9|application:nginx', source: 'ip:198.51.100.9', target: 'application:nginx', rel: 'uses_app', origin: 'inventory', style: 'recorded', versions: ['128.0'], network: true },
+      { id: 'app_vulns|application:nginx|vuln:7', source: 'application:nginx', target: 'vuln:7', rel: 'app_vulns', origin: 'inventory', style: 'heuristic', match: 'best_effort' },
+    ],
+    groups: [{ rel: 'app_clients', label: 'Clients using it (seen on the network)', neighbor_type: 'ip', origin: 'inventory', total: 500, total_capped: false, shown: 1, very_common: true, status: 'ok' }],
+    sources: {},
+    generated_at: '',
+    cached: false,
+    elapsed_ms: 1,
+  };
+  const merged = mergeNeighborhood(emptyModel(['application:nginx']), response);
+  assert.ok(merged.ok);
+  const elements = toElements(visibleGraph(merged.model), { centres: ['application:nginx'], dark: false });
+  const byId = new Map(elements.map((e) => [e.data.id as string, e]));
+
+  it('draws an application as a green pentagon with its own glyph, in both themes', () => {
+    assert.deepEqual([TYPE_STYLES.application.shape, TYPE_STYLES.application.glyph, TYPE_STYLES.application.label], ['pentagon', 'P', 'Application']);
+    const node = byId.get('application:nginx')!;
+    assert.equal(node.data.shape, 'pentagon');
+    assert.equal(node.data.color, typeColor('application', false));
+    assert.notEqual(typeColor('application', true), typeColor('application', false));
+    assert.match(node.classes, /\bt-application\b/);
+    assert.match(byId.get('application:zoom')!.classes, /\bf-unmanaged\b/);
+  });
+
+  it('captions inventory edges with the newest version, network evidence and best-effort matches', () => {
+    assert.equal(byId.get('runs_app|asset:4|application:nginx')!.data.label, '1.25.3 +1');
+    assert.match(byId.get('runs_app|asset:4|application:nginx')!.classes, /\bs-recorded\b.*\blabelled\b/);
+    assert.equal(byId.get('uses_app|ip:198.51.100.9|application:nginx')!.data.label, '128.0 · network');
+    const vuln = byId.get('app_vulns|application:nginx|vuln:7')!;
+    assert.equal(vuln.data.label, 'best effort');
+    assert.match(vuln.classes, /\bs-heuristic\b/);
+    assert.equal(applicationEdgeLabel({ rel: 'app_vulns', match: 'exact', versions: ['1.24.0'] }), '', 'an exact match needs no caption');
+    assert.equal(applicationEdgeLabel({ rel: 'alert_ips', versions: ['1'] }), '', 'only application edges');
+    assert.equal(applicationEdgeLabel({ rel: 'runs_app', versions: ['x'.repeat(40)] }).length, 24, 'cut like a label');
+    assert.equal(versionsLabel(['1.24.0', '1.25.3‮']), '1.24.0, 1.25.3');
+    assert.equal(versionsLabel(undefined), '');
+  });
+
+  it('labels the relations and the very-common group', () => {
+    assert.equal(edgeLabel('runs_app'), 'Runs this application (inventory)');
+    assert.equal(edgeLabel('uses_app'), 'Uses this application (seen on the network)');
+    assert.equal(edgeLabel('app_vulns'), 'Open vulnerability of the application');
+    assert.equal(byId.get('group:app_clients|application:nginx')!.data.label, '+499 clients using it (seen on the network)\nvery common');
+  });
+
+  it('styles an unmanaged application with a double border', () => {
+    const sheet = stylesheet({ dark: true, text: '#fff', textMuted: '#999', background: '#000', card: '#111', border: '#333', edge: '#666', primary: '#409eff', danger: '#f56c6c', warning: '#e6a23c', highlight: '#7048e8' });
+    assert.equal(sheet.find((s) => s.selector === 'node.f-unmanaged')?.style['border-style'], 'double');
   });
 });
 

@@ -20,7 +20,8 @@ export type CyShape =
   | 'triangle'
   | 'tag'
   | 'barrel'
-  | 'star';
+  | 'star'
+  | 'pentagon';
 
 export interface TypeStyle {
   label: string;
@@ -46,6 +47,7 @@ export const TYPE_STYLES: Record<NodeType, TypeStyle> = {
   shipper_tag: { label: 'Unknown shipper', plural: 'Unknown shippers', shape: 'rectangle', glyph: '?', aspect: 1.5 },
   endpoint: { label: 'Endpoint agent', plural: 'Endpoint agents', shape: 'rectangle', glyph: 'E', aspect: 1.5 },
   account: { label: 'SIEMBox account', plural: 'SIEMBox accounts', shape: 'star', glyph: 'K', aspect: 1 },
+  application: { label: 'Application', plural: 'Applications', shape: 'pentagon', glyph: 'P', aspect: 1.1 },
 };
 
 export const ORIGIN_LABELS: Record<Origin, string> = {
@@ -93,6 +95,9 @@ export const EDGE_LABELS: Record<string, string> = {
   connected_to: 'Connected to (seen in logs)',
   queried: 'Queried this domain (seen in logs)',
   sent_by: 'Logs sent from this IP',
+  runs_app: 'Runs this application (inventory)',
+  uses_app: 'Uses this application (seen on the network)',
+  app_vulns: 'Open vulnerability of the application',
 };
 
 export const edgeLabel = (rel: string): string => EDGE_LABELS[rel] ?? rel.replace(/_/g, ' ');
@@ -149,6 +154,7 @@ const TYPE_COLORS_LIGHT: Record<NodeType, string> = {
   shipper_tag: '#868e96',
   endpoint: '#364fc7',
   account: '#9c36b5',
+  application: '#2b8a3e',
 };
 const TYPE_COLORS_DARK: Record<NodeType, string> = {
   ip: '#748ffc',
@@ -165,6 +171,7 @@ const TYPE_COLORS_DARK: Record<NodeType, string> = {
   shipper_tag: '#a3a6ad',
   endpoint: '#748ffc',
   account: '#e599f7',
+  application: '#69db7c',
 };
 
 /** The fill of a node: severity for alerts and vulnerabilities, else its type's colour. */
@@ -177,6 +184,24 @@ export function nodeColor(node: Pick<GraphNode, 'type' | 'facts'>, dark: boolean
 }
 
 export const typeColor = (type: NodeType, dark: boolean): string => (dark ? TYPE_COLORS_DARK : TYPE_COLORS_LIGHT)[type];
+
+/**
+ * The canvas caption of an application edge: the newest version seen (an
+ * edge from the inventory), "network" for evidence seen only on the wire, and
+ * "best effort" for a vulnerability matched by product name. '' otherwise.
+ */
+export function applicationEdgeLabel(edge: Pick<GraphEdge, 'rel' | 'versions' | 'network' | 'match'>): string {
+  if (edge.rel !== 'runs_app' && edge.rel !== 'uses_app' && edge.rel !== 'app_vulns') return '';
+  const parts: string[] = [];
+  const newest = edge.versions?.length ? edge.versions[edge.versions.length - 1] : '';
+  if (newest && edge.rel !== 'app_vulns') parts.push(canvasLabel(edge.versions!.length > 1 ? `${newest} +${edge.versions!.length - 1}` : newest));
+  if (edge.network) parts.push('network');
+  if (edge.match === 'best_effort') parts.push('best effort');
+  return parts.join(' · ');
+}
+
+/** "1.24.0, 1.25.3", for the details panel. */
+export const versionsLabel = (versions: readonly string[] | undefined): string => (versions ?? []).map((v) => canvasLabel(v)).join(', ');
 
 const glyphCache = new Map<string, string>();
 
@@ -261,6 +286,8 @@ export function toElements(visible: VisibleGraph, options: ElementOptions): Elem
     } else if (edge.role === 'dest' || edge.role === 'sender') {
       label = edge.role === 'dest' ? 'dest' : 'sender';
     }
+    const appLabel = applicationEdgeLabel(edge);
+    if (appLabel) label = label ? `${label} · ${appLabel}` : appLabel;
     if (edge.new) label = label ? `NEW · ${label}` : 'NEW';
     if (edge.success_after_failures) label = `${label ? `${label} · ` : ''}success after failures`;
     if (label) classes.push('labelled');
@@ -303,6 +330,7 @@ export function stylesheet(p: GraphPalette): Array<{ selector: string; style: Re
     { selector: 'node.centre', style: { 'border-width': 3, 'border-color': p.primary } },
     { selector: 'node.crit-critical, node.crit-high', style: { 'border-width': 3, 'border-color': p.warning } },
     { selector: 'node.f-threat_feed', style: { 'border-width': 4, 'border-color': p.danger } },
+    { selector: 'node.f-unmanaged', style: { 'border-style': 'double', 'border-width': 3, 'border-color': p.textMuted } },
     { selector: 'node.t-shipper_tag', style: { 'border-style': 'dashed', 'border-width': 2, 'border-color': p.textMuted } },
     { selector: 'node.f-closed', style: { opacity: 0.45 } },
     {

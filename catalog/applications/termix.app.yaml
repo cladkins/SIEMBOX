@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: termix
+name: Termix
+vendor: Termix
+category: remote-access
+description: Web-based SSH terminal and server manager.
+website: https://github.com/LukeGus/Termix
+match:
+  parser: [termix-session]
+  container_image: ['*/lukegus/termix', lukegus/termix]
+tests:
+  - source: parser
+    input: termix-session
+  - source: container_image
+    input: 'ghcr.io/lukegus/termix:release-1.6.0'
+    version: '1.6.0'

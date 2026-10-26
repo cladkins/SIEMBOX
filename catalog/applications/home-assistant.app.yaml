@@ -1,0 +1,33 @@
+schema: siembox.app/v1
+id: home-assistant
+name: Home Assistant
+vendor: Home Assistant
+category: home-automation
+description: Home automation platform.
+website: https://www.home-assistant.io
+cpe: { vendor: home-assistant, product: home-assistant }
+match:
+  syslog_program: [homeassistant, home-assistant, home assistant]
+  parser: [home-assistant]
+  container_image: [homeassistant/home-assistant, '*/home-assistant/home-assistant', linuxserver/homeassistant, '*/linuxserver/homeassistant']
+  user_agent:
+    - '^HomeAssistant/(\d+(?:\.\d+)+)'
+  dns: [home-assistant.io, nabu.casa]
+tests:
+  - source: syslog_program
+    input: homeassistant
+  - source: parser
+    input: home-assistant
+  - source: container_image
+    input: 'ghcr.io/home-assistant/home-assistant:2024.1.5'
+    version: '2024.1.5'
+  - source: container_image
+    input: 'ghcr.io/home-assistant/home-assistant:stable'
+    version: null
+  - source: user_agent
+    input: HomeAssistant/2024.1.5 aiohttp/3.9.1 Python/3.11
+    version: '2024.1.5'
+  - source: dns
+    input: version.home-assistant.io
+  - source: dns
+    input: abcdef.ui.nabu.casa

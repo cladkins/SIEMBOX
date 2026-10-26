@@ -1,0 +1,13 @@
+schema: siembox.app/v1
+id: screenconnect
+name: ConnectWise ScreenConnect
+vendor: ConnectWise
+category: remote-access
+description: 'Remote support software; often abused for remote access.'
+website: https://screenconnect.connectwise.com
+cpe: { vendor: connectwise, product: screenconnect }
+match:
+  dns: [screenconnect.com]
+tests:
+  - source: dns
+    input: instance-abc123-relay.screenconnect.com

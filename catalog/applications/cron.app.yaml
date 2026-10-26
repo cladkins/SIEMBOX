@@ -1,0 +1,14 @@
+schema: siembox.app/v1
+id: cron
+name: cron
+vendor: Various
+category: os-component
+description: 'Scheduled job daemon (cron, cronie).'
+match:
+  syslog_program: [cron, crond]
+  package: [cron, cronie]
+tests:
+  - source: syslog_program
+    input: CRON
+  - source: package
+    input: cron

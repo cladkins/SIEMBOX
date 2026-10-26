@@ -1,0 +1,19 @@
+schema: siembox.app/v1
+id: discord
+name: Discord
+vendor: Discord
+category: messaging
+description: Voice and text chat.
+website: https://discord.com
+match:
+  user_agent:
+    - '\bdiscord/(\d+(?:\.\d+)+)'
+  dns: [discord.com, discord.gg, discordapp.com, discordapp.net, discord.media]
+tests:
+  - source: dns
+    input: gateway.discord.gg
+  - source: dns
+    input: cdn.discordapp.com
+  - source: user_agent
+    input: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) discord/1.0.9028 Chrome/120.0.6099.291 Electron/28.2.10 Safari/537.36'
+    version: '1.0.9028'

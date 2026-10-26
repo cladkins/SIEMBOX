@@ -1,0 +1,32 @@
+schema: siembox.app/v1
+id: nextcloud
+name: Nextcloud
+vendor: Nextcloud
+category: file-sharing
+description: 'File sync and collaboration server, and its desktop and Android clients.'
+website: https://nextcloud.com
+cpe: { vendor: nextcloud, product: nextcloud_server }
+match:
+  syslog_program: [nextcloud]
+  parser: [nextcloud-access]
+  container_image: [nextcloud, linuxserver/nextcloud, '*/linuxserver/nextcloud', nextcloud/all-in-one]
+  user_agent:
+    - '\bmirall/(\d+(?:\.\d+)+)'
+    - '\bNextcloud-android/(\d+(?:\.\d+)+)'
+  dns: [nextcloud.com]
+tests:
+  - source: syslog_program
+    input: nextcloud
+  - source: parser
+    input: nextcloud-access
+  - source: container_image
+    input: 'nextcloud:28.0.1-apache'
+    version: '28.0.1'
+  - source: user_agent
+    input: 'Mozilla/5.0 (Linux) mirall/3.11.0 (Nextcloud, ubuntu-6.5.0-14-generic ClientArchitecture: x86_64 OsArchitecture: x86_64)'
+    version: '3.11.0'
+  - source: user_agent
+    input: 'Mozilla/5.0 (Android) Nextcloud-android/3.27.0'
+    version: '3.27.0'
+  - source: dns
+    input: updates.nextcloud.com

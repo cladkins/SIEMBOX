@@ -1,0 +1,20 @@
+schema: siembox.app/v1
+id: authentik
+name: authentik
+vendor: Authentik Security
+category: auth
+description: 'Identity provider (SSO, OAuth, SAML, LDAP).'
+website: https://goauthentik.io
+cpe: { vendor: goauthentik, product: authentik }
+match:
+  syslog_program: [authentik server, authentik worker, authentik]
+  parser: [authentik-asgi-access, authentik-audit, authentik-console]
+  container_image: ['*/goauthentik/server', goauthentik/server, beryju/authentik]
+tests:
+  - source: syslog_program
+    input: Authentik Server
+  - source: parser
+    input: authentik-audit
+  - source: container_image
+    input: 'ghcr.io/goauthentik/server:2024.2.1'
+    version: '2024.2.1'

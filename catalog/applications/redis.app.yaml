@@ -1,0 +1,24 @@
+schema: siembox.app/v1
+id: redis
+name: Redis
+vendor: Redis
+category: database
+description: In-memory data store.
+website: https://redis.io
+cpe: { vendor: redis, product: redis }
+match:
+  syslog_program: [redis-server, redis]
+  service:
+    names: [redis]
+  container_image: [redis, bitnami/redis, redis/redis-stack]
+  package: [redis-server, redis]
+tests:
+  - source: syslog_program
+    input: redis-server
+  - source: service
+    input: { name: redis }
+  - source: container_image
+    input: 'redis:7.2.4-alpine'
+    version: '7.2.4'
+  - source: package
+    input: redis-server

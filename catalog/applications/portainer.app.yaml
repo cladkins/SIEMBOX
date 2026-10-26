@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: portainer
+name: Portainer
+vendor: Portainer
+category: container-runtime
+description: Container management UI and agent.
+website: https://www.portainer.io
+match:
+  syslog_program: [portainer]
+  container_image: [portainer/portainer-ce, portainer/portainer-ee, portainer/portainer, portainer/agent]
+tests:
+  - source: syslog_program
+    input: portainer
+  - source: container_image
+    input: 'portainer/portainer-ce:2.19.4'
+    version: '2.19.4'

@@ -1,0 +1,17 @@
+schema: siembox.app/v1
+id: guacamole
+name: Apache Guacamole
+vendor: Apache Software Foundation
+category: remote-access
+description: Clientless remote desktop gateway.
+website: https://guacamole.apache.org
+cpe: { vendor: apache, product: guacamole }
+match:
+  syslog_program: [guacd]
+  container_image: [guacamole/guacamole, guacamole/guacd]
+tests:
+  - source: syslog_program
+    input: guacd
+  - source: container_image
+    input: 'guacamole/guacamole:1.5.4'
+    version: '1.5.4'

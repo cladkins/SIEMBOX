@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: containerd
+name: containerd
+vendor: CNCF
+category: container-runtime
+description: Container runtime.
+website: https://containerd.io
+cpe: { vendor: linuxfoundation, product: containerd }
+match:
+  syslog_program: [containerd]
+  package: [containerd, containerd.io]
+tests:
+  - source: syslog_program
+    input: containerd
+  - source: package
+    input: containerd.io

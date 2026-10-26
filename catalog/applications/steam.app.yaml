@@ -1,0 +1,19 @@
+schema: siembox.app/v1
+id: steam
+name: Steam
+vendor: Valve
+category: game
+description: Game store and client.
+website: https://store.steampowered.com
+match:
+  user_agent:
+    - '^Valve/Steam HTTP Client (\d+(?:\.\d+)*)'
+  dns: [steampowered.com, steamcommunity.com, steamstatic.com, steamcontent.com, steamserver.net]
+tests:
+  - source: dns
+    input: api.steampowered.com
+  - source: dns
+    input: cache1-fra1.steamcontent.com
+  - source: user_agent
+    input: Valve/Steam HTTP Client 1.0
+    version: '1.0'

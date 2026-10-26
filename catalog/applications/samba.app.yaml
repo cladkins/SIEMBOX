@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: samba
+name: Samba
+vendor: Samba
+category: file-sharing
+description: SMB/CIFS file and print server.
+website: https://www.samba.org
+cpe: { vendor: samba, product: samba }
+match:
+  syslog_program: [smbd, nmbd, samba]
+  package: [samba]
+tests:
+  - source: syslog_program
+    input: smbd
+  - source: package
+    input: samba

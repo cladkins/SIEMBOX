@@ -1,0 +1,21 @@
+schema: siembox.app/v1
+id: ubuntu
+name: Ubuntu
+vendor: Canonical
+category: operating-system
+description: Operating system.
+website: https://ubuntu.com
+cpe: { vendor: canonical, product: ubuntu_linux }
+match:
+  dns: [archive.ubuntu.com, security.ubuntu.com]
+  os:
+    family: linux
+    pretty_name: '^Ubuntu (\d+\.\d+(?:\.\d+)?)'
+tests:
+  - source: os
+    input: { family: linux, pretty_name: Ubuntu 22.04.4 LTS }
+    version: '22.04.4'
+  - source: dns
+    input: archive.ubuntu.com
+  - source: dns
+    input: us.archive.ubuntu.com

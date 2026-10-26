@@ -1,0 +1,20 @@
+schema: siembox.app/v1
+id: openvpn
+name: OpenVPN
+vendor: OpenVPN
+category: vpn
+description: VPN server and client.
+website: https://openvpn.net
+cpe: { vendor: openvpn, product: openvpn }
+match:
+  syslog_program: [openvpn]
+  container_image: [kylemanna/openvpn, openvpn/openvpn-as]
+  package: [openvpn]
+tests:
+  - source: syslog_program
+    input: openvpn
+  - source: container_image
+    input: 'kylemanna/openvpn:2.4'
+    version: '2.4'
+  - source: package
+    input: openvpn

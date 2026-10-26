@@ -1,0 +1,14 @@
+schema: siembox.app/v1
+id: onedrive
+name: Microsoft OneDrive
+vendor: Microsoft
+category: file-sharing
+description: Cloud file storage.
+website: https://onedrive.live.com
+match:
+  dns: [onedrive.live.com, onedrive.com, '1drv.ms', storage.live.com]
+tests:
+  - source: dns
+    input: onedrive.live.com
+  - source: dns
+    input: api.onedrive.com

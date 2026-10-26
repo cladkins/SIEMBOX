@@ -1,0 +1,25 @@
+schema: siembox.app/v1
+id: tailscale
+name: Tailscale
+vendor: Tailscale
+category: vpn
+description: Mesh VPN built on WireGuard.
+website: https://tailscale.com
+cpe: { vendor: tailscale, product: tailscale }
+match:
+  syslog_program: [tailscaled]
+  container_image: [tailscale/tailscale, '*/tailscale/tailscale']
+  package: [tailscale]
+  dns: [tailscale.com, tailscale.io]
+tests:
+  - source: syslog_program
+    input: tailscaled
+  - source: container_image
+    input: 'tailscale/tailscale:v1.58.2'
+    version: '1.58.2'
+  - source: package
+    input: tailscale
+  - source: dns
+    input: controlplane.tailscale.com
+  - source: dns
+    input: log.tailscale.io

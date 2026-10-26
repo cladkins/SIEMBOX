@@ -1,0 +1,20 @@
+schema: siembox.app/v1
+id: mosquitto
+name: Eclipse Mosquitto
+vendor: Eclipse Foundation
+category: home-automation
+description: MQTT broker.
+website: https://mosquitto.org
+cpe: { vendor: eclipse, product: mosquitto }
+match:
+  syslog_program: [mosquitto]
+  container_image: [eclipse-mosquitto]
+  package: [mosquitto]
+tests:
+  - source: syslog_program
+    input: mosquitto
+  - source: container_image
+    input: 'eclipse-mosquitto:2.0.18'
+    version: '2.0.18'
+  - source: package
+    input: mosquitto

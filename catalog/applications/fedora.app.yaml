@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: fedora
+name: Fedora Linux
+vendor: Fedora Project
+category: operating-system
+description: Operating system.
+website: https://fedoraproject.org
+cpe: { vendor: fedoraproject, product: fedora }
+match:
+  os:
+    family: linux
+    pretty_name: '^Fedora(?: Linux)? (\d+)'
+tests:
+  - source: os
+    input: { family: linux, pretty_name: 'Fedora Linux 39 (Workstation Edition)' }
+    version: '39'

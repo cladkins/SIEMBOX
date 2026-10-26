@@ -1,0 +1,25 @@
+schema: siembox.app/v1
+id: qbittorrent
+name: qBittorrent
+vendor: qBittorrent
+category: file-sharing
+description: 'BitTorrent client (qbittorrent-nox in containers).'
+website: https://www.qbittorrent.org
+cpe: { vendor: qbittorrent, product: qbittorrent }
+match:
+  syslog_program: [qbittorrent-nox]
+  container_image: [linuxserver/qbittorrent, '*/linuxserver/qbittorrent', '*/hotio/qbittorrent']
+  package: [qbittorrent-nox, qbittorrent]
+  user_agent:
+    - '^qBittorrent/v?(\d+(?:\.\d+)+)'
+tests:
+  - source: syslog_program
+    input: qbittorrent-nox
+  - source: container_image
+    input: 'lscr.io/linuxserver/qbittorrent:4.6.2'
+    version: '4.6.2'
+  - source: package
+    input: qbittorrent-nox
+  - source: user_agent
+    input: qBittorrent/4.6.2
+    version: '4.6.2'

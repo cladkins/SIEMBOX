@@ -183,6 +183,8 @@ const INVENTORY: Row[] = [
   ['PUT', '/api/settings/retention', ADMIN_ONLY],
   ['GET', '/api/settings/context-graph', ADMIN_ONLY],
   ['PUT', '/api/settings/context-graph', ADMIN_ONLY],
+  ['GET', '/api/settings/applications', ADMIN_ONLY],
+  ['PUT', '/api/settings/applications', ADMIN_ONLY],
   ['POST', '/api/settings/retention/cleanup', ADMIN_ONLY],
   ['GET', '/api/settings/retention/cleanup/status', ADMIN_ONLY],
   ['GET', '/api/settings/retention/stats', ADMIN_ONLY],
@@ -415,6 +417,13 @@ const INVENTORY: Row[] = [
   ['GET', '/api/graph/neighborhood', ANY_ROLE],
   ['GET', '/api/graph/relation', ANY_ROLE],
   ['GET', '/api/graph/evidence', ANY_ROLE],
+
+  // routes/applications.ts: Application Monitoring (every role reads; refresh is analyst and up)
+  ['GET', '/api/applications', ANY_ROLE],
+  ['GET', '/api/applications/unmatched', ANY_ROLE],
+  ['GET', '/api/applications/vulnerabilities', ANY_ROLE],
+  ['POST', '/api/applications/refresh', ANALYST_UP],
+  ['GET', '/api/applications/:id', ANY_ROLE],
 
   // routes/display.ts: a wall screen's own read (its display link in X-Display-Token, never a login)
   ['GET', '/api/display/snapshot', DISPLAY],

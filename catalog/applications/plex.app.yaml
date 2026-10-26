@@ -1,0 +1,36 @@
+schema: siembox.app/v1
+id: plex
+name: Plex Media Server
+vendor: Plex
+category: media-server
+description: 'Media server for movies, TV and music; clients stream from it locally or through plex.tv.'
+website: https://www.plex.tv
+cpe: { vendor: plex, product: media_server }
+match:
+  syslog_program: [plex, plexmediaserver, plex media server]
+  parser: [plex]
+  container_image: [plexinc/pms-docker, linuxserver/plex, '*/linuxserver/plex', '*/hotio/plex']
+  package: [plexmediaserver]
+  user_agent:
+    - '^PlexMediaServer/(\d+(?:\.\d+)+)'
+  dns: [plex.tv, plex.direct]
+tests:
+  - source: syslog_program
+    input: plex
+  - source: parser
+    input: plex
+  - source: container_image
+    input: 'lscr.io/linuxserver/plex:1.40.0.7998-c29d4c0c8-ls210'
+    version: '1.40.0.7998'
+  - source: container_image
+    input: 'plexinc/pms-docker:latest'
+    version: null
+  - source: package
+    input: plexmediaserver
+  - source: user_agent
+    input: PlexMediaServer/1.40.0.7998-c29d4c0c8
+    version: '1.40.0.7998'
+  - source: dns
+    input: pubsub.plex.tv
+  - source: dns
+    input: '192-168-1-20.abcdef0123456789.plex.direct'

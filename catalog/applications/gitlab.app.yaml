@@ -1,0 +1,17 @@
+schema: siembox.app/v1
+id: gitlab
+name: GitLab
+vendor: GitLab
+category: dev-tools
+description: 'DevOps platform (self-managed).'
+website: https://about.gitlab.com
+cpe: { vendor: gitlab, product: gitlab }
+match:
+  container_image: [gitlab/gitlab-ce, gitlab/gitlab-ee]
+  package: [gitlab-ce, gitlab-ee]
+tests:
+  - source: container_image
+    input: 'gitlab/gitlab-ce:16.8.1-ce.0'
+    version: '16.8.1'
+  - source: package
+    input: gitlab-ce

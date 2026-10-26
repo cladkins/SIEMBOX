@@ -1,0 +1,18 @@
+schema: siembox.app/v1
+id: anydesk
+name: AnyDesk
+vendor: AnyDesk Software
+category: remote-access
+description: 'Remote desktop software; often abused for remote access.'
+website: https://anydesk.com
+cpe: { vendor: anydesk, product: anydesk }
+match:
+  package: [anydesk]
+  dns: [anydesk.com]
+tests:
+  - source: package
+    input: anydesk
+  - source: dns
+    input: relay-1234abcd.net.anydesk.com
+  - source: dns
+    input: boot.net.anydesk.com

@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: adguard-home
+name: AdGuard Home
+vendor: AdGuard
+category: dns
+description: Network-wide DNS ad blocker.
+website: https://adguard.com/adguard-home/overview.html
+match:
+  syslog_program: [adguardhome]
+  container_image: [adguard/adguardhome, '*/adguard/adguardhome']
+tests:
+  - source: syslog_program
+    input: AdGuardHome
+  - source: container_image
+    input: 'adguard/adguardhome:v0.107.43'
+    version: '0.107.43'

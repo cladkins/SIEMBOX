@@ -1,0 +1,19 @@
+schema: siembox.app/v1
+id: slack
+name: Slack
+vendor: Salesforce
+category: messaging
+description: Team chat.
+website: https://slack.com
+match:
+  user_agent:
+    - '\bSlack/(\d+(?:\.\d+)+)'
+  dns: [slack.com, slack-edge.com, slack-msgs.com]
+tests:
+  - source: dns
+    input: app.slack.com
+  - source: dns
+    input: a.slack-edge.com
+  - source: user_agent
+    input: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Slack/4.36.140 Chrome/120.0.6099.199 Electron/28.1.4 Safari/537.36 Sonic Slack_SSB/4.36.140'
+    version: '4.36.140'

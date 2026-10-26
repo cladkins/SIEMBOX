@@ -1,0 +1,17 @@
+schema: siembox.app/v1
+id: bitwarden
+name: Bitwarden
+vendor: Bitwarden
+category: password-manager
+description: 'Password manager (cloud service and its clients).'
+website: https://bitwarden.com
+cpe: { vendor: bitwarden, product: bitwarden }
+match:
+  container_image: [bitwarden/self-host]
+  dns: [bitwarden.com, bitwarden.eu]
+tests:
+  - source: container_image
+    input: 'bitwarden/self-host:2024.1.0-beta'
+    version: '2024.1.0'
+  - source: dns
+    input: vault.bitwarden.com

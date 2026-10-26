@@ -1,0 +1,32 @@
+schema: siembox.app/v1
+id: nginx
+name: nginx
+vendor: F5
+category: web-server
+description: Web server and reverse proxy.
+website: https://nginx.org
+cpe: { vendor: f5, product: nginx }
+match:
+  syslog_program: [nginx]
+  parser: [standard-nginx-access, standard-nginx-error, nginx-komodo-error, nginx-komodo-ip-only, nginx-komodo-timestamp-first]
+  service:
+    banner:
+      - '^nginx(?: (\d+(?:\.\d+)+))?'
+  container_image: [nginx, nginxinc/nginx-unprivileged, '*/nginxinc/nginx-unprivileged', bitnami/nginx, linuxserver/nginx, '*/linuxserver/nginx']
+  package: [nginx, nginx-core, nginx-full, nginx-light, nginx-extras]
+tests:
+  - source: syslog_program
+    input: nginx
+  - source: parser
+    input: standard-nginx-access
+  - source: service
+    input: { name: http, banner: nginx 1.24.0 }
+    version: '1.24.0'
+  - source: container_image
+    input: 'nginx:1.25.3-alpine'
+    version: '1.25.3'
+  - source: container_image
+    input: 'docker.io/library/nginx:latest'
+    version: null
+  - source: package
+    input: nginx-core

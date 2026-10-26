@@ -1,0 +1,21 @@
+schema: siembox.app/v1
+id: curl
+name: curl
+vendor: curl
+category: http-client
+description: Command-line HTTP client.
+website: https://curl.se
+cpe: { vendor: haxx, product: curl }
+match:
+  package: [curl, libcurl4]
+  user_agent:
+    - '^curl/(\d+(?:\.\d+)*)'
+tests:
+  - source: user_agent
+    input: curl/7.81.0
+    version: '7.81.0'
+  - source: user_agent
+    input: curl/8.0
+    version: '8.0'
+  - source: package
+    input: curl

@@ -15,7 +15,8 @@
     "lint": "eslint src",
     "format": "prettier --write \"src/**/*.ts\"",
     "validate-detections": "node dist/scripts/validate-detections.js",
-    "validate-packs": "node dist/scripts/validate-packs.js"
+    "validate-packs": "node dist/scripts/validate-packs.js",
+    "validate-applications": "node dist/scripts/validate-applications.js"
   },
   "keywords": [
     "siem",

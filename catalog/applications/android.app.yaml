@@ -1,0 +1,15 @@
+schema: siembox.app/v1
+id: android
+name: Android
+vendor: Google
+category: operating-system
+description: Operating system.
+website: https://www.android.com
+cpe: { vendor: google, product: android }
+match:
+  user_agent:
+    - '\(Linux; Android (\d+(?:\.\d+)*)'
+tests:
+  - source: user_agent
+    input: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36'
+    version: '14'

@@ -1,0 +1,20 @@
+schema: siembox.app/v1
+id: pihole
+name: Pi-hole
+vendor: Pi-hole
+category: dns
+description: Network-wide DNS ad blocker.
+website: https://pi-hole.net
+cpe: { vendor: pi-hole, product: pi-hole }
+match:
+  syslog_program: [pihole-ftl, pihole]
+  parser: [pihole-query, pihole-dns-adblock]
+  container_image: [pihole/pihole, '*/pihole/pihole']
+tests:
+  - source: syslog_program
+    input: pihole-FTL
+  - source: parser
+    input: pihole-query
+  - source: container_image
+    input: 'pihole/pihole:2024.01.0'
+    version: '2024.01.0'

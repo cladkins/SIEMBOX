@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: nginx-proxy-manager
+name: Nginx Proxy Manager
+vendor: jc21
+category: reverse-proxy
+description: 'Reverse proxy with a web UI and Let''s Encrypt.'
+website: https://nginxproxymanager.com
+match:
+  parser: [nginx-proxy-manager]
+  container_image: [jc21/nginx-proxy-manager, '*/jc21/nginx-proxy-manager']
+tests:
+  - source: parser
+    input: nginx-proxy-manager
+  - source: container_image
+    input: 'jc21/nginx-proxy-manager:2.11.1'
+    version: '2.11.1'

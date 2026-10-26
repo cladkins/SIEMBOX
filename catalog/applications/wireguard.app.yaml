@@ -1,0 +1,20 @@
+schema: siembox.app/v1
+id: wireguard
+name: WireGuard
+vendor: WireGuard
+category: vpn
+description: 'VPN tunnel (kernel module and wg-quick; wg-easy).'
+website: https://www.wireguard.com
+cpe: { vendor: wireguard, product: wireguard }
+match:
+  syslog_program: [wg-quick]
+  container_image: [linuxserver/wireguard, '*/linuxserver/wireguard', '*/wg-easy/wg-easy', weejewel/wg-easy]
+  package: [wireguard, wireguard-tools]
+tests:
+  - source: syslog_program
+    input: wg-quick
+  - source: container_image
+    input: 'ghcr.io/wg-easy/wg-easy:13'
+    version: '13'
+  - source: package
+    input: wireguard-tools

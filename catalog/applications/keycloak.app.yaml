@@ -1,0 +1,20 @@
+schema: siembox.app/v1
+id: keycloak
+name: Keycloak
+vendor: Keycloak
+category: auth
+description: Identity and access management.
+website: https://www.keycloak.org
+cpe: { vendor: redhat, product: keycloak }
+match:
+  syslog_program: [keycloak]
+  parser: [keycloak-event]
+  container_image: ['*/keycloak/keycloak', keycloak/keycloak, bitnami/keycloak]
+tests:
+  - source: syslog_program
+    input: keycloak
+  - source: parser
+    input: keycloak-event
+  - source: container_image
+    input: 'quay.io/keycloak/keycloak:23.0.4'
+    version: '23.0.4'

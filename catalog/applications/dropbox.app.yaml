@@ -1,0 +1,19 @@
+schema: siembox.app/v1
+id: dropbox
+name: Dropbox
+vendor: Dropbox
+category: file-sharing
+description: Cloud file storage and its desktop client.
+website: https://www.dropbox.com
+match:
+  user_agent:
+    - '^DropboxDesktopClient/(\d+(?:\.\d+)+)'
+  dns: [dropbox.com, dropboxapi.com, dropboxusercontent.com]
+tests:
+  - source: dns
+    input: client.dropbox.com
+  - source: dns
+    input: content.dropboxapi.com
+  - source: user_agent
+    input: 'DropboxDesktopClient/191.4.4995 (Windows; 10; PC; en_US)'
+    version: '191.4.4995'

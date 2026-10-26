@@ -1,0 +1,22 @@
+schema: siembox.app/v1
+id: cloudflared
+name: 'Cloudflare Tunnel (cloudflared)'
+vendor: Cloudflare
+category: reverse-proxy
+description: Outbound tunnel to Cloudflare.
+website: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+match:
+  syslog_program: [cloudflared]
+  container_image: [cloudflare/cloudflared]
+  package: [cloudflared]
+  dns: [argotunnel.com]
+tests:
+  - source: syslog_program
+    input: cloudflared
+  - source: container_image
+    input: 'cloudflare/cloudflared:2024.1.5'
+    version: '2024.1.5'
+  - source: package
+    input: cloudflared
+  - source: dns
+    input: region1.v2.argotunnel.com

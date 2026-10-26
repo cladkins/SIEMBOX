@@ -1,0 +1,18 @@
+schema: siembox.app/v1
+id: sonarr
+name: Sonarr
+vendor: Sonarr
+category: media-server
+description: TV series download manager.
+website: https://sonarr.tv
+match:
+  container_image: [linuxserver/sonarr, '*/linuxserver/sonarr', '*/hotio/sonarr']
+  user_agent:
+    - '^Sonarr/(\d+(?:\.\d+)+)'
+tests:
+  - source: container_image
+    input: 'lscr.io/linuxserver/sonarr:4.0.0'
+    version: '4.0.0'
+  - source: user_agent
+    input: 'Sonarr/4.0.0.748 (ubuntu 22.04)'
+    version: '4.0.0.748'

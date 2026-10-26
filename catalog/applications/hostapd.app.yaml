@@ -1,0 +1,19 @@
+schema: siembox.app/v1
+id: hostapd
+name: hostapd
+vendor: w1.fi
+category: network
+description: Wi-Fi access point daemon.
+website: https://w1.fi/hostapd/
+cpe: { vendor: w1.fi, product: hostapd }
+match:
+  syslog_program: [hostapd]
+  parser: [unifi-hostapd]
+  package: [hostapd]
+tests:
+  - source: syslog_program
+    input: hostapd
+  - source: parser
+    input: unifi-hostapd
+  - source: package
+    input: hostapd

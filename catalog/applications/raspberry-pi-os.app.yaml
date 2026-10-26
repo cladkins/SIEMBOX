@@ -1,0 +1,15 @@
+schema: siembox.app/v1
+id: raspberry-pi-os
+name: Raspberry Pi OS
+vendor: Raspberry Pi
+category: operating-system
+description: Operating system.
+website: https://www.raspberrypi.com/software/
+match:
+  os:
+    family: linux
+    pretty_name: '^Raspbian GNU/Linux (\d+)'
+tests:
+  - source: os
+    input: { family: linux, pretty_name: 'Raspbian GNU/Linux 11 (bullseye)' }
+    version: '11'

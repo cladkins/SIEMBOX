@@ -1,0 +1,19 @@
+schema: siembox.app/v1
+id: sudo
+name: sudo
+vendor: Todd C. Miller
+category: os-component
+description: Run commands as another user.
+website: https://www.sudo.ws
+cpe: { vendor: sudo_project, product: sudo }
+match:
+  syslog_program: [sudo]
+  parser: [linux-sudo]
+  package: [sudo]
+tests:
+  - source: syslog_program
+    input: sudo
+  - source: parser
+    input: linux-sudo
+  - source: package
+    input: sudo

@@ -1,0 +1,18 @@
+schema: siembox.app/v1
+id: radarr
+name: Radarr
+vendor: Radarr
+category: media-server
+description: Movie download manager.
+website: https://radarr.video
+match:
+  container_image: [linuxserver/radarr, '*/linuxserver/radarr', '*/hotio/radarr']
+  user_agent:
+    - '^Radarr/(\d+(?:\.\d+)+)'
+tests:
+  - source: container_image
+    input: 'ghcr.io/hotio/radarr:release'
+    version: null
+  - source: user_agent
+    input: 'Radarr/5.2.6.8376 (debian 12)'
+    version: '5.2.6.8376'

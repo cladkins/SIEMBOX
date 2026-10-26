@@ -1,0 +1,14 @@
+schema: siembox.app/v1
+id: microsoft-teams
+name: Microsoft Teams
+vendor: Microsoft
+category: messaging
+description: Chat and meetings.
+website: https://www.microsoft.com/microsoft-teams
+match:
+  dns: [teams.microsoft.com, teams.live.com, teams.cdn.office.net]
+tests:
+  - source: dns
+    input: teams.microsoft.com
+  - source: dns
+    input: statics.teams.cdn.office.net

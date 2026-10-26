@@ -1,0 +1,20 @@
+schema: siembox.app/v1
+id: authelia
+name: Authelia
+vendor: Authelia
+category: auth
+description: Single sign-on and two-factor portal for reverse proxies.
+website: https://www.authelia.com
+cpe: { vendor: authelia, product: authelia }
+match:
+  syslog_program: [authelia]
+  parser: [authelia-access]
+  container_image: [authelia/authelia, '*/authelia/authelia']
+tests:
+  - source: syslog_program
+    input: authelia
+  - source: parser
+    input: authelia-access
+  - source: container_image
+    input: 'authelia/authelia:4.38.0'
+    version: '4.38.0'

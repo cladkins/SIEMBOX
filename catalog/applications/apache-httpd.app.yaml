@@ -1,0 +1,26 @@
+schema: siembox.app/v1
+id: apache-httpd
+name: Apache HTTP Server
+vendor: Apache Software Foundation
+category: web-server
+description: Web server.
+website: https://httpd.apache.org
+cpe: { vendor: apache, product: http_server }
+match:
+  syslog_program: [httpd, apache2]
+  service:
+    banner:
+      - '^Apache httpd(?: (\d+(?:\.\d+)+))?'
+  container_image: [httpd, bitnami/apache]
+  package: [apache2, httpd]
+tests:
+  - source: syslog_program
+    input: apache2
+  - source: service
+    input: { name: http, banner: Apache httpd 2.4.58 }
+    version: '2.4.58'
+  - source: container_image
+    input: 'httpd:2.4.58'
+    version: '2.4.58'
+  - source: package
+    input: apache2

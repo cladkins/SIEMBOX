@@ -1,0 +1,20 @@
+schema: siembox.app/v1
+id: bind9
+name: BIND 9
+vendor: ISC
+category: dns
+description: Authoritative and recursive DNS server.
+website: https://www.isc.org/bind/
+cpe: { vendor: isc, product: bind }
+match:
+  syslog_program: [named]
+  container_image: [internetsystemsconsortium/bind9, ubuntu/bind9]
+  package: [bind9, bind]
+tests:
+  - source: syslog_program
+    input: named
+  - source: container_image
+    input: 'internetsystemsconsortium/bind9:9.18'
+    version: '9.18'
+  - source: package
+    input: bind9

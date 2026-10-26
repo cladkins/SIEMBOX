@@ -26,6 +26,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Vulnerabilities](#vulnerabilities-endpoints)
   - [Exposure Monitoring (Digital Risk)](#exposure-monitoring-digital-risk)
   - [Context Graph](#context-graph-endpoints)
+  - [Application Monitoring](#application-monitoring-endpoints)
   - [Endpoint Agent Updates (EDR)](#endpoint-agent-updates-edr)
   - [Display links (Big Display)](#display-links-big-display)
   - [Admin Dashboard](#admin-dashboard-endpoints)
@@ -6974,6 +6975,110 @@ Admin only. The log-relationship rollup behind the Context Graph.
 used only before the rollup's first run), `daily_new_cap` (10,000 -
 10,000,000). Answers as GET; an out-of-range value is `400`. The job applies
 a change at its next minute.
+
+---
+
+## Application Monitoring Endpoints
+
+The software inventory behind *Assets & Vulns → Application Monitoring*: which
+applications run where, at which versions, from log program names, the parser
+that matched, nmap services, shipper-reported container images, endpoint
+findings and OS, and the user agents and DNS queries in parsed logs, matched
+against the catalog's application signatures (`applications/<id>.app.yaml`;
+see the wiki's *Application Monitoring* page). A background job
+(`Application inventory` on *Admin → Background Jobs*) builds it every two
+minutes off the ingest path; these routes only read its tables. Every role
+may read; `POST /refresh` is analyst and up.
+
+Source keys: `syslog_program`, `parser`, `service_scan`, `container`,
+`edr_package`, `os`, `user_agent`, `dns`. Location types: `host` (a logging
+host: syslog host name, else its address), `asset` (an asset id), `shipper` (a
+log shipper's host), `client` (a network client IP).
+
+### GET /api/applications
+
+Query: `category`, `source`, `host` (matches a location key, an asset's host
+name or IP, or a shipper's name or host name), `search` (name, vendor, id),
+`view` (`all` | `drift` | `vulnerable` | `unmanaged`).
+
+```json
+{
+  "applications": [
+    {
+      "id": "nginx", "name": "nginx", "vendor": "F5", "category": "web-server",
+      "sources": ["container", "parser", "syslog_program"],
+      "hosts": 3, "clients": 0,
+      "versions": [{ "version": "1.24.0", "locations": 1, "last_seen": "..." }, { "version": "1.25.3", "locations": 2, "last_seen": "..." }],
+      "latest_version": "1.25.3", "drift": true, "unmanaged": false,
+      "vulnerabilities": { "total": 2, "exact": 1, "critical": 0, "high": 1 },
+      "events": 182000, "first_seen": "...", "last_seen": "..."
+    }
+  ],
+  "status": {
+    "enabled": true, "retention_days": 30, "caught_up": true, "covered_from": "...", "covered_until": "...",
+    "last_run_at": "...", "last_summary": "101 signatures (catalog); 812 logs in 1 batch(es); ...",
+    "signatures": { "source": "catalog", "count": 101, "error": null, "refused": [] },
+    "catalog_repo": "cladkins/siembox-catalog"
+  }
+}
+```
+
+`versions` counts each location once, at the newest version it was seen with,
+oldest first; `drift` is more than one of them. `unmanaged`: only `user_agent`
+/ `dns` evidence (seen on the network, not on a host of yours).
+`signatures.source` is `catalog`, `cache` (the last read; the catalog is
+unreachable), `stored` (the set stored by an earlier run) or `bundled` (the
+built-in starter set); `refused` lists signature regexes the safety gate left
+out.
+
+### GET /api/applications/:id
+
+The list row plus `description`, `website`, `cpe`, `matchers`, `locations`
+(up to 500, newest first: `loc_type`, `loc_key`, `label`, the `asset` and
+`shipper` it resolves to, `current_version`, `versions`, `sources`, `events`,
+`first_seen`, `last_seen`, and up to five `evidence` samples — the matched
+value, a `raw_log_id`, a port, an image or a package), `locations_total` and
+`vulnerability_list` (up to 200: `cve_id`, `title`, `severity`, `cvss_score`,
+`asset_id`, `asset`, `match` `package`|`product`, `version`). `404` for an id
+no stored signature has.
+
+### GET /api/applications/vulnerabilities
+
+Open findings linked to applications, by CVSS (up to 1,000). Query: `app`,
+`severity`. `match`: `package` is exact (an endpoint finding for one of the
+signature's packages); `product` is best effort (an open finding on an asset
+where the application was seen whose title or Nuclei template names it).
+
+### GET /api/applications/unmatched
+
+The most frequent values no signature matched, per source (`syslog_program`,
+`container`, `user_agent` product), top 100 each (`limit` up to 500,
+`source` to pick one): `value`, `events`, `locations`, `first_seen`,
+`last_seen`, `sample_location`, `sample` (a whole user agent or image
+reference) and `suggest_url`, a GitHub "new file" link that opens a
+pre-filled `applications/<id>.app.yaml` in the catalog.
+
+### POST /api/applications/refresh
+
+Analyst and up. Re-reads the catalog and runs the job now (bounded to its usual
+15 s of database time). `{ "summary": "...", "result": {...}, "status": {...} }`;
+`409` while a run is already going.
+
+### GET/PUT /api/settings/applications
+
+Admin only.
+
+```json
+{
+  "inventory": { "enabled": true, "retention_days": 30, "backfill_days": 7 },
+  "status": { "...": "as in GET /api/applications", "rows": 1663, "bytes": 1200000 }
+}
+```
+
+**PUT body:** `{ "inventory": { ... } }` with any of `enabled` (boolean),
+`retention_days` (1-3650: an application, version or location not seen for
+this long drops out), `backfill_days` (0-90; used only before the job's first
+run). Answers as GET; an out-of-range value is `400`.
 
 ---
 

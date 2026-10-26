@@ -51,6 +51,8 @@ const ROUTES: Array<[method: string, path: string, allowed: Role[]]> = [
   ['put', '/retention', ADMIN_ONLY],
   ['get', '/context-graph', ADMIN_ONLY],
   ['put', '/context-graph', ADMIN_ONLY],
+  ['get', '/applications', ADMIN_ONLY],
+  ['put', '/applications', ADMIN_ONLY],
   ['post', '/retention/cleanup', ADMIN_ONLY],
   ['get', '/retention/cleanup/status', ADMIN_ONLY],
   ['get', '/retention/stats', ADMIN_ONLY],

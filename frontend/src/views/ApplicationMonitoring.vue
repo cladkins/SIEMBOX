@@ -27,7 +27,7 @@
           <div v-if="status.signatures.error">{{ status.signatures.error }}</div>
           <div v-for="(r, i) in status.signatures.refused.slice(0, 10)" :key="i">{{ r.appId }} {{ r.location }}: {{ r.reason }}</div>
         </template>
-        <el-tag size="small" type="warning">signature problems</el-tag>
+        <el-tag size="small" type="warning">{{ status.signatures.refused.length ? 'signature problems' : 'catalog notice' }}</el-tag>
       </el-tooltip>
     </div>
 

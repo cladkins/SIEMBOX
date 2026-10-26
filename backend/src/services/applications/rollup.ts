@@ -42,13 +42,20 @@ import { APP_SCHEMA, type AppSignature } from './appFormat';
 import { AppIndex, cleanDomain, parseImageRef, userAgentProduct, type AppMatch, MAX_MATCH_INPUT } from './matchers';
 import { fetchAppCatalog, gateSignatureRegexes, type AppCatalog, type RegexGateResult } from './appCatalog';
 
-export const BATCH_SIZE = 5_000;
+export const BATCH_SIZE = 2_500;
 export const MIN_BATCH_SIZE = 1_000;
 export const LAG = '2 minutes';
 export const RUN_BUDGET_MS = 15_000;
 export const BATCH_STATEMENT_TIMEOUT_MS = 15_000;
 export const PRUNE_EVERY_MS = 60 * 60_000;
-export const PAUSE_RATIO = 3;
+/**
+ * Rest between batches, as a multiple of the batch's own time. Measured on a
+ * 4-core box with 300,000 logs of backlog: at 3 (the graph rollup's) syslog
+ * ingestion ran about 10% slower while a drain ran back to back; at 6, with
+ * batches of 2,500, within run-to-run noise (about 28,000 logs a second of
+ * database time, 4,000 a second with the rests).
+ */
+export const PAUSE_RATIO = 6;
 export const UNMATCHED_CAP = 500;
 /** Rows a snapshot source reads at most (asset_services, shipper_containers, EDR findings). */
 export const SNAPSHOT_LIMIT = 200_000;
@@ -407,19 +414,29 @@ export function matchSnapshots(input: SnapshotInput, index: AppIndex): { rows: R
   return { rows, unmatched };
 }
 
-/** The best-effort product pattern for vulnerability titles: \m(?:name|product)\M, words of 4+ characters. */
-export function productPattern(app: AppSignature): string | null {
+/**
+ * The words a vulnerability title (or Nuclei template id) must contain, as a
+ * whole word, to be linked best effort: the application's name and its CPE
+ * product, lower case, 4+ characters. Pure.
+ */
+export function productWords(app: AppSignature): string[] {
   const words = new Set<string>();
-  const add = (w: string | undefined | null) => {
+  for (const w of [app.name, app.cpe?.product.replace(/_/g, ' ')]) {
     const t = (w ?? '').trim().toLowerCase();
     if (t.length >= 4) words.add(t);
-  };
-  add(app.name);
-  add(app.cpe?.product.replace(/_/g, ' '));
-  if (words.size === 0) return null;
-  const esc = [...words].map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  return `\\m(?:${esc.join('|')})\\M`;
+  }
+  return [...words];
 }
+
+const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * The package and installed version of an EDR finding, from its evidence
+ * ("package=<name> installed=<version> fixed=... source=grype", edrService):
+ * plain string functions (a regex here cost 0.1 ms a row).
+ */
+const EVIDENCE_PACKAGE_SQL = (col: string) => `left(split_part(substring(${col} FROM 9), ' ', 1), 128)`;
+const EVIDENCE_INSTALLED_SQL = (col: string) => `left(split_part(split_part(${col}, ' installed=', 2), ' ', 1), 128)`;
 
 // ---------------------------------------------------------------------------
 // The run
@@ -456,6 +473,8 @@ export interface InventoryRunResult {
   backedOff: boolean;
   batchSize: number;
   dbMs: number;
+  /** Wall time of each step, ms (signatures includes the regex gate). */
+  timings: { signatures: number; logs: number; snapshots: number; vulnLinks: number; prune: number };
 }
 
 async function inTransaction<T>(client: RollupClient, work: () => Promise<T>): Promise<T> {
@@ -591,12 +610,11 @@ async function readSnapshots(client: RollupClient): Promise<SnapshotInput> {
   const packages = await client.query(
     `SELECT asset_id, pkg AS package, inst AS installed, count(*)::int AS findings, min(first_detected) AS first, max(last_detected) AS seen
        FROM (SELECT asset_id, first_detected, last_detected,
-                    substring(evidence from '(?:^| )package=(\\S{1,128})') AS pkg,
-                    substring(evidence from '(?:^| )installed=(\\S{1,128})') AS inst
+                    ${EVIDENCE_PACKAGE_SQL('evidence')} AS pkg, ${EVIDENCE_INSTALLED_SQL('evidence')} AS inst
                FROM asset_vulnerabilities
               WHERE status = 'open' AND evidence LIKE 'package=%'
               LIMIT $1) f
-      WHERE pkg IS NOT NULL
+      WHERE pkg <> ''
       GROUP BY asset_id, pkg, inst`,
     [SNAPSHOT_LIMIT]
   );
@@ -635,15 +653,17 @@ async function rebuildVulnLinks(client: RollupClient, apps: AppSignature[]): Pro
   const pkgName: string[] = [];
   const patApp: string[] = [];
   const patRe: string[] = [];
+  const patWord: string[] = [];
   for (const a of apps) {
     for (const p of a.match.package) {
       pkgApp.push(a.id);
       pkgName.push(p);
     }
-    const pattern = productPattern(a);
-    if (pattern && a.category !== 'saas' && a.category !== 'browser' && a.category !== 'http-client') {
+    if (a.category === 'saas' || a.category === 'browser' || a.category === 'http-client') continue;
+    for (const word of productWords(a)) {
       patApp.push(a.id);
-      patRe.push(pattern);
+      patRe.push(`\\m${escapeRegex(word)}\\M`);
+      patWord.push(`%${word.replace(/[\\%_]/g, '\\$&')}%`);
     }
   }
   return inTransaction(client, async () => {
@@ -652,10 +672,10 @@ async function rebuildVulnLinks(client: RollupClient, apps: AppSignature[]): Pro
     const exact = await client.query(
       `INSERT INTO application_vuln_links (app_id, asset_id, vulnerability_id, match, version)
        SELECT DISTINCT ON (m.app_id, av.asset_id, av.vulnerability_id)
-              m.app_id, av.asset_id, av.vulnerability_id, 'package', COALESCE(substring(av.evidence from '(?:^| )installed=(\\S{1,128})'), '')
+              m.app_id, av.asset_id, av.vulnerability_id, 'package', ${EVIDENCE_INSTALLED_SQL('av.evidence')}
          FROM asset_vulnerabilities av
          JOIN unnest($1::text[], $2::text[]) AS m(app_id, pkg)
-           ON lower(substring(av.evidence from '(?:^| )package=(\\S{1,128})')) = m.pkg
+           ON lower(${EVIDENCE_PACKAGE_SQL('av.evidence')}) = m.pkg
         WHERE av.status = 'open' AND av.evidence LIKE 'package=%' AND av.asset_id IS NOT NULL
        ON CONFLICT DO NOTHING`,
       [pkgApp, pkgName]
@@ -667,12 +687,13 @@ async function rebuildVulnLinks(client: RollupClient, apps: AppSignature[]): Pro
        INSERT INTO application_vuln_links (app_id, asset_id, vulnerability_id, match, version)
        SELECT DISTINCT s.app_id, s.asset_id, av.vulnerability_id, 'product', ''
          FROM seen s
-         JOIN unnest($1::text[], $2::text[]) AS p(app_id, pattern) ON p.app_id = s.app_id
+         JOIN unnest($1::text[], $2::text[], $3::text[]) AS p(app_id, pattern, word) ON p.app_id = s.app_id
          JOIN asset_vulnerabilities av ON av.asset_id = s.asset_id AND av.status = 'open'
          JOIN vulnerabilities v ON v.id = av.vulnerability_id
-        WHERE v.title ~* p.pattern OR COALESCE(v.metadata->>'nuclei_template', '') ~* p.pattern
+         CROSS JOIN LATERAL (SELECT lower(COALESCE(v.title, '') || ' ' || COALESCE(v.metadata->>'nuclei_template', '')) AS text) t
+        WHERE t.text LIKE p.word AND t.text ~ p.pattern
        ON CONFLICT DO NOTHING`,
-      [patApp, patRe]
+      [patApp, patRe, patWord]
     );
     return (exact.rowCount ?? 0) + (product.rowCount ?? 0);
   });
@@ -710,6 +731,13 @@ export async function runInventoryRollup(options: InventoryRunOptions): Promise<
   const result: InventoryRunResult = {
     status: 'ok', signatures: 0, signatureSource: '', consumed: 0, batches: 0, rowsWritten: 0, snapshotRows: 0, vulnLinks: 0, pruned: 0,
     more: false, backedOff: false, batchSize: size, dbMs: 0,
+    timings: { signatures: 0, logs: 0, snapshots: 0, vulnLinks: 0, prune: 0 },
+  };
+  let mark = now();
+  const lap = (step: keyof InventoryRunResult['timings']) => {
+    const t = now();
+    result.timings[step] += t - mark;
+    mark = t;
   };
   const client = await options.connect();
   let releaseArg: Error | undefined;
@@ -731,6 +759,7 @@ export async function runInventoryRollup(options: InventoryRunOptions): Promise<
     result.signatures = catalog.apps.length;
     result.signatureSource = catalog.source;
     await storeSignatures(client, catalog, hash, gate);
+    lap('signatures');
 
     const parserNames = new Map<string, string>(((await client.query(`SELECT id::text AS id, name FROM parsers`)).rows as Array<{ id: string; name: string }>).map((r) => [r.id, r.name]));
     const lag = options.lag ?? LAG;
@@ -772,10 +801,14 @@ export async function runInventoryRollup(options: InventoryRunOptions): Promise<
     } else {
       await client.query(`UPDATE application_inventory_state SET caught_up = true, covered_until = NOW(), last_run_at = NOW() WHERE id = 1`);
     }
+    lap('logs');
     const snapStarted = now();
     result.snapshotRows = await refreshSnapshots(client, index);
+    lap('snapshots');
     result.vulnLinks = await rebuildVulnLinks(client, catalog.apps);
+    lap('vulnLinks');
     result.pruned = await prune(client, settings, now(), options.forcePrune === true);
+    lap('prune');
     spent += now() - snapStarted;
     result.dbMs = spent;
     result.batchSize = size;

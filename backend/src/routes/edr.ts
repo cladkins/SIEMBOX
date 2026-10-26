@@ -36,6 +36,16 @@ import {
   cancelAgentUpdate,
   requestUpdatesForOutdated,
 } from '../services/edr/agentUpdateService';
+import {
+  parseCapabilities,
+  parseScanTypes,
+  pendingScanRequests,
+  reportScan,
+  requestScans,
+  requestScansBulk,
+  cancelScan,
+  listScans,
+} from '../services/edr/edrScans';
 import { AuditService } from '../services/audit/auditService';
 import { rateLimitedHandler, requestLimitKey } from '../net/requestLimits';
 
@@ -70,17 +80,24 @@ router.post('/agents/enroll', async (req: Request, res: Response) => {
 // config_version is composite (agent row + current YARA version) so a new YARA
 // bundle makes it rise and the agent re-pulls config. See buildAgentConfig.
 router.post('/agents/:id/heartbeat', edrAgentLimiter, authenticateAgent, requireAgentMatchesParam, async (req: Request, res: Response) => {
-  const { status, agent_version, update } = req.body ?? {};
-  // `update` is the agent's self-update progress. A malformed one is dropped, not
-  // rejected: liveness must not depend on an optional field.
+  const { status, agent_version, update, capabilities } = req.body ?? {};
+  // `update` is the agent's self-update progress, `capabilities` what it can do.
+  // A malformed one is dropped, not rejected: liveness must not depend on an
+  // optional field.
   const base = await EdrAgentModel.heartbeat(
     req.params.id as string,
     status,
     sanitizeAgentVersion(agent_version),
-    parseHeartbeatUpdate(update)
+    parseHeartbeatUpdate(update),
+    parseCapabilities(capabilities)
   );
   const yaraVersion = await getCurrentYaraVersion();
-  res.status(200).json({ config_version: (base ?? req.edrAgent!.config_version) + yaraVersion });
+  // Console scan requests waiting for this agent (older agents ignore the field).
+  const scanRequests = await pendingScanRequests(req.params.id as string);
+  res.status(200).json({
+    config_version: (base ?? req.edrAgent!.config_version) + yaraVersion,
+    scan_requests: scanRequests,
+  });
 });
 
 // Config pull — agent auth.
@@ -108,7 +125,7 @@ function assertBodyAgent(req: Request) {
 // Inventory — agent auth; upsert the endpoint asset.
 router.post('/inventory', edrAgentLimiter, authenticateAgent, async (req: Request, res: Response) => {
   assertBodyAgent(req);
-  await ingestInventory(req.edrAgent!.agent_id, req.body?.inventory ?? {});
+  await ingestInventory(req.edrAgent!.agent_id, req.body?.inventory ?? {}, req.body?.scan_id);
   res.status(202).json({ accepted: true });
 });
 
@@ -133,6 +150,13 @@ router.post('/packages', edrAgentLimiter, authenticateAgent, async (req: Request
   assertBodyAgent(req);
   const result = await ingestPackages(req.edrAgent!.agent_id, req.body ?? {});
   res.status(200).json(result);
+});
+
+// Scan history — agent auth; the agent reports a scan's start and end (console
+// requests by scan_id; its own scheduled runs without one, which creates the row).
+router.post('/scans', edrAgentLimiter, authenticateAgent, async (req: Request, res: Response) => {
+  assertBodyAgent(req);
+  res.status(200).json(await reportScan(req.edrAgent!.agent_id, req.body ?? {}));
 });
 
 // ---- Admin-facing endpoints (UI) -------------------------------------------
@@ -223,6 +247,53 @@ router.post('/agents/update-outdated', authenticate, authorize('admin'), async (
   const requested = await requestUpdatesForOutdated('manual-bulk');
   await auditEdr(req, 'edr.agent_update.request_all', { requested });
   res.json({ requested });
+});
+
+// ---- On-demand scans (analyst and up; history readable by every role) -------
+// Static path (/agents/scans/bulk) declared before /agents/:id.
+
+const SCAN_WRITERS = ['admin', 'operator', 'analyst'] as const;
+
+// "Scan selected": request scans on up to BULK_SCAN_MAX_AGENTS endpoints.
+router.post('/agents/scans/bulk', authenticate, authorize(...SCAN_WRITERS), async (req: Request, res: Response) => {
+  const types = parseScanTypes(req.body?.types);
+  const result = await requestScansBulk(req.body?.agent_ids, types, req.user!.id);
+  await auditEdr(req, 'edr.scan.request_bulk', { types, ...result });
+  res.json(result);
+});
+
+// "Scan now" on one endpoint. A type already outstanding returns that request.
+router.post('/agents/:id/scans', authenticate, authorize(...SCAN_WRITERS), async (req: Request, res: Response) => {
+  const agentId = req.params.id as string;
+  const types = parseScanTypes(req.body?.types);
+  const result = await requestScans(agentId, types, req.user!.id);
+  await auditEdr(req, 'edr.scan.request', {
+    agent_id: agentId,
+    types,
+    created: result.created,
+    scan_ids: result.scans.map((s) => s.id),
+  });
+  res.json(result);
+});
+
+// Cancel a pending request (409 once the agent has started it).
+router.post('/agents/:id/scans/:scanId/cancel', authenticate, authorize(...SCAN_WRITERS), async (req: Request, res: Response) => {
+  const agentId = req.params.id as string;
+  const scan = await cancelScan(agentId, req.params.scanId as string);
+  await auditEdr(req, 'edr.scan.cancel', { agent_id: agentId, scan_id: scan.id, scan_type: scan.scan_type });
+  res.json({ scan });
+});
+
+// An endpoint's scan history (scheduled and on-demand), newest first.
+router.get('/agents/:id/scans', authenticate, async (req: Request, res: Response) => {
+  const num = (v: unknown) => (typeof v === 'string' && /^\d+$/.test(v) ? parseInt(v, 10) : undefined);
+  const str = (v: unknown) => (typeof v === 'string' && v !== '' ? v : undefined);
+  res.json(await listScans(req.params.id as string, {
+    type: str(req.query.type),
+    status: str(req.query.status),
+    limit: num(req.query.limit),
+    offset: num(req.query.offset),
+  }));
 });
 
 // Request an update to the latest version for one agent.

@@ -3,8 +3,12 @@
  * GitHub for the latest siembox-endpoint release and stores it; with
  * auto-update on, outdated agents are then asked to update. Network failures
  * are recorded (edr_agent_latest_error) and never crash the process.
+ *
+ * Each run also expires stale endpoint scan requests and prunes the scan
+ * history (services/edr/edrScans.ts runScanHousekeeping).
  */
 import { checkForAgentRelease } from '../services/edr/agentUpdateService';
+import { runScanHousekeeping } from '../services/edr/edrScans';
 import { logger } from '../utils/logger';
 import { ErrorLogService } from '../services/errors/errorLogService';
 import { registerRecurringJob, trackJobRun } from '../services/jobs/jobRegistry';
@@ -17,6 +21,14 @@ let intervalId: NodeJS.Timeout | null = null;
 let startupTimer: NodeJS.Timeout | null = null;
 
 async function tick(): Promise<void> {
+  // Scan history housekeeping first: it must not wait on (or fail with) GitHub.
+  try {
+    const { expired, pruned } = await runScanHousekeeping();
+    if (expired || pruned) logger.info(`[EDR] scan history: ${expired} expired, ${pruned} pruned`);
+  } catch (err) {
+    logger.warn('[EDR] scan history housekeeping failed:', err instanceof Error ? err.message : err);
+    ErrorLogService.logBackgroundError('edr-agent-release', err, { dedupeKey: 'scan-housekeeping' });
+  }
   try {
     await trackJobRun(JOB_KEY, async () => {
       const status = await checkForAgentRelease();
@@ -35,7 +47,7 @@ export function startEdrAgentReleaseJob(): void {
     key: JOB_KEY,
     name: 'Endpoint agent release check',
     description:
-      'Checks GitHub for the latest siembox-endpoint release and, when auto-update is on, requests updates for outdated endpoints.',
+      'Checks GitHub for the latest siembox-endpoint release and, when auto-update is on, requests updates for outdated endpoints. Also expires stale endpoint scan requests and prunes scan history.',
     intervalMs: CHECK_INTERVAL_MS,
   });
   startupTimer = setTimeout(() => void tick(), STARTUP_DELAY_MS);

@@ -28,6 +28,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Context Graph](#context-graph-endpoints)
   - [Application Monitoring](#application-monitoring-endpoints)
   - [Endpoint Installed Packages (EDR)](#endpoint-installed-packages-edr)
+  - [Endpoint Scans and Scan History (EDR)](#endpoint-scans-and-scan-history-edr)
   - [Endpoint Agent Updates (EDR)](#endpoint-agent-updates-edr)
   - [Display links (Big Display)](#display-links-big-display)
   - [Admin Dashboard](#admin-dashboard-endpoints)
@@ -160,7 +161,7 @@ Detection content, alert triage and the AI Analyst:
 | `POST /api/ai/chat`, `PATCH` / `DELETE /api/ai/chat/sessions/:id` | yes | yes | yes | no |
 | `POST /api/parsers/ai/generate`, `POST /api/rules/ai/generate`, `POST /api/rules/import/sigma`, `/import/sigma/preview`, `POST /api/packs/:id/install`, `/install-new` | yes | no | no | no |
 
-The reads under these routes stay open to every role, but only analyst and up can force a catalog refetch with `GET /api/parsers/catalog?refresh=true` or `GET /api/rules/catalog?refresh=true`, or refresh the SigmaHQ library with `POST /api/sigma/library/refresh`: a viewer's `refresh` flag is ignored and the cached listing comes back. `GET /api/ai/chat/health` answers only `{ "configured": true }` or `false`; the AI Analyst's provider, model and base URL are in the admin-only `GET /api/settings/ai-chat`. A refusal on the parser, rule, alert and AI Analyst writes above (all but the triage re-run and the last row) is recorded in `audit_logs` like a refused scan write (below). User management, settings and notification changes, Endpoints (EDR) and the admin dashboard are admin-only; shipper management has its own table under [Log Shippers](#log-shippers-endpoints). Every route and the roles it allows are listed in `backend/src/routes/routeInventory.test.ts`, which the test suite checks against the running API.
+The reads under these routes stay open to every role, but only analyst and up can force a catalog refetch with `GET /api/parsers/catalog?refresh=true` or `GET /api/rules/catalog?refresh=true`, or refresh the SigmaHQ library with `POST /api/sigma/library/refresh`: a viewer's `refresh` flag is ignored and the cached listing comes back. `GET /api/ai/chat/health` answers only `{ "configured": true }` or `false`; the AI Analyst's provider, model and base URL are in the admin-only `GET /api/settings/ai-chat`. A refusal on the parser, rule, alert and AI Analyst writes above (all but the triage re-run and the last row) is recorded in `audit_logs` like a refused scan write (below). User management, settings and notification changes, Endpoints (EDR) and the admin dashboard are admin-only, except the endpoint scan routes (analyst and up request and cancel scans, every role reads the history; see [Endpoint Scans](#endpoint-scans-and-scan-history-edr)); shipper management has its own table under [Log Shippers](#log-shippers-endpoints). Every route and the roles it allows are listed in `backend/src/routes/routeInventory.test.ts`, which the test suite checks against the running API.
 
 (Earlier versions let any logged-in role, viewers included, make every call in this table except the triage re-run and the last row, deleting alerts included. A script that used a viewer's token for these writes needs an analyst's, or an admin's to delete alerts.)
 
@@ -241,7 +242,7 @@ restarts. Failed sign-ins are counted separately, in the database: see
 | Limit | Default (per 15 minutes) | Applies to | Headers |
 |-------|--------------------------|------------|---------|
 | General | 1000 requests (`API_RATE_LIMIT_MAX`) | Every `/api` request, except the two exemptions below | `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` |
-| EDR agents | 30000 requests (`EDR_AGENT_RATE_MAX`) | Agent-key routes, which skip the general limit when they carry `X-Agent-ID` and use the route's own method: `POST` heartbeat, `GET` (or `HEAD`) config and YARA, `POST` inventory, events and vulnerabilities. Any other method, and enrollment, is under the general limit. | `RateLimit-*` |
+| EDR agents | 30000 requests (`EDR_AGENT_RATE_MAX`) | Agent-key routes, which skip the general limit when they carry `X-Agent-ID` and use the route's own method: `POST` heartbeat, `GET` (or `HEAD`) config and YARA, `POST` inventory, events, vulnerabilities, packages and scans. Any other method, and enrollment, is under the general limit. | `RateLimit-*` |
 | HTTP log push | 6000 requests (`SHIPPER_LOG_PUSH_MAX`) | `POST /api/shippers/logs`, which skips the general limit when it carries `X-Shipper-ID` (other methods on that path don't) | `RateLimit-*` |
 | Password check | 30 requests | `POST /api/exposure/password-check` | `RateLimit-*` |
 | Display link lookups | 30 failed lookups | `GET /api/display/snapshot`: only answers with `401` count (a working, paused or out-of-network screen never uses it up); the 31st gets `429` and no database work. Display requests also count towards the general limit: one screen refreshing every 30 s makes 30 requests per 15 minutes, so many screens behind one address may need a higher `API_RATE_LIMIT_MAX`. | `RateLimit-*` |
@@ -7152,6 +7153,127 @@ Admin. The agent's current list: query `q` (name contains), `limit` (default
 `snapshot` is `null` before the first report. `GET /api/edr/agents` also
 returns `package_count`, `packages_reported_at` (last report, changed or not)
 and `packages_stored_at` (last time the list changed) per agent.
+
+---
+
+## Endpoint Scans and Scan History (EDR)
+
+Every scan an endpoint agent runs (vulnerability scan with grype, YARA file
+scan, package inventory, system inventory) is recorded per endpoint, and
+analysts can request any of them on demand (see
+[Endpoint agent](../edr.md#scans-and-scan-history)). Needs agent v0.0.20 or
+later; older agents ignore requests (they expire) and report no history.
+
+A scan row:
+
+```json
+{
+  "id": "<uuid>", "agent_id": "<uuid>",
+  "scan_type": "vuln", "trigger": "console",
+  "requested_by": 3, "requested_by_username": "alice",
+  "requested_at": "...", "started_at": "...", "completed_at": "...", "duration_ms": 81234,
+  "status": "succeeded",
+  "summary": { "findings": 41, "new": 2, "resolved": 1, "stored": 41 },
+  "error": null
+}
+```
+
+- `scan_type`: `vuln`, `yara`, `packages`, `inventory`.
+- `trigger`: `console` (requested here), `schedule` or `startup` (the agent's own cadence).
+- `status`: `pending` (requested, not picked up), `running`, `succeeded`,
+  `failed` (`error` holds the agent's message, up to 500 characters),
+  `cancelled` (by a user while pending), `expired` (not picked up within 24
+  hours, or not reported finished within 12).
+- `summary` by type: `vuln` `findings` (unique identifiers), `new` (not on the
+  endpoint before), `resolved` (open findings of the previous report that this
+  one no longer holds; they stay open until someone marks them), `stored`;
+  `packages` `packages`, `added`, `removed`, `unchanged`; `yara` `hits`,
+  `new_hits`, `full` (every file vs. only changed ones); `inventory` `changed`,
+  `software`. The server computes the vuln, packages and inventory counts from
+  the data the scan sent; the agent adds its own keys, which never overwrite
+  the server's.
+
+### POST /api/edr/agents/:id/scans
+
+Analyst and up. Body `{ "types": ["vuln", "yara"] }`. Creates one `pending`
+console request per type; a type with a console request already pending or
+running returns that one instead (`created: false`). Offline endpoints are
+fine: the request waits for the next heartbeat. Recorded in `audit_logs`
+(`edr.scan.request`).
+
+```json
+{ "created": 1, "scans": [{ "...": "scan row", "created": true }, { "...": "scan row", "created": false }] }
+```
+
+`400` unknown or empty `types`; `404` unknown agent.
+
+### POST /api/edr/agents/scans/bulk
+
+Analyst and up. Body `{ "agent_ids": ["<uuid>", ...], "types": ["vuln"] }`, at
+most 200 agents (`400` beyond). Returns
+`{ "agents": 12, "created": 11, "already_outstanding": 1, "missing": ["<uuid of an unknown agent>"] }`.
+Audited as `edr.scan.request_bulk`.
+
+### POST /api/edr/agents/:id/scans/:scanId/cancel
+
+Analyst and up. Cancels a `pending` request: `{ "scan": { ...row, "status": "cancelled" } }`.
+`404` unknown scan (or another agent's); `409` once the agent has started it
+(or it already finished). Audited as `edr.scan.cancel`.
+
+### GET /api/edr/agents/:id/scans
+
+Every role. The endpoint's history, newest first. Query: `type`, `status`
+(`400` for unknown values), `limit` (default 50, up to 200), `offset`.
+
+```json
+{ "total": 37, "outstanding": 1, "supports_adhoc": true, "min_agent_version": "0.0.20", "scans": [ ... ] }
+```
+
+`supports_adhoc` is whether the agent reported the `adhoc_scans` capability.
+`GET /api/edr/agents` also returns `scans_outstanding` (pending or running) and
+`capabilities` per agent.
+
+History is kept for 90 days and at most the newest 200 rows per endpoint and
+scan type; the `edr-agent-release` job (every 6 hours) prunes it and expires
+stale requests.
+
+### Agent side
+
+**Heartbeat.** `POST /api/edr/agents/:id/heartbeat` accepts
+`"capabilities": ["adhoc_scans"]` (stored; a heartbeat without the field keeps
+the stored list) and its response carries the pending console requests,
+oldest first:
+
+```json
+{ "config_version": 12, "scan_requests": [{ "scan_id": "<uuid>", "scan_type": "vuln", "requested_at": "..." }] }
+```
+
+**POST /api/edr/scans** (agent auth, agent limiter). The agent reports a
+run's start and end:
+
+```json
+{ "agent_id": "<uuid>", "scan_id": "<uuid>", "scan_type": "vuln", "trigger": "console",
+  "status": "succeeded", "started_at": "...", "completed_at": "...", "summary": { "findings": 41 }, "error": "" }
+```
+
+- With `scan_id`: `running` moves a pending request on; `succeeded` or
+  `failed` finishes a pending, running or expired one. Response
+  `{ "scan_id": "...", "status": "running", "accepted": true }`. A cancelled
+  request answers `accepted: false, status: "cancelled"` (the agent skips it),
+  as does an expired one reported `running`, or a run already finished.
+- Without `scan_id`: a scheduled or startup run (`trigger` `schedule`, the
+  default, or `startup`; `console` is `400`). A row is created in the reported
+  status and its `scan_id` returned for the finishing report; a finished run
+  can be reported in one call.
+- `status` is `running`, `succeeded` or `failed`; `summary` is a flat object
+  (up to 20 snake_case keys; numbers, booleans, strings up to 200 characters).
+- `400` bad `scan_type`, `status`, `trigger` or `scan_id`, or a `scan_type`
+  that is not the scan's; `404` a scan_id that is not this agent's.
+
+**Linking the data.** `POST /api/edr/vulnerabilities`, `POST /api/edr/packages`
+and `POST /api/edr/inventory` (top level, next to `inventory`) accept an
+optional `scan_id`; the counts computed while storing that report are merged
+into the scan's `summary`. An unknown or foreign `scan_id` is ignored.
 
 ---
 

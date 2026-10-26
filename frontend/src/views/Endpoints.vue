@@ -9,6 +9,11 @@
         </p>
       </div>
       <div class="actions">
+        <el-button
+          v-if="canScan"
+          :disabled="selected.length === 0 || selected.length > BULK_SCAN_MAX"
+          @click="openBulkScan"
+        >Scan selected<template v-if="selected.length"> ({{ selected.length }})</template></el-button>
         <el-button @click="refresh" :loading="loading"><el-icon><Refresh /></el-icon> Refresh</el-button>
         <el-button type="primary" @click="openTokenDialog"><el-icon><Plus /></el-icon> Enroll an endpoint</el-button>
       </div>
@@ -16,11 +21,18 @@
 
     <!-- Agent list -->
     <el-card>
-      <el-table :data="endpoints" v-loading="loading" stripe>
+      <p v-if="canScan && selected.length > BULK_SCAN_MAX" class="muted" style="margin: 0 0 8px">
+        Select at most {{ BULK_SCAN_MAX }} endpoints per scan request.
+      </p>
+      <el-table :data="endpoints" v-loading="loading" stripe row-key="agent_id" @selection-change="onSelectionChange">
+        <el-table-column v-if="canScan" type="selection" width="42" reserve-selection />
         <el-table-column label="Host" min-width="180">
           <template #default="{ row }">
             <strong>{{ row.hostname || '(unknown)' }}</strong>
             <div class="muted">{{ row.ip || '' }}</div>
+            <el-tag v-if="Number(row.scans_outstanding) > 0" size="small" type="info" style="margin-top: 4px">
+              {{ row.live_status === 'online' ? 'scan queued or running' : 'scan queued — agent offline' }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="OS" min-width="160">
@@ -239,7 +251,24 @@
     </el-dialog>
 
     <!-- Endpoint detail drawer -->
-    <el-drawer v-model="detailOpen" :title="detail.agent ? (detail.agent.hostname || 'Endpoint') : 'Endpoint'" size="60%">
+    <!-- Scan selected dialog -->
+    <el-dialog v-model="bulk.open" title="Scan selected endpoints" width="520px">
+      <p style="margin-top: 0">Request these scans on {{ selected.length }} endpoint(s):</p>
+      <el-checkbox-group v-model="bulk.types">
+        <div v-for="t in SCAN_TYPES" :key="t.value"><el-checkbox :value="t.value">{{ t.label }}</el-checkbox></div>
+      </el-checkbox-group>
+      <p class="muted">
+        Each endpoint runs them on its next heartbeat (about a minute); offline endpoints keep the request for 24 hours.
+        A scan already queued or running on an endpoint is not requested twice. Agents before
+        v{{ MIN_ADHOC_AGENT_VERSION }} ignore the request.
+      </p>
+      <template #footer>
+        <el-button @click="bulk.open = false">Cancel</el-button>
+        <el-button type="primary" :disabled="bulk.types.length === 0" :loading="bulk.busy" @click="submitBulkScan">Request scans</el-button>
+      </template>
+    </el-dialog>
+
+    <el-drawer v-model="detailOpen" @closed="stopHistoryPolling" :title="detail.agent ? (detail.agent.hostname || 'Endpoint') : 'Endpoint'" size="60%">
       <div v-if="detail.agent">
         <el-descriptions :column="2" border size="small" style="margin-bottom: 16px">
           <el-descriptions-item label="Hostname">{{ detail.agent.hostname || '—' }}</el-descriptions-item>
@@ -269,6 +298,27 @@
           </el-descriptions-item>
           <el-descriptions-item label="Package list changed">{{ detail.agent.packages_stored_at ? formatDate(detail.agent.packages_stored_at) : '—' }}</el-descriptions-item>
         </el-descriptions>
+
+        <div class="scan-now" v-if="canScan">
+          <el-checkbox-group v-model="scanForm.types" size="small">
+            <el-checkbox v-for="t in SCAN_TYPES" :key="t.value" :value="t.value">{{ t.label }}</el-checkbox>
+          </el-checkbox-group>
+          <el-button
+            type="primary"
+            size="small"
+            :disabled="scanForm.types.length === 0"
+            :loading="scanForm.busy"
+            @click="scanNow"
+          >Scan now</el-button>
+        </div>
+        <el-alert
+          v-if="!supportsAdhocScans(detail.agent)"
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 12px"
+          :title="`Agent ${detail.agent.agent_version ? 'v' + detail.agent.agent_version : '(unknown version)'} does not run on-demand scans — update it to v${MIN_ADHOC_AGENT_VERSION} or later. Requests wait until it does, then expire after 24 hours.`"
+        />
 
         <el-tabs v-model="detailTab">
           <el-tab-pane :label="`Detections (${detail.detections.length})`" name="detections">
@@ -304,6 +354,63 @@
               <template #empty>No vulnerabilities reported for this endpoint.</template>
             </el-table>
           </el-tab-pane>
+          <el-tab-pane :label="`Scan history (${history.total.toLocaleString()})`" name="scans">
+            <div class="history-filters">
+              <el-select v-model="history.type" placeholder="All types" clearable size="small" style="width: 160px" @change="reloadHistory">
+                <el-option v-for="t in SCAN_TYPES" :key="t.value" :value="t.value" :label="scanTypeLabel(t.value)" />
+              </el-select>
+              <el-select v-model="history.status" placeholder="All statuses" clearable size="small" style="width: 160px" @change="reloadHistory">
+                <el-option v-for="st in SCAN_STATUS_OPTIONS" :key="st" :value="st" :label="st" />
+              </el-select>
+              <span v-if="history.outstanding > 0" class="muted">Refreshing while a scan is queued or running…</span>
+            </div>
+            <el-table :data="history.scans" v-loading="history.loading" size="small" stripe max-height="420">
+              <el-table-column label="Type" width="130">
+                <template #default="{ row }">{{ scanTypeLabel(row.scan_type) }}</template>
+              </el-table-column>
+              <el-table-column label="Trigger" width="140">
+                <template #default="{ row }">
+                  {{ triggerLabel(row.trigger) }}
+                  <div v-if="row.requested_by_username" class="muted">by {{ row.requested_by_username }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="Started" width="160">
+                <template #default="{ row }">
+                  <template v-if="row.started_at">{{ formatDate(row.started_at) }}</template>
+                  <span v-else class="muted">requested {{ formatDate(row.requested_at) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="Duration" width="90">
+                <template #default="{ row }">{{ formatDuration(row.duration_ms) }}</template>
+              </el-table-column>
+              <el-table-column label="Status" width="190">
+                <template #default="{ row }">
+                  <el-tooltip :disabled="!row.error" :content="row.error || ''" placement="top">
+                    <el-tag :type="scanStatusTag(row.status)" size="small">{{ scanStatusText(row, detailOnline) }}</el-tag>
+                  </el-tooltip>
+                </template>
+              </el-table-column>
+              <el-table-column label="Summary" min-width="220" show-overflow-tooltip>
+                <template #default="{ row }">{{ summarizeScan(row) || '—' }}</template>
+              </el-table-column>
+              <el-table-column v-if="canScan" label="" width="90" align="right">
+                <template #default="{ row }">
+                  <el-button v-if="row.status === 'pending'" size="small" link type="danger" @click="cancelScan(row)">Cancel</el-button>
+                </template>
+              </el-table-column>
+              <template #empty>No scans recorded yet. Agents before v{{ MIN_ADHOC_AGENT_VERSION }} do not report their scans.</template>
+            </el-table>
+            <el-pagination
+              v-if="history.total > history.pageSize"
+              small
+              layout="prev, pager, next"
+              :total="history.total"
+              :page-size="history.pageSize"
+              v-model:current-page="history.page"
+              style="margin-top: 8px"
+              @current-change="loadHistory"
+            />
+          </el-tab-pane>
           <el-tab-pane :label="`Packages (${detail.packagesTotal.toLocaleString()})`" name="packages">
             <el-input
               v-model="detail.packageQuery"
@@ -333,8 +440,24 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import { api } from '@/services/api';
+import { useAuthStore } from '@/stores/auth';
+import {
+  SCAN_TYPES,
+  BULK_SCAN_MAX,
+  MIN_ADHOC_AGENT_VERSION,
+  canRequestScans,
+  formatDuration,
+  scanStatusTag,
+  scanStatusText,
+  scanTypeLabel,
+  summarizeScan,
+  supportsAdhocScans,
+  triggerLabel,
+  type ScanRow,
+  type ScanType,
+} from '@/utils/endpointScans';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, Plus, CopyDocument } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
@@ -356,6 +479,21 @@ const tokenDialog = ref(false);
 const generating = ref(false);
 const generated = ref('');
 const tokenForm = reactive({ label: '', expires_in_hours: 0 });
+
+const authStore = useAuthStore();
+const canScan = computed(() => canRequestScans(authStore.user?.role));
+const selected = ref<any[]>([]);
+function onSelectionChange(rows: any[]) { selected.value = rows; }
+const bulk = reactive<{ open: boolean; types: ScanType[]; busy: boolean }>({ open: false, types: ['vuln'], busy: false });
+
+const SCAN_STATUS_OPTIONS = ['pending', 'running', 'succeeded', 'failed', 'cancelled', 'expired'];
+const scanForm = reactive<{ types: ScanType[]; busy: boolean }>({ types: ['vuln'], busy: false });
+const history = reactive<{
+  scans: ScanRow[]; total: number; outstanding: number; loading: boolean;
+  type: string; status: string; page: number; pageSize: number;
+}>({ scans: [], total: 0, outstanding: 0, loading: false, type: '', status: '', page: 1, pageSize: 25 });
+let historyTimer: ReturnType<typeof setTimeout> | undefined;
+const HISTORY_POLL_MS = 5000;
 
 const detailOpen = ref(false);
 const detailTab = ref('detections');
@@ -561,6 +699,13 @@ async function copy(text: string) {
 
 async function openDetail(agent: any) {
   detail.agent = agent;
+  history.scans = [];
+  history.total = 0;
+  history.outstanding = 0;
+  history.type = '';
+  history.status = '';
+  history.page = 1;
+  void loadHistory();
   detail.detections = [];
   detail.vulns = [];
   detail.packages = [];
@@ -599,6 +744,107 @@ let packageQueryTimer: ReturnType<typeof setTimeout> | undefined;
 function onPackageQuery() {
   clearTimeout(packageQueryTimer);
   packageQueryTimer = setTimeout(() => void loadPackages(), 300);
+}
+
+// ---- Scans ---------------------------------------------------------------------
+const detailOnline = computed(() => detail.agent?.live_status === 'online');
+
+function stopHistoryPolling() {
+  clearTimeout(historyTimer);
+  historyTimer = undefined;
+}
+onBeforeUnmount(stopHistoryPolling);
+
+async function loadHistory() {
+  const agentId = detail.agent?.agent_id;
+  if (!agentId) return;
+  stopHistoryPolling();
+  history.loading = history.scans.length === 0;
+  try {
+    const { data } = await api.getEndpointScans(agentId, {
+      type: history.type || undefined,
+      status: history.status || undefined,
+      limit: history.pageSize,
+      offset: (history.page - 1) * history.pageSize,
+    });
+    if (detail.agent?.agent_id !== agentId) return;
+    history.scans = data.scans || [];
+    history.total = Number(data.total ?? 0);
+    history.outstanding = Number(data.outstanding ?? 0);
+    if (data.supports_adhoc !== undefined && detail.agent) {
+      // The list row may predate the agent's first capable heartbeat.
+      detail.agent.capabilities = data.supports_adhoc ? ['adhoc_scans'] : detail.agent.capabilities;
+    }
+  } catch { ElMessage.error('Failed to load scan history'); }
+  finally { history.loading = false; }
+  // Keep the table live while anything is queued or running.
+  if (detailOpen.value && history.outstanding > 0) {
+    historyTimer = setTimeout(() => void loadHistory(), HISTORY_POLL_MS);
+  }
+}
+
+function reloadHistory() {
+  history.page = 1;
+  void loadHistory();
+}
+
+async function scanNow() {
+  const agent = detail.agent;
+  if (!agent) return;
+  scanForm.busy = true;
+  try {
+    const { data } = await api.requestEndpointScans(agent.agent_id, scanForm.types);
+    const existing = (data.scans || []).length - Number(data.created ?? 0);
+    const where = agent.live_status === 'online' ? 'the agent picks it up within about a minute' : 'the agent is offline; it runs when it reconnects (within 24 hours)';
+    ElMessage.success(
+      `${data.created} scan(s) requested${existing > 0 ? `, ${existing} already queued or running` : ''} — ${where}`
+    );
+    detailTab.value = 'scans';
+    await Promise.all([loadHistory(), fetchEndpoints()]);
+  } catch (e) { ElMessage.error(errorMessage(e, 'Failed to request scans')); }
+  finally { scanForm.busy = false; }
+}
+
+async function cancelScan(row: ScanRow) {
+  const agentId = detail.agent?.agent_id;
+  if (!agentId) return;
+  try {
+    await api.cancelEndpointScan(agentId, row.id);
+    ElMessage.success('Scan request cancelled');
+    await Promise.all([loadHistory(), fetchEndpoints()]);
+  } catch (e) {
+    ElMessage.error(errorMessage(e, 'Failed to cancel the scan request'));
+    void loadHistory();
+  }
+}
+
+function openBulkScan() {
+  bulk.types = ['vuln'];
+  bulk.open = true;
+}
+
+async function submitBulkScan() {
+  const ids = selected.value.map((r) => r.agent_id);
+  if (ids.length === 0 || ids.length > BULK_SCAN_MAX) return;
+  try {
+    await ElMessageBox.confirm(
+      `Request ${bulk.types.map(scanTypeLabel).join(', ')} on ${ids.length} endpoint(s)?`,
+      'Scan selected',
+      { type: 'warning', confirmButtonText: 'Request scans', cancelButtonText: 'Cancel' }
+    );
+  } catch { return; }
+  bulk.busy = true;
+  try {
+    const { data } = await api.requestEndpointScansBulk(ids, bulk.types);
+    const extra = [
+      data.already_outstanding ? `${data.already_outstanding} already queued or running` : '',
+      data.missing?.length ? `${data.missing.length} endpoint(s) no longer enrolled` : '',
+    ].filter(Boolean).join('; ');
+    ElMessage.success(`${data.created} scan(s) requested on ${data.agents} endpoint(s)${extra ? ` (${extra})` : ''}`);
+    bulk.open = false;
+    await fetchEndpoints();
+  } catch (e) { ElMessage.error(errorMessage(e, 'Failed to request scans')); }
+  finally { bulk.busy = false; }
 }
 
 async function removeEndpoint(agent: any) {
@@ -647,6 +893,8 @@ function severityType(sev: string): string {
 .subtitle { margin: 4px 0 0; color: var(--el-text-color-secondary); font-size: 13px; }
 .actions { display: flex; gap: 8px; }
 .update-state { margin-top: 4px; }
+.scan-now { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.history-filters { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .muted { color: var(--el-text-color-secondary); font-size: 12px; }
 .token-row { display: flex; gap: 8px; }
 .install {

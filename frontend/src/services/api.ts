@@ -561,6 +561,12 @@ export const api = {
   updateEndpoint: (id: string) => apiClient.post(`/edr/agents/${id}/update`),
   cancelEndpointUpdate: (id: string) => apiClient.delete(`/edr/agents/${id}/update`),
   updateOutdatedEndpoints: () => apiClient.post('/edr/agents/update-outdated'),
+  getEndpointScans: (id: string, params?: { type?: string; status?: string; limit?: number; offset?: number }) =>
+    apiClient.get(`/edr/agents/${id}/scans`, { params }),
+  requestEndpointScans: (id: string, types: string[]) => apiClient.post(`/edr/agents/${id}/scans`, { types }),
+  requestEndpointScansBulk: (agentIds: string[], types: string[]) =>
+    apiClient.post('/edr/agents/scans/bulk', { agent_ids: agentIds, types }),
+  cancelEndpointScan: (id: string, scanId: string) => apiClient.post(`/edr/agents/${id}/scans/${scanId}/cancel`),
 
   // Context Graph (GET only, every role). The graph page shows every failure
   // inline (a busy answer retries once), so nothing toasts; an 8 s timeout and

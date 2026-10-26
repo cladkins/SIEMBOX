@@ -26,15 +26,17 @@ unique index on `event_id` for replay dedup).
 
 **Agent-facing** (per-agent key: `Authorization: Bearer <key>` + `X-Agent-ID`):
 - `POST /agents/enroll` — exchange a one-time enrollment token for `{agent_id, agent_api_key, config}` (key returned once; only its sha256 is stored).
-- `POST /agents/:id/heartbeat` → `{config_version}` (optional `update` progress report, see [Agent updates](#agent-updates))
+- `POST /agents/:id/heartbeat` → `{config_version, scan_requests}` (optional `update` progress report, see [Agent updates](#agent-updates); `capabilities` and `scan_requests`, see [Scans and scan history](#scans-and-scan-history))
 - `GET  /agents/:id/config` → `AgentConfig` (includes `yara_rules_version` and `agent_update`)
 - `GET  /agents/:id/yara` → curated YARA bundle as raw `text/plain` (empty body valid)
 - `POST /inventory` · `POST /events` · `POST /vulnerabilities` → `202 Accepted`
+- `POST /scans` → `200` `{scan_id, status, accepted}`: the agent reports a scan's start or end (see [Scans and scan history](#scans-and-scan-history))
 - `POST /packages` → `200` with `{accepted, unchanged, snapshot_required, package_count, stored, removed, skipped, truncated}` (installed software, see [Installed packages](#installed-packages))
 
 **Admin-facing** (JWT + admin role):
 - `GET /agents`, `GET /agents/:id`, `GET /agents/:id/vulnerabilities`, `GET /agents/:id/packages`, `GET /agents/:id/detections`, `DELETE /agents/:id`
 - Agent updates: `GET /agent-updates`, `POST /agent-updates/check`, `PUT /agent-updates/settings`, `POST /agents/:id/update`, `DELETE /agents/:id/update`, `POST /agents/update-outdated` (see [Agent updates](#agent-updates) and `docs/reference/API.md`)
+- Scans (analyst and up; history every role): `POST /agents/:id/scans`, `POST /agents/scans/bulk`, `POST /agents/:id/scans/:scanId/cancel`, `GET /agents/:id/scans`
 - `POST /tokens` (generate, plaintext shown once), `GET /tokens`, `DELETE /tokens/:hash` (revoke)
 - `GET /yara` (current bundle version/sha/size), `POST /yara/refresh` (pull YARA-Forge now)
 
@@ -164,10 +166,53 @@ agent; it still takes no remediation action on the host. See
 [Troubleshooting](operations/TROUBLESHOOTING.md#endpoint-agent-issues) when an
 update stays pending or fails.
 
+## Scans and scan history
+
+Each endpoint has a **Scan history** tab in its *Endpoints* drawer: every
+vulnerability scan (grype), YARA file scan, package inventory and system
+inventory the agent runs, scheduled or on demand, with who asked, when it ran,
+how long it took, its status and a one-line result (findings new / no longer
+reported, packages added / removed, YARA hits, inventory changed or not).
+Stored in `edr_agent_scans` (migration `050_edr_agent_scans.sql`).
+
+**On demand.** *Scan now* in the drawer (pick the types) or *Scan selected* on
+the list (up to 200 endpoints, after a confirmation) creates a `pending`
+request per endpoint and type; analysts, operators and admins can request and
+cancel, every role can read the history. The agent's next heartbeat (about a
+minute) carries the request in `scan_requests`; the agent reports `running`,
+runs the scan at once without moving its schedule, then reports `succeeded` or
+`failed` with a summary. A request for a scan already queued or running on that
+endpoint returns the existing one. If the same scan is already running on its
+schedule, the request runs right after it, never alongside. An offline
+endpoint keeps the request (shown *queued — agent offline*) for 24 hours, then
+it expires; a run not reported finished within 12 hours expires too. A pending
+request can be cancelled. An on-demand YARA scan checks every file (the
+scheduled passes after startup check only files changed since the previous
+one), under the same CPU limits; an on-demand package inventory always sends
+the full list.
+
+**Scheduled runs** are reported by the agent too (trigger `schedule` or
+`startup`). YARA's minute-by-minute incremental passes are recorded only when
+they find something; full passes always are.
+
+**Summaries.** The server computes the vulnerability, package and inventory
+counts from the report the scan sent (`scan_id` on `POST /vulnerabilities`,
+`/packages`, `/inventory`). `resolved` for vulnerabilities counts open findings
+of the previous report that the new one no longer holds; the server does not
+close them. The agent's YARA summary is `hits`, `new_hits` and `full`; osquery
+returns only matching files, so there is no files-scanned count.
+
+**Older agents.** Agents before v0.0.20 neither report scans nor run requests;
+the drawer says so (the agent reports the `adhoc_scans` capability in its
+heartbeat) and requests sent to them expire. Retention: 90 days, and at most
+the newest 200 rows per endpoint and scan type, pruned with stale requests by
+the `edr-agent-release` job every 6 hours.
+
 ## Known follow-ups
 
 - Endpoint alerts are inserted directly, so they don't yet fire Email/Slack/NTFY notifications (rule-based alerts still do).
 - Server-pushed Sigma `rules` in `AgentConfig` are empty; wire to `/api/rules` (endpoint/Sigma) later.
+- The Endpoints page is admin-only, so analysts and viewers cannot reach the scan controls and history in the UI yet, although the scan API allows them.
 - YARA bundle status (version/source/size) + a "Pull YARA-Forge now" button live on
   the **Endpoints** page; per-agent "which version does this agent have"
   isn't tracked yet (the agent stores it locally; the server only knows the served version).

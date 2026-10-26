@@ -71,6 +71,12 @@ export interface EdrAgent {
   update_error: string | null;
   update_requested_at: Date | null;
   update_updated_at: Date | null;
+  /** Heartbeat-reported capabilities ('adhoc_scans': runs console scan requests); null until reported. */
+  capabilities: string[] | null;
+  /** When the newest vulnerability report started being stored (migration 050). */
+  last_vuln_ingest_at: Date | null;
+  /** Hash of the newest host inventory, for the scan history's `changed`. */
+  inventory_hash: string | null;
 }
 
 /** An already-validated heartbeat `update` report (see parseHeartbeatUpdate). */
@@ -111,7 +117,8 @@ export class EdrAgentModel {
   }
 
   /**
-   * Heartbeat: refresh last_seen / status / version and apply any update report;
+   * Heartbeat: refresh last_seen / status / version / capabilities (when sent)
+   * and apply any update report;
    * returns the current config_version. One UPDATE, so the heartbeat stays cheap.
    *
    * The update columns change only for the agent's CURRENT request: a report
@@ -126,7 +133,8 @@ export class EdrAgentModel {
     agentId: string,
     status: string,
     agentVersion?: string,
-    update?: HeartbeatUpdateReport | null
+    update?: HeartbeatUpdateReport | null,
+    capabilities?: string[]
   ): Promise<number | null> {
     const matched = `($4::uuid IS NOT NULL AND update_request_id = $4::uuid)`;
     // Reaching the target OR passing it (an admin upgraded the host by hand)
@@ -143,6 +151,7 @@ export class EdrAgentModel {
          SET last_seen = NOW(),
              status = $2,
              agent_version = COALESCE($3::text, agent_version),
+             capabilities = COALESCE($7::text[], capabilities),
              update_state = CASE WHEN ${success} THEN 'succeeded'
                                  WHEN ${matched} AND $5::text IS NOT NULL THEN $5::text
                                  ELSE update_state END,
@@ -165,6 +174,7 @@ export class EdrAgentModel {
         update?.request_id ?? null,
         update?.state ?? null,
         update?.error ?? null,
+        capabilities ?? null,
       ]
     );
     return result.rows[0]?.config_version ?? null;
@@ -208,7 +218,9 @@ export class EdrAgentModel {
          $2::int AS vuln_scan_interval_seconds,
          ps.package_count AS package_count,
          ps.reported_at AS packages_reported_at,
-         ps.stored_at AS packages_stored_at
+         ps.stored_at AS packages_stored_at,
+         (SELECT COUNT(*)::int FROM edr_agent_scans s
+           WHERE s.agent_id = a.agent_id AND s.status IN ('pending', 'running')) AS scans_outstanding
        FROM edr_agents a
        LEFT JOIN edr_agent_package_snapshots ps ON ps.agent_id = a.agent_id
        ORDER BY a.last_seen DESC NULLS LAST, a.created_at DESC`,

@@ -847,6 +847,30 @@ and `GET /api/edr/agent-updates` returns the same `error`.
 **Solution:** fix the cause, then press *Update* again (a failed update is
 retried with a new request; *Cancel update* clears a stuck one).
 
+### Issue: An On-Demand Endpoint Scan Stays Queued or Expires
+
+**Symptoms:**
+- In an endpoint's *Scan history*, a request stays `queued` (or `queued — agent offline`) and turns `expired` after 24 hours
+- A run stays `running` and turns `expired` after 12 hours
+
+**Common causes:**
+
+1. **The agent predates on-demand scans** (before v0.0.20). The drawer says so;
+   update the agent (*Update* on the list), then request again.
+2. **The endpoint is offline.** The request runs on its next heartbeat, within
+   24 hours.
+3. **The scan cannot run on the host.** grype or osqueryi is missing (the
+   agent skips that scanner and reports the run `failed`: hover the status for
+   its error), or the agent restarted mid-run (`expired`).
+
+**Diagnosis:**
+```bash
+sudo journalctl -u siembox-agent -n 200 --no-pager | grep -i scan
+```
+
+**Solution:** fix the cause and press *Scan now* again; *Cancel* drops a
+request that is still queued.
+
 ---
 
 ## Log Discovery & API-Polled Sources

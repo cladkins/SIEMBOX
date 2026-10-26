@@ -19,6 +19,7 @@ import pool from '../../config/database';
 import { logger } from '../../utils/logger';
 import { ApiError } from '../../middleware/errorHandler';
 import { EdrAgentModel } from '../../models/EdrAgent';
+import { attachScanSummary } from './edrScans';
 
 /** Field limits; longer values are clipped. */
 export const MAX_NAME = 256;
@@ -113,6 +114,8 @@ export interface PackageIngestResult {
   snapshot_required: boolean;
   package_count: number;
   stored: number;
+  /** Packages the previous snapshot did not hold. */
+  added: number;
   removed: number;
   skipped: number;
   truncated: number;
@@ -120,8 +123,10 @@ export interface PackageIngestResult {
 
 /**
  * Store one agent's package report. Body: { snapshot_hash?, collected_at?,
- * force?, packages?: [{ name, version, type }] }. Without `packages` it is a
- * hash-only check. `force` stores the list even when the hash is unchanged.
+ * force?, scan_id?, packages?: [{ name, version, type }] }. Without
+ * `packages` it is a hash-only check. `force` stores the list even when the
+ * hash is unchanged. With scan_id (the agent's scan history row), the counts
+ * go into that row's summary.
  */
 export async function ingestPackages(agentId: string, input: unknown): Promise<PackageIngestResult> {
   const body = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
@@ -137,7 +142,7 @@ export async function ingestPackages(agentId: string, input: unknown): Promise<P
   await EdrAgentModel.touch(agentId);
   const started = Date.now();
   const result: PackageIngestResult = {
-    accepted: false, unchanged: false, snapshot_required: false, package_count: 0, stored: 0, removed: 0,
+    accepted: false, unchanged: false, snapshot_required: false, package_count: 0, stored: 0, added: 0, removed: 0,
     skipped: normalized.skipped, truncated: normalized.truncated,
   };
 
@@ -159,7 +164,9 @@ export async function ingestPackages(agentId: string, input: unknown): Promise<P
         [agentId, stamp, collectedAt]
       );
       await client.query('COMMIT');
-      return { ...result, accepted: true, unchanged: true, package_count: Number(meta[0].package_count) };
+      const count = Number(meta[0].package_count);
+      await attachScanSummary(agentId, body.scan_id, 'packages', { packages: count, added: 0, removed: 0, unchanged: count });
+      return { ...result, accepted: true, unchanged: true, package_count: count };
     }
     if (!hasList) {
       await client.query('ROLLBACK');
@@ -167,14 +174,20 @@ export async function ingestPackages(agentId: string, input: unknown): Promise<P
     }
 
     const rows = normalized.rows;
+    let added = 0;
     for (let i = 0; i < rows.length; i += PACKAGE_BATCH) {
       const batch = rows.slice(i, i + PACKAGE_BATCH);
-      await client.query(
-        `INSERT INTO edr_agent_packages AS p (agent_id, type, name, version, first_seen, last_seen)
-         SELECT $1, t.type, t.name, t.version, $5, $5 FROM UNNEST($2::text[], $3::text[], $4::text[]) AS t(type, name, version)
-         ON CONFLICT (agent_id, type, name, version) DO UPDATE SET last_seen = EXCLUDED.last_seen`,
+      // xmax = 0 marks a row this statement inserted (not one it updated).
+      const up = await client.query(
+        `WITH up AS (
+           INSERT INTO edr_agent_packages AS p (agent_id, type, name, version, first_seen, last_seen)
+           SELECT $1, t.type, t.name, t.version, $5, $5 FROM UNNEST($2::text[], $3::text[], $4::text[]) AS t(type, name, version)
+           ON CONFLICT (agent_id, type, name, version) DO UPDATE SET last_seen = EXCLUDED.last_seen
+           RETURNING (xmax = 0) AS inserted)
+         SELECT COUNT(*) FILTER (WHERE inserted)::int AS added FROM up`,
         [agentId, batch.map((r) => r.type), batch.map((r) => r.name), batch.map((r) => r.version), stamp]
       );
+      added += up.rows[0].added;
     }
     const removed = await client.query(`DELETE FROM edr_agent_packages WHERE agent_id = $1 AND last_seen < $2`, [agentId, stamp]);
     await client.query(
@@ -184,7 +197,12 @@ export async function ingestPackages(agentId: string, input: unknown): Promise<P
       [agentId, hash, rows.length, collectedAt, stamp]
     );
     await client.query('COMMIT');
-    Object.assign(result, { accepted: true, package_count: rows.length, stored: rows.length, removed: removed.rowCount ?? 0 });
+    Object.assign(result, {
+      accepted: true, package_count: rows.length, stored: rows.length, added, removed: removed.rowCount ?? 0,
+    });
+    await attachScanSummary(agentId, body.scan_id, 'packages', {
+      packages: rows.length, added, removed: result.removed, unchanged: rows.length - added,
+    });
     logger.info(
       `[EDR] package snapshot agent=${agentId} packages=${rows.length} removed=${result.removed} ` +
         `skipped=${result.skipped} truncated=${result.truncated} ms=${Date.now() - started}`

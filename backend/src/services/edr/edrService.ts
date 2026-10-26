@@ -34,6 +34,7 @@ import {
 } from '../../models/EdrAgent';
 import { getCurrentYaraVersion } from './yaraService';
 import type { AgentUpdateConfig } from './agentUpdate';
+import { attachScanSummary } from './edrScans';
 import { NotificationService } from '../notifications/notificationService';
 import { maybeTriageAlert } from '../ai/triageService';
 
@@ -173,7 +174,29 @@ export async function enrollAgent(input: EnrollInput, connIp?: string) {
 
 // ---- Inventory --------------------------------------------------------------
 
-export async function ingestInventory(agentId: string, inventory: any): Promise<number | null> {
+/**
+ * A hash of a host inventory without its collection time, independent of key
+ * and software order, so an unchanged host hashes the same every hour. Pure.
+ */
+export function inventoryHash(inventory: any): string {
+  const canonical = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(canonical);
+    if (v && typeof v === 'object') {
+      return Object.fromEntries(
+        Object.keys(v as Record<string, unknown>).sort().map((k) => [k, canonical((v as Record<string, unknown>)[k])])
+      );
+    }
+    return v;
+  };
+  const facts: Record<string, unknown> = { ...(inventory && typeof inventory === 'object' ? inventory : {}) };
+  const software = facts.software;
+  delete facts.software;
+  delete facts.collected_at;
+  const sw = Array.isArray(software) ? software.map((x) => JSON.stringify(canonical(x))).sort() : [];
+  return crypto.createHash('sha256').update(JSON.stringify([canonical(facts), sw])).digest('hex');
+}
+
+export async function ingestInventory(agentId: string, inventory: any, scanId?: unknown): Promise<number | null> {
   const agent = await EdrAgentModel.findById(agentId);
   const ip = pickIp(inventory?.ip, agent?.ip ?? undefined);
   // Cap software so a huge package list can't bloat the asset row.
@@ -199,6 +222,18 @@ export async function ingestInventory(agentId: string, inventory: any): Promise<
     await query('UPDATE edr_agents SET asset_id = $2 WHERE agent_id = $1', [agentId, assetId]);
   }
   await EdrAgentModel.touch(agentId);
+
+  // Scan history: did anything change since the previous report?
+  const hash = inventoryHash(inventory);
+  const prev = await query(
+    `UPDATE edr_agents a SET inventory_hash = $2 FROM (SELECT inventory_hash FROM edr_agents WHERE agent_id = $1) old
+      WHERE a.agent_id = $1 RETURNING old.inventory_hash AS previous`,
+    [agentId, hash]
+  );
+  await attachScanSummary(agentId, scanId, 'inventory', {
+    changed: prev.rows[0]?.previous !== hash,
+    software: software.length,
+  });
   return assetId;
 }
 
@@ -243,11 +278,23 @@ export async function ingestVulnerabilities(agentId: string, payload: any): Prom
     rows.set(key, row);
   }
 
-  let stored = 0;
   const all = [...rows.values()];
+  // History summary, counted before the report is stored: how many of its
+  // findings the endpoint did not have yet, and how many of the previous
+  // report's open findings it no longer holds.
+  const before = await countVulnChanges(agent.asset_id, agent.last_vuln_ingest_at ?? null, all.map((r) => r.cve_id));
+
+  let stored = 0;
   for (let i = 0; i < all.length; i += EDR_VULN_BATCH) {
     stored += await storeEdrVulnBatch(agentId, agent.asset_id, all.slice(i, i + EDR_VULN_BATCH));
   }
+  await query('UPDATE edr_agents SET last_vuln_ingest_at = $2 WHERE agent_id = $1', [agentId, before.startedAt]);
+  await attachScanSummary(agentId, payload?.scan_id, 'vuln', {
+    findings: all.length,
+    new: Math.max(0, all.length - before.alreadyOpen),
+    resolved: before.resolved,
+    stored,
+  });
   // received = grype's count; unique = what the host shows as "Open vulns".
   // received - unique = duplicate_id (same id, multiple packages) + skipped_no_id.
   logger.info(
@@ -255,6 +302,34 @@ export async function ingestVulnerabilities(agentId: string, payload: any): Prom
     `duplicate_id=${duplicate} skipped_no_id=${skippedNoId}`
   );
   return stored;
+}
+
+/**
+ * Before storing a vulnerability report: how many of its identifiers the asset
+ * already has linked, and how many findings of the previous report (open,
+ * last_detected at or after that report started being stored) it no longer
+ * holds. The store does not close those: an endpoint finding stays open until
+ * someone marks it, so `resolved` means "no longer reported by the scan".
+ * `startedAt` is read before the writes, so this report's rows are all at or
+ * after it.
+ */
+async function countVulnChanges(
+  assetId: number,
+  previous: Date | null,
+  identifiers: string[]
+): Promise<{ alreadyOpen: number; resolved: number; startedAt: Date }> {
+  const result = await query(
+    `SELECT NOW() AS started_at,
+            (SELECT COUNT(*)::int FROM asset_vulnerabilities av JOIN vulnerabilities v ON v.id = av.vulnerability_id
+              WHERE av.asset_id = $1 AND v.cve_id = ANY($2::varchar[])) AS already,
+            CASE WHEN $3::timestamptz IS NULL THEN 0 ELSE
+              (SELECT COUNT(*)::int FROM asset_vulnerabilities av JOIN vulnerabilities v ON v.id = av.vulnerability_id
+                WHERE av.asset_id = $1 AND av.status = 'open' AND av.last_detected >= $3::timestamptz
+                  AND NOT (v.cve_id = ANY($2::varchar[]))) END AS resolved`,
+    [assetId, identifiers, previous]
+  );
+  const r = result.rows[0];
+  return { alreadyOpen: r.already, resolved: r.resolved, startedAt: r.started_at };
 }
 
 /**

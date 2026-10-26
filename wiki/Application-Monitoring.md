@@ -16,7 +16,8 @@ It is an inventory only: it raises no alerts.
 | **Parser** | which catalog parser matched the log (`plex`, `traefik-access`, `pihole-query`) | the product on the logging host |
 | **Service scan** | `asset_services` from nmap scans (service name; a banner/version when a scanner reports one) | the product on an **asset** (`postgresql`, `ms-wbt-server` → RDP, `vnc`) |
 | **Container** | the images log shippers report (`lscr.io/linuxserver/plex:1.40.0`) | product **and version** (from the tag) on the shipper's host |
-| **Endpoint package** | SIEMBox Endpoint vulnerability findings (`package=… installed=…`) | package **and installed version** on the endpoint (vulnerable packages only, until the endpoint agent reports a full software list) |
+| **Vulnerable package** | SIEMBox Endpoint vulnerability findings (`package=… installed=…`) | package **and installed version** on the endpoint, while it has an open finding |
+| **Installed package** | the endpoint agent's list of installed software (dpkg, rpm, apk, Homebrew, app bundles, Windows uninstall entries) | package **and installed version** on the endpoint, vulnerable or not |
 | **Endpoint OS** | the endpoint agent's OS (`Ubuntu 22.04.4 LTS`) | the operating system and version |
 | **User agent** | `user_agent` in parsed web/proxy logs (nginx, Traefik, Caddy, NPM, authentik) | client software and version, per **client IP** |
 | **DNS** | queried names in DNS logs (Pi-hole) | apps and SaaS in use, per client IP (`*.zoom.us` → Zoom) |
@@ -91,7 +92,9 @@ tests:
 - `container_image` — image name globs, no tag (`*` matches any characters);
   `docker.io/library/` is folded away. The tag is the version when it starts
   with a number.
-- `package` — package names in endpoint findings.
+- `package` — package names in endpoint findings and in the endpoint agent's
+  installed-software list (lower case; the dpkg/rpm/apk name, a Homebrew
+  formula, an app bundle's name).
 - `user_agent` — regexes on the user agent; the one group is the version.
 - `dns` — `zoom.us` matches zoom.us and every subdomain; `*.plex.direct` only
   subdomains.
@@ -143,7 +146,8 @@ this page sees the same in the graph.
 many days an application, version or location stays listed after it was last
 seen (30 by default), and the backfill on upgrade (7 days of existing logs).
 Scan, container and endpoint evidence follows its source at once: an upgraded
-image or a patched package replaces the old version immediately.
+image or a patched package replaces the old version immediately, and a package
+the endpoint's newest software list no longer has drops out.
 
 ## Limits
 
@@ -151,7 +155,9 @@ image or a patched package replaces the old version immediately.
   product or version, so a service scan names a product only for
   product-specific services (PostgreSQL, Redis, RDP, VNC...). `ssh` alone could
   be OpenSSH or Dropbear and is not claimed.
-- The endpoint agent reports vulnerable packages only; its full software list
-  (SBOM) is a later phase.
+- Installed packages need an endpoint agent that reports them (it sends the
+  list at startup and every few hours, and only when it changed); older agents
+  report vulnerable packages only. Windows uninstall entries are display names
+  ("Mozilla Firefox (x64 en-US)"), which a `package` matcher rarely names.
 - A new signature applies to logs from when it is loaded on; scan, container
   and endpoint evidence is re-matched every run.

@@ -11,6 +11,7 @@ export type InventorySource =
   | 'service_scan'
   | 'container'
   | 'edr_package'
+  | 'endpoint_sbom'
   | 'os'
   | 'user_agent'
   | 'dns';
@@ -44,13 +45,14 @@ export const SOURCE_LABELS: Record<InventorySource, { label: string; hint: strin
   parser: { label: 'Parser', hint: 'A catalog parser for it matched the logs' },
   service_scan: { label: 'Service scan', hint: 'An nmap service on an asset' },
   container: { label: 'Container', hint: "A log shipper reported the image on its host" },
-  edr_package: { label: 'Endpoint package', hint: 'The endpoint agent found the package (vulnerable packages only for now)' },
+  edr_package: { label: 'Vulnerable package', hint: "The endpoint agent's vulnerability scan found the package with an open finding" },
+  endpoint_sbom: { label: 'Installed package', hint: "The package is in the endpoint agent's list of installed software" },
   os: { label: 'Endpoint OS', hint: 'The operating system an endpoint agent reports' },
   user_agent: { label: 'User agent', hint: 'A client sent it as its user agent (web and proxy logs)' },
   dns: { label: 'DNS', hint: 'A client looked up its domains (DNS logs)' },
 };
 
-export const SOURCE_ORDER: InventorySource[] = ['syslog_program', 'parser', 'service_scan', 'container', 'edr_package', 'os', 'user_agent', 'dns'];
+export const SOURCE_ORDER: InventorySource[] = ['syslog_program', 'parser', 'service_scan', 'container', 'edr_package', 'endpoint_sbom', 'os', 'user_agent', 'dns'];
 
 export function sourceLabel(source: string): string {
   return SOURCE_LABELS[source as InventorySource]?.label ?? source;

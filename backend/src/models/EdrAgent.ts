@@ -205,8 +205,12 @@ export class EdrAgentModel {
          (SELECT MAX(av.last_detected) FROM asset_vulnerabilities av
             WHERE av.asset_id = a.asset_id) AS last_scan_at,
          a.last_scan_completed_at + ($2::int * INTERVAL '1 second') AS next_scan_at,
-         $2::int AS vuln_scan_interval_seconds
+         $2::int AS vuln_scan_interval_seconds,
+         ps.package_count AS package_count,
+         ps.reported_at AS packages_reported_at,
+         ps.stored_at AS packages_stored_at
        FROM edr_agents a
+       LEFT JOIN edr_agent_package_snapshots ps ON ps.agent_id = a.agent_id
        ORDER BY a.last_seen DESC NULLS LAST, a.created_at DESC`,
       [OFFLINE_THRESHOLD_MINUTES, VULN_SCAN_INTERVAL_SECONDS]
     );

@@ -337,6 +337,7 @@ const INVENTORY: Row[] = [
   ['POST', '/api/edr/inventory', AGENT],
   ['POST', '/api/edr/events', AGENT],
   ['POST', '/api/edr/vulnerabilities', AGENT],
+  ['POST', '/api/edr/packages', AGENT],
   ['GET', '/api/edr/agents', ADMIN_ONLY],
   ['POST', '/api/edr/tokens', ADMIN_ONLY],
   ['GET', '/api/edr/tokens', ADMIN_ONLY],
@@ -351,6 +352,7 @@ const INVENTORY: Row[] = [
   ['DELETE', '/api/edr/agents/:id/update', ADMIN_ONLY],
   ['GET', '/api/edr/agents/:id', ADMIN_ONLY],
   ['GET', '/api/edr/agents/:id/vulnerabilities', ADMIN_ONLY],
+  ['GET', '/api/edr/agents/:id/packages', ADMIN_ONLY],
   ['GET', '/api/edr/agents/:id/detections', ADMIN_ONLY],
   ['DELETE', '/api/edr/agents/:id', ADMIN_ONLY],
 

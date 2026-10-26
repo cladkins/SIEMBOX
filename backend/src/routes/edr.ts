@@ -20,6 +20,7 @@ import {
   buildAgentConfig,
   createEnrollmentToken,
 } from '../services/edr/edrService';
+import { ingestPackages, listAgentPackages } from '../services/edr/edrPackages';
 import {
   getCurrentYaraVersion,
   getCurrentYaraBundle,
@@ -123,6 +124,15 @@ router.post('/vulnerabilities', edrAgentLimiter, authenticateAgent, async (req: 
   assertBodyAgent(req);
   const stored = await ingestVulnerabilities(req.edrAgent!.agent_id, req.body ?? {});
   res.status(202).json({ accepted: true, stored });
+});
+
+// Installed packages — agent auth; a full snapshot of the host's software
+// (replaces the agent's previous one). An unchanged snapshot_hash skips the
+// writes; a hash-only body asks whether the server has that snapshot.
+router.post('/packages', edrAgentLimiter, authenticateAgent, async (req: Request, res: Response) => {
+  assertBodyAgent(req);
+  const result = await ingestPackages(req.edrAgent!.agent_id, req.body ?? {});
+  res.status(200).json(result);
 });
 
 // ---- Admin-facing endpoints (UI) -------------------------------------------
@@ -246,6 +256,18 @@ router.get('/agents/:id/vulnerabilities', authenticate, authorize('admin'), asyn
   if (!agent) throw new ApiError(404, 'Agent not found');
   const vulns = agent.asset_id ? await VulnerabilityRepository.getAssetVulnerabilities(agent.asset_id) : [];
   res.json({ vulnerabilities: vulns });
+});
+
+// Endpoint's installed packages (the agent's newest snapshot), filtered by name.
+router.get('/agents/:id/packages', authenticate, authorize('admin'), async (req: Request, res: Response) => {
+  const agent = await EdrAgentModel.findById(req.params.id as string);
+  if (!agent) throw new ApiError(404, 'Agent not found');
+  const num = (v: unknown) => (typeof v === 'string' && /^\d+$/.test(v) ? parseInt(v, 10) : undefined);
+  res.json(await listAgentPackages(agent.agent_id, {
+    q: typeof req.query.q === 'string' ? req.query.q : undefined,
+    limit: num(req.query.limit),
+    offset: num(req.query.offset),
+  }));
 });
 
 // Endpoint's detections (alerts) — reuses the existing alerts table.

@@ -23,10 +23,11 @@
  *      halves the batch. Between batches it rests PAUSE_RATIO times as long as
  *      the batch took, and it stops after RUN_BUDGET_MS of database time.
  *   3. Snapshots: the small tables are read whole every run (asset_services,
- *      shipper_containers, open EDR package findings, edr_agents' OS) and their
- *      inventory rows replaced: a row that is no longer in its source is
- *      removed at once, so an upgraded container or package does not show two
- *      versions until retention.
+ *      shipper_containers, open EDR package findings, edr_agents' OS), and of
+ *      the endpoints' installed packages (edr_agent_packages, migration 049)
+ *      the ones a signature names, and their inventory rows replaced: a row
+ *      that is no longer in its source is removed at once, so an upgraded
+ *      container or package does not show two versions until retention.
  *   4. Vulnerability links: rebuilt from the inventory (exact: an open EDR
  *      finding for a signature's package; best effort: an open finding on an
  *      asset where the application was seen whose title or template names it).
@@ -57,12 +58,12 @@ export const PRUNE_EVERY_MS = 60 * 60_000;
  */
 export const PAUSE_RATIO = 6;
 export const UNMATCHED_CAP = 500;
-/** Rows a snapshot source reads at most (asset_services, shipper_containers, EDR findings). */
+/** Rows a snapshot source reads at most (asset_services, shipper_containers, EDR findings, endpoint packages). */
 export const SNAPSHOT_LIMIT = 200_000;
 
-export const SOURCES = ['syslog_program', 'parser', 'service_scan', 'container', 'edr_package', 'os', 'user_agent', 'dns'] as const;
+export const SOURCES = ['syslog_program', 'parser', 'service_scan', 'container', 'edr_package', 'endpoint_sbom', 'os', 'user_agent', 'dns'] as const;
 export type InventorySource = (typeof SOURCES)[number];
-export const SNAPSHOT_SOURCES: InventorySource[] = ['service_scan', 'container', 'edr_package', 'os'];
+export const SNAPSHOT_SOURCES: InventorySource[] = ['service_scan', 'container', 'edr_package', 'endpoint_sbom', 'os'];
 export const NETWORK_SOURCES: InventorySource[] = ['user_agent', 'dns'];
 
 export interface RollupClient {
@@ -363,6 +364,8 @@ export interface SnapshotInput {
   services: Array<{ asset_id: number; port: number; protocol: string; service_name: string | null; service_version: string | null; banner: string | null; seen: Date }>;
   containers: Array<{ shipper_id: number; image: string; containers: number; names: string[]; seen: Date }>;
   packages: Array<{ asset_id: number; package: string; installed: string | null; findings: number; first: Date; seen: Date }>;
+  /** Endpoint installed packages (the agent's newest snapshot), only names a signature has. Optional: older callers. */
+  sbom?: Array<{ asset_id: number; package: string; version: string; type: string; first: Date; seen: Date }>;
   agents: Array<{ asset_id: number; os: string | null; os_version: string | null; seen: Date }>;
 }
 
@@ -399,6 +402,14 @@ export function matchSnapshots(input: SnapshotInput, index: AppIndex): { rows: R
       rows.add({
         app_id: m.appId, loc_type: 'asset', loc_key: String(p.asset_id), source: 'edr_package', version: m.version ?? '', events: p.findings,
         first_seen: p.first, last_seen: p.seen, evidence: { package: p.package, installed_version: p.installed },
+      });
+    }
+  }
+  for (const p of input.sbom ?? []) {
+    for (const m of index.matchPackage(p.package, p.version)) {
+      rows.add({
+        app_id: m.appId, loc_type: 'asset', loc_key: String(p.asset_id), source: 'endpoint_sbom', version: m.version ?? '', events: 1,
+        first_seen: p.first, last_seen: p.seen, evidence: { package: p.package, version: p.version, type: p.type },
       });
     }
   }
@@ -594,7 +605,7 @@ async function runBatch(
   });
 }
 
-async function readSnapshots(client: RollupClient): Promise<SnapshotInput> {
+async function readSnapshots(client: RollupClient, packageNames: string[]): Promise<SnapshotInput> {
   const services = await client.query(
     `SELECT asset_id, port, protocol, service_name, service_version, banner, COALESCE(last_seen, discovered_at, NOW()) AS seen
        FROM asset_services WHERE asset_id IS NOT NULL AND COALESCE(state, 'open') = 'open' ORDER BY id LIMIT $1`,
@@ -618,18 +629,30 @@ async function readSnapshots(client: RollupClient): Promise<SnapshotInput> {
       GROUP BY asset_id, pkg, inst`,
     [SNAPSHOT_LIMIT]
   );
+  // Endpoint installed packages: only the names a signature has (an index on
+  // lower(name)); seen is the newest report, changed or not.
+  const sbom = packageNames.length === 0 ? null : await client.query(
+    `SELECT a.asset_id, p.name AS package, p.version, p.type, p.first_seen AS first, GREATEST(p.last_seen, s.reported_at) AS seen
+       FROM edr_agent_packages p
+       JOIN edr_agents a ON a.agent_id = p.agent_id
+       LEFT JOIN edr_agent_package_snapshots s ON s.agent_id = p.agent_id
+      WHERE a.asset_id IS NOT NULL AND lower(p.name) = ANY($1::text[])
+      LIMIT $2`,
+    [packageNames, SNAPSHOT_LIMIT]
+  );
   const agents = await client.query(`SELECT asset_id, os, os_version, COALESCE(last_seen, created_at, NOW()) AS seen FROM edr_agents WHERE asset_id IS NOT NULL`);
   const date = (v: unknown) => (v instanceof Date ? v : new Date(String(v)));
   return {
     services: services.rows.map((r) => ({ ...r, seen: date(r.seen) })),
     containers: containers.rows.map((r) => ({ shipper_id: r.shipper_id, image: r.image, containers: Number(r.containers ?? 0), names: r.names ?? [], seen: date(r.seen) })),
     packages: packages.rows.map((r) => ({ ...r, first: date(r.first ?? r.seen), seen: date(r.seen) })),
+    sbom: (sbom?.rows ?? []).map((r) => ({ ...r, first: date(r.first ?? r.seen), seen: date(r.seen) })),
     agents: agents.rows.map((r) => ({ ...r, seen: date(r.seen) })),
   };
 }
 
 async function refreshSnapshots(client: RollupClient, index: AppIndex): Promise<number> {
-  const input = await readSnapshots(client);
+  const input = await readSnapshots(client, index.packageNames());
   const { rows, unmatched } = matchSnapshots(input, index);
   const list = rows.list();
   await inTransaction(client, async () => {
@@ -682,7 +705,7 @@ async function rebuildVulnLinks(client: RollupClient, apps: AppSignature[]): Pro
     );
     const product = await client.query(
       `WITH seen AS (
-         SELECT DISTINCT app_id, asset_id FROM application_location_assets WHERE loc_type <> 'client' AND source <> 'edr_package'
+         SELECT DISTINCT app_id, asset_id FROM application_location_assets WHERE loc_type <> 'client' AND source NOT IN ('edr_package', 'endpoint_sbom')
        )
        INSERT INTO application_vuln_links (app_id, asset_id, vulnerability_id, match, version)
        SELECT DISTINCT s.app_id, s.asset_id, av.vulnerability_id, 'product', ''

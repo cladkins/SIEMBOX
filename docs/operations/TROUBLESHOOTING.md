@@ -1548,15 +1548,21 @@ through it in order:
    endpoint agent that reports its software list: *Endpoints → Details*
    shows *Installed packages* and when they were last reported ("not
    reported": the agent predates it, or its collectors found nothing).
-3. **Does a signature match it?** Open the **Not identified** tab: the most
-   frequent program names, container images and user-agent products nothing
-   matches. If yours is there, no signature covers that name: click
-   **Suggest signature**, fill in the TODOs (name, vendor, category; add
-   more matchers and a test for each) and open the pull request in
-   [siembox-catalog](https://github.com/cladkins/siembox-catalog); its CI
-   validates it (`npm run validate-applications`). Once merged, SIEMBox picks
-   it up within five minutes (or at **Refresh now**). Logs already processed
-   are not re-matched; scan, container and endpoint evidence is, every run.
+3. **Does a signature match it?** Open the **Not identified** tab: what
+   nothing matches, by kind (log programs, parsers, container images,
+   installed packages, network services, user-agent products, DNS domains).
+   Operating-system packages and CDN domains are hidden: tick **Show system
+   packages & noise** if yours could be one. If it is there, no signature
+   covers it: **Create signature** (analysts and up) opens it pre-filled;
+   **Test against my evidence** shows what it would identify; save it and it
+   applies at once — evidence already collected included (the job looks back
+   over the last backfill days of logs for it; the status line shows the
+   progress). Then **Contribute** it to
+   [siembox-catalog](https://github.com/cladkins/siembox-catalog) so everyone
+   gets it (or use **Suggest** to open the draft there directly).
+   A new signature finds nothing in logs older than the backfill window
+   (*Settings → Application Monitoring*, 7 days by default; 0 turns the look
+   back off).
 4. **The status line says "catalog notice" or "signature problems".** Hover
    it: the catalog could not be reached (SIEMBox keeps the signatures it read
    last), or a signature regex was refused by the ReDoS gate and left out.

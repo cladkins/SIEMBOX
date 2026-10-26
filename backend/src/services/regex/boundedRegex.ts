@@ -22,6 +22,7 @@ import type { PortableParser, SelfTestResult } from '../parser/parserPortable';
 import type { RecommendationResult, SourceSample } from '../parser/parserRecommendations';
 import type { CandidateRule, RuleSourceSample, RuleRecommendation } from '../rules/detectionRecommendations';
 import type { CompatPairs, CompatSource } from '../sigma/sigmaCompat';
+import type { CheckContext, SignatureCheck } from '../applications/signatureCheck';
 
 /** Largest sample a caller may test a pattern on: the HTTP log-push message cap. */
 export const MAX_SAMPLE_BYTES = 64 * 1024;
@@ -110,6 +111,22 @@ export function sigmaMatchesBounded(sources: CompatSource[], work: CompatPairs[]
   return regexTestPool().run<Record<string, Record<string, number>>>(
     'sigmaMatches',
     { sources, work },
+    { timeoutMs: RECOMMENDATION_TIMEOUT_MS }
+  );
+}
+
+/**
+ * An application signature's checks (signatureCheck.checkSignature) in the
+ * test pool: the caller's document is compiled and its tests run there, never
+ * on the event loop. Its regexes should have passed the write-time gate first.
+ */
+export function checkSignatureBounded(doc: unknown, ctx: CheckContext): Promise<SignatureCheck> {
+  return regexTestPool().run<SignatureCheck>(
+    'checkSignature',
+    {
+      doc,
+      ctx: { ...ctx, parserNames: ctx.parserNames ? [...ctx.parserNames] : null, skipRegex: [...(ctx.skipRegex ?? [])] },
+    },
     { timeoutMs: RECOMMENDATION_TIMEOUT_MS }
   );
 }

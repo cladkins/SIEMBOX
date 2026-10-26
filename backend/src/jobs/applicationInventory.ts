@@ -8,7 +8,8 @@
  * Admin -> Background Jobs shows it as "Application inventory"; it reads
  * "disabled" while Settings -> Application Monitoring has it switched off
  * (the timer keeps ticking, so switching it back on needs no restart).
- * POST /api/applications/refresh runs it at once (runApplicationInventoryNow).
+ * POST /api/applications/refresh runs it at once (runApplicationInventoryNow);
+ * saving a local signature starts a run too (kickApplicationInventory).
  */
 import pool from '../config/database';
 import { logger } from '../utils/logger';
@@ -22,7 +23,7 @@ const STARTUP_DELAY_MS = 45_000;
 const NAME = 'Application inventory';
 const DESCRIPTION =
   'Matches log programs, parsers, nmap services, shipper containers, EDR findings, user agents and DNS queries against the ' +
-  "catalog's application signatures for Application Monitoring. Runs every two minutes, a few minutes behind ingestion.";
+  "catalog's application signatures and your local ones for Application Monitoring. Runs every two minutes, a few minutes behind ingestion.";
 
 let intervalId: NodeJS.Timeout | null = null;
 let startupTimer: NodeJS.Timeout | null = null;
@@ -80,6 +81,17 @@ export async function runApplicationInventoryNow(): Promise<InventoryRunResult |
   } finally {
     running = null;
   }
+}
+
+/**
+ * A saved local signature: run the rollup now (snapshot evidence matches on
+ * this run, the look back starts) instead of at the next tick. Only while
+ * the job is running (not in tests or one-off scripts); a run already going
+ * leaves it to the next tick.
+ */
+export function kickApplicationInventory(): void {
+  if (!intervalId || running) return;
+  void tickApplicationInventory();
 }
 
 export function startApplicationInventoryJob(): void {

@@ -7005,8 +7005,9 @@ findings, installed packages and OS, and the user agents and DNS queries in pars
 against the catalog's application signatures (`applications/<id>.app.yaml`;
 see the wiki's *Application Monitoring* page). A background job
 (`Application inventory` on *Admin → Background Jobs*) builds it every two
-minutes off the ingest path; these routes only read its tables. Every role
-may read; `POST /refresh` is analyst and up.
+minutes off the ingest path; these routes only read its tables (and the
+local signatures). Every role may read; `POST /refresh`, local signatures and
+the Not identified ignore list are analyst and up.
 
 Source keys: `syslog_program`, `parser`, `service_scan`, `container`,
 `edr_package` (a package with an open endpoint finding), `endpoint_sbom` (a
@@ -7071,12 +7072,154 @@ where the application was seen whose title or Nuclei template names it).
 
 ### GET /api/applications/unmatched
 
-The most frequent values no signature matched, per source (`syslog_program`,
-`container`, `user_agent` product), top 100 each (`limit` up to 500,
-`source` to pick one): `value`, `events`, `locations`, `first_seen`,
-`last_seen`, `sample_location`, `sample` (a whole user agent or image
-reference) and `suggest_url`, a GitHub "new file" link that opens a
-pre-filled `applications/<id>.app.yaml` in the catalog.
+What SIEMBox sees that no signature identifies, per kind: `syslog_program`
+(log program), `parser` (a parser that matched logs), `container` (image name),
+`package` (an endpoint's installed package, or an EDR finding's package,
+aggregated by name across agents), `service` (an nmap product such as
+`Apache httpd`, else the service name), `user_agent` (product token), `dns`
+(registrable domain). Query: `source` (one kind), `search` (value or sample),
+`limit` (per kind, default 100, up to 500), `noise=true` (also operating-system
+and library packages, CDN/telemetry domains, generic nmap services),
+`ignored=true` (also values an analyst ignored).
+
+```json
+{
+  "unmatched": [
+    {
+      "source": "package", "value": "tailscale", "events": 4, "locations": 4,
+      "first_seen": "...", "last_seen": "...", "sample_location": "12", "location_label": "nas01",
+      "sample": "tailscale 1.76.1", "detail": { "version": "1.76.1", "type": "deb" },
+      "noise": false, "ignored": false,
+      "draft": { "schema": "siembox.app/v1", "id": "tailscale", "name": "Tailscale", "...": "the editor's starting signature" },
+      "suggest_url": "https://github.com/cladkins/siembox-catalog/new/main?filename=applications%2Ftailscale.app.yaml&value=..."
+    }
+  ],
+  "counts": { "package": { "listed": 37, "noise": 812, "ignored": 2, "total": 851 }, "...": "one per kind" }
+}
+```
+
+`draft` is a starting signature for the editor (one matcher of the value's
+kind and a test from its sample; the category may be empty); `suggest_url`
+opens the same draft, with `TODO`s, as a new file in the catalog.
+
+### POST /api/applications/unmatched/ignore, /unmatched/unignore
+
+Analyst and up. `{ "source": "package", "value": "foo" }`: hide a value from
+the list ("not an application"), or show it again. Ignored values are still
+collected; `?ignored=true` lists them.
+
+### Local signatures
+
+Signatures written in SIEMBox, in the catalog's format (`siembox.app/v1`).
+They are used next to the catalog's set; a local id that is also a catalog id
+**overrides** the catalog's signature while it is enabled. Every role may
+read them and prepare a contribution; writing them, and the editor's checks
+(they run a regex the caller wrote), are analyst and up (a refusal is audited);
+the AI draft is admin-only. A signature is sent as `{ "yaml": "<text>" }` (or
+`{ "signature": { ... } }`), up to 64 KB.
+
+A save takes effect at once: it starts an inventory run, which matches the
+snapshot evidence (nmap services, containers, installed packages, endpoint
+findings and OS) on that run, drops the values it matches from the Not
+identified list, and **looks back** for it over the logs the job already
+processed (programs, parsers, user agents, DNS): the last
+`application_inventory_backfill_days` (7) days of `parsed_logs`, newest first,
+in the job's usual bounded batches, for just the new or changed signatures.
+A location it already had keeps its count; new locations get their history.
+A signature the catalog adds is looked back for the same way. With the
+backfill set to 0 days, no look back runs.
+
+#### GET /api/applications/signatures
+
+```json
+{
+  "signatures": [
+    { "id": "tailscale", "name": "Tailscale", "vendor": "Tailscale", "category": "vpn", "enabled": true,
+      "origin": "local", "catalog_status": "not_in_catalog", "valid": true, "errors": [],
+      "created_by": "alice", "updated_by": "alice", "created_at": "...", "updated_at": "..." }
+  ],
+  "catalog": { "count": 101, "source": "catalog", "repo": "cladkins/siembox-catalog" },
+  "ai_available": true,
+  "rescan": { "apps": ["tailscale"], "pending": [], "progress": 0.4, "started_at": "..." }
+}
+```
+
+`origin`: `local`, or `override` (the catalog has the id). `catalog_status`:
+`not_in_catalog`, `same` (the catalog has this exact signature: the local copy
+can go), `differs`. `rescan`: the look back running now (`progress` 0-1) and
+the ids queued for the next one.
+
+#### GET /api/applications/signatures/:id
+
+A local signature (`definition`, `yaml` as saved, `enabled`, `origin`,
+`catalog_status`, `catalog_yaml`), or a catalog one read-only (`origin:
+"catalog"`, to copy or override). `404` otherwise.
+
+#### POST /api/applications/signatures/validate
+
+Analyst and up. Checks a signature without saving it: `{ "yaml": "...",
+"id": "<when editing>" }` →
+
+```json
+{
+  "ok": true, "ready": false,
+  "errors": [], "contribute_errors": ["tests: add at least one matching test for match.dns"],
+  "warnings": ["supersedes \"x\", which is not a signature in use"],
+  "signature": { "...": "normalized" }, "yaml": "<catalog-ready YAML>",
+  "tests": { "total": 2, "failures": [] },
+  "catalog": { "exists": false, "status": "not_in_catalog", "source": "catalog" }
+}
+```
+
+`ok` (can be saved): the format (`validate-applications`' validator), every
+regex through the write-time ReDoS gate, its tests against the whole set in
+use, and no matcher value another signature claims. `ready` (can be
+contributed): also the catalog CI's strict checks (no unknown keys, a matching
+test for every matcher kind), listed in `contribute_errors`.
+
+#### POST /api/applications/signatures/test
+
+Analyst and up. What the signature would identify in the evidence SIEMBox has
+now, before it is saved: the Not identified list, the log values other
+signatures identify, and the current nmap services, containers, endpoint OS,
+installed packages and EDR findings (never `raw_logs`/`parsed_logs`).
+`{ "check": { ...as /validate }, "result": { "hits": [{ "kind": "package",
+"value": "tailscale 1.76.1 (deb)", "version": "1.76.1", "location": "12",
+"location_label": "nas01", "now": "snapshot", "identified_as": [] }], "counts":
+{ "package": 4 }, "total": 4, "locations": 4, "versions": ["1.76.1"],
+"resolves_unmatched": 1, "truncated": false } }`. `now`: `not_identified`
+(it leaves that list), `identified` (another signature has it too:
+`identified_as`), `snapshot` (new). `422` when the signature is not valid or a
+regex was refused.
+
+#### POST /api/applications/signatures/ai-draft
+
+Admin only (as the parser and detection builders). `{ "items": [{ "source":
+"package", "value": "tailscale", "sample": "...", "detail": {...} }], "hints":
+"..." }` (up to 10 items): the AI Builder's model (*Settings → AI*, with the
+*Builder output length* budget) drafts a signature, checked as `/validate`
+does; a failing first draft is sent back once with its errors. `{ "ok",
+"signature", "check", "attempts", "error"?, "truncated"? }`. Nothing is
+saved. `409` when no AI provider is configured.
+
+#### POST /api/applications/signatures, PUT/DELETE /api/applications/signatures/:id
+
+Analyst and up. `POST` saves a new one (`201 { "signature", "check",
+"catalog" }`; `409` if the id is taken locally, `422` with the check when it
+is not valid). `PUT` takes `{ "yaml" }` and/or `{ "enabled": false }`; the id
+cannot change. `DELETE` removes it: a local-only signature takes its inventory
+rows with it; an override hands the id back to the catalog's signature (looked
+back for again).
+
+#### GET /api/applications/signatures/:id/contribute
+
+Every role (as for parsers). Runs the catalog CI's checks on a local signature
+and returns `{ "path": "applications/<id>.app.yaml", "content": "<YAML>",
+"valid", "ready", "errors", "warnings", "tests", "exists_in_catalog",
+"catalog_status", "contribute_url" }`. `contribute_url` (only when `ready`) is
+GitHub's pre-filled "propose new file" page you finish in your own browser;
+SIEMBox never opens the pull request or holds a credential. A warning says
+when the catalog already has the id.
 
 ### POST /api/applications/refresh
 

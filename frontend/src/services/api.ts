@@ -303,7 +303,21 @@ export const api = {
   // Application Monitoring (software inventory from logs, scans, containers, endpoints)
   getApplications: (params: Record<string, string> = {}) => apiClient.get('/applications', { params, ...INLINE }),
   getApplication: (id: string) => apiClient.get(`/applications/${encodeURIComponent(id)}`, INLINE),
-  getApplicationsUnmatched: (source?: string) => apiClient.get('/applications/unmatched', { params: source ? { source } : {}, ...INLINE }),
+  getApplicationsUnmatched: (params: Record<string, string> = {}) => apiClient.get('/applications/unmatched', { params, ...INLINE }),
+  ignoreApplicationUnmatched: (source: string, value: string) => apiClient.post('/applications/unmatched/ignore', { source, value }, INLINE),
+  unignoreApplicationUnmatched: (source: string, value: string) => apiClient.post('/applications/unmatched/unignore', { source, value }, INLINE),
+  // Local application signatures (the editor, Contribute, the AI draft)
+  getApplicationSignatures: () => apiClient.get('/applications/signatures', INLINE),
+  getApplicationSignature: (id: string) => apiClient.get(`/applications/signatures/${encodeURIComponent(id)}`, INLINE),
+  validateApplicationSignature: (yaml: string, id?: string) => apiClient.post('/applications/signatures/validate', { yaml, id }, { ...INLINE, timeout: 60000 }),
+  testApplicationSignature: (yaml: string) => apiClient.post('/applications/signatures/test', { yaml }, { ...INLINE, timeout: 60000 }),
+  createApplicationSignature: (yaml: string) => apiClient.post('/applications/signatures', { yaml }, { ...INLINE, timeout: 60000 }),
+  updateApplicationSignature: (id: string, body: { yaml?: string; enabled?: boolean }) =>
+    apiClient.put(`/applications/signatures/${encodeURIComponent(id)}`, body, { ...INLINE, timeout: 60000 }),
+  deleteApplicationSignature: (id: string) => apiClient.delete(`/applications/signatures/${encodeURIComponent(id)}`, INLINE),
+  getApplicationSignatureContribution: (id: string) => apiClient.get(`/applications/signatures/${encodeURIComponent(id)}/contribute`, { ...INLINE, timeout: 60000 }),
+  draftApplicationSignatureAI: (items: Array<{ source: string; value: string; sample?: string | null; detail?: unknown }>, hints?: string) =>
+    apiClient.post('/applications/signatures/ai-draft', { items, hints }, { ...INLINE, timeout: AI_CALL_TIMEOUT_MS }),
   getApplicationVulnerabilities: (params: Record<string, string> = {}) => apiClient.get('/applications/vulnerabilities', { params, ...INLINE }),
   refreshApplications: () => apiClient.post('/applications/refresh', {}, { ...INLINE, timeout: 120000 }),
   getApplicationSettings: () => apiClient.get('/settings/applications', INLINE),

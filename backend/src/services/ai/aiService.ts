@@ -850,7 +850,7 @@ export async function callProviderChatDetailed(
 }
 
 /** Single-turn wrapper (system + user) — preserves every existing caller. */
-async function callProvider(
+export async function callProvider(
   cfg: AiConfig,
   system: string,
   user: string,

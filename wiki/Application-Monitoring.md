@@ -45,13 +45,73 @@ address and host name, so the detail drawer links to *Assets* where it can.
   show up in clients' DNS queries or user agents, with no host, container,
   scan or endpoint evidence of yours (a SaaS your users rely on, a
   remote-access tool such as AnyDesk).
-- **Not identified** — the most frequent program names, container images and
-  user-agent products no signature matches, each with **Suggest signature**,
-  which opens a pre-filled signature file in the catalog.
+- **Not identified** — what SIEMBox sees that no signature identifies, most
+  frequent first, by kind: log programs, parsers that matched logs, container
+  images, **installed packages** (endpoint agents' software lists and EDR
+  findings, counted across endpoints), **network services** (the nmap product,
+  e.g. *Apache httpd*, else the service name), user-agent products and **DNS
+  domains** (the registrable domain clients queried). Filter by kind, search,
+  and show or hide **system packages & noise** (operating-system and library
+  packages, CDN and telemetry domains, generic nmap services: hidden by
+  default) and **ignored** values. Each row has **Create signature** (opens
+  the editor pre-filled for that value; select several rows to make one
+  signature of them), **Ignore** ("not an application", analysts and up) and
+  **Suggest** (the same draft as a new file in the catalog).
+- **Signatures** — your local signatures (below), with their catalog status.
 
 Filters: category, evidence source, host (name, IP or shipper) and search.
 Every role can read the page; **Refresh now** (re-read the catalog and run the
 job) is for analysts and up.
+
+## Writing a signature here
+
+Like parsers, signatures can be written in SIEMBox and contributed to the
+catalog. **Create signature** (the page header, or a Not identified row) opens
+the editor, analysts and up:
+
+- a **form** (name, id, vendor, category, description, website, CPE, one
+  matcher list per evidence kind, tests) or the raw **YAML** — the catalog's
+  own `applications/<id>.app.yaml` format; switch between them at any time;
+- **live checks** with the validator the catalog's CI runs: errors stop a
+  save (a malformed field, a regex the ReDoS gate refuses, a test that fails, a
+  value another signature already claims); *needed before contributing* lists
+  what the catalog additionally requires (a matching test for every matcher
+  kind, no unknown keys);
+- **Test against my evidence** — what the signature would identify now,
+  before you save it: the Not identified values it takes, the log values other
+  signatures already identify, and the current nmap services, containers,
+  installed packages, EDR findings and endpoint OS, with the locations and the
+  versions it reads;
+- **Draft with AI** (admins, when *Settings → AI* has a provider) — the AI
+  Builder's model proposes the signature from the selected values; its draft
+  goes through the same checks (a failing one is sent back once with its
+  errors) and opens in the editor for you to review. Nothing is saved until
+  you save it.
+
+A saved signature **takes effect at once**: saving starts an inventory run.
+Scan, container, installed-package, finding and OS evidence is matched on that
+run; the values it matches leave the Not identified list; and because the
+job's cursor has already passed your existing logs, it **looks back** for the
+new signature over the last *backfill* days of logs (7 by default, *Settings →
+Application Monitoring*), newest first, in the job's usual small batches
+(the status line shows *Looking back over older logs… 40%*). A location the
+signature already had keeps its count; new locations get their history. A
+signature the catalog adds is looked back for the same way. With the backfill
+set to 0, only new logs are matched.
+
+A local signature whose id is a catalog id **overrides** the catalog's
+(*local override*; **Override signature** in an application's detail drawer
+starts from the catalog's). The **Signatures** tab says for each one whether
+it is *Not in the catalog*, *Differs from catalog* or *Same as catalog* (then
+the local copy can be deleted). Deleting an override hands the id back to the
+catalog's signature; switching one off keeps it but stops using it.
+
+**Contribute** checks a local signature with the catalog CI's rules and
+opens GitHub's pre-filled *propose new file* page for
+`applications/<id>.app.yaml` in your browser, signed in as you (or **Copy
+YAML**); SIEMBox never holds a GitHub credential. It warns when the catalog
+already has the id. Once the pull request is merged, the catalog's copy
+arrives within five minutes and the tab shows *Same as catalog*.
 
 ## Signatures
 
@@ -105,7 +165,8 @@ tests:
 Every regex is plain JavaScript, at most one capture group (the version), and
 must pass the same ReDoS check parsers and detection rules do. Validate with
 `npm run validate-applications` (see the catalog's CONTRIBUTING); the catalog's
-CI runs it on every pull request.
+CI runs it on every pull request. The editor on this page runs the same checks
+as you type (see *Writing a signature here*).
 
 SIEMBox reads the catalog's signatures at most every five minutes. If the
 catalog cannot be reached it keeps using the last set it read (also stored in

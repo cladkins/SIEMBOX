@@ -16,6 +16,7 @@ import { runSelfTests } from '../parser/parserPortable';
 import { recommendParsers } from '../parser/parserRecommendations';
 import { recommendRules } from '../rules/detectionRecommendations';
 import { countSigmaMatches } from '../sigma/sigmaCompat';
+import { checkSignature } from '../applications/signatureCheck';
 import { analysisFlags, needsFuzzPass, recheckParams, verdictFromDiagnostics, type RegexVerdict } from '../parser/redos';
 
 type Handler = (payload: any) => unknown | Promise<unknown>;
@@ -58,6 +59,13 @@ const handlers: Record<string, Handler> = {
   recommendParsers: (p) => recommendParsers(p.samples, p.candidates),
   recommendRules: (p) => recommendRules(p.sources, p.candidates),
   sigmaMatches: (p) => countSigmaMatches(p.sources, p.work),
+  // An application signature a caller wrote: validated, compiled and tested here (Sets travel as arrays).
+  checkSignature: (p) =>
+    checkSignature(p.doc, {
+      ...p.ctx,
+      parserNames: p.ctx.parserNames ? new Set(p.ctx.parserNames) : null,
+      skipRegex: new Set(p.ctx.skipRegex ?? []),
+    }),
   scan,
 };
 

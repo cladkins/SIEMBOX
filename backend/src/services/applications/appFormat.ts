@@ -192,6 +192,11 @@ export function domainMatcherProblem(entry: string): string | null {
  * compiles it without any), at most one capture group (the version), no named
  * groups or backreferences, and it must not match the empty string (it would
  * match every value).
+ *
+ * It compiles the pattern and runs it only on the empty string. A signature
+ * an API caller sends is validated in the regex test pool's worker
+ * (signatureCheck.checkSignature via boundedRegex.checkSignatureBounded), after
+ * its regexes passed the write-time ReDoS gate, never on the event loop.
  */
 export function signatureRegexProblem(source: string): string | null {
   if (source.length === 0 || source.length > APP_LIMITS.regex) return `must be 1 to ${APP_LIMITS.regex} characters`;

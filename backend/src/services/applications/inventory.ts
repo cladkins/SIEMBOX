@@ -10,7 +10,9 @@
  */
 import { query } from '../../config/database';
 import { catalogNewFileUrl, catalogRepoRef } from '../parser/catalogService';
-import { APP_CATEGORIES, APP_FILE_SUFFIX, APP_SCHEMA, type AppSignature } from './appFormat';
+import * as yaml from '../../utils/yaml';
+import { APP_CATEGORIES, APP_FILE_SUFFIX, type AppSignature } from './appFormat';
+import { draftForGap, isNoise, isUnmatchedKind, UNMATCHED_KINDS } from './gaps';
 import { NETWORK_SOURCES, SOURCES, readInventorySettings } from './rollup';
 
 /** Version order: numeric runs compare as numbers, the rest as text ("1.10" > "1.9", "8.9p1" > "8.4p1"). Pure. */
@@ -366,65 +368,103 @@ export interface UnmatchedItem {
   first_seen: string;
   last_seen: string;
   sample_location: string | null;
+  /** The example location in words (an asset's host name, a shipper's name), when SIEMBox knows it. */
+  location_label: string | null;
   sample: string | null;
+  detail: Record<string, unknown> | null;
+  /** Operating-system package, CDN domain, generic service: hidden unless asked for. */
+  noise: boolean;
+  /** An analyst marked it "not an application". */
+  ignored: boolean;
+  /** The signature the editor opens for it (catalog format; the category may still be empty). */
+  draft: Record<string, unknown>;
+  /** The catalog's new-file page, pre-filled with the draft. */
   suggest_url: string;
 }
 
-/** A starting signature for a value nothing matched, for the catalog's new-file page. Pure. */
-export function suggestedSignature(source: string, value: string, sample: string | null): { path: string; yaml: string } {
-  const id = value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60) || 'new-application';
-  const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
-  const esc = value.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-  let match: string;
-  let test: string;
-  if (source === 'syslog_program') {
-    match = `  syslog_program: [${q(value)}]`;
-    test = `  - source: syslog_program\n    input: ${q(value)}`;
-  } else if (source === 'container') {
-    match = `  container_image: [${q(value)}]`;
-    test = `  - source: container_image\n    input: ${q(sample ?? value)}`;
-  } else {
-    match = `  user_agent:\n    - ${q(`\\b${esc}/(\\d+(?:\\.\\d+)*)`)}`;
-    test = `  - source: user_agent\n    input: ${q(sample ?? `${value}/1.0`)}`;
-  }
-  const yaml = [
-    `schema: ${APP_SCHEMA}`,
-    `id: ${id}`,
-    `name: ${q(value)}`,
-    `vendor: ${q('TODO')}`,
-    `category: TODO`,
-    `description: ${q('TODO: what it is.')}`,
-    `match:`,
-    match,
-    `tests:`,
-    test,
-    '',
-  ].join('\n');
-  return { path: `applications/${id}${APP_FILE_SUFFIX}`, yaml };
+/** A starting signature for a value nothing matched, for the catalog's new-file page (TODO where the author must fill in). Pure. */
+export function suggestedSignature(source: string, value: string, sample: string | null, detail: Record<string, unknown> | null = null): { path: string; yaml: string } {
+  const draft = draftForGap({ source, value, sample, detail });
+  const doc: Record<string, unknown> = {
+    ...draft,
+    vendor: draft.vendor || 'TODO',
+    category: draft.category || 'TODO',
+    description: draft.description || 'TODO: what it is.',
+  };
+  return { path: `applications/${String(draft.id)}${APP_FILE_SUFFIX}`, yaml: yaml.dump(doc, { lineWidth: -1, noRefs: true, quotingType: "'", flowLevel: 2 }) };
 }
 
 export const UNMATCHED_LIMIT = 100;
+/** Rows the list reads at most (the table is capped per kind by the rollup). */
+const UNMATCHED_READ = 5000;
 
-export async function listUnmatched(source?: string, limit = UNMATCHED_LIMIT): Promise<UnmatchedItem[]> {
-  const params: unknown[] = [Math.min(Math.max(1, limit), 500)];
-  let where = '';
-  if (source && ['syslog_program', 'container', 'user_agent'].includes(source)) {
+export interface UnmatchedOptions {
+  search?: string;
+  /** Include system packages, CDN domains, generic services. */
+  noise?: boolean;
+  /** Include the values an analyst ignored. */
+  ignored?: boolean;
+}
+
+export interface UnmatchedCounts {
+  /** Per kind: listed (with the current noise/ignored choice), noise, ignored, all. */
+  [kind: string]: { listed: number; noise: number; ignored: number; total: number };
+}
+
+async function readUnmatched(source?: string, search?: string): Promise<any[]> {
+  const params: unknown[] = [UNMATCHED_READ];
+  const where: string[] = [];
+  if (source && isUnmatchedKind(source)) {
     params.push(source);
-    where = `WHERE source = $2`;
+    where.push(`u.source = $${params.length}`);
+  }
+  if (search && search.trim()) {
+    params.push(`%${search.trim().slice(0, 100).replace(/[\\%_]/g, '\\$&')}%`);
+    where.push(`(u.value ILIKE $${params.length} OR u.sample ILIKE $${params.length})`);
   }
   const { rows } = await query(
-    `SELECT * FROM (
-       SELECT u.*, row_number() OVER (PARTITION BY source ORDER BY events DESC, last_seen DESC) AS rank FROM application_unmatched u ${where}
-     ) r WHERE rank <= $1 ORDER BY source, events DESC`,
+    `SELECT u.*, (ig.value IS NOT NULL) AS ignored,
+            CASE WHEN u.source IN ('package', 'service') THEN COALESCE(a.hostname, host(a.ip_address))
+                 WHEN u.source = 'container' THEN COALESCE(ls.hostname, ls.name) END AS location_label
+       FROM application_unmatched u
+       LEFT JOIN application_unmatched_ignores ig ON ig.source = u.source AND ig.value = u.value
+       LEFT JOIN assets a ON u.source IN ('package', 'service') AND a.id::text = u.sample_location
+       LEFT JOIN log_shippers ls ON u.source = 'container' AND ls.id::text = u.sample_location
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY u.source, u.events DESC, u.last_seen DESC
+      LIMIT $1`,
     params
   );
-  return rows.map((r) => {
-    const s = suggestedSignature(r.source, r.value, r.sample);
-    return {
+  return rows;
+}
+
+/**
+ * The Not identified list: per kind, the most frequent values no signature
+ * matches (`limit` per kind), each with its draft signature and catalog link.
+ * System packages, CDN domains and generic services (noise) and ignored values
+ * are left out unless asked for; `counts` says how many each kind has.
+ */
+export async function listUnmatchedWithCounts(
+  source?: string,
+  limit = UNMATCHED_LIMIT,
+  opts: UnmatchedOptions = {}
+): Promise<{ unmatched: UnmatchedItem[]; counts: UnmatchedCounts }> {
+  const per = Math.min(Math.max(1, limit), 500);
+  const rows = await readUnmatched(source, opts.search);
+  const counts: UnmatchedCounts = {};
+  const out: UnmatchedItem[] = [];
+  for (const k of UNMATCHED_KINDS) counts[k] = { listed: 0, noise: 0, ignored: 0, total: 0 };
+  for (const r of rows) {
+    const c = (counts[r.source] ??= { listed: 0, noise: 0, ignored: 0, total: 0 });
+    const noise = isNoise(r.source, r.value, r.detail);
+    c.total++;
+    if (noise) c.noise++;
+    if (r.ignored) c.ignored++;
+    if ((noise && !opts.noise) || (r.ignored && !opts.ignored)) continue;
+    c.listed++;
+    if (c.listed > per) continue;
+    const s = suggestedSignature(r.source, r.value, r.sample, r.detail);
+    out.push({
       source: r.source,
       value: r.value,
       events: Number(r.events),
@@ -432,8 +472,19 @@ export async function listUnmatched(source?: string, limit = UNMATCHED_LIMIT): P
       first_seen: iso(r.first_seen),
       last_seen: iso(r.last_seen),
       sample_location: r.sample_location,
+      location_label: r.location_label ?? null,
       sample: r.sample,
+      detail: r.detail ?? null,
+      noise,
+      ignored: r.ignored === true,
+      draft: draftForGap({ source: r.source, value: r.value, sample: r.sample, detail: r.detail }),
       suggest_url: catalogNewFileUrl(s.path, s.yaml),
-    };
-  });
+    });
+  }
+  out.sort((a, b) => a.source.localeCompare(b.source) || b.events - a.events);
+  return { unmatched: out, counts };
+}
+
+export async function listUnmatched(source?: string, limit = UNMATCHED_LIMIT, opts: UnmatchedOptions = {}): Promise<UnmatchedItem[]> {
+  return (await listUnmatchedWithCounts(source, limit, opts)).unmatched;
 }

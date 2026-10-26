@@ -1,0 +1,22 @@
+schema: siembox.app/v1
+id: zerotier
+name: ZeroTier
+vendor: ZeroTier
+category: vpn
+description: Peer-to-peer virtual network.
+website: https://www.zerotier.com
+match:
+  syslog_program: [zerotier-one]
+  container_image: [zerotier/zerotier]
+  package: [zerotier-one]
+  dns: [zerotier.com]
+tests:
+  - source: syslog_program
+    input: zerotier-one
+  - source: container_image
+    input: 'zerotier/zerotier:1.12.2'
+    version: '1.12.2'
+  - source: package
+    input: zerotier-one
+  - source: dns
+    input: my.zerotier.com

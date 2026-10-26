@@ -1,0 +1,18 @@
+schema: siembox.app/v1
+id: prowlarr
+name: Prowlarr
+vendor: Prowlarr
+category: media-server
+description: 'Indexer manager for the *arr applications.'
+website: https://prowlarr.com
+match:
+  container_image: [linuxserver/prowlarr, '*/linuxserver/prowlarr', '*/hotio/prowlarr']
+  user_agent:
+    - '^Prowlarr/(\d+(?:\.\d+)+)'
+tests:
+  - source: container_image
+    input: 'linuxserver/prowlarr:1.11.4'
+    version: '1.11.4'
+  - source: user_agent
+    input: 'Prowlarr/1.11.4.4173 (alpine 3.18.5)'
+    version: '1.11.4.4173'

@@ -28,6 +28,8 @@ import {
 } from '../services/ai/aiBudgets';
 import { logger } from '../utils/logger';
 import { logSourceStatus, readLogEdgeSettings, readLogEdgeState } from '../services/graph/logEdgeRollup';
+import { readInventorySettings } from '../services/applications/rollup';
+import { readInventoryStatus } from '../services/applications/inventory';
 import {
   completeOnboarding,
   completeOnboardingIfNeverRecorded,
@@ -389,6 +391,57 @@ router.put('/context-graph', authorize('admin'), async (req: Request, res: Respo
     );
   }
   res.json(await contextGraphSettings());
+});
+
+// Application Monitoring: the inventory rollup (jobs/applicationInventory.ts).
+// The switch takes effect at the job's next run (within two minutes);
+// backfill_days only matters before the rollup's first run (the upgrade).
+const APPLICATION_FIELDS = {
+  retention_days: { key: 'application_inventory_retention_days', min: 1, max: 3650 },
+  backfill_days: { key: 'application_inventory_backfill_days', min: 0, max: 90 },
+} as const;
+
+async function applicationSettings() {
+  const settings = await readInventorySettings((sql, params) => query(sql, params as unknown[]));
+  const size = await query(
+    `SELECT pg_total_relation_size('application_inventory') + pg_total_relation_size('application_unmatched') AS bytes,
+            (SELECT count(*) FROM application_inventory)::int AS rows`
+  );
+  return {
+    inventory: { enabled: settings.enabled, retention_days: settings.retentionDays, backfill_days: settings.backfillDays },
+    status: { ...(await readInventoryStatus()), rows: Number(size.rows[0]?.rows ?? 0), bytes: Number(size.rows[0]?.bytes ?? 0) },
+  };
+}
+
+router.get('/applications', authorize('admin'), async (_req: Request, res: Response) => {
+  res.json(await applicationSettings());
+});
+
+router.put('/applications', authorize('admin'), async (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as { inventory?: Record<string, unknown> };
+  const input = body.inventory;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ApiError(400, 'inventory must be an object');
+  const writes: Array<[string, string]> = [];
+  if (input.enabled !== undefined) {
+    if (typeof input.enabled !== 'boolean') throw new ApiError(400, 'inventory.enabled must be true or false');
+    writes.push(['application_inventory_enabled', String(input.enabled)]);
+  }
+  for (const [field, spec] of Object.entries(APPLICATION_FIELDS)) {
+    const value = input[field];
+    if (value === undefined) continue;
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < spec.min || value > spec.max) {
+      throw new ApiError(400, `inventory.${field} must be a whole number from ${spec.min} to ${spec.max}`);
+    }
+    writes.push([spec.key, String(value)]);
+  }
+  for (const [key, value] of writes) {
+    await query(
+      `INSERT INTO system_settings (key, value) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+      [key, value]
+    );
+  }
+  res.json(await applicationSettings());
 });
 
 // Manual cleanup trigger

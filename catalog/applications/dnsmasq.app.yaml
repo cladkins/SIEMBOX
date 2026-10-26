@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: dnsmasq
+name: dnsmasq
+vendor: Thekelleys
+category: dns
+description: Lightweight DNS forwarder and DHCP server.
+website: https://thekelleys.org.uk/dnsmasq/doc.html
+cpe: { vendor: thekelleys, product: dnsmasq }
+match:
+  syslog_program: [dnsmasq, dnsmasq-dhcp]
+  package: [dnsmasq, dnsmasq-base]
+tests:
+  - source: syslog_program
+    input: dnsmasq
+  - source: package
+    input: dnsmasq-base

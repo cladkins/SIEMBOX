@@ -1,0 +1,20 @@
+schema: siembox.app/v1
+id: gitea
+name: Gitea
+vendor: Gitea
+category: dev-tools
+description: Self-hosted Git service.
+website: https://about.gitea.com
+cpe: { vendor: gitea, product: gitea }
+match:
+  syslog_program: [gitea]
+  container_image: [gitea/gitea]
+  package: [gitea]
+tests:
+  - source: syslog_program
+    input: gitea
+  - source: container_image
+    input: 'gitea/gitea:1.21.4-rootless'
+    version: '1.21.4'
+  - source: package
+    input: gitea

@@ -1,0 +1,23 @@
+schema: siembox.app/v1
+id: caddy
+name: Caddy
+vendor: Caddy
+category: web-server
+description: Web server with automatic HTTPS.
+website: https://caddyserver.com
+cpe: { vendor: caddyserver, product: caddy }
+match:
+  syslog_program: [caddy]
+  parser: [caddy-access]
+  container_image: [caddy, lucaslorentz/caddy-docker-proxy]
+  package: [caddy]
+tests:
+  - source: syslog_program
+    input: caddy
+  - source: parser
+    input: caddy-access
+  - source: container_image
+    input: 'caddy:2.7.6-alpine'
+    version: '2.7.6'
+  - source: package
+    input: caddy

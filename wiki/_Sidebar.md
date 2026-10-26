@@ -14,6 +14,7 @@
 **Security features**
 - [Threat Intel](Threat-Intel)
 - [Vulnerability & Container Scanning](Vulnerability-and-Container-Scanning)
+- [Application Monitoring](Application-Monitoring)
 - [SIEMBOX Endpoint](SIEMBOX-Endpoint)
 - [AI Security Analyst](AI-Security-Analyst)
 

@@ -1,0 +1,22 @@
+schema: siembox.app/v1
+id: syncthing
+name: Syncthing
+vendor: Syncthing
+category: file-sharing
+description: Continuous peer-to-peer file synchronization.
+website: https://syncthing.net
+match:
+  syslog_program: [syncthing]
+  container_image: [syncthing/syncthing, linuxserver/syncthing, '*/linuxserver/syncthing']
+  package: [syncthing]
+  dns: [syncthing.net]
+tests:
+  - source: syslog_program
+    input: syncthing
+  - source: container_image
+    input: 'syncthing/syncthing:1.27.2'
+    version: '1.27.2'
+  - source: package
+    input: syncthing
+  - source: dns
+    input: relays.syncthing.net

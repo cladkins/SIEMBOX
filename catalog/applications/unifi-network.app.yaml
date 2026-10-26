@@ -1,0 +1,26 @@
+schema: siembox.app/v1
+id: unifi-network
+name: UniFi Network
+vendor: Ubiquiti
+category: network
+description: 'UniFi gateways, access points and the Network application.'
+website: https://ui.com
+cpe: { vendor: ui, product: unifi_network_application }
+match:
+  syslog_program: [stahtd, mcad, ubios-udapi-server]
+  parser: [ubiquiti-unifi-cef-audit, ubiquiti-unifi-client-devices, ubiquiti-unifi-ids-ips, garp-ui-send-frame]
+  container_image: [jacobalberty/unifi, linuxserver/unifi-network-application, '*/linuxserver/unifi-network-application', linuxserver/unifi-controller, '*/linuxserver/unifi-controller']
+  dns: [ui.com]
+tests:
+  - source: syslog_program
+    input: stahtd
+  - source: parser
+    input: ubiquiti-unifi-ids-ips
+  - source: container_image
+    input: 'lscr.io/linuxserver/unifi-network-application:8.0.28'
+    version: '8.0.28'
+  - source: dns
+    input: fw-update.ubnt.com
+    match: false
+  - source: dns
+    input: config.ui.com

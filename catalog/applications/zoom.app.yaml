@@ -1,0 +1,14 @@
+schema: siembox.app/v1
+id: zoom
+name: Zoom
+vendor: Zoom Video Communications
+category: messaging
+description: Video meetings.
+website: https://zoom.us
+match:
+  dns: [zoom.us, zoomgov.com]
+tests:
+  - source: dns
+    input: us04web.zoom.us
+  - source: dns
+    input: zoom.us

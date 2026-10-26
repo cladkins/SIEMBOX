@@ -1,0 +1,28 @@
+schema: siembox.app/v1
+id: grafana
+name: Grafana
+vendor: Grafana Labs
+category: monitoring
+description: Dashboards and observability.
+website: https://grafana.com
+cpe: { vendor: grafana, product: grafana }
+match:
+  syslog_program: [grafana, grafana-server]
+  container_image: [grafana/grafana, grafana/grafana-oss, grafana/grafana-enterprise, bitnami/grafana]
+  package: [grafana, grafana-enterprise]
+  user_agent:
+    - '^Grafana/(\d+(?:\.\d+)+)'
+  dns: [grafana.com, grafana.net]
+tests:
+  - source: syslog_program
+    input: grafana-server
+  - source: container_image
+    input: 'grafana/grafana-oss:10.2.3'
+    version: '10.2.3'
+  - source: package
+    input: grafana
+  - source: user_agent
+    input: Grafana/10.2.3
+    version: '10.2.3'
+  - source: dns
+    input: grafana.com

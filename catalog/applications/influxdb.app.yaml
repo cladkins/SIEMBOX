@@ -1,0 +1,20 @@
+schema: siembox.app/v1
+id: influxdb
+name: InfluxDB
+vendor: InfluxData
+category: database
+description: Time-series database.
+website: https://www.influxdata.com
+cpe: { vendor: influxdata, product: influxdb }
+match:
+  syslog_program: [influxd]
+  container_image: [influxdb, bitnami/influxdb]
+  package: [influxdb, influxdb2]
+tests:
+  - source: syslog_program
+    input: influxd
+  - source: container_image
+    input: 'influxdb:2.7.5'
+    version: '2.7.5'
+  - source: package
+    input: influxdb2

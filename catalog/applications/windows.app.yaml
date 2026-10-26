@@ -1,0 +1,23 @@
+schema: siembox.app/v1
+id: windows
+name: Windows
+vendor: Microsoft
+category: operating-system
+description: 'Operating system. From a browser user agent the version is the NT version (Windows 10 and 11 both say 10.0).'
+website: https://www.microsoft.com/windows
+cpe: { vendor: microsoft, product: windows }
+match:
+  user_agent:
+    - '\(Windows NT (\d+\.\d+)'
+  dns: [windowsupdate.com]
+  os:
+    family: windows
+tests:
+  - source: os
+    input: { family: windows, pretty_name: windows }
+    version: null
+  - source: user_agent
+    input: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    version: '10.0'
+  - source: dns
+    input: download.windowsupdate.com

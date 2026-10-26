@@ -1,0 +1,23 @@
+schema: siembox.app/v1
+id: fail2ban
+name: Fail2ban
+vendor: Fail2ban
+category: security
+description: Bans IPs after repeated failures.
+website: https://github.com/fail2ban/fail2ban
+cpe: { vendor: fail2ban, product: fail2ban }
+match:
+  syslog_program: [fail2ban, fail2ban-server, fail2ban.actions]
+  parser: [fail2ban]
+  container_image: [crazymax/fail2ban, linuxserver/fail2ban, '*/linuxserver/fail2ban']
+  package: [fail2ban]
+tests:
+  - source: syslog_program
+    input: fail2ban-server
+  - source: parser
+    input: fail2ban
+  - source: container_image
+    input: 'crazymax/fail2ban:1.0.2'
+    version: '1.0.2'
+  - source: package
+    input: fail2ban

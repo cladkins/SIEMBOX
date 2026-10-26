@@ -1,0 +1,17 @@
+schema: siembox.app/v1
+id: google-drive
+name: Google Drive
+vendor: Google
+category: file-sharing
+description: Cloud file storage.
+website: https://drive.google.com
+match:
+  dns: [drive.google.com, drive.usercontent.google.com, googledrive.com]
+tests:
+  - source: dns
+    input: drive.google.com
+  - source: dns
+    input: drive.usercontent.google.com
+  - source: dns
+    input: www.google.com
+    match: false

@@ -1,0 +1,23 @@
+schema: siembox.app/v1
+id: macos
+name: macOS
+vendor: Apple
+category: operating-system
+description: Operating system. Browsers freeze the version in their user agent at 10_15_7.
+website: https://www.apple.com/macos/
+cpe: { vendor: apple, product: macos }
+match:
+  user_agent:
+    - '\bMac OS X (\d+[_.]\d+(?:[_.]\d+)?)'
+  os:
+    family: darwin
+tests:
+  - source: os
+    input: { family: darwin, pretty_name: darwin }
+    version: null
+  - source: user_agent
+    input: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
+    version: '10_15_7'
+  - source: user_agent
+    input: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1'
+    match: false

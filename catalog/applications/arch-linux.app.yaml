@@ -1,0 +1,15 @@
+schema: siembox.app/v1
+id: arch-linux
+name: Arch Linux
+vendor: Arch Linux
+category: operating-system
+description: Operating system.
+website: https://archlinux.org
+match:
+  os:
+    family: linux
+    pretty_name: '^Arch Linux'
+tests:
+  - source: os
+    input: { family: linux, pretty_name: Arch Linux }
+    version: null

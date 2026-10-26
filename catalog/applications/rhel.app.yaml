@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: rhel
+name: Red Hat Enterprise Linux
+vendor: Red Hat
+category: operating-system
+description: Operating system.
+website: https://www.redhat.com/rhel
+cpe: { vendor: redhat, product: enterprise_linux }
+match:
+  os:
+    family: linux
+    pretty_name: '^Red Hat Enterprise Linux (\d+(?:\.\d+)?)'
+tests:
+  - source: os
+    input: { family: linux, pretty_name: 'Red Hat Enterprise Linux 9.3 (Plow)' }
+    version: '9.3'

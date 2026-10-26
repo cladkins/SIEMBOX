@@ -1,0 +1,28 @@
+schema: siembox.app/v1
+id: docker
+name: Docker Engine
+vendor: Docker
+category: container-runtime
+description: 'Container engine (dockerd) and CLI.'
+website: https://www.docker.com
+cpe: { vendor: docker, product: engine }
+match:
+  syslog_program: [dockerd, docker]
+  service:
+    names: [docker]
+  package: [docker-ce, docker.io, docker-engine, moby-engine]
+  user_agent:
+    - '^Docker-Client/(\d+(?:\.\d+)+)'
+  dns: [docker.io]
+tests:
+  - source: syslog_program
+    input: dockerd
+  - source: service
+    input: { name: docker }
+  - source: package
+    input: docker-ce
+  - source: user_agent
+    input: 'Docker-Client/24.0.7 (linux)'
+    version: '24.0.7'
+  - source: dns
+    input: registry-1.docker.io

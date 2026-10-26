@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: linux-kernel
+name: Linux kernel
+vendor: Linux
+category: os-component
+description: 'Kernel messages, including netfilter (iptables/nftables, UFW) and wireless drivers.'
+website: https://kernel.org
+cpe: { vendor: linux, product: linux_kernel }
+match:
+  syslog_program: [kernel]
+  parser: [netfilter-firewall, linux-kernel-btm-reconnect, linux-wifi-ieee80211-node-vid, qca-wlan-station-events]
+tests:
+  - source: syslog_program
+    input: kernel
+  - source: parser
+    input: netfilter-firewall

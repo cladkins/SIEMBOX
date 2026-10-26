@@ -1,0 +1,22 @@
+schema: siembox.app/v1
+id: firefox
+name: Firefox
+vendor: Mozilla
+category: browser
+description: Web browser.
+website: https://www.mozilla.org/firefox/
+cpe: { vendor: mozilla, product: firefox }
+match:
+  user_agent:
+    - '\bFirefox/(\d+(?:\.\d+)*)'
+    - '\bFxiOS/(\d+(?:\.\d+)*)'
+tests:
+  - source: user_agent
+    input: 'Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0'
+    version: '121.0'
+  - source: user_agent
+    input: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/121.0 Mobile/15E148 Safari/605.1.15'
+    version: '121.0'
+  - source: user_agent
+    input: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    match: false

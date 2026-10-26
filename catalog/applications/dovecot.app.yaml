@@ -1,0 +1,21 @@
+schema: siembox.app/v1
+id: dovecot
+name: Dovecot
+vendor: Dovecot
+category: mail
+description: IMAP and POP3 server.
+website: https://www.dovecot.org
+cpe: { vendor: dovecot, product: dovecot }
+match:
+  syslog_program: [dovecot]
+  service:
+    banner:
+      - '^Dovecot (?:imapd|pop3d)'
+  package: [dovecot-core, dovecot-imapd]
+tests:
+  - source: syslog_program
+    input: dovecot
+  - source: service
+    input: { name: imap, banner: Dovecot imapd }
+  - source: package
+    input: dovecot-core

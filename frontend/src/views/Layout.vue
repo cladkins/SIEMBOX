@@ -84,14 +84,20 @@
           </el-menu-item>
         </el-sub-menu>
 
-        <el-sub-menu index="assets" v-if="authStore.user?.role === 'admin' || authStore.user?.role === 'analyst' || authStore.user?.role === 'operator'">
+        <!-- Every role: Application Monitoring is read-only for viewers; the
+             rest of this group is analyst and up (each item says who). -->
+        <el-sub-menu index="assets">
           <template #title>
             <el-icon><Monitor /></el-icon>
             <span>Assets &amp; Vulns</span>
           </template>
-          <el-menu-item index="/asset-inventory">
+          <el-menu-item index="/asset-inventory" v-if="canAnalyst">
             <el-icon><Box /></el-icon>
             <span>Assets</span>
+          </el-menu-item>
+          <el-menu-item index="/application-monitoring">
+            <el-icon><Operation /></el-icon>
+            <span>Application Monitoring</span>
           </el-menu-item>
           <el-menu-item index="/vulnerability-scanning" v-if="authStore.user?.role === 'admin' || authStore.user?.role === 'operator'">
             <el-icon><Search /></el-icon>
@@ -113,7 +119,7 @@
             <el-icon><Cpu /></el-icon>
             <span>Endpoints</span>
           </el-menu-item>
-          <el-menu-item index="/templates">
+          <el-menu-item index="/templates" v-if="canAnalyst">
             <el-icon><Collection /></el-icon>
             <span>Templates</span>
           </el-menu-item>
@@ -218,7 +224,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useThemeStore } from '@/stores/theme';
 import { useChatStore } from '@/stores/chat';
 import AnalystChat from '@/components/AnalystChat.vue';
-import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim, Cpu, ChatDotRound, Compass, Connection, MagicStick, View, Share, Histogram } from '@element-plus/icons-vue';
+import { Monitor, Bell, Document, Setting, Files, Tools, Upload, User, Grid, Box, Search, Warning, Collection, DataAnalysis, Fold, Expand, Moon, Sunny, Ship, Timer, Aim, Cpu, ChatDotRound, Compass, Connection, MagicStick, View, Share, Histogram, Operation } from '@element-plus/icons-vue';
 
 const route = useRoute();
 const authStore = useAuthStore();
@@ -282,6 +288,7 @@ const pageTitle = computed(() => {
     '/content-packs': 'Content Packs',
     '/shippers': 'Log Shippers',
     '/asset-inventory': 'Asset Inventory',
+    '/application-monitoring': 'Application Monitoring',
     '/vulnerability-scanning': 'Vulnerability Scanning',
     '/vulnerability-management': 'Vulnerability Management',
     '/container-scanning': 'Container Scanning',

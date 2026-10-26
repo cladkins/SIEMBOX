@@ -1,0 +1,24 @@
+schema: siembox.app/v1
+id: mysql
+name: MySQL
+vendor: Oracle
+category: database
+description: 'Relational database. nmap names MariaDB''s port "mysql" too.'
+website: https://www.mysql.com
+cpe: { vendor: oracle, product: mysql }
+match:
+  syslog_program: [mysqld]
+  service:
+    names: [mysql]
+  container_image: [mysql, bitnami/mysql]
+  package: [mysql-server]
+tests:
+  - source: syslog_program
+    input: mysqld
+  - source: service
+    input: { name: mysql }
+  - source: container_image
+    input: 'mysql:8.0.36'
+    version: '8.0.36'
+  - source: package
+    input: mysql-server

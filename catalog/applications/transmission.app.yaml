@@ -1,0 +1,24 @@
+schema: siembox.app/v1
+id: transmission
+name: Transmission
+vendor: Transmission
+category: file-sharing
+description: BitTorrent client and daemon.
+website: https://transmissionbt.com
+match:
+  syslog_program: [transmission-daemon]
+  container_image: [linuxserver/transmission, '*/linuxserver/transmission']
+  package: [transmission-daemon]
+  user_agent:
+    - '^Transmission/(\d+(?:\.\d+)+)'
+tests:
+  - source: syslog_program
+    input: transmission-daemon
+  - source: container_image
+    input: 'linuxserver/transmission:4.0.5'
+    version: '4.0.5'
+  - source: package
+    input: transmission-daemon
+  - source: user_agent
+    input: Transmission/4.0.5
+    version: '4.0.5'

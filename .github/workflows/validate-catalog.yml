@@ -9,7 +9,10 @@ permissions:
 # parse->derive->normalize pipeline the app uses); detection rules under rules/
 # must pass strict structural validation against the operators/shape the rules
 # engine supports; content packs under catalog/packs/ must pass the pack schema
-# and reference only parsers and detections that exist here. Anything that passes here imports into SIEMBox cleanly.
+# and reference only parsers and detections that exist here; application
+# signatures under catalog/applications/ must pass the signature schema, the
+# ReDoS check and their own tests, and reference only parsers that exist here.
+# Anything that passes here imports into SIEMBox cleanly.
 on:
   pull_request:
     paths:
@@ -21,6 +24,8 @@ on:
       - 'backend/src/scripts/validate-detections.ts'
       - 'backend/src/scripts/validate-packs.ts'
       - 'backend/src/services/packs/**'
+      - 'backend/src/scripts/validate-applications.ts'
+      - 'backend/src/services/applications/**'
       - '.github/workflows/validate-catalog.yml'
   push:
     branches: [main, develop]
@@ -30,6 +35,7 @@ on:
       - 'backend/src/services/parser/**'
       - 'backend/src/services/rules/**'
       - 'backend/src/services/packs/**'
+      - 'backend/src/services/applications/**'
       - '.github/workflows/validate-catalog.yml'
   workflow_dispatch:
 
@@ -68,3 +74,6 @@ jobs:
         working-directory: backend
         run: npm run validate-packs -- ../catalog/packs --parsers ../catalog/parsers --detections ../rules
 
+      - name: Validate application signatures (strict, ReDoS, self-tests, parsers resolve)
+        working-directory: backend
+        run: npm run validate-applications -- ../catalog/applications --parsers ../catalog/parsers

@@ -1,0 +1,14 @@
+schema: siembox.app/v1
+id: python-requests
+name: Python Requests
+vendor: Python Software Foundation
+category: http-client
+description: 'Python HTTP library (scripts, scanners, integrations).'
+website: https://requests.readthedocs.io
+match:
+  user_agent:
+    - '^python-requests/(\d+(?:\.\d+)*)'
+tests:
+  - source: user_agent
+    input: python-requests/2.31.0
+    version: '2.31.0'

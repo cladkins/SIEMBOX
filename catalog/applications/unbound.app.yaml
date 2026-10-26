@@ -1,0 +1,20 @@
+schema: siembox.app/v1
+id: unbound
+name: Unbound
+vendor: NLnet Labs
+category: dns
+description: Validating recursive DNS resolver.
+website: https://nlnetlabs.nl/projects/unbound/
+cpe: { vendor: nlnetlabs, product: unbound }
+match:
+  syslog_program: [unbound]
+  container_image: [mvance/unbound, klutchell/unbound]
+  package: [unbound]
+tests:
+  - source: syslog_program
+    input: unbound
+  - source: container_image
+    input: 'mvance/unbound:1.19.0'
+    version: '1.19.0'
+  - source: package
+    input: unbound

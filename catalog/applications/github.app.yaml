@@ -1,0 +1,14 @@
+schema: siembox.app/v1
+id: github
+name: GitHub
+vendor: GitHub
+category: saas
+description: 'Code hosting; seen through DNS.'
+website: https://github.com
+match:
+  dns: [github.com, githubusercontent.com]
+tests:
+  - source: dns
+    input: api.github.com
+  - source: dns
+    input: raw.githubusercontent.com

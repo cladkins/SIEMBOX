@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: immich
+name: Immich
+vendor: Immich
+category: media-server
+description: Self-hosted photo and video backup.
+website: https://immich.app
+match:
+  syslog_program: [immich_server, immich-server]
+  container_image: ['*/immich-app/immich-server', altran1502/immich-server]
+tests:
+  - source: syslog_program
+    input: immich_server
+  - source: container_image
+    input: 'ghcr.io/immich-app/immich-server:v1.94.1'
+    version: '1.94.1'

@@ -1,0 +1,19 @@
+schema: siembox.app/v1
+id: komodo
+name: Komodo
+vendor: Komodo
+category: container-runtime
+description: 'Build and deployment manager (Core and Periphery agents).'
+website: https://komo.do
+match:
+  syslog_program: [komodo-periphery, periphery]
+  parser: [komodo-periphery]
+  container_image: ['*/moghtech/komodo-core', '*/moghtech/komodo-periphery', '*/mbecker20/komodo', '*/mbecker20/periphery']
+tests:
+  - source: syslog_program
+    input: periphery
+  - source: parser
+    input: komodo-periphery
+  - source: container_image
+    input: 'ghcr.io/moghtech/komodo-periphery:1.16.12'
+    version: '1.16.12'

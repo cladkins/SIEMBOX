@@ -1,0 +1,27 @@
+schema: siembox.app/v1
+id: postgresql
+name: PostgreSQL
+vendor: PostgreSQL Global Development Group
+category: database
+description: Relational database.
+website: https://www.postgresql.org
+cpe: { vendor: postgresql, product: postgresql }
+match:
+  syslog_program: [postgres, postgresql]
+  service:
+    names: [postgresql]
+  container_image: [postgres, bitnami/postgresql, postgis/postgis, '*/cloudnative-pg/postgresql']
+  package: [postgresql, postgresql-13, postgresql-14, postgresql-15, postgresql-16, postgresql-17]
+tests:
+  - source: syslog_program
+    input: postgres
+  - source: service
+    input: { name: postgresql }
+  - source: container_image
+    input: 'postgres:16-alpine'
+    version: '16'
+  - source: container_image
+    input: 'postgres:15.5'
+    version: '15.5'
+  - source: package
+    input: postgresql-16

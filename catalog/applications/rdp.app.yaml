@@ -1,0 +1,13 @@
+schema: siembox.app/v1
+id: rdp
+name: 'Remote Desktop (RDP)'
+vendor: Microsoft
+category: remote-access
+description: 'Windows Remote Desktop Services listening (nmap ms-wbt-server).'
+website: https://learn.microsoft.com/windows-server/remote/remote-desktop-services/
+match:
+  service:
+    names: [ms-wbt-server]
+tests:
+  - source: service
+    input: { name: ms-wbt-server }

@@ -1,0 +1,23 @@
+schema: siembox.app/v1
+id: traefik
+name: Traefik
+vendor: Traefik Labs
+category: reverse-proxy
+description: Cloud-native reverse proxy and load balancer.
+website: https://traefik.io
+cpe: { vendor: traefik, product: traefik }
+match:
+  syslog_program: [traefik]
+  parser: [traefik-access]
+  container_image: [traefik, '*/traefik/traefik']
+  package: [traefik]
+tests:
+  - source: syslog_program
+    input: traefik
+  - source: parser
+    input: traefik-access
+  - source: container_image
+    input: 'traefik:v2.10.7'
+    version: '2.10.7'
+  - source: package
+    input: traefik

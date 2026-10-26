@@ -1,0 +1,15 @@
+schema: siembox.app/v1
+id: vnc
+name: VNC server
+vendor: Various
+category: remote-access
+description: 'A VNC server listening (nmap vnc), or an installed VNC server package.'
+match:
+  service:
+    names: [vnc]
+  package: [tigervnc-standalone-server, x11vnc, tightvncserver]
+tests:
+  - source: service
+    input: { name: vnc }
+  - source: package
+    input: x11vnc

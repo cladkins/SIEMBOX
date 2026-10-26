@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: paperless-ngx
+name: Paperless-ngx
+vendor: Paperless-ngx
+category: productivity
+description: Document management system.
+website: https://docs.paperless-ngx.com
+match:
+  syslog_program: [paperless, paperless-ngx]
+  container_image: ['*/paperless-ngx/paperless-ngx', paperlessngx/paperless-ngx]
+tests:
+  - source: syslog_program
+    input: paperless-ngx
+  - source: container_image
+    input: 'ghcr.io/paperless-ngx/paperless-ngx:2.3.3'
+    version: '2.3.3'

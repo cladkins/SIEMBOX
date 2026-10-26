@@ -300,6 +300,15 @@ export const api = {
   installContentPackNew: (id: string) =>
     apiClient.post(`/packs/${encodeURIComponent(id)}/install-new`, {}, { timeout: 300000 }),
 
+  // Application Monitoring (software inventory from logs, scans, containers, endpoints)
+  getApplications: (params: Record<string, string> = {}) => apiClient.get('/applications', { params, ...INLINE }),
+  getApplication: (id: string) => apiClient.get(`/applications/${encodeURIComponent(id)}`, INLINE),
+  getApplicationsUnmatched: (source?: string) => apiClient.get('/applications/unmatched', { params: source ? { source } : {}, ...INLINE }),
+  getApplicationVulnerabilities: (params: Record<string, string> = {}) => apiClient.get('/applications/vulnerabilities', { params, ...INLINE }),
+  refreshApplications: () => apiClient.post('/applications/refresh', {}, { ...INLINE, timeout: 120000 }),
+  getApplicationSettings: () => apiClient.get('/settings/applications', INLINE),
+  updateApplicationSettings: (inventory: Record<string, number | boolean>) => apiClient.put('/settings/applications', { inventory }, INLINE),
+
   // AI builder
   getAiSettings: () => apiClient.get('/settings/ai'),
   updateAiSettings: (data: any) => apiClient.put('/settings/ai', data),

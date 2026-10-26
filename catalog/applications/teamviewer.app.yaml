@@ -1,0 +1,19 @@
+schema: siembox.app/v1
+id: teamviewer
+name: TeamViewer
+vendor: TeamViewer
+category: remote-access
+description: Remote desktop and support software.
+website: https://www.teamviewer.com
+cpe: { vendor: teamviewer, product: teamviewer }
+match:
+  syslog_program: [teamviewerd]
+  package: [teamviewer]
+  dns: [teamviewer.com]
+tests:
+  - source: syslog_program
+    input: teamviewerd
+  - source: package
+    input: teamviewer
+  - source: dns
+    input: router15.teamviewer.com

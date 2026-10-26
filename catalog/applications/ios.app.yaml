@@ -1,0 +1,18 @@
+schema: siembox.app/v1
+id: ios
+name: iOS / iPadOS
+vendor: Apple
+category: operating-system
+description: Operating system.
+website: https://www.apple.com/ios/
+cpe: { vendor: apple, product: iphone_os }
+match:
+  user_agent:
+    - '\((?:iPhone|iPad); CPU (?:iPhone )?OS (\d+(?:_\d+)+)'
+tests:
+  - source: user_agent
+    input: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1'
+    version: '17_1_2'
+  - source: user_agent
+    input: 'Mozilla/5.0 (iPad; CPU OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1'
+    version: '17_1'

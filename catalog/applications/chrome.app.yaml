@@ -1,0 +1,28 @@
+schema: siembox.app/v1
+id: chrome
+name: Chrome
+vendor: Google
+category: browser
+description: 'Web browser (Chromium-based browsers that do not name themselves look like Chrome).'
+website: https://www.google.com/chrome/
+cpe: { vendor: google, product: chrome }
+match:
+  user_agent:
+    - '\bChrome/(\d+(?:\.\d+)*) (?:Mobile )?Safari/'
+    - '\bCriOS/(\d+(?:\.\d+)*)'
+tests:
+  - source: user_agent
+    input: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    version: '120.0.0.0'
+  - source: user_agent
+    input: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.2210.91'
+    match: false
+  - source: user_agent
+    input: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0'
+    match: false
+  - source: user_agent
+    input: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) discord/1.0.9028 Chrome/120.0.6099.291 Electron/28.2.10 Safari/537.36'
+    match: false
+  - source: user_agent
+    input: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
+    match: false

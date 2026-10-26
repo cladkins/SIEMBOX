@@ -1,0 +1,22 @@
+schema: siembox.app/v1
+id: rustdesk
+name: RustDesk
+vendor: RustDesk
+category: remote-access
+description: 'Open-source remote desktop (client and self-hosted hbbs/hbbr server).'
+website: https://rustdesk.com
+match:
+  syslog_program: [hbbs, hbbr]
+  container_image: [rustdesk/rustdesk-server, rustdesk/rustdesk-server-s6]
+  package: [rustdesk]
+  dns: [rustdesk.com]
+tests:
+  - source: syslog_program
+    input: hbbs
+  - source: container_image
+    input: 'rustdesk/rustdesk-server:1.1.10-3'
+    version: '1.1.10'
+  - source: package
+    input: rustdesk
+  - source: dns
+    input: rs-ny.rustdesk.com

@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: proxmox-ve
+name: Proxmox VE
+vendor: Proxmox
+category: virtualization
+description: 'Virtualization platform (KVM and LXC).'
+website: https://www.proxmox.com/en/proxmox-virtual-environment
+cpe: { vendor: proxmox, product: virtual_environment }
+match:
+  syslog_program: [pvedaemon, pveproxy, pvestatd, pve-firewall, pvescheduler, pve-ha-lrm, pve-ha-crm]
+  package: [pve-manager, proxmox-ve]
+tests:
+  - source: syslog_program
+    input: pvedaemon
+  - source: package
+    input: pve-manager

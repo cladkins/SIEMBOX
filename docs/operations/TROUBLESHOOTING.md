@@ -12,6 +12,7 @@ Comprehensive troubleshooting guide for diagnosing and resolving common issues i
 - [Log Discovery & API-Polled Sources](#log-discovery--api-polled-sources)
 - [Parser Problems](#parser-problems)
 - [Detection Rules](#detection-rules)
+- [Application Monitoring](#application-monitoring)
 - [Database Issues](#database-issues)
 - [Authentication Problems](#authentication-problems)
 - [Performance Issues](#performance-issues)
@@ -1496,6 +1497,42 @@ A rule listed as **Cannot add** was refused by the regex safety gate or does not
 convert faithfully; the tooltip has the reason.
 
 ---
+
+## Application Monitoring
+
+### Issue: An application I run isn't listed on Application Monitoring
+
+Application Monitoring only lists software a **signature** in the catalog
+(`applications/<id>.app.yaml`) matches, from evidence SIEMBox has. Work
+through it in order:
+
+1. **Has the job run?** The status line under the title says *Building* while
+   it works through existing logs, *Switched off* when *Settings → Application
+   Monitoring* has it off; *Admin → Background Jobs → Application inventory*
+   shows its last run. It trails ingestion by a few minutes; **Refresh now**
+   (analysts and up) runs it at once.
+2. **Is there evidence?** It needs one of: the program's syslog lines (with
+   its name as the TAG), logs a catalog parser for it parses, an nmap service,
+   a container on a host whose log shipper reports containers, an endpoint
+   finding, or clients' user agents / DNS queries in parsed logs. A container
+   needs the shipper's Docker socket and `CONTAINER_REPORT_INTERVAL` (see
+   *Container Scanning → Shipper hosts*).
+3. **Does a signature match it?** Open the **Not identified** tab: the most
+   frequent program names, container images and user-agent products nothing
+   matches. If yours is there, no signature covers that name: click
+   **Suggest signature**, fill in the TODOs (name, vendor, category; add
+   more matchers and a test for each) and open the pull request in
+   [siembox-catalog](https://github.com/cladkins/siembox-catalog); its CI
+   validates it (`npm run validate-applications`). Once merged, SIEMBox picks
+   it up within five minutes (or at **Refresh now**). Logs already processed
+   are not re-matched; scan, container and endpoint evidence is, every run.
+4. **The status line says "catalog notice" or "signature problems".** Hover
+   it: the catalog could not be reached (SIEMBox keeps the signatures it read
+   last), or a signature regex was refused by the ReDoS gate and left out.
+
+An nmap `ssh` service alone is not claimed (OpenSSH or Dropbear?); nmap scans
+record the service name only, so a service scan identifies a product only for
+product-specific services.
 
 ## Database Issues
 

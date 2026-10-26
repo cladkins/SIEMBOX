@@ -1,0 +1,20 @@
+schema: siembox.app/v1
+id: haproxy
+name: HAProxy
+vendor: HAProxy Technologies
+category: reverse-proxy
+description: TCP/HTTP load balancer.
+website: https://www.haproxy.org
+cpe: { vendor: haproxy, product: haproxy }
+match:
+  syslog_program: [haproxy]
+  container_image: [haproxy, haproxytech/haproxy-alpine]
+  package: [haproxy]
+tests:
+  - source: syslog_program
+    input: haproxy
+  - source: container_image
+    input: 'haproxy:2.9.2'
+    version: '2.9.2'
+  - source: package
+    input: haproxy

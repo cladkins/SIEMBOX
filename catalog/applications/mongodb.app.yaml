@@ -1,0 +1,24 @@
+schema: siembox.app/v1
+id: mongodb
+name: MongoDB
+vendor: MongoDB
+category: database
+description: Document database.
+website: https://www.mongodb.com
+cpe: { vendor: mongodb, product: mongodb }
+match:
+  syslog_program: [mongod]
+  service:
+    names: [mongodb]
+  container_image: [mongo, bitnami/mongodb]
+  package: [mongodb-org-server]
+tests:
+  - source: syslog_program
+    input: mongod
+  - source: service
+    input: { name: mongodb }
+  - source: container_image
+    input: 'mongo:7.0.5'
+    version: '7.0.5'
+  - source: package
+    input: mongodb-org-server

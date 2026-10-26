@@ -1,0 +1,18 @@
+schema: siembox.app/v1
+id: systemd
+name: systemd
+vendor: systemd
+category: os-component
+description: Linux init and service manager.
+website: https://systemd.io
+cpe: { vendor: systemd_project, product: systemd }
+match:
+  syslog_program: [systemd, systemd-logind, systemd-resolved, systemd-networkd, systemd-timesyncd, systemd-journald, systemd-udevd]
+  package: [systemd]
+tests:
+  - source: syslog_program
+    input: systemd
+  - source: syslog_program
+    input: systemd-logind
+  - source: package
+    input: systemd

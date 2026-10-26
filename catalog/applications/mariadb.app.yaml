@@ -1,0 +1,20 @@
+schema: siembox.app/v1
+id: mariadb
+name: MariaDB
+vendor: MariaDB Foundation
+category: database
+description: 'Relational database (MySQL fork).'
+website: https://mariadb.org
+cpe: { vendor: mariadb, product: mariadb }
+match:
+  syslog_program: [mariadbd, mariadb]
+  container_image: [mariadb, linuxserver/mariadb, '*/linuxserver/mariadb', bitnami/mariadb]
+  package: [mariadb-server, mariadb-server-core]
+tests:
+  - source: syslog_program
+    input: mariadbd
+  - source: container_image
+    input: 'mariadb:11.2.2'
+    version: '11.2.2'
+  - source: package
+    input: mariadb-server

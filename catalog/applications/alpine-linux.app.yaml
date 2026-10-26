@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: alpine-linux
+name: Alpine Linux
+vendor: Alpine Linux
+category: operating-system
+description: Operating system.
+website: https://alpinelinux.org
+cpe: { vendor: alpinelinux, product: alpine_linux }
+match:
+  os:
+    family: linux
+    pretty_name: '^Alpine Linux v(\d+\.\d+)'
+tests:
+  - source: os
+    input: { family: linux, pretty_name: Alpine Linux v3.19 }
+    version: '3.19'

@@ -1,0 +1,22 @@
+schema: siembox.app/v1
+id: dropbear
+name: Dropbear SSH
+vendor: Matt Johnston
+category: remote-access
+description: 'Small SSH server (routers, embedded).'
+website: https://matt.ucc.asn.au/dropbear/dropbear.html
+cpe: { vendor: dropbear_ssh_project, product: dropbear_ssh }
+match:
+  syslog_program: [dropbear]
+  service:
+    banner:
+      - '^Dropbear sshd(?: (\d+(?:\.\d+)+))?'
+  package: [dropbear, dropbear-bin]
+tests:
+  - source: syslog_program
+    input: dropbear
+  - source: service
+    input: { name: ssh, banner: Dropbear sshd 2022.83 }
+    version: '2022.83'
+  - source: package
+    input: dropbear-bin

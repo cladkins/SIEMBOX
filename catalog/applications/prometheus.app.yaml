@@ -1,0 +1,25 @@
+schema: siembox.app/v1
+id: prometheus
+name: Prometheus
+vendor: CNCF
+category: monitoring
+description: Metrics collection and alerting.
+website: https://prometheus.io
+cpe: { vendor: prometheus, product: prometheus }
+match:
+  syslog_program: [prometheus]
+  container_image: [prom/prometheus, '*/prometheus/prometheus', bitnami/prometheus]
+  package: [prometheus]
+  user_agent:
+    - '^Prometheus/(\d+(?:\.\d+)+)'
+tests:
+  - source: syslog_program
+    input: prometheus
+  - source: container_image
+    input: 'prom/prometheus:v2.48.1'
+    version: '2.48.1'
+  - source: package
+    input: prometheus
+  - source: user_agent
+    input: Prometheus/2.48.1
+    version: '2.48.1'

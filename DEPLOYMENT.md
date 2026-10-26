@@ -461,6 +461,32 @@ minutes behind ingestion:
 
 Time it on a scratch database with `backend/scripts/graph-bench.sql`.
 
+**Updating to the release with Application Monitoring** (migration
+`048_application_inventory.sql` runs on its own; no `.env` or compose change):
+the migration creates five small, empty tables (`application_inventory`,
+`application_unmatched`, `application_vuln_links`, `application_signatures`,
+`application_inventory_state`), one view and three settings. Nothing changes on
+the ingest path. A background job, **Application inventory** on *Admin →
+Background Jobs*, matches evidence against the catalog's application
+signatures every two minutes on the main database pool:
+
+- **Signatures.** Read from the catalog's `applications/` (same repo and ref as
+  parsers; `SIEMBOX_CATALOG_APPLICATIONS_PATH`, default `applications`) and
+  stored in the database, so a restart without network keeps them. Air-gapped:
+  a small built-in starter set until the catalog has been read once.
+- **Backfill.** The first run starts 7 days back
+  (`application_inventory_backfill_days`) and works through the existing logs
+  in batches of 2,500 with rests six times as long as each batch, at most 15 s
+  of database time a run: about 28,000 logs a second of database time, 4,000 a
+  second with the rests (a 4-core test box; ingestion's pace was unchanged
+  within noise while it ran). After that a run costs about 0.2 s.
+- **Retention.** An application, version or location not seen for 30 days drops
+  out (*Settings → Application Monitoring*); scan, container and endpoint
+  evidence follows its source at once.
+- **Disk.** Small: one row per application, location, source and version (the
+  bench's 300,000 logs, 50 assets, 300 containers and 3,000 endpoint findings
+  made 1,700 rows), and at most 500 unmatched values per source.
+
 ## Database Migrations and Seeding
 
 ### Automatic Initialization

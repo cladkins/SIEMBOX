@@ -1,0 +1,16 @@
+schema: siembox.app/v1
+id: go-http-client
+name: Go HTTP client
+vendor: Go
+category: http-client
+description: 'Go standard library HTTP client (many tools and scanners).'
+match:
+  user_agent:
+    - '^Go-http-client/(\d+\.\d+)'
+tests:
+  - source: user_agent
+    input: Go-http-client/1.1
+    version: '1.1'
+  - source: user_agent
+    input: Go-http-client/2.0
+    version: '2.0'

@@ -212,6 +212,7 @@
             <template v-if="detail.website"> · <a :href="detail.website" target="_blank" rel="noopener noreferrer">website</a></template>
           </p>
           <p v-if="detail.description">{{ detail.description }}</p>
+          <OpenInGraphButton type="application" :value="detail.id" window="30d" size="small" @navigate="detailOpen = false" />
           <el-descriptions :column="2" size="small" border class="block">
             <el-descriptions-item label="Where">{{ whereLabel(detail) }}</el-descriptions-item>
             <el-descriptions-item label="Evidence">{{ detail.sources.map(sourceLabel).join(', ') || '—' }}</el-descriptions-item>
@@ -276,11 +277,13 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Refresh, Search } from '@element-plus/icons-vue';
 import { api } from '@/services/api';
 import { useAuthStore } from '@/stores/auth';
 import SeverityBadge from '@/components/SeverityBadge.vue';
+import OpenInGraphButton from '@/components/graph/OpenInGraphButton.vue';
 import {
   ageLabel,
   categoryLabel,
@@ -359,6 +362,7 @@ const canSeeAssets = computed(() => ['admin', 'operator', 'analyst'].includes(ro
 
 const tab = ref('inventory');
 const filters = reactive({ search: '', category: '', source: '', host: '' });
+const route = useRoute();
 const apps = ref<ApplicationRow[]>([]);
 const status = ref<Status | null>(null);
 const loading = ref(false);
@@ -431,7 +435,7 @@ async function loadUnmatched() {
   }
 }
 
-async function open(row: ApplicationRow) {
+async function open(row: Pick<ApplicationRow, 'id'>) {
   detailOpen.value = true;
   detailLoading.value = true;
   detail.value = null;
@@ -473,6 +477,9 @@ watch(tab, (t) => {
 });
 
 onMounted(async () => {
+  // ?app=<id> (the Context Graph's link): open that application's detail.
+  const linked = typeof route.query.app === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(route.query.app) ? route.query.app : null;
+  if (linked) void open({ id: linked });
   await load();
   void loadVulns();
   void loadUnmatched();

@@ -64,6 +64,10 @@
         <el-descriptions-item v-if="edge.role" label="Role">{{ roleLabel(edge.role) }}</el-descriptions-item>
         <el-descriptions-item v-if="edge.count !== undefined" label="Count">{{ edge.count.toLocaleString('en-US') }}</el-descriptions-item>
         <el-descriptions-item v-if="outcomeLabel(edge)" label="Outcome">{{ outcomeLabel(edge) }}</el-descriptions-item>
+        <el-descriptions-item v-if="edge.versions?.length" label="Versions">{{ versionsLabel(edge.versions) }}</el-descriptions-item>
+        <el-descriptions-item v-if="edge.sources?.length" label="Evidence">{{ edge.sources.map(sourceLabel).join(', ') }}</el-descriptions-item>
+        <el-descriptions-item v-if="edge.network" label="Network evidence">seen only on the network (user agents, DNS queries), not on the device</el-descriptions-item>
+        <el-descriptions-item v-if="edge.match" label="Match">{{ edge.match === 'exact' ? 'exact: an endpoint finding on one of its packages' : 'best effort: the finding names the product' }}</el-descriptions-item>
         <el-descriptions-item v-if="edge.first_seen" label="First seen">{{ when(edge.first_seen) }}</el-descriptions-item>
         <el-descriptions-item v-if="edge.last_seen" label="Last seen">{{ when(edge.last_seen) }}</el-descriptions-item>
       </el-descriptions>
@@ -89,10 +93,11 @@ import { ElMessage } from 'element-plus';
 import { CopyDocument } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
 import { factText, formatCount, fullLabel } from '@/graph/labels';
-import { ORIGIN_LABELS, STYLE_MEANINGS, TYPE_STYLES, edgeLabel, outcomeLabel, roleLabel } from '@/graph/style';
+import { ORIGIN_LABELS, STYLE_MEANINGS, TYPE_STYLES, edgeLabel, outcomeLabel, roleLabel, versionsLabel } from '@/graph/style';
 import { keyOfId } from '@/graph/entityKey';
 import { EVIDENCE_RELS, type GraphEdge, type GraphNode, type NodeFlag, type RelationGroup, type RelId } from '@/graph/types';
 import GraphEvidence from './GraphEvidence.vue';
+import { sourceLabel as appSourceLabel } from '@/utils/applications';
 
 const props = defineProps<{
   node: GraphNode | null;
@@ -134,7 +139,11 @@ const FLAG_LABELS: Partial<Record<NodeFlag, string>> = {
   critical: 'critical asset',
   open_vulns: 'open vulnerabilities',
   closed: 'closed',
+  unmanaged: 'seen only on the network',
 };
+
+/** Application Monitoring's names for its evidence sources. */
+const sourceLabel = (s: string) => factText(appSourceLabel(s));
 
 const NOTES: Record<string, string> = {
   log_expired: 'Logs older than the retention period are deleted.',
@@ -232,6 +241,10 @@ const openIn = computed<OpenLink[]>(() => {
       break;
     case 'account':
       links.push({ label: 'Users', to: { path: '/users' } });
+      break;
+    case 'application':
+      // The page opens the application's detail drawer: locations, versions, vulnerabilities.
+      links.push({ label: 'Application Monitoring', to: { path: '/application-monitoring', query: { app: n.key } } });
       break;
     default:
       break;

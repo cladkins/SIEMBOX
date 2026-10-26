@@ -24,7 +24,8 @@ export type NodeType =
   | 'shipper'
   | 'shipper_tag'
   | 'endpoint'
-  | 'account';
+  | 'account'
+  | 'application';
 
 export const NODE_TYPES: readonly NodeType[] = [
   'ip',
@@ -41,6 +42,7 @@ export const NODE_TYPES: readonly NodeType[] = [
   'shipper_tag',
   'endpoint',
   'account',
+  'application',
 ];
 
 /** Where a relationship comes from. */
@@ -50,7 +52,8 @@ export const ORIGINS: readonly Origin[] = ['alerts', 'logs', 'inventory', 'risk'
 /** recorded: SIEMBox's own record (solid). logs: a claim a log made (dashed). heuristic: a match (dotted). */
 export type EdgeStyle = 'recorded' | 'logs' | 'heuristic';
 
-export type NodeFlag = 'threat_feed' | 'foreign' | 'private' | 'sender_only' | 'critical' | 'open_vulns' | 'closed';
+/** unmanaged: an application seen only on the network (user agents, DNS). */
+export type NodeFlag = 'threat_feed' | 'foreign' | 'private' | 'sender_only' | 'critical' | 'open_vulns' | 'closed' | 'unmanaged';
 
 /**
  * Relation ids. The server's catalog is the whitelist; this client renders an
@@ -93,6 +96,14 @@ export interface GraphEdge {
   /** signed_in_as: a pair first seen in the window. */
   new?: boolean;
   success_after_failures?: boolean;
+  /** runs_app, uses_app, app_vulns: the versions seen, oldest first (at most 5). */
+  versions?: string[];
+  /** runs_app, uses_app: Application Monitoring's evidence sources. */
+  sources?: string[];
+  /** uses_app: seen only on the network (user agents, DNS queries). */
+  network?: boolean;
+  /** app_vulns: exact (an EDR package finding) or best_effort (the title names the product). */
+  match?: 'exact' | 'best_effort';
 }
 
 export type GroupStatus = 'ok' | 'timeout' | 'unavailable';

@@ -13,6 +13,7 @@
  *                a positive integer id
  *   shipper_tag  8 lower-case hex characters
  *   endpoint     a UUID, lower-case
+ *   application  an application signature id: trimmed, lower-cased, [a-z0-9][a-z0-9-]{0,63}
  *
  * The page canonicalizes the URL's entities with these before it asks the
  * API, so `?entity=host:NAS` and `?entity=host:nas` are one view. The server
@@ -44,6 +45,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const OCTET = '(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])';
 const IPV4 = new RegExp(`^${OCTET}(?:\\.${OCTET}){3}$`);
 const MAPPED_V4 = new RegExp(`^::ffff:(${OCTET}(?:\\.${OCTET}){3})$`, 'i');
+const APP_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const IPV6_CHARS = /^[0-9a-f:.]+$/i;
 
 const hasWhitespace = (value: string) => /\s/u.test(value);
@@ -142,6 +144,13 @@ export function canonicalUuid(value: unknown): string | null {
   return UUID_PATTERN.test(s) ? s : null;
 }
 
+/** An application id (a catalog signature's kebab-case id), lower-case, or null. */
+export function canonicalAppId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const s = value.trim().toLowerCase();
+  return APP_ID_PATTERN.test(s) ? s : null;
+}
+
 /** The canonical key of `value` as a `type`, or null when it isn't a valid one. */
 export function canonicalKey(type: NodeType, value: unknown): string | null {
   switch (type) {
@@ -157,6 +166,8 @@ export function canonicalKey(type: NodeType, value: unknown): string | null {
       return canonicalShipperTag(value);
     case 'endpoint':
       return canonicalUuid(value);
+    case 'application':
+      return canonicalAppId(value);
     default:
       return ID_TYPES.has(type) ? canonicalId(value) : null;
   }

@@ -13,6 +13,8 @@
  *                a positive integer id (vuln = vulnerabilities.id, account = users.id)
  *   shipper_tag  8 lower-case hex characters (a raw_logs.shipper_id no shipper matches)
  *   endpoint     an edr_agents.agent_id UUID, lower-case
+ *   application  an application signature id (application_signatures.id):
+ *                spaces trimmed, lower-cased; [a-z0-9][a-z0-9-]{0,63}
  *
  * Validation runs before any value reaches SQL (`::inet` only after net.isIP).
  *
@@ -48,6 +50,7 @@ const ID_TYPES: ReadonlySet<NodeType> = new Set(['alert', 'rule', 'asset', 'vuln
 const ID_PATTERN = /^[1-9][0-9]{0,9}$/;
 const TAG_PATTERN = /^[0-9a-f]{8}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const APP_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const MAPPED_V4 = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i;
 
 const hasWhitespace = (value: string) => /\s/u.test(value);
@@ -140,6 +143,13 @@ export function canonicalUuid(value: unknown): string | null {
   return UUID_PATTERN.test(s) ? s : null;
 }
 
+/** An application id (the catalog signature's kebab-case id), lower-case, or null. */
+export function canonicalAppId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const s = value.trim().toLowerCase();
+  return APP_ID_PATTERN.test(s) ? s : null;
+}
+
 /** The canonical key of `value` as a `type`, or null when it isn't a valid one. */
 export function canonicalKey(type: NodeType, value: unknown): string | null {
   switch (type) {
@@ -155,6 +165,8 @@ export function canonicalKey(type: NodeType, value: unknown): string | null {
       return canonicalShipperTag(value);
     case 'endpoint':
       return canonicalUuid(value);
+    case 'application':
+      return canonicalAppId(value);
     default:
       return ID_TYPES.has(type) ? canonicalId(value) : null;
   }
@@ -258,4 +270,11 @@ export const ENTITY_KEY_FIXTURES: ReadonlyArray<readonly [NodeType, string, stri
   ['shipper_tag', 'deadbeefz', null],
   ['endpoint', '3F2504E0-4F89-11D3-9A0C-0305E82C3301', '3f2504e0-4f89-11d3-9a0c-0305e82c3301'],
   ['endpoint', 'not-a-uuid', null],
+  ['application', 'nginx', 'nginx'],
+  ['application', ' Home-Assistant ', 'home-assistant'],
+  ['application', '7zip', '7zip'],
+  ['application', '-nginx', null],
+  ['application', 'plex media', null],
+  ['application', 'nginx_1', null],
+  ['application', 'a'.repeat(65), null],
 ];

@@ -22,6 +22,11 @@ import { geoipService } from '../geoip/geoipService';
 import { OFFLINE_THRESHOLD_MINUTES } from '../../models/EdrAgent';
 import { SHIPPER_OFFLINE_THRESHOLD_MINUTES } from '../../models/LogShipper';
 import type { FactValue, GraphNode, NodeFlag, NodeType, Role } from './types';
+import { compareVersions } from '../applications/inventory';
+import { NETWORK_ONLY } from './resolvers/applications';
+
+/** Versions an application node lists at most (the newest). */
+export const NODE_VERSIONS = 10;
 
 const PRIVATE_RANGES = new net.BlockList();
 for (const [address, prefix] of [
@@ -232,6 +237,44 @@ const LOADERS: Partial<Record<NodeType, TypeLoader>> = {
         status: text(row.status),
         last_seen: when(row.last_seen),
       }),
+  },
+  application: {
+    // Off the primary keys of application_inventory and application_vuln_links
+    // (app_id first): the versions seen, distinct locations, open vulnerabilities.
+    sql: `SELECT s.id, s.name, s.vendor, s.category,
+                 inv.versions, inv.locations, inv.network_only,
+                 (SELECT count(DISTINCT l.vulnerability_id) FROM application_vuln_links l WHERE l.app_id = s.id) AS open_vulns
+            FROM application_signatures s
+            LEFT JOIN LATERAL (
+              SELECT array_agg(DISTINCT i.version) FILTER (WHERE i.version <> '') AS versions,
+                     count(DISTINCT (i.loc_type, i.loc_key)) AS locations,
+                     bool_and(i.source = ANY($2::text[])) AS network_only
+                FROM application_inventory i WHERE i.app_id = s.id
+            ) inv ON true
+           WHERE s.id = ANY($1::text[])`,
+    key: (row) => String(row.id),
+    cast: 'text',
+    params: () => [NETWORK_ONLY],
+    build: (ref, row) => {
+      const versions = ((row.versions as string[] | null) ?? []).map((v) => String(v)).sort(compareVersions).slice(-NODE_VERSIONS);
+      const openVulns = num(row.open_vulns) ?? 0;
+      const flags: NodeFlag[] = [];
+      if (openVulns > 0) flags.push('open_vulns');
+      if (row.network_only === true) flags.push('unmanaged');
+      return baseNode(
+        ref,
+        String(row.name || ref.key),
+        {
+          name: text(row.name),
+          vendor: text(row.vendor),
+          category: text(row.category),
+          versions: versions.length ? sanitizeFact(versions.join(', ')) : null,
+          locations: num(row.locations) ?? 0,
+          open_vulns: openVulns,
+        },
+        flags
+      );
+    },
   },
   account: {
     sql: `SELECT u.id, u.username, u.role, u.enabled, u.mfa_enabled, u.last_login FROM users u WHERE u.id = ANY($1::int[])`,

@@ -40,6 +40,29 @@ test('every role sees every node type except endpoints; only admins see account 
   for (const role of ROLES) assert.ok(allowedFacts(role, 'asset').includes('agent_status'));
 });
 
+test('applications: every role sees and expands them, with the same facts; nothing else of the signature gets out', () => {
+  for (const role of ROLES) {
+    assert.equal(canExpandType(role, 'application'), true, role);
+    assert.deepEqual(allowedFacts(role, 'application'), ['name', 'vendor', 'category', 'versions', 'locations', 'open_vulns']);
+  }
+  const node: GraphNode = {
+    id: 'application:nginx',
+    type: 'application',
+    key: 'nginx',
+    label: 'nginx',
+    facts: { name: 'nginx', vendor: 'F5', category: 'web-server', versions: '1.25.3', locations: 3, open_vulns: 1, definition: '{"match":{}}', evidence: 'raw log 7' },
+    flags: ['open_vulns'],
+    expandable: true,
+  };
+  assert.deepEqual(Object.keys(serializeNode('viewer', node).facts), ['name', 'vendor', 'category', 'versions', 'locations', 'open_vulns']);
+  // The relations a viewer runs from an application, and the ones that reach it.
+  const rels = (type: NodeType) => relationsFor(type, 'viewer').map((def) => def.rel);
+  assert.deepEqual(rels('application'), ['app_assets', 'app_hosts', 'app_ips', 'app_shippers', 'app_clients', 'app_vulns']);
+  for (const type of ['asset', 'host', 'ip', 'shipper'] as NodeType[]) assert.ok(rels(type).includes('runs_app'), type);
+  assert.ok(rels('ip').includes('uses_app'));
+  assert.ok(rels('vuln').includes('vuln_apps'));
+});
+
 test('no fact allowlist names a key, a hash, a secret or matched_data', () => {
   for (const type of NODE_TYPES) {
     for (const role of ROLES) {

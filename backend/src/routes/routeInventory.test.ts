@@ -945,6 +945,12 @@ test('the Context Graph shows a role nothing the routes it mirrors refuse that r
       }
     }
   }
+  // Applications: exactly the roles that read Application Monitoring, no more
+  // and no fewer (the page, an application's detail, its vulnerabilities).
+  assert.deepEqual(NODE_VISIBILITY.application.mirrors, ['GET /api/applications', 'GET /api/applications/:id', 'GET /api/applications/vulnerabilities']);
+  for (const id of NODE_VISIBILITY.application.mirrors) {
+    assert.deepEqual([...NODE_VISIBILITY.application.roles].sort(), [...(whoOf.get(id) as string[])].sort(), `application nodes and ${id}`);
+  }
   // The graph's own routes are open to every role that sees anything in it.
   for (const path of ['/api/graph/search', '/api/graph/neighborhood', '/api/graph/relation']) {
     assert.deepEqual(whoOf.get(`GET ${path}`), ANY_ROLE, path);

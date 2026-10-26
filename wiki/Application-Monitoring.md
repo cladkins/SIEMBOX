@@ -109,6 +109,34 @@ catalog cannot be reached it keeps using the last set it read (also stored in
 the database, so a restart keeps it), and falls back to a small built-in
 starter set only when it has never read one.
 
+## In the Context Graph
+
+Every application in the inventory is also a node of the **Context Graph**
+(a green pentagon marked **P**). **Open in Context Graph** in an
+application's detail drawer centres the graph on it; search the graph by an
+application's name, vendor or id. The links are solid (they come from the
+inventory, not from what a single log said) and current, like the page:
+
+- **asset / host / IP / log shipper → runs → application** — where it runs,
+  with the versions and evidence sources on the link. An asset collects every
+  location that is it (its id from scans and endpoint findings, its IP and
+  host name from logs, a shipper at its address); a log shipper's link is its
+  host's containers.
+- **client IP → uses → application** — seen only on the network (user agents,
+  DNS queries), marked *network evidence*. That is not "runs": expanding the
+  asset at that IP doesn't list it, its IP does. An application seen only
+  this way is flagged *seen only on the network* (the Unmanaged tab).
+- **application → has → vulnerability** — the linked open findings: an
+  *exact* match is a solid link, a *best-effort* one (the finding names the
+  product) a dotted one.
+
+Expanding an asset, host, IP or shipper lists its applications; expanding a
+vulnerability lists the applications it is linked to. An application on
+hundreds of clients shows as one *very common* group with a handful of them,
+like any other busy relation; **Table** pages through all of them. The
+details panel links back to the application here. Every role that can read
+this page sees the same in the graph.
+
 ## Settings
 
 *Settings → Application Monitoring* (admins): switch the inventory off, how

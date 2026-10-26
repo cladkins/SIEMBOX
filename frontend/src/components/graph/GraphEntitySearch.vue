@@ -38,7 +38,7 @@ import type { NodeType, SearchCandidate, SearchResponse } from '@/graph/types';
  * click adds the candidate as a centre; Shift+Enter replaces the centres.
  */
 withDefaults(defineProps<{ placeholder?: string }>(), {
-  placeholder: 'IP, user, host, domain, alert #, CVE…',
+  placeholder: 'IP, user, host, domain, application, alert #, CVE…',
 });
 
 const emit = defineEmits<{ pick: [entity: string, replace: boolean]; error: [message: string] }>();

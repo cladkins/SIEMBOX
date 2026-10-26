@@ -6715,7 +6715,9 @@ So that the graph can't crowd out the rest of SIEMBox:
   resolved; `identity` kind, value; `shipper` name, status, hostname,
   ip_address, version, last_seen (never a key); `shipper_tag` tag; `endpoint`
   hostname, os, agent_version, status, last_seen; `account` username, and for
-  admins role, enabled, mfa_enabled, last_login.
+  admins role, enabled, mfa_enabled, last_login; `application` name, vendor,
+  category, versions (the 10 newest seen, comma-separated), locations
+  (distinct inventory locations), open_vulns (linked open vulnerabilities).
 - A shipper's and an endpoint agent's `status` is the live one, worked out
   from `last_seen` as the rest of SIEMBox does: a shipper is `pending` (never
   heard from), `offline` (no heartbeat for 3 minutes), `error` or `online`, as
@@ -6726,11 +6728,16 @@ So that the graph can't crowd out the rest of SIEMBox:
   has stopped reporting.
 - `flags`: `threat_feed`, `foreign` (outside `GEOIP_HOME_COUNTRIES`), `private`,
   `critical` (asset criticality), `open_vulns`, `closed` (a closed or
-  false-positive alert).
+  false-positive alert), `unmanaged` (an application seen only on the network:
+  user agents and DNS queries, on no host, container or service).
 - An **edge** is `{id, source, target, rel, origin, style}`, plus `role` on
   `alert_ips` (`source`, `dest`, or `sender`: the IP equals the log's
   `observer_ip`, the device that sent it) and `count`, `failures`,
-  `successes`, `first_seen`, `last_seen` on `account_signins`. Its id is
+  `successes`, `first_seen`, `last_seen` on `account_signins`; `versions`
+  (oldest first, the 5 newest), `sources` (Application Monitoring's evidence
+  sources), `count`, `first_seen`, `last_seen` on `runs_app` and `uses_app`,
+  plus `network: true` on `uses_app`; `match` (`exact` or `best_effort`),
+  `count` (assets) and `versions` on `app_vulns`. Its id is
   `rel|source|target`, and its direction is fixed (an alert points at the IP
   it names, whichever side was expanded), so the same fact reached from
   either side is one edge.
@@ -6776,6 +6783,11 @@ So that the graph can't crowd out the rest of SIEMBox:
 | `identity_user` | identity (email), user | user, identity | risk, dotted | users in alerts that are that address (compared in lower case) |
 | `identity_domain` | identity (email domain), domain | domain, identity | risk, solid | the email domain |
 | `account_signins` / `ip_signins` | account / ip (admin) | ip / account | accounts, solid | sign-ins in `audit_logs`, with successes and failures |
+| `runs_app` | asset, host, ip, shipper | application | inventory, solid | [Application Monitoring](#application-monitoring-endpoints)'s inventory: for an asset every location that is it (its id, IP, host name, a shipper at its address); for a host or ip the logging host; for a shipper its containers. Not network evidence |
+| `uses_app` | ip | application | inventory, solid, `network: true` | a client seen using it on the network (user agents, DNS queries) |
+| `app_assets` / `app_hosts` / `app_ips` / `app_shippers` | application | asset / host / ip (a logging host known by its sender IP) / shipper | inventory, solid | the same `runs_app` edges, from the application |
+| `app_clients` | application | ip | inventory, solid | the same `uses_app` edges, from the application |
+| `app_vulns` / `vuln_apps` | application / vuln | vuln / application | inventory, solid (`exact`) or dotted (`best_effort`) | `application_vuln_links`: an open EDR finding for one of its packages (exact), or an open finding on a host where it runs whose title names the product (best effort); open only |
 
 ### Roles in the graph
 
@@ -6785,6 +6797,7 @@ So that the graph can't crowd out the rest of SIEMBox:
 | account nodes a sign-in alert names: the username the alert shows, not expandable | yes | yes | yes | yes |
 | account details, expanding an account, `account_signins` / `ip_signins` | yes | no | no | no |
 | endpoint nodes, `alert_endpoint`, `asset_endpoint` | yes | no | no | no |
+| application nodes and their relations (as `GET /api/applications`) | yes | yes | yes | yes |
 
 Relations a role can't see don't run and aren't listed, and nothing says how
 many were left out. Each row mirrors routes the role can already call
@@ -6794,7 +6807,8 @@ many were left out. Each row mirrors routes the role can already call
 ### GET /api/graph/search
 
 What a typed string could mean, as at most 10 candidates. It reads only small
-tables (assets, shippers, watched domains, rules, identities, vulnerabilities)
+tables (assets, shippers, watched domains, rules, identities, vulnerabilities,
+Application Monitoring's signatures and inventory)
 and counts alerts, never logs.
 
 **Query:** `q` (1-200 characters).
@@ -6805,6 +6819,8 @@ or `alert 123` the alert; `CVE-...` or `NUCLEI-...` the vulnerability; a string
 with `@` the user and a monitored email identity; a host- or domain-like word
 assets and shippers by name prefix, watched domains, `host:`, `domain:` (with a
 dot) or `user:` (without) and rules by name; anything else `user:` and rules.
+Both of the last two also list up to 3 applications whose name or vendor holds
+the text, or whose id starts with it (only applications in the inventory).
 
 **Response:**
 

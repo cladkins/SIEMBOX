@@ -1,7 +1,7 @@
 <template>
   <div class="context-graph">
     <div class="page-header">
-      <p class="subtitle">Everything SIEMBox knows that is linked to an alert, IP, user, host, asset or domain.</p>
+      <p class="subtitle">Everything SIEMBox knows that is linked to an alert, IP, user, host, asset, application or domain.</p>
       <div class="header-controls">
         <GraphEntitySearch ref="search" @pick="onPick" @error="(m: string) => (notice = m)" />
         <el-radio-group :model-value="windowValue" size="small" aria-label="Time window" @change="onWindow">

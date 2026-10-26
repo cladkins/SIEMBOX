@@ -193,15 +193,15 @@ export function domainMatcherProblem(entry: string): string | null {
  * groups or backreferences, and it must not match the empty string (it would
  * match every value).
  *
- * Compiling a caller's pattern here is safe: it is at most APP_LIMITS.regex
- * characters, and the only inputs it runs on are the empty string. Running it
- * on real text happens only after the ReDoS gate (regexSafety) accepted it.
+ * It compiles the pattern and runs it only on the empty string. A signature
+ * an API caller sends is validated in the regex test pool's worker
+ * (signatureCheck.checkSignature via boundedRegex.checkSignatureBounded), after
+ * its regexes passed the write-time ReDoS gate, never on the event loop.
  */
 export function signatureRegexProblem(source: string): string | null {
   if (source.length === 0 || source.length > APP_LIMITS.regex) return `must be 1 to ${APP_LIMITS.regex} characters`;
   let re: RegExp;
   try {
-    // codeql[js/regex-injection] compiled and run only on '' (see above); real text needs the ReDoS gate first
     re = new RegExp(source);
   } catch (e) {
     return `does not compile: ${(e as Error).message}`;
@@ -211,7 +211,6 @@ export function signatureRegexProblem(source: string): string | null {
   // Count capture groups by matching against a string that cannot match, via
   // the source's own group structure: new RegExp(source + '|').exec('') has one
   // entry per group.
-  // codeql[js/regex-injection] run only on the empty string
   const groups = new RegExp(`${source}|`).exec('')!.length - 1;
   if (groups > 1) return `has ${groups} capture groups; at most one (the version) is allowed — use (?:...) for the rest`;
   if (re.test('')) return 'matches the empty string (it would match every value)';

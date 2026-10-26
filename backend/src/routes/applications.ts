@@ -14,11 +14,10 @@ import {
 import { describeInventoryRun, loadStoredSignatures } from '../services/applications/rollup';
 import { kickApplicationInventory, runApplicationInventoryNow } from '../jobs/applicationInventory';
 import { fetchAppCatalog, gateSignatureRegexes, getApplicationSource } from '../services/applications/appCatalog';
-import { collectAppRegexes, validateApplication, type AppSignature } from '../services/applications/appFormat';
+import { validateApplication, type AppSignature } from '../services/applications/appFormat';
 import {
   catalogPath,
   catalogStatus,
-  checkSignature,
   countCustomSignatures,
   deleteCustomSignature,
   getCustomSignature,
@@ -28,6 +27,7 @@ import {
   loadCustomSignatures,
   MAX_LOCAL_SIGNATURES,
   mergeSignatures,
+  rawSignatureRegexes,
   readSignatureInput,
   requestRescan,
   signatureToYaml,
@@ -40,6 +40,7 @@ import { AI_DRAFT_MAX_ITEMS, draftSignatureWithAi, type DraftItem } from '../ser
 import { isUnmatchedKind } from '../services/applications/gaps';
 import { assessRegexes } from '../services/regex/regexSafety';
 import { sendRegexRunError } from '../services/regex/regexHttp';
+import { checkSignatureBounded } from '../services/regex/boundedRegex';
 import { callProvider, getAiConfig, getAiPublicConfig } from '../services/ai/aiService';
 import { getAiBudgets } from '../services/ai/aiBudgets';
 import { catalogNewFileUrl } from '../services/parser/catalogService';
@@ -140,21 +141,19 @@ async function signatureSet(): Promise<SignatureSet> {
  * and returns null).
  */
 async function checkDoc(res: Response, doc: unknown, set: SignatureSet, expectId?: string): Promise<(SignatureCheck & { regex_refused: boolean }) | null> {
-  const loose = validateApplication(doc, { strict: false, expectId });
+  // The regexes go through the write-time gate (a worker) before anything
+  // compiles them; the checks themselves, which compile them and run the
+  // tests, run in the regex test pool with a hard budget.
+  const refs = rawSignatureRegexes(doc);
   let regex = null;
-  if (loose.ok && loose.app) {
-    const refs = collectAppRegexes(loose.app);
-    if (refs.length) {
-      try {
-        regex = await assessRegexes(refs, { priority: 'high' });
-      } catch (error) {
-        if (sendRegexRunError(res, error)) return null;
-        throw error;
-      }
-    }
+  try {
+    if (refs.length) regex = await assessRegexes(refs, { priority: 'high' });
+    const check = await checkSignatureBounded(doc, { effective: set.effective, parserNames: set.parserNames, regex, expectId, skipRegex: set.skip });
+    return { ...check, regex_refused: !!regex && (regex.vulnerable.length > 0 || regex.undecided.length > 0) };
+  } catch (error) {
+    if (sendRegexRunError(res, error, 'The signature check')) return null;
+    throw error;
   }
-  const check = checkSignature(doc, { effective: set.effective, parserNames: set.parserNames, regex, expectId, skipRegex: set.skip });
-  return { ...check, regex_refused: !!regex && (regex.vulnerable.length > 0 || regex.undecided.length > 0) };
 }
 
 function catalogInfo(set: SignatureSet, app: AppSignature | null) {
@@ -271,16 +270,21 @@ router.post('/signatures/ai-draft', authorize('admin'), async (req: Request, res
       cfg: await getAiConfig(),
       complete: callProvider,
       check: async (doc) => {
-        const loose = validateApplication(doc, { strict: false });
+        const refs = rawSignatureRegexes(doc);
         let regex = null;
-        if (loose.ok && loose.app && collectAppRegexes(loose.app).length) {
+        if (refs.length) {
           try {
-            regex = await assessRegexes(collectAppRegexes(loose.app), { priority: 'high' });
+            regex = await assessRegexes(refs, { priority: 'high' });
           } catch {
             gateBusy = true;
           }
         }
-        return checkSignature(doc, { effective: set.effective, parserNames: set.parserNames, regex, skipRegex: set.skip });
+        try {
+          return await checkSignatureBounded(doc, { effective: set.effective, parserNames: set.parserNames, regex, skipRegex: set.skip });
+        } catch (error) {
+          const why = error instanceof Error ? error.message : String(error);
+          return { ok: false, ready: false, errors: [`the signature could not be checked: ${why}`], warnings: [], contribute_errors: [], signature: null, yaml: null, tests: { total: 0, failures: [] } };
+        }
       },
     }
   );

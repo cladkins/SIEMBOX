@@ -38,7 +38,7 @@ import * as crypto from 'crypto';
 import { batchedDelete } from '../../utils/batchDelete';
 import { isStatementTimeout } from '../shippers/snapshotCache';
 import { stableStringify } from '../parser/catalogService';
-import type { AppSignature } from './appFormat';
+import { APP_SCHEMA, type AppSignature } from './appFormat';
 import { AppIndex, cleanDomain, parseImageRef, userAgentProduct, type AppMatch, MAX_MATCH_INPUT } from './matchers';
 import { fetchAppCatalog, gateSignatureRegexes, type AppCatalog, type RegexGateResult } from './appCatalog';
 
@@ -491,7 +491,7 @@ async function storeSignatures(client: RollupClient, catalog: AppCatalog, hash: 
            FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::jsonb[]) AS u(id, name, vendor, category, definition)
          ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, vendor = EXCLUDED.vendor, category = EXCLUDED.category,
            definition = EXCLUDED.definition, source = EXCLUDED.source, fetched_at = EXCLUDED.fetched_at, updated_at = NOW()`,
-        [apps.map((a) => a.id), apps.map((a) => a.name), apps.map((a) => a.vendor), apps.map((a) => a.category), apps.map((a) => JSON.stringify(a)), storedSource, catalog.fetched_at]
+        [apps.map((a) => a.id), apps.map((a) => a.name), apps.map((a) => a.vendor), apps.map((a) => a.category), apps.map((a) => JSON.stringify({ schema: APP_SCHEMA, ...a })), storedSource, catalog.fetched_at]
       );
     }
     await client.query(

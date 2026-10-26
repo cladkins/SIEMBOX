@@ -69,6 +69,15 @@ export const settingsAreas: SettingsArea[] = [
     component: () => import('./ContextGraphSettings.vue'),
   },
   {
+    key: 'applications',
+    path: 'applications',
+    title: 'Application Monitoring',
+    icon: Monitor,
+    description: 'The software inventory behind Application Monitoring: on or off, and how long an application stays listed after it was last seen.',
+    adminOnly: true,
+    component: () => import('./ApplicationSettings.vue'),
+  },
+  {
     key: 'ingestion',
     path: 'ingestion',
     title: 'Log Ingestion',

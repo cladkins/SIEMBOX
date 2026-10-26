@@ -270,6 +270,7 @@ function text(v: unknown, where: string, max: number, errors: string[], required
   }
   const t = v.trim();
   if (t.length > max) errors.push(`${where} is longer than ${max} characters`);
+  // eslint-disable-next-line no-control-regex -- refusing control characters is the point
   if (/[\u0000-\u001f\u007f]/.test(t.replace(/\n/g, ''))) errors.push(`${where} contains control characters`);
   return t;
 }

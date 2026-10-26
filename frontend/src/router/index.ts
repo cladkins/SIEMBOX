@@ -154,6 +154,12 @@ const routes: RouteRecordRaw[] = [
         meta: { allowedRoles: ['admin', 'analyst', 'operator'] },
       },
       {
+        // Every role: read-only for viewers (the API gates Refresh to analyst and up).
+        path: 'application-monitoring',
+        name: 'ApplicationMonitoring',
+        component: () => import('@/views/ApplicationMonitoring.vue'),
+      },
+      {
         path: 'log-discovery',
         name: 'LogDiscovery',
         component: () => import('@/views/LogDiscovery.vue'),

@@ -10,7 +10,7 @@
  * checks every entry is identical to its catalog/applications/ mirror file:
  * regenerate this file from the mirror when they differ.
  *
- * Generated from catalog/applications/ (22 signatures).
+ * Generated from catalog/applications/ (23 signatures).
  */
 export const BUNDLED_APPLICATION_DOCS: unknown[] = [
   {
@@ -1049,6 +1049,30 @@ export const BUNDLED_APPLICATION_DOCS: unknown[] = [
         "source": "user_agent",
         "input": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.2210.91",
         "version": "120.0.2210.91"
+      }
+    ]
+  },
+  {
+    "schema": "siembox.app/v1",
+    "id": "opera",
+    "name": "Opera",
+    "vendor": "Opera",
+    "category": "browser",
+    "description": "Web browser.",
+    "website": "https://www.opera.com",
+    "supersedes": [
+      "chrome"
+    ],
+    "match": {
+      "user_agent": [
+        "\\bOPR/(\\d+(?:\\.\\d+)*)"
+      ]
+    },
+    "tests": [
+      {
+        "source": "user_agent",
+        "input": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0",
+        "version": "106.0.0.0"
       }
     ]
   },

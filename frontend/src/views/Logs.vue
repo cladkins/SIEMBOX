@@ -321,10 +321,12 @@ const loadParsers = async () => {
 const route = useRoute();
 
 // Deep links from other pages (e.g. Shippers -> Direct Syslog Sources -> "View
-// Logs") pre-fill the filters: ?source_ip=<ip>&tab=raw|parsed&range=24h.
+// Logs", Application Monitoring's evidence) pre-fill the filters:
+// ?source_ip=<ip>&app_name=<program>&tab=raw|parsed&range=24h.
 function applyRouteQuery() {
   const q = route.query;
   if (typeof q.source_ip === 'string') filters.source_ip = q.source_ip;
+  if (typeof q.app_name === 'string') filters.app_name = q.app_name;
   if (q.tab === 'raw' || q.tab === 'parsed') activeTab.value = q.tab;
   const preset = typeof q.range === 'string' ? RANGE_PRESETS[q.range] : undefined;
   if (preset) dateRange.value = lastDuration(preset);

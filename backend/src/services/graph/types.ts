@@ -24,7 +24,8 @@ export type NodeType =
   | 'shipper'
   | 'shipper_tag'
   | 'endpoint'
-  | 'account';
+  | 'account'
+  | 'application';
 
 export const NODE_TYPES: readonly NodeType[] = [
   'ip',
@@ -41,6 +42,7 @@ export const NODE_TYPES: readonly NodeType[] = [
   'shipper_tag',
   'endpoint',
   'account',
+  'application',
 ];
 
 /** Where a relationship comes from. */
@@ -50,7 +52,8 @@ export const ORIGINS: readonly Origin[] = ['alerts', 'logs', 'inventory', 'risk'
 /** recorded: SIEMBox's own record (solid). logs: a claim a log made (dashed). heuristic: a match (dotted). */
 export type EdgeStyle = 'recorded' | 'logs' | 'heuristic';
 
-export type NodeFlag = 'threat_feed' | 'foreign' | 'private' | 'sender_only' | 'critical' | 'open_vulns' | 'closed';
+/** unmanaged: an application seen only on the network (user agents, DNS), on no host, container or service of yours. */
+export type NodeFlag = 'threat_feed' | 'foreign' | 'private' | 'sender_only' | 'critical' | 'open_vulns' | 'closed' | 'unmanaged';
 
 /**
  * Relation ids: what a group (and /api/graph/relation) is about. Edges carry
@@ -106,7 +109,17 @@ export type RelId =
   | 'queried_by'
   | 'sent_by'
   | 'sent_hosts'
-  | 'shipped_devices';
+  | 'shipped_devices'
+  // Application Monitoring's inventory (migration 048, resolvers/applications.ts).
+  | 'runs_app'
+  | 'uses_app'
+  | 'app_vulns'
+  | 'app_assets'
+  | 'app_hosts'
+  | 'app_ips'
+  | 'app_shippers'
+  | 'app_clients'
+  | 'vuln_apps';
 
 export type Role = 'admin' | 'operator' | 'analyst' | 'viewer';
 export type FactValue = string | number | boolean | null;
@@ -144,6 +157,14 @@ export interface GraphEdge {
   new?: boolean;
   /** signed_in_as only: both failed and successful sign-ins were seen. */
   success_after_failures?: boolean;
+  /** runs_app, uses_app, app_vulns: the versions seen (oldest first, at most the newest 5; sanitized). */
+  versions?: string[];
+  /** runs_app, uses_app: the inventory's evidence sources (syslog_program, container, user_agent, ...). */
+  sources?: string[];
+  /** uses_app: seen only on the network (user agents, DNS queries), not on the device. */
+  network?: boolean;
+  /** app_vulns: exact (an EDR finding on one of the application's packages) or best_effort (the finding's title names the product). */
+  match?: 'exact' | 'best_effort';
 }
 
 export type GroupStatus = 'ok' | 'timeout' | 'unavailable';

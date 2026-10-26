@@ -50,6 +50,9 @@ export const NODE_VISIBILITY: Readonly<Record<NodeType | 'account_details', Visi
   account: { roles: ALL_ROLES, mirrors: ['GET /api/alerts/:id'] },
   account_details: { roles: ADMIN, mirrors: ['GET /api/users/:id', 'GET /api/admin/users/:id/activity'] },
   endpoint: { roles: ADMIN, mirrors: ['GET /api/edr/agents/:id'] },
+  // Application Monitoring: every role reads the inventory, an application's
+  // locations (assets, hosts, shippers, client IPs) and its vulnerabilities.
+  application: { roles: ALL_ROLES, mirrors: ['GET /api/applications', 'GET /api/applications/:id', 'GET /api/applications/vulnerabilities'] },
 };
 
 export function canSeeType(role: Role, type: NodeType): boolean {
@@ -97,6 +100,7 @@ const FACTS: Readonly<Record<NodeType, readonly string[]>> = {
   shipper_tag: ['tag'],
   endpoint: ['hostname', 'os', 'agent_version', 'status', 'last_seen'],
   account: ['username'],
+  application: ['name', 'vendor', 'category', 'versions', 'locations', 'open_vulns'],
 };
 const ACCOUNT_DETAIL_FACTS: readonly string[] = ['role', 'enabled', 'mfa_enabled', 'last_login'];
 

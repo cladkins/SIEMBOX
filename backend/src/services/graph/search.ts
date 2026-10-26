@@ -11,6 +11,8 @@
  *      or host name prefix (3), watched domains (3), host:<q>, domain:<q> (with
  *      a dot), user:<q> (without), and rules by name (3).
  *   7. Anything else: user:<q>, and rules by name (3).
+ *   In 6 and 7, applications by name, vendor or id (3, only those in the
+ *   inventory), after the assets.
  *
  * Hints come from cheap probes: alert counts in the last 30 days (counted
  * over at most 1,001 rows) for IP, user, host and domain candidates, and facts
@@ -64,6 +66,15 @@ function hintFor(node: GraphNode, alerts: { total: number; capped: boolean } | n
       return ['rule', f.severity, f.enabled === false ? 'disabled' : null].filter(Boolean).join(' · ');
     case 'shipper':
       return ['shipper', f.status].filter(Boolean).join(' · ');
+    case 'application':
+      return [
+        'application',
+        f.vendor,
+        typeof f.locations === 'number' ? `${f.locations} location${f.locations === 1 ? '' : 's'}` : null,
+        typeof f.open_vulns === 'number' && f.open_vulns > 0 ? `${f.open_vulns} open vuln${f.open_vulns === 1 ? '' : 's'}` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
     case 'identity':
       return f.kind === 'email_domain' ? 'monitored email domain' : 'monitored identity';
     case 'domain':
@@ -98,7 +109,7 @@ async function computeSearch(deps: GraphDeps, caller: Caller, q: string) {
         if (ref && canSeeType(role, ref.type) && !refs.some((r) => r.id === ref.id)) refs.push(ref);
       };
       let incomplete = false;
-      const lookup = async (label: string, sql: string, params: unknown[], type: 'asset' | 'alert' | 'vuln' | 'shipper' | 'identity' | 'rule') => {
+      const lookup = async (label: string, sql: string, params: unknown[], type: 'asset' | 'alert' | 'vuln' | 'shipper' | 'identity' | 'rule' | 'application') => {
         if (!canSeeType(role, type)) return;
         const result = await budget.step(`search:${label}`, (query) => query<{ id: string | number }>(sql, params));
         if (result.status !== 'ok') {
@@ -107,6 +118,19 @@ async function computeSearch(deps: GraphDeps, caller: Caller, q: string) {
         }
         for (const row of result.value) add(entityRef(type, String(row.id)));
       };
+
+      // Applications by name, vendor or id: the signature set is small (a seq
+      // scan of it), each candidate probes application_inventory's primary key.
+      const applications = () =>
+        lookup(
+          'applications',
+          `SELECT s.id FROM application_signatures s
+            WHERE (s.name ILIKE $1 ESCAPE '\\' OR s.vendor ILIKE $1 ESCAPE '\\' OR s.id LIKE $2 ESCAPE '\\')
+              AND EXISTS (SELECT 1 FROM application_inventory i WHERE i.app_id = s.id)
+            ORDER BY (lower(s.name) = $3) DESC, s.name, s.id LIMIT 3`,
+          [containsPattern(q), prefixPattern(q.toLowerCase()), q.toLowerCase()],
+          'application'
+        );
 
       const colon = q.indexOf(':');
       const literalType = colon > 0 ? q.slice(0, colon).trim().toLowerCase() : '';
@@ -153,6 +177,7 @@ async function computeSearch(deps: GraphDeps, caller: Caller, q: string) {
           [prefix],
           'asset'
         );
+        await applications();
         await lookup(
           'shippers',
           `SELECT s.id FROM log_shippers s WHERE lower(s.name) LIKE $1 ESCAPE '\\' OR lower(s.hostname) LIKE $1 ESCAPE '\\' ORDER BY s.name, s.id LIMIT 3`,
@@ -176,9 +201,10 @@ async function computeSearch(deps: GraphDeps, caller: Caller, q: string) {
         }
         await lookup('rules', `SELECT r.id FROM detection_rules r WHERE r.name ILIKE $1 ESCAPE '\\' ORDER BY r.name LIMIT 3`, [containsPattern(q)], 'rule');
       } else {
-        // 7. Anything else: a user name, or a rule.
+        // 7. Anything else: a user name, an application, or a rule.
         const user = canonicalUser(q);
         add(user ? entityRef('user', user) : null);
+        await applications();
         await lookup('rules', `SELECT r.id FROM detection_rules r WHERE r.name ILIKE $1 ESCAPE '\\' ORDER BY r.name LIMIT 3`, [containsPattern(q)], 'rule');
       }
 

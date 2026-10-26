@@ -42,7 +42,11 @@ import type { PoolClient } from 'pg';
 import pool, { closePools } from '../../config/database';
 import { IP_ALERTS_SQL } from '../../routes/threatIntel';
 import { ASSET_ALERTS_SQL } from '../assets/assetContext';
-import type { Query } from './budget';
+import type { BudgetContext, Query } from './budget';
+import { hydrate } from './hydrate';
+import { search } from './search';
+import { createGraphCache, createSemaphore } from './limits';
+import type { QueryClient } from '../shippers/snapshotCache';
 import { entityRef, type EntityRef } from './entityKey';
 import { RELATIONS } from './relations';
 import { ALERT_KEY_INDEXES, alertKeyEquals, alertKeyStatsName, type AlertKey } from './alertKeys';
@@ -402,4 +406,117 @@ test('log relationships: the a side reads the PK, the b side idx_graph_log_edges
   assert.ok((await plannedIndexes(bSide)).includes('idx_graph_log_edges_b'), 'b side: idx_graph_log_edges_b');
   const cursor = await plannedIndexes({ sql: UPPER_BOUND_SQL, params: ['2 minutes'] });
   assert.ok(cursor.includes('idx_parsed_logs_created_at'), `the cursor bound: ${cursor.join(', ')}`);
+});
+
+test('application nodes: every relation, the facts lookup and the search probe the inventory by index, never a sequential scan', async (t) => {
+  if (!db) return t.skip(SKIP);
+  // 300 applications on 30,000 inventory rows (20,000 of them client IPs, a
+  // few apps on thousands of them), 200 assets, 2,000 vulnerability links.
+  await db.query('SAVEPOINT apps');
+  try {
+    await db.query(
+      `INSERT INTO application_signatures (id, name, vendor, category, definition, source)
+       SELECT 'plan' || $1 || '-' || g, 'Plan app ' || g, 'Vendor ' || (g % 40), 'web-server', '{}', 'catalog' FROM generate_series(1, 300) g`,
+      [tag]
+    );
+    const assets = (
+      await db.query(
+        `INSERT INTO assets (ip_address, hostname) SELECT ('198.19.253.' || g)::inet, 'plan-' || $1 || '-' || g FROM generate_series(1, 200) g RETURNING id`,
+        [tag]
+      )
+    ).rows.map((r) => r.id as number);
+    await db.query(
+      `INSERT INTO application_inventory (app_id, loc_type, loc_key, source, version, events, first_seen, last_seen)
+       SELECT 'plan' || $1 || '-' || (1 + (CASE WHEN g % 4 = 0 THEN g % 300 ELSE g % 3 END)),
+              CASE WHEN g <= 20000 THEN 'client' WHEN g <= 25000 THEN 'host' WHEN g <= 29000 THEN 'asset' ELSE 'shipper' END,
+              CASE WHEN g <= 20000 THEN '198.18.' || (g % 250) || '.' || (g / 250)
+                   WHEN g <= 25000 THEN CASE WHEN g % 2 = 0 THEN 'plan-' || $1 || '-' || (g % 200) ELSE '198.19.254.' || (g % 250) END
+                   WHEN g <= 29000 THEN ($2::int[])[1 + g % 200]::text
+                   ELSE (g % 50)::text END,
+              CASE WHEN g <= 20000 THEN 'user_agent' WHEN g <= 25000 THEN 'syslog_program' WHEN g <= 29000 THEN 'service_scan' ELSE 'container' END,
+              (g % 7)::text, 1 + g % 9, NOW() - INTERVAL '5 days', NOW() - make_interval(mins => g)
+         FROM generate_series(1, 30000) g
+       ON CONFLICT DO NOTHING`,
+      [tag, assets]
+    );
+    const vulns = (
+      await db.query(
+        `INSERT INTO vulnerabilities (cve_id, severity, cvss_score, title) SELECT 'CVE-PLAN-' || $1 || '-' || g, 'high', 7.5, 'plan' FROM generate_series(1, 200) g RETURNING id`,
+        [tag]
+      )
+    ).rows.map((r) => r.id as number);
+    await db.query(
+      `INSERT INTO application_vuln_links (app_id, asset_id, vulnerability_id, match, version)
+       SELECT 'plan' || $1 || '-' || (1 + g % 300), ($2::int[])[1 + g % 200], ($3::int[])[1 + (g / 10) % 200], CASE WHEN g % 2 = 0 THEN 'package' ELSE 'product' END, ''
+         FROM generate_series(1, 2000) g
+       ON CONFLICT DO NOTHING`,
+      [tag, assets, vulns]
+    );
+    for (const table of ['application_signatures', 'application_inventory', 'application_vuln_links', 'assets', 'vulnerabilities']) await db.query(`ANALYZE ${table}`);
+
+    const INV = ['application_inventory', 'application_vuln_links'];
+    const assertIndexed = async (label: string, statement: Statement, expected: string[]) => {
+      const all = await plan(statement, true);
+      for (const n of all) {
+        assert.ok(!(n['Node Type'] === 'Seq Scan' && INV.includes(n['Relation Name'] ?? '')), `${label}: a sequential scan of ${n['Relation Name']}`);
+      }
+      const used = all.map((n) => n['Index Name']).filter(Boolean);
+      // 'a|b': either index (the planner may start from the other side of a join).
+      for (const names of expected) assert.ok(names.split('|').some((name) => used.includes(name)), `${label}: ${names} in ${used.join(', ')}`);
+    };
+    const app = entityRef('application', `plan${tag}-1`);
+    const assetRef = entityRef('asset', String(assets[3]));
+    const cases: Array<[string, string, EntityRef, Record<string, unknown> | null, string[]]> = [
+      ['asset', 'runs_app', assetRef, { ip: '198.19.253.4', hostname: `plan-${tag}-4` }, ['idx_application_inventory_location']],
+      ['host', 'runs_app', entityRef('host', `plan-${tag}-4`), null, ['idx_application_inventory_location']],
+      ['ip', 'runs_app', entityRef('ip', '198.19.254.7'), null, ['idx_application_inventory_location']],
+      ['ip', 'uses_app', entityRef('ip', '198.18.7.3'), null, ['idx_application_inventory_location']],
+      ['shipper', 'runs_app', entityRef('shipper', '7'), { id: 7 }, ['idx_application_inventory_location']],
+      ['application', 'app_assets', app, { id: app.key }, ['application_inventory_pkey']],
+      ['application', 'app_hosts', app, { id: app.key }, ['application_inventory_pkey']],
+      ['application', 'app_ips', app, { id: app.key }, ['application_inventory_pkey']],
+      ['application', 'app_shippers', app, { id: app.key }, ['application_inventory_pkey|idx_application_inventory_location']],
+      ['application', 'app_clients', app, { id: app.key }, ['application_inventory_pkey']],
+      ['application', 'app_vulns', app, { id: app.key }, ['application_vuln_links_pkey']],
+      ['vuln', 'vuln_apps', entityRef('vuln', String(vulns[5])), { id: vulns[5] }, ['idx_application_vuln_links_vuln']],
+    ];
+    for (const [center, rel, ref, row, expected] of cases) {
+      await assertIndexed(`${center} ${rel}`, await captured(def(center, rel), ref, row, '30d'), expected);
+    }
+
+    // The facts lookup (hydrate.ts) and the search probe (search.ts), as they send them.
+    const statements: Statement[] = [];
+    const record: Query = async <T>(sql: string, params: unknown[] = []) => {
+      statements.push({ sql, params });
+      return [] as T[];
+    };
+    const budget = {
+      step: async <T>(_label: string, fn: (q: Query) => Promise<T>) => ({ status: 'ok' as const, value: await fn(record) }),
+      elapsed: () => 0,
+      timeouts: () => 0,
+      steps: () => 0,
+    };
+    await hydrate(budget as BudgetContext, 'viewer', [app, entityRef('application', `plan${tag}-2`)], new Map());
+    const facts = statements.find((s) => s.sql.includes('FROM application_signatures s'));
+    assert.ok(facts, 'the facts lookup ran');
+    await assertIndexed('facts', facts, ['application_inventory_pkey', 'application_vuln_links_pkey']);
+    statements.length = 0;
+    const recording: QueryClient = {
+      query: async (sql: string, params?: unknown[]) => {
+        statements.push({ sql, params: params ?? [] });
+        return { rows: [] };
+      },
+      release() {},
+    } as QueryClient;
+    await search(
+      { acquire: async () => recording, semaphore: createSemaphore(), cache: createGraphCache(), now: () => Date.now() },
+      { id: 1, role: 'viewer' },
+      'plan app 1'
+    );
+    const probe = statements.find((s) => s.sql.includes('FROM application_signatures s'));
+    assert.ok(probe, 'the search probed applications');
+    await assertIndexed('search', probe, ['application_inventory_pkey']);
+  } finally {
+    await db.query('ROLLBACK TO SAVEPOINT apps');
+  }
 });

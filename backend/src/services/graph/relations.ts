@@ -20,6 +20,7 @@ import { ACCOUNT_RELATIONS, loadAccountCenter } from './resolvers/accounts';
 import { ENDPOINT_RELATIONS, loadEndpointCenter } from './resolvers/endpoints';
 import { loadRuleCenter } from './resolvers/rules';
 import { LOG_EDGE_RELATIONS } from './resolvers/logEdges';
+import { APPLICATION_RELATIONS, loadApplicationCenter } from './resolvers/applications';
 
 export const RELATIONS: readonly RelationDef[] = [
   ...ALERT_RELATIONS,
@@ -28,6 +29,7 @@ export const RELATIONS: readonly RelationDef[] = [
   ...ENDPOINT_RELATIONS,
   ...RISK_RELATIONS,
   ...ACCOUNT_RELATIONS,
+  ...APPLICATION_RELATIONS,
   ...LOG_EDGE_RELATIONS,
 ];
 
@@ -81,6 +83,8 @@ export async function loadCenter(q: Query, ref: EntityRef): Promise<CenterInfo> 
       return loadAccountCenter(q, ref);
     case 'endpoint':
       return loadEndpointCenter(q, ref);
+    case 'application':
+      return loadApplicationCenter(q, ref);
     default:
       return { exists: true, row: null };
   }

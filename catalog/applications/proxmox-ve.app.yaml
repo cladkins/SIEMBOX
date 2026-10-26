@@ -9,8 +9,13 @@ cpe: { vendor: proxmox, product: virtual_environment }
 match:
   syslog_program: [pvedaemon, pveproxy, pvestatd, pve-firewall, pvescheduler, pve-ha-lrm, pve-ha-crm]
   package: [pve-manager, proxmox-ve]
+  parser: [proxmox-pveproxy-access, proxmox-auth-failure]
 tests:
   - source: syslog_program
     input: pvedaemon
   - source: package
     input: pve-manager
+  - source: parser
+    input: proxmox-pveproxy-access
+  - source: parser
+    input: proxmox-auth-failure

@@ -3,7 +3,7 @@
   "name": "nginx-komodo-error",
   "description": "Parses NGINX error logs from komodo system",
   "parser_type": "regex",
-  "priority": 44,
+  "priority": 38,
   "pattern": "^(?<timestamp>\\d{4}/\\d{2}/\\d{2}\\s+\\d{2}:\\d{2}:\\d{2})\\s+\\[(?<log_level>\\w+)\\]\\s+(?<pid>\\d+)#(?<worker_id>\\d+):\\s+\\*(?<connection_id>\\d+)\\s*(?<message>.*)?",
   "field_mappings": {
     "timestamp": "timestamp",

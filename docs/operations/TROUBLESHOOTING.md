@@ -392,6 +392,10 @@ was written for. The symptom is a log that *is* parsed but into the wrong
 `event_type` with few fields (e.g. a UniFi IDS/IPS event landing as a bare
 `cef_event`). Give the specific parser a lower priority number than the generic
 one — `Logs → Parsed Logs → Parser` column shows which one actually claimed it.
+For parser files, `cd backend && npm run build && npm run validate-parsers --
+<dir-with-all-your-parsers>` lists every sample claimed by the wrong parser,
+with both priorities and the fields lost (see PARSERS.md, "Set Parser
+Priority"); the catalog's CI runs the same check.
 
 ---
 

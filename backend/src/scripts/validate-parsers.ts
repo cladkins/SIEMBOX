@@ -9,12 +9,20 @@
  *   node dist/scripts/validate-parsers.js <file-or-dir> [more...]
  *   node dist/scripts/validate-parsers.js catalog/parsers
  *
- * Exits 0 if every file passes (strict) validation AND all self-tests pass; 1 otherwise.
+ * When more than one parser is given, they are also checked AS A SET, the way the
+ * engine runs them (ascending priority, first match wins): every sample of a
+ * non-catch-all parser must be claimed by that parser, or by an earlier one that
+ * still produces all of the sample's expected fields. See
+ * services/parser/parserShadowing.ts.
+ *
+ * Exits 0 if every file passes (strict) validation AND all self-tests pass AND no
+ * parser shadows another; 1 otherwise.
  */
 import * as fs from 'fs';
 import * as path from 'path';
 import { validatePortableParser, runSelfTests, PortableParser } from '../services/parser/parserPortable';
 import { isUndecidedUnbounded, redosUndecidedMessage, scanParserRedos } from '../services/parser/redos';
+import { findShadowingConflicts, formatShadowConflict } from '../services/parser/parserShadowing';
 
 function findParserFiles(target: string): string[] {
   const stat = fs.statSync(target);
@@ -30,7 +38,14 @@ function findParserFiles(target: string): string[] {
   return out;
 }
 
-function validateFile(file: string): { ok: boolean; lines: string[] } {
+interface FileResult {
+  ok: boolean;
+  lines: string[];
+  /** Set once the file passes schema validation, for the cross-parser check. */
+  parser?: PortableParser;
+}
+
+function validateFile(file: string): FileResult {
   const lines: string[] = [];
   let parsed: unknown;
   try {
@@ -45,7 +60,8 @@ function validateFile(file: string): { ok: boolean; lines: string[] } {
     return { ok: false, lines: [`✗ ${file}`, ...validation.errors.map((e) => `    error: ${e}`), ...lines] };
   }
 
-  const selfTest = runSelfTests(parsed as PortableParser);
+  const parser = parsed as PortableParser;
+  const selfTest = runSelfTests(parser);
   if (!selfTest.ok) {
     const fl: string[] = [`✗ ${file}  (${selfTest.passed}/${selfTest.total} self-tests passed)`, ...lines];
     for (const f of selfTest.failures) {
@@ -55,7 +71,7 @@ function validateFile(file: string): { ok: boolean; lines: string[] } {
       }
       if (f.note) fl.push(`      two-stage transport: ${f.note}`);
     }
-    return { ok: false, lines: fl };
+    return { ok: false, lines: fl, parser };
   }
 
   // ReDoS gate: every shipped regex must be non-backtracking — the same scan the
@@ -85,10 +101,10 @@ function validateFile(file: string): { ok: boolean; lines: string[] } {
       fl.push(`    ${f.location}: ${what}`);
     }
     fl.push('    Rewrite to avoid catastrophic backtracking: anchor segments, avoid adjacent \\s+/.* over the same text, prefer bounded character classes.');
-    return { ok: false, lines: [...fl, ...lines] };
+    return { ok: false, lines: [...fl, ...lines], parser };
   }
 
-  return { ok: true, lines: [`✓ ${file}  (${selfTest.total} self-tests passed, ReDoS-safe)`, ...lines] };
+  return { ok: true, lines: [`✓ ${file}  (${selfTest.total} self-tests passed, ReDoS-safe)`, ...lines], parser };
 }
 
 function main() {
@@ -113,14 +129,34 @@ function main() {
   }
 
   let failed = 0;
+  const parsers: PortableParser[] = [];
   for (const file of files.sort()) {
-    const { ok, lines } = validateFile(file);
+    const { ok, lines, parser } = validateFile(file);
     if (!ok) failed++;
+    if (parser) parsers.push(parser);
     console.log(lines.join('\n'));
   }
-
   console.log(`\n${files.length - failed}/${files.length} parser file(s) passed.`);
-  process.exit(failed > 0 ? 1 : 0);
+
+  // Cross-parser check: a parser that passes its own self-tests can still never
+  // fire if an earlier parser (lower priority number) claims its logs.
+  let conflicts = 0;
+  if (parsers.length > 1) {
+    const found = findShadowingConflicts(parsers);
+    conflicts = found.length;
+    console.log(
+      `\nParser selection order (${parsers.length} parsers, ascending priority, first match wins; ` +
+        'ties broken by name here, by install order in production):'
+    );
+    for (const c of found) console.log(formatShadowConflict(c).join('\n'));
+    console.log(
+      conflicts === 0
+        ? '✓ no parser claims another parser\'s samples without producing their expected fields.'
+        : `\n${conflicts} sample(s) claimed by the wrong parser.`
+    );
+  }
+
+  process.exit(failed > 0 || conflicts > 0 ? 1 : 0);
 }
 
 main();

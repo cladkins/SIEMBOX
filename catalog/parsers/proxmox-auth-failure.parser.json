@@ -1,0 +1,68 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "proxmox-auth-failure",
+  "description": "Proxmox VE failed logins from syslog (header stripped). Covers the daemon's own line, logged by pvedaemon for every realm (\"authentication failure; rhost=... user=user@realm msg=...\"), and the pam_unix line for the proxmox-ve-auth PAM service (Linux PAM realm, logged under the tag IPCC.xs). The remote address is unwrapped from ::ffff:a.b.c.d.",
+  "parser_type": "regex",
+  "priority": 16,
+  "pattern": "^(?:authentication failure; rhost=(?:::ffff:)?(?<rhost>[0-9a-fA-F:.]{2,45}) user=(?<user>\\S{1,128}) msg=(?<reason>.{0,512})|pam_unix\\(proxmox-ve-auth:auth\\): authentication failure; logname=\\S{0,64} uid=\\d{1,10} euid=\\d{1,10} tty=\\S{0,64} ruser=\\S{0,64} rhost=(?:(?:::ffff:)?(?<pam_rhost>[0-9a-fA-F:.]{2,45}))? {1,4}user=(?<pam_user>\\S{1,128}))$",
+  "field_mappings": {
+    "rhost": "source_ip",
+    "pam_rhost": "source_ip",
+    "user": "user",
+    "pam_user": "user",
+    "reason": "reason"
+  },
+  "derivations": [
+    {
+      "set": {
+        "event": "login_failure",
+        "service": "pvedaemon"
+      }
+    }
+  ],
+  "event_type": "proxmox_auth",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "pvedaemon: failed web UI / API login (syslog tag pvedaemon, header stripped)",
+      "input": "authentication failure; rhost=::ffff:192.168.1.130 user=root@pam msg=Authentication failure",
+      "expect": {
+        "source_ip": "192.168.1.130",
+        "user": "root@pam",
+        "reason": "Authentication failure",
+        "event": "login_failure",
+        "auth_outcome": "failure",
+        "service": "pvedaemon"
+      }
+    },
+    {
+      "description": "pvedaemon: unknown user in the built-in PVE realm",
+      "input": "authentication failure; rhost=::ffff:203.0.113.45 user=admin@pve msg=no such user ('admin@pve')",
+      "expect": {
+        "source_ip": "203.0.113.45",
+        "user": "admin@pve",
+        "event": "login_failure",
+        "service": "pvedaemon"
+      }
+    },
+    {
+      "description": "pam_unix failure for the Linux PAM realm (syslog tag IPCC.xs, header stripped)",
+      "input": "pam_unix(proxmox-ve-auth:auth): authentication failure; logname= uid=0 euid=0 tty= ruser= rhost=::ffff:192.168.1.130  user=root",
+      "expect": {
+        "source_ip": "192.168.1.130",
+        "user": "root",
+        "event": "login_failure",
+        "auth_outcome": "failure",
+        "service": "pvedaemon"
+      }
+    },
+    {
+      "description": "sshd's pam_unix failure is not a Proxmox login",
+      "input": "pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.9  user=root",
+      "expect": {
+        "service": null,
+        "event": null
+      }
+    }
+  ]
+}

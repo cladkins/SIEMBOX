@@ -21,31 +21,34 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
 import { runParser, ParserDef } from './runParser';
+import { engineOrder, findShadowingConflicts, formatShadowConflict, selectFirstMatch, ShadowingParser } from './parserShadowing';
 
 const CATALOG = path.join(__dirname, '../../../../catalog/parsers');
 
-function loadAll(): ParserDef[] {
+function loadAll(): ShadowingParser[] {
   return fs
     .readdirSync(CATALOG)
     .filter((f) => f.endsWith('.parser.json'))
-    .map((f) => JSON.parse(fs.readFileSync(path.join(CATALOG, f), 'utf8')) as ParserDef);
+    .map((f) => JSON.parse(fs.readFileSync(path.join(CATALOG, f), 'utf8')) as ShadowingParser);
 }
 
 /**
  * Reproduce ParserEngine.processLog's selection: ascending priority, first match
  * wins. The id tiebreak the DB applies is approximated by name so the result is
- * deterministic here.
+ * deterministic here (parserShadowing.engineOrder, shared with validate-parsers).
  */
 function selectParser(message: string): { parser: ParserDef; result: NonNullable<ReturnType<typeof runParser>> } | null {
-  const ordered = loadAll().sort(
-    (a, b) => (a.priority ?? 100) - (b.priority ?? 100) || a.name.localeCompare(b.name)
-  );
-  for (const parser of ordered) {
-    const result = runParser(parser, message, { packetSourceIp: '192.168.1.1' });
-    if (result) return { parser, result };
-  }
-  return null;
+  return selectFirstMatch(engineOrder(loadAll()), message, '192.168.1.1');
 }
+
+test('no catalog parser claims another parser\'s samples without producing their expected fields', () => {
+  // The whole-catalog form of every test below, and the same check
+  // validate-parsers runs in the catalog's CI: each sample of each non-catch-all
+  // parser must be claimed by its own parser, or by an earlier one that yields
+  // all of its expected fields.
+  const conflicts = findShadowingConflicts(loadAll());
+  assert.deepEqual(conflicts, [], conflicts.map((c) => formatShadowConflict(c).join('\n')).join('\n'));
+});
 
 // Real UCG-Max IDS/IPS event, as stored after the syslog header is stripped.
 const UNIFI_IPS =
@@ -300,4 +303,49 @@ test('the ASGI parser stores the payload once, not twice', () => {
   assert.equal(copies.length, 1, `payload duplicated across: ${copies.map(([k]) => k).join(', ')}`);
   // And the container gutter is stripped, so `message` is valid JSON.
   assert.doesNotThrow(() => JSON.parse(String(result.fields.message)));
+});
+
+// ---------------------------------------------------------------------------
+// Proxmox VE. The first Proxmox parser was `parser_type: json` with an empty
+// pattern and mappings only on generic envelope keys (host/message/service), so
+// at priority 15 it claimed authentik's JSON ahead of authentik-asgi-access
+// (23), and moved behind authentik-audit (24) it lost its own samples instead.
+// Real Proxmox logs arrive as plain syslog, so the parsers now match the
+// header-stripped message lines and claim nothing else.
+// ---------------------------------------------------------------------------
+
+test('Proxmox pveproxy access and failed-login lines go to the Proxmox parsers', () => {
+  const cases: Array<[string, string, Record<string, string>]> = [
+    [
+      '::ffff:192.168.1.130 - root@pam [05/10/2026:11:23:14 -0500] "GET /api2/json/cluster/resources HTTP/1.1" 200 4231',
+      'proxmox-pveproxy-access',
+      { source_ip: '192.168.1.130', user: 'root@pam', method: 'GET', status_code: '200', event: 'http_access_success' },
+    ],
+    [
+      'authentication failure; rhost=::ffff:192.168.1.130 user=root@pam msg=Authentication failure',
+      'proxmox-auth-failure',
+      { source_ip: '192.168.1.130', user: 'root@pam', event: 'login_failure', auth_outcome: 'failure' },
+    ],
+    [
+      'pam_unix(proxmox-ve-auth:auth): authentication failure; logname= uid=0 euid=0 tty= ruser= rhost=::ffff:192.168.1.130  user=root',
+      'proxmox-auth-failure',
+      { source_ip: '192.168.1.130', user: 'root', event: 'login_failure' },
+    ],
+  ];
+  for (const [line, winner, fields] of cases) {
+    const picked = selectParser(line);
+    assert.equal(picked?.parser.name, winner, `claimed by ${picked?.parser.name}: ${line}`);
+    for (const [k, v] of Object.entries(fields)) assert.equal(picked!.result.fields[k], v, `${winner}: ${k}`);
+  }
+});
+
+test('the Proxmox parsers claim no JSON and no other service\'s auth lines', () => {
+  for (const line of [
+    AUTHENTIK_ASGI,
+    '{"host":"pve","message":"pam_unix(proxmox-ve-auth:auth): authentication failure; user=root","service":"IPCC.xs"}',
+    'pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.9  user=root',
+    NGINX_COMMON,
+  ]) {
+    assert.doesNotMatch(String(selectParser(line)?.parser.name), /^proxmox-/, line);
+  }
 });

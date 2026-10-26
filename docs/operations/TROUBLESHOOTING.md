@@ -1520,7 +1520,10 @@ through it in order:
    a container on a host whose log shipper reports containers, an endpoint
    finding, or clients' user agents / DNS queries in parsed logs. A container
    needs the shipper's Docker socket and `CONTAINER_REPORT_INTERVAL` (see
-   *Container Scanning → Shipper hosts*).
+   *Container Scanning → Shipper hosts*). Installed packages need an
+   endpoint agent that reports its software list: *Endpoints → Details*
+   shows *Installed packages* and when they were last reported ("not
+   reported": the agent predates it, or its collectors found nothing).
 3. **Does a signature match it?** Open the **Not identified** tab: the most
    frequent program names, container images and user-agent products nothing
    matches. If yours is there, no signature covers that name: click

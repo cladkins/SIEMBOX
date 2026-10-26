@@ -260,6 +260,14 @@
           </el-descriptions-item>
           <el-descriptions-item label="Next scan ≈">{{ detail.agent.next_scan_at ? formatDate(detail.agent.next_scan_at) : '—' }}</el-descriptions-item>
           <el-descriptions-item label="Scan interval">{{ humanInterval(detail.agent.vuln_scan_interval_seconds) }}</el-descriptions-item>
+          <el-descriptions-item label="Installed packages">
+            <template v-if="detail.agent.packages_reported_at">
+              {{ Number(detail.agent.package_count ?? 0).toLocaleString() }}
+              <span class="muted">(reported {{ formatDate(detail.agent.packages_reported_at) }})</span>
+            </template>
+            <template v-else>not reported</template>
+          </el-descriptions-item>
+          <el-descriptions-item label="Package list changed">{{ detail.agent.packages_stored_at ? formatDate(detail.agent.packages_stored_at) : '—' }}</el-descriptions-item>
         </el-descriptions>
 
         <el-tabs v-model="detailTab">
@@ -296,6 +304,28 @@
               <template #empty>No vulnerabilities reported for this endpoint.</template>
             </el-table>
           </el-tab-pane>
+          <el-tab-pane :label="`Packages (${detail.packagesTotal.toLocaleString()})`" name="packages">
+            <el-input
+              v-model="detail.packageQuery"
+              placeholder="Filter by name"
+              clearable
+              size="small"
+              style="max-width: 280px; margin-bottom: 8px"
+              @input="onPackageQuery"
+            />
+            <el-table :data="detail.packages" v-loading="detail.packagesLoading" size="small" stripe max-height="420">
+              <el-table-column prop="name" label="Package" min-width="220" show-overflow-tooltip />
+              <el-table-column prop="version" label="Version" min-width="160" show-overflow-tooltip />
+              <el-table-column prop="type" label="Type" width="90" />
+              <el-table-column label="First seen" width="170">
+                <template #default="{ row }">{{ formatDate(row.first_seen) }}</template>
+              </el-table-column>
+              <template #empty>No installed packages reported. Agents that predate the software inventory send none.</template>
+            </el-table>
+            <p v-if="detail.packagesTotal > detail.packages.length" class="muted">
+              Showing {{ detail.packages.length }} of {{ detail.packagesTotal.toLocaleString() }}; filter by name to narrow it.
+            </p>
+          </el-tab-pane>
         </el-tabs>
       </div>
     </el-drawer>
@@ -329,8 +359,12 @@ const tokenForm = reactive({ label: '', expires_in_hours: 0 });
 
 const detailOpen = ref(false);
 const detailTab = ref('detections');
-const detail = reactive<{ agent: any; detections: any[]; vulns: any[]; loading: boolean }>({
+const detail = reactive<{
+  agent: any; detections: any[]; vulns: any[]; loading: boolean;
+  packages: any[]; packagesTotal: number; packageQuery: string; packagesLoading: boolean;
+}>({
   agent: null, detections: [], vulns: [], loading: false,
+  packages: [], packagesTotal: 0, packageQuery: '', packagesLoading: false,
 });
 
 // The API on 8421 serves plain HTTP; an https URL here fails every enrollment.
@@ -529,7 +563,11 @@ async function openDetail(agent: any) {
   detail.agent = agent;
   detail.detections = [];
   detail.vulns = [];
+  detail.packages = [];
+  detail.packagesTotal = 0;
+  detail.packageQuery = '';
   detail.loading = true;
+  void loadPackages();
   detailTab.value = 'detections';
   detailOpen.value = true;
   try {
@@ -541,6 +579,26 @@ async function openDetail(agent: any) {
     detail.vulns = v.data.vulnerabilities || [];
   } catch { ElMessage.error('Failed to load endpoint detail'); }
   finally { detail.loading = false; }
+}
+
+async function loadPackages() {
+  const agentId = detail.agent?.agent_id;
+  if (!agentId) return;
+  const q = detail.packageQuery;
+  detail.packagesLoading = true;
+  try {
+    const { data } = await api.getEndpointPackages(agentId, { q: q || undefined, limit: 500 });
+    if (detail.agent?.agent_id !== agentId || detail.packageQuery !== q) return; // a newer request is on its way
+    detail.packages = data.packages || [];
+    detail.packagesTotal = Number(data.total ?? 0);
+  } catch { ElMessage.error('Failed to load installed packages'); }
+  finally { detail.packagesLoading = false; }
+}
+
+let packageQueryTimer: ReturnType<typeof setTimeout> | undefined;
+function onPackageQuery() {
+  clearTimeout(packageQueryTimer);
+  packageQueryTimer = setTimeout(() => void loadPackages(), 300);
 }
 
 async function removeEndpoint(agent: any) {

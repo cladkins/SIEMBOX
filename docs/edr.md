@@ -16,6 +16,7 @@ Only the agent **identity** is new. Everything the agent reports lands in the
 | inventory          | `assets` (`asset_type='endpoint'`, upserted by IP so it correlates with log/Nuclei data) |
 | events (detection) | `alerts` (`source='edr'`, linked to the endpoint asset, deduped on the agent event id) |
 | vulnerabilities    | `vulnerabilities` + `asset_vulnerabilities` (idempotent upsert) |
+| packages           | `edr_agent_packages` + `edr_agent_package_snapshots` (migration 049; full snapshot per agent) |
 
 New tables (migration `016_edr_agents.sql`): `edr_agents`, `edr_enrollment_tokens`.
 `alerts` gains nullable `asset_id` / `source` / `event_id` columns (+ a partial
@@ -29,9 +30,10 @@ unique index on `event_id` for replay dedup).
 - `GET  /agents/:id/config` → `AgentConfig` (includes `yara_rules_version` and `agent_update`)
 - `GET  /agents/:id/yara` → curated YARA bundle as raw `text/plain` (empty body valid)
 - `POST /inventory` · `POST /events` · `POST /vulnerabilities` → `202 Accepted`
+- `POST /packages` → `200` with `{accepted, unchanged, snapshot_required, package_count, stored, removed, skipped, truncated}` (installed software, see [Installed packages](#installed-packages))
 
 **Admin-facing** (JWT + admin role):
-- `GET /agents`, `GET /agents/:id`, `GET /agents/:id/vulnerabilities`, `GET /agents/:id/detections`, `DELETE /agents/:id`
+- `GET /agents`, `GET /agents/:id`, `GET /agents/:id/vulnerabilities`, `GET /agents/:id/packages`, `GET /agents/:id/detections`, `DELETE /agents/:id`
 - Agent updates: `GET /agent-updates`, `POST /agent-updates/check`, `PUT /agent-updates/settings`, `POST /agents/:id/update`, `DELETE /agents/:id/update`, `POST /agents/update-outdated` (see [Agent updates](#agent-updates) and `docs/reference/API.md`)
 - `POST /tokens` (generate, plaintext shown once), `GET /tokens`, `DELETE /tokens/:hash` (revoke)
 - `GET /yara` (current bundle version/sha/size), `POST /yara/refresh` (pull YARA-Forge now)
@@ -49,7 +51,46 @@ install instructions.
 - **Scan timing:** the agent reports no forward schedule — it runs on the server-set cadence in `AgentConfig` (heartbeat 60s, config 5m, inventory 1h, **vuln scan daily**) and only reports `scan_started_at`/`scan_completed_at` after a scan. Those are stored on the agent row; the Endpoints UI shows the real last scan + duration and derives **next scan ≈ last completed + `vuln_scan_interval_seconds`**.
 - **Detections:** `type='detection'` → alerts; `telemetry` events are ignored for now.
 - **Offline:** an agent reads as offline when `last_seen` is older than 5 minutes.
-- **Rate limiting:** the agent-key routes (heartbeat, config, YARA, inventory, events, vulnerabilities) carrying `X-Agent-ID`, with the method each route answers, skip the general per-address limiter, so a fleet behind one NAT address isn't throttled; they have their own, higher per-address limit (`EDR_AGENT_RATE_MAX`, default 30000 per 15 minutes) in front of agent auth. Enrollment counts toward the general limit, with or without `X-Agent-ID`. The address is the agent's TCP address: an `X-Forwarded-For` it sends to port 8421 is ignored.
+- **Rate limiting:** the agent-key routes (heartbeat, config, YARA, inventory, events, vulnerabilities, packages) carrying `X-Agent-ID`, with the method each route answers, skip the general per-address limiter, so a fleet behind one NAT address isn't throttled; they have their own, higher per-address limit (`EDR_AGENT_RATE_MAX`, default 30000 per 15 minutes) in front of agent auth. Enrollment counts toward the general limit, with or without `X-Agent-ID`. The address is the agent's TCP address: an `X-Forwarded-For` it sends to port 8421 is ignored.
+
+## Installed packages
+
+The agent reports the full list of software installed on its host (not only
+what grype finds vulnerable) to `POST /api/edr/packages`. Each report is a
+**full snapshot**: it replaces the agent's previous list, so a package missing
+from the newest report is removed. Rows belong to the agent (`ON DELETE
+CASCADE`), so deregistering an endpoint drops its list; Application
+Monitoring places them on the agent's asset as the `endpoint_sbom` evidence
+source, matched by the signatures' `package` matcher (lower-cased name).
+
+```json
+{
+  "agent_id": "<uuid>",
+  "snapshot_hash": "sha256:…",
+  "collected_at": "2026-10-26T12:00:00Z",
+  "force": false,
+  "packages": [{ "name": "openssh-server", "version": "1:9.6p1-3ubuntu13.5", "type": "deb" }]
+}
+```
+
+- `snapshot_hash` (optional, ≤128 chars of `[A-Za-z0-9:_+/=.-]`) is opaque to
+  the server; without one it computes its own over the cleaned list. When it
+  equals the stored hash nothing is written (`unchanged: true`) — only
+  `reported_at` moves. `force: true` stores the list anyway.
+- A body with `snapshot_hash` and no `packages` is a check: `unchanged: true`
+  when the server has that snapshot, else `accepted: false,
+  snapshot_required: true` (send the list).
+- `type` is the ecosystem (`deb`, `rpm`, `apk`, `brew`, `app`, `pkg`, `msi`,
+  `npm`, `pypi`, `go`, …): lower case, else stored as `''`. Names are clipped
+  to 256 characters, versions to 128, control characters dropped; entries
+  without a name are skipped, duplicate (type, name, version) collapse (dpkg
+  lists multi-arch packages once per architecture). At most 50,000 packages a
+  report (the rest are dropped, counted in `truncated`); the body limit is the
+  API's 10 MB, and gzip request bodies are accepted.
+- Stored in batched `UNNEST` upserts in one transaction under the agent's
+  snapshot-row lock (two reports from one agent serialize): 10,000 packages
+  take a fraction of a second, far inside the agent's 30 s timeout.
+- Older servers answer `404`; the agent backs off and keeps the rest running.
 
 ## YARA rule packs (server-delivered)
 

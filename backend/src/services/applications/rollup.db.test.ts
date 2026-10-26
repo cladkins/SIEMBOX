@@ -13,6 +13,8 @@
  * twice; unmatched programs, user-agent products and images; snapshot sources
  * (nmap services, shipper containers, EDR packages and OS) and that an
  * upgraded image or package replaces its row at once (no false drift);
+ * endpoint installed packages (endpoint_sbom) on the agent's asset, gone
+ * with the snapshot that drops them;
  * vulnerability links, exact by package and best effort by product; the
  * retention prune and the unmatched cap; signatures stored for the page and
  * as the catalog fallback. Skips itself without Postgres.
@@ -31,7 +33,7 @@ let ready = false;
 
 const TABLES = [
   'raw_logs', 'parsed_logs', 'parsers', 'assets', 'asset_services', 'log_shippers', 'shipper_containers', 'vulnerabilities',
-  'asset_vulnerabilities', 'edr_agents', 'application_inventory', 'application_unmatched', 'application_vuln_links',
+  'asset_vulnerabilities', 'edr_agents', 'edr_agent_packages', 'edr_agent_package_snapshots', 'application_inventory', 'application_unmatched', 'application_vuln_links',
   'application_signatures', 'application_inventory_state',
 ];
 
@@ -297,6 +299,42 @@ test('snapshot sources: services, containers, EDR packages and OS; vulnerability
   assert.equal(find(rows, 'openssh', 'asset:1', 'edr_package').length, 0);
   const { rows: after2 } = await pool.query(`SELECT app_id FROM ${schema}.application_vuln_links ORDER BY 1`);
   assert.deepEqual(after2.map((l) => l.app_id), ['nginx']);
+});
+
+test('endpoint installed packages: endpoint_sbom on the agent\'s asset, version from the package, gone when the snapshot drops it', async (t) => {
+  if (!ready) return t.skip(SKIP);
+  await pool.query(`INSERT INTO ${schema}.assets (id, ip_address, hostname) VALUES (1, '10.0.0.2', 'web01'), (2, '10.0.0.3', 'db01')`);
+  const agent = crypto.randomUUID();
+  const unlinked = crypto.randomUUID(); // no asset yet: contributes nothing
+  await pool.query(`INSERT INTO ${schema}.edr_agents (agent_id, api_key_hash, asset_id) VALUES ($1, 'h', 2), ($2, 'h', NULL)`, [agent, unlinked]);
+  await pool.query(
+    `INSERT INTO ${schema}.edr_agent_packages (agent_id, type, name, version) VALUES
+       ($1, 'deb', 'openssh-server', '1:9.6p1-3ubuntu13.5'), ($1, 'deb', 'libc6', '2.39-0ubuntu8'), ($1, 'deb', 'Nginx', '1.24.0-2ubuntu7'),
+       ($2, 'deb', 'openssh-server', '1:8.0')`,
+    [agent, unlinked]
+  );
+  await pool.query(`INSERT INTO ${schema}.edr_agent_package_snapshots (agent_id, snapshot_hash, package_count, reported_at) VALUES ($1, 'h1', 3, NOW())`, [agent]);
+  // nginx has no package matcher in these signatures: only openssh matches.
+  await run();
+  let rows = await inventory();
+  assert.deepEqual(rows.filter((r) => r.source === 'endpoint_sbom'), [
+    { app_id: 'openssh', loc: 'asset:2', source: 'endpoint_sbom', version: '1:9.6p1-3ubuntu13.5', events: 1 },
+  ]);
+  const { rows: ev } = await pool.query(`SELECT evidence FROM ${schema}.application_inventory WHERE source = 'endpoint_sbom'`);
+  assert.deepEqual(ev[0].evidence, { package: 'openssh-server', version: '1:9.6p1-3ubuntu13.5', type: 'deb' });
+  const { rows: links } = await pool.query(`SELECT * FROM ${schema}.application_vuln_links`);
+  assert.equal(links.length, 0, 'an installed package is no vulnerability');
+
+  // Upgraded: the new snapshot has the new version only; the old row goes at once.
+  await pool.query(`UPDATE ${schema}.edr_agent_packages SET version = '1:9.6p1-3ubuntu13.8' WHERE agent_id = $1 AND name = 'openssh-server'`, [agent]);
+  await run();
+  rows = await inventory();
+  assert.deepEqual(find(rows, 'openssh', 'asset:2', 'endpoint_sbom').map((r) => r.version), ['1:9.6p1-3ubuntu13.8']);
+
+  // Removed from the host: the next snapshot no longer has it.
+  await pool.query(`DELETE FROM ${schema}.edr_agent_packages WHERE agent_id = $1 AND name = 'openssh-server'`, [agent]);
+  await run();
+  assert.equal((await inventory()).filter((r) => r.source === 'endpoint_sbom').length, 0);
 });
 
 test('retention prunes rows not seen for N days and caps the unmatched list', async (t) => {

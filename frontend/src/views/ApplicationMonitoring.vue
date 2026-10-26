@@ -464,7 +464,10 @@ async function refresh() {
 function evidenceText(e: Record<string, unknown> | null): string {
   if (!e) return '';
   if (typeof e.image === 'string') return e.image;
-  if (typeof e.package === 'string') return `${e.package}${e.installed_version ? ` ${e.installed_version}` : ''}`;
+  if (typeof e.package === 'string') {
+    const version = e.installed_version ?? e.version;
+    return `${e.package}${version ? ` ${version}` : ''}${typeof e.type === 'string' && e.type ? ` (${e.type})` : ''}`;
+  }
   if (e.port !== undefined) return `${e.port}/${e.protocol ?? 'tcp'} ${e.service_name ?? ''}`.trim();
   if (typeof e.os_version === 'string') return e.os_version;
   if (typeof e.value === 'string') return e.value.length > 120 ? `${e.value.slice(0, 120)}…` : e.value;

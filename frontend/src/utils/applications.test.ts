@@ -45,7 +45,8 @@ describe('versions', () => {
 
 describe('labels', () => {
   it('sources, where, categories, signature source', () => {
-    assert.equal(sourceLabel('edr_package'), 'Endpoint package');
+    assert.equal(sourceLabel('edr_package'), 'Vulnerable package');
+    assert.equal(sourceLabel('endpoint_sbom'), 'Installed package');
     assert.equal(sourceLabel('something-new'), 'something-new');
     assert.equal(whereLabel({ hosts: 1, clients: 0 }), '1 host');
     assert.equal(whereLabel({ hosts: 3, clients: 12 }), '3 hosts, 12 clients');

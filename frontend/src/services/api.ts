@@ -543,6 +543,8 @@ export const api = {
   getEndpoints: () => apiClient.get('/edr/agents'),
   getEndpoint: (id: string) => apiClient.get(`/edr/agents/${id}`),
   getEndpointVulnerabilities: (id: string) => apiClient.get(`/edr/agents/${id}/vulnerabilities`),
+  getEndpointPackages: (id: string, params: { q?: string; limit?: number; offset?: number } = {}) =>
+    apiClient.get(`/edr/agents/${id}/packages`, { params }),
   getEndpointDetections: (id: string, limit = 100) =>
     apiClient.get(`/edr/agents/${id}/detections`, { params: { limit } }),
   deleteEndpoint: (id: string) => apiClient.delete(`/edr/agents/${id}`),

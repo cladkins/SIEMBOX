@@ -24,6 +24,7 @@ Endpoint data flows into the **same** tables and views as the rest of SIEMBox, s
 | **Inventory** (hostname, OS, version, arch, IP) | `assets` (`asset_type=endpoint`), keyed by IP | An **Asset** (correlates with log-/Nuclei-discovered hosts) |
 | **Detections** | `alerts` (`source=edr`), deduped by event id | **Alerts**, linked to the endpoint asset |
 | **Vulnerabilities** (local scan) | `asset_vulnerabilities` (idempotent by asset+CVE) | **Vulnerability Management** + the asset's vulns |
+| **Installed packages** (dpkg, rpm, apk, Homebrew, app bundles, Windows uninstall entries) | `edr_agent_packages` (a full snapshot per agent, replaced by each report) | The endpoint's **Packages** tab, and **[Application Monitoring](Application-Monitoring)** (*Installed package* evidence) |
 
 Because endpoints are assets, they also appear in **[Asset-360](Architecture)** — one asset view tying together its vulnerabilities, the alerts it raised, its agent, any matching log shipper, GeoIP, and open ports.
 
@@ -45,6 +46,6 @@ See [Configuration → Endpoints](Configuration#endpoints--yara-optional) for th
 
 ## API
 
-The full server-side API (enrollment, heartbeat, config, inventory/events/vulnerabilities ingest, YARA, admin endpoints) is documented in-repo: **[docs/edr.md](https://github.com/cladkins/SIEMBOX/blob/main/docs/edr.md)**. Key route groups: `/api/edr/agents/*`, `/api/edr/tokens`, `/api/edr/yara`, `/api/edr/{inventory,events,vulnerabilities}`.
+The full server-side API (enrollment, heartbeat, config, inventory/events/vulnerabilities ingest, YARA, admin endpoints) is documented in-repo: **[docs/edr.md](https://github.com/cladkins/SIEMBOX/blob/main/docs/edr.md)**. Key route groups: `/api/edr/agents/*`, `/api/edr/tokens`, `/api/edr/yara`, `/api/edr/{inventory,events,vulnerabilities,packages}`.
 
 See also: [Architecture](Architecture) · [Vulnerability & Container Scanning](Vulnerability-and-Container-Scanning) · [Configuration](Configuration).

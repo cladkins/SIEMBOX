@@ -21,7 +21,9 @@
  *                   "image@sha256:...". The tag is the version when it starts
  *                   with a number.
  *   package         an EDR (grype) finding: package=<name> installed=<version>
- *                   in asset_vulnerabilities.evidence (edrService.edrVulnRow).
+ *                   in asset_vulnerabilities.evidence (edrService.edrVulnRow);
+ *                   and an endpoint's installed packages (edr_agent_packages:
+ *                   the dpkg/rpm/apk name, a Homebrew formula, an app bundle).
  *   user_agent      parsed_data.user_agent of web/proxy logs (nginx, Traefik,
  *                   Caddy, NPM, Authentik): "Mozilla/5.0 (...) Firefox/121.0",
  *                   "python-requests/2.31.0", "curl/8.0".
@@ -265,6 +267,11 @@ export class AppIndex {
     const out: AppMatch[] = [];
     for (const { glob, appId } of this.images) if (globMatch(glob, parsed.name)) out.push({ appId, version });
     return this.resolve(out);
+  }
+
+  /** Every package name a signature names (lower case), for the endpoint package query. */
+  packageNames(): string[] {
+    return [...this.packages.keys()];
   }
 
   matchPackage(name: string, installedVersion?: string | null): AppMatch[] {

@@ -27,6 +27,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Exposure Monitoring (Digital Risk)](#exposure-monitoring-digital-risk)
   - [Context Graph](#context-graph-endpoints)
   - [Application Monitoring](#application-monitoring-endpoints)
+  - [Endpoint Installed Packages (EDR)](#endpoint-installed-packages-edr)
   - [Endpoint Agent Updates (EDR)](#endpoint-agent-updates-edr)
   - [Display links (Big Display)](#display-links-big-display)
   - [Admin Dashboard](#admin-dashboard-endpoints)
@@ -6999,7 +7000,7 @@ a change at its next minute.
 The software inventory behind *Assets & Vulns → Application Monitoring*: which
 applications run where, at which versions, from log program names, the parser
 that matched, nmap services, shipper-reported container images, endpoint
-findings and OS, and the user agents and DNS queries in parsed logs, matched
+findings, installed packages and OS, and the user agents and DNS queries in parsed logs, matched
 against the catalog's application signatures (`applications/<id>.app.yaml`;
 see the wiki's *Application Monitoring* page). A background job
 (`Application inventory` on *Admin → Background Jobs*) builds it every two
@@ -7007,7 +7008,9 @@ minutes off the ingest path; these routes only read its tables. Every role
 may read; `POST /refresh` is analyst and up.
 
 Source keys: `syslog_program`, `parser`, `service_scan`, `container`,
-`edr_package`, `os`, `user_agent`, `dns`. Location types: `host` (a logging
+`edr_package` (a package with an open endpoint finding), `endpoint_sbom` (a
+package in the endpoint agent's installed-software list, `POST
+/api/edr/packages`), `os`, `user_agent`, `dns`. Location types: `host` (a logging
 host: syslog host name, else its address), `asset` (an asset id), `shipper` (a
 log shipper's host), `client` (a network client IP).
 
@@ -7095,6 +7098,60 @@ Admin only.
 `retention_days` (1-3650: an application, version or location not seen for
 this long drops out), `backfill_days` (0-90; used only before the job's first
 run). Answers as GET; an out-of-range value is `400`.
+
+---
+
+## Endpoint Installed Packages (EDR)
+
+The endpoint agent's list of installed software (see [Endpoint agent](../edr.md#installed-packages)).
+
+### POST /api/edr/packages
+
+Agent auth (`Authorization: Bearer <agent key>` + `X-Agent-ID`), behind the
+agent limiter like the other agent routes. A full snapshot: it replaces the
+agent's previous list.
+
+```json
+{
+  "agent_id": "<uuid>",
+  "snapshot_hash": "sha256:…",
+  "collected_at": "2026-10-26T12:00:00Z",
+  "force": false,
+  "packages": [{ "name": "openssh-server", "version": "1:9.6p1-3ubuntu13.5", "type": "deb" }]
+}
+```
+
+**Response `200`:**
+
+```json
+{ "accepted": true, "unchanged": false, "snapshot_required": false, "package_count": 2817, "stored": 2817, "removed": 3, "skipped": 0, "truncated": 0 }
+```
+
+- Same `snapshot_hash` as stored (and no `force`): nothing written,
+  `unchanged: true`.
+- `snapshot_hash` without `packages`: a check. `unchanged: true` when the
+  server has it; otherwise `accepted: false, snapshot_required: true`.
+- `400`: `packages` not an array (and no hash), or a malformed hash; `403`:
+  body `agent_id` is another agent's.
+- Limits: name 256, version 128, type 32 characters (clipped); 50,000
+  packages a report (`truncated` counts the rest); 10 MB body (gzip accepted).
+
+### GET /api/edr/agents/:id/packages
+
+Admin. The agent's current list: query `q` (name contains), `limit` (default
+200, up to 1,000), `offset`.
+
+```json
+{
+  "total": 2817,
+  "packages": [{ "type": "deb", "name": "adduser", "version": "3.137ubuntu1", "first_seen": "...", "last_seen": "..." }],
+  "snapshot": { "package_count": 2817, "collected_at": "...", "stored_at": "...", "reported_at": "..." }
+}
+```
+
+`snapshot` is `null` before the first report. `GET /api/edr/agents` also
+returns `package_count`, `packages_reported_at` (last report, changed or not)
+and `packages_stored_at` (last time the list changed) per agent.
 
 ---
 

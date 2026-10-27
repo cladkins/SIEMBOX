@@ -24,6 +24,7 @@ import {
   savePersistedScopeCidrs,
 } from '../services/logDiscovery/discoveryScanService';
 import { loadFingerprintLibrary, getFingerprintById } from '../services/logDiscovery/fingerprintLoader';
+import { auditPublicTargetConfirmation, enforcePublicTargets } from '../services/scanner/publicTargetGuard';
 import { LogAccessMethod } from '../services/logDiscovery/types';
 import { listPollableFingerprintIds } from '../services/logDiscovery/apiPoll/registry';
 import { pollOneSource } from '../services/logDiscovery/apiPoll/poller';
@@ -365,6 +366,8 @@ router.get('/fingerprints', (_req: Request, res: Response) => {
 });
 
 // POST /scans - trigger a scan (mode: passive | active | full). Runs asynchronously; returns the job id.
+// CIDRs in public address space are refused (400, naming them) unless the body
+// carries allow_public_targets: true.
 router.post('/scans', requireDiscoveryScan, async (req: Request, res: Response) => {
   const { mode = 'full', manual_cidrs } = req.body || {};
   if (!['passive', 'active', 'full'].includes(mode)) {
@@ -390,7 +393,25 @@ router.post('/scans', requireDiscoveryScan, async (req: Request, res: Response) 
     }
   }
 
-  const result = await runScan({ mode, manualCidrs: manual_cidrs, createdBy: req.user?.id ?? null, assignedShipperId });
+  // The CIDRs this run will sweep: the request's list, or the saved scan
+  // scope. Public address space is refused unless the request confirms it
+  // (allow_public_targets: true): see services/scanner/publicTargetGuard.ts.
+  const manualCidrs: string[] = manual_cidrs !== undefined ? manual_cidrs : await getPersistedScopeCidrs();
+  const sweep = resolveScope(manualCidrs, []).cidrs;
+  const publicCheck = enforcePublicTargets(sweep, req, res);
+  if (!publicCheck) return;
+
+  const result = await runScan({
+    mode,
+    manualCidrs,
+    createdBy: req.user?.id ?? null,
+    assignedShipperId,
+    scanOptions: {
+      origin: { page: 'log_discovery' },
+      ...(publicCheck.confirmation ? { publicTargetsConfirmation: publicCheck.confirmation } : {}),
+    },
+  });
+  await auditPublicTargetConfirmation(req, publicCheck.confirmation, { type: 'discovery_scan', id: result.scanId, targets: sweep });
   res.status(202).json({
     scan_id: result.scanId,
     cidrs: result.cidrs,

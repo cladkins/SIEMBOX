@@ -118,7 +118,7 @@ export const settingsAreas: SettingsArea[] = [
     path: 'discovery',
     title: 'Asset Discovery',
     icon: Search,
-    description: 'Automatic asset inventory built from the hosts seen in incoming logs.',
+    description: 'Automatic asset inventory built from the hosts seen in incoming logs, and how long a scan queued for a log shipper waits before it expires.',
     adminOnly: true,
     component: () => import('./AssetDiscoverySettings.vue'),
   },

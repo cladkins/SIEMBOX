@@ -187,10 +187,13 @@ class AssetServiceClient {
   async triggerScan(
     targets: string[],
     scanType: string,
-    assignedShipperId?: number | null
+    assignedShipperId?: number | null,
+    allowPublicTargets = false
   ): Promise<ScanResponse> {
     const body: Record<string, unknown> = { targets, scanType };
     if (assignedShipperId != null) body.assignedShipperId = assignedShipperId;
+    // Only after the dialog's "I'm authorized" confirmation (PublicTargetWarning).
+    if (allowPublicTargets) body.allow_public_targets = true;
     const response = await apiClient.post('/assets/scan', body);
     return response.data;
   }

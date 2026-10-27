@@ -230,7 +230,15 @@ each tagged with its `kind`. The shipper runs `nmap … -oX -` (asset) or
 `nuclei … -jsonl` (vuln) and POSTs the output to
 `POST /api/shippers/scan-results`.
 
-**Stuck as `queued`** — the shipper never claimed it:
+The shipper's queued and running jobs are listed on the **Shippers** page: open
+the shipper and look under *Scan Jobs* (targets, who created each job and from
+which page or scheduled scan, its age), where *Cancel* drops one.
+
+**Stuck as `queued`** — the shipper never claimed it. A queued job is not kept
+forever: one the shipper hasn't claimed within the shipper job expiry window
+(**Settings > Asset Discovery > Shipper Scan Jobs**, default 24 hours) turns
+**`expired`** and never runs, so a shipper that comes back after a long outage
+doesn't run old scans. Re-run the scan once the shipper is back. Before that:
 - Confirm the scan was assigned to *this* shipper (the right shipper runs it).
 - Confirm scanning isn't disabled: `SCAN_POLL_INTERVAL` must not be `0`.
 - **Shipper too old**: network scanning needs **1.2.0**+ for nmap, **1.3.0**+ for
@@ -254,8 +262,13 @@ each tagged with its `kind`. The shipper runs `nmap … -oX -` (asset) or
   longer fails for that — see below.)
 - `Scan <id> result POST failed (HTTP ...)` — the result couldn't be delivered
   (`000` = couldn't reach `SIEMBOX_API_URL`; `404` = key not recognised).
+- A **backend** restart no longer fails shipper jobs: their worker is the
+  shipper, so queued ones stay queued (until they expire) and running ones
+  still post their results. (It used to mark them `failed` with *Interrupted by
+  backend restart*.)
 - A shipper that is **restarted mid-scan** leaves the row `running` with no
-  result; re-run the scan.
+  result; cancel it from the shipper's *Scan Jobs* and re-run the scan. (A
+  cancelled job's late results are discarded.)
 
 **nmap scan runs but finds nothing on the LAN**: a bridged shipper can do TCP
 connect/service scans (`-sT`, `-sV`) but not ARP ping sweeps (`-sn`) or OS

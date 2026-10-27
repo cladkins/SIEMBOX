@@ -30,6 +30,16 @@ import {
   failDiscoveryScan,
 } from '../services/logDiscovery/discoveryScanService';
 import { DiscoveryScanModel } from '../models/DiscoveryScan';
+import {
+  cancelShipperJob,
+  countShipperJobs,
+  expireStaleShipperJobs,
+  isShipperJobKind,
+  listShipperJobs,
+  type ShipperJobKind,
+} from '../services/scanner/shipperJobs';
+import { AuditService } from '../services/audit/auditService';
+import { auditSource, hasRequiredRole, requireScanPermission, UserRole } from '../middleware/scanPermissions';
 
 // Access model. app.ts mounts this router WITHOUT `authenticate`, because the
 // shipper agent's own endpoints (the PUBLIC ENDPOINTS section at the bottom)
@@ -134,12 +144,19 @@ async function getSyslogSettings(): Promise<{ siem_host: string; siem_port: numb
 // Get all shippers
 router.get('/', authenticate, async (req: Request, res: Response) => {
   try {
-    const shippers = await LogShipperModel.findAll();
+    const [shippers, jobCounts] = await Promise.all([
+      LogShipperModel.findAll(),
+      // A failed count must not take the list down with it.
+      countShipperJobs().catch(() => ({}) as Awaited<ReturnType<typeof countShipperJobs>>),
+    ]);
 
-    // Calculate dynamic status based on last_seen
+    // Calculate dynamic status based on last_seen; attach the queued/running
+    // scan-job counts the Shippers page badges.
     const shippersWithStatus = shippers.map((shipper: any) => ({
       ...shipperForRole(shipper, req.user?.role),
-      status: calculateStatus(shipper.last_seen, shipper.status)
+      status: calculateStatus(shipper.last_seen, shipper.status),
+      queued_jobs: jobCounts[shipper.id]?.queued ?? 0,
+      running_jobs: jobCounts[shipper.id]?.running ?? 0,
     }));
 
     res.json(shippersWithStatus);
@@ -434,6 +451,79 @@ router.get('/:id/activity', authenticate, async (req: Request, res: Response) =>
   }
 });
 
+// ----------------------------------------------------------------------------
+// Scan jobs dispatched to a shipper (services/scanner/shipperJobs.ts): what is
+// queued for it, what it is running, and what expired unclaimed in the last
+// week. Any signed-in role can look. Cancelling needs the role that may stop
+// that kind of scan elsewhere: analyst or higher for an asset (nmap) scan, the
+// role that starts one; operator or higher for a vulnerability (nuclei) scan
+// and a log-discovery sweep, as POST /api/vulnerabilities/scans/:id/cancel and
+// POST /api/log-discovery/scans/:id/cancel require. Refusals go to audit_logs.
+// ----------------------------------------------------------------------------
+
+/** Lowest role that may cancel each kind of shipper job. */
+export const SHIPPER_JOB_CANCEL_ROLE: Record<ShipperJobKind, UserRole> = {
+  nmap: UserRole.Analyst,
+  nuclei: UserRole.Operator,
+  discovery: UserRole.Operator,
+};
+
+const requireShipperJobCancel = requireScanPermission(UserRole.Analyst, 'shipper_job');
+
+router.get('/:id/jobs', authenticate, async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) throw new ApiError(400, 'Invalid shipper id');
+  const shipper = await LogShipperModel.findById(id);
+  if (!shipper) throw new ApiError(404, 'Shipper not found');
+  res.json({ jobs: await listShipperJobs(id) });
+});
+
+router.post(
+  '/:id/jobs/:kind/:scanId/cancel',
+  authenticate,
+  requireShipperJobCancel,
+  async (req: Request, res: Response): Promise<void> => {
+    const id = Number(req.params.id);
+    const scanId = Number(req.params.scanId);
+    const kind = req.params.kind;
+    if (!Number.isInteger(id) || id <= 0) throw new ApiError(400, 'Invalid shipper id');
+    if (!Number.isInteger(scanId) || scanId <= 0) throw new ApiError(400, 'Invalid scan id');
+    if (!isShipperJobKind(kind)) throw new ApiError(400, "kind must be 'nmap', 'nuclei' or 'discovery'");
+
+    const required = SHIPPER_JOB_CANCEL_ROLE[kind];
+    const source = auditSource(req);
+    if (!hasRequiredRole(req.user!.role, required)) {
+      await AuditService.log({
+        userId: req.user!.id,
+        action: 'access.denied',
+        resourceType: 'shipper_job',
+        resourceId: scanId,
+        ipAddress: source.ipAddress,
+        userAgent: req.headers['user-agent'] || 'unknown',
+        responseStatus: 403,
+        details: { requiredRole: required, userRole: req.user!.role, kind, shipperId: id, path: req.path, method: req.method },
+      });
+      throw new ApiError(403, `Access denied. Cancelling a ${kind} job requires role ${required} or higher. Your role: ${req.user!.role}`);
+    }
+
+    const outcome = await cancelShipperJob(id, kind, scanId, req.user!.username ?? null);
+    if (!outcome.found) throw new ApiError(404, 'Job not found for this shipper');
+    if (outcome.cancelled) {
+      await AuditService.log({
+        userId: req.user!.id,
+        action: 'scan.shipper_job.cancelled',
+        resourceType: kind === 'discovery' ? 'discovery_scan' : 'scan',
+        resourceId: scanId,
+        ipAddress: source.ipAddress,
+        userAgent: req.headers['user-agent'] || 'unknown',
+        responseStatus: 200,
+        details: { kind, shipperId: id, previousStatus: outcome.previousStatus },
+      });
+    }
+    res.json({ cancelled: outcome.cancelled, status: outcome.status, previous_status: outcome.previousStatus });
+  }
+);
+
 // Regenerate API key (admin-only, like the HTTP push key; see the access model above)
 router.post('/:id/regenerate-key', authenticate, requireAdmin, async (req: Request, res: Response) => {
   try {
@@ -676,10 +766,17 @@ router.get('/scan-jobs/:api_key', async (req: Request, res: Response) => {
     // Each source claims only its own rows (asset_discovery / vulnerability scans
     // from vulnerability_scans, discovery scans from discovery_scans), so they
     // never steal each other's work; the shipper dispatches on each job's `kind`.
+    //
+    // First expire this shipper's queued jobs that are older than the expiry
+    // window (a shipper back after days offline must not run them), then claim:
+    // the claim queries apply the same window, so nothing stale is handed out
+    // even if expiring failed.
+    const expiry = await expireStaleShipperJobs({ shipperId: shipper.id }).catch(() => null);
+    const maxAgeHours = expiry?.hours;
     const [nmapJobs, nucleiJobs, discoveryJobs] = await Promise.all([
-      NmapScanner.claimScanJobsForShipper(shipper.id),
-      NucleiScanner.claimScanJobsForShipper(shipper.id),
-      claimDiscoveryJobsForShipper(shipper.id),
+      NmapScanner.claimScanJobsForShipper(shipper.id, maxAgeHours),
+      NucleiScanner.claimScanJobsForShipper(shipper.id, maxAgeHours),
+      claimDiscoveryJobsForShipper(shipper.id, maxAgeHours),
     ]);
     res.json({ jobs: [...nmapJobs, ...nucleiJobs, ...discoveryJobs] });
   } catch (error) {
@@ -724,6 +821,13 @@ router.post('/scan-results', async (req: Request, res: Response): Promise<void> 
 
     const ip_address = req.ip || req.socket.remoteAddress || 'unknown';
     await LogShipperModel.updateHeartbeat(api_key, ip_address).catch(() => {});
+
+    // Cancelled (from the Shippers page or the scan page) or expired: whatever
+    // the shipper sends now is ignored, so a cancel sticks.
+    if (currentStatus === 'cancelled' || currentStatus === 'expired') {
+      res.json({ status: currentStatus, ignored: true });
+      return;
+    }
 
     // Shipper couldn't run the scan (tool missing, host unreachable, timeout...).
     if (typeof scanError === 'string' && scanError.length > 0) {
@@ -800,6 +904,13 @@ router.post('/discovery-results', async (req: Request, res: Response): Promise<v
 
     const ip_address = req.ip || req.socket.remoteAddress || 'unknown';
     await LogShipperModel.updateHeartbeat(api_key, ip_address).catch(() => {});
+
+    // Cancelled or expired (anything but running or completed): the results
+    // are ignored, so a cancel sticks and a never-claimed scan stays unrun.
+    if (scan.status !== 'running' && scan.status !== 'completed') {
+      res.json({ status: scan.status, ignored: true });
+      return;
+    }
 
     // Shipper couldn't run the probe.
     if (typeof scanError === 'string' && scanError.length > 0) {

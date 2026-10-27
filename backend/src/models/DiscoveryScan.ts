@@ -2,8 +2,10 @@ import { query } from '../config/database';
 
 export type DiscoveryScanMode = 'passive' | 'active' | 'full';
 // 'queued' is a shipper-dispatched scan waiting to be claimed (migration 033);
-// an in-process scan is created straight into 'running'.
-export type DiscoveryScanStatus = 'queued' | 'running' | 'completed' | 'failed';
+// an in-process scan is created straight into 'running'. 'expired' is a queued
+// scan its shipper never claimed within the expiry window (migration 052,
+// services/scanner/shipperJobs.ts): it was never run.
+export type DiscoveryScanStatus = 'queued' | 'running' | 'completed' | 'failed' | 'expired';
 
 export interface DiscoveryScan {
   id: number;
@@ -20,6 +22,8 @@ export interface DiscoveryScan {
   /** That shipper's display name, joined for the UI (null when unassigned or shipper deleted). */
   assigned_shipper_name?: string | null;
   claimed_at: string | null;
+  /** Where the scan came from and any public-target confirmation (migration 052); null on older rows. */
+  scan_options: Record<string, unknown> | null;
   created_at: string;
 }
 
@@ -46,10 +50,15 @@ export const DiscoveryScanModel = {
     return result.rows[0] || null;
   },
 
-  async create(mode: DiscoveryScanMode, cidrs: string[], createdBy: number | null): Promise<DiscoveryScan> {
+  async create(
+    mode: DiscoveryScanMode,
+    cidrs: string[],
+    createdBy: number | null,
+    scanOptions: Record<string, unknown> | null = null
+  ): Promise<DiscoveryScan> {
     const result = await query(
-      `INSERT INTO discovery_scans (mode, cidrs, status, created_by) VALUES ($1, $2, 'running', $3) RETURNING *`,
-      [mode, JSON.stringify(cidrs), createdBy]
+      `INSERT INTO discovery_scans (mode, cidrs, status, created_by, scan_options) VALUES ($1, $2, 'running', $3, $4) RETURNING *`,
+      [mode, JSON.stringify(cidrs), createdBy, scanOptions ? JSON.stringify(scanOptions) : null]
     );
     return result.rows[0];
   },
@@ -62,12 +71,13 @@ export const DiscoveryScanModel = {
     mode: DiscoveryScanMode,
     cidrs: string[],
     createdBy: number | null,
-    shipperId: number
+    shipperId: number,
+    scanOptions: Record<string, unknown> | null = null
   ): Promise<DiscoveryScan> {
     const result = await query(
-      `INSERT INTO discovery_scans (mode, cidrs, status, created_by, assigned_shipper_id)
-       VALUES ($1, $2, 'queued', $3, $4) RETURNING *`,
-      [mode, JSON.stringify(cidrs), createdBy, shipperId]
+      `INSERT INTO discovery_scans (mode, cidrs, status, created_by, assigned_shipper_id, scan_options)
+       VALUES ($1, $2, 'queued', $3, $4, $5) RETURNING *`,
+      [mode, JSON.stringify(cidrs), createdBy, shipperId, scanOptions ? JSON.stringify(scanOptions) : null]
     );
     return result.rows[0];
   },
@@ -75,20 +85,22 @@ export const DiscoveryScanModel = {
   /**
    * Atomically hand out and claim every queued scan assigned to a shipper
    * (queued -> running, stamping claimed_at), so a job is claimed once even
-   * under concurrent polls. Mirrors the nmap/nuclei claim.
+   * under concurrent polls. Mirrors the nmap/nuclei claim, including never
+   * handing out a job older than `maxAgeHours` (the shipper-job expiry window).
    */
-  async claimForShipper(shipperId: number): Promise<DiscoveryScan[]> {
+  async claimForShipper(shipperId: number, maxAgeHours: number): Promise<DiscoveryScan[]> {
     const result = await query(
       `UPDATE discovery_scans
           SET status = 'running', claimed_at = NOW(), started_at = NOW()
         WHERE id IN (
           SELECT id FROM discovery_scans
            WHERE assigned_shipper_id = $1 AND status = 'queued'
+             AND created_at > NOW() - make_interval(hours => $2::int)
            ORDER BY created_at
            FOR UPDATE SKIP LOCKED
         )
         RETURNING *`,
-      [shipperId]
+      [shipperId, maxAgeHours]
     );
     return result.rows;
   },

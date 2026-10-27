@@ -733,6 +733,39 @@ curl -X PUT http://localhost:8421/api/shippers/sources/<source-id> \
 
 ---
 
+### Issue: A Shipper Scanned an Unexpected Range
+
+**Symptoms:**
+- A host running a log shipper ran `nmap` (or nuclei, or a discovery sweep) against a range nobody remembers asking for, possibly public address space (a firewall or ISP alert, an abuse report)
+- It was not a scheduled scan, or it happened days after someone queued it
+
+**How it happens:** a scan with *Run from* set to a shipper waits `queued` until that shipper polls for jobs. Before shipper job expiry, a queued job waited forever, so a one-off scan queued while the shipper was offline ran whenever it came back. A typo in the target (`192.169.1.0/24` for `192.168.1.0/24`) then scans someone else's network.
+
+**Find the scan:**
+1. **Shippers** page: open the shipper. *Scan Jobs* lists what is queued for it and running on it, plus what expired in the last week, with the targets, who created each, from which page (or which scheduled scan), and when.
+2. The scan's own page: **Assets** (*Asset Discovery Scans*, *Run from* column), **Vulnerability Scanning** (*Recent Scans*) or **Log Discovery** (*Recent scans*), and **Scheduled Scans** for a schedule with that shipper as *Run from*.
+3. From the database, the shipper's recent jobs:
+   ```bash
+   docker exec siembox-postgres psql -U siembox -d siembox -c "
+     SELECT id, scan_type, target, status, created_at, claimed_at,
+            scan_options->'origin' AS origin, scan_options->>'description' AS description,
+            (SELECT username FROM users WHERE id = initiated_by) AS created_by
+       FROM vulnerability_scans
+      WHERE assigned_shipper_id = <shipper-id> ORDER BY created_at DESC LIMIT 20;"
+   docker exec siembox-postgres psql -U siembox -d siembox -c "
+     SELECT id, mode, cidrs, status, created_at, claimed_at, created_by
+       FROM discovery_scans WHERE assigned_shipper_id = <shipper-id> ORDER BY created_at DESC LIMIT 20;"
+   ```
+   `claimed_at` is when the shipper picked the job up, which is when it ran. `audit_logs` has a `scan.asset.create` / `scan.vulnerability.create` row for each scan (with the user), and a `scan.public_targets.confirmed` row when someone confirmed public targets.
+
+**Prevent it:**
+- **Expiry.** A queued shipper job that isn't picked up within **Settings > Asset Discovery > Shipper Scan Jobs** (default 24 hours, `shipper_job_expiry_hours`) becomes `expired` and never runs; the scan pages show *expired (never ran)* with the reason. Lower it if your shippers poll reliably. The job-pull refuses older jobs even between sweeps.
+- **Cancel** stale or wrong jobs from the shipper's *Scan Jobs* (analyst and up for an asset scan, operator and up for vulnerability and discovery scans). A job already running on the shipper can't be stopped from SIEMBox, but its results are discarded.
+- **Public targets** are refused unless the person starting the scan ticks *I'm authorized to scan these public addresses*, and a range one octet away from a private one gets a *did you mean 192.168…?* hint. A scheduled scan saved before this check keeps running and shows a *Public targets* badge on Scheduled Scans; edit it to fix the target (saving asks for the confirmation if it is still public).
+- A scheduled scan whose previous run is still queued for its shipper doesn't queue another, so an offline shipper no longer collects a backlog of identical runs.
+
+---
+
 ## Endpoint Agent Issues
 
 ### Issue: Endpoint Agent Installed but Never Appears on the Endpoints Page

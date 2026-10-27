@@ -20,11 +20,11 @@
                 :disabled="s.status !== 'online'"
               />
             </el-select>
-            <el-button @click="triggerScan('passive')" :loading="scanning">
+            <el-button @click="triggerScan('passive')" :loading="scanning" :disabled="scopeGate.blocked">
               <el-icon><Aim /></el-icon>
               Scan (passive)
             </el-button>
-            <el-button type="primary" @click="triggerScan('full')" :loading="scanning">
+            <el-button type="primary" @click="triggerScan('full')" :loading="scanning" :disabled="scopeGate.blocked">
               <el-icon><Search /></el-icon>
               Scan (passive + active)
             </el-button>
@@ -67,6 +67,12 @@
         <span v-else class="scope-empty">Only an admin can change the scan scope.</span>
       </div>
 
+      <PublicTargetWarning
+        v-model="scopePublicConfirmed"
+        :targets="manualCidrs"
+        :allow-fix="false"
+      />
+
       <div v-if="showDetectedCidrSuggestion" class="scope-line">
         <span class="scope-label">Detected LAN:</span>
         <el-tag type="success" size="small" style="margin-right: 6px">{{ scope?.detected_lan_cidr }}</el-tag>
@@ -100,11 +106,11 @@
             <el-table-column label="Status" width="120">
               <template #default="{ row }">
                 <el-tooltip
-                  v-if="row.status === 'failed' && row.error_message"
+                  v-if="(row.status === 'failed' || row.status === 'expired') && row.error_message"
                   :content="row.error_message"
                   placement="top"
                 >
-                  <el-tag :type="scanStatusColor(row.status)" size="small" style="cursor: help">{{ row.status }}</el-tag>
+                  <el-tag :type="scanStatusColor(row.status)" size="small" style="cursor: help">{{ scanStatusLabel(row.status) }}</el-tag>
                 </el-tooltip>
                 <el-tag v-else :type="scanStatusColor(row.status)" size="small">{{ row.status }}</el-tag>
               </template>
@@ -188,6 +194,12 @@
         are rejected to keep the sweep bounded -- split a bigger range into smaller CIDRs instead.
       </p>
       <el-input v-model="manualCidrInput" placeholder="192.168.20.0/24, 10.10.4.0/24" />
+      <PublicTargetWarning
+        :targets="manualCidrInput.split(',').map((c) => c.trim()).filter(Boolean)"
+        :confirmable="false"
+        style="margin-top: 10px"
+        @use-suggestion="(from: string, to: string) => (manualCidrInput = replaceTargetToken(manualCidrInput, from, to))"
+      />
       <template #footer>
         <el-button @click="showManualCidrDialog = false">Cancel</el-button>
         <el-button type="primary" @click="previewManualCidrs">Save</el-button>
@@ -373,6 +385,8 @@ import logDiscoveryService, {
 import DiscoverySourcesTable from '@/components/DiscoverySourcesTable.vue';
 import PollSourceEditDialog from '@/components/PollSourceEditDialog.vue';
 import { useAuthStore } from '@/stores/auth';
+import PublicTargetWarning from '@/components/PublicTargetWarning.vue';
+import { publicTargetGate, replaceTargetToken, scanStatusLabel } from '@/utils/shipperJobs';
 
 const authStore = useAuthStore();
 // Operators can open this page, scan and triage sources; the scope, manual
@@ -399,6 +413,9 @@ const advanced = ref<RankedSource[]>([]);
 const fingerprints = ref<FingerprintEntry[]>([]);
 
 const showManualCidrDialog = ref(false);
+// Scope CIDRs in public address space need the "I'm authorized" confirmation
+// before a scan can start (the API refuses them otherwise).
+const scopePublicConfirmed = ref(false);
 const manualCidrInput = ref('');
 // The confirmed scan-scope CIDRs. Loaded from the server's persisted standing
 // scope on mount and re-saved on every change, so a subnet you add sticks
@@ -459,7 +476,7 @@ function formatDate(date: string) {
 
 function scanStatusColor(status: string) {
   if (status === 'completed') return 'success';
-  if (status === 'failed') return 'danger';
+  if (status === 'failed' || status === 'expired') return 'danger';
   return 'warning';
 }
 
@@ -571,10 +588,17 @@ function refreshAll() {
   loadSources();
 }
 
+const scopeGate = computed(() => publicTargetGate(manualCidrs.value, scopePublicConfirmed.value));
+
 async function triggerScan(mode: DiscoveryScanMode) {
   scanning.value = true;
   try {
-    const result = await logDiscoveryService.triggerScan(mode, manualCidrs.value, selectedShipperId.value);
+    const result = await logDiscoveryService.triggerScan(
+      mode,
+      manualCidrs.value,
+      selectedShipperId.value,
+      scopeGate.value.allowPublicTargets
+    );
     ElMessage.success(`Scan #${result.scan_id} started`);
     if (result.vlan_warning) ElMessage.warning(result.vlan_warning);
     setTimeout(refreshAll, 3000);

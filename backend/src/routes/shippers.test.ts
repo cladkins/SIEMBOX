@@ -28,6 +28,7 @@ import router, {
 import { authenticate, authenticateAllowingPasswordChange, requireAdmin, requireOperator } from '../middleware/auth';
 import { LogShipperModel, ShipperSourceModel, type LogShipper, type ShipperSource } from '../models/LogShipper';
 import { ApiError } from '../middleware/errorHandler';
+import { AuditService } from '../services/audit/auditService';
 
 const SQL_MUST_NOT_RUN = 'SQL must not run in shippers.test.ts';
 const poolQuery = mock.method(pool, 'query', async () => {
@@ -47,7 +48,13 @@ const READS: Route[] = [
   ['get', '/:id/sources'],
   ['get', '/:id/volumes'],
   ['get', '/:id/activity'],
+  ['get', '/:id/jobs'],
 ];
+
+// Cancelling a shipper's scan job: analyst and up at the route's gate (an asset
+// scan); the handler also requires operator for nuclei and discovery jobs
+// (shipperJobs.db.test.ts covers that half).
+const ANALYST_WRITES: Route[] = [['post', '/:id/jobs/:kind/:scanId/cancel']];
 
 const OPERATOR_WRITES: Route[] = [
   ['post', '/'],
@@ -107,7 +114,9 @@ test('the router has no router-level middleware: each route gates itself', () =>
 });
 
 test('every route is classified, so a new route cannot slip in ungated unnoticed', () => {
-  const known = new Set([...READS, ...OPERATOR_WRITES, ...ADMIN_WRITES, ...SHIPPER_FACING].map(([m, p]) => `${m} ${p}`));
+  const known = new Set(
+    [...READS, ...OPERATOR_WRITES, ...ADMIN_WRITES, ...ANALYST_WRITES, ...SHIPPER_FACING].map(([m, p]) => `${m} ${p}`)
+  );
   for (const layer of (router as any).stack) {
     for (const method of Object.keys(layer.route.methods)) {
       assert.ok(known.has(`${method} ${layer.route.path}`), `unclassified route ${method.toUpperCase()} ${layer.route.path}`);
@@ -120,6 +129,30 @@ for (const [method, path] of READS) {
     const handlers = routeHandlers(method, path);
     assert.equal(handlers[0], authenticate);
     assert.ok(!handlers.includes(requireOperator) && !handlers.includes(requireAdmin));
+  });
+}
+
+for (const [method, path] of ANALYST_WRITES) {
+  test(`${method.toUpperCase()} ${path} requires analyst or higher, refusals audited`, async () => {
+    const auditLog = mock.method(AuditService, 'log', async () => {});
+    try {
+      const handlers = routeHandlers(method, path) as Array<(req: any, res: any, next: (err?: unknown) => void) => unknown>;
+      assert.equal(handlers[0], authenticate, 'authenticate runs first');
+      const run = (role: string) =>
+        new Promise<unknown>((resolve) => {
+          void handlers[1](
+            { user: { id: 1, username: 'u', email: 'u@x', role }, params: {}, path, method: method.toUpperCase(), headers: {}, socket: {} },
+            {},
+            resolve
+          );
+        });
+      for (const role of ['admin', 'operator', 'analyst']) assert.equal(await run(role), undefined, `${role} passes`);
+      const refused = await run('viewer');
+      assert.ok(refused instanceof ApiError && refused.statusCode === 403, 'viewer is refused');
+      assert.equal(auditLog.mock.callCount(), 1, 'the refusal is audited');
+    } finally {
+      auditLog.mock.restore();
+    }
   });
 }
 

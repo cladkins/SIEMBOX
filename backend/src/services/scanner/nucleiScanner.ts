@@ -19,6 +19,8 @@ import {
   ProcessedNucleiVulnerability,
   NucleiSeverity,
 } from '../../types/nucleiTypes';
+import type { PublicTargetConfirmation } from './publicTargetGuard';
+import { getShipperJobExpiryHours, type ScanOrigin } from './shipperJobs';
 
 // Template directory (must match templateService.ts)
 const TEMPLATES_DIR = process.env.NUCLEI_TEMPLATES_DIR || '/root/nuclei-templates';
@@ -48,6 +50,10 @@ export interface ScanOptions {
    * Docker network -- see migration 032). null/undefined runs it in-process.
    */
   assignedShipperId?: number | null;
+  /** Which page (or schedule) created the scan; shown on the Shippers page's queued-jobs list. */
+  origin?: ScanOrigin;
+  /** Set when the request confirmed a public target (allow_public_targets: true). */
+  publicTargetsConfirmation?: PublicTargetConfirmation | null;
 }
 
 /**
@@ -187,7 +193,8 @@ export class NucleiScanner {
    * is re-validated here; a scan whose target no longer validates is failed and
    * skipped rather than handed out.
    */
-  static async claimScanJobsForShipper(shipperId: number): Promise<ShipperNucleiJob[]> {
+  static async claimScanJobsForShipper(shipperId: number, maxAgeHours?: number): Promise<ShipperNucleiJob[]> {
+    maxAgeHours ??= await getShipperJobExpiryHours();
     const result = await pool.query(
       `UPDATE vulnerability_scans
           SET status = 'running',
@@ -197,11 +204,13 @@ export class NucleiScanner {
         WHERE id IN (
           SELECT id FROM vulnerability_scans
            WHERE assigned_shipper_id = $1 AND status = 'queued' AND scan_type = 'vulnerability'
+             -- Never hand out a job older than the expiry window (shipperJobs.ts).
+             AND created_at > NOW() - make_interval(hours => $2::int)
            ORDER BY created_at
            FOR UPDATE SKIP LOCKED
         )
         RETURNING id, scan_options`,
-      [shipperId]
+      [shipperId, maxAgeHours]
     );
 
     const jobs: ShipperNucleiJob[] = [];
@@ -926,6 +935,8 @@ export class NucleiScanner {
         description: options.description,
         timeout: options.timeout,
         rateLimit: options.rateLimit,
+        ...(options.origin ? { origin: options.origin } : {}),
+        ...(options.publicTargetsConfirmation ? { publicTargetsConfirmation: options.publicTargetsConfirmation } : {}),
       };
 
       const result = await pool.query(query, [

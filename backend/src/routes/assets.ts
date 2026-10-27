@@ -17,6 +17,7 @@ import { authenticate } from '../middleware/auth';
 import { requireAssetScanPermission, requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { AssetRepository } from '../services/assets/assetRepository';
 import { NmapScanner, validateScanTargets } from '../services/scanner/nmapScanner';
+import { auditPublicTargetConfirmation, enforcePublicTargets } from '../services/scanner/publicTargetGuard';
 import { AutoDiscoveryService } from '../services/assets/autoDiscoveryService';
 import { ScanRepository } from '../services/assets/scanRepository';
 import { LogShipperModel } from '../models/LogShipper';
@@ -393,7 +394,9 @@ router.get('/:id/services', async (req: Request, res: Response): Promise<void> =
  * target string on whitespace before spawning the real `nmap` binary, so an
  * unvalidated target containing a space could carry extra nmap flags through
  * to that (root, in the container) process -- including ones that read or
- * write files.
+ * write files. A target in public address space (outside RFC 1918 and the
+ * other private/reserved ranges) is refused with a 400 naming it unless the
+ * body carries allow_public_targets: true (services/scanner/publicTargetGuard.ts).
  */
 router.post(
   '/scan',
@@ -408,6 +411,11 @@ router.post(
         res.status(400).json({ error: targetError });
         return;
       }
+
+      // Public address space is refused unless the request confirms it
+      // (allow_public_targets: true): see services/scanner/publicTargetGuard.ts.
+      const publicCheck = enforcePublicTargets(targets, req, res);
+      if (!publicCheck) return;
 
       // Optional: run this scan from a log shipper out on the LAN instead of on
       // the backend (whose nmap can't see the real network from inside the
@@ -438,7 +446,10 @@ router.post(
         userId: req.user!.id,
         description,
         assignedShipperId,
+        origin: { page: 'assets' },
+        publicTargetsConfirmation: publicCheck.confirmation,
       });
+      await auditPublicTargetConfirmation(req, publicCheck.confirmation, { type: 'scan', id: scanId, targets });
 
       res.status(202).json({
         message: assignedShipperId

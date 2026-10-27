@@ -71,6 +71,43 @@
         You do not have permission to modify settings. Contact an administrator.
       </el-alert>
     </el-card>
+
+    <el-card style="margin-top: 20px" data-testid="shipper-job-settings">
+      <template #header>
+        <span>Shipper Scan Jobs</span>
+      </template>
+
+      <el-alert type="info" :closable="false" style="margin-bottom: 20px">
+        A scan run from a log shipper waits, queued, until that shipper picks it up. One the shipper hasn't picked up
+        within this window expires and never runs, so a shipper that comes back after being offline doesn't run old
+        work. The Shippers page lists each shipper's queued and running jobs.
+      </el-alert>
+
+      <el-form label-width="250px" v-loading="shipperJobsLoading">
+        <el-form-item label="Expire unclaimed jobs after (hours)">
+          <el-input-number
+            v-model="shipperJobExpiryHours"
+            :min="shipperJobLimits.min"
+            :max="shipperJobLimits.max"
+            :disabled="authStore.user?.role !== 'admin' || shipperJobsSaving"
+            style="width: 200px"
+          />
+          <el-button
+            type="primary"
+            :loading="shipperJobsSaving"
+            :disabled="authStore.user?.role !== 'admin'"
+            @click="saveShipperJobExpiry"
+            style="margin-left: 10px"
+          >
+            Save
+          </el-button>
+          <br />
+          <el-text size="small" type="info">
+            {{ shipperJobLimits.min }}-{{ shipperJobLimits.max }} hours. Default: {{ shipperJobLimits.default }} (one day).
+          </el-text>
+        </el-form-item>
+      </el-form>
+    </el-card>
   </div>
 </template>
 
@@ -91,9 +128,46 @@ const autoDiscoveryForm = reactive({
   stale_asset_threshold_days: 30
 });
 
+const shipperJobsLoading = ref(false);
+const shipperJobsSaving = ref(false);
+const shipperJobExpiryHours = ref(24);
+const shipperJobLimits = reactive({ min: 1, max: 720, default: 24 });
+
 onMounted(() => {
   fetchAutoDiscoverySettings();
+  fetchShipperJobSettings();
 });
+
+async function fetchShipperJobSettings() {
+  shipperJobsLoading.value = true;
+  try {
+    const { data } = await api.getShipperJobSettings();
+    if (Number.isFinite(data.expiry_hours)) shipperJobExpiryHours.value = data.expiry_hours;
+    if (Number.isFinite(data.min_expiry_hours)) shipperJobLimits.min = data.min_expiry_hours;
+    if (Number.isFinite(data.max_expiry_hours)) shipperJobLimits.max = data.max_expiry_hours;
+    if (Number.isFinite(data.default_expiry_hours)) shipperJobLimits.default = data.default_expiry_hours;
+  } catch (error) {
+    console.error('Failed to fetch shipper job settings', error);
+  } finally {
+    shipperJobsLoading.value = false;
+  }
+}
+
+async function saveShipperJobExpiry() {
+  if (authStore.user?.role !== 'admin') {
+    ElMessage.warning('Only administrators can modify settings');
+    return;
+  }
+  shipperJobsSaving.value = true;
+  try {
+    await api.updateShipperJobSettings({ expiry_hours: shipperJobExpiryHours.value });
+    ElMessage.success('Shipper job expiry updated');
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Failed to update setting');
+  } finally {
+    shipperJobsSaving.value = false;
+  }
+}
 
 async function fetchAutoDiscoverySettings() {
   autoDiscoveryLoading.value = true;

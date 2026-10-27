@@ -15,6 +15,8 @@ import { ErrorLogService } from '../errors/errorLogService';
 import { AssetType, AssetCriticality, AssetStatus, DiscoveryMethod, ServiceState } from '../../models/Asset';
 import { isValidScanTarget } from '../../utils/typeGuards';
 import { parseNmapXml } from './nmapXml';
+import type { PublicTargetConfirmation } from './publicTargetGuard';
+import { getShipperJobExpiryHours, type ScanOrigin } from './shipperJobs';
 
 /**
  * Scan options interface
@@ -31,6 +33,10 @@ export interface ScanOptions {
    * 032). null/undefined runs it in-process, exactly as before.
    */
   assignedShipperId?: number | null;
+  /** Which page (or schedule) created the scan; shown on the Shippers page's queued-jobs list. */
+  origin?: ScanOrigin;
+  /** Set when the request confirmed public targets (allow_public_targets: true). */
+  publicTargetsConfirmation?: PublicTargetConfirmation | null;
 }
 
 /**
@@ -136,9 +142,15 @@ export class NmapScanner {
    * validated target list the shipper must run -- the shipper never picks its
    * own flags or targets. Stored targets are re-validated here at hand-out
    * time; a scan whose stored targets no longer validate is failed and skipped
-   * rather than handed out.
+   * rather than handed out. A queued job older than the shipper-job expiry
+   * window (default 24 h, shipperJobs.ts) is never handed out: the job-pull
+   * expires it first, and this query skips it regardless.
    */
-  static async claimScanJobsForShipper(shipperId: number): Promise<ShipperScanJob[]> {
+  static async claimScanJobsForShipper(
+    shipperId: number,
+    maxAgeHours?: number
+  ): Promise<ShipperScanJob[]> {
+    maxAgeHours ??= await getShipperJobExpiryHours();
     const result = await pool.query(
       `UPDATE vulnerability_scans
           SET status = 'running',
@@ -148,11 +160,14 @@ export class NmapScanner {
         WHERE id IN (
           SELECT id FROM vulnerability_scans
            WHERE assigned_shipper_id = $1 AND status = 'queued' AND scan_type = 'asset_discovery'
+             -- Never hand out a job older than the expiry window (shipperJobs.ts):
+             -- a shipper back after a week must not run week-old work.
+             AND created_at > NOW() - make_interval(hours => $2::int)
            ORDER BY created_at
            FOR UPDATE SKIP LOCKED
         )
         RETURNING id, scan_options`,
-      [shipperId]
+      [shipperId, maxAgeHours]
     );
 
     const jobs: ShipperScanJob[] = [];
@@ -522,6 +537,8 @@ export class NmapScanner {
         targets: options.targets,
         scanType: options.scanType,
         description: options.description,
+        ...(options.origin ? { origin: options.origin } : {}),
+        ...(options.publicTargetsConfirmation ? { publicTargetsConfirmation: options.publicTargetsConfirmation } : {}),
       };
 
       const result = await pool.query(query, [

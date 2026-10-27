@@ -693,6 +693,32 @@ compose file mounts today, and LLDP capture has no implementation yet. Only
 ARP/mDNS/SSDP passive discovery and the single-VLAN warning's accuracy benefit
 from host networking.
 
+## Scans run from a log shipper
+
+Asset, vulnerability and log-discovery scans can run from a log shipper out on
+your LAN (*Run from* in each scan dialog; see the log-shipper README's
+*Network Scanning*). Three safeguards apply:
+
+- **Queued jobs expire.** A dispatched scan waits `queued` until its shipper
+  polls for it. One the shipper hasn't picked up within **Settings > Asset
+  Discovery > Shipper Scan Jobs** (default **24 hours**, 1 hour to 30 days;
+  `system_settings` key `shipper_job_expiry_hours`) becomes `expired` and never
+  runs, so a shipper that was offline for days doesn't run old scans when it
+  comes back. A sweep every five minutes (the *Shipper job expiry* job on the
+  admin dashboard) marks them, and the job-pull itself refuses anything older.
+  A scheduled scan whose previous run is still queued doesn't queue another.
+- **Each shipper's work is visible.** The Shippers page counts each shipper's
+  queued and running jobs; opening a shipper lists them (targets, who created
+  each and from which page or schedule, age) with *Cancel*.
+- **Public targets need confirming.** A target outside private and reserved
+  address space is refused unless whoever starts the scan ticks *I'm authorized
+  to scan these public addresses* (the API's `allow_public_targets: true`), and
+  a near miss of a private range (`192.169.1.0/24`) gets a *did you mean*
+  hint. Scheduled scans saved before this keep running, with a badge.
+
+If a shipper scanned something unexpected, see
+[TROUBLESHOOTING.md](docs/operations/TROUBLESHOOTING.md#issue-a-shipper-scanned-an-unexpected-range).
+
 ## Threat Intelligence Feeds
 
 The **Threat Intel** page enriches an IP lookup with external intelligence: which

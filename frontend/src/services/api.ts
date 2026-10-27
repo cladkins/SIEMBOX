@@ -427,6 +427,9 @@ export const api = {
   // stale_threshold_days }) — there are no per-key setting routes.
   getAutoDiscoverySettings: () => apiClient.get('/settings/auto-discovery'),
   updateAutoDiscoverySettings: (data: any) => apiClient.put('/settings/auto-discovery', data),
+  // How long a scan queued for a log shipper waits before it expires unrun.
+  getShipperJobSettings: () => apiClient.get('/settings/shipper-jobs'),
+  updateShipperJobSettings: (data: { expiry_hours: number }) => apiClient.put('/settings/shipper-jobs', data),
 
   // Log Shippers
   getShippers: () => apiClient.get('/shippers'),
@@ -455,6 +458,11 @@ export const api = {
   // Shipper HTTP Log Push (separate key from the syslog api_key above)
   generateShipperPushKey: (id: number) => apiClient.post(`/shippers/${id}/http-push-key`),
   revokeShipperPushKey: (id: number) => apiClient.delete(`/shippers/${id}/http-push-key`),
+
+  // Scan jobs queued for / running on a shipper (kind: nmap | nuclei | discovery)
+  getShipperJobs: (id: number) => apiClient.get(`/shippers/${id}/jobs`),
+  cancelShipperJob: (id: number, kind: string, scanId: number) =>
+    apiClient.post(`/shippers/${id}/jobs/${kind}/${scanId}/cancel`),
 
   // Shipper Activity Log
   getShipperActivity: (id: number, limit?: number) =>

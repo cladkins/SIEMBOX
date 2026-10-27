@@ -1,4 +1,12 @@
 import { Router, Request, Response } from 'express';
+import {
+  DEFAULT_SHIPPER_JOB_EXPIRY_HOURS,
+  MAX_SHIPPER_JOB_EXPIRY_HOURS,
+  MIN_SHIPPER_JOB_EXPIRY_HOURS,
+  getShipperJobExpiryHours,
+  parseExpiryHours,
+  setShipperJobExpiryHours,
+} from '../services/scanner/shipperJobs';
 import { query } from '../config/database';
 import { settingRowForAdmin } from '../services/settings/settingsRedaction';
 import {
@@ -906,6 +914,34 @@ router.put('/auto-discovery', authorize('admin'), async (req: Request, res: Resp
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to update auto-discovery settings');
   }
+});
+
+// ===========================
+// Shipper scan jobs
+// ===========================
+// How long a scan queued for a log shipper waits to be picked up before it
+// expires unrun (services/scanner/shipperJobs.ts). Shown with the other scan
+// settings on Settings > Asset Discovery.
+
+router.get('/shipper-jobs', authorize('admin'), async (_req: Request, res: Response) => {
+  res.json({
+    expiry_hours: await getShipperJobExpiryHours(),
+    default_expiry_hours: DEFAULT_SHIPPER_JOB_EXPIRY_HOURS,
+    min_expiry_hours: MIN_SHIPPER_JOB_EXPIRY_HOURS,
+    max_expiry_hours: MAX_SHIPPER_JOB_EXPIRY_HOURS,
+  });
+});
+
+router.put('/shipper-jobs', authorize('admin'), async (req: Request, res: Response) => {
+  const hours = parseExpiryHours(req.body?.expiry_hours);
+  if (hours === null) {
+    throw new ApiError(
+      400,
+      `expiry_hours must be a whole number of hours from ${MIN_SHIPPER_JOB_EXPIRY_HOURS} to ${MAX_SHIPPER_JOB_EXPIRY_HOURS}`
+    );
+  }
+  await setShipperJobExpiryHours(hours, req.user?.id ?? null);
+  res.json({ expiry_hours: hours });
 });
 
 // Get auto-discovery statistics

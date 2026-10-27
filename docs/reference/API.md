@@ -7282,7 +7282,7 @@ agent's previous list.
 
 ### GET /api/edr/agents/:id/packages
 
-Admin. The agent's current list: query `q` (name contains), `limit` (default
+Analyst, operator or admin. The agent's current list: query `q` (name contains), `limit` (default
 200, up to 1,000), `offset`.
 
 ```json

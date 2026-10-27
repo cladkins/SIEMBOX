@@ -33,14 +33,15 @@ unique index on `event_id` for replay dedup).
 - `POST /scans` → `200` `{scan_id, status, accepted}`: the agent reports a scan's start or end (see [Scans and scan history](#scans-and-scan-history))
 - `POST /packages` → `200` with `{accepted, unchanged, snapshot_required, package_count, stored, removed, skipped, truncated}` (installed software, see [Installed packages](#installed-packages))
 
-**Admin-facing** (JWT + admin role):
-- `GET /agents`, `GET /agents/:id`, `GET /agents/:id/vulnerabilities`, `GET /agents/:id/packages`, `GET /agents/:id/detections`, `DELETE /agents/:id`
-- Agent updates: `GET /agent-updates`, `POST /agent-updates/check`, `PUT /agent-updates/settings`, `POST /agents/:id/update`, `DELETE /agents/:id/update`, `POST /agents/update-outdated` (see [Agent updates](#agent-updates) and `docs/reference/API.md`)
+**Console-facing** (JWT):
+- Analyst, operator or admin: `GET /agents`, `GET /agents/:id`, `GET /agents/:id/vulnerabilities`, `GET /agents/:id/packages`, `GET /agents/:id/detections`
+- Admin: `DELETE /agents/:id`
+- Admin, agent updates: `GET /agent-updates`, `POST /agent-updates/check`, `PUT /agent-updates/settings`, `POST /agents/:id/update`, `DELETE /agents/:id/update`, `POST /agents/update-outdated` (see [Agent updates](#agent-updates) and `docs/reference/API.md`)
 - Scans (analyst and up; history every role): `POST /agents/:id/scans`, `POST /agents/scans/bulk`, `POST /agents/:id/scans/:scanId/cancel`, `GET /agents/:id/scans`
-- `POST /tokens` (generate, plaintext shown once), `GET /tokens`, `DELETE /tokens/:hash` (revoke)
-- `GET /yara` (current bundle version/sha/size), `POST /yara/refresh` (pull YARA-Forge now)
+- Admin: `POST /tokens` (generate, plaintext shown once), `GET /tokens`, `DELETE /tokens/:hash` (revoke)
+- Admin: `GET /yara` (current bundle version/sha/size), `POST /yara/refresh` (pull YARA-Forge now)
 
-The **Endpoints** UI (admin) lives under *Assets & Vulnerabilities → Endpoints*:
+The **Endpoints** UI (analyst, operator and admin; enrollment, tokens, YARA, updates and removal admin-only) lives under *Assets & Vulnerabilities → Endpoints*:
 agent list with live status + open-vuln / recent-detection counts, a per-endpoint
 drill-down (reusing the alert + vuln tables), and enrollment-token generation with
 install instructions.
@@ -212,7 +213,7 @@ the `edr-agent-release` job every 6 hours.
 
 - Endpoint alerts are inserted directly, so they don't yet fire Email/Slack/NTFY notifications (rule-based alerts still do).
 - Server-pushed Sigma `rules` in `AgentConfig` are empty; wire to `/api/rules` (endpoint/Sigma) later.
-- The Endpoints page is admin-only, so analysts and viewers cannot reach the scan controls and history in the UI yet, although the scan API allows them.
+- The Endpoints page is open to analysts and operators (endpoints, detections, vulnerabilities, packages, scan history, Scan now / Scan selected). Enrollment, tokens, YARA rules, agent updates and removal stay admin-only. Viewers don't see the page, although the scan-history API allows them.
 - YARA bundle status (version/source/size) + a "Pull YARA-Forge now" button live on
   the **Endpoints** page; per-agent "which version does this agent have"
   isn't tracked yet (the agent stores it locally; the server only knows the served version).

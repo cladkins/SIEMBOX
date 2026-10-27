@@ -339,7 +339,7 @@ const INVENTORY: Row[] = [
   ['POST', '/api/edr/vulnerabilities', AGENT],
   ['POST', '/api/edr/packages', AGENT],
   ['POST', '/api/edr/scans', AGENT],
-  ['GET', '/api/edr/agents', ADMIN_ONLY],
+  ['GET', '/api/edr/agents', ANALYST_UP],
   ['POST', '/api/edr/tokens', ADMIN_ONLY],
   ['GET', '/api/edr/tokens', ADMIN_ONLY],
   ['DELETE', '/api/edr/tokens/:hash', ADMIN_ONLY],
@@ -355,10 +355,10 @@ const INVENTORY: Row[] = [
   ['GET', '/api/edr/agents/:id/scans', ANY_ROLE],
   ['POST', '/api/edr/agents/:id/update', ADMIN_ONLY],
   ['DELETE', '/api/edr/agents/:id/update', ADMIN_ONLY],
-  ['GET', '/api/edr/agents/:id', ADMIN_ONLY],
-  ['GET', '/api/edr/agents/:id/vulnerabilities', ADMIN_ONLY],
-  ['GET', '/api/edr/agents/:id/packages', ADMIN_ONLY],
-  ['GET', '/api/edr/agents/:id/detections', ADMIN_ONLY],
+  ['GET', '/api/edr/agents/:id', ANALYST_UP],
+  ['GET', '/api/edr/agents/:id/vulnerabilities', ANALYST_UP],
+  ['GET', '/api/edr/agents/:id/packages', ANALYST_UP],
+  ['GET', '/api/edr/agents/:id/detections', ANALYST_UP],
   ['DELETE', '/api/edr/agents/:id', ADMIN_ONLY],
 
   // routes/packs.ts: Content Packs page

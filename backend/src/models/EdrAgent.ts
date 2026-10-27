@@ -77,6 +77,10 @@ export interface EdrAgent {
   last_vuln_ingest_at: Date | null;
   /** Hash of the newest host inventory, for the scan history's `changed`. */
   inventory_hash: string | null;
+  /** Named scan policy (migration 054); null = the default policy. */
+  scan_policy_id: number | null;
+  /** Per-scan-type overrides of the policy ({ vuln: {...} }), or null. */
+  scan_policy_overrides: Record<string, unknown> | null;
 }
 
 /** An already-validated heartbeat `update` report (see parseHeartbeatUpdate). */
@@ -220,9 +224,13 @@ export class EdrAgentModel {
          ps.reported_at AS packages_reported_at,
          ps.stored_at AS packages_stored_at,
          (SELECT COUNT(*)::int FROM edr_agent_scans s
-           WHERE s.agent_id = a.agent_id AND s.status IN ('pending', 'running')) AS scans_outstanding
+           WHERE s.agent_id = a.agent_id AND s.status IN ('pending', 'running')) AS scans_outstanding,
+         COALESCE(sp.name, (SELECT d.name FROM edr_scan_policies d WHERE d.is_default LIMIT 1), 'Default') AS scan_policy_name,
+         CASE WHEN jsonb_typeof(a.scan_policy_overrides) = 'object'
+              THEN (SELECT COUNT(*)::int FROM jsonb_object_keys(a.scan_policy_overrides)) ELSE 0 END AS scan_policy_override_count
        FROM edr_agents a
        LEFT JOIN edr_agent_package_snapshots ps ON ps.agent_id = a.agent_id
+       LEFT JOIN edr_scan_policies sp ON sp.id = a.scan_policy_id
        ORDER BY a.last_seen DESC NULLS LAST, a.created_at DESC`,
       [OFFLINE_THRESHOLD_MINUTES, VULN_SCAN_INTERVAL_SECONDS]
     );

@@ -35,6 +35,9 @@ import {
 import { getCurrentYaraVersion } from './yaraService';
 import type { AgentUpdateConfig } from './agentUpdate';
 import { attachScanSummary } from './edrScans';
+import { agentConfigScanPolicy } from './scanPolicies';
+
+export type AgentScanPolicyConfig = Awaited<ReturnType<typeof agentConfigScanPolicy>>;
 import { NotificationService } from '../notifications/notificationService';
 import { maybeTriageAlert } from '../ai/triageService';
 
@@ -56,11 +59,18 @@ function parseTimestamp(value: unknown): Date | null {
  *
  * `yara_rules_version` is the version the agent compares against; 0 means "use the
  * embedded baseline only" (no server bundle published yet).
+ *
+ * `scan_policy` (when given) says the server schedules this agent's scans
+ * (services/edr/scanPolicies.ts): an agent that understands it stops running
+ * its own intervals and runs the policy scans the heartbeat issues; `scans`
+ * names which types its effective policy enables. Older agents ignore it and
+ * keep the interval fields below.
  */
 export function buildAgentConfig(
   baseConfigVersion: number,
   yaraRulesVersion = 0,
-  agentUpdate: AgentUpdateConfig | null = null
+  agentUpdate: AgentUpdateConfig | null = null,
+  scanPolicy: AgentScanPolicyConfig | null = null
 ) {
   return {
     config_version: baseConfigVersion + yaraRulesVersion,
@@ -76,6 +86,7 @@ export function buildAgentConfig(
     // Outstanding self-update request ({version, request_id}), or null. The
     // agent attempts a given request_id at most once.
     agent_update: agentUpdate,
+    ...(scanPolicy ? { scan_policy: scanPolicy } : {}),
   };
 }
 
@@ -169,7 +180,11 @@ export async function enrollAgent(input: EnrollInput, connIp?: string) {
   // New agents default to config_version 1; include the current YARA version so a
   // freshly-enrolled agent downloads the current bundle on its first config poll.
   const yaraVersion = await getCurrentYaraVersion();
-  return { agent_id: agentId, agent_api_key: apiKey, config: buildAgentConfig(1, yaraVersion) };
+  return {
+    agent_id: agentId,
+    agent_api_key: apiKey,
+    config: buildAgentConfig(1, yaraVersion, null, await agentConfigScanPolicy(agentId)),
+  };
 }
 
 // ---- Inventory --------------------------------------------------------------

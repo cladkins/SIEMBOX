@@ -5,6 +5,9 @@
  *  - console requests (an analyst's "Scan now") are created here as
  *    `pending`, served to the agent in its heartbeat response
  *    (`scan_requests`) and moved on by the agent's reports;
+ *  - policy runs (trigger 'policy', scanPolicies.ts) take the same path:
+ *    the heartbeat creates them when the endpoint's scan policy says a scan
+ *    is due;
  *  - the agent's own scheduled and startup runs are created by its first
  *    report (POST /api/edr/scans without a scan_id).
  * The agent reports a run's start (`running`) and its end (`succeeded` or
@@ -25,7 +28,7 @@ import { isUuid } from './agentUpdate';
 
 export const SCAN_TYPES = ['vuln', 'yara', 'packages', 'inventory'] as const;
 export type ScanType = (typeof SCAN_TYPES)[number];
-export const SCAN_TRIGGERS = ['schedule', 'startup', 'console'] as const;
+export const SCAN_TRIGGERS = ['schedule', 'startup', 'console', 'policy'] as const;
 export type ScanTrigger = (typeof SCAN_TRIGGERS)[number];
 export const SCAN_STATUSES = ['pending', 'running', 'succeeded', 'failed', 'cancelled', 'expired'] as const;
 export type ScanStatus = (typeof SCAN_STATUSES)[number];
@@ -56,6 +59,8 @@ const MAX_CAPABILITIES = 16;
 export interface ScanRequest {
   scan_id: string;
   scan_type: ScanType;
+  /** 'console' (an analyst's "Scan now") or 'policy' (due under the endpoint's scan policy). */
+  trigger: 'console' | 'policy';
   requested_at: Date;
 }
 
@@ -179,6 +184,7 @@ export async function runScanHousekeeping(): Promise<{ expired: number; pruned: 
 
 const ROW_COLUMNS = `s.id, s.agent_id, s.scan_type, s.trigger, s.requested_by, u.username AS requested_by_username,
   s.requested_at, s.started_at, s.completed_at, s.status, s.summary, s.error,
+  s.policy_id, s.policy_name, s.policy_source,
   CASE WHEN s.started_at IS NOT NULL AND s.completed_at IS NOT NULL
        THEN GREATEST(0, (EXTRACT(EPOCH FROM (s.completed_at - s.started_at)) * 1000)::bigint) END AS duration_ms`;
 
@@ -335,11 +341,14 @@ export async function listScans(
 
 // ---- Agent side -------------------------------------------------------------------------
 
-/** Pending console requests for the heartbeat response, oldest first (after expiring stale ones). */
+/**
+ * Pending requests (console and policy) for the heartbeat response, oldest
+ * first (after expiring stale ones).
+ */
 export async function pendingScanRequests(agentId: string): Promise<ScanRequest[]> {
   await expireStaleScans(agentId);
   const result = await query(
-    `SELECT id AS scan_id, scan_type, requested_at FROM edr_agent_scans
+    `SELECT id AS scan_id, scan_type, trigger, requested_at FROM edr_agent_scans
       WHERE agent_id = $1 AND status = 'pending' ORDER BY requested_at, id`,
     [agentId]
   );
@@ -380,8 +389,8 @@ export async function reportScan(agentId: string, input: unknown): Promise<ScanR
 
   if (rawId === undefined || rawId === null || rawId === '') {
     const trigger = body.trigger === undefined ? 'schedule' : body.trigger;
-    if (!isOneOf(SCAN_TRIGGERS, trigger) || trigger === 'console') {
-      throw new ApiError(400, 'trigger must be schedule or startup (a console run reports its scan_id)');
+    if (!isOneOf(SCAN_TRIGGERS, trigger) || trigger === 'console' || trigger === 'policy') {
+      throw new ApiError(400, 'trigger must be schedule or startup (a console or policy run reports its scan_id)');
     }
     const ins = await query(
       `INSERT INTO edr_agent_scans (agent_id, scan_type, trigger, requested_at, started_at, completed_at, status, summary, error)

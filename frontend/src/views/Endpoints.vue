@@ -14,6 +14,12 @@
           :disabled="selected.length === 0 || selected.length > BULK_SCAN_MAX"
           @click="openBulkScan"
         >Scan selected<template v-if="selected.length"> ({{ selected.length }})</template></el-button>
+        <el-button
+          v-if="canEditPolicy"
+          :disabled="selected.length === 0 || selected.length > ASSIGN_MAX"
+          data-testid="assign-policy"
+          @click="openAssign"
+        >Assign policy<template v-if="selected.length"> ({{ selected.length }})</template></el-button>
         <el-button @click="refresh" :loading="loading"><el-icon><Refresh /></el-icon> Refresh</el-button>
         <el-button v-if="isAdmin" type="primary" @click="openTokenDialog"><el-icon><Plus /></el-icon> Enroll an endpoint</el-button>
       </div>
@@ -59,6 +65,15 @@
                 </el-tag>
               </el-tooltip>
             </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="Scan policy" min-width="150">
+          <template #default="{ row }">
+            <span>{{ row.scan_policy_name || 'Default' }}</span>
+            <el-tag v-if="Number(row.scan_policy_override_count) > 0" size="small" type="warning" style="margin-left: 4px">
+              +{{ row.scan_policy_override_count }} override{{ Number(row.scan_policy_override_count) === 1 ? '' : 's' }}
+            </el-tag>
+            <div v-if="row.capabilities && !supportsPolicyScans(row)" class="muted">agent runs its own intervals</div>
           </template>
         </el-table-column>
         <el-table-column label="Open vulns" width="110" align="center">
@@ -109,6 +124,14 @@
         <template #empty>No endpoints enrolled yet. Click <strong>Enroll an endpoint</strong> to generate a token.</template>
       </el-table>
     </el-card>
+
+    <ScanPoliciesCard
+      style="margin-top: 16px"
+      :policies="policies.list"
+      :loading="policies.loading"
+      :can-edit="canEditPolicy"
+      @changed="onPoliciesChanged"
+    />
 
     <!-- Agent updates (admin) -->
     <el-card v-if="isAdmin" style="margin-top: 16px">
@@ -268,6 +291,22 @@
       </template>
     </el-dialog>
 
+    <!-- Assign policy dialog -->
+    <el-dialog v-model="assign.open" title="Assign a scan policy" width="480px">
+      <p style="margin-top: 0">Assign this policy to {{ selected.length }} endpoint(s):</p>
+      <el-select v-model="assign.policyId" style="width: 100%" data-testid="assign-policy-select">
+        <el-option v-for="p in policies.list" :key="p.id" :value="p.id" :label="p.is_default ? `${p.name} (default)` : p.name" />
+      </el-select>
+      <p class="muted">
+        Each endpoint keeps its per-scan overrides. Agents pick the change up on their next heartbeat; agents before
+        v{{ MIN_POLICY_AGENT_VERSION }} keep their own intervals until they are updated.
+      </p>
+      <template #footer>
+        <el-button @click="assign.open = false">Cancel</el-button>
+        <el-button type="primary" :disabled="assign.policyId === null" :loading="assign.busy" @click="submitAssign">Assign</el-button>
+      </template>
+    </el-dialog>
+
     <el-drawer v-model="detailOpen" @closed="stopHistoryPolling" :title="detail.agent ? (detail.agent.hostname || 'Endpoint') : 'Endpoint'" size="60%">
       <div v-if="detail.agent">
         <el-descriptions :column="2" border size="small" style="margin-bottom: 16px">
@@ -287,8 +326,17 @@
             </template>
             <template v-else>never</template>
           </el-descriptions-item>
-          <el-descriptions-item label="Next scan ≈">{{ detail.agent.next_scan_at ? formatDate(detail.agent.next_scan_at) : '—' }}</el-descriptions-item>
-          <el-descriptions-item label="Scan interval">{{ humanInterval(detail.agent.vuln_scan_interval_seconds) }}</el-descriptions-item>
+          <template v-if="supportsPolicyScans(detail.agent)">
+            <el-descriptions-item label="Scan policy">
+              {{ detail.agent.scan_policy_name || 'Default' }}
+              <el-button link type="primary" size="small" @click="detailTab = 'policy'">schedule</el-button>
+            </el-descriptions-item>
+            <el-descriptions-item label="Scans">scheduled by the server</el-descriptions-item>
+          </template>
+          <template v-else>
+            <el-descriptions-item label="Next scan ≈">{{ detail.agent.next_scan_at ? formatDate(detail.agent.next_scan_at) : '—' }}</el-descriptions-item>
+            <el-descriptions-item label="Scan interval">{{ humanInterval(detail.agent.vuln_scan_interval_seconds) }}</el-descriptions-item>
+          </template>
           <el-descriptions-item label="Installed packages">
             <template v-if="detail.agent.packages_reported_at">
               {{ Number(detail.agent.package_count ?? 0).toLocaleString() }}
@@ -368,10 +416,11 @@
               <el-table-column label="Type" width="130">
                 <template #default="{ row }">{{ scanTypeLabel(row.scan_type) }}</template>
               </el-table-column>
-              <el-table-column label="Trigger" width="140">
+              <el-table-column label="Trigger" width="170">
                 <template #default="{ row }">
                   {{ triggerLabel(row.trigger) }}
                   <div v-if="row.requested_by_username" class="muted">by {{ row.requested_by_username }}</div>
+                  <div v-if="row.trigger === 'policy'" class="muted">{{ policyRunLabel(row) }}</div>
                 </template>
               </el-table-column>
               <el-table-column label="Started" width="160">
@@ -409,6 +458,15 @@
               v-model:current-page="history.page"
               style="margin-top: 8px"
               @current-change="loadHistory"
+            />
+          </el-tab-pane>
+          <el-tab-pane label="Scan policy" name="policy">
+            <EndpointScanPolicy
+              v-if="detailTab === 'policy'"
+              :agent-id="detail.agent.agent_id"
+              :policies="policies.list"
+              :can-edit="canEditPolicy"
+              @changed="onEndpointPolicyChanged"
             />
           </el-tab-pane>
           <el-tab-pane :label="`Packages (${detail.packagesTotal.toLocaleString()})`" name="packages">
@@ -458,6 +516,15 @@ import {
   type ScanRow,
   type ScanType,
 } from '@/utils/endpointScans';
+import {
+  MIN_POLICY_AGENT_VERSION,
+  canEditPolicies,
+  policyRunLabel,
+  supportsPolicyScans,
+  type ScanPolicy,
+} from '@/utils/scanPolicies';
+import ScanPoliciesCard from '@/components/endpoints/ScanPoliciesCard.vue';
+import EndpointScanPolicy from '@/components/endpoints/EndpointScanPolicy.vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, Plus, CopyDocument } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
@@ -485,6 +552,12 @@ const canScan = computed(() => canRequestScans(authStore.user?.role));
 // Analysts and operators see endpoints, findings and scans; enrollment, tokens,
 // YARA rules, agent updates and removal are admin-only (the API agrees).
 const isAdmin = computed(() => authStore.user?.role === 'admin');
+// Scan policies: everyone here reads them; operators and admins edit, assign and override (the API agrees).
+const canEditPolicy = computed(() => canEditPolicies(authStore.user?.role));
+const policies = reactive<{ list: ScanPolicy[]; loading: boolean }>({ list: [], loading: false });
+/** Endpoints one "Assign policy" may name (BULK_ASSIGN_MAX_AGENTS on the server). */
+const ASSIGN_MAX = 500;
+const assign = reactive<{ open: boolean; policyId: number | null; busy: boolean }>({ open: false, policyId: null, busy: false });
 const selected = ref<any[]>([]);
 function onSelectionChange(rows: any[]) { selected.value = rows; }
 const bulk = reactive<{ open: boolean; types: ScanType[]; busy: boolean }>({ open: false, types: ['vuln'], busy: false });
@@ -530,12 +603,21 @@ async function fetchUpdateStatus() {
   const res = await api.getAgentUpdateStatus();
   updates.status = res.data;
 }
+async function fetchPolicies() {
+  policies.loading = true;
+  try {
+    const res = await api.getScanPolicies();
+    policies.list = res.data.policies || [];
+  } finally {
+    policies.loading = false;
+  }
+}
 async function refresh() {
   loading.value = true;
   try {
     await Promise.all(isAdmin.value
-      ? [fetchEndpoints(), fetchTokens(), fetchYaraStatus(), fetchUpdateStatus()]
-      : [fetchEndpoints()]);
+      ? [fetchEndpoints(), fetchPolicies(), fetchTokens(), fetchYaraStatus(), fetchUpdateStatus()]
+      : [fetchEndpoints(), fetchPolicies()]);
   }
   catch { ElMessage.error('Failed to load endpoints'); }
   finally { loading.value = false; }
@@ -780,7 +862,8 @@ async function loadHistory() {
     history.outstanding = Number(data.outstanding ?? 0);
     if (data.supports_adhoc !== undefined && detail.agent) {
       // The list row may predate the agent's first capable heartbeat.
-      detail.agent.capabilities = data.supports_adhoc ? ['adhoc_scans'] : detail.agent.capabilities;
+      const caps: string[] = Array.isArray(detail.agent.capabilities) ? detail.agent.capabilities : [];
+      if (data.supports_adhoc && !caps.includes('adhoc_scans')) detail.agent.capabilities = [...caps, 'adhoc_scans'];
     }
   } catch { ElMessage.error('Failed to load scan history'); }
   finally { history.loading = false; }
@@ -823,6 +906,35 @@ async function cancelScan(row: ScanRow) {
     ElMessage.error(errorMessage(e, 'Failed to cancel the scan request'));
     void loadHistory();
   }
+}
+
+function onPoliciesChanged() {
+  void fetchPolicies();
+  void fetchEndpoints();
+}
+function onEndpointPolicyChanged() {
+  void fetchPolicies(); // endpoint counts
+  void fetchEndpoints();
+}
+
+function openAssign() {
+  assign.policyId = policies.list.find((p) => p.is_default)?.id ?? null;
+  assign.open = true;
+}
+
+async function submitAssign() {
+  const ids = selected.value.map((r) => r.agent_id);
+  const policy = policies.list.find((p) => p.id === assign.policyId);
+  if (!policy || ids.length === 0 || ids.length > ASSIGN_MAX) return;
+  assign.busy = true;
+  try {
+    const { data } = await api.assignScanPolicy(ids, policy.is_default ? null : policy.id);
+    const missing = data.missing?.length ? ` (${data.missing.length} no longer enrolled)` : '';
+    ElMessage.success(`${data.agents} endpoint(s) now follow ${policy.name}${missing}`);
+    assign.open = false;
+    await Promise.all([fetchEndpoints(), fetchPolicies()]);
+  } catch (e) { ElMessage.error(errorMessage(e, 'Failed to assign the policy')); }
+  finally { assign.busy = false; }
 }
 
 function openBulkScan() {

@@ -35,6 +35,7 @@ describe('endpoint scans', () => {
     assert.equal(triggerLabel('console'), 'on demand');
     assert.equal(triggerLabel('schedule'), 'scheduled');
     assert.equal(triggerLabel('startup'), 'startup');
+    assert.equal(triggerLabel('policy'), 'scan policy');
     assert.equal(scanTypeLabel('packages'), 'Packages');
   });
 

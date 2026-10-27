@@ -28,8 +28,8 @@ export interface EvidenceHit {
   version: string | null;
   location: string | null;
   location_label: string | null;
-  /** Where it is now: in the Not identified list, or identified as other applications. */
-  now: 'not_identified' | 'identified' | 'snapshot';
+  /** Where it is now: identified as other applications, or by none (unidentified). */
+  now: 'not_identified' | 'identified';
   identified_as: string[];
 }
 
@@ -40,7 +40,7 @@ export interface EvidenceTestResult {
   total: number;
   locations: number;
   versions: string[];
-  /** The hits that would leave the Not identified list. */
+  /** Values that would leave the Not identified list. */
   resolves_unmatched: number;
   truncated: boolean;
 }
@@ -58,8 +58,15 @@ export class HitCollector {
     this.counts[h.kind] = (this.counts[h.kind] ?? 0) + 1;
     if (h.location) this.locs.add(`${h.kind}\u0000${h.location}`);
     if (h.version) this.versions.add(h.version);
-    if (h.now === 'not_identified') this.resolves++;
     if (this.hits.length < TEST_MATCH_LIMIT) this.hits.push(h);
+  }
+  /** Whether a hit of this kind is already listed at this location. */
+  has(kind: string, location: string | null): boolean {
+    return location != null && this.locs.has(`${kind}\u0000${location}`);
+  }
+  /** Count a Not identified value this signature would resolve. */
+  resolveUnmatched(): void {
+    this.resolves++;
   }
   result(): EvidenceTestResult {
     return {
@@ -88,24 +95,7 @@ export async function testSignatureAgainstEvidence(app: AppSignature, others: Ap
   const hits = new HitCollector();
   const id = app.id;
 
-  // 1. The Not identified list.
-  const unmatched = await query(
-    `SELECT u.source, u.value, u.sample, u.detail, u.sample_location,
-            CASE WHEN u.source IN ('package', 'service') THEN COALESCE(a.hostname, host(a.ip_address))
-                 WHEN u.source = 'container' THEN COALESCE(ls.hostname, ls.name) END AS label
-       FROM application_unmatched u
-       LEFT JOIN assets a ON u.source IN ('package', 'service') AND a.id::text = u.sample_location
-       LEFT JOIN log_shippers ls ON u.source = 'container' AND ls.id::text = u.sample_location
-      ORDER BY u.events DESC LIMIT $1`,
-    [SNAPSHOT_READ]
-  );
-  for (const r of unmatched.rows) {
-    if (!unmatchedResolves(only, r)) continue;
-    const version = versionFor(only, r);
-    hits.add({ kind: r.source, value: r.sample || r.value, version, location: r.sample_location, location_label: r.label ?? r.sample_location, now: 'not_identified', identified_as: [] });
-  }
-
-  // 2. Log values other signatures identify now.
+  // 1. Log values other signatures identify now.
   const identified = await query(
     `SELECT source, value, max(loc_key) AS loc, array_agg(DISTINCT app_id) AS apps
        FROM (SELECT source, evidence->>'value' AS value, loc_key, app_id FROM application_inventory
@@ -127,7 +117,7 @@ export async function testSignatureAgainstEvidence(app: AppSignature, others: Ap
     hits.add({ kind: r.source, value: v, version: hit.version, location: r.loc, location_label: r.loc, now: 'identified', identified_as: r.apps ?? [] });
   }
 
-  // 3. Snapshots.
+  // 2. Snapshots.
   const services = await query(
     `SELECT s.asset_id, s.port, s.protocol, s.service_name, s.service_version, s.banner, COALESCE(a.hostname, host(a.ip_address)) AS label
        FROM asset_services s LEFT JOIN assets a ON a.id = s.asset_id
@@ -142,7 +132,7 @@ export async function testSignatureAgainstEvidence(app: AppSignature, others: Ap
     hits.add({
       kind: 'service',
       value: `${s.port}/${s.protocol} ${[s.service_name, s.service_version].filter(Boolean).join(' ')}`.trim(),
-      version: hit.version, location: String(s.asset_id), location_label: s.label, now: now.length ? 'identified' : 'snapshot', identified_as: now,
+      version: hit.version, location: String(s.asset_id), location_label: s.label, now: now.length ? 'identified' : 'not_identified', identified_as: now,
     });
   }
   const containers = await query(
@@ -153,7 +143,7 @@ export async function testSignatureAgainstEvidence(app: AppSignature, others: Ap
     const hit = mine(only.matchImage(c.image), id);
     if (!hit) continue;
     const now = full.matchImage(c.image).filter((m) => m.appId !== id).map((m) => m.appId);
-    hits.add({ kind: 'container', value: c.image, version: hit.version, location: String(c.shipper_id), location_label: c.label, now: now.length ? 'identified' : 'snapshot', identified_as: now });
+    hits.add({ kind: 'container', value: c.image, version: hit.version, location: String(c.shipper_id), location_label: c.label, now: now.length ? 'identified' : 'not_identified', identified_as: now });
   }
   if (app.match.package.length) {
     const pkgs = await query(
@@ -166,7 +156,7 @@ export async function testSignatureAgainstEvidence(app: AppSignature, others: Ap
       const hit = mine(only.matchPackage(p.name, p.version), id);
       if (!hit) continue;
       const now = full.matchPackage(p.name, p.version).filter((m) => m.appId !== id).map((m) => m.appId);
-      hits.add({ kind: 'package', value: `${p.name} ${p.version}${p.type ? ` (${p.type})` : ''}`, version: hit.version, location: String(p.asset_id), location_label: p.label, now: now.length ? 'identified' : 'snapshot', identified_as: now });
+      hits.add({ kind: 'package', value: `${p.name} ${p.version}${p.type ? ` (${p.type})` : ''}`, version: hit.version, location: String(p.asset_id), location_label: p.label, now: now.length ? 'identified' : 'not_identified', identified_as: now });
     }
   }
   if (app.match.os) {
@@ -179,9 +169,30 @@ export async function testSignatureAgainstEvidence(app: AppSignature, others: Ap
       const hit = mine(only.matchOs(a.os, a.os_version), id);
       if (!hit) continue;
       const now = full.matchOs(a.os, a.os_version).filter((m) => m.appId !== id).map((m) => m.appId);
-      hits.add({ kind: 'os', value: `${a.os ?? ''} ${a.os_version ?? ''}`.trim(), version: hit.version, location: String(a.asset_id), location_label: a.label, now: now.length ? 'identified' : 'snapshot', identified_as: now });
+      hits.add({ kind: 'os', value: `${a.os ?? ''} ${a.os_version ?? ''}`.trim(), version: hit.version, location: String(a.asset_id), location_label: a.label, now: now.length ? 'identified' : 'not_identified', identified_as: now });
     }
   }
+  // 3. The Not identified list (after the snapshots, which list every location).
+  const unmatched = await query(
+    `SELECT u.source, u.value, u.sample, u.detail, u.sample_location,
+            CASE WHEN u.source IN ('package', 'service') THEN COALESCE(a.hostname, host(a.ip_address))
+                 WHEN u.source = 'container' THEN COALESCE(ls.hostname, ls.name) END AS label
+       FROM application_unmatched u
+       LEFT JOIN assets a ON u.source IN ('package', 'service') AND a.id::text = u.sample_location
+       LEFT JOIN log_shippers ls ON u.source = 'container' AND ls.id::text = u.sample_location
+      ORDER BY u.events DESC LIMIT $1`,
+    [SNAPSHOT_READ]
+  );
+  for (const r of unmatched.rows) {
+    if (!unmatchedResolves(only, r)) continue;
+    hits.resolveUnmatched();
+    // A container, package or service already listed from its snapshot at
+    // this location would otherwise show twice (once from each list).
+    if (hits.has(r.source, r.sample_location)) continue;
+    const version = versionFor(only, r);
+    hits.add({ kind: r.source, value: r.sample || r.value, version, location: r.sample_location, location_label: r.label ?? r.sample_location, now: 'not_identified', identified_as: [] });
+  }
+
   return hits.result();
 }
 

@@ -164,6 +164,43 @@ test('test: what the signature would identify now (here: the Not identified pack
   assert.equal(r.json.result.resolves_unmatched, 1);
 });
 
+test('test: a package on two endpoints is listed once per endpoint, all unidentified, not again from the Not identified list', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const pkg = `${ID}-dup`;
+  const assetIds: number[] = [];
+  const agentIds: string[] = [];
+  try {
+    for (const host of ['a', 'b']) {
+      const asset = await pool.query(
+        `INSERT INTO assets (ip_address, hostname, status) VALUES ($1, $2, 'active') RETURNING id`,
+        [`198.18.${crypto.randomInt(0, 256)}.${crypto.randomInt(1, 255)}`, `appsig-${tag}-${host}`]
+      );
+      assetIds.push(asset.rows[0].id);
+      const agentId = crypto.randomUUID();
+      agentIds.push(agentId);
+      await pool.query(`INSERT INTO edr_agents (agent_id, api_key_hash, asset_id) VALUES ($1, $2, $3)`, [agentId, crypto.randomBytes(32).toString('hex'), asset.rows[0].id]);
+      await pool.query(`INSERT INTO edr_agent_packages (agent_id, name, version, type) VALUES ($1, $2, '1.0.0', 'deb')`, [agentId, pkg]);
+    }
+    // The rollup lists the name once, sampled at the first endpoint.
+    await pool.query(
+      `INSERT INTO application_unmatched (source, value, events, locations, first_seen, last_seen, sample_location, sample, detail)
+       VALUES ('package', $1, 2, 2, NOW(), NOW(), $2, $3, '{"version": "1.0.0", "type": "deb"}') ON CONFLICT DO NOTHING`,
+      [pkg, String(assetIds[0]), `${pkg} 1.0.0`]
+    );
+    const yaml = yamlFor(`${ID}-dup`).replace(`[${ID}-dup-agent]`, `[${pkg}]`).replace(`input: ${ID}-dup-agent`, `input: ${pkg}`);
+    const r = await call('analyst', 'POST', '/api/applications/signatures/test', { yaml });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    const hits = r.json.result.hits.filter((h: any) => h.kind === 'package');
+    assert.deepEqual(hits.map((h: any) => h.location).sort(), assetIds.map(String).sort(), JSON.stringify(hits));
+    assert.ok(hits.every((h: any) => h.now === 'not_identified'), JSON.stringify(hits));
+    assert.equal(r.json.result.locations, 2);
+    assert.equal(r.json.result.resolves_unmatched, 1);
+  } finally {
+    await pool.query('DELETE FROM edr_agents WHERE agent_id = ANY($1::uuid[])', [agentIds]);
+    await pool.query('DELETE FROM assets WHERE id = ANY($1)', [assetIds]);
+  }
+});
+
 test('save, list, read, contribute, disable, delete; an override of a catalog id', async (t) => {
   if (!dbReady) return t.skip(SKIP);
   const created = await call('analyst', 'POST', '/api/applications/signatures', { yaml: yamlFor(ID) });

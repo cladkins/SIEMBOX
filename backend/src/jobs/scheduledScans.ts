@@ -10,6 +10,7 @@ import { ScheduledScanModel, ScheduledScan } from '../models/ScheduledScan';
 import { NucleiScanner } from '../services/scanner/nucleiScanner';
 import { NmapScanner } from '../services/scanner/nmapScanner';
 import { TrivyScanner } from '../services/scanner/trivyScanner';
+import { discoverScannableImages } from '../services/scanner/containerTargets';
 import { LogShipperModel } from '../models/LogShipper';
 import { logger } from '../utils/logger';
 import { ErrorLogService } from '../services/errors/errorLogService';
@@ -51,7 +52,23 @@ export async function triggerScheduledScan(schedule: ScheduledScan): Promise<num
   // Container scans are Trivy image scans (no LAN scan), so they are never
   // dispatched to a shipper -- handle first, before resolving any shipper.
   if (schedule.scan_type === 'container') {
-    return TrivyScanner.scan(opts.image_ref, userId);
+    if (opts.all_images !== true) return TrivyScanner.scan(opts.image_ref, userId);
+    // Every image discovered now (SIEMBox host + each shipper's host), so a
+    // container started since the schedule was saved is covered too.
+    const { images, dropped } = await discoverScannableImages();
+    if (images.length === 0) {
+      throw new Error('No scannable container images discovered (mount the Docker socket, or run log shippers that report containers)');
+    }
+    if (dropped > 0) {
+      logger.warn(`[Scheduled Scans] Schedule #${schedule.id} ("${schedule.name}"): ${dropped} image(s) over the ${images.length}-image limit were not queued`);
+    }
+    let first: number | null = null;
+    for (const image of images) {
+      const id = await TrivyScanner.scan(image, userId);
+      first ??= id;
+    }
+    logger.info(`[Scheduled Scans] Schedule #${schedule.id} ("${schedule.name}") queued ${images.length} container image scan(s)`);
+    return first!;
   }
 
   // Optional LAN-side dispatch: run this scheduled scan from a log shipper

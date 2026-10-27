@@ -233,7 +233,17 @@
 
         <!-- Container options -->
         <template v-else-if="scheduledScanForm.scan_type === 'container'">
-          <el-form-item label="Image" required>
+          <el-form-item label="Images">
+            <el-radio-group v-model="scheduledScanForm.containerAll">
+              <el-radio :value="true">All discovered images</el-radio>
+              <el-radio :value="false">One image</el-radio>
+            </el-radio-group>
+            <el-text v-if="scheduledScanForm.containerAll" size="small" type="info">
+              Each run scans every image currently found on the SIEMBox host (Docker socket) and on every log
+              shipper's host, as on the Container Scanning page — new containers are picked up automatically.
+            </el-text>
+          </el-form-item>
+          <el-form-item v-if="!scheduledScanForm.containerAll" label="Image" required>
             <el-input
               v-model="scheduledScanForm.imageRef"
               placeholder="e.g. nginx:latest, ghcr.io/cladkins/siembox-backend:latest"
@@ -322,7 +332,8 @@ const scheduledScanForm = reactive({
   vulnTags: [] as string[],
   vulnTemplates: [] as string[],
   vulnSeverities: [] as string[],
-  // container
+  // container: every discovered image, or one image ref
+  containerAll: true,
   imageRef: '',
   // optional LAN-side dispatch (asset/vuln only); null = run on the backend
   assignedShipperId: null as number | null,
@@ -444,7 +455,7 @@ function formatScanTarget(scan: any): string {
     return Array.isArray(options.targets) ? options.targets.join(', ') : '-';
   }
   if (scan.scan_type === 'container') {
-    return options.image_ref || '-';
+    return options.all_images ? 'All discovered images' : options.image_ref || '-';
   }
   return options.target || '-';
 }
@@ -468,6 +479,7 @@ function resetScheduledScanForm() {
   scheduledScanForm.vulnTemplates = [];
   scheduledScanForm.vulnSeverities = [];
   scheduledScanForm.imageRef = '';
+  scheduledScanForm.containerAll = true;
   scheduledScanForm.assignedShipperId = null;
   schedPublicConfirmed.value = false;
 }
@@ -493,6 +505,7 @@ function editSchedule(scan: any) {
     scheduledScanForm.assetScanType = options.scanType || 'ping';
   } else if (scan.scan_type === 'container') {
     scheduledScanForm.imageRef = options.image_ref || '';
+    scheduledScanForm.containerAll = options.all_images === true;
   } else if (scan.scan_type === 'vulnerability') {
     scheduledScanForm.vulnTarget = options.target || '';
     const sel = options.templateSelection || {};
@@ -571,6 +584,8 @@ async function saveSchedule() {
       return;
     }
     scan_options = { targets, scanType: scheduledScanForm.assetScanType };
+  } else if (scheduledScanForm.scan_type === 'container' && scheduledScanForm.containerAll) {
+    scan_options = { all_images: true };
   } else if (scheduledScanForm.scan_type === 'container') {
     const imageRef = scheduledScanForm.imageRef.trim();
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/@-]{0,510}$/.test(imageRef)) {

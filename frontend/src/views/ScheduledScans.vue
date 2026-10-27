@@ -12,9 +12,17 @@
       <template #header>
         <div class="card-header">
           <span>Schedules</span>
+          <span class="header-actions">
+          <el-button
+            v-if="convertible.length"
+            size="small"
+            data-testid="convert-legacy"
+            @click="convertLegacySchedules"
+          >Switch {{ convertible.length }} to set times</el-button>
           <el-button type="primary" size="small" @click="showCreateSchedule" :icon="Plus">
             New Schedule
           </el-button>
+          </span>
         </div>
       </template>
 
@@ -278,6 +286,15 @@
           </el-text>
         </el-form-item>
 
+        <el-alert
+          v-if="convertedFrom && timing.frequency !== 'interval'"
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 12px"
+          data-testid="converted-note"
+          :title="`This schedule ran ${convertedFrom.toLowerCase()} from when it was saved, so its time drifted. It's set below to run at the same time as its next run, at fixed times from now on. Choose Fixed interval to keep it as it was.`"
+        />
         <el-form-item label="Frequency" required>
           <el-select v-model="timing.frequency" style="width: 100%" data-testid="schedule-frequency">
             <el-option label="Hourly" value="hourly" />
@@ -366,7 +383,10 @@
                   · {{ formatInZone(run, viewerZone) }} your time
                 </el-text>
               </div>
-              <el-text v-if="timing.frequency === 'interval'" class="timing-help" type="info" size="small">If saved now.</el-text>
+              <el-text v-if="timing.frequency === 'interval' && !timingChanged && editingNextRun" class="timing-help" type="info" size="small">
+                Unchanged: the next run stays {{ formatInZone(editingNextRun, viewerZone) }}.
+              </el-text>
+              <el-text v-else-if="timing.frequency === 'interval'" class="timing-help" type="info" size="small">If saved now.</el-text>
             </template>
             <el-text v-else type="info" size="small">…</el-text>
           </div>
@@ -412,6 +432,7 @@ import {
   formatInZone,
   timeZoneOptions,
   timingFormFromRow,
+  calendarEquivalent,
   timingFormProblem,
   timingPayload,
   type TimingForm,
@@ -462,6 +483,14 @@ const hourlySlots = computed(() => {
 });
 
 // Live "Next runs" preview, computed by the server (the same rules it schedules with).
+// Editing: the timing as loaded (an unchanged timing isn't sent, so saving a
+// rename doesn't move the next run), the stored next run, and the interval a
+// pre-converted fixed-interval schedule came from.
+const loadedTiming = ref<string | null>(null);
+const editingNextRun = ref<string | null>(null);
+const convertedFrom = ref<string | null>(null);
+const timingChanged = computed(() => loadedTiming.value === null || JSON.stringify(timingPayload(timing)) !== loadedTiming.value);
+
 const previewRuns = ref<string[]>([]);
 const previewError = ref('');
 const previewZone = computed(() => (timing.frequency === 'interval' ? viewerZone : timing.timezone));
@@ -603,6 +632,9 @@ function formatDate(date: string): string {
 }
 
 function resetScheduledScanForm() {
+  loadedTiming.value = null;
+  editingNextRun.value = null;
+  convertedFrom.value = null;
   scheduledScanForm.id = null;
   scheduledScanForm.name = '';
   scheduledScanForm.scan_type = 'asset';
@@ -637,6 +669,15 @@ function editSchedule(scan: any) {
   scheduledScanForm.scan_type = scan.scan_type;
   scheduledScanForm.enabled = scan.enabled;
   Object.assign(timing, timingFormFromRow(scan, viewerZone));
+  loadedTiming.value = JSON.stringify(timingPayload(timing));
+  editingNextRun.value = scan.next_run_at ?? null;
+  // A fixed-interval schedule opens converted to set times at its next run's
+  // time of day (the drift the interval caused stops once it's saved).
+  const equivalent = scan.schedule ? null : calendarEquivalent(scan.interval_minutes, scan.next_run_at, viewerZone);
+  if (equivalent) {
+    Object.assign(timing, equivalent);
+    convertedFrom.value = formatInterval(scan.interval_minutes);
+  }
 
   const options = scan.scan_options || {};
   scheduledScanForm.assignedShipperId = options.assignedShipperId ?? null;
@@ -754,7 +795,7 @@ async function saveSchedule() {
     name: scheduledScanForm.name.trim(),
     scan_type: scheduledScanForm.scan_type,
     scan_options,
-    ...timingPayload(timing),
+    ...(timingChanged.value ? timingPayload(timing) : {}),
     enabled: scheduledScanForm.enabled,
   };
   if (schedGate.value.allowPublicTargets) payload.allow_public_targets = true;
@@ -775,6 +816,44 @@ async function saveSchedule() {
   } finally {
     scheduledScansSaving.value = false;
   }
+}
+
+// Fixed-interval schedules that have a set-times equivalent (see calendarEquivalent).
+const convertible = computed(() =>
+  scheduledScans.value
+    .filter((row) => !row.schedule && row.interval_minutes)
+    .map((row) => ({ row, equivalent: calendarEquivalent(row.interval_minutes, row.next_run_at, viewerZone) }))
+    .filter((c): c is { row: any; equivalent: Partial<TimingForm> } => c.equivalent !== null)
+);
+
+async function convertLegacySchedules() {
+  const plans = convertible.value.map(({ row, equivalent }) => {
+    const form = { ...timingFormFromRow(row, viewerZone), ...equivalent };
+    return { row, schedule: timingPayload(form).schedule };
+  });
+  const lines = plans.map((p) => `${p.row.name}: ${formatInterval(p.row.interval_minutes)} → ${describeSchedule({ schedule: p.schedule })}`);
+  try {
+    await ElMessageBox.confirm(
+      `Each keeps the time of day of its next run, in ${viewerZone}, and stops drifting:\n\n${lines.join('\n')}`,
+      `Switch ${plans.length} schedule${plans.length === 1 ? '' : 's'} to set times?`,
+      { confirmButtonText: 'Switch', cancelButtonText: 'Cancel', type: 'info', customStyle: { whiteSpace: 'pre-line', maxWidth: '640px' } }
+    );
+  } catch {
+    return;
+  }
+  scheduledScansSaving.value = true;
+  let failed = 0;
+  for (const p of plans) {
+    try {
+      await api.updateScheduledScan(p.row.id, { schedule: p.schedule });
+    } catch {
+      failed++;
+    }
+  }
+  scheduledScansSaving.value = false;
+  if (failed) ElMessage.error(`${failed} of ${plans.length} could not be switched`);
+  else ElMessage.success(`Switched ${plans.length} schedule${plans.length === 1 ? '' : 's'} to set times`);
+  fetchScheduledScans();
 }
 
 async function toggleScheduleEnabled(scan: any) {
@@ -838,6 +917,11 @@ async function deleteScheduleConfirm(scan: any) {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
 }
 .public-badge {
   margin-left: 6px;

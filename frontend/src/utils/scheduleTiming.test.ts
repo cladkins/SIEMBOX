@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  calendarEquivalent,
   defaultTimingForm,
   describeDays,
   describeSchedule,
@@ -95,5 +96,24 @@ describe('time zones', () => {
     assert.equal(formatInZone('2026-03-09T07:30:00Z', CHI), 'Mon, Mar 9, 02:30 CDT');
     assert.equal(formatInZone('2026-01-09T08:30:00Z', CHI), 'Fri, Jan 9, 02:30 CST');
     assert.equal(formatInZone('2026-01-09T08:30:00Z', 'Not/AZone'), '2026-01-09T08:30:00Z');
+  });
+});
+
+describe('calendarEquivalent (switching a fixed-interval schedule to set times)', () => {
+  // 2026-10-28T08:15:00Z is Wed 03:15 in Chicago (CDT).
+  const next = '2026-10-28T08:15:00.000Z';
+  it('keeps the next run\'s time of day', () => {
+    assert.deepEqual(calendarEquivalent(1440, next, CHI), { frequency: 'daily', time: '03:15', timezone: CHI });
+    assert.deepEqual(calendarEquivalent(10080, next, CHI), { frequency: 'weekly', time: '03:15', days: [3], timezone: CHI });
+    assert.deepEqual(calendarEquivalent(60, next, CHI), { frequency: 'hourly', minute: 15, every_hours: 1, timezone: CHI });
+    assert.deepEqual(calendarEquivalent(360, next, CHI), { frequency: 'hourly', minute: 15, every_hours: 6, timezone: CHI });
+    assert.deepEqual(calendarEquivalent(1440, next, 'UTC'), { frequency: 'daily', time: '08:15', timezone: 'UTC' });
+  });
+  it('has none for intervals without a calendar form, or without a next run', () => {
+    assert.equal(calendarEquivalent(30, next, CHI), null);
+    assert.equal(calendarEquivalent(2880, next, CHI), null);
+    assert.equal(calendarEquivalent(300, next, CHI), null);
+    assert.equal(calendarEquivalent(1440, null, CHI), null);
+    assert.equal(calendarEquivalent(1440, 'not a date', CHI), null);
   });
 });

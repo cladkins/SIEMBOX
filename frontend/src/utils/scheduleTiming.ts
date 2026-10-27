@@ -124,6 +124,48 @@ export function timingPayload(form: TimingForm): { schedule: CalendarSchedule | 
   return schedule ? { schedule } : { schedule: null, interval_minutes: form.interval_minutes };
 }
 
+/** Wall-clock parts of an instant in a zone. */
+function partsInZone(iso: string, timeZone: string): { weekday: number; day: number; hour: number; minute: number } | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      weekday: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(d);
+    const get = (type: string) => parts.find((x) => x.type === type)?.value ?? '';
+    return { weekday: WEEKDAY_SHORT.indexOf(get('weekday')), day: Number(get('day')), hour: Number(get('hour')), minute: Number(get('minute')) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The calendar schedule a fixed-interval schedule converts to, keeping the
+ * time of its next run: every 24 hours with the next run at 03:15 becomes
+ * daily at 03:15; every 7 days becomes weekly on that weekday; every hour, or
+ * every 2/3/4/6/8/12 hours, becomes hourly at that minute (every-N-hours
+ * counts from midnight, so the hours can move -- the form lists them).
+ * Null when there's no equivalent (e.g. every 30 minutes, every 2 days).
+ */
+export function calendarEquivalent(intervalMinutes: number, nextRunIso: string | null | undefined, timeZone: string): Partial<TimingForm> | null {
+  if (!nextRunIso) return null;
+  const p = partsInZone(nextRunIso, timeZone);
+  if (!p || p.weekday < 0) return null;
+  const time = `${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`;
+  if (intervalMinutes === 1440) return { frequency: 'daily', time, timezone: timeZone };
+  if (intervalMinutes === 10080) return { frequency: 'weekly', time, days: [p.weekday], timezone: timeZone };
+  const hours = intervalMinutes / 60;
+  if (Number.isInteger(hours) && [1, 2, 3, 4, 6, 8, 12].includes(hours)) {
+    return { frequency: 'hourly', minute: p.minute, every_hours: hours, timezone: timeZone };
+  }
+  return null;
+}
+
 /** A problem the form can see before saving, or null. The server checks again. */
 export function timingFormProblem(form: TimingForm): string | null {
   if (form.frequency === 'interval') {

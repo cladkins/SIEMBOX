@@ -590,6 +590,19 @@ export const api = {
   requestEndpointScansBulk: (agentIds: string[], types: string[]) =>
     apiClient.post('/edr/agents/scans/bulk', { agent_ids: agentIds, types }),
   cancelEndpointScan: (id: string, scanId: string) => apiClient.post(`/edr/agents/${id}/scans/${scanId}/cancel`),
+  // Endpoint scan policies
+  getScanPolicies: () => apiClient.get('/edr/scan-policies'),
+  createScanPolicy: (data: { name: string; description?: string | null; scans: unknown }) =>
+    apiClient.post('/edr/scan-policies', data),
+  updateScanPolicy: (id: number, data: { name?: string; description?: string | null; scans?: unknown }) =>
+    apiClient.put(`/edr/scan-policies/${id}`, data),
+  deleteScanPolicy: (id: number) => apiClient.delete(`/edr/scan-policies/${id}`),
+  previewScanPolicySpec: (spec: unknown, count = 3) => apiClient.post('/edr/scan-policies/preview', { spec, count }),
+  assignScanPolicy: (agentIds: string[], policyId: number | null) =>
+    apiClient.post('/edr/agents/scan-policy', { agent_ids: agentIds, policy_id: policyId }),
+  getEndpointScanPolicy: (id: string) => apiClient.get(`/edr/agents/${id}/scan-policy`),
+  setEndpointScanPolicy: (id: string, data: { policy_id?: number | null; overrides?: unknown }) =>
+    apiClient.put(`/edr/agents/${id}/scan-policy`, data),
 
   // Context Graph (GET only, every role). The graph page shows every failure
   // inline (a busy answer retries once), so nothing toasts; an 8 s timeout and

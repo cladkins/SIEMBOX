@@ -11,8 +11,11 @@ export type ScanStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cance
 export interface ScanRow {
   id: string;
   scan_type: ScanType;
-  trigger: 'schedule' | 'startup' | 'console';
+  trigger: 'schedule' | 'startup' | 'console' | 'policy';
   requested_by_username?: string | null;
+  /** Policy runs: the policy's name when issued, and whether an endpoint override set the timing. */
+  policy_name?: string | null;
+  policy_source?: 'policy' | 'override' | null;
   requested_at: string;
   started_at?: string | null;
   completed_at?: string | null;
@@ -49,6 +52,7 @@ export function scanTypeLabel(t: string): string {
 export function triggerLabel(t: string): string {
   if (t === 'console') return 'on demand';
   if (t === 'schedule') return 'scheduled';
+  if (t === 'policy') return 'scan policy';
   return t;
 }
 

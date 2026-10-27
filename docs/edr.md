@@ -27,7 +27,7 @@ unique index on `event_id` for replay dedup).
 **Agent-facing** (per-agent key: `Authorization: Bearer <key>` + `X-Agent-ID`):
 - `POST /agents/enroll` — exchange a one-time enrollment token for `{agent_id, agent_api_key, config}` (key returned once; only its sha256 is stored).
 - `POST /agents/:id/heartbeat` → `{config_version, scan_requests}` (optional `update` progress report, see [Agent updates](#agent-updates); `capabilities` and `scan_requests`, see [Scans and scan history](#scans-and-scan-history))
-- `GET  /agents/:id/config` → `AgentConfig` (includes `yara_rules_version` and `agent_update`)
+- `GET  /agents/:id/config` → `AgentConfig` (includes `yara_rules_version`, `agent_update` and `scan_policy`, see [Scan policies](#scan-policies))
 - `GET  /agents/:id/yara` → curated YARA bundle as raw `text/plain` (empty body valid)
 - `POST /inventory` · `POST /events` · `POST /vulnerabilities` → `202 Accepted`
 - `POST /scans` → `200` `{scan_id, status, accepted}`: the agent reports a scan's start or end (see [Scans and scan history](#scans-and-scan-history))
@@ -38,6 +38,7 @@ unique index on `event_id` for replay dedup).
 - Admin: `DELETE /agents/:id`
 - Admin, agent updates: `GET /agent-updates`, `POST /agent-updates/check`, `PUT /agent-updates/settings`, `POST /agents/:id/update`, `DELETE /agents/:id/update`, `POST /agents/update-outdated` (see [Agent updates](#agent-updates) and `docs/reference/API.md`)
 - Scans (analyst and up; history every role): `POST /agents/:id/scans`, `POST /agents/scans/bulk`, `POST /agents/:id/scans/:scanId/cancel`, `GET /agents/:id/scans`
+- Scan policies (read: analyst and up; write: operator and admin): `GET /scan-policies`, `POST /scan-policies`, `POST /scan-policies/preview`, `GET|PUT|DELETE /scan-policies/:policyId`, `POST /agents/scan-policy` (bulk assign), `GET|PUT /agents/:id/scan-policy` (see [Scan policies](#scan-policies))
 - Admin: `POST /tokens` (generate, plaintext shown once), `GET /tokens`, `DELETE /tokens/:hash` (revoke)
 - Admin: `GET /yara` (current bundle version/sha/size), `POST /yara/refresh` (pull YARA-Forge now)
 
@@ -193,8 +194,9 @@ one), under the same CPU limits; an on-demand package inventory always sends
 the full list.
 
 **Scheduled runs** are reported by the agent too (trigger `schedule` or
-`startup`). YARA's minute-by-minute incremental passes are recorded only when
-they find something; full passes always are.
+`startup`, or `policy` for runs its scan policy issued, shown as *scan policy*
+with the policy's name). YARA's minute-by-minute incremental passes are
+recorded only when they find something; full passes always are.
 
 **Summaries.** The server computes the vulnerability, package and inventory
 counts from the report the scan sent (`scan_id` on `POST /vulnerabilities`,
@@ -209,11 +211,75 @@ heartbeat) and requests sent to them expire. Retention: 90 days, and at most
 the newest 200 rows per endpoint and scan type, pruned with stale requests by
 the `edr-agent-release` job every 6 hours.
 
+## Scan policies
+
+*Endpoints → Scan policies* sets which scans endpoints run and when, instead of
+each agent's built-in intervals. Stored in `edr_scan_policies`,
+`edr_agents.scan_policy_id` / `scan_policy_overrides` and
+`edr_agent_policy_runs` (migration `054_edr_scan_policies.sql`); logic in
+`backend/src/services/edr/scanPolicies.ts`.
+
+- **Policies.** A policy has one entry per scan type (vulnerability,
+  YARA, package inventory, system inventory): on or off; a schedule, either a
+  calendar one like Scheduled Scans' (hourly at a minute / every N hours,
+  daily, weekly on chosen days, monthly, in a time zone) or a fixed interval
+  (15 minutes to 30 days, counted from the endpoint's last run); and an
+  optional **time window** ("only start between 22:00 and 06:00" in a time
+  zone; it may wrap past midnight) — a scan that comes due outside it waits
+  for it to open. The editor shows the next runs the server computes.
+- **Default and named policies.** Exactly one policy is the default: every
+  endpoint follows it unless assigned a named policy (select endpoints, then
+  *Assign policy*, or pick one in the endpoint's *Scan policy* tab). The
+  default can be edited but not deleted; deleting a named policy moves its
+  endpoints back to the default. The default starts as what agents did on
+  their own: system inventory hourly, packages every 6 hours, vulnerabilities
+  and a full YARA pass daily.
+- **Per-endpoint overrides.** In the drawer's *Scan policy* tab, *Override*
+  replaces one scan type's entry for that endpoint only (*Clear* returns it to
+  the policy). The tab shows each type's source (policy or override), its
+  schedule, its next three runs, whether a due run waits for its window, and
+  the last policy run.
+- **Who.** Everyone on the Endpoints page (analysts and up) sees policies and
+  each endpoint's effective schedule. Operators and admins create, edit,
+  delete, assign and override, as they manage Scheduled Scans; every write is
+  audited (`edr.scan_policy.*`). *Scan now* (analysts and up) still runs any
+  scan at once, whatever the policy says.
+
+**Delivery: the server schedules, the agent runs.** The server works out when
+each endpoint's scans are due and issues them as scan requests in the
+heartbeat response (`scan_requests`, trigger `policy`), the path *Scan now*
+uses, so the agent needs no schedule logic. The config's `scan_policy`
+(`{managed: true, policy, scans: {<type>: {enabled}}}`) tells the agent the
+server schedules its scans: it stops its own intervals and startup scans.
+YARA's per-minute check of changed files keeps running while the policy
+enables YARA; full passes are the policy's. Changing a policy, assignment or
+override raises the affected agents' `config_version`, so they re-pull the
+config within a minute.
+
+**When a scan is due.** Checked on every heartbeat, per endpoint and type
+(`edr_agent_policy_runs`): an endpoint new to policies runs each enabled scan
+once right away (its baseline), then on schedule; after a run, a calendar
+entry is next due at its next occurrence, an interval entry an interval later.
+Changing an entry recomputes its next due time (a calendar entry: its next
+occurrence; an interval one: an interval after the last run). A due scan whose
+previous policy run is still queued or running is skipped, not doubled up.
+
+**Offline endpoints.** Nothing is queued while an endpoint is offline. When it
+reconnects, each scan that came due meanwhile runs **once** (missed runs are
+not replayed), subject to its window; the next one is computed from then.
+
+**Older agents.** Agents before v0.0.22 do not report the `policy_scans`
+capability: the server issues them no policy scans and they keep their own
+intervals (system inventory hourly, vulnerabilities daily, packages every 6
+hours, YARA changed files every minute plus a full pass at startup). The list
+marks them *agent runs its own intervals*, and their *Scan policy* tab says so
+and shows what applies once they are updated.
+
 ## Known follow-ups
 
 - Endpoint alerts are inserted directly, so they don't yet fire Email/Slack/NTFY notifications (rule-based alerts still do).
 - Server-pushed Sigma `rules` in `AgentConfig` are empty; wire to `/api/rules` (endpoint/Sigma) later.
-- The Endpoints page is open to analysts and operators (endpoints, detections, vulnerabilities, packages, scan history, Scan now / Scan selected). Enrollment, tokens, YARA rules, agent updates and removal stay admin-only. Viewers don't see the page, although the scan-history API allows them.
+- The Endpoints page is open to analysts and operators (endpoints, detections, vulnerabilities, packages, scan history, Scan now / Scan selected; operators also edit and assign scan policies). Enrollment, tokens, YARA rules, agent updates and removal stay admin-only. Viewers don't see the page, although the scan-history API allows them.
 - YARA bundle status (version/source/size) + a "Pull YARA-Forge now" button live on
   the **Endpoints** page; per-agent "which version does this agent have"
   isn't tracked yet (the agent stores it locally; the server only knows the served version).

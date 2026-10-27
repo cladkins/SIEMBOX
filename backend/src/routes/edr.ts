@@ -46,7 +46,25 @@ import {
   cancelScan,
   listScans,
 } from '../services/edr/edrScans';
+import {
+  issueDuePolicyScans,
+  agentConfigScanPolicy,
+  listPolicies,
+  getPolicy,
+  createPolicy,
+  updatePolicy,
+  deletePolicy,
+  assignPolicyBulk,
+  getAgentScanPolicy,
+  setAgentScanPolicy,
+  normalizeScanSpec,
+  previewRuns,
+  MIN_POLICY_AGENT_VERSION,
+  POLICY_SCAN_CAPABILITY,
+  LOCAL_AGENT_INTERVALS,
+} from '../services/edr/scanPolicies';
 import { AuditService } from '../services/audit/auditService';
+import { logger } from '../utils/logger';
 import { rateLimitedHandler, requestLimitKey } from '../net/requestLimits';
 
 const router = Router();
@@ -97,7 +115,17 @@ router.post('/agents/:id/heartbeat', edrAgentLimiter, authenticateAgent, require
     parseCapabilities(capabilities)
   );
   const yaraVersion = await getCurrentYaraVersion();
-  // Console scan requests waiting for this agent (older agents ignore the field).
+  // Policy scans that are due now (only for agents reporting the
+  // policy_scans capability). Best-effort: liveness never fails over it.
+  try {
+    await issueDuePolicyScans(req.params.id as string);
+  } catch (err) {
+    logger.warn('[EDR] policy scan scheduling failed', {
+      agentId: req.params.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  // Console and policy scan requests waiting for this agent (older agents ignore the field).
   const scanRequests = await pendingScanRequests(req.params.id as string);
   res.status(200).json({
     config_version: (base ?? req.edrAgent!.config_version) + yaraVersion,
@@ -108,7 +136,10 @@ router.post('/agents/:id/heartbeat', edrAgentLimiter, authenticateAgent, require
 // Config pull — agent auth.
 router.get('/agents/:id/config', edrAgentLimiter, authenticateAgent, requireAgentMatchesParam, async (req: Request, res: Response) => {
   const yaraVersion = await getCurrentYaraVersion();
-  res.status(200).json(buildAgentConfig(req.edrAgent!.config_version, yaraVersion, buildAgentUpdateConfig(req.edrAgent)));
+  const scanPolicy = await agentConfigScanPolicy(req.edrAgent!.agent_id);
+  res.status(200).json(
+    buildAgentConfig(req.edrAgent!.config_version, yaraVersion, buildAgentUpdateConfig(req.edrAgent), scanPolicy)
+  );
 });
 
 // YARA rule pull — agent auth. Returns the curated bundle (highest version) as
@@ -299,6 +330,83 @@ router.get('/agents/:id/scans', authenticate, async (req: Request, res: Response
     limit: num(req.query.limit),
     offset: num(req.query.offset),
   }));
+});
+
+// ---- Scan policies -------------------------------------------------------------
+// Which scans endpoints run and when (services/edr/scanPolicies.ts). Everyone
+// on the Endpoints page reads them; operators and admins change them, as they
+// do Scheduled Scans. Static paths are declared before /agents/:id.
+
+const POLICY_WRITERS = ['admin', 'operator'] as const;
+
+// Policies (default first) with how many endpoints follow each.
+router.get('/scan-policies', authenticate, authorize(...ENDPOINT_READERS), async (_req: Request, res: Response) => {
+  res.json({
+    policies: await listPolicies(),
+    min_agent_version: MIN_POLICY_AGENT_VERSION,
+    capability: POLICY_SCAN_CAPABILITY,
+    local_intervals: LOCAL_AGENT_INTERVALS,
+  });
+});
+
+// The next runs one scan entry would produce if saved now (the editor's preview). Writes nothing.
+router.post('/scan-policies/preview', authenticate, authorize(...POLICY_WRITERS), async (req: Request, res: Response) => {
+  let spec;
+  try {
+    spec = normalizeScanSpec(req.body?.spec, 'spec');
+  } catch (err) {
+    throw new ApiError(400, err instanceof Error ? err.message : 'Invalid scan entry');
+  }
+  const count = req.body?.count ?? 3;
+  if (!Number.isInteger(count) || count < 1 || count > 10) throw new ApiError(400, 'count must be an integer from 1 to 10');
+  res.json({ spec, next_runs: previewRuns(spec, new Date(), count).map((d) => d.toISOString()) });
+});
+
+router.post('/scan-policies', authenticate, authorize(...POLICY_WRITERS), async (req: Request, res: Response) => {
+  const policy = await createPolicy(req.body, req.user!.id);
+  await auditEdr(req, 'edr.scan_policy.create', { policy_id: policy.id, name: policy.name });
+  res.status(201).json({ policy });
+});
+
+router.get('/scan-policies/:policyId', authenticate, authorize(...ENDPOINT_READERS), async (req: Request, res: Response) => {
+  res.json({ policy: await getPolicy(req.params.policyId) });
+});
+
+router.put('/scan-policies/:policyId', authenticate, authorize(...POLICY_WRITERS), async (req: Request, res: Response) => {
+  const policy = await updatePolicy(req.params.policyId, req.body, req.user!.id);
+  await auditEdr(req, 'edr.scan_policy.update', { policy_id: policy.id, name: policy.name, is_default: policy.is_default });
+  res.json({ policy });
+});
+
+// Delete a named policy; its endpoints fall back to the default (which cannot be deleted).
+router.delete('/scan-policies/:policyId', authenticate, authorize(...POLICY_WRITERS), async (req: Request, res: Response) => {
+  const { deleted, endpoints } = await deletePolicy(req.params.policyId);
+  await auditEdr(req, 'edr.scan_policy.delete', { policy_id: deleted.id, name: deleted.name, endpoints });
+  res.json({ deleted: true, endpoints });
+});
+
+// Assign a policy (policy_id null = the default) to the selected endpoints.
+router.post('/agents/scan-policy', authenticate, authorize(...POLICY_WRITERS), async (req: Request, res: Response) => {
+  const result = await assignPolicyBulk(req.body?.agent_ids, req.body?.policy_id);
+  await auditEdr(req, 'edr.scan_policy.assign', { policy_id: result.policy_id, agents: result.agents, missing: result.missing.length });
+  res.json(result);
+});
+
+// One endpoint's policy, overrides, effective schedule and next runs.
+router.get('/agents/:id/scan-policy', authenticate, authorize(...ENDPOINT_READERS), async (req: Request, res: Response) => {
+  res.json(await getAgentScanPolicy(req.params.id as string));
+});
+
+// Set one endpoint's policy and/or its per-scan-type overrides.
+router.put('/agents/:id/scan-policy', authenticate, authorize(...POLICY_WRITERS), async (req: Request, res: Response) => {
+  const agentId = req.params.id as string;
+  const result = await setAgentScanPolicy(agentId, req.body ?? {});
+  await auditEdr(req, 'edr.scan_policy.endpoint', {
+    agent_id: agentId,
+    policy_id: result.assigned_policy_id,
+    overrides: Object.keys(result.overrides),
+  });
+  res.json(result);
 });
 
 // Request an update to the latest version for one agent.

@@ -7498,7 +7498,10 @@ A scan row:
 ```
 
 - `scan_type`: `vuln`, `yara`, `packages`, `inventory`.
-- `trigger`: `console` (requested here), `schedule` or `startup` (the agent's own cadence).
+- `trigger`: `console` (requested here), `schedule` or `startup` (the agent's own cadence),
+  `policy` (issued by the endpoint's scan policy; `policy_name` is the policy's
+  name when issued, `policy_source` `policy` or `override`; see
+  [Endpoint Scan Policies](#endpoint-scan-policies-edr)).
 - `status`: `pending` (requested, not picked up), `running`, `succeeded`,
   `failed` (`error` holds the agent's message, up to 500 characters),
   `cancelled` (by a user while pending), `expired` (not picked up within 24
@@ -7549,8 +7552,8 @@ Every role. The endpoint's history, newest first. Query: `type`, `status`
 ```
 
 `supports_adhoc` is whether the agent reported the `adhoc_scans` capability.
-`GET /api/edr/agents` also returns `scans_outstanding` (pending or running) and
-`capabilities` per agent.
+`GET /api/edr/agents` also returns `scans_outstanding` (pending or running),
+`capabilities`, `scan_policy_name` and `scan_policy_override_count` per agent.
 
 History is kept for 90 days and at most the newest 200 rows per endpoint and
 scan type; the `edr-agent-release` job (every 6 hours) prunes it and expires
@@ -7559,12 +7562,13 @@ stale requests.
 ### Agent side
 
 **Heartbeat.** `POST /api/edr/agents/:id/heartbeat` accepts
-`"capabilities": ["adhoc_scans"]` (stored; a heartbeat without the field keeps
-the stored list) and its response carries the pending console requests,
-oldest first:
+`"capabilities": ["adhoc_scans", "policy_scans"]` (stored; a heartbeat without
+the field keeps the stored list). For an agent with `policy_scans` it first
+issues the policy scans that are due; its response carries the pending
+requests, console and policy, oldest first:
 
 ```json
-{ "config_version": 12, "scan_requests": [{ "scan_id": "<uuid>", "scan_type": "vuln", "requested_at": "..." }] }
+{ "config_version": 12, "scan_requests": [{ "scan_id": "<uuid>", "scan_type": "vuln", "trigger": "console", "requested_at": "..." }] }
 ```
 
 **POST /api/edr/scans** (agent auth, agent limiter). The agent reports a
@@ -7581,7 +7585,7 @@ run's start and end:
   request answers `accepted: false, status: "cancelled"` (the agent skips it),
   as does an expired one reported `running`, or a run already finished.
 - Without `scan_id`: a scheduled or startup run (`trigger` `schedule`, the
-  default, or `startup`; `console` is `400`). A row is created in the reported
+  default, or `startup`; `console` and `policy` are `400`). A row is created in the reported
   status and its `scan_id` returned for the finishing report; a finished run
   can be reported in one call.
 - `status` is `running`, `succeeded` or `failed`; `summary` is a flat object
@@ -7593,6 +7597,133 @@ run's start and end:
 and `POST /api/edr/inventory` (top level, next to `inventory`) accept an
 optional `scan_id`; the counts computed while storing that report are merged
 into the scan's `summary`. An unknown or foreign `scan_id` is ignored.
+
+---
+
+## Endpoint Scan Policies (EDR)
+
+Which scans endpoint agents run and when (see [Endpoint agent](../edr.md#scan-policies)).
+All routes are under `/api/edr`. Reads: analyst, operator and admin. Writes:
+operator and admin, each recorded in `audit_logs` (`edr.scan_policy.create`,
+`.update`, `.delete`, `.assign`, `.endpoint`; `resource_type` `edr_agent`).
+
+**A scan entry** (one per scan type `vuln`, `yara`, `packages`, `inventory`):
+
+```json
+{
+  "enabled": true,
+  "schedule": { "frequency": "daily", "time": "02:00", "timezone": "America/Chicago" },
+  "interval_minutes": null,
+  "window": { "start": "22:00", "end": "06:00", "timezone": "America/Chicago" }
+}
+```
+
+- `schedule` is a calendar schedule as in [Scheduled scan timing](#scheduled-scan-timing)
+  (`hourly` with `minute` and `every_hours`, `daily`, `weekly` with `days`,
+  `monthly` with `day_of_month`, each in an IANA `timezone`), or `null` for a
+  fixed interval: `interval_minutes`, 15 to 43200, counted from the
+  endpoint's last run. Send one or the other.
+- `window` (optional, `null` for any time): a due scan starts only between
+  `start` and `end` (HH:MM in `timezone`; `end` earlier than `start` wraps
+  past midnight; they must differ).
+- A disabled entry keeps its timing for when it is turned back on.
+
+### GET /api/edr/scan-policies
+
+```json
+{
+  "policies": [{ "id": 1, "name": "Default", "description": "…", "is_default": true,
+                 "scans": { "vuln": { …entry }, "yara": { … }, "packages": { … }, "inventory": { … } },
+                 "endpoint_count": 12, "created_at": "…", "updated_at": "…" }],
+  "min_agent_version": "0.0.22",
+  "capability": "policy_scans",
+  "local_intervals": { "inventory_seconds": 3600, "vuln_seconds": 86400, "packages_seconds": 21600, "yara": "…" }
+}
+```
+
+The default policy comes first. `local_intervals` is what agents without the
+capability run on their own.
+
+### POST /api/edr/scan-policies
+
+Body `{ "name": "Servers", "description": "optional", "scans": { …an entry for every type } }`.
+`201 { "policy": { … } }`; `400` a missing or invalid entry (the message names
+it, e.g. `scans.yara is required`, `scans.vuln.window.start must be HH:MM`);
+`409` a name already used (case-insensitive).
+
+### GET /api/edr/scan-policies/:policyId · PUT · DELETE
+
+`PUT` takes any of `name`, `description`, `scans` (all four entries) and
+answers `{ "policy": { … } }`; the default policy can be edited. `DELETE`
+removes a named policy and moves its endpoints back to the default:
+`{ "deleted": true, "endpoints": 3 }`; the default answers `400`. Unknown ids
+are `404`. Edits raise the `config_version` of the endpoints that follow the
+policy.
+
+### POST /api/edr/scan-policies/preview
+
+Operator and admin; writes nothing. Body `{ "spec": { …entry }, "count": 3 }`
+(1-10). Returns `{ "spec": { …normalized }, "next_runs": ["ISO", …] }`: the runs
+the entry would give an endpoint that last ran it now, with the window
+applied.
+
+### POST /api/edr/agents/scan-policy
+
+Bulk assignment: `{ "agent_ids": ["<uuid>", …], "policy_id": 4 }`, at most 500
+agents; `policy_id: null` (or the default policy's id) means the default.
+Returns `{ "agents": 2, "policy_id": 4, "missing": ["<uuid of an unknown agent>"] }`.
+`400` bad ids or a `policy_id` that names no policy.
+
+### GET /api/edr/agents/:id/scan-policy
+
+The endpoint's effective policy:
+
+```json
+{
+  "agent_id": "<uuid>",
+  "managed": true,
+  "min_agent_version": "0.0.22",
+  "agent_version": "0.0.22",
+  "policy": { "id": 4, "name": "Servers", "is_default": false },
+  "assigned_policy_id": 4,
+  "overrides": { "vuln": { …entry } },
+  "scans": [{
+    "scan_type": "vuln", "source": "override", "spec": { …entry },
+    "next_runs": ["ISO", "ISO", "ISO"], "waiting": "window",
+    "outstanding": false, "last_issued_at": "ISO",
+    "last_run": { "status": "succeeded", "requested_at": "ISO", "completed_at": "ISO" }
+  }],
+  "local_intervals": null
+}
+```
+
+`managed` is whether the agent reported `policy_scans`; when it hasn't,
+`local_intervals` says what it runs instead. `source` is `override` or
+`policy`. `next_runs` is empty for a disabled type; its first entry is about
+now when a run is due on the next heartbeat. `waiting` is `window` (due, held
+for its window), `outstanding` (due while the last policy run is still
+queued or running, so this one is skipped) or `null`.
+
+### PUT /api/edr/agents/:id/scan-policy
+
+Operator and admin. Body with `policy_id` (number, or `null` for the default)
+and/or `overrides` (the full map of scan type to entry, replacing the previous
+one; `null` or `{}` clears them). Answers like the `GET`. `400` neither field,
+an unknown scan type or an invalid entry; `404` unknown agent.
+
+### Agent side
+
+- `GET /api/edr/agents/:id/config` (and the enrollment response's `config`)
+  carry `"scan_policy": { "managed": true, "policy": "Servers", "scans": { "vuln": { "enabled": true }, … } }`.
+  An agent that understands it stops its own scan intervals and startup scans.
+- Each heartbeat of an agent with `policy_scans` issues the scans that are
+  due: `scan_requests` entries with `"trigger": "policy"`, run and reported
+  like console requests (`POST /api/edr/scans` with their `scan_id`). One
+  outstanding policy run per endpoint and type.
+- Due times: an endpoint new to policies runs each enabled scan once at once;
+  after a run, a calendar entry is due at its next occurrence, an interval
+  entry an interval later; a due scan outside its window waits; a scan that
+  came due while the endpoint was offline runs once on reconnect.
 
 ---
 

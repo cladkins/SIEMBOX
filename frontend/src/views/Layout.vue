@@ -115,7 +115,7 @@
             <el-icon><Timer /></el-icon>
             <span>Scheduled Scans</span>
           </el-menu-item>
-          <el-menu-item index="/endpoints" v-if="authStore.user?.role === 'admin'">
+          <el-menu-item index="/endpoints" v-if="['admin', 'analyst', 'operator'].includes(authStore.user?.role ?? '')">
             <el-icon><Cpu /></el-icon>
             <span>Endpoints</span>
           </el-menu-item>

@@ -15,7 +15,7 @@
           @click="openBulkScan"
         >Scan selected<template v-if="selected.length"> ({{ selected.length }})</template></el-button>
         <el-button @click="refresh" :loading="loading"><el-icon><Refresh /></el-icon> Refresh</el-button>
-        <el-button type="primary" @click="openTokenDialog"><el-icon><Plus /></el-icon> Enroll an endpoint</el-button>
+        <el-button v-if="isAdmin" type="primary" @click="openTokenDialog"><el-icon><Plus /></el-icon> Enroll an endpoint</el-button>
       </div>
     </div>
 
@@ -88,14 +88,14 @@
         <el-table-column label="" width="290" align="right">
           <template #default="{ row }">
             <el-button
-              v-if="row.update_request_id"
+              v-if="isAdmin && row.update_request_id"
               size="small"
               plain
               :loading="busyAgent === row.agent_id"
               @click="cancelUpdate(row)"
             >Cancel update</el-button>
             <el-button
-              v-else-if="canUpdate(row)"
+              v-else-if="isAdmin && canUpdate(row)"
               size="small"
               type="warning"
               plain
@@ -103,15 +103,15 @@
               @click="requestUpdate(row)"
             >Update</el-button>
             <el-button size="small" @click="openDetail(row)">Details</el-button>
-            <el-button size="small" type="danger" plain @click="removeEndpoint(row)">Remove</el-button>
+            <el-button v-if="isAdmin" size="small" type="danger" plain @click="removeEndpoint(row)">Remove</el-button>
           </template>
         </el-table-column>
         <template #empty>No endpoints enrolled yet. Click <strong>Enroll an endpoint</strong> to generate a token.</template>
       </el-table>
     </el-card>
 
-    <!-- Agent updates -->
-    <el-card style="margin-top: 16px">
+    <!-- Agent updates (admin) -->
+    <el-card v-if="isAdmin" style="margin-top: 16px">
       <template #header>
         <div class="card-header-row">
           <span>Agent updates</span>
@@ -159,8 +159,8 @@
       </p>
     </el-card>
 
-    <!-- YARA rules status -->
-    <el-card style="margin-top: 16px">
+    <!-- YARA rules status (admin) -->
+    <el-card v-if="isAdmin" style="margin-top: 16px">
       <template #header>
         <div class="card-header-row">
           <span>YARA rules</span>
@@ -183,8 +183,8 @@
       </p>
     </el-card>
 
-    <!-- Enrollment tokens -->
-    <el-card style="margin-top: 16px">
+    <!-- Enrollment tokens (admin) -->
+    <el-card v-if="isAdmin" style="margin-top: 16px">
       <template #header><span>Enrollment tokens</span></template>
       <el-table :data="tokens" size="small" stripe>
         <el-table-column prop="label" label="Label" min-width="160">
@@ -482,6 +482,9 @@ const tokenForm = reactive({ label: '', expires_in_hours: 0 });
 
 const authStore = useAuthStore();
 const canScan = computed(() => canRequestScans(authStore.user?.role));
+// Analysts and operators see endpoints, findings and scans; enrollment, tokens,
+// YARA rules, agent updates and removal are admin-only (the API agrees).
+const isAdmin = computed(() => authStore.user?.role === 'admin');
 const selected = ref<any[]>([]);
 function onSelectionChange(rows: any[]) { selected.value = rows; }
 const bulk = reactive<{ open: boolean; types: ScanType[]; busy: boolean }>({ open: false, types: ['vuln'], busy: false });
@@ -529,7 +532,11 @@ async function fetchUpdateStatus() {
 }
 async function refresh() {
   loading.value = true;
-  try { await Promise.all([fetchEndpoints(), fetchTokens(), fetchYaraStatus(), fetchUpdateStatus()]); }
+  try {
+    await Promise.all(isAdmin.value
+      ? [fetchEndpoints(), fetchTokens(), fetchYaraStatus(), fetchUpdateStatus()]
+      : [fetchEndpoints()]);
+  }
   catch { ElMessage.error('Failed to load endpoints'); }
   finally { loading.value = false; }
 }

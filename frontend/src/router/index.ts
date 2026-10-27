@@ -122,7 +122,7 @@ const routes: RouteRecordRaw[] = [
         path: 'endpoints',
         name: 'Endpoints',
         component: () => import('@/views/Endpoints.vue'),
-        meta: { requiresAdmin: true },
+        meta: { allowedRoles: ['admin', 'analyst', 'operator'] },
       },
       {
         // Settings hub: one child page per functional area, generated from

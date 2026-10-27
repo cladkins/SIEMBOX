@@ -71,6 +71,11 @@ const edrAgentLimiter = rateLimit({
 
 // Enrollment — unauthenticated; the body carries a one-time enrollment token.
 // Counted by the general limiter (app.ts) whatever headers it carries.
+// The Endpoints page: analysts and operators read agents and their findings
+// (and request scans, SCAN_WRITERS below). Enrollment, tokens, YARA rules,
+// agent updates and removal stay admin-only.
+const ENDPOINT_READERS = ['admin', 'operator', 'analyst'] as const;
+
 router.post('/agents/enroll', async (req: Request, res: Response) => {
   const result = await enrollAgent(req.body ?? {}, req.ip);
   res.status(200).json(result);
@@ -162,7 +167,7 @@ router.post('/scans', edrAgentLimiter, authenticateAgent, async (req: Request, r
 // ---- Admin-facing endpoints (UI) -------------------------------------------
 
 // List endpoints with live status + open-vuln / recent-detection counts.
-router.get('/agents', authenticate, authorize('admin'), async (_req: Request, res: Response) => {
+router.get('/agents', authenticate, authorize(...ENDPOINT_READERS), async (_req: Request, res: Response) => {
   const agents = await EdrAgentModel.listWithStats();
   res.json({ agents });
 });
@@ -313,7 +318,7 @@ router.delete('/agents/:id/update', authenticate, authorize('admin'), async (req
 });
 
 // Endpoint detail.
-router.get('/agents/:id', authenticate, authorize('admin'), async (req: Request, res: Response) => {
+router.get('/agents/:id', authenticate, authorize(...ENDPOINT_READERS), async (req: Request, res: Response) => {
   const agent = await EdrAgentModel.findById(req.params.id as string);
   if (!agent) throw new ApiError(404, 'Agent not found');
   const safe: any = { ...agent };
@@ -322,7 +327,7 @@ router.get('/agents/:id', authenticate, authorize('admin'), async (req: Request,
 });
 
 // Endpoint's vulnerabilities (reuses the existing asset-vuln store).
-router.get('/agents/:id/vulnerabilities', authenticate, authorize('admin'), async (req: Request, res: Response) => {
+router.get('/agents/:id/vulnerabilities', authenticate, authorize(...ENDPOINT_READERS), async (req: Request, res: Response) => {
   const agent = await EdrAgentModel.findById(req.params.id as string);
   if (!agent) throw new ApiError(404, 'Agent not found');
   const vulns = agent.asset_id ? await VulnerabilityRepository.getAssetVulnerabilities(agent.asset_id) : [];
@@ -330,7 +335,7 @@ router.get('/agents/:id/vulnerabilities', authenticate, authorize('admin'), asyn
 });
 
 // Endpoint's installed packages (the agent's newest snapshot), filtered by name.
-router.get('/agents/:id/packages', authenticate, authorize('admin'), async (req: Request, res: Response) => {
+router.get('/agents/:id/packages', authenticate, authorize(...ENDPOINT_READERS), async (req: Request, res: Response) => {
   const agent = await EdrAgentModel.findById(req.params.id as string);
   if (!agent) throw new ApiError(404, 'Agent not found');
   const num = (v: unknown) => (typeof v === 'string' && /^\d+$/.test(v) ? parseInt(v, 10) : undefined);
@@ -342,7 +347,7 @@ router.get('/agents/:id/packages', authenticate, authorize('admin'), async (req:
 });
 
 // Endpoint's detections (alerts) — reuses the existing alerts table.
-router.get('/agents/:id/detections', authenticate, authorize('admin'), async (req: Request, res: Response) => {
+router.get('/agents/:id/detections', authenticate, authorize(...ENDPOINT_READERS), async (req: Request, res: Response) => {
   const agent = await EdrAgentModel.findById(req.params.id as string);
   if (!agent) throw new ApiError(404, 'Agent not found');
   if (!agent.asset_id) { res.json({ alerts: [] }); return; }

@@ -82,7 +82,10 @@
               </el-table-column>
               <el-table-column prop="status" label="Status" width="100">
                 <template #default="{ row }">
-                  <el-tag :type="getScanStatusColor(row.status)">{{ row.status }}</el-tag>
+                  <el-tooltip v-if="row.status === 'expired' && row.error_message" :content="row.error_message" placement="top">
+                    <el-tag :type="getScanStatusColor(row.status)">{{ scanStatusLabel(row.status) }}</el-tag>
+                  </el-tooltip>
+                  <el-tag v-else :type="getScanStatusColor(row.status)">{{ scanStatusLabel(row.status) }}</el-tag>
                 </template>
               </el-table-column>
               <el-table-column prop="assets_discovered" label="Assets Found" width="120" />
@@ -405,10 +408,15 @@
             placeholder="Enter IP addresses or CIDR ranges (one per line)&#10;Example:&#10;192.168.1.1&#10;192.168.1.0/24"
           />
         </el-form-item>
+        <PublicTargetWarning
+          v-model="scanPublicConfirmed"
+          :targets="scanTargetList"
+          @use-suggestion="(from: string, to: string) => (scanForm.targets = replaceTargetToken(scanForm.targets, from, to))"
+        />
       </el-form>
       <template #footer>
         <el-button @click="showScanDialog = false">Cancel</el-button>
-        <el-button type="primary" @click="triggerScan" :loading="scanLoading">Trigger Scan</el-button>
+        <el-button type="primary" @click="triggerScan" :loading="scanLoading" :disabled="scanGate.blocked">Trigger Scan</el-button>
       </template>
     </el-dialog>
 
@@ -420,7 +428,7 @@
           <el-descriptions-item label="Type">{{ selectedScan.scan_type }}</el-descriptions-item>
           <el-descriptions-item label="Target">{{ selectedScan.target }}</el-descriptions-item>
           <el-descriptions-item label="Status">
-            <el-tag :type="getScanStatusColor(selectedScan.status)">{{ selectedScan.status }}</el-tag>
+            <el-tag :type="getScanStatusColor(selectedScan.status)">{{ scanStatusLabel(selectedScan.status) }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="Started">{{ formatDate(selectedScan.started_at) }}</el-descriptions-item>
           <el-descriptions-item label="Completed">{{ selectedScan.completed_at ? formatDate(selectedScan.completed_at) : 'In progress' }}</el-descriptions-item>
@@ -431,8 +439,8 @@
         </el-descriptions>
 
         <div v-if="selectedScan.error_message" style="margin-top: 20px">
-          <el-alert type="error" :closable="false">
-            <strong>Error:</strong> {{ selectedScan.error_message }}
+          <el-alert :type="selectedScan.status === 'expired' ? 'warning' : 'error'" :closable="false">
+            <strong>{{ selectedScan.status === 'expired' ? 'Expired:' : 'Error:' }}</strong> {{ selectedScan.error_message }}
           </el-alert>
         </div>
 
@@ -454,6 +462,8 @@ import { Search, Refresh, Cpu, Connection, Warning } from '@element-plus/icons-v
 import assetService, { type Asset, type AssetWithServices, type AssetRelated, type ShipperSummary } from '@/services/assetService';
 import { useAuthStore } from '@/stores/auth';
 import { api } from '@/services/api';
+import PublicTargetWarning from '@/components/PublicTargetWarning.vue';
+import { publicTargetGate, replaceTargetToken, scanStatusLabel, scanStatusTagType } from '@/utils/shipperJobs';
 
 const authStore = useAuthStore();
 const canTriggerScans = computed(() => ['admin', 'analyst', 'operator'].includes(authStore.user?.role || ''));
@@ -489,6 +499,12 @@ const scanForm = ref<{ scanType: string; targets: string; assignedShipperId: num
   targets: '',
   assignedShipperId: null
 });
+
+// Targets in public address space need the "I'm authorized" confirmation
+// before the scan can be sent (the API refuses them otherwise).
+const scanPublicConfirmed = ref(false);
+const scanTargetList = computed(() => scanForm.value.targets.split('\n').map((t) => t.trim()).filter((t) => t));
+const scanGate = computed(() => publicTargetGate(scanTargetList.value, scanPublicConfirmed.value));
 
 // Log shippers available to run a scan from (for the "Run from" picker).
 const shippers = ref<ShipperSummary[]>([]);
@@ -558,13 +574,7 @@ function showScanDetails(scan: any) {
 
 // Get scan status color
 function getScanStatusColor(status: string) {
-  const colors: Record<string, string> = {
-    completed: 'success',
-    running: 'warning',
-    queued: 'info',
-    failed: 'danger'
-  };
-  return colors[status] || '';
+  return scanStatusTagType(status);
 }
 
 // Stop polling
@@ -659,7 +669,12 @@ async function triggerScan() {
   scanLoading.value = true;
   try {
     const targets = scanForm.value.targets.split('\n').map(t => t.trim()).filter(t => t);
-    const result = await assetService.triggerScan(targets, scanForm.value.scanType, scanForm.value.assignedShipperId);
+    const result = await assetService.triggerScan(
+      targets,
+      scanForm.value.scanType,
+      scanForm.value.assignedShipperId,
+      scanGate.value.allowPublicTargets
+    );
     const via = scanForm.value.assignedShipperId
       ? ' It will run on the selected shipper once it checks in.'
       : '';
@@ -667,6 +682,7 @@ async function triggerScan() {
     showScanDialog.value = false;
     scanForm.value.targets = '';
     scanForm.value.assignedShipperId = null;
+    scanPublicConfirmed.value = false;
     loadScans(); // Refresh scan list once
   } catch (error: any) {
     ElMessage.error(error.response?.data?.error || 'Failed to trigger scan');

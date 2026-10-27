@@ -61,6 +61,26 @@
                 <el-tag size="small">{{ row.sources?.length || 0 }}</el-tag>
               </template>
             </el-table-column>
+            <el-table-column label="Scan jobs" width="170" align="center">
+              <template #default="{ row }">
+                <el-tooltip
+                  v-if="(row.queued_jobs || 0) + (row.running_jobs || 0) > 0"
+                  :content="`${row.queued_jobs || 0} queued, ${row.running_jobs || 0} running. View the shipper to see or cancel them.`"
+                  placement="top"
+                >
+                  <el-button
+                    size="small"
+                    :type="row.queued_jobs && row.status !== 'online' ? 'danger' : 'warning'"
+                    plain
+                    data-testid="shipper-job-badge"
+                    @click="viewShipper(row)"
+                  >
+                    {{ jobBadgeText(row.queued_jobs, row.running_jobs) }}
+                  </el-button>
+                </el-tooltip>
+                <el-text v-else size="small" type="info">—</el-text>
+              </template>
+            </el-table-column>
             <el-table-column label="Actions" width="200" align="center">
               <template #default="{ row }">
                 <el-button size="small" @click="viewShipper(row)" :icon="View">
@@ -342,6 +362,13 @@
         </el-descriptions>
 
         <el-divider />
+
+        <!-- Scan jobs queued for / running on this shipper -->
+        <ShipperScanJobs
+          :shipper-id="currentShipper.id"
+          :shipper-status="currentShipper.status"
+          @changed="fetchShippers"
+        />
 
         <!-- Log Sources Section -->
         <div class="section-header">
@@ -660,6 +687,8 @@ import {
 import { format } from 'date-fns';
 import logDiscoveryService, { type RankedSource, type FingerprintEntry } from '@/services/logDiscoveryService';
 import PollSourceEditDialog from '@/components/PollSourceEditDialog.vue';
+import ShipperScanJobs from '@/components/ShipperScanJobs.vue';
+import { jobBadgeText } from '@/utils/shipperJobs';
 
 const router = useRouter();
 const authStore = useAuthStore();

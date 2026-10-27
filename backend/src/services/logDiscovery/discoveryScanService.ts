@@ -7,6 +7,7 @@ import { logger } from '../../utils/logger';
 import { ErrorLogService } from '../errors/errorLogService';
 import { query } from '../../config/database';
 import { DiscoveryScanModel, DiscoveryScanMode } from '../../models/DiscoveryScan';
+import { getShipperJobExpiryHours } from '../scanner/shipperJobs';
 import { DiscoverySourceModel, DiscoverySource } from '../../models/DiscoverySource';
 import { loadFingerprintLibrary, getFingerprintById } from './fingerprintLoader';
 import { resolveScope } from './scope';
@@ -220,6 +221,8 @@ export interface RunScanOptions {
    * in-process, exactly as before.
    */
   assignedShipperId?: number | null;
+  /** Stored as the scan's scan_options (origin, public-target confirmation). */
+  scanOptions?: Record<string, unknown> | null;
 }
 
 export interface RunScanResult {
@@ -240,12 +243,18 @@ export async function runScan(opts: RunScanOptions): Promise<RunScanResult> {
   // via the job-pull and runs the probe out on the LAN; no in-process worker or
   // watchdog here (the shipper owns the run), exactly like the nmap/nuclei path.
   if (opts.assignedShipperId != null) {
-    const scan = await DiscoveryScanModel.createAssigned(opts.mode, scope.cidrs, opts.createdBy ?? null, opts.assignedShipperId);
+    const scan = await DiscoveryScanModel.createAssigned(
+      opts.mode,
+      scope.cidrs,
+      opts.createdBy ?? null,
+      opts.assignedShipperId,
+      opts.scanOptions ?? null
+    );
     logger.info(`[logDiscovery] scan ${scan.id} queued for shipper ${opts.assignedShipperId}`);
     return { scanId: scan.id, cidrs: scope.cidrs, vlanWarning: scope.warning, rejectedCidrs: scope.rejected };
   }
 
-  const scan = await DiscoveryScanModel.create(opts.mode, scope.cidrs, opts.createdBy ?? null);
+  const scan = await DiscoveryScanModel.create(opts.mode, scope.cidrs, opts.createdBy ?? null, opts.scanOptions ?? null);
 
   activeScanIds.add(scan.id);
   // Watchdog: if the run wedges past the hard cap, flag it cancelled (the
@@ -299,8 +308,8 @@ export interface ShipperDiscoveryJob {
 }
 
 /** Atomically claim a shipper's queued discovery scans and turn them into jobs. */
-export async function claimDiscoveryJobsForShipper(shipperId: number): Promise<ShipperDiscoveryJob[]> {
-  const claimed = await DiscoveryScanModel.claimForShipper(shipperId);
+export async function claimDiscoveryJobsForShipper(shipperId: number, maxAgeHours?: number): Promise<ShipperDiscoveryJob[]> {
+  const claimed = await DiscoveryScanModel.claimForShipper(shipperId, maxAgeHours ?? (await getShipperJobExpiryHours()));
   if (claimed.length === 0) return [];
   const probePlan = buildProbePlan();
   return claimed.map((s) => ({

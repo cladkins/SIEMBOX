@@ -30,6 +30,13 @@
         <el-table-column label="Target" min-width="180">
           <template #default="{ row }">
             <el-text size="small">{{ formatScanTarget(row) }}</el-text>
+            <el-tooltip
+              v-if="row.public_targets?.length"
+              placement="top"
+              :content="`Public address space: ${row.public_targets.join(', ')}. This schedule keeps running; saving changes to it asks you to confirm you're authorized to scan these addresses.`"
+            >
+              <el-tag type="danger" size="small" effect="plain" class="public-badge" data-testid="public-target-badge">Public targets</el-tag>
+            </el-tooltip>
           </template>
         </el-table-column>
 
@@ -113,6 +120,12 @@
             <el-text size="small" type="info">
               IPs or CIDR ranges separated by comma, space, or newline.
             </el-text>
+            <PublicTargetWarning
+              v-model="schedPublicConfirmed"
+              :targets="schedTargetList"
+              style="width: 100%"
+              @use-suggestion="(from: string, to: string) => (scheduledScanForm.assetTargets = replaceTargetToken(scheduledScanForm.assetTargets, from, to))"
+            />
           </el-form-item>
 
           <el-form-item label="Asset Scan Type" required>
@@ -131,6 +144,12 @@
             <el-input
               v-model="scheduledScanForm.vulnTarget"
               placeholder="IP address, CIDR range, or hostname (e.g., 192.168.1.1, example.com)"
+            />
+            <PublicTargetWarning
+              v-model="schedPublicConfirmed"
+              :targets="schedTargetList"
+              style="width: 100%"
+              @use-suggestion="(_from: string, to: string) => (scheduledScanForm.vulnTarget = to)"
             />
           </el-form-item>
 
@@ -259,7 +278,7 @@
 
       <template #footer>
         <el-button @click="scheduledScanDialogVisible = false">Cancel</el-button>
-        <el-button type="primary" @click="saveSchedule" :loading="scheduledScansSaving">
+        <el-button type="primary" @click="saveSchedule" :loading="scheduledScansSaving" :disabled="schedGate.blocked">
           {{ scheduledScanForm.id ? 'Update' : 'Create' }}
         </el-button>
       </template>
@@ -268,7 +287,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, computed } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete, VideoPlay } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
@@ -279,6 +298,8 @@ import vulnerabilityService, {
   type TemplateTag,
   type ShipperSummary,
 } from '@/services/vulnerabilityService';
+import PublicTargetWarning from '@/components/PublicTargetWarning.vue';
+import { publicTargetGate, replaceTargetToken } from '@/utils/shipperJobs';
 
 const scheduledScansLoading = ref(false);
 const scheduledScansSaving = ref(false);
@@ -306,6 +327,20 @@ const scheduledScanForm = reactive({
   // optional LAN-side dispatch (asset/vuln only); null = run on the backend
   assignedShipperId: null as number | null,
 });
+
+// Targets in public address space need the "I'm authorized" confirmation
+// before a create or an edit can be saved (the API refuses them otherwise).
+// A schedule saved before that check keeps running; its row shows a badge.
+const schedPublicConfirmed = ref(false);
+const schedTargetList = computed<string[]>(() => {
+  if (scheduledScanForm.scan_type === 'asset') return parseTargets(scheduledScanForm.assetTargets);
+  if (scheduledScanForm.scan_type === 'vulnerability') {
+    const t = scheduledScanForm.vulnTarget.trim();
+    return t ? [t] : [];
+  }
+  return [];
+});
+const schedGate = computed(() => publicTargetGate(schedTargetList.value, schedPublicConfirmed.value));
 
 // Log shippers available to run a scan from (for the "Run from" picker).
 const schedShippers = ref<ShipperSummary[]>([]);
@@ -434,6 +469,7 @@ function resetScheduledScanForm() {
   scheduledScanForm.vulnSeverities = [];
   scheduledScanForm.imageRef = '';
   scheduledScanForm.assignedShipperId = null;
+  schedPublicConfirmed.value = false;
 }
 
 function showCreateSchedule() {
@@ -559,13 +595,14 @@ async function saveSchedule() {
     scan_options.assignedShipperId = scheduledScanForm.assignedShipperId;
   }
 
-  const payload = {
+  const payload: Record<string, unknown> = {
     name: scheduledScanForm.name.trim(),
     scan_type: scheduledScanForm.scan_type,
     scan_options,
     interval_minutes: scheduledScanForm.interval_minutes,
     enabled: scheduledScanForm.enabled,
   };
+  if (schedGate.value.allowPublicTargets) payload.allow_public_targets = true;
 
   scheduledScansSaving.value = true;
   try {
@@ -646,5 +683,8 @@ async function deleteScheduleConfirm(scan: any) {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.public-badge {
+  margin-left: 6px;
 }
 </style>

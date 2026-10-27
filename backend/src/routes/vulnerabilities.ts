@@ -28,6 +28,7 @@ import { NucleiScanner, validateNucleiTarget } from '../services/scanner/nucleiS
 import { VulnerabilityProcessor } from '../services/scanner/vulnerabilityProcessor';
 import { TemplateService } from '../services/scanner/templateService';
 import { LogShipperModel } from '../models/LogShipper';
+import { auditPublicTargetConfirmation, enforcePublicTargets } from '../services/scanner/publicTargetGuard';
 
 const router = express.Router();
 
@@ -442,7 +443,8 @@ router.get('/scans/:scanId/status', async (req: Request, res: Response): Promise
 /**
  * POST /api/vulnerabilities/scans
  * Trigger a new vulnerability scan
- * Admin or operator.
+ * Admin or operator. A target in public address space is refused with a 400
+ * unless the body carries allow_public_targets: true.
  */
 router.post('/scans', authenticate, requireVulnScanPermission, async (req: Request, res: Response) => {
   try {
@@ -481,6 +483,11 @@ router.post('/scans', authenticate, requireVulnScanPermission, async (req: Reque
         return;
       }
     }
+
+    // Public address space is refused unless the request confirms it
+    // (allow_public_targets: true): see services/scanner/publicTargetGuard.ts.
+    const publicCheck = enforcePublicTargets([String(target)], req, res);
+    if (!publicCheck) return;
 
     // Build template selection
     const templateSelection: any = {};
@@ -528,7 +535,10 @@ router.post('/scans', authenticate, requireVulnScanPermission, async (req: Reque
       timeout,
       rateLimit,
       assignedShipperId,
+      origin: { page: 'vulnerability_scanning' },
+      publicTargetsConfirmation: publicCheck.confirmation,
     });
+    await auditPublicTargetConfirmation(req, publicCheck.confirmation, { type: 'scan', id: scanId, targets: [String(target)] });
 
     res.status(202).json({
       message: assignedShipperId ? 'Vulnerability scan queued for log shipper' : 'Vulnerability scan initiated',

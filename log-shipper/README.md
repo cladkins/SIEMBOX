@@ -226,9 +226,23 @@ default; set `SCAN_POLL_INTERVAL=0` to turn it off.
 > string), so a target can't smuggle in extra flags.
 
 **Dispatching a scan to a shipper:** trigger a scan in SIEMBox and select this
-shipper to run it. (Via the API, `POST /api/assets/scan` and
-`POST /api/vulnerabilities/scans` each accept an `assignedShipperId`; omit it to
-run the scan on the backend as before.)
+shipper to run it. (Via the API, `POST /api/assets/scan`,
+`POST /api/vulnerabilities/scans` and `POST /api/log-discovery/scans` each
+accept an `assignedShipperId`; omit it to run the scan on the backend as
+before.)
+
+**Queued jobs expire.** A scan waits `queued` until this shipper polls for it.
+If the shipper is offline, the job expires unrun after the shipper job expiry
+window (default 24 hours, **Settings > Asset Discovery > Shipper Scan Jobs**):
+a shipper that comes back after days away never runs old scans. The **Shippers**
+page lists each shipper's queued and running jobs (targets, who created them,
+from which page or scheduled scan) with *Cancel*.
+
+**Public targets need confirming.** SIEMBox refuses a scan target in public
+address space (anything outside RFC 1918, 100.64.0.0/10, loopback, link-local
+and IPv6 ULA/link-local) unless whoever starts the scan confirms they're
+authorized to scan it, and flags likely typos (`192.169.1.0/24`: *did you mean
+192.168.1.0/24?*). See docs/reference/API.md, *Public scan targets*.
 
 ### Deployment for effective discovery
 

@@ -2,7 +2,7 @@ import apiClient from './api';
 
 export type DiscoverySourceStatus = 'candidate' | 'confirmed' | 'onboarded' | 'ignored';
 export type DiscoveryScanMode = 'passive' | 'active' | 'full';
-export type DiscoveryScanStatus = 'queued' | 'running' | 'completed' | 'failed';
+export type DiscoveryScanStatus = 'queued' | 'running' | 'completed' | 'failed' | 'expired';
 
 /** A log shipper as returned by GET /api/shippers (only the fields the picker needs). */
 export interface ShipperSummary {
@@ -222,10 +222,13 @@ class LogDiscoveryServiceClient {
   async triggerScan(
     mode: DiscoveryScanMode,
     manualCidrs: string[] = [],
-    assignedShipperId?: number | null
+    assignedShipperId?: number | null,
+    allowPublicTargets = false
   ): Promise<TriggerScanResponse> {
     const body: Record<string, unknown> = { mode, manual_cidrs: manualCidrs };
     if (assignedShipperId != null) body.assignedShipperId = assignedShipperId;
+    // Only after the page's "I'm authorized" confirmation (PublicTargetWarning).
+    if (allowPublicTargets) body.allow_public_targets = true;
     const response = await apiClient.post('/log-discovery/scans', body);
     return response.data;
   }

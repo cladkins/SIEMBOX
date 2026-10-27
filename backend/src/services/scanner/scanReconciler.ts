@@ -7,6 +7,12 @@
  * and can't be cancelled through the normal path. On startup we mark them as
  * failed so they don't stay stuck (issue #19), and surface the event in the
  * admin dashboard.
+ *
+ * Scans dispatched to a log shipper are left alone: their worker is the
+ * shipper, not this process, so a backend restart interrupts nothing. A queued
+ * one is still waiting for its shipper and expires on its own if the shipper
+ * never claims it (shipperJobs.ts); a running one finishes on the shipper and
+ * posts its results back.
  */
 
 import { query } from '../../config/database';
@@ -28,7 +34,7 @@ export async function reconcileInterruptedScans(): Promise<number> {
            error_message = 'Interrupted by backend restart',
            completed_at = NOW(),
            updated_at = NOW()
-       WHERE status IN ('running', 'queued')
+       WHERE status IN ('running', 'queued') AND assigned_shipper_id IS NULL
        RETURNING id`
     );
 
@@ -58,7 +64,7 @@ export async function reconcileInterruptedScans(): Promise<number> {
        SET status = 'failed',
            error_message = 'Interrupted by backend restart',
            completed_at = NOW()
-       WHERE status = 'running'
+       WHERE status = 'running' AND assigned_shipper_id IS NULL
        RETURNING id`
     );
 

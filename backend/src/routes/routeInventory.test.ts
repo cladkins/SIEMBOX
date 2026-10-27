@@ -198,6 +198,8 @@ const INVENTORY: Row[] = [
   ['POST', '/api/settings/ip-whitelist/check', ADMIN_ONLY],
   ['GET', '/api/settings/auto-discovery', ADMIN_ONLY],
   ['PUT', '/api/settings/auto-discovery', ADMIN_ONLY],
+  ['GET', '/api/settings/shipper-jobs', ADMIN_ONLY],
+  ['PUT', '/api/settings/shipper-jobs', ADMIN_ONLY],
   ['GET', '/api/settings/auto-discovery/stats', ADMIN_ONLY],
   // Getting Started: every role reads whether setup is done; only admins mark
   // it done or reopen it
@@ -223,6 +225,11 @@ const INVENTORY: Row[] = [
   ['POST', '/api/shippers/:id/volumes', OPERATOR_UP],
   ['DELETE', '/api/shippers/volumes/:volumeId', OPERATOR_UP],
   ['GET', '/api/shippers/:id/activity', ANY_ROLE],
+  // Scan jobs queued for / running on a shipper. Cancel: analyst and up at the
+  // gate (an asset scan); the handler also requires operator for a
+  // vulnerability or discovery job (shipperJobs.db.test.ts).
+  ['GET', '/api/shippers/:id/jobs', ANY_ROLE],
+  ['POST', '/api/shippers/:id/jobs/:kind/:scanId/cancel', ANALYST_UP, AUDITED],
   ['POST', '/api/shippers/:id/regenerate-key', ADMIN_ONLY],
   ['POST', '/api/shippers/:id/http-push-key', ADMIN_ONLY],
   ['DELETE', '/api/shippers/:id/http-push-key', ADMIN_ONLY],

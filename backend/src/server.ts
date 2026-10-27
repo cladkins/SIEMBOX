@@ -15,6 +15,7 @@ import { CleanupService } from './services/cleanup/cleanupService';
 import { importRules } from './scripts/import-rules';
 import { startAutoDiscoveryJob, stopAutoDiscoveryJob } from './jobs/autoDiscovery';
 import { startScheduledScansJob, stopScheduledScansJob } from './jobs/scheduledScans';
+import { startShipperJobExpiryJob, stopShipperJobExpiryJob } from './jobs/shipperJobExpiry';
 import { startIngestionHealthJob, stopIngestionHealthJob } from './jobs/ingestionHealth';
 import { startThreatFeedsJob, stopThreatFeedsJob } from './jobs/threatFeeds';
 import { startDiscoveryApiPollerJob, stopDiscoveryApiPollerJob } from './jobs/discoveryApiPoller';
@@ -152,6 +153,10 @@ const startServer = async () => {
 
     // Start scheduled scans job
     startScheduledScansJob();
+
+    // Expire scan jobs queued for a log shipper that never picked them up, so
+    // a shipper coming back after days offline can't run old work.
+    startShipperJobExpiryJob();
 
     // Start ingestion-health monitor (drives ingestion notifications)
     startIngestionHealthJob();
@@ -302,6 +307,7 @@ const shutdown = async (signal: string) => {
   }
   stopAutoDiscoveryJob();
   stopScheduledScansJob();
+  stopShipperJobExpiryJob();
   stopIngestionHealthJob();
   stopThreatFeedsJob();
   stopDiscoveryApiPollerJob();

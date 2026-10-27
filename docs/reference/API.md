@@ -185,6 +185,28 @@ Reads under `/api/assets`, `/api/vulnerabilities`, `/api/scheduled-scans`, `/api
 
 A refused scan or asset write is also recorded in `audit_logs` (`action` `access.denied`, with the required and actual role); the admin-only log-discovery routes and the log-discovery source actions answer `403` without that audit entry. The entry's `ip_address` is the client address (see [Rate Limiting](#rate-limiting)): the browser's real address through the web UI, and the caller's TCP address on a direct call to port 8421, whatever `X-Forwarded-For` it sends. Only a proxy listed in `TRUSTED_PROXIES` can name another client; when what it forwards is not an IP address, the TCP peer address is stored instead, so the entry is always written, and when it connected over TCP its own address is kept in `details.peerAddress`. Shipper management has its own table under [Log Shippers](#log-shippers-endpoints). (Earlier versions let any logged-in role, viewers included, make these calls.)
 
+### Public scan targets
+
+Scans are for your own networks. `POST /api/assets/scan`, `POST /api/vulnerabilities/scans`, `POST /api/log-discovery/scans` and `POST` / `PUT /api/scheduled-scans` refuse a target in **public address space** unless the request confirms it. Private and reserved space is RFC 1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), RFC 6598 `100.64.0.0/10`, loopback, link-local `169.254.0.0/16`, the documentation and benchmarking ranges, multicast and reserved space, and for IPv6 `::1`, ULA `fc00::/7`, link-local `fe80::/10`, `2001:db8::/32` and multicast. IPv4 addresses, CIDRs and nmap octet ranges (`192.168.1.1-254`) are checked, bare or as a URL's host; a CIDR that only partly covers private space (`10.0.0.0/7`) counts as public. Hostnames are not resolved and are never refused.
+
+Without confirmation the API answers `400` and nothing is created:
+
+```json
+{
+  "error": "Refusing to scan public address space: 192.169.1.0/24 (did you mean 192.168.1.0/24?). ...",
+  "message": "(same as error)",
+  "code": "PUBLIC_TARGETS_UNCONFIRMED",
+  "public_targets": [{ "target": "192.169.1.0/24", "suggestion": "192.168.1.0/24" }],
+  "hostnames": []
+}
+```
+
+- `suggestion` is present when the target is one octet away from a private range, a likely typo: `192.169.x` → `192.168.x`, `193.168.x` → `192.168.x`, `172.32.x` → `172.31.x`, `172.61.x` → `172.16.x`, `11.x` → `10.x`. `partly_private: true` marks a range that reaches into public space.
+
+To scan public addresses you are authorized to scan, add `"allow_public_targets": true` (a literal `true`) to the request body. The confirmation is stored with the scan as `scan_options.publicTargetsConfirmation` (`confirmedBy`, `confirmedByUsername`, `confirmedAt`, `publicTargets`) and written to `audit_logs` as `scan.public_targets.confirmed`. The scan dialogs show the public targets inline with an "I'm authorized to scan these public addresses" checkbox and send the flag only when it is ticked.
+
+A **scheduled scan** saved before this check keeps running as it is. `GET /api/scheduled-scans` lists each schedule's `public_targets` (the Scheduled Scans page badges them), and any `PUT` that sends `scan_options` (the edit dialog) needs the confirmation again; a `PUT` that only toggles `enabled` or renames does not.
+
 ---
 
 ## Response Format
@@ -2952,6 +2974,8 @@ Two kinds of route live under `/api/shippers`:
 | POST / PUT / DELETE | `/:id/sources`, `/sources/:sourceId`, `/:id/volumes`, `/volumes/:volumeId` | Admin or operator |
 | POST | `/:id/regenerate-key` | Admin |
 | POST / DELETE | `/:id/http-push-key` | Admin |
+| GET | `/:id/jobs` | Any role |
+| POST | `/:id/jobs/:kind/:scanId/cancel` | Analyst and up for an asset (`nmap`) job; admin or operator for a `nuclei` or `discovery` job |
 
 **`api_key` redaction:** a shipper's syslog `api_key` is returned only to roles that can manage shippers (admin and operator), in every response that carries a shipper row (list, detail, create, update). Analysts and viewers get the same rows without the `api_key` field. The HTTP push key's hash is never returned to anyone (`http_push_enabled` says whether one is set).
 
@@ -3406,6 +3430,62 @@ Delete volume mount.
 
 ---
 
+### GET /api/shippers/:id/jobs
+
+The scan jobs dispatched to this shipper: every `queued` (waiting for the shipper to pick it up) and `running` (claimed, out on the shipper) asset, vulnerability and log-discovery scan, plus those that `expired` in the last 7 days, oldest first. The Shippers page shows them under the shipper's **Scan Jobs**, and the list's **Scan jobs** column counts them (`GET /api/shippers` adds `queued_jobs` and `running_jobs` to each row).
+
+**Authentication:** Required (any role)
+
+**Response (200):**
+```json
+{
+  "jobs": [
+    {
+      "kind": "nmap",
+      "scanId": 42,
+      "shipperId": 3,
+      "status": "queued",
+      "targets": ["192.168.1.0/24"],
+      "scanType": "port",
+      "createdBy": 5,
+      "createdByUsername": "alice",
+      "createdAt": "2026-10-27T09:00:00.000Z",
+      "claimedAt": null,
+      "ageSeconds": 5400,
+      "expiresAt": "2026-10-28T09:00:00.000Z",
+      "origin": { "page": "scheduled_scans", "scheduledScanId": 4, "scheduledScanName": "Nightly LAN" },
+      "description": "Scheduled: Nightly LAN",
+      "errorMessage": null,
+      "publicTargetsConfirmed": false
+    }
+  ]
+}
+```
+- `kind` - `nmap` (asset scan), `nuclei` (vulnerability scan) or `discovery` (log-discovery sweep; `scanId` is a `discovery_scans` id, `scanType` its mode).
+- `expiresAt` - queued jobs only: when the job expires unrun if the shipper still hasn't claimed it (see [shipper job expiry](#get-apisettingsshipper-jobs)).
+- `origin.page` - where the scan was started: `assets`, `vulnerability_scanning`, `log_discovery` or `scheduled_scans` (with the schedule's id and name). Older rows without a stored origin are labelled from their scan type.
+- `errorMessage` - expired jobs only: the reason recorded on the scan.
+
+**Errors:** `400` invalid id, `404` shipper not found.
+
+---
+
+### POST /api/shippers/:id/jobs/:kind/:scanId/cancel
+
+Cancel one of this shipper's `queued` or `running` jobs. A queued job is never handed out afterwards. A running job is already on the shipper and can't be stopped from here; the results it posts later are ignored (`/scan-results` and `/discovery-results` answer `{ "status": "cancelled", "ignored": true }`). Asset and vulnerability scans become `cancelled`; a discovery scan becomes `failed` with the reason, as `POST /api/log-discovery/scans/:id/cancel` does. Each cancel is written to `audit_logs` as `scan.shipper_job.cancelled`.
+
+**Authentication:** Required. `kind: nmap` needs analyst or higher (the role that starts an asset scan); `nuclei` and `discovery` need operator or higher, matching `POST /api/vulnerabilities/scans/:scanId/cancel` and `POST /api/log-discovery/scans/:id/cancel`. Refusals are written to `audit_logs` (`access.denied`, `resource_type` `shipper_job`).
+
+**Response (200):**
+```json
+{ "cancelled": true, "status": "cancelled", "previous_status": "queued" }
+```
+- `cancelled` is `false` when the job had already finished; `status` is then its current status.
+
+**Errors:** `400` invalid id or `kind`, `403` role too low for this kind, `404` no such job for this shipper (a job of another shipper, or a `kind` that doesn't match the row).
+
+---
+
 ### GET /api/shippers/:id/activity
 
 Get activity log for shipper.
@@ -3720,6 +3800,8 @@ If the database can't be reached (including a connection pool that stays exhaust
 }
 ```
 
+**Queued jobs expire.** A job its shipper hasn't claimed within the shipper job expiry window (`shipper_job_expiry_hours`, default 24 h; [Settings](#get-apisettingsshipper-jobs)) is never handed out: this endpoint first marks the shipper's stale jobs `expired`, and the claim itself skips anything older than the window. A background sweep (the **Shipper job expiry** job, every 5 minutes) does the same for shippers that never poll. A shipper that comes back after days offline therefore gets only recent work, never a scan someone queued last week.
+
 The args/targets (or, for discovery, the probe plan) are **built and validated by the server** — the shipper chooses neither. It runs exactly `nmap <nmapArgs> <targets> -oX -` for a `kind: "nmap"` job, `nuclei <nucleiArgs> -target <t>…` for `kind: "nuclei"`, or its bundled Node discovery agent (fed the job on stdin) for `kind: "discovery"`. `nucleiArgs` carry only portable selection (tags/severity/IDs); the discovery `probePlan` carries the ports/HTTP paths/mDNS services extracted from the fingerprint library (so the shipper needs no fingerprint files). `jobs` is `[]` when nothing is queued. The `scanId` namespaces differ per `kind` (discovery ids come from `discovery_scans`), which is why discovery results post to a separate endpoint below.
 
 **Errors:**
@@ -3748,7 +3830,7 @@ The args/targets (or, for discovery, the probe plan) are **built and validated b
 
 **Ownership:** the `api_key` must own the scan (its `assigned_shipper_id`), so a shipper can't write results for another shipper's — or a backend-run — scan.
 
-**Response (200):** `{ "status": "completed" }` or `{ "status": "failed" }`
+**Response (200):** `{ "status": "completed" }` or `{ "status": "failed" }`; for a scan that was cancelled (from the Shippers page or the scan page) or expired, `{ "status": "cancelled" | "expired", "ignored": true }` and the payload is discarded.
 
 **Errors:**
 - `400` - Missing `api_key`, non-positive `scan_id`, or no output (`xml` for an asset scan / `jsonl` for a vuln scan) and no `error`
@@ -3777,7 +3859,7 @@ Each `tls_subjects` entry is `{ "port": 8006, "subject_cn": "pve", "san": ["DNS:
 { "api_key": "<shipper api key>", "scan_id": 7, "error": "node runtime not available on the shipper" }
 ```
 
-**Response (200):** `{ "status": "completed" }` or `{ "status": "failed" }`
+**Response (200):** `{ "status": "completed" }` or `{ "status": "failed" }`; for a scan that is neither `running` nor `completed` (cancelled, expired), `{ "status": "<its status>", "ignored": true }` and the signals are discarded.
 
 **Errors:**
 - `400` - Missing `api_key`, non-positive `scan_id`, or neither `signals` (array) nor `error`
@@ -3800,6 +3882,33 @@ Every `/api/assets` route requires a login (`Authorization: Bearer <token>`); wi
 
 The writes take the roles that can open the Asset Inventory page; a viewer gets `403` (see [Roles for scan and asset writes](#roles-for-scan-and-asset-writes)).
 
+### POST /api/assets/scan
+
+Start an nmap asset scan.
+
+**Authentication:** Required (admin, analyst or operator)
+
+**Request Body:**
+```json
+{
+  "targets": ["192.168.1.0/24", "10.0.0.5"],
+  "scanType": "port",
+  "description": "optional",
+  "assignedShipperId": 3,
+  "allow_public_targets": false
+}
+```
+- `targets` - IPs, CIDRs or hostnames (each validated; anything else is a `400`).
+- `scanType` - `ping`, `port` (default), `service` or `os`.
+- `assignedShipperId` (optional) - run the scan from this log shipper, out on its LAN. The scan is created `queued` and waits for the shipper to pick it up; one it hasn't picked up within the [expiry window](#get-apisettingsshipper-jobs) becomes `expired` and never runs. Omit to run on the backend.
+- `allow_public_targets` (optional) - `true` confirms targets in public address space; without it they get a `400` naming them ([Public scan targets](#public-scan-targets)).
+
+**Response (202):** `{ "message": "Scan queued for log shipper", "scanId": 42, "status": "queued", "assignedShipperId": 3 }`
+
+The scan's `scan_options` records `origin: { "page": "assets" }` and, when confirmed, `publicTargetsConfirmation`.
+
+---
+
 ### GET /api/assets/scans
 
 Get all vulnerability scans with filtering and pagination.
@@ -3807,7 +3916,7 @@ Get all vulnerability scans with filtering and pagination.
 **Authentication:** Required (any role)
 
 **Query Parameters:**
-- `status` (optional) - Filter by scan status: `queued`, `running`, `completed`, `failed`
+- `status` (optional) - Filter by scan status: `queued`, `running`, `completed`, `failed`, `cancelled`, `expired` (a shipper job never picked up within the expiry window; `error_message` says so)
 - `scan_type` (optional) - Filter by scan type: `asset_discovery`, `vulnerability`
 - `limit` (optional) - Results per page (default: 50)
 - `offset` (optional) - Pagination offset (default: 0)
@@ -4006,6 +4115,23 @@ Update auto-discovery configuration settings.
 - Changing `interval_minutes` causes the auto-discovery job to reschedule
 - Setting `enabled: false` stops auto-discovery but preserves the interval setting
 - Changes take effect immediately (no restart required)
+
+---
+
+### GET /api/settings/shipper-jobs
+
+How long a scan queued for a log shipper waits to be picked up before it expires unrun (see [scan-jobs](#get-apishippersscan-jobsapi_key)). Admin only. Shown on Settings > Asset Discovery.
+
+**Response (200):**
+```json
+{ "expiry_hours": 24, "default_expiry_hours": 24, "min_expiry_hours": 1, "max_expiry_hours": 720 }
+```
+
+### PUT /api/settings/shipper-jobs
+
+Admin only. Body `{ "expiry_hours": 12 }`: a whole number of hours from 1 to 720 (30 days), else `400`. Applies at once: the next job-pull and sweep use the new window. Stored as `system_settings` key `shipper_job_expiry_hours` (migration `052` seeds `24`).
+
+**Response (200):** `{ "expiry_hours": 12 }`
 
 ---
 
@@ -4216,7 +4342,8 @@ Trigger a scan. Runs asynchronously; returns immediately with the job id.
 ```
 - `mode` - `passive` (ARP/mDNS/SSDP/DHCP-lease only), `active` (sweeps every approved manual CIDR for live hosts, then scoped port/HTTP/TLS probing of those plus whatever passive discovery found), or `full` (both passive and active)
 - `manual_cidrs` (optional) - CIDRs to sweep on this scan (each /22 or smaller; see `GET /scope`). When omitted, the scan falls back to the persisted standing scope (`GET /scope/cidrs`); an explicit array (including an empty one) is used as-is.
-- `assignedShipperId` (optional) - run the whole probe pipeline on this log shipper (out on the LAN) instead of in-process on the backend. Must be an existing shipper id (400 otherwise). When set, the scan is created `queued` and waits for that shipper to claim it on its next job poll; omit (or `null`) to run on the backend. See the `/api/shippers/discovery-*` endpoints.
+- `assignedShipperId` (optional) - run the whole probe pipeline on this log shipper (out on the LAN) instead of in-process on the backend. Must be an existing shipper id (400 otherwise). When set, the scan is created `queued` and waits for that shipper to claim it on its next job poll (it expires unrun if the shipper doesn't within the [expiry window](#get-apisettingsshipper-jobs)); omit (or `null`) to run on the backend. See the `/api/shippers/discovery-*` endpoints.
+- `allow_public_targets` (optional) - `true` to confirm CIDRs in public address space (the request's `manual_cidrs`, or the saved scope when omitted); without it such a scan is refused with `400`. See [Public scan targets](#public-scan-targets).
 
 **Response (202):**
 ```json
@@ -4266,7 +4393,8 @@ A single scan job's status.
   "assigned_shipper_name": null
 }
 ```
-- `status` - `queued` (dispatched to a shipper, awaiting claim), `running`, `completed`, or `failed`. An in-process scan starts straight at `running`.
+- `status` - `queued` (dispatched to a shipper, awaiting claim), `running`, `completed`, `failed`, or `expired` (dispatched to a shipper that didn't claim it within the expiry window; never ran, `error_message` says why). An in-process scan starts straight at `running`.
+- `scan_options` - `origin` (where the scan was started) and, for a confirmed scan of public CIDRs, `publicTargetsConfirmation`; `null` on scans from before these were recorded.
 - `results_summary.hosts_failed` - hosts the scan saw but couldn't match or save. They are skipped and the rest of the scan completes; `host_errors` (present only when some failed) lists the first 20 with their error. Scans from before this field have no `hosts_failed`.
 - `assigned_shipper_id` / `assigned_shipper_name` - the shipper the scan ran on, or `null`/absent when it ran on the backend (the name is joined for display).
 
@@ -5091,6 +5219,8 @@ Trigger a new vulnerability scan using Nuclei.
 | `description` | string | No | Description for this scan |
 | `timeout` | integer | No | Scan timeout in milliseconds (default: 30 minutes) |
 | `rateLimit` | integer | No | Maximum requests per second |
+| `assignedShipperId` | integer | No | Run the scan from this log shipper (queued until it picks it up; expires unrun after the [expiry window](#get-apisettingsshipper-jobs)) |
+| `allow_public_targets` | boolean | No | `true` confirms a target in public address space; without it such a target gets `400` ([Public scan targets](#public-scan-targets)) |
 
 **Template Selection Options:**
 - `"all"` - Use all available templates
@@ -5113,7 +5243,7 @@ Trigger a new vulnerability scan using Nuclei.
 ```
 
 **Errors:**
-- `400` - Missing target
+- `400` - Missing target, or a target in public address space without `allow_public_targets: true` (`code: "PUBLIC_TARGETS_UNCONFIRMED"`)
 - `403` - Analyst or viewer role
 
 ---

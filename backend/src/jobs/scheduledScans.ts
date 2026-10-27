@@ -14,11 +14,26 @@ import { LogShipperModel } from '../models/LogShipper';
 import { logger } from '../utils/logger';
 import { ErrorLogService } from '../services/errors/errorLogService';
 import { registerRecurringJob, trackJobRun, markJobResult } from '../services/jobs/jobRegistry';
+import { pendingScheduledRun, type ScanOrigin } from '../services/scanner/shipperJobs';
 
 const JOB_KEY = 'scheduled-scans';
 
 let intervalId: NodeJS.Timeout | null = null;
 const CHECK_INTERVAL_MS = 60 * 1000; // look for due scans once a minute
+
+/**
+ * The schedule's previous run, when it is still queued for the schedule's
+ * shipper (not yet picked up). While one waits, the scheduler doesn't queue
+ * another: an offline shipper would otherwise collect one identical job per
+ * interval and run them all back to back when it returns. The waiting run
+ * expires like any other shipper job (services/scanner/shipperJobs.ts), after
+ * which the next due run queues normally.
+ */
+export async function pendingRunFor(schedule: ScheduledScan): Promise<number | null> {
+  if (schedule.scan_type === 'container') return null;
+  const shipperId = schedule.scan_options?.assignedShipperId ?? null;
+  return pendingScheduledRun(schedule.last_scan_id ?? null, shipperId);
+}
 
 /**
  * Trigger a single schedule's scan and return the created scan id.
@@ -28,6 +43,10 @@ export async function triggerScheduledScan(schedule: ScheduledScan): Promise<num
   const opts = schedule.scan_options || {};
   const userId = schedule.created_by || 1;
   const description = `Scheduled: ${schedule.name}`;
+  const origin: ScanOrigin = { page: 'scheduled_scans', scheduledScanId: schedule.id, scheduledScanName: schedule.name };
+  // A schedule saved with confirmed public targets passes that on to each run.
+  // One saved before the public-target check has none and still runs.
+  const publicTargetsConfirmation = opts.publicTargetsConfirmation ?? null;
 
   // Container scans are Trivy image scans (no LAN scan), so they are never
   // dispatched to a shipper -- handle first, before resolving any shipper.
@@ -61,6 +80,8 @@ export async function triggerScheduledScan(schedule: ScheduledScan): Promise<num
       timeout: opts.timeout,
       rateLimit: opts.rateLimit,
       assignedShipperId,
+      origin,
+      publicTargetsConfirmation,
     });
   }
 
@@ -70,6 +91,8 @@ export async function triggerScheduledScan(schedule: ScheduledScan): Promise<num
     userId,
     description,
     assignedShipperId,
+    origin,
+    publicTargetsConfirmation,
   });
 }
 
@@ -88,8 +111,20 @@ export async function runDueScheduledScans(): Promise<void> {
   }
 
   let triggered = 0;
+  let deferred = 0;
   for (const schedule of due) {
     try {
+      const pending = await pendingRunFor(schedule);
+      if (pending !== null) {
+        // Previous run still waiting for its shipper: roll the schedule
+        // forward without queuing a duplicate.
+        await ScheduledScanModel.markRun(schedule.id, pending);
+        deferred += 1;
+        logger.info(
+          `[Scheduled Scans] "${schedule.name}" (#${schedule.id}) is due, but its previous run (scan ${pending}) is still queued for its shipper; not queuing another`
+        );
+        continue;
+      }
       const scanId = await triggerScheduledScan(schedule);
       await ScheduledScanModel.markRun(schedule.id, scanId);
       triggered += 1;
@@ -110,7 +145,10 @@ export async function runDueScheduledScans(): Promise<void> {
 
   markJobResult(
     JOB_KEY,
-    due.length === 0 ? 'nothing due' : `triggered ${triggered} of ${due.length} due schedule(s)`
+    due.length === 0
+      ? 'nothing due'
+      : `triggered ${triggered} of ${due.length} due schedule(s)` +
+          (deferred > 0 ? `; ${deferred} still waiting on a queued shipper run` : '')
   );
 }
 

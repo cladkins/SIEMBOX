@@ -69,6 +69,9 @@ const ROUTES: Array<[method: string, path: string, allowed: Role[]]> = [
   // Asset auto-discovery
   ['get', '/auto-discovery', ADMIN_ONLY],
   ['put', '/auto-discovery', ADMIN_ONLY],
+  // Shipper scan-job expiry
+  ['get', '/shipper-jobs', ADMIN_ONLY],
+  ['put', '/shipper-jobs', ADMIN_ONLY],
   ['get', '/auto-discovery/stats', ADMIN_ONLY],
   // Getting Started completion: every role reads it (admins also see who); admins change it.
   ['get', '/onboarding', ANY_ROLE],

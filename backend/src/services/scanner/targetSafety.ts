@@ -160,7 +160,8 @@ function judgeV6Span(span: Span<bigint>): SpanVerdict {
 
 /** Optimal-string-alignment distance <= 1: one substitution, insertion, deletion or adjacent swap. */
 function oneEditApart(a: string, b: string): boolean {
-  if (a === b) return false;
+  // Only ever compares octets (1-3 digits); anything longer is no slip of one.
+  if (a === b || a.length > 3 || b.length > 3) return false;
   if (a.length === b.length) {
     const diffs: number[] = [];
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) diffs.push(i);

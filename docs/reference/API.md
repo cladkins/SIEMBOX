@@ -205,6 +205,8 @@ Without confirmation the API answers `400` and nothing is created:
 
 To scan public addresses you are authorized to scan, add `"allow_public_targets": true` (a literal `true`) to the request body. The confirmation is stored with the scan as `scan_options.publicTargetsConfirmation` (`confirmedBy`, `confirmedByUsername`, `confirmedAt`, `publicTargets`) and written to `audit_logs` as `scan.public_targets.confirmed`. The scan dialogs show the public targets inline with an "I'm authorized to scan these public addresses" checkbox and send the flag only when it is ticked.
 
+A **container** schedule (`scan_type: "container"`) takes `scan_options.image_ref` (one image) or `scan_options.all_images: true` (each run scans every scannable image discovered on the SIEMBox host and on every log shipper's host, deduplicated, at most 200; a run with nothing discovered fails with that reason).
+
 A **scheduled scan** saved before this check keeps running as it is. `GET /api/scheduled-scans` lists each schedule's `public_targets` (the Scheduled Scans page badges them), and any `PUT` that sends `scan_options` (the edit dialog) needs the confirmation again; a `PUT` that only toggles `enabled` or renames does not.
 
 ---

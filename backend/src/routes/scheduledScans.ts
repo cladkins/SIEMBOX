@@ -31,8 +31,12 @@ function validateScanOptions(scanType: ScheduledScanType, opts: any): void {
       throw new ApiError(400, 'Asset scans require scan_options.targets (a non-empty array of IPs/CIDRs)');
     }
   } else if (scanType === 'container') {
-    if (!opts.image_ref || typeof opts.image_ref !== 'string') {
-      throw new ApiError(400, 'Container scans require scan_options.image_ref (an image reference)');
+    // Either one image, or every image discovered when the schedule runs.
+    if (opts.all_images !== undefined && typeof opts.all_images !== 'boolean') {
+      throw new ApiError(400, 'scan_options.all_images must be a boolean');
+    }
+    if (opts.all_images !== true && (!opts.image_ref || typeof opts.image_ref !== 'string')) {
+      throw new ApiError(400, 'Container scans require scan_options.image_ref (an image reference) or scan_options.all_images: true');
     }
   } else {
     if (!opts.target || typeof opts.target !== 'string') {

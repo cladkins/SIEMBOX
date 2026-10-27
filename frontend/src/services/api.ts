@@ -505,6 +505,7 @@ export const api = {
   // Scheduled Scans
   getScheduledScans: () => apiClient.get('/scheduled-scans'),
   createScheduledScan: (data: any) => apiClient.post('/scheduled-scans', data),
+  previewScheduledScan: (data: any) => apiClient.post('/scheduled-scans/preview', data),
   updateScheduledScan: (id: number, data: any) => apiClient.put(`/scheduled-scans/${id}`, data),
   deleteScheduledScan: (id: number) => apiClient.delete(`/scheduled-scans/${id}`),
   runScheduledScan: (id: number) => apiClient.post(`/scheduled-scans/${id}/run`),

@@ -177,7 +177,7 @@ Reads under `/api/assets`, `/api/vulnerabilities`, `/api/scheduled-scans`, `/api
 | `POST /api/vulnerabilities/templates/download` | yes | yes | no | no |
 | `POST /api/vulnerabilities/scans`, `POST /api/vulnerabilities/scans/:scanId/cancel` | yes | yes | no | no |
 | `PATCH /api/vulnerabilities/:assetId/:vulnId` | yes | yes | no | no |
-| `POST /api/scheduled-scans`, `PUT` / `DELETE /api/scheduled-scans/:id`, `POST /api/scheduled-scans/:id/run` | yes | yes | no | no |
+| `POST /api/scheduled-scans`, `POST /api/scheduled-scans/preview`, `PUT` / `DELETE /api/scheduled-scans/:id`, `POST /api/scheduled-scans/:id/run` | yes | yes | no | no |
 | `POST /api/log-discovery/scans`, `POST /api/log-discovery/scans/:id/cancel` | yes | yes | no | no |
 | `POST /api/log-discovery/sources/:id/confirm`, `/ignore`, `/onboard/confirm` | yes | yes | no | no |
 | `PUT /api/log-discovery/scope/cidrs`, `POST /api/log-discovery/sources/manual`, `PATCH` and `DELETE /api/log-discovery/sources/:id`, the `/sources/:id/poller` writes | yes | no | no | no |
@@ -208,6 +208,50 @@ To scan public addresses you are authorized to scan, add `"allow_public_targets"
 A **container** schedule (`scan_type: "container"`) takes `scan_options.image_ref` (one image) or `scan_options.all_images: true` (each run scans every scannable image discovered on the SIEMBox host and on every log shipper's host, deduplicated, at most 200; a run with nothing discovered fails with that reason).
 
 A **scheduled scan** saved before this check keeps running as it is. `GET /api/scheduled-scans` lists each schedule's `public_targets` (the Scheduled Scans page badges them), and any `PUT` that sends `scan_options` (the edit dialog) needs the confirmation again; a `PUT` that only toggles `enabled` or renames does not.
+
+### Scheduled scan timing
+
+`/api/scheduled-scans` (`GET`, `POST`, `PUT /:id`, `DELETE /:id`, `POST /:id/run`) drives the Scheduled Scans page. A schedule runs either at **calendar times** (`schedule`) or every **fixed interval** (`interval_minutes`, the original mode). `POST` sends exactly one of the two; `GET` returns both fields, with the unused one `null`.
+
+```json
+{
+  "name": "Weekday LAN sweep",
+  "scan_type": "asset",
+  "scan_options": { "targets": ["192.168.1.0/24"], "scanType": "port" },
+  "schedule": { "frequency": "weekly", "time": "02:30", "days": [1, 2, 3, 4, 5], "timezone": "America/Chicago" }
+}
+```
+
+`schedule` fields (stored as given, keeping only the fields its frequency uses; `days` sorted and deduplicated):
+
+| `frequency` | Fields | Runs |
+|---|---|---|
+| `hourly` | `minute` (0-59), `every_hours` (1-12, default 1) | `minute` past every `every_hours`-th hour, counted from local midnight (cron's `M */N`): `every_hours: 6, minute: 15` runs at 00:15, 06:15, 12:15, 18:15 |
+| `daily` | `time` (`HH:MM`, 24-hour) | every day at `time` |
+| `weekly` | `time`, `days` (non-empty; 0 = Sunday ... 6 = Saturday) | at `time` on each of `days` |
+| `monthly` | `time`, `day_of_month` (1-31) | at `time` on `day_of_month`; a month without that day runs on its last day (31 → Apr 30, Feb 28/29) |
+
+Every frequency also takes `timezone`, an IANA zone name (`America/Chicago`, `Europe/London`, `UTC`; links such as `Asia/Calcutta` are accepted, numeric offsets such as `+05:00` are not). Times are wall-clock in that zone across daylight-saving changes: a time skipped when the clocks go forward (02:30 on a US spring-forward day) runs at the next valid instant, the moment the clock jumps (03:00); a time that happens twice when they go back runs once, at its first occurrence. An optional `"mode": "calendar"` is accepted and ignored.
+
+`next_run_at` is the first occurrence after now, recomputed on create, whenever a `PUT` changes the timing, when a schedule is re-enabled (`enabled: true`), and after every run (a "Run now" too). A schedule that came due while SIEMBox was down runs once when it is back and then resumes its normal times; there is no burst of catch-up runs. A fixed-interval schedule's next run is still now + `interval_minutes`. A due run whose previous run is still queued for its log shipper is skipped as before, and the schedule rolls on to its next occurrence.
+
+`PUT /api/scheduled-scans/:id` changes the timing only when it sends one: `schedule` (an object) switches to or edits calendar timing; `interval_minutes` (with `schedule` absent or `null`) switches to or edits a fixed interval; `schedule: null` alone returns to the schedule's stored interval, if it has one. Schedules created before calendar timing keep `schedule: null` and run every `interval_minutes` exactly as before.
+
+`400` messages name the problem, for example `Send either schedule (calendar timing) or interval_minutes (fixed interval), not both`, `interval_minutes must be an integer of at least 5 (or send a calendar schedule instead)`, `schedule.timezone must be an IANA time zone name, e.g. America/Chicago or UTC`, `schedule.time must be HH:MM (24-hour), e.g. 02:30`, `schedule.days must be a non-empty array of weekdays, 0 (Sunday) to 6 (Saturday)`, `schedule.day_of_month must be an integer from 1 to 31`, `schedule.every_hours must be an integer from 1 to 12`.
+
+#### POST /api/scheduled-scans/preview
+
+The next runs a timing would produce, for the edit dialog's "Next runs" preview. Admin or operator (like the writes); writes nothing. Body: `schedule` or `interval_minutes` (validated exactly as on create), and optional `count` (1-10, default 3).
+
+```json
+{
+  "schedule": { "frequency": "weekly", "timezone": "America/Chicago", "time": "02:30", "days": [1, 3, 5] },
+  "interval_minutes": null,
+  "next_runs": ["2026-10-28T07:30:00.000Z", "2026-10-30T07:30:00.000Z", "2026-11-02T08:30:00.000Z"]
+}
+```
+
+For an interval, `next_runs` are now + 1, 2, 3 × `interval_minutes` (when it would run if saved now).
 
 ---
 

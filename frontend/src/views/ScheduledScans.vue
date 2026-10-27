@@ -4,7 +4,7 @@
       <h2>Scheduled Scans</h2>
       <p class="subtitle">
         Recurring asset discovery, vulnerability, and container image scans. Each
-        schedule runs automatically on its interval, or trigger it now with "Run now".
+        schedule runs automatically at the times you choose, or trigger it now with "Run now".
       </p>
     </div>
 
@@ -21,13 +21,13 @@
       <el-table :data="scheduledScans" v-loading="scheduledScansLoading" stripe>
         <el-table-column prop="name" label="Name" min-width="150" />
 
-        <el-table-column label="Type" width="120">
+        <el-table-column label="Type" width="110">
           <template #default="{ row }">
             <el-tag :type="scanTypeTag(row.scan_type)" size="small">{{ row.scan_type }}</el-tag>
           </template>
         </el-table-column>
 
-        <el-table-column label="Target" min-width="180">
+        <el-table-column label="Target" min-width="150">
           <template #default="{ row }">
             <el-text size="small">{{ formatScanTarget(row) }}</el-text>
             <el-tooltip
@@ -40,15 +40,28 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="Run from" width="140">
+        <el-table-column label="Run from" width="110">
           <template #default="{ row }">
             <el-text size="small">{{ formatRunFrom(row) }}</el-text>
           </template>
         </el-table-column>
 
-        <el-table-column label="Interval" width="140">
+        <el-table-column label="Schedule" min-width="250">
           <template #default="{ row }">
-            <el-text size="small">{{ formatInterval(row.interval_minutes) }}</el-text>
+            <div class="schedule-cell">
+              <el-text size="small" data-testid="schedule-summary">{{ describeSchedule(row) }}</el-text>
+              <el-text v-if="!row.enabled" type="info" size="small">Disabled</el-text>
+              <el-tooltip
+                v-else-if="row.next_run_at && row.schedule?.timezone && row.schedule.timezone !== viewerZone"
+                placement="top"
+                :content="`${formatInZone(row.next_run_at, row.schedule.timezone)} (${row.schedule.timezone})`"
+              >
+                <el-text type="info" size="small" data-testid="schedule-next-run">Next: {{ formatInZone(row.next_run_at, viewerZone) }}</el-text>
+              </el-tooltip>
+              <el-text v-else-if="row.next_run_at" type="info" size="small" data-testid="schedule-next-run">
+                Next: {{ formatInZone(row.next_run_at, viewerZone) }}
+              </el-text>
+            </div>
           </template>
         </el-table-column>
 
@@ -62,16 +75,10 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="Last Run" width="180">
+        <el-table-column label="Last Run" width="150">
           <template #default="{ row }">
             <span v-if="row.last_run_at">{{ formatDate(row.last_run_at) }}</span>
             <el-text v-else type="info" size="small">Never</el-text>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="Next Run" width="180">
-          <template #default="{ row }">
-            <el-text size="small">{{ row.next_run_at ? formatDate(row.next_run_at) : '-' }}</el-text>
           </template>
         </el-table-column>
 
@@ -271,14 +278,98 @@
           </el-text>
         </el-form-item>
 
-        <el-form-item label="Interval" required>
-          <el-select v-model="scheduledScanForm.interval_minutes" style="width: 100%">
-            <el-option label="Every hour" :value="60" />
-            <el-option label="Every 6 hours" :value="360" />
-            <el-option label="Every 12 hours" :value="720" />
-            <el-option label="Daily" :value="1440" />
-            <el-option label="Weekly" :value="10080" />
+        <el-form-item label="Frequency" required>
+          <el-select v-model="timing.frequency" style="width: 100%" data-testid="schedule-frequency">
+            <el-option label="Hourly" value="hourly" />
+            <el-option label="Daily" value="daily" />
+            <el-option label="Weekly" value="weekly" />
+            <el-option label="Monthly" value="monthly" />
+            <el-option label="Fixed interval (every N minutes from the last run)" value="interval" />
           </el-select>
+        </el-form-item>
+
+        <template v-if="timing.frequency === 'interval'">
+          <el-form-item label="Interval" required>
+            <el-select v-model="timing.interval_minutes" style="width: 100%">
+              <el-option v-for="p in intervalOptions" :key="p.value" :label="p.label" :value="p.value" />
+            </el-select>
+            <el-text class="timing-help" size="small" type="info">
+              Runs this long after it was saved or last ran, so the time of day drifts. Choose Hourly, Daily, Weekly or
+              Monthly to run at set times instead.
+            </el-text>
+          </el-form-item>
+        </template>
+
+        <template v-else>
+          <el-form-item v-if="timing.frequency === 'hourly'" label="Minute past the hour" required>
+            <div class="timing-row">
+              <el-input-number v-model="timing.minute" :min="0" :max="59" :step="5" controls-position="right" />
+              <span class="timing-label">every</span>
+              <el-select v-model="timing.every_hours" style="width: 130px">
+                <el-option v-for="n in 12" :key="n" :label="n === 1 ? 'hour' : `${n} hours`" :value="n" />
+              </el-select>
+            </div>
+            <el-text class="timing-help" v-if="timing.every_hours > 1" size="small" type="info">
+              Counted from midnight in the schedule's time zone ({{ hourlySlots }}).
+            </el-text>
+          </el-form-item>
+
+          <el-form-item v-if="timing.frequency === 'weekly'" label="Days" required>
+            <el-checkbox-group v-model="timing.days" size="small" data-testid="schedule-days">
+              <el-checkbox-button v-for="d in WEEKDAY_ORDER" :key="d" :value="d">{{ WEEKDAY_SHORT[d] }}</el-checkbox-button>
+            </el-checkbox-group>
+            <div class="day-shortcuts">
+              <el-button link type="primary" size="small" @click="timing.days = [1, 2, 3, 4, 5]">Weekdays</el-button>
+              <el-button link type="primary" size="small" @click="timing.days = [0, 6]">Weekends</el-button>
+              <el-button link type="primary" size="small" @click="timing.days = [0, 1, 2, 3, 4, 5, 6]">Every day</el-button>
+            </div>
+          </el-form-item>
+
+          <el-form-item v-if="timing.frequency === 'monthly'" label="Day of month" required>
+            <el-input-number v-model="timing.day_of_month" :min="1" :max="31" controls-position="right" />
+            <el-text class="timing-help" size="small" type="info">
+              A month without this day (e.g. the 31st in April, or the 29th-31st in February) runs on its last day.
+            </el-text>
+          </el-form-item>
+
+          <el-form-item v-if="timing.frequency !== 'hourly'" label="Time" required>
+            <el-time-picker
+              v-model="timing.time"
+              format="HH:mm"
+              value-format="HH:mm"
+              :clearable="false"
+              placeholder="HH:MM"
+              style="width: 140px"
+              data-testid="schedule-time"
+            />
+          </el-form-item>
+
+          <el-form-item label="Time zone" required>
+            <el-select v-model="timing.timezone" filterable style="width: 100%" data-testid="schedule-timezone">
+              <el-option v-for="z in zoneOptions" :key="z" :label="z === viewerZone ? `${z} (your time zone)` : z" :value="z" />
+            </el-select>
+            <el-text class="timing-help" size="small" type="info">
+              Times are wall-clock in this zone and follow daylight saving: a time skipped when clocks go forward runs
+              when the clock jumps; a time repeated when they go back runs once.
+            </el-text>
+          </el-form-item>
+        </template>
+
+        <el-form-item label="Next runs">
+          <div class="preview" data-testid="schedule-preview">
+            <el-text v-if="timingProblem" type="warning" size="small">{{ timingProblem }}</el-text>
+            <el-text v-else-if="previewError" type="danger" size="small">{{ previewError }}</el-text>
+            <template v-else-if="previewRuns.length">
+              <div v-for="run in previewRuns" :key="run" class="preview-run">
+                <span>{{ formatInZone(run, previewZone) }}</span>
+                <el-text v-if="previewZone !== viewerZone" type="info" size="small">
+                  · {{ formatInZone(run, viewerZone) }} your time
+                </el-text>
+              </div>
+              <el-text v-if="timing.frequency === 'interval'" class="timing-help" type="info" size="small">If saved now.</el-text>
+            </template>
+            <el-text v-else type="info" size="small">…</el-text>
+          </div>
         </el-form-item>
 
         <el-form-item label="Enabled">
@@ -297,7 +388,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue';
+import { ref, reactive, onMounted, computed, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete, VideoPlay } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
@@ -310,6 +401,21 @@ import vulnerabilityService, {
 } from '@/services/vulnerabilityService';
 import PublicTargetWarning from '@/components/PublicTargetWarning.vue';
 import { publicTargetGate, replaceTargetToken } from '@/utils/shipperJobs';
+import {
+  INTERVAL_PRESETS,
+  WEEKDAY_ORDER,
+  WEEKDAY_SHORT,
+  browserTimeZone,
+  defaultTimingForm,
+  describeSchedule,
+  formatInterval,
+  formatInZone,
+  timeZoneOptions,
+  timingFormFromRow,
+  timingFormProblem,
+  timingPayload,
+  type TimingForm,
+} from '@/utils/scheduleTiming';
 
 const scheduledScansLoading = ref(false);
 const scheduledScansSaving = ref(false);
@@ -321,7 +427,6 @@ const scheduledScanForm = reactive({
   name: '',
   scan_type: 'asset' as 'asset' | 'vulnerability' | 'container',
   enabled: true,
-  interval_minutes: 1440,
   // asset
   assetTargets: '',
   assetScanType: 'ping' as 'ping' | 'port' | 'service' | 'os',
@@ -338,6 +443,55 @@ const scheduledScanForm = reactive({
   // optional LAN-side dispatch (asset/vuln only); null = run on the backend
   assignedShipperId: null as number | null,
 });
+
+// When the schedule runs: a calendar frequency in a time zone, or the original
+// fixed interval. New schedules default to daily at 02:00 in the viewer's zone.
+const viewerZone = browserTimeZone();
+const timing = reactive<TimingForm>(defaultTimingForm(viewerZone));
+const zoneOptions = computed(() => timeZoneOptions(viewerZone, timing.timezone));
+const timingProblem = computed(() => timingFormProblem(timing));
+const intervalOptions = computed(() =>
+  INTERVAL_PRESETS.some((p) => p.value === timing.interval_minutes)
+    ? INTERVAL_PRESETS
+    : [...INTERVAL_PRESETS, { label: formatInterval(timing.interval_minutes), value: timing.interval_minutes }]
+);
+const hourlySlots = computed(() => {
+  const slots: string[] = [];
+  for (let h = 0; h < 24; h += timing.every_hours) slots.push(`${String(h).padStart(2, '0')}:${String(timing.minute).padStart(2, '0')}`);
+  return slots.join(', ');
+});
+
+// Live "Next runs" preview, computed by the server (the same rules it schedules with).
+const previewRuns = ref<string[]>([]);
+const previewError = ref('');
+const previewZone = computed(() => (timing.frequency === 'interval' ? viewerZone : timing.timezone));
+let previewTimer: ReturnType<typeof setTimeout> | null = null;
+let previewSeq = 0;
+watch(
+  () => (scheduledScanDialogVisible.value ? JSON.stringify(timingPayload(timing)) : null),
+  (payload) => {
+    if (previewTimer) clearTimeout(previewTimer);
+    if (!payload || timingProblem.value) {
+      previewRuns.value = [];
+      return;
+    }
+    previewTimer = setTimeout(async () => {
+      const seq = ++previewSeq;
+      try {
+        const response = await api.previewScheduledScan({ ...JSON.parse(payload), count: 3 });
+        if (seq !== previewSeq) return;
+        previewRuns.value = response.data?.next_runs ?? [];
+        previewError.value = '';
+      } catch (error) {
+        if (seq !== previewSeq) return;
+        previewRuns.value = [];
+        const data = (error as { response?: { data?: { message?: string; error?: string } } }).response?.data;
+        previewError.value = data?.message || data?.error || 'Could not preview the next runs';
+      }
+    }, 250);
+  },
+  { immediate: true }
+);
 
 // Targets in public address space need the "I'm authorized" confirmation
 // before a create or an edit can be saved (the API refuses them otherwise).
@@ -433,22 +587,6 @@ function scanTypeTag(type: string): string {
   return { asset: 'primary', vulnerability: 'danger', container: 'warning' }[type] || 'info';
 }
 
-function formatInterval(minutes: number): string {
-  const presets: Record<number, string> = {
-    60: 'Every hour',
-    360: 'Every 6 hours',
-    720: 'Every 12 hours',
-    1440: 'Daily',
-    10080: 'Weekly',
-  };
-  if (presets[minutes]) return presets[minutes];
-  if (minutes % 60 === 0) {
-    const hours = minutes / 60;
-    return `Every ${hours} hour${hours === 1 ? '' : 's'}`;
-  }
-  return `Every ${minutes} min`;
-}
-
 function formatScanTarget(scan: any): string {
   const options = scan.scan_options || {};
   if (scan.scan_type === 'asset') {
@@ -469,7 +607,9 @@ function resetScheduledScanForm() {
   scheduledScanForm.name = '';
   scheduledScanForm.scan_type = 'asset';
   scheduledScanForm.enabled = true;
-  scheduledScanForm.interval_minutes = 1440;
+  Object.assign(timing, defaultTimingForm(viewerZone));
+  previewRuns.value = [];
+  previewError.value = '';
   scheduledScanForm.assetTargets = '';
   scheduledScanForm.assetScanType = 'ping';
   scheduledScanForm.vulnTarget = '';
@@ -496,7 +636,7 @@ function editSchedule(scan: any) {
   scheduledScanForm.name = scan.name;
   scheduledScanForm.scan_type = scan.scan_type;
   scheduledScanForm.enabled = scan.enabled;
-  scheduledScanForm.interval_minutes = scan.interval_minutes;
+  Object.assign(timing, timingFormFromRow(scan, viewerZone));
 
   const options = scan.scan_options || {};
   scheduledScanForm.assignedShipperId = options.assignedShipperId ?? null;
@@ -571,8 +711,8 @@ async function saveSchedule() {
     ElMessage.warning('Please enter a name');
     return;
   }
-  if (scheduledScanForm.interval_minutes < 5) {
-    ElMessage.warning('Interval must be at least 5 minutes');
+  if (timingProblem.value) {
+    ElMessage.warning(timingProblem.value);
     return;
   }
 
@@ -614,7 +754,7 @@ async function saveSchedule() {
     name: scheduledScanForm.name.trim(),
     scan_type: scheduledScanForm.scan_type,
     scan_options,
-    interval_minutes: scheduledScanForm.interval_minutes,
+    ...timingPayload(timing),
     enabled: scheduledScanForm.enabled,
   };
   if (schedGate.value.allowPublicTargets) payload.allow_public_targets = true;
@@ -631,7 +771,7 @@ async function saveSchedule() {
     scheduledScanDialogVisible.value = false;
     fetchScheduledScans();
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.error || 'Failed to save schedule');
+    ElMessage.error(error.response?.data?.message || error.response?.data?.error || 'Failed to save schedule');
   } finally {
     scheduledScansSaving.value = false;
   }
@@ -645,7 +785,7 @@ async function toggleScheduleEnabled(scan: any) {
     fetchScheduledScans();
   } catch (error: any) {
     scan.enabled = !scan.enabled;
-    ElMessage.error(error.response?.data?.error || 'Failed to update schedule');
+    ElMessage.error(error.response?.data?.message || error.response?.data?.error || 'Failed to update schedule');
   } finally {
     scheduledScansSaving.value = false;
   }
@@ -701,5 +841,38 @@ async function deleteScheduleConfirm(scan: any) {
 }
 .public-badge {
   margin-left: 6px;
+}
+.schedule-cell {
+  text-align: left;
+  line-height: 1.5;
+}
+.schedule-cell > * {
+  display: block;
+  text-align: left;
+}
+.timing-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.timing-label {
+  color: var(--siembox-text-secondary, #909399);
+}
+.day-shortcuts {
+  width: 100%;
+}
+.timing-help {
+  display: block;
+  width: 100%;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+.preview {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.6;
+}
+.preview-run {
+  font-variant-numeric: tabular-nums;
 }
 </style>

@@ -500,6 +500,40 @@ test('a due schedule whose previous run is still queued for its shipper does not
   }
 });
 
+test('a due calendar schedule queues for its shipper, and rolls to its next occurrence while that run waits', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const schedule = await ScheduledScanModel.create({
+    name: `${name}-calendar`,
+    scan_type: 'asset',
+    scan_options: { targets: ['10.20.34.0/24'], scanType: 'ping', assignedShipperId: shipperId },
+    interval_minutes: null,
+    schedule: { frequency: 'hourly', minute: 0, every_hours: 1, timezone: 'America/New_York' },
+    enabled: true,
+  });
+  const due = async () => pool.query(`UPDATE scheduled_scans SET next_run_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, [schedule.id]);
+  const runs = async () =>
+    (await pool.query(`SELECT id, status FROM vulnerability_scans WHERE scan_options->'origin'->>'scheduledScanId' = $1 ORDER BY id`, [String(schedule.id)])).rows;
+  const nextRun = async () =>
+    ((await pool.query('SELECT next_run_at::timestamptz AS at FROM scheduled_scans WHERE id = $1', [schedule.id])).rows[0].at as Date).getTime();
+
+  try {
+    await due();
+    await runDueScheduledScans();
+    assert.equal((await runs()).length, 1);
+    const first = await nextRun();
+    assert.ok(first > Date.now() - 5000 && first <= Date.now() + 3600_000, 'the next top of the hour');
+    assert.equal(new Date(first).getUTCMinutes(), 0);
+
+    // Due again while the first run is still queued: no duplicate, still rolls forward.
+    await due();
+    await runDueScheduledScans();
+    assert.equal((await runs()).length, 1);
+    assert.equal(await nextRun(), first);
+  } finally {
+    await pool.query('UPDATE scheduled_scans SET enabled = false WHERE id = $1', [schedule.id]);
+  }
+});
+
 test('GET/PUT /api/settings/shipper-jobs', async (t) => {
   if (!dbReady) return t.skip(SKIP);
   assert.equal((await call('operator', 'GET', '/api/settings/shipper-jobs')).status, 403);

@@ -292,6 +292,7 @@ const INVENTORY: Row[] = [
   // routes/scheduledScans.ts: Scheduled Scans page
   ['GET', '/api/scheduled-scans', ANY_ROLE],
   ['POST', '/api/scheduled-scans', OPERATOR_UP, AUDITED],
+  ['POST', '/api/scheduled-scans/preview', OPERATOR_UP, AUDITED],
   ['PUT', '/api/scheduled-scans/:id', OPERATOR_UP, AUDITED],
   ['DELETE', '/api/scheduled-scans/:id', OPERATOR_UP, AUDITED],
   ['POST', '/api/scheduled-scans/:id/run', OPERATOR_UP, AUDITED],

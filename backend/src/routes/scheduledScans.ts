@@ -7,6 +7,7 @@ import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { auditPublicTargetConfirmation, enforcePublicTargets } from '../services/scanner/publicTargetGuard';
 import { findPublicTargets } from '../services/scanner/targetSafety';
 import type { PublicTargetConfirmation } from '../services/scanner/publicTargetGuard';
+import { nextRuns, normalizeCalendarSchedule, type CalendarSchedule } from '../utils/scheduleTiming';
 
 // app.ts mounts this router behind `authenticate`. Listing is open to any role;
 // creating, changing, deleting or running a schedule (which dispatches a scan,
@@ -19,6 +20,12 @@ import type { PublicTargetConfirmation } from '../services/scanner/publicTargetG
 // confirmation is stored as scan_options.publicTargetsConfirmation. A schedule
 // saved before this check keeps running as it is; the list reports its public
 // targets (public_targets) so the page can badge it.
+//
+// Timing: a schedule either runs every interval_minutes (the original mode) or
+// on a calendar `schedule` (hourly / daily / weekly / monthly wall-clock times
+// in an IANA time zone; utils/scheduleTiming.ts). A request sends one of the
+// two; next_run_at is recomputed whenever the timing changes or the schedule
+// is re-enabled, and after every run.
 const router = Router();
 const requireScheduleWrite = requireScanPermission(UserRole.Operator, 'scheduled_scan');
 
@@ -82,8 +89,33 @@ function withConfirmation(opts: any, confirmation: PublicTargetConfirmation | nu
 
 function validateInterval(value: any): void {
   if (!Number.isInteger(value) || value < 5) {
-    throw new ApiError(400, 'interval_minutes must be an integer of at least 5');
+    throw new ApiError(400, 'interval_minutes must be an integer of at least 5 (or send a calendar schedule instead)');
   }
+}
+
+function parseSchedule(value: unknown): CalendarSchedule {
+  try {
+    return normalizeCalendarSchedule(value);
+  } catch (error) {
+    throw new ApiError(400, error instanceof Error ? error.message : 'Invalid schedule');
+  }
+}
+
+const present = (v: unknown) => v !== undefined && v !== null;
+
+/**
+ * The timing a create or a full preview names: a calendar schedule, or a fixed
+ * interval. Exactly one must be sent.
+ */
+function parseTiming(body: { schedule?: unknown; interval_minutes?: unknown } | undefined): { schedule: CalendarSchedule | null; interval_minutes: number | null } {
+  if (present(body?.schedule)) {
+    if (present(body?.interval_minutes)) {
+      throw new ApiError(400, 'Send either schedule (calendar timing) or interval_minutes (fixed interval), not both');
+    }
+    return { schedule: parseSchedule(body.schedule), interval_minutes: null };
+  }
+  validateInterval(body?.interval_minutes);
+  return { schedule: null, interval_minutes: body!.interval_minutes as number };
 }
 
 // GET / - list all schedules
@@ -97,9 +129,24 @@ router.get('/', async (_req: Request, res: Response) => {
   );
 });
 
+// POST /preview - the next runs a timing would produce (the form's live preview).
+// Writes nothing; gated like the writes because only the edit dialog uses it.
+router.post('/preview', requireScheduleWrite, async (req: Request, res: Response) => {
+  const timing = parseTiming(req.body);
+  const count = req.body?.count ?? 3;
+  if (!Number.isInteger(count) || count < 1 || count > 10) {
+    throw new ApiError(400, 'count must be an integer from 1 to 10');
+  }
+  const now = new Date();
+  const runs = timing.schedule
+    ? nextRuns(timing.schedule, now, count)
+    : Array.from({ length: count }, (_, i) => new Date(now.getTime() + (i + 1) * timing.interval_minutes! * 60_000));
+  res.json({ ...timing, next_runs: runs.map((d) => d.toISOString()) });
+});
+
 // POST / - create a schedule
 router.post('/', requireScheduleWrite, async (req: Request, res: Response) => {
-  const { name, scan_type, scan_options, interval_minutes, enabled } = req.body;
+  const { name, scan_type, scan_options, enabled } = req.body;
 
   if (!name || typeof name !== 'string') {
     throw new ApiError(400, 'name is required');
@@ -107,7 +154,7 @@ router.post('/', requireScheduleWrite, async (req: Request, res: Response) => {
   if (scan_type !== 'asset' && scan_type !== 'vulnerability' && scan_type !== 'container') {
     throw new ApiError(400, "scan_type must be 'asset', 'vulnerability', or 'container'");
   }
-  validateInterval(interval_minutes);
+  const timing = parseTiming(req.body);
   validateScanOptions(scan_type, scan_options);
   await assertShipperExists(scan_type, scan_options);
   const targets = scheduleTargets(scan_type, scan_options);
@@ -118,7 +165,8 @@ router.post('/', requireScheduleWrite, async (req: Request, res: Response) => {
     name,
     scan_type,
     scan_options: withConfirmation(scan_options, publicCheck.confirmation),
-    interval_minutes,
+    interval_minutes: timing.interval_minutes,
+    schedule: timing.schedule,
     enabled: enabled !== false,
     created_by: (req as any).user?.id ?? null,
   });
@@ -138,13 +186,29 @@ router.put('/:id', requireScheduleWrite, async (req: Request, res: Response) => 
     throw new ApiError(404, 'Scheduled scan not found');
   }
 
-  const { name, scan_type, scan_options, interval_minutes, enabled } = req.body;
+  const { name, scan_type, scan_options, enabled } = req.body;
 
   if (scan_type !== undefined && scan_type !== 'asset' && scan_type !== 'vulnerability' && scan_type !== 'container') {
     throw new ApiError(400, "scan_type must be 'asset', 'vulnerability', or 'container'");
   }
-  if (interval_minutes !== undefined) {
-    validateInterval(interval_minutes);
+
+  // Timing, if this save changes it. A calendar `schedule` replaces any
+  // interval; `interval_minutes` (with schedule absent or null) switches to, or
+  // stays in, the fixed-interval mode; `schedule: null` alone switches back to
+  // the schedule's stored interval, if it has one.
+  let timing: { schedule: CalendarSchedule | null; interval_minutes: number | null } | undefined;
+  if (present(req.body.schedule)) {
+    timing = parseTiming(req.body);
+  } else if (present(req.body.interval_minutes)) {
+    validateInterval(req.body.interval_minutes);
+    timing = { schedule: null, interval_minutes: req.body.interval_minutes };
+  } else if (req.body.schedule === null) {
+    if (existing.interval_minutes == null) {
+      throw new ApiError(400, 'This schedule has no interval to return to: send interval_minutes along with schedule: null');
+    }
+    timing = { schedule: null, interval_minutes: existing.interval_minutes };
+  } else if (req.body.interval_minutes === null) {
+    throw new ApiError(400, 'interval_minutes must be an integer of at least 5 (or send a calendar schedule instead)');
   }
   let storedOptions: Record<string, any> | undefined;
   let confirmation: PublicTargetConfirmation | null = null;
@@ -163,11 +227,18 @@ router.put('/:id', requireScheduleWrite, async (req: Request, res: Response) => 
     storedOptions = withConfirmation(scan_options, confirmation);
   }
 
-  await ScheduledScanModel.update(id, { name, scan_type, scan_options: storedOptions, interval_minutes, enabled });
+  await ScheduledScanModel.update(id, {
+    name,
+    scan_type,
+    scan_options: storedOptions,
+    interval_minutes: timing?.interval_minutes,
+    schedule: timing?.schedule,
+    enabled,
+  });
   await auditPublicTargetConfirmation(req, confirmation, { type: 'scheduled_scan', id, targets });
 
-  // Re-anchor the next run when the cadence changes or the schedule is re-enabled.
-  if (interval_minutes !== undefined || enabled === true) {
+  // Re-anchor the next run when the timing changes or the schedule is re-enabled.
+  if (timing !== undefined || enabled === true) {
     await ScheduledScanModel.resetNextRun(id);
   }
 

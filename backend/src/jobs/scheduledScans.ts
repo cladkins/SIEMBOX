@@ -3,7 +3,10 @@
  *
  * Periodically triggers user-defined recurring vulnerability and asset scans.
  * A schedule is "due" when enabled and next_run_at <= NOW(); after triggering,
- * next_run_at is rolled forward by interval_minutes.
+ * next_run_at is rolled forward: by interval_minutes for a fixed-interval
+ * schedule, or to the next calendar occurrence after now for a calendar one
+ * (utils/scheduleTiming.ts). A schedule that came due while SIEMBox was down
+ * therefore runs once on startup and then resumes its normal times.
  */
 
 import { ScheduledScanModel, ScheduledScan } from '../models/ScheduledScan';

@@ -236,6 +236,11 @@ test('agent and log-push routes with their header skip the general limit but kee
   assert.equal(agent.headers['x-ratelimit-limit'], undefined, 'not counted by the general limit');
   assert.equal(agent.headers['ratelimit-limit'], '30000', 'counted by the agent limiter');
 
+  const metrics = await send('tcp', 'POST', '/api/edr/metrics', { 'X-Agent-ID': 'agent-1' }, { samples: [] });
+  assert.equal(metrics.status, 401, 'no agent key');
+  assert.equal(metrics.headers['x-ratelimit-limit'], undefined, 'metrics: not counted by the general limit');
+  assert.equal(metrics.headers['ratelimit-limit'], '30000', 'metrics: counted by the agent limiter');
+
   const push = await send('tcp', 'POST', '/api/shippers/logs', { 'X-Shipper-ID': '1' }, { message: 'x' });
   assert.equal(push.status, 401, 'no push key');
   assert.equal(push.headers['x-ratelimit-limit'], undefined);
@@ -263,6 +268,7 @@ test('the wrong method on an agent or log-push path is counted by the general li
     ['PUT', '/api/edr/agents/x2/yara', { 'X-Agent-ID': 'agent-1' }],
     ['GET', '/api/edr/agents/x3/heartbeat', { 'X-Agent-ID': 'agent-1' }],
     ['GET', '/api/edr/events', { 'X-Agent-ID': 'agent-1' }],
+    ['GET', '/api/edr/metrics', { 'X-Agent-ID': 'agent-1' }],
     ['GET', '/api/shippers/logs', { 'X-Shipper-ID': '1' }],
     ['PUT', '/api/shippers/logs', { 'X-Shipper-ID': '1' }],
     ['DELETE', '/api/shippers/logs/', { 'X-Shipper-ID': '1' }],

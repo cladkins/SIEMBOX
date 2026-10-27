@@ -36,7 +36,7 @@ import {
   type TooltipItem,
 } from 'chart.js';
 import { useThemeStore } from '@/stores/theme';
-import { axisLabel, type XY } from '@/utils/endpointPerformance';
+import { axisLabel, tickStep, type XY } from '@/utils/endpointPerformance';
 
 ChartJS.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 
@@ -96,7 +96,8 @@ const chartData = computed(() => {
     fill: d.fill ? 'origin' : false,
     borderWidth: d.faint ? 1 : 1.75,
     borderDash: d.dashed ? [5, 4] : [],
-    pointRadius: 0,
+    // Sparse data (a new agent, a short range) would be invisible as bare line segments.
+    pointRadius: d.data.filter((p) => p.y !== null).length < 15 ? 2 : 0,
     pointHoverRadius: 3,
     pointHitRadius: 6,
     tension: 0.2,
@@ -161,7 +162,14 @@ const chartOptions = computed<ChartOptions<'line'>>(() => {
         max: props.to,
         grid: { display: false },
         border: { color: grid },
-        ticks: { color: text, maxRotation: 0, autoSkip: true, maxTicksLimit: 7, callback: (v) => axisLabel(Number(v), range) },
+        ticks: {
+          color: text,
+          maxRotation: 0,
+          autoSkip: true,
+          maxTicksLimit: 8,
+          stepSize: tickStep(range),
+          callback: (v) => axisLabel(Number(v), range),
+        },
       },
       y: {
         beginAtZero: true,

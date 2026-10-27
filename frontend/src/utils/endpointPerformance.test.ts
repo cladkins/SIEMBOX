@@ -15,6 +15,7 @@ import {
   performanceProblem,
   supportsPerfMetrics,
   swapPct,
+  tickStep,
   toXY,
   type PerfPoint,
 } from './endpointPerformance.ts';
@@ -94,5 +95,15 @@ describe('endpointPerformance', () => {
     const p = { load1: null } as PerfPoint;
     assert.equal(hasLoad([p]), false);
     assert.equal(hasLoad([p, { ...p, load1: 0.2 }]), true);
+  });
+
+  it('time axis ticks fall on round steps, at most 7 per range', () => {
+    const min = 60_000;
+    assert.equal(tickStep(60 * min), 10 * min);
+    assert.equal(tickStep(6 * 60 * min), 60 * min);
+    assert.equal(tickStep(24 * 60 * min), 240 * min);
+    assert.equal(tickStep(7 * 1440 * min), 1440 * min);
+    assert.equal(tickStep(30 * 1440 * min), 7 * 1440 * min);
+    assert.equal(tickStep(90 * 1440 * min), 14 * 1440 * min);
   });
 });

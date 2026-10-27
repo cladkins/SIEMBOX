@@ -232,6 +232,16 @@ export function axisLabel(ms: number, rangeMs: number): string {
   return `${d.toLocaleString(undefined, { month: 'short' })} ${d.getDate()}`;
 }
 
+/**
+ * The time axis' tick spacing for a range, so ticks fall on round times
+ * (multiples of it since the epoch: whole hours, whole UTC days) instead of
+ * wherever chart.js's even split lands.
+ */
+export function tickStep(rangeMs: number): number {
+  const steps = [5, 10, 15, 30, 60, 120, 180, 240, 360, 720, 1440, 2880, 7 * 1440, 14 * 1440].map((m) => m * 60_000);
+  return steps.find((s) => rangeMs / s <= 7) ?? steps[steps.length - 1];
+}
+
 export const RANGE_MS: Record<PerfRange, number> = {
   '1h': 3_600_000,
   '6h': 6 * 3_600_000,

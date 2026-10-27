@@ -18,6 +18,7 @@ import {
   type CalendarSchedule,
   type TimingForm,
 } from './scheduleTiming.ts';
+import type { PolicyPerformance } from './endpointPerformance.ts';
 
 export type PolicyScanType = 'vuln' | 'yara' | 'packages' | 'inventory';
 
@@ -69,6 +70,8 @@ export interface ScanPolicy {
   description: string | null;
   is_default: boolean;
   scans: PolicyScans;
+  /** Performance metrics, process sampling and alert thresholds (endpointPerformance.ts); absent from an older server. */
+  performance?: PolicyPerformance;
   endpoint_count?: number;
 }
 

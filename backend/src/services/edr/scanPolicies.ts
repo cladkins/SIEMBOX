@@ -42,6 +42,13 @@ import {
 } from '../../utils/scheduleTiming';
 import { isUuid } from './agentUpdate';
 import { SCAN_TYPES, expireStaleScans, type ScanType } from './edrScans';
+import {
+  BUILTIN_DEFAULT_PERFORMANCE,
+  agentPerformanceConfig,
+  normalizePerformance,
+  storedPerformance,
+  type PolicyPerformance,
+} from './perfConfig';
 
 /** Heartbeat capability of an agent whose scans the server schedules. */
 export const POLICY_SCAN_CAPABILITY = 'policy_scans';
@@ -90,6 +97,8 @@ export interface ScanPolicy {
   description: string | null;
   is_default: boolean;
   scans: PolicyScans;
+  /** Performance metrics on/off, process sampling on/off, alert thresholds (perfConfig.ts). */
+  performance: PolicyPerformance;
   created_at?: Date;
   updated_at?: Date;
 }
@@ -368,6 +377,7 @@ interface PolicyRow {
   description: string | null;
   is_default: boolean;
   scans: unknown;
+  performance?: unknown;
   created_at: Date;
   updated_at: Date;
   endpoint_count?: number | string;
@@ -383,6 +393,7 @@ function rowToPolicy(r: PolicyRow): ScanPolicy & { endpoint_count?: number } {
     description: r.description,
     is_default: r.is_default,
     scans: storedScans(r.scans),
+    performance: storedPerformance(r.performance),
     created_at: r.created_at,
     updated_at: r.updated_at,
     ...(r.endpoint_count !== undefined ? { endpoint_count: Number(r.endpoint_count) } : {}),
@@ -442,16 +453,18 @@ export async function createPolicy(body: Body, userId: number | null): Promise<S
   const name = parseName(body?.name);
   const description = parseDescription(body?.description);
   let scans: PolicyScans;
+  let performance: PolicyPerformance = BUILTIN_DEFAULT_PERFORMANCE;
   try {
     scans = normalizePolicyScans(body?.scans);
+    if (body?.performance !== undefined) performance = normalizePerformance(body.performance);
   } catch (err) {
     toApiError(err);
   }
   try {
     const r = await query(
-      `INSERT INTO edr_scan_policies (name, description, is_default, scans, created_by, updated_by)
-       VALUES ($1, $2, FALSE, $3::jsonb, $4, $4) RETURNING *`,
-      [name, description, JSON.stringify(scans), userId]
+      `INSERT INTO edr_scan_policies (name, description, is_default, scans, performance, created_by, updated_by)
+       VALUES ($1, $2, FALSE, $3::jsonb, $4::jsonb, $5, $5) RETURNING *`,
+      [name, description, JSON.stringify(scans), JSON.stringify(performance), userId]
     );
     return rowToPolicy(r.rows[0]);
   } catch (err) {
@@ -466,19 +479,19 @@ export async function updatePolicy(rawId: unknown, body: Body, userId: number | 
   const name = body?.name === undefined ? current.name : parseName(body.name);
   const description = body?.description === undefined ? current.description : parseDescription(body.description);
   let scans = current.scans;
-  if (body?.scans !== undefined) {
-    try {
-      scans = normalizePolicyScans(body.scans);
-    } catch (err) {
-      toApiError(err);
-    }
+  let performance = current.performance;
+  try {
+    if (body?.scans !== undefined) scans = normalizePolicyScans(body.scans);
+    if (body?.performance !== undefined) performance = normalizePerformance(body.performance);
+  } catch (err) {
+    toApiError(err);
   }
   try {
     const r = await query(
       `UPDATE edr_scan_policies
-          SET name = $2, description = $3, scans = $4::jsonb, updated_by = $5, updated_at = NOW()
+          SET name = $2, description = $3, scans = $4::jsonb, performance = $5::jsonb, updated_by = $6, updated_at = NOW()
         WHERE id = $1 RETURNING *`,
-      [current.id, name, description, JSON.stringify(scans), userId]
+      [current.id, name, description, JSON.stringify(scans), JSON.stringify(performance), userId]
     );
     if (current.is_default) await bumpConfig('scan_policy_id IS NULL', []);
     else await bumpConfig('scan_policy_id = $1', [current.id]);
@@ -550,14 +563,15 @@ interface AgentPolicyContext {
   agent_version: string | null;
   scan_policy_id: number | null;
   overrides: PolicyOverrides;
-  policy: { id: number | null; name: string; is_default: boolean; scans: PolicyScans };
+  policy: { id: number | null; name: string; is_default: boolean; scans: PolicyScans; performance: PolicyPerformance };
 }
 
 async function loadContext(agentId: string): Promise<AgentPolicyContext | null> {
   if (!isUuid(agentId)) return null;
   const r = await query(
     `SELECT a.agent_id, a.capabilities, a.agent_version, a.scan_policy_id, a.scan_policy_overrides,
-            p.id AS p_id, p.name AS p_name, p.is_default AS p_default, p.scans AS p_scans
+            p.id AS p_id, p.name AS p_name, p.is_default AS p_default, p.scans AS p_scans,
+            p.performance AS p_performance
        FROM edr_agents a
        LEFT JOIN edr_scan_policies p
          ON p.id = COALESCE(a.scan_policy_id, (SELECT id FROM edr_scan_policies WHERE is_default LIMIT 1))
@@ -573,8 +587,14 @@ async function loadContext(agentId: string): Promise<AgentPolicyContext | null> 
     scan_policy_id: row.scan_policy_id,
     overrides: storedOverrides(row.scan_policy_overrides),
     policy: row.p_id
-      ? { id: row.p_id, name: row.p_name, is_default: row.p_default, scans: storedScans(row.p_scans) }
-      : { id: null, name: 'Default', is_default: true, scans: BUILTIN_DEFAULT_SCANS },
+      ? {
+          id: row.p_id,
+          name: row.p_name,
+          is_default: row.p_default,
+          scans: storedScans(row.p_scans),
+          performance: storedPerformance(row.p_performance),
+        }
+      : { id: null, name: 'Default', is_default: true, scans: BUILTIN_DEFAULT_SCANS, performance: BUILTIN_DEFAULT_PERFORMANCE },
   };
 }
 
@@ -650,6 +670,20 @@ export async function agentConfigScanPolicy(agentId: string) {
     policy: ctx?.policy.name ?? 'Default',
     scans: Object.fromEntries(scans.map((s) => [s.scan_type, { enabled: s.spec.enabled }])),
   };
+}
+
+/**
+ * An endpoint's performance settings, from its effective policy (the default
+ * when it has none, or the built-in defaults for an unknown agent).
+ */
+export async function agentPerformance(agentId: string): Promise<{ policy: string; performance: PolicyPerformance }> {
+  const ctx = await loadContext(agentId);
+  return { policy: ctx?.policy.name ?? 'Default', performance: ctx?.policy.performance ?? BUILTIN_DEFAULT_PERFORMANCE };
+}
+
+/** The agent config's `performance` (every agent gets it; those without perf_metrics ignore it). */
+export async function agentConfigPerformance(agentId: string) {
+  return agentPerformanceConfig((await agentPerformance(agentId)).performance);
 }
 
 /** The Endpoints details pane: an endpoint's policy, overrides, effective entries and next runs. */

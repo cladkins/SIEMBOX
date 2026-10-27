@@ -35,9 +35,10 @@ import {
 import { getCurrentYaraVersion } from './yaraService';
 import type { AgentUpdateConfig } from './agentUpdate';
 import { attachScanSummary } from './edrScans';
-import { agentConfigScanPolicy } from './scanPolicies';
+import { agentConfigScanPolicy, agentConfigPerformance } from './scanPolicies';
 
 export type AgentScanPolicyConfig = Awaited<ReturnType<typeof agentConfigScanPolicy>>;
+export type AgentPerformanceConfig = Awaited<ReturnType<typeof agentConfigPerformance>>;
 import { NotificationService } from '../notifications/notificationService';
 import { maybeTriageAlert } from '../ai/triageService';
 
@@ -65,12 +66,17 @@ function parseTimestamp(value: unknown): Date | null {
  * its own intervals and runs the policy scans the heartbeat issues; `scans`
  * names which types its effective policy enables. Older agents ignore it and
  * keep the interval fields below.
+ *
+ * `performance` (when given) is the endpoint's machine-performance setting
+ * from its policy: metrics and process sampling on/off plus the cadence
+ * (services/edr/perfConfig.ts). Agents without perf_metrics ignore it.
  */
 export function buildAgentConfig(
   baseConfigVersion: number,
   yaraRulesVersion = 0,
   agentUpdate: AgentUpdateConfig | null = null,
-  scanPolicy: AgentScanPolicyConfig | null = null
+  scanPolicy: AgentScanPolicyConfig | null = null,
+  performance: AgentPerformanceConfig | null = null
 ) {
   return {
     config_version: baseConfigVersion + yaraRulesVersion,
@@ -87,6 +93,7 @@ export function buildAgentConfig(
     // agent attempts a given request_id at most once.
     agent_update: agentUpdate,
     ...(scanPolicy ? { scan_policy: scanPolicy } : {}),
+    ...(performance ? { performance } : {}),
   };
 }
 
@@ -183,7 +190,7 @@ export async function enrollAgent(input: EnrollInput, connIp?: string) {
   return {
     agent_id: agentId,
     agent_api_key: apiKey,
-    config: buildAgentConfig(1, yaraVersion, null, await agentConfigScanPolicy(agentId)),
+    config: buildAgentConfig(1, yaraVersion, null, await agentConfigScanPolicy(agentId), await agentConfigPerformance(agentId)),
   };
 }
 

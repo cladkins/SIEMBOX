@@ -227,8 +227,15 @@ export class EdrAgentModel {
            WHERE s.agent_id = a.agent_id AND s.status IN ('pending', 'running')) AS scans_outstanding,
          COALESCE(sp.name, (SELECT d.name FROM edr_scan_policies d WHERE d.is_default LIMIT 1), 'Default') AS scan_policy_name,
          CASE WHEN jsonb_typeof(a.scan_policy_overrides) = 'object'
-              THEN (SELECT COUNT(*)::int FROM jsonb_object_keys(a.scan_policy_overrides)) ELSE 0 END AS scan_policy_override_count
+              THEN (SELECT COUNT(*)::int FROM jsonb_object_keys(a.scan_policy_overrides)) ELSE 0 END AS scan_policy_override_count,
+         pl.ts AS perf_at,
+         pl.cpu_pct AS perf_cpu_pct,
+         pl.mem_pct AS perf_mem_pct,
+         pl.disk_max_pct AS perf_disk_max_pct,
+         pl.disk_max_mount AS perf_disk_max_mount,
+         (SELECT COUNT(*)::int FROM edr_perf_alert_state st WHERE st.agent_id = a.agent_id) AS perf_alerts_open
        FROM edr_agents a
+       LEFT JOIN edr_perf_latest pl ON pl.agent_id = a.agent_id
        LEFT JOIN edr_agent_package_snapshots ps ON ps.agent_id = a.agent_id
        LEFT JOIN edr_scan_policies sp ON sp.id = a.scan_policy_id
        ORDER BY a.last_seen DESC NULLS LAST, a.created_at DESC`,

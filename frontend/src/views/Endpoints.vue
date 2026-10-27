@@ -76,6 +76,9 @@
             <div v-if="row.capabilities && !supportsPolicyScans(row)" class="muted">agent runs its own intervals</div>
           </template>
         </el-table-column>
+        <el-table-column label="Performance" width="170">
+          <template #default="{ row }"><PerfIndicator :row="row" /></template>
+        </el-table-column>
         <el-table-column label="Open vulns" width="110" align="center">
           <template #default="{ row }">
             <el-tag v-if="Number(row.open_vulns) > 0" type="warning" size="small">{{ row.open_vulns }}</el-tag>
@@ -460,6 +463,15 @@
               @current-change="loadHistory"
             />
           </el-tab-pane>
+          <el-tab-pane name="performance">
+            <template #label>
+              Performance
+              <el-tag v-if="Number(detail.agent.perf_alerts_open) > 0" type="danger" size="small" style="margin-left: 4px">
+                {{ detail.agent.perf_alerts_open }}
+              </el-tag>
+            </template>
+            <EndpointPerformance v-if="detailTab === 'performance'" :agent-id="detail.agent.agent_id" />
+          </el-tab-pane>
           <el-tab-pane label="Scan policy" name="policy">
             <EndpointScanPolicy
               v-if="detailTab === 'policy'"
@@ -525,6 +537,8 @@ import {
 } from '@/utils/scanPolicies';
 import ScanPoliciesCard from '@/components/endpoints/ScanPoliciesCard.vue';
 import EndpointScanPolicy from '@/components/endpoints/EndpointScanPolicy.vue';
+import EndpointPerformance from '@/components/endpoints/EndpointPerformance.vue';
+import PerfIndicator from '@/components/endpoints/PerfIndicator.vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, Plus, CopyDocument } from '@element-plus/icons-vue';
 import { format } from 'date-fns';

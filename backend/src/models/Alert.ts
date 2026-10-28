@@ -111,6 +111,56 @@ export class AlertModel {
     return withAlertRef(result.rows[0]);
   }
 
+  /**
+   * An alert raised outside the rules engine (no rule): `source` names what
+   * raised it and `event_id` dedupes it (the alerts table's partial unique
+   * index), so a repeat returns null instead of a second alert.
+   */
+  static async createSourced(params: {
+    source: string;
+    event_id: string;
+    severity: Alert['severity'];
+    title: string;
+    description?: string | null;
+    matched_data: Record<string, any>;
+    asset_id?: number | null;
+  }): Promise<number | null> {
+    const result = await query(
+      `INSERT INTO alerts (rule_id, parsed_log_id, severity, title, description, matched_data, status, asset_id, source, event_id)
+       VALUES (NULL, NULL, $1, $2, $3, $4, 'new', $5, $6, $7)
+       ON CONFLICT (event_id) WHERE event_id IS NOT NULL DO NOTHING
+       RETURNING id`,
+      [
+        params.severity,
+        params.title.slice(0, 255),
+        params.description ?? null,
+        JSON.stringify(params.matched_data),
+        params.asset_id ?? null,
+        params.source,
+        params.event_id,
+      ]
+    );
+    return (result.rowCount ?? 0) > 0 ? result.rows[0].id : null;
+  }
+
+  /**
+   * Merge keys into an alert's matched_data and append a line to its
+   * description (a recovery note, say). Status and assignment are untouched.
+   */
+  static async annotate(id: number, patch: Record<string, any>, note?: string): Promise<boolean> {
+    const result = await query(
+      `UPDATE alerts
+          SET matched_data = COALESCE(matched_data, '{}'::jsonb) || $2::jsonb,
+              description = CASE WHEN $3::text IS NULL THEN description
+                                 WHEN description IS NULL OR description = '' THEN $3::text
+                                 ELSE description || E'\n' || $3::text END,
+              updated_at = NOW()
+        WHERE id = $1`,
+      [id, JSON.stringify(patch), note ?? null]
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
   static async findById(id: number): Promise<Alert | null> {
     const result = await query('SELECT * FROM alerts WHERE id = $1', [id]);
     return result.rows[0] ? withAlertRef(result.rows[0]) : null;

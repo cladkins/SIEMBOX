@@ -78,7 +78,7 @@ app.use(corsHeaders(corsPolicy));
 const LIMITER_EXEMPT_ROUTES: ReadonlyArray<{ methods: readonly string[]; path: RegExp; header: string }> = [
   { methods: ['POST'], path: /^\/api\/edr\/agents\/[^/]+\/heartbeat\/?$/i, header: 'x-agent-id' },
   { methods: ['GET', 'HEAD'], path: /^\/api\/edr\/agents\/[^/]+\/(?:config|yara)\/?$/i, header: 'x-agent-id' },
-  { methods: ['POST'], path: /^\/api\/edr\/(?:inventory|events|vulnerabilities|packages|scans)\/?$/i, header: 'x-agent-id' },
+  { methods: ['POST'], path: /^\/api\/edr\/(?:inventory|events|vulnerabilities|packages|scans|metrics)\/?$/i, header: 'x-agent-id' },
   { methods: ['POST'], path: /^\/api\/shippers\/logs\/?$/i, header: 'x-shipper-id' },
 ];
 

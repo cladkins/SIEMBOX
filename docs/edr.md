@@ -27,10 +27,11 @@ unique index on `event_id` for replay dedup).
 **Agent-facing** (per-agent key: `Authorization: Bearer <key>` + `X-Agent-ID`):
 - `POST /agents/enroll` — exchange a one-time enrollment token for `{agent_id, agent_api_key, config}` (key returned once; only its sha256 is stored).
 - `POST /agents/:id/heartbeat` → `{config_version, scan_requests}` (optional `update` progress report, see [Agent updates](#agent-updates); `capabilities` and `scan_requests`, see [Scans and scan history](#scans-and-scan-history))
-- `GET  /agents/:id/config` → `AgentConfig` (includes `yara_rules_version`, `agent_update` and `scan_policy`, see [Scan policies](#scan-policies))
+- `GET  /agents/:id/config` → `AgentConfig` (includes `yara_rules_version`, `agent_update`, `scan_policy` (see [Scan policies](#scan-policies)) and `performance` (see [Machine performance](#machine-performance)))
 - `GET  /agents/:id/yara` → curated YARA bundle as raw `text/plain` (empty body valid)
 - `POST /inventory` · `POST /events` · `POST /vulnerabilities` → `202 Accepted`
 - `POST /scans` → `200` `{scan_id, status, accepted}`: the agent reports a scan's start or end (see [Scans and scan history](#scans-and-scan-history))
+- `POST /metrics` → `200` `{accepted, duplicate, rejected, processes, alerts_opened, alerts_recovered}`: per-minute performance samples and top-process snapshots (see [Machine performance](#machine-performance))
 - `POST /packages` → `200` with `{accepted, unchanged, snapshot_required, package_count, stored, removed, skipped, truncated}` (installed software, see [Installed packages](#installed-packages))
 
 **Console-facing** (JWT):
@@ -38,6 +39,7 @@ unique index on `event_id` for replay dedup).
 - Admin: `DELETE /agents/:id`
 - Admin, agent updates: `GET /agent-updates`, `POST /agent-updates/check`, `PUT /agent-updates/settings`, `POST /agents/:id/update`, `DELETE /agents/:id/update`, `POST /agents/update-outdated` (see [Agent updates](#agent-updates) and `docs/reference/API.md`)
 - Scans (analyst and up; history every role): `POST /agents/:id/scans`, `POST /agents/scans/bulk`, `POST /agents/:id/scans/:scanId/cancel`, `GET /agents/:id/scans`
+- Performance (analyst and up): `GET /agents/:id/performance?range=1h|6h|24h|7d|30d|90d`, `GET /agents/:id/processes?range=&at=`; its settings and alert thresholds are part of the scan policy (write: operator and admin)
 - Scan policies (read: analyst and up; write: operator and admin): `GET /scan-policies`, `POST /scan-policies`, `POST /scan-policies/preview`, `GET|PUT|DELETE /scan-policies/:policyId`, `POST /agents/scan-policy` (bulk assign), `GET|PUT /agents/:id/scan-policy` (see [Scan policies](#scan-policies))
 - Admin: `POST /tokens` (generate, plaintext shown once), `GET /tokens`, `DELETE /tokens/:hash` (revoke)
 - Admin: `GET /yara` (current bundle version/sha/size), `POST /yara/refresh` (pull YARA-Forge now)
@@ -55,7 +57,7 @@ install instructions.
 - **Scan timing:** the agent reports no forward schedule — it runs on the server-set cadence in `AgentConfig` (heartbeat 60s, config 5m, inventory 1h, **vuln scan daily**) and only reports `scan_started_at`/`scan_completed_at` after a scan. Those are stored on the agent row; the Endpoints UI shows the real last scan + duration and derives **next scan ≈ last completed + `vuln_scan_interval_seconds`**.
 - **Detections:** `type='detection'` → alerts; `telemetry` events are ignored for now.
 - **Offline:** an agent reads as offline when `last_seen` is older than 5 minutes.
-- **Rate limiting:** the agent-key routes (heartbeat, config, YARA, inventory, events, vulnerabilities, packages) carrying `X-Agent-ID`, with the method each route answers, skip the general per-address limiter, so a fleet behind one NAT address isn't throttled; they have their own, higher per-address limit (`EDR_AGENT_RATE_MAX`, default 30000 per 15 minutes) in front of agent auth. Enrollment counts toward the general limit, with or without `X-Agent-ID`. The address is the agent's TCP address: an `X-Forwarded-For` it sends to port 8421 is ignored.
+- **Rate limiting:** the agent-key routes (heartbeat, config, YARA, inventory, events, vulnerabilities, packages, metrics) carrying `X-Agent-ID`, with the method each route answers, skip the general per-address limiter, so a fleet behind one NAT address isn't throttled; they have their own, higher per-address limit (`EDR_AGENT_RATE_MAX`, default 30000 per 15 minutes) in front of agent auth. Enrollment counts toward the general limit, with or without `X-Agent-ID`. The address is the agent's TCP address: an `X-Forwarded-For` it sends to port 8421 is ignored.
 
 ## Installed packages
 
@@ -275,6 +277,83 @@ hours, YARA changed files every minute plus a full pass at startup). The list
 marks them *agent runs its own intervals*, and their *Scan policy* tab says so
 and shows what applies once they are updated.
 
+## Machine performance
+
+Agents from v0.0.23 report the host's performance (capability `perf_metrics`):
+*Endpoints* shows a small CPU / memory / fullest-disk indicator per endpoint
+(dimmed when the newest sample is over 3 minutes old) and the drawer's
+**Performance** tab charts it. Stored by migration
+`055_edr_performance.sql`; logic in
+`backend/src/services/edr/edrPerformance.ts` and `perfConfig.ts`.
+
+**What the agent sends.** Every minute a sample: CPU % (all cores, since the
+previous sample), memory used / total (used excludes reclaimable page cache:
+`MemTotal - MemAvailable` on Linux), swap, load average 1/5/15 (not on
+Windows), uptime, used / free bytes per local filesystem (network and pseudo
+filesystems and read-only images such as snaps are skipped; at most 32), and
+bytes/s in and out per interface (loopback and container veths skipped; at
+most 16). Every 5 minutes the 10 busiest processes by CPU (averaged over the
+5 minutes; % of one core, as top shows it) and by resident memory: pid, name,
+user, never command lines. Batched to `POST /api/edr/metrics` every minute;
+unsent data waits in a buffer of 3 hours (kept across an agent restart) so a
+short outage leaves no gap. No external tools or dependencies on Linux
+(`/proc`); macOS also runs `vm_stat`, `netstat -ibn` and `ps` once a minute;
+Windows uses the Win32 APIs.
+
+**Storage and retention.** Raw samples (`edr_perf_samples`, one row per
+endpoint and minute, ~8 MB per endpoint per week) are kept
+`EDR_PERF_RAW_DAYS` (7) days and drive the 1h / 6h / 24h charts (1-, 2- and
+5-minute buckets). Each batch recomputes the hourly rollup
+(`edr_perf_hourly`: averages and peaks per hour, weighted by sample count) of
+the hours it added samples to, from that hour's raw rows, so a late or re-sent
+batch lands correctly and nothing is counted twice. Rollups are kept
+`EDR_PERF_HOURLY_DAYS` (90) days and drive the 7d / 30d / 90d charts (1-hour,
+4-hour and 1-day buckets), so no chart reads more than ~1,500 rows. Process
+snapshots are kept 7 days. The `edr-agent-release` job (every 6 hours) prunes
+all three in batches. A sample dated more than 7 days back or 5 minutes ahead
+is refused. With 50 endpoints and a full week of samples (504,000 rows) the
+charts answer in 5–17 ms (median; 1h–24h raw, 7d rollups), and one agent's
+per-minute ingest takes ~8 ms.
+
+**Settings and thresholds (scan policy).** Each scan policy's *Performance*
+tab (operators and admins) turns metrics and process sampling on or off for
+its endpoints (sent in the agent config as `performance`) and sets three
+alert thresholds, checked on the server as samples arrive:
+
+| Metric | Default | Notes |
+|--------|---------|-------|
+| CPU    | above 95% for 10 minutes, medium | all cores |
+| Memory | above 95% for 10 minutes, medium | |
+| Disk   | above 90%, high | per mount point |
+
+"For N minutes" means every sample of the last N minutes is above the
+threshold, and those samples cover the span (at least 80% of a sample a
+minute), so an agent that just started cannot alert on two samples; 0 means
+the newest sample alone. An agent's own `"performance_metrics": false` (or
+`"performance_processes": false`) in its `agent.json` turns it off whatever
+the policy says.
+
+**Alerts.** A breach raises an ordinary alert (source `edr-perf`, linked to
+the endpoint's asset, through the notification channels like other alerts;
+not sent to AI triage, as it is operational rather than a security finding),
+for example *Disk / 93% full on web-01*. There is **one open alert per
+endpoint, metric and mount** (`edr_perf_alert_state`): more breaching samples
+change nothing. It **recovers** once the value has been at least 3 points
+below the threshold for up to 5 minutes (the newest sample for a 0-minute
+threshold): the slot is freed and the alert notes the recovery
+(`matched_data.performance_state: recovered`, `recovered_at`,
+`recovered_value`, a line in the description); its status is left for an
+analyst to close. Only after a recovery can a new breach raise a new alert, so
+a value hovering at the threshold cannot raise a storm. Turning a threshold
+(or metrics) off releases its open alerts (`threshold_off`); a disk whose
+mount is not reported for an hour releases its alert (`target_missing`).
+Thresholds are evaluated only on fresh data (the newest sample at most 10
+minutes old), not on an old batch replayed later. The Performance tab lists
+an endpoint's open performance alerts; the list counts them.
+
+**Older agents.** Agents before v0.0.23 send nothing; their Performance tab
+says to update them.
+
 ## Known follow-ups
 
 - Endpoint alerts are inserted directly, so they don't yet fire Email/Slack/NTFY notifications (rule-based alerts still do).
@@ -297,7 +376,10 @@ EOF
 ```
 Generate a token under **Endpoints**, run the agent, and it should appear in
 the list; inventory fills the endpoint asset, scans surface vulns on it, and
-detections show in the **Alerts** UI and the endpoint drill-down.
+detections show in the **Alerts** UI and the endpoint drill-down. Its
+performance indicator appears within two minutes and the *Performance* tab's
+charts fill a point a minute (`siembox-agent metrics` prints one sample
+without a server).
 
 **YARA self-test** (needs no server rules — the agent's baseline matches it):
 drop a file containing `SIEMBOX_YARA_SELFTEST` into a watched dir (`~/Downloads`

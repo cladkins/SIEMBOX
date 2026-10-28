@@ -27,6 +27,11 @@
           <span :class="{ muted: !row.scans[t.value]?.enabled }">{{ describeSpec(row.scans[t.value]) }}</span>
         </template>
       </el-table-column>
+      <el-table-column label="Performance" min-width="170">
+        <template #default="{ row }">
+          <span :class="{ muted: !row.performance?.metrics && row.performance }">{{ describePerformance(row.performance) }}</span>
+        </template>
+      </el-table-column>
       <el-table-column label="Endpoints" width="100" align="center">
         <template #default="{ row }">{{ row.endpoint_count ?? 0 }}</template>
       </el-table-column>
@@ -55,6 +60,14 @@
             </template>
             <ScanSpecEditor v-model="editor.specs[t.value]" :scan-type="t.value" :label="t.label" :help="t.help" />
           </el-tab-pane>
+          <el-tab-pane name="performance">
+            <template #label>
+              Performance
+              <el-tag v-if="!editor.performance.metrics" size="small" type="info" style="margin-left: 4px">off</el-tag>
+              <el-tag v-else-if="performanceProblem(editor.performance)" size="small" type="warning" style="margin-left: 4px">!</el-tag>
+            </template>
+            <PerfSettingsEditor v-model="editor.performance" />
+          </el-tab-pane>
         </el-tabs>
       </el-form>
       <template #footer>
@@ -75,6 +88,8 @@ import { reactive } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus } from '@element-plus/icons-vue';
 import ScanSpecEditor from './ScanSpecEditor.vue';
+import PerfSettingsEditor from './PerfSettingsEditor.vue';
+import { describePerformance, performanceForm, performanceProblem, type PolicyPerformance } from '@/utils/endpointPerformance';
 import { api } from '@/services/api';
 import { browserTimeZone } from '@/utils/scheduleTiming';
 import {
@@ -107,16 +122,27 @@ const editor = reactive<{
   id: number | null;
   name: string;
   description: string;
-  tab: PolicyScanType;
+  tab: PolicyScanType | 'performance';
   specs: Record<PolicyScanType, SpecForm>;
+  performance: PolicyPerformance;
   saving: boolean;
-}>({ open: false, id: null, name: '', description: '', tab: 'vuln', specs: formsFor(defaultPolicyScans()), saving: false });
+}>({
+  open: false,
+  id: null,
+  name: '',
+  description: '',
+  tab: 'vuln',
+  specs: formsFor(defaultPolicyScans()),
+  performance: performanceForm(null),
+  saving: false,
+});
 
 function openEditor(policy: ScanPolicy | null) {
   editor.id = policy?.id ?? null;
   editor.name = policy?.name ?? '';
   editor.description = policy?.description ?? '';
   editor.specs = formsFor(policy?.scans ?? defaultPolicyScans());
+  editor.performance = performanceForm(policy?.performance);
   editor.tab = 'vuln';
   editor.open = true;
 }
@@ -139,10 +165,16 @@ async function save() {
       return;
     }
   }
+  const perfProblem = editor.performance.metrics ? performanceProblem(editor.performance) : null;
+  if (perfProblem) {
+    editor.tab = 'performance';
+    ElMessage.warning(`Performance: ${perfProblem}`);
+    return;
+  }
   const scans = Object.fromEntries(POLICY_SCAN_TYPES.map((t) => [t.value, specFromForm(editor.specs[t.value])]));
   editor.saving = true;
   try {
-    const body = { name: editor.name.trim(), description: editor.description.trim() || null, scans };
+    const body = { name: editor.name.trim(), description: editor.description.trim() || null, scans, performance: editor.performance };
     if (editor.id) await api.updateScanPolicy(editor.id, body);
     else await api.createScanPolicy(body);
     ElMessage.success(editor.id ? 'Policy saved; its endpoints pick it up on their next heartbeat' : 'Policy created');

@@ -29,6 +29,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Application Monitoring](#application-monitoring-endpoints)
   - [Endpoint Installed Packages (EDR)](#endpoint-installed-packages-edr)
   - [Endpoint Scans and Scan History (EDR)](#endpoint-scans-and-scan-history-edr)
+  - [Endpoint Performance (EDR)](#endpoint-performance-edr)
   - [Endpoint Agent Updates (EDR)](#endpoint-agent-updates-edr)
   - [Display links (Big Display)](#display-links-big-display)
   - [Admin Dashboard](#admin-dashboard-endpoints)
@@ -7724,6 +7725,121 @@ an unknown scan type or an invalid entry; `404` unknown agent.
   after a run, a calendar entry is due at its next occurrence, an interval
   entry an interval later; a due scan outside its window waits; a scan that
   came due while the endpoint was offline runs once on reconnect.
+
+---
+
+## Endpoint Performance (EDR)
+
+Machine performance reported by endpoint agents from v0.0.23 (capability
+`perf_metrics`; see [Endpoint agent](../edr.md#machine-performance)). Reads:
+analyst, operator and admin. The settings and alert thresholds are part of
+each scan policy (`performance`, below), written by operators and admins
+through the scan policy routes.
+
+### POST /api/edr/metrics
+
+Agent auth (`Authorization: Bearer <agent key>`, `X-Agent-ID`), agent limiter.
+
+```json
+{
+  "agent_id": "<uuid>",
+  "samples": [
+    {
+      "ts": "2026-10-27T12:00:00Z",
+      "cpu_pct": 12.5, "cpu_count": 8,
+      "mem_total": 17179869184, "mem_used": 6442450944,
+      "swap_total": 2147483648, "swap_used": 0,
+      "load1": 0.42, "load5": 0.51, "load15": 0.48,
+      "uptime_seconds": 86400,
+      "disks": [{ "mount": "/", "fs": "ext4", "total": 100000000000, "used": 61000000000, "free": 34000000000 }],
+      "net": [{ "iface": "eth0", "rx_bps": 125000.5, "tx_bps": 20000 }]
+    }
+  ],
+  "processes": [
+    {
+      "ts": "2026-10-27T12:00:00Z",
+      "by_cpu": [{ "pid": 812, "name": "postgres", "user": "postgres", "cpu_pct": 35.2, "mem_rss": 524288000, "mem_pct": 3.1 }],
+      "by_mem": [{ "pid": 812, "name": "postgres", "user": "postgres", "cpu_pct": 35.2, "mem_rss": 524288000, "mem_pct": 3.1 }]
+    }
+  ]
+}
+```
+
+→ `200` `{ "accepted": 1, "duplicate": 0, "rejected": 0, "processes": 1, "alerts_opened": 0, "alerts_recovered": 0 }`.
+
+- A sample already stored (same agent and `ts`) is a `duplicate`, so re-sending a batch is safe.
+- `rejected`: a sample without a valid `ts` (more than 7 days old or 5 minutes ahead) or `mem_total`, or a snapshot without a valid `ts` or named processes. Other values are clamped (CPU 0–100, used ≤ total) or dropped (non-numbers).
+- Limits: 1,440 samples and 48 snapshots per request (`400` beyond), 32 disks and 32 interfaces per sample, 25 processes per list; mount 256, interface 64, process name 128, user 64 characters.
+- `load*` are omitted where the OS has none (Windows). `cpu_pct` of a process is % of one core.
+- `403` when `agent_id` names another agent.
+
+### GET /api/edr/agents/:id/performance
+
+`?range=` `1h`, `6h`, `24h` (default) from per-minute samples in 1-, 2- and
+5-minute buckets; `7d`, `30d`, `90d` from hourly rollups in 1-hour, 4-hour
+and 1-day buckets.
+
+```json
+{
+  "agent_id": "<uuid>", "range": "24h", "from": "…", "to": "…",
+  "bucket_seconds": 300, "source": "raw",
+  "supported": true, "min_agent_version": "0.0.23", "agent_version": "0.0.23",
+  "policy": "Default",
+  "performance": { "metrics": true, "processes": true, "thresholds": { "cpu": { … }, "memory": { … }, "disk": { … } } },
+  "retention": { "raw_days": 7, "hourly_days": 90 },
+  "points": [{ "t": "…", "cpu": 12.1, "cpu_max": 40.2, "mem_used": 6.4e9, "mem_total": 1.7e10, "mem_pct": 37.5,
+               "swap_used": 0, "swap_total": 2.1e9, "load1": 0.4, "load5": 0.5, "load15": 0.5, "uptime": 86400, "samples": 5 }],
+  "disks": [{ "mount": "/", "points": [{ "t": "…", "pct": 61.2, "pct_max": 61.3 }] }],
+  "net": [{ "iface": "eth0", "points": [{ "t": "…", "rx": 125000, "tx": 20000 }] }],
+  "latest": { "ts": "…", "cpu_pct": 12.5, "mem_total": …, "mem_used": …, "disks": [ … ], "net": [ … ], … },
+  "open_alerts": [{ "metric": "disk", "target": "/", "opened_at": "…", "opened_value": 93, "last_value": 93.4,
+                    "alert_id": 4821, "severity": "high", "title": "Disk / 93% full on web-01", "status": "new" }]
+}
+```
+
+Disk `pct` is used / (used + free), as df shows it. `supported` is false for
+an agent without `perf_metrics`. `400` unknown range; `404` unknown agent.
+`GET /api/edr/agents` also returns `perf_at`, `perf_cpu_pct`, `perf_mem_pct`,
+`perf_disk_max_pct`, `perf_disk_max_mount` (the newest sample) and
+`perf_alerts_open`.
+
+### GET /api/edr/agents/:id/processes
+
+`?range=` (as above, at most the 7 days kept) and optional `?at=<ISO time>`.
+Returns `{ "times": [ISO, …], "snapshot": { "ts", "by_cpu": [ … ], "by_mem": [ … ] } | null }`:
+the snapshot times in the range (newest first, at most 300) and the snapshot
+at or before `at` (the newest without it).
+
+### Scan policy `performance`
+
+`GET /api/edr/scan-policies` returns, and `POST` / `PUT /api/edr/scan-policies/:policyId`
+accept (optional; a new policy without it gets the defaults, an update without
+it keeps the current one), per policy:
+
+```json
+"performance": {
+  "metrics": true,
+  "processes": true,
+  "thresholds": {
+    "cpu":    { "enabled": true, "percent": 95, "minutes": 10, "severity": "medium" },
+    "memory": { "enabled": true, "percent": 95, "minutes": 10, "severity": "medium" },
+    "disk":   { "enabled": true, "percent": 90, "minutes": 0,  "severity": "high" }
+  }
+}
+```
+
+`percent` 1–99.9, `minutes` an integer 0–240 (0 = the newest sample alone),
+`severity` low / medium / high / critical; `400` otherwise. A change raises its
+endpoints' `config_version`. `GET /api/edr/agents/:id/config` carries
+`"performance": { "enabled": true, "processes": true, "sample_interval_seconds": 60,
+"send_interval_seconds": 60, "process_interval_seconds": 300, "top_processes": 10 }`
+from the endpoint's policy.
+
+**Alerts** (source `edr-perf`, `asset_id` the endpoint's asset): one open per
+endpoint, metric and mount; recovered (3 points below the threshold for up to
+5 minutes) with `matched_data.performance_state` `recovered`, `recovered_at`
+and `recovered_value`; `threshold_off` when the threshold is turned off,
+`target_missing` when a mount is not reported for an hour.
 
 ---
 

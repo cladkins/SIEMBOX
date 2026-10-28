@@ -49,6 +49,7 @@ import {
 import {
   issueDuePolicyScans,
   agentConfigScanPolicy,
+  agentConfigPerformance,
   listPolicies,
   getPolicy,
   createPolicy,
@@ -63,6 +64,7 @@ import {
   POLICY_SCAN_CAPABILITY,
   LOCAL_AGENT_INTERVALS,
 } from '../services/edr/scanPolicies';
+import { ingestMetrics, getPerformance, getProcesses, parseRange } from '../services/edr/edrPerformance';
 import { AuditService } from '../services/audit/auditService';
 import { logger } from '../utils/logger';
 import { rateLimitedHandler, requestLimitKey } from '../net/requestLimits';
@@ -137,8 +139,9 @@ router.post('/agents/:id/heartbeat', edrAgentLimiter, authenticateAgent, require
 router.get('/agents/:id/config', edrAgentLimiter, authenticateAgent, requireAgentMatchesParam, async (req: Request, res: Response) => {
   const yaraVersion = await getCurrentYaraVersion();
   const scanPolicy = await agentConfigScanPolicy(req.edrAgent!.agent_id);
+  const performance = await agentConfigPerformance(req.edrAgent!.agent_id);
   res.status(200).json(
-    buildAgentConfig(req.edrAgent!.config_version, yaraVersion, buildAgentUpdateConfig(req.edrAgent), scanPolicy)
+    buildAgentConfig(req.edrAgent!.config_version, yaraVersion, buildAgentUpdateConfig(req.edrAgent), scanPolicy, performance)
   );
 });
 
@@ -193,6 +196,14 @@ router.post('/packages', edrAgentLimiter, authenticateAgent, async (req: Request
 router.post('/scans', edrAgentLimiter, authenticateAgent, async (req: Request, res: Response) => {
   assertBodyAgent(req);
   res.status(200).json(await reportScan(req.edrAgent!.agent_id, req.body ?? {}));
+});
+
+// Machine performance — agent auth; per-minute samples and top-process
+// snapshots (services/edr/edrPerformance.ts). Samples already stored are
+// skipped, so re-sending after an outage is safe; thresholds are evaluated here.
+router.post('/metrics', edrAgentLimiter, authenticateAgent, async (req: Request, res: Response) => {
+  assertBodyAgent(req);
+  res.status(200).json(await ingestMetrics(req.edrAgent!.agent_id, req.body ?? {}));
 });
 
 // ---- Admin-facing endpoints (UI) -------------------------------------------
@@ -452,6 +463,17 @@ router.get('/agents/:id/packages', authenticate, authorize(...ENDPOINT_READERS),
     limit: num(req.query.limit),
     offset: num(req.query.offset),
   }));
+});
+
+// Endpoint's performance charts over ?range= (1h, 6h, 24h raw; 7d, 30d, 90d hourly
+// rollups), its newest sample, open performance alerts and its policy's thresholds.
+router.get('/agents/:id/performance', authenticate, authorize(...ENDPOINT_READERS), async (req: Request, res: Response) => {
+  res.json(await getPerformance(req.params.id as string, parseRange(req.query.range)));
+});
+
+// Endpoint's top processes: snapshot times in ?range= and the snapshot at ?at= (or the newest).
+router.get('/agents/:id/processes', authenticate, authorize(...ENDPOINT_READERS), async (req: Request, res: Response) => {
+  res.json(await getProcesses(req.params.id as string, parseRange(req.query.range), req.query.at));
 });
 
 // Endpoint's detections (alerts) — reuses the existing alerts table.

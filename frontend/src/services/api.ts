@@ -592,9 +592,9 @@ export const api = {
   cancelEndpointScan: (id: string, scanId: string) => apiClient.post(`/edr/agents/${id}/scans/${scanId}/cancel`),
   // Endpoint scan policies
   getScanPolicies: () => apiClient.get('/edr/scan-policies'),
-  createScanPolicy: (data: { name: string; description?: string | null; scans: unknown }) =>
+  createScanPolicy: (data: { name: string; description?: string | null; scans: unknown; performance?: unknown }) =>
     apiClient.post('/edr/scan-policies', data),
-  updateScanPolicy: (id: number, data: { name?: string; description?: string | null; scans?: unknown }) =>
+  updateScanPolicy: (id: number, data: { name?: string; description?: string | null; scans?: unknown; performance?: unknown }) =>
     apiClient.put(`/edr/scan-policies/${id}`, data),
   deleteScanPolicy: (id: number) => apiClient.delete(`/edr/scan-policies/${id}`),
   previewScanPolicySpec: (spec: unknown, count = 3) => apiClient.post('/edr/scan-policies/preview', { spec, count }),
@@ -603,6 +603,11 @@ export const api = {
   getEndpointScanPolicy: (id: string) => apiClient.get(`/edr/agents/${id}/scan-policy`),
   setEndpointScanPolicy: (id: string, data: { policy_id?: number | null; overrides?: unknown }) =>
     apiClient.put(`/edr/agents/${id}/scan-policy`, data),
+  // Endpoint performance (charts, current numbers, open alerts) and top processes
+  getEndpointPerformance: (id: string, range: string) =>
+    apiClient.get(`/edr/agents/${id}/performance`, { params: { range } }),
+  getEndpointProcesses: (id: string, params: { range?: string; at?: string } = {}) =>
+    apiClient.get(`/edr/agents/${id}/processes`, { params }),
 
   // Context Graph (GET only, every role). The graph page shows every failure
   // inline (a busy answer retries once), so nothing toasts; an 8 s timeout and

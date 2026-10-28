@@ -873,6 +873,36 @@ and `GET /api/edr/agent-updates` returns the same `error`.
 4. **Release check fails, no latest version.** The server cannot reach
    `api.github.com`, or GitHub rate-limited the request (set `GITHUB_TOKEN`
    in the backend environment), or the latest tag is not `vX.Y.Z`.
+
+### Issue: An Endpoint Shows No Performance Data
+
+**Symptoms:**
+- The *Performance* column on *Endpoints* reads `—` or `no data yet`, or is dimmed (stale)
+- The drawer's *Performance* tab has empty charts
+
+**Diagnosis:**
+```bash
+# On the endpoint: one sample, printed (no server needed)
+siembox-agent metrics
+# The agent log (Linux)
+sudo journalctl -u siembox-agent -n 200 --no-pager | grep -i -E "performance|metrics"
+```
+
+**Common causes:**
+
+1. **The agent predates v0.0.23.** It does not report `perf_metrics`; the tab
+   says so. Update it (*Update* on *Endpoints*).
+2. **Turned off.** In the endpoint's scan policy (*Scan policies → Edit →
+   Performance*), or locally with `"performance_metrics": false` in the
+   endpoint's `agent.json` (the log says `performance metrics disabled`).
+3. **The server predates the feature.** The agent logs `server does not accept
+   performance metrics yet (404 on /api/edr/metrics)` and retries hourly.
+4. **Stale (dimmed) indicator.** The newest sample is over 3 minutes old: the
+   endpoint is offline or cannot reach the server. It keeps up to 3 hours of
+   samples and sends them when it reconnects, so the charts fill the gap.
+5. **Too many performance alerts.** Raise a threshold or its *for N minutes*
+   in the scan policy; one alert stays open per endpoint, metric and mount
+   until the value recovers, so repeats do not pile up.
 5. **No Update button on a development build or a current agent.** Only an
    agent behind the latest `X.Y.Z` release, or a development build (manual
    only), can be updated; auto-update skips development builds.

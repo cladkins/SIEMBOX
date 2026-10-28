@@ -5,10 +5,12 @@
  * are recorded (edr_agent_latest_error) and never crash the process.
  *
  * Each run also expires stale endpoint scan requests and prunes the scan
- * history (services/edr/edrScans.ts runScanHousekeeping).
+ * history (services/edr/edrScans.ts runScanHousekeeping), and prunes endpoint
+ * performance data past its retention (services/edr/edrPerformance.ts).
  */
 import { checkForAgentRelease } from '../services/edr/agentUpdateService';
 import { runScanHousekeeping } from '../services/edr/edrScans';
+import { prunePerformance } from '../services/edr/edrPerformance';
 import { logger } from '../utils/logger';
 import { ErrorLogService } from '../services/errors/errorLogService';
 import { registerRecurringJob, trackJobRun } from '../services/jobs/jobRegistry';
@@ -29,6 +31,16 @@ async function tick(): Promise<void> {
     logger.warn('[EDR] scan history housekeeping failed:', err instanceof Error ? err.message : err);
     ErrorLogService.logBackgroundError('edr-agent-release', err, { dedupeKey: 'scan-housekeeping' });
   }
+  // Performance retention: raw samples and process snapshots 7 days, hourly rollups 90.
+  try {
+    const p = await prunePerformance();
+    if (p.samples || p.hourly || p.processes) {
+      logger.info(`[EDR] performance retention: ${p.samples} samples, ${p.hourly} hourly rollups, ${p.processes} process snapshots pruned`);
+    }
+  } catch (err) {
+    logger.warn('[EDR] performance retention failed:', err instanceof Error ? err.message : err);
+    ErrorLogService.logBackgroundError('edr-agent-release', err, { dedupeKey: 'perf-retention' });
+  }
   try {
     await trackJobRun(JOB_KEY, async () => {
       const status = await checkForAgentRelease();
@@ -47,7 +59,7 @@ export function startEdrAgentReleaseJob(): void {
     key: JOB_KEY,
     name: 'Endpoint agent release check',
     description:
-      'Checks GitHub for the latest siembox-endpoint release and, when auto-update is on, requests updates for outdated endpoints. Also expires stale endpoint scan requests and prunes scan history.',
+      'Checks GitHub for the latest siembox-endpoint release and, when auto-update is on, requests updates for outdated endpoints. Also expires stale endpoint scan requests, prunes scan history and prunes endpoint performance data past its retention.',
     intervalMs: CHECK_INTERVAL_MS,
   });
   startupTimer = setTimeout(() => void tick(), STARTUP_DELAY_MS);

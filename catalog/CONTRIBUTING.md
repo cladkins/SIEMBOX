@@ -164,4 +164,3 @@ npm run validate-scans -- ../catalog/scans
 
 The format and its rules: `backend/src/services/scanSuggestions/scanFormat.ts`
 and the wiki's *Vulnerability and Container Scanning* page.
-

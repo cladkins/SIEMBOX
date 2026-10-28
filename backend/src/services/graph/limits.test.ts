@@ -106,7 +106,9 @@ test('visibility classes: an admin never shares a cache key with any other role'
   for (const role of ['operator', 'analyst', 'viewer'] as const) {
     assert.notEqual(visibilityClass(role), admin, role);
   }
-  // Roles that see the same graph share answers.
-  assert.equal(visibilityClass('operator'), visibilityClass('viewer'));
+  // Roles that see the same graph share answers: operators and analysts see
+  // endpoints (the Endpoints page); viewers don't.
+  assert.equal(visibilityClass('operator'), visibilityClass('analyst'));
+  assert.notEqual(visibilityClass('analyst'), visibilityClass('viewer'));
   assert.equal(visibilityClass('admin'), visibilityClass('admin'));
 });

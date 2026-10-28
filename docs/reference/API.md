@@ -162,7 +162,7 @@ Detection content, alert triage and the AI Analyst:
 | `POST /api/ai/chat`, `PATCH` / `DELETE /api/ai/chat/sessions/:id` | yes | yes | yes | no |
 | `POST /api/parsers/ai/generate`, `POST /api/rules/ai/generate`, `POST /api/rules/import/sigma`, `/import/sigma/preview`, `POST /api/packs/:id/install`, `/install-new` | yes | no | no | no |
 
-The reads under these routes stay open to every role, but only analyst and up can force a catalog refetch with `GET /api/parsers/catalog?refresh=true` or `GET /api/rules/catalog?refresh=true`, or refresh the SigmaHQ library with `POST /api/sigma/library/refresh`: a viewer's `refresh` flag is ignored and the cached listing comes back. `GET /api/ai/chat/health` answers only `{ "configured": true }` or `false`; the AI Analyst's provider, model and base URL are in the admin-only `GET /api/settings/ai-chat`. A refusal on the parser, rule, alert and AI Analyst writes above (all but the triage re-run and the last row) is recorded in `audit_logs` like a refused scan write (below). User management, settings and notification changes, Endpoints (EDR) and the admin dashboard are admin-only, except the endpoint scan routes (analyst and up request and cancel scans, every role reads the history; see [Endpoint Scans](#endpoint-scans-and-scan-history-edr)); shipper management has its own table under [Log Shippers](#log-shippers-endpoints). Every route and the roles it allows are listed in `backend/src/routes/routeInventory.test.ts`, which the test suite checks against the running API.
+The reads under these routes stay open to every role, but only analyst and up can force a catalog refetch with `GET /api/parsers/catalog?refresh=true` or `GET /api/rules/catalog?refresh=true`, or refresh the SigmaHQ library with `POST /api/sigma/library/refresh`: a viewer's `refresh` flag is ignored and the cached listing comes back. `GET /api/ai/chat/health` answers only `{ "configured": true }` or `false`; the AI Analyst's provider, model and base URL are in the admin-only `GET /api/settings/ai-chat`. A refusal on the parser, rule, alert and AI Analyst writes above (all but the triage re-run and the last row) is recorded in `audit_logs` like a refused scan write (below). User management, settings and notification changes, Endpoints (EDR) management (enrollment, tokens, YARA rules, agent updates, removal) and the admin dashboard are admin-only; reading endpoints, their findings and packages is analyst and up, and so are the endpoint scan routes (analyst and up request and cancel scans, every role reads the history; see [Endpoint Scans](#endpoint-scans-and-scan-history-edr)); shipper management has its own table under [Log Shippers](#log-shippers-endpoints). Every route and the roles it allows are listed in `backend/src/routes/routeInventory.test.ts`, which the test suite checks against the running API.
 
 (Earlier versions let any logged-in role, viewers included, make every call in this table except the triage re-run and the last row, deleting alerts included. A script that used a viewer's token for these writes needs an analyst's, or an admin's to delete alerts.)
 
@@ -6911,7 +6911,7 @@ agent) are current state; open findings always count.
 | `400` | `code: "GRAPH_BAD_ENTITY"` (the entity isn't a valid `type:key`) or `"GRAPH_BAD_PARAM"` (any other parameter) |
 | `401` | Only a missing or expired session; never bad input |
 | `403` | Only `PASSWORD_CHANGE_REQUIRED` |
-| `404` | `code: "GRAPH_NOT_AVAILABLE"`: the relation isn't one of this entity type, or the role can't expand this type (accounts and endpoint agents, for non-admins) |
+| `404` | `code: "GRAPH_NOT_AVAILABLE"`: the relation isn't one of this entity type, or the role can't expand this type (accounts for non-admins; endpoint agents for viewers) |
 | `429` | The general [rate limit](#rate-limiting) |
 | `503` | `code: "GRAPH_BUSY"` with `Retry-After: 2` and `retryAfter: 2`: no slot within a second, no database connection, or every source timed out |
 
@@ -7016,16 +7016,16 @@ So that the graph can't crowd out the rest of SIEMBox:
 | `alert_finding` | alert, finding | finding, alert | risk, solid | the finding that raised the alert |
 | `alert_same_event` | alert | alert | alerts, solid | alerts on the same parsed log |
 | `alert_account` | alert | account | alerts, solid | a sign-in protection alert's account |
-| `alert_endpoint` | alert | endpoint (admin) | alerts, solid | an endpoint detection's agent |
+| `alert_endpoint` | alert | endpoint (analyst and up) | alerts, solid | an endpoint detection's agent |
 | `alert_device` | alert | host or ip, and its shipper | logs, dashed | the log's syslog header host, else its sender IP, and the shipper (or ghost `shipper_tag`) its tag names, while the log is retained; the second edge is `shipped_by` |
-| `entity_alerts` | ip, user, host, domain, asset, account (admin), endpoint (admin) | alert | alerts, solid | alerts in the window naming it; for an asset, by `asset_id` (solid) or naming its current IP (dotted) |
+| `entity_alerts` | ip, user, host, domain, asset, account (admin), endpoint (analyst and up) | alert | alerts, solid | alerts in the window naming it; for an asset, by `asset_id` (solid) or naming its current IP (dotted) |
 | `rule_alerts` | rule | alert | alerts, solid | the rule's alerts in the window |
 | `asset_ip` / `ip_asset` | asset / ip | ip / asset | inventory, solid | the asset's current IP |
 | `asset_host` / `host_assets` | asset / host | host / asset | inventory, solid | the asset's host name |
 | `asset_vulns` / `vuln_assets` | asset / vuln | vuln / asset | inventory, solid | open findings, or all with `vuln_status=all`, by risk score |
-| `ip_vulns` / `host_vulns` / `endpoint_vulns` | ip / host / endpoint | vuln | inventory, solid | the same findings for the asset(s) with that IP or host name, or the endpoint's asset, one hop away (one row per vulnerability, its highest risk); `endpoint_vulns` is admin-only like the endpoint |
+| `ip_vulns` / `host_vulns` / `endpoint_vulns` | ip / host / endpoint | vuln | inventory, solid | the same findings for the asset(s) with that IP or host name, or the endpoint's asset, one hop away (one row per vulnerability, its highest risk); `endpoint_vulns` is analyst and up, like the endpoint |
 | `asset_shipper` / `shipper_assets` | asset / shipper | shipper / asset | inventory, dotted | a shipper with the asset's host name or IP |
-| `asset_endpoint` | asset, endpoint (admin) | endpoint, asset | inventory, solid | the asset's agent |
+| `asset_endpoint` | asset, endpoint (analyst and up) | endpoint, asset | inventory, solid | the asset's agent |
 | `shipper_address` | shipper | ip, host | inventory, solid | the address and host name it reported |
 | `ip_shipper` / `host_shipper` | ip / host | shipper | inventory, solid | shippers at that address or host |
 | `finding_identity` / `identity_findings` | finding / identity | identity / finding | risk, solid | the monitored identity |
@@ -7046,7 +7046,7 @@ So that the graph can't crowd out the rest of SIEMBox:
 | ip, host, user, domain, alert, rule, asset (with its agent status), vuln, finding, identity, shipper, shipper_tag | yes | yes | yes | yes |
 | account nodes a sign-in alert names: the username the alert shows, not expandable | yes | yes | yes | yes |
 | account details, expanding an account, `account_signins` / `ip_signins` | yes | no | no | no |
-| endpoint nodes, `alert_endpoint`, `asset_endpoint` | yes | no | no | no |
+| endpoint nodes, `alert_endpoint`, `asset_endpoint`, `endpoint_vulns` (as the Endpoints page) | yes | yes | yes | no |
 | application nodes and their relations (as `GET /api/applications`) | yes | yes | yes | yes |
 
 Relations a role can't see don't run and aren't listed, and nothing says how

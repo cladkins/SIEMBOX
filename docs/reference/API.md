@@ -172,7 +172,7 @@ Reads under `/api/assets`, `/api/vulnerabilities`, `/api/scheduled-scans`, `/api
 
 | Route | Admin | Operator | Analyst | Viewer |
 |---|---|---|---|---|
-| `POST /api/assets`, `PUT /api/assets/:id`, `DELETE /api/assets/:id` | yes | yes | yes | no |
+| `POST /api/assets`, `PUT /api/assets/:id`, `DELETE /api/assets/:id`, `POST /api/assets/:id/merge` | yes | yes | yes | no |
 | `POST /api/assets/scan`, `POST /api/assets/discover` | yes | yes | yes | no |
 | `POST /api/vulnerabilities/templates/refresh` | yes | yes | yes | no |
 | `POST /api/vulnerabilities/templates/download` | yes | yes | no | no |
@@ -3991,13 +3991,96 @@ Every `/api/assets` route requires a login (`Authorization: Bearer <token>`); wi
 
 | Method | Path | Access |
 |---|---|---|
-| GET | `/api/assets`, `/api/assets/statistics`, `/api/assets/:id`, `/api/assets/:id/related`, `/api/assets/:id/services` | Any role |
+| GET | `/api/assets`, `/api/assets/statistics`, `/api/assets/:id`, `/api/assets/:id/related`, `/api/assets/:id/duplicates`, `/api/assets/:id/services` | Any role |
 | GET | `/api/assets/scans`, `/api/assets/scans/active`, `/api/assets/scans/statistics`, `/api/assets/scans/:scanId` | Any role |
 | POST / PUT / DELETE | `/api/assets`, `/api/assets/:id` | Admin, analyst or operator |
+| POST | `/api/assets/:id/merge` | Admin, analyst or operator |
 | POST | `/api/assets/discover` | Admin, analyst or operator |
 | POST | `/api/assets/scan` | Admin, analyst or operator |
 
 The writes take the roles that can open the Asset Inventory page; a viewer gets `403` (see [Roles for scan and asset writes](#roles-for-scan-and-asset-writes)).
+
+### GET /api/assets/:id/duplicates
+
+Other assets that may be the same machine, as hints for a manual merge.
+Nothing is merged. A hint is an asset with the same MAC address (any spelling;
+random MACs count here), the same short host name (case-insensitive, first DNS
+label: `Chriss-MBP-383.localdomain`, `chriss-mbp-383.local` and
+`chriss-mbp-383.tailnet.ts.net` match) as this asset or as the name its
+endpoint agent reports, or one whose `metadata.agent_id` is this asset's agent.
+
+**Authentication:** Required (any role)
+
+**Response (200):** (`404` when the asset does not exist)
+```json
+{
+  "duplicates": [
+    {
+      "id": 72, "ip_address": "192.168.1.254", "hostname": "Chriss-MBP-383.localdomain",
+      "mac_address": null, "discovery_method": "nmap", "asset_type": "server",
+      "last_seen": "2026-10-20T09:12:00Z", "open_vulnerabilities": 890, "agents": 0,
+      "reasons": ["same_hostname"]
+    }
+  ]
+}
+```
+`reasons`: `same_mac`, `same_hostname`, `same_agent`.
+
+### POST /api/assets/:id/merge
+
+Merge the `from` assets into asset `:id` and delete them, in one transaction.
+
+**Authentication:** Required (admin, analyst or operator; a viewer gets `403`, written to `audit_logs`)
+
+**Request Body:**
+```json
+{ "from": [71, 72], "dry_run": false }
+```
+- `from`: 1 to 100 asset ids, not including `:id`.
+- `dry_run: true`: report what would move and change nothing (the UI's confirmation).
+
+What moves to the kept asset (every foreign key to `assets.id`, plus
+Application Monitoring's per-asset rows):
+- **Vulnerability findings** (`asset_vulnerabilities`): one row per
+  vulnerability. Rows for the same vulnerability combine: earliest
+  `first_detected`, latest `last_detected`, `open` if any of them was open
+  (else the kept row's status: the kept asset's own row, or the most recently
+  detected), the newest evidence, every distinct note. The risk score is
+  recomputed for the kept asset, whose criticality becomes the highest of the
+  merged assets'.
+- **Services** (`asset_services`): one per port/protocol, the most recently seen; `discovered_at` the earliest.
+- **Alerts** (`alerts.asset_id`) and **endpoint agents** (`edr_agents.asset_id`).
+- **Application Monitoring** locations of type asset (`application_inventory`) and its vulnerability links.
+- **The asset row:** the kept asset's values win; a missing host name, MAC or
+  OS is filled from the newest merged asset; tags are combined; metadata keys
+  the kept asset lacks are copied; first/last seen widen. The merged assets are
+  listed in `metadata.merged_assets` and their addresses in `metadata.ip_history`.
+
+Each merge writes one `audit_logs` row: `action = 'asset.merge'`,
+`resource_id` = the kept asset, `details` = `{mode, into, merged: [...], moved, warnings}`.
+Automatic merges (endpoint agents, `docs/edr.md`) write the same row with
+`mode: "auto"` and no user.
+
+**Response (200):**
+```json
+{
+  "into": { "id": 33, "ip_address": "192.168.1.130", "hostname": "Chriss-MBP-383.localdomain" },
+  "merged": [
+    { "id": 71, "ip_address": "192.168.1.253", "hostname": "Chriss-MacBook-Pro-383.local", "mac_address": null,
+      "discovery_method": "nmap", "asset_type": "endpoint", "open_vulnerabilities": 1474, "agents": [] }
+  ],
+  "moved": { "vulnerabilities": 1474, "vulnerabilities_combined": 1449, "services": 0, "alerts": 0,
+             "agents": 0, "application_locations": 12, "application_vuln_links": 3 },
+  "dry_run": false,
+  "warnings": []
+}
+```
+`moved.vulnerabilities_combined` counts the vulnerabilities found on more than
+one of the assets (each becomes one finding). `warnings` names what a reviewer
+should check: more than one endpoint agent on the result, a different hardware
+MAC, a different host name.
+
+**Errors:** `400` (bad ids, an asset merged into itself, more than 100), `404` (an asset that does not exist).
 
 ### POST /api/assets/scan
 

@@ -9,6 +9,18 @@
               <el-icon><Search /></el-icon>
               Trigger Scan
             </el-button>
+            <el-tooltip
+              v-if="canMerge"
+              :content="selectedRows.length >= 2 ? 'Merge the selected assets into one' : 'Select two or more assets (the same machine) to merge them'"
+              placement="bottom"
+            >
+              <span>
+                <el-button :disabled="selectedRows.length < 2" @click="openMergeDialog(selectedRows)" data-test="merge-into">
+                  <el-icon><Files /></el-icon>
+                  Merge into…
+                </el-button>
+              </span>
+            </el-tooltip>
             <el-button @click="refreshAll">
               <el-icon><Refresh /></el-icon>
               Refresh
@@ -141,10 +153,13 @@
       <el-table
         :data="assets"
         v-loading="loading"
-        @row-click="showAssetDetails"
+        row-key="id"
+        @row-click="onRowClick"
+        @selection-change="onSelectionChange"
         style="width: 100%; margin-top: 20px"
         :default-sort="{ prop: 'last_seen', order: 'descending' }"
       >
+        <el-table-column v-if="canMerge" type="selection" width="44" />
         <el-table-column prop="ip_address" label="IP Address" width="150" sortable />
         <el-table-column prop="hostname" label="Hostname" width="200" sortable />
         <el-table-column prop="os_type" label="OS" width="120" />
@@ -210,6 +225,10 @@
           <el-descriptions-item label="Discovery Method">{{ selectedAsset.discovery_method }}</el-descriptions-item>
           <el-descriptions-item label="First Seen">{{ formatDate(selectedAsset.first_seen) }}</el-descriptions-item>
           <el-descriptions-item label="Last Seen">{{ formatDate(selectedAsset.last_seen) }}</el-descriptions-item>
+          <el-descriptions-item v-if="selectedAsset.metadata?.current_ip" label="Current IP">
+            {{ selectedAsset.metadata.current_ip }}
+            <span class="field-hint">(reported by its agent; another asset holds this address)</span>
+          </el-descriptions-item>
           <el-descriptions-item label="Location">
             <template v-if="related?.geo">
               {{ related.geo.country_name }} ({{ related.geo.country_code }})
@@ -271,6 +290,49 @@
               </el-tag>
             </div>
           </div>
+        </div>
+
+        <!-- Possible duplicates: hints only, merged only when someone chooses to -->
+        <div v-if="duplicates.length" class="duplicate-hints" data-test="duplicate-hints">
+          <div class="duplicate-hints-header">
+            <span class="related-label"><el-icon><Files /></el-icon> Possible duplicates</span>
+            <el-button
+              v-if="canMerge"
+              size="small"
+              type="primary"
+              plain
+              :disabled="duplicateSelection.length === 0"
+              @click="mergeDuplicatesIntoSelected"
+            >
+              Merge selected into this asset
+            </el-button>
+          </div>
+          <div class="field-hint">
+            Other assets that look like the same machine. Nothing is merged unless you choose to.
+          </div>
+          <el-table
+            :data="duplicates"
+            size="small"
+            style="width: 100%; margin-top: 6px"
+            max-height="220"
+            @selection-change="(rows: DuplicateHint[]) => (duplicateSelection = rows)"
+          >
+            <el-table-column v-if="canMerge" type="selection" width="40" />
+            <el-table-column label="Asset" min-width="220">
+              <template #default="{ row }">
+                <el-button link type="primary" size="small" @click="openAssetById(row.id)">{{ assetLabel(row) }}</el-button>
+              </template>
+            </el-table-column>
+            <el-table-column label="Why" min-width="200">
+              <template #default="{ row }">
+                <el-tag v-for="r in row.reasons" :key="r" size="small" effect="plain" class="reason-tag">{{ duplicateReasonLabel(r) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="discovery_method" label="Found by" width="110" />
+            <el-table-column label="Open vulns" width="100">
+              <template #default="{ row }">{{ row.open_vulnerabilities }}</template>
+            </el-table-column>
+          </el-table>
         </div>
 
         <!-- Detail tabs: vulns + alerts (correlation) then services + metadata -->
@@ -369,6 +431,54 @@
       </div>
     </el-dialog>
 
+    <!-- Merge Dialog -->
+    <el-dialog v-model="showMergeDialog" title="Merge duplicate assets" width="720px" data-test="merge-dialog">
+      <p class="merge-intro">
+        Choose the asset to keep. The others are merged into it and then deleted: their vulnerability findings,
+        services, alerts, endpoint agents and Application Monitoring entries move to the kept asset.
+      </p>
+      <el-radio-group v-model="mergeKeepId" class="merge-keep" @change="loadMergePreview">
+        <el-radio v-for="a in mergeCandidates" :key="a.id" :value="a.id" border class="merge-keep-option">
+          <span class="merge-keep-label">{{ assetLabel(a) }}</span>
+          <span class="merge-keep-meta">
+            #{{ a.id }} · {{ a.discovery_method || 'unknown' }}
+            <el-tag v-if="(a.agent_count ?? 0) > 0" size="small" type="success" effect="plain">endpoint agent</el-tag>
+          </span>
+        </el-radio>
+      </el-radio-group>
+
+      <div v-loading="mergePreviewLoading" class="merge-preview">
+        <template v-if="mergePreview">
+          <h4>Moves to {{ assetLabel(mergePreview.into) }}</h4>
+          <ul>
+            <li v-for="line in mergeMoveLines(mergePreview.moved)" :key="line">{{ line }}</li>
+            <li v-if="mergeMoveLines(mergePreview.moved).length === 0" class="muted">Nothing else references them.</li>
+          </ul>
+          <h4>Deleted after the merge</h4>
+          <ul>
+            <li v-for="m in mergePreview.merged" :key="m.id">
+              {{ assetLabel(m) }} · #{{ m.id }} · {{ m.discovery_method || 'unknown' }} · {{ m.open_vulnerabilities }} open vulns
+            </li>
+          </ul>
+          <el-alert
+            v-for="w in mergePreview.warnings"
+            :key="w"
+            type="warning"
+            :title="w"
+            :closable="false"
+            show-icon
+            style="margin-top: 8px"
+          />
+        </template>
+      </div>
+      <template #footer>
+        <el-button @click="showMergeDialog = false">Cancel</el-button>
+        <el-button type="danger" :disabled="!mergePreview" :loading="merging" @click="confirmMerge">
+          Merge {{ mergePreview?.merged.length || '' }} asset{{ mergePreview?.merged.length === 1 ? '' : 's' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- Trigger Scan Dialog -->
     <el-dialog v-model="showScanDialog" title="Trigger Asset Scan" width="600px">
       <el-form :model="scanForm" label-width="120px">
@@ -458,15 +568,27 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import OpenInGraphButton from '@/components/graph/OpenInGraphButton.vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Search, Refresh, Cpu, Connection, Warning } from '@element-plus/icons-vue';
+import { Search, Refresh, Cpu, Connection, Warning, Files } from '@element-plus/icons-vue';
 import assetService, { type Asset, type AssetWithServices, type AssetRelated, type ShipperSummary } from '@/services/assetService';
 import { useAuthStore } from '@/stores/auth';
 import { api } from '@/services/api';
 import PublicTargetWarning from '@/components/PublicTargetWarning.vue';
 import { publicTargetGate, replaceTargetToken, scanStatusLabel, scanStatusTagType } from '@/utils/shipperJobs';
+import {
+  assetLabel,
+  canMergeAssets,
+  defaultKeepId,
+  duplicateReasonLabel,
+  mergeFromIds,
+  mergeMoveLines,
+  type DuplicateHint,
+  type MergeableAsset,
+  type MergeResult,
+} from '@/utils/assetMerge';
 
 const authStore = useAuthStore();
 const canTriggerScans = computed(() => ['admin', 'analyst', 'operator'].includes(authStore.user?.role || ''));
+const canMerge = computed(() => canMergeAssets(authStore.user?.role));
 
 const route = useRoute();
 const assets = ref<Asset[]>([]);
@@ -487,6 +609,82 @@ const selectedAsset = ref<AssetWithServices | null>(null);
 const activeTab = ref('vulnerabilities');
 const related = ref<AssetRelated | null>(null);
 const loadingRelated = ref(false);
+
+// Possible duplicates of the open asset (hints) and the merge dialog.
+const duplicates = ref<DuplicateHint[]>([]);
+const duplicateSelection = ref<DuplicateHint[]>([]);
+const selectedRows = ref<Asset[]>([]);
+const showMergeDialog = ref(false);
+const mergeCandidates = ref<MergeableAsset[]>([]);
+const mergeKeepId = ref<number | null>(null);
+const mergePreview = ref<MergeResult | null>(null);
+const mergePreviewLoading = ref(false);
+const merging = ref(false);
+
+function apiErrorMessage(error: unknown, fallback: string): string {
+  return (error as { response?: { data?: { error?: string } } })?.response?.data?.error || fallback;
+}
+
+function onSelectionChange(rows: Asset[]) {
+  selectedRows.value = rows;
+}
+
+function onRowClick(row: Asset, column?: { type?: string }) {
+  if (column?.type === 'selection') return; // the checkbox selects, it doesn't open
+  showAssetDetails(row);
+}
+
+function openMergeDialog(candidates: MergeableAsset[], keepId?: number) {
+  mergeCandidates.value = candidates;
+  mergeKeepId.value = keepId ?? defaultKeepId(candidates);
+  mergePreview.value = null;
+  showMergeDialog.value = true;
+  loadMergePreview();
+}
+
+async function loadMergePreview() {
+  const keep = mergeKeepId.value;
+  const from = mergeFromIds(mergeCandidates.value, keep);
+  mergePreview.value = null;
+  if (keep === null || from.length === 0) return;
+  mergePreviewLoading.value = true;
+  try {
+    const preview = await assetService.mergeAssets(keep, from, true);
+    if (mergeKeepId.value === keep) mergePreview.value = preview;
+  } catch (error) {
+    ElMessage.error(apiErrorMessage(error, 'Failed to preview the merge'));
+  } finally {
+    mergePreviewLoading.value = false;
+  }
+}
+
+async function confirmMerge() {
+  const keep = mergeKeepId.value;
+  if (keep === null || !mergePreview.value) return;
+  merging.value = true;
+  try {
+    const result = await assetService.mergeAssets(keep, mergeFromIds(mergeCandidates.value, keep));
+    ElMessage.success(`Merged ${result.merged.length} asset${result.merged.length === 1 ? '' : 's'} into ${assetLabel(result.into)}`);
+    showMergeDialog.value = false;
+    selectedRows.value = [];
+    await loadAssets();
+    if (showDetailsDialog.value) openAssetById(keep);
+  } catch (error) {
+    ElMessage.error(apiErrorMessage(error, 'Failed to merge assets'));
+  } finally {
+    merging.value = false;
+  }
+}
+
+function mergeDuplicatesIntoSelected() {
+  const current = selectedAsset.value;
+  if (!current) return;
+  const candidates: MergeableAsset[] = [
+    { ...current, agent_count: related.value?.agent ? 1 : 0 },
+    ...duplicateSelection.value.map((d) => ({ ...d, agent_count: d.agents })),
+  ];
+  openMergeDialog(candidates, current.id);
+}
 
 const openVulnCount = computed(
   () => related.value?.vulnerabilities.filter((v) => v.status === 'open').length || 0
@@ -609,6 +807,17 @@ async function openAssetById(id: number) {
   loadingRelated.value = true;
   activeTab.value = 'vulnerabilities';
   related.value = null;
+  duplicates.value = [];
+  duplicateSelection.value = [];
+
+  assetService
+    .getDuplicates(id)
+    .then((hints) => {
+      duplicates.value = hints;
+    })
+    .catch((error) => {
+      console.error('Failed to load possible duplicates', error);
+    });
 
   // Core asset + correlated entities load in parallel; a failure on one
   // shouldn't blank the other.
@@ -878,5 +1087,70 @@ onUnmounted(() => {
 
 .tab-badge {
   margin-left: 4px;
+}
+
+.duplicate-hints {
+  margin-top: 16px;
+  border: 1px solid var(--el-color-warning-light-5);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background-color: var(--siembox-bg-color);
+}
+
+.duplicate-hints-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.reason-tag {
+  margin-right: 4px;
+}
+
+.merge-intro {
+  margin: 0 0 14px;
+  line-height: 1.5;
+  color: var(--el-text-color-regular);
+}
+
+.merge-keep {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.merge-keep-option {
+  margin-right: 0;
+  height: auto;
+  padding: 8px 12px;
+}
+
+.merge-keep-label {
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.merge-keep-meta {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.merge-preview {
+  margin-top: 16px;
+  min-height: 60px;
+}
+
+.merge-preview h4 {
+  margin: 12px 0 4px;
+}
+
+.merge-preview ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.merge-preview .muted {
+  color: var(--el-text-color-secondary);
 }
 </style>

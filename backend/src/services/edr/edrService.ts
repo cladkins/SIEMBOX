@@ -2,8 +2,11 @@
  * EDR server-side ingest.
  *
  * Turns agent payloads into rows in SIEMBox's EXISTING tables:
- *   enroll/inventory -> assets (asset_type='endpoint', upserted by IP so an
- *                       endpoint correlates with any existing log/Nuclei asset)
+ *   enroll/inventory -> assets (asset_type='endpoint'). The agent's asset is
+ *                       sticky: found once (an existing asset that is clearly
+ *                       this machine, else the asset at its IP so an endpoint
+ *                       correlates with the log/Nuclei asset there, else a new
+ *                       one) and kept across IP changes; see endpointAsset.ts
  *   vulnerabilities  -> vulnerabilities + asset_vulnerabilities (idempotent upsert)
  *   events(detection)-> alerts (source='edr', linked to the endpoint asset,
  *                       deduped on the agent's stable event id)
@@ -14,13 +17,8 @@ import { isIP } from 'net';
 import pool, { query } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { ApiError } from '../../middleware/errorHandler';
-import { AssetRepository } from '../assets/assetRepository';
 import { VulnerabilityRepository } from '../vulnerabilities/vulnerabilityRepository';
-import {
-  AssetType,
-  AssetStatus,
-  DiscoveryMethod,
-} from '../../models/Asset';
+import { linkEndpointAsset } from './endpointAsset';
 import { VulnerabilitySeverity, VulnerabilityStatus } from '../../models/Vulnerability';
 import {
   EdrAgentModel,
@@ -114,30 +112,6 @@ function pickIp(bodyIp?: string, connIp?: string): string | null {
   return null;
 }
 
-/** Upsert the endpoint asset (by IP) and return its id, or null if no usable IP. */
-async function upsertEndpointAsset(facts: {
-  ip: string | null;
-  hostname?: string | null;
-  mac?: string | null;
-  os?: string | null;
-  os_version?: string | null;
-  metadata?: Record<string, unknown>;
-}): Promise<number | null> {
-  if (!facts.ip) return null;
-  const asset = await AssetRepository.create({
-    ip_address: facts.ip,
-    hostname: facts.hostname || null,
-    mac_address: facts.mac || null,
-    os_type: facts.os || null,
-    os_version: facts.os_version || null,
-    asset_type: AssetType.ENDPOINT,
-    discovery_method: DiscoveryMethod.EDR_AGENT,
-    status: AssetStatus.ACTIVE,
-    metadata: facts.metadata as any,
-  });
-  return asset.id;
-}
-
 // ---- Enrollment -------------------------------------------------------------
 
 export interface EnrollInput {
@@ -148,6 +122,8 @@ export interface EnrollInput {
   arch?: string;
   agent_version?: string;
   ip?: string;
+  /** Optional: a hardware MAC lets a re-installed agent find its old asset (endpointAsset.ts). */
+  mac?: string;
 }
 
 export async function enrollAgent(input: EnrollInput, connIp?: string) {
@@ -161,20 +137,12 @@ export async function enrollAgent(input: EnrollInput, connIp?: string) {
   }
 
   const ip = pickIp(input.ip, connIp);
-  const assetId = await upsertEndpointAsset({
-    ip,
-    hostname: input.hostname,
-    os: input.os,
-    os_version: input.os_version,
-    metadata: { agent: true },
-  });
-
   const agentId = crypto.randomUUID();
   const apiKey = generateSecret(); // 64-char hex, returned exactly once
   await EdrAgentModel.create({
     agent_id: agentId,
     api_key_hash: sha256hex(apiKey),
-    asset_id: assetId,
+    asset_id: null,
     hostname: input.hostname,
     os: input.os,
     os_version: input.os_version,
@@ -182,6 +150,18 @@ export async function enrollAgent(input: EnrollInput, connIp?: string) {
     agent_version: input.agent_version,
     ip,
   });
+  const { assetId } = await linkEndpointAsset(
+    agentId,
+    {
+      ip,
+      hostname: input.hostname,
+      mac: typeof input.mac === 'string' ? input.mac : null,
+      os: input.os,
+      os_version: input.os_version,
+      metadata: { agent: true, agent_id: agentId },
+    },
+    'enroll'
+  );
 
   logger.info('EDR agent enrolled', { agentId, assetId, hostname: input.hostname });
   // New agents default to config_version 1; include the current YARA version so a
@@ -223,10 +203,11 @@ export async function ingestInventory(agentId: string, inventory: any, scanId?: 
   const ip = pickIp(inventory?.ip, agent?.ip ?? undefined);
   // Cap software so a huge package list can't bloat the asset row.
   const software = Array.isArray(inventory?.software) ? inventory.software : [];
-  const assetId = await upsertEndpointAsset({
+  // The agent's own asset, kept across IP changes (endpointAsset.ts).
+  const { assetId } = await linkEndpointAsset(agentId, {
     ip,
     hostname: inventory?.hostname,
-    mac: inventory?.mac,
+    mac: typeof inventory?.mac === 'string' ? inventory.mac : null,
     os: inventory?.os,
     os_version: inventory?.os_version,
     metadata: {
@@ -238,11 +219,6 @@ export async function ingestInventory(agentId: string, inventory: any, scanId?: 
       inventory_collected_at: inventory?.collected_at,
     },
   });
-
-  // Keep the agent linked to whatever asset its IP resolved to.
-  if (assetId && agent && agent.asset_id !== assetId) {
-    await query('UPDATE edr_agents SET asset_id = $2 WHERE agent_id = $1', [agentId, assetId]);
-  }
   await EdrAgentModel.touch(agentId);
 
   // Scan history: did anything change since the previous report?

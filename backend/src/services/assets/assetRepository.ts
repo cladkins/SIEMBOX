@@ -71,7 +71,8 @@ export class AssetRepository {
           metadata,
           tags,
           created_at,
-          updated_at
+          updated_at,
+          (SELECT COUNT(*)::int FROM edr_agents e WHERE e.asset_id = assets.id) AS agent_count
         FROM assets
         ${whereClause}
         ORDER BY last_seen DESC
@@ -209,7 +210,10 @@ export class AssetRepository {
           asset_type = COALESCE(EXCLUDED.asset_type, assets.asset_type),
           status = EXCLUDED.status,
           last_seen = NOW(),
-          metadata = COALESCE(EXCLUDED.metadata, assets.metadata),
+          -- Merged, not replaced: a rescan must not drop keys another source
+          -- wrote (an endpoint agent's agent_id, ip_history, merged_assets).
+          metadata = CASE WHEN EXCLUDED.metadata IS NULL THEN assets.metadata
+                          ELSE COALESCE(assets.metadata, '{}'::jsonb) || EXCLUDED.metadata END,
           tags = COALESCE(EXCLUDED.tags, assets.tags),
           updated_at = NOW()
         RETURNING

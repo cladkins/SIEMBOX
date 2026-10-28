@@ -29,6 +29,7 @@ import { startDomainMonitorJob, stopDomainMonitorJob } from './jobs/domainMonito
 import { startSignInHousekeepingJob, stopSignInHousekeepingJob } from './jobs/signInHousekeeping';
 import { startGraphLogEdgesJob, stopGraphLogEdgesJob } from './jobs/graphLogEdges';
 import { startApplicationInventoryJob, stopApplicationInventoryJob } from './jobs/applicationInventory';
+import { runEndpointAssetBackfill } from './services/edr/endpointAsset';
 import { signInSettings } from './services/auth/signInPolicy';
 import { getDummyHash } from './services/auth/signInService';
 import { stopRefusalSummary } from './services/auth/authEvents';
@@ -235,6 +236,13 @@ const startServer = async () => {
     // Application Monitoring: the software inventory, rolled up every two
     // minutes off the ingest path (services/applications/rollup.ts).
     startApplicationInventoryJob();
+    // Endpoint assets: fold each agent's leftover duplicate asset rows (one per
+    // IP the agent once had, from before assets stayed with their agent) into
+    // its asset. Strong evidence only, each merge audited; idempotent, so later
+    // starts find nothing. In the background; never fails the start.
+    void runEndpointAssetBackfill().catch((error) => {
+      logger.warn('[EDR] endpoint asset backfill failed', { error: error instanceof Error ? error.message : String(error) });
+    });
 
     // Regex safety: give every stored parser and rule regex a ReDoS verdict
     // (cached in regex_safety_verdicts, so only new regexes cost anything) and

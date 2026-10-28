@@ -250,6 +250,8 @@ const INVENTORY: Row[] = [
   ['GET', '/api/assets/scans/:scanId', ANY_ROLE],
   ['GET', '/api/assets/:id', ANY_ROLE],
   ['GET', '/api/assets/:id/related', ANY_ROLE],
+  ['GET', '/api/assets/:id/duplicates', ANY_ROLE],
+  ['POST', '/api/assets/:id/merge', ANALYST_UP, AUDITED],
   ['POST', '/api/assets', ANALYST_UP, AUDITED],
   ['PUT', '/api/assets/:id', ANALYST_UP, AUDITED],
   ['DELETE', '/api/assets/:id', ANALYST_UP, AUDITED],

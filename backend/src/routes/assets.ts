@@ -7,8 +7,8 @@
  * Access: app.ts mounts this router behind `authenticate`, so every route
  * requires a login (the per-route `authenticate` on the write routes is
  * redundant but harmless). Reads are open to any role. Every write (create,
- * edit or delete an asset, POST /scan, POST /discover) requires admin, analyst
- * or operator: the roles that can open the Asset Inventory page
+ * edit, delete or merge assets, POST /scan, POST /discover) requires admin,
+ * analyst or operator: the roles that can open the Asset Inventory page
  * (frontend/src/router/index.ts), which is where the UI makes these calls.
  */
 
@@ -23,6 +23,9 @@ import { ScanRepository } from '../services/assets/scanRepository';
 import { LogShipperModel } from '../models/LogShipper';
 import { AssetStatus, AssetCriticality, AssetType } from '../models/Asset';
 import { getAssetContext } from '../services/assets/assetContext';
+import { findDuplicateHints, mergeAssets, parseMergeIds } from '../services/assets/assetMerge';
+import { auditSource } from '../middleware/scanPermissions';
+import { ApiError } from '../middleware/errorHandler';
 
 const router = express.Router();
 
@@ -258,6 +261,64 @@ router.get('/:id/related', async (req: Request, res: Response): Promise<void> =>
       error: 'Failed to retrieve related asset data',
       message: error.message,
     });
+  }
+});
+
+/**
+ * GET /api/assets/:id/duplicates
+ * Possible duplicates of this asset, as hints for a manual merge: the same MAC
+ * address, the same short host name (case-insensitive, first DNS label, so
+ * .local/.localdomain/.lan/tailnet suffixes don't matter), or one that recorded
+ * this asset's endpoint agent. Nothing is merged.
+ * Any logged-in role (read-only).
+ */
+router.get('/:id/duplicates', async (req: Request, res: Response): Promise<void> => {
+  const assetId = parseInt(req.params.id as string);
+  if (isNaN(assetId)) {
+    res.status(400).json({ error: 'Invalid asset ID' });
+    return;
+  }
+  try {
+    const duplicates = await findDuplicateHints(assetId);
+    if (!duplicates) {
+      res.status(404).json({ error: 'Asset not found' });
+      return;
+    }
+    res.json({ duplicates });
+  } catch (error: any) {
+    console.error('Get duplicate assets error:', error);
+    res.status(500).json({ error: 'Failed to look up possible duplicates', message: error.message });
+  }
+});
+
+/**
+ * POST /api/assets/:id/merge   body { from: [ids], dry_run?: boolean }
+ * Merge the `from` assets into this one and delete them, in one transaction:
+ * findings (one per vulnerability), services, alerts, endpoint agents and
+ * Application Monitoring locations move; see services/assets/assetMerge.ts.
+ * With dry_run: true, returns what would move and changes nothing (the
+ * confirmation dialog). Audited (audit_logs action asset.merge).
+ * Admin, analyst or operator, like DELETE /:id.
+ */
+router.post('/:id/merge', authenticate, requireAssetWrite, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { into, from } = parseMergeIds(req.params.id, req.body?.from);
+    const source = auditSource(req);
+    const result = await mergeAssets(into, from, {
+      mode: 'manual',
+      dryRun: req.body?.dry_run === true,
+      userId: req.user?.id ?? null,
+      ipAddress: source.ipAddress,
+      userAgent: (req.headers['user-agent'] as string) || null,
+    });
+    res.json(result);
+  } catch (error: any) {
+    if (error instanceof ApiError) {
+      res.status(error.statusCode).json({ error: error.message });
+      return;
+    }
+    console.error('Merge assets error:', error);
+    res.status(500).json({ error: 'Failed to merge assets', message: error.message });
   }
 });
 

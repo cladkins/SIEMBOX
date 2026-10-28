@@ -60,6 +60,8 @@ test('applications: every role sees and expands them, with the same facts; nothi
   assert.deepEqual(rels('application'), ['app_assets', 'app_hosts', 'app_ips', 'app_shippers', 'app_clients', 'app_vulns']);
   for (const type of ['asset', 'host', 'ip', 'shipper'] as NodeType[]) assert.ok(rels(type).includes('runs_app'), type);
   assert.ok(rels('ip').includes('uses_app'));
+  assert.ok(rels('ip').includes('ip_vulns'), 'an IP\'s asset vulnerabilities, one hop');
+  assert.ok(rels('host').includes('host_vulns'));
   assert.ok(rels('vuln').includes('vuln_apps'));
 });
 
@@ -147,7 +149,7 @@ function spiedDeps(): { deps: GraphDeps; calls: string[] } {
 
 test('admin-only resolvers are never invoked for other roles (spied)', async () => {
   const window = resolveWindow({}, Date.now());
-  const adminOnly = new Set(['ip ip_signins', 'account account_signins', 'asset asset_endpoint', 'endpoint asset_endpoint', 'alert alert_endpoint', 'account entity_alerts', 'endpoint entity_alerts']);
+  const adminOnly = new Set(['ip ip_signins', 'account account_signins', 'asset asset_endpoint', 'endpoint asset_endpoint', 'alert alert_endpoint', 'account entity_alerts', 'endpoint entity_alerts', 'endpoint endpoint_vulns']);
   for (const role of NON_ADMIN) {
     const { deps, calls } = spiedDeps();
     for (const type of ['ip', 'asset', 'alert', 'user', 'host', 'domain'] as NodeType[]) {

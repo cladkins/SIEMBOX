@@ -151,24 +151,21 @@
             <template v-if="testResult.versions.length"> · versions {{ testResult.versions.slice(0, 6).join(', ') }}</template>
             <div v-if="testResult.resolves_unmatched" class="muted">{{ testResult.resolves_unmatched }} would leave the Not identified list</div>
           </div>
-          <el-table :data="testResult.hits.slice(0, 50)" size="small" max-height="320" empty-text="Nothing in the current evidence matches" class="hits">
-            <el-table-column label="Evidence" min-width="160">
+          <div class="muted small hits-intro">Saving this signature identifies:</div>
+          <el-table :data="testResult.hits.slice(0, 50)" size="small" max-height="320" empty-text="Nothing in the current evidence matches" class="hits" table-layout="auto">
+            <el-table-column label="Evidence">
               <template #default="{ row }">
-                <div class="muted">{{ hitKind(row.kind) }}</div>
+                <div class="muted">{{ hitKind(row.kind) }}<template v-if="row.version"> · v{{ row.version }}</template></div>
                 <code class="wrap">{{ row.value }}</code>
+                <div class="muted small wrap">{{ row.location_label ?? row.location ?? '—' }}</div>
               </template>
             </el-table-column>
-            <el-table-column label="Where" min-width="90">
-              <template #default="{ row }">{{ row.location_label ?? row.location ?? '—' }}</template>
-            </el-table-column>
-            <el-table-column label="Ver." width="70">
-              <template #default="{ row }">{{ row.version ?? '—' }}</template>
-            </el-table-column>
-            <el-table-column label="Now" width="96">
+            <el-table-column label="Today" width="118">
               <template #default="{ row }">
-                <el-tag v-if="row.now === 'not_identified'" size="small" type="warning">unidentified</el-tag>
-                <el-tooltip v-else-if="row.identified_as.length" :content="row.identified_as.join(', ')" placement="top"><el-tag size="small" type="info">also {{ row.identified_as[0] }}</el-tag></el-tooltip>
-                <el-tag v-else size="small" type="success">new</el-tag>
+                <el-tooltip v-if="row.identified_as.length" :content="`Also identified as ${row.identified_as.join(', ')}`" placement="top">
+                  <el-tag size="small" type="info" class="now-tag">also {{ row.identified_as[0] }}</el-tag>
+                </el-tooltip>
+                <el-tag v-else size="small" type="success" class="now-tag">newly identified</el-tag>
               </template>
             </el-table-column>
           </el-table>
@@ -423,6 +420,19 @@ function hitKind(kind: string): string {
 </script>
 
 <style scoped>
+.hits-intro {
+  margin: 6px 0 4px;
+}
+.hits :deep(.wrap) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.now-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .block {
   margin-bottom: 10px;
 }

@@ -1,7 +1,7 @@
 /**
- * Endpoint (EDR) agents: admin only, as the Endpoints page and
- * GET /api/edr/agents/:id are. Every role still sees an asset's agent status
- * as facts on the asset node (hydrate.ts), the same as Asset-360 shows it.
+ * Endpoint (EDR) agents: analysts, operators and admins, as the Endpoints page
+ * and GET /api/edr/agents/:id are. Every role still sees an asset's agent
+ * status as facts on the asset node (hydrate.ts), the same as Asset-360 shows it.
  *
  *   asset_endpoint  edr_agents.asset_id, from either side
  *   endpoint_vulns  the open findings on the endpoint's asset

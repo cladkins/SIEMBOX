@@ -23,15 +23,17 @@ import type { QueryClient } from '../shippers/snapshotCache';
 const ROLES: Role[] = ['admin', 'operator', 'analyst', 'viewer'];
 const NON_ADMIN: Role[] = ['operator', 'analyst', 'viewer'];
 
-test('every role sees every node type except endpoints; only admins see account details', () => {
+test('every role sees every node type except endpoints (not viewers); only admins see account details', () => {
   for (const type of NODE_TYPES) {
     for (const role of ROLES) {
-      assert.equal(canSeeType(role, type), type !== 'endpoint' || role === 'admin', `${role} ${type}`);
+      assert.equal(canSeeType(role, type), type !== 'endpoint' || role !== 'viewer', `${role} ${type}`);
     }
   }
+  assert.equal(canExpandType('analyst', 'endpoint'), true, 'analysts use the Endpoints page');
+  assert.equal(canExpandType('operator', 'endpoint'), true);
+  assert.equal(canExpandType('viewer', 'endpoint'), false);
   for (const role of NON_ADMIN) {
     assert.equal(canExpandType(role, 'account'), false, `${role} can't expand an account`);
-    assert.equal(canExpandType(role, 'endpoint'), false);
     assert.deepEqual(allowedFacts(role, 'account'), ['username']);
   }
   assert.equal(canExpandType('admin', 'account'), true);
@@ -98,6 +100,7 @@ test('serializeNode keeps only allowed facts; filterGraph drops invisible nodes 
   assert.deepEqual(viewer.nodes.map((n) => n.id), ['asset:1']);
   assert.deepEqual(viewer.edges, []);
   assert.equal(filterGraph('admin', [asset, endpoint], [edge]).edges.length, 1);
+  assert.equal(filterGraph('analyst', [asset, endpoint], [edge]).edges.length, 1);
 });
 
 test('the catalog: a role only gets relations whose centre it may expand and whose neighbour it may see', () => {
@@ -109,10 +112,11 @@ test('the catalog: a role only gets relations whose centre it may expand and who
       }
     }
     assert.deepEqual(relationsFor('account', role), []);
-    assert.deepEqual(relationsFor('endpoint', role), []);
     assert.ok(!relationsFor('ip', role).some((def) => def.rel === 'ip_signins'));
-    assert.ok(!relationsFor('asset', role).some((def) => def.rel === 'asset_endpoint'));
-    assert.ok(!relationsFor('alert', role).some((def) => def.rel === 'alert_endpoint'));
+    const seesEndpoints = role !== 'viewer';
+    assert.equal(relationsFor('endpoint', role).length > 0, seesEndpoints, role);
+    assert.equal(relationsFor('asset', role).some((def) => def.rel === 'asset_endpoint'), seesEndpoints, role);
+    assert.equal(relationsFor('alert', role).some((def) => def.rel === 'alert_endpoint'), seesEndpoints, role);
   }
   assert.ok(relationsFor('ip', 'admin').some((def) => def.rel === 'ip_signins'));
   assert.ok(relationsFor('asset', 'admin').some((def) => def.rel === 'asset_endpoint'));
@@ -147,10 +151,13 @@ function spiedDeps(): { deps: GraphDeps; calls: string[] } {
   };
 }
 
-test('admin-only resolvers are never invoked for other roles (spied)', async () => {
+test('restricted resolvers are never invoked for roles that may not see them (spied)', async () => {
   const window = resolveWindow({}, Date.now());
-  const adminOnly = new Set(['ip ip_signins', 'account account_signins', 'asset asset_endpoint', 'endpoint asset_endpoint', 'alert alert_endpoint', 'account entity_alerts', 'endpoint entity_alerts', 'endpoint endpoint_vulns']);
+  // Account details and sign-ins: admins only. Endpoints: not viewers (the Endpoints page is analyst and up).
+  const accountOnly = ['ip ip_signins', 'account account_signins', 'account entity_alerts'];
+  const endpointOnly = ['asset asset_endpoint', 'endpoint asset_endpoint', 'alert alert_endpoint', 'endpoint entity_alerts', 'endpoint endpoint_vulns'];
   for (const role of NON_ADMIN) {
+    const adminOnly = new Set(role === 'viewer' ? [...accountOnly, ...endpointOnly] : accountOnly);
     const { deps, calls } = spiedDeps();
     for (const type of ['ip', 'asset', 'alert', 'user', 'host', 'domain'] as NodeType[]) {
       const key = type === 'ip' ? '198.51.100.7' : type === 'domain' ? 'example.com' : type === 'user' || type === 'host' ? 'nas' : '1';
@@ -158,8 +165,9 @@ test('admin-only resolvers are never invoked for other roles (spied)', async () 
     }
     assert.ok(calls.length > 0);
     assert.deepEqual(calls.filter((call) => adminOnly.has(call)), [], `${role} ran admin-only resolvers`);
-    // Centring on an admin-only type is refused before anything runs.
-    for (const center of [entityRef('endpoint', '3f2504e0-4f89-11d3-9a0c-0305e82c3301'), entityRef('account', '1')]) {
+    // Centring on a type the role may not expand is refused before anything runs.
+    const refused = role === 'viewer' ? [entityRef('endpoint', '3f2504e0-4f89-11d3-9a0c-0305e82c3301'), entityRef('account', '1')] : [entityRef('account', '1')];
+    for (const center of refused) {
       await assert.rejects(
         getNeighborhood(deps, { id: 1, role }, { center, window, limit: 5, vulnStatus: 'open' }),
         (err: unknown) => err instanceof GraphError && err.statusCode === 404

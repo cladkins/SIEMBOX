@@ -22,6 +22,8 @@ import { NODE_TYPES } from './types';
 
 export const ALL_ROLES: readonly Role[] = ['admin', 'operator', 'analyst', 'viewer'];
 const ADMIN: readonly Role[] = ['admin'];
+// The Endpoints page and its read routes (routes/edr.ts ENDPOINT_READERS).
+const ENDPOINT_READERS: readonly Role[] = ['admin', 'operator', 'analyst'];
 
 export interface VisibilityEntry {
   roles: readonly Role[];
@@ -49,7 +51,7 @@ export const NODE_VISIBILITY: Readonly<Record<NodeType | 'account_details', Visi
   // Label only (the username a siembox-auth alert already shows), not expandable.
   account: { roles: ALL_ROLES, mirrors: ['GET /api/alerts/:id'] },
   account_details: { roles: ADMIN, mirrors: ['GET /api/users/:id', 'GET /api/admin/users/:id/activity'] },
-  endpoint: { roles: ADMIN, mirrors: ['GET /api/edr/agents/:id'] },
+  endpoint: { roles: ENDPOINT_READERS, mirrors: ['GET /api/edr/agents/:id'] },
   // Application Monitoring: every role reads the inventory, an application's
   // locations (assets, hosts, shippers, client IPs) and its vulnerabilities.
   application: { roles: ALL_ROLES, mirrors: ['GET /api/applications', 'GET /api/applications/:id', 'GET /api/applications/vulnerabilities'] },

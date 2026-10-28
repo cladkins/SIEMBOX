@@ -411,6 +411,7 @@ test('an asset: current IP, host, open vulnerabilities, shipper match, alerts by
   assert.equal(viewer.json.center.facts.agent_status, 'online', 'agent status is a fact for every role');
   // The same role again is served from cache.
   assert.equal((await nbr('viewer', `asset:${ids.asset}`)).json.cached, true);
+  assert.equal((await nbr('analyst', `asset:${ids.asset}`)).json.cached, false, 'analysts see endpoints, so not the viewer\'s answer');
   assert.equal((await nbr('operator', `asset:${ids.asset}`)).json.cached, true, 'roles that see the same graph share it');
 
   const vuln = (await nbr('viewer', `vuln:${ids.vuln}`)).json;
@@ -428,7 +429,7 @@ test('an asset: current IP, host, open vulnerabilities, shipper match, alerts by
   assert.ok(!shipper.nodes.some((n) => Object.keys(n.facts).some((f) => /key|hash/.test(f))), 'no key or hash facts');
 });
 
-test('accounts and endpoints are admin-only; a non-admin sees the account a sign-in alert names, label only', async (t) => {
+test('accounts are admin-only and endpoints analyst and up; a non-admin sees the account a sign-in alert names, label only', async (t) => {
   if (!dbReady) return t.skip(SKIP);
   graphCache.clear();
   const admin = (await nbr('admin', `ip:${IP.attacker}`, '&limit=25')).json;
@@ -445,8 +446,13 @@ test('accounts and endpoints are admin-only; a non-admin sees the account a sign
     const account = auth.nodes.find((n) => n.type === 'account')!;
     assert.deepEqual([account.label, account.facts, account.expandable], [`graph-${tag}-admin`, { username: `graph-${tag}-admin` }, false]);
     const edr = (await nbr(role, alertId('edr'))).json;
-    assert.ok(!edr.nodes.some((n) => n.type === 'endpoint'), `${role}: no endpoint node`);
-    for (const entity of [`account:${userIds[0]}`, `endpoint:${AGENT_ID}`]) {
+    const seesEndpoints = role !== 'viewer'; // the Endpoints page is analyst and up
+    assert.equal(edr.nodes.some((n) => n.type === 'endpoint'), seesEndpoints, `${role}: endpoint node`);
+    if (seesEndpoints) {
+      const endpoint = (await nbr(role, `endpoint:${AGENT_ID}`)).json;
+      assert.ok(edge(endpoint, 'asset_endpoint', `asset:${ids.asset}`, `endpoint:${AGENT_ID}`), `${role}: expands the endpoint`);
+    }
+    for (const entity of seesEndpoints ? [`account:${userIds[0]}`] : [`account:${userIds[0]}`, `endpoint:${AGENT_ID}`]) {
       const refused = await nbr(role, entity);
       assert.deepEqual([refused.status, (refused.json as Json).code], [404, 'GRAPH_NOT_AVAILABLE'], `${role} ${entity}`);
     }

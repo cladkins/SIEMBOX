@@ -1,0 +1,38 @@
+schema: siembox.scan/v1
+id: endpoint-workstations-business-hours
+name: Workstations — business hours, light
+kind: endpoint_policy
+category: endpoints
+tags: [endpoint, workstations]
+description: >-
+  Desktops that are on during the working day: every scan runs between 09:00
+  and 17:00 on weekdays and stays light (vulnerabilities and YARA weekly,
+  packages daily, system inventory hourly).
+why: >-
+  Workstations are often off at night, so night-time scans never run. This
+  keeps scans inside working hours and spreads the heavier ones across the
+  week so no single day is slow for the user.
+intrusive: false
+load: light
+options:
+  scans:
+    vuln:
+      enabled: true
+      schedule: { frequency: weekly, days: [3], time: "12:30" }
+      window: { start: "09:00", end: "17:00" }
+    yara:
+      enabled: true
+      schedule: { frequency: weekly, days: [5], time: "12:00" }
+      window: { start: "09:00", end: "17:00" }
+    packages:
+      enabled: true
+      schedule: { frequency: weekly, days: [1, 2, 3, 4, 5], time: "10:15" }
+      window: { start: "09:00", end: "17:00" }
+    inventory:
+      enabled: true
+      interval_minutes: 60
+      window: { start: "09:00", end: "17:00" }
+inputs:
+  - field: endpoints
+    label: Endpoints
+    hint: Select the workstations on the Endpoints page, then Assign policy.

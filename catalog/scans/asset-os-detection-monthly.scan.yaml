@@ -1,0 +1,29 @@
+schema: siembox.scan/v1
+id: asset-os-detection-monthly
+name: Monthly OS detection
+kind: asset
+category: inventory
+tags: [nmap, os, fingerprint]
+description: >-
+  An Nmap OS and version scan (-O -sV) on the first of each month, filling in
+  each asset's operating system.
+why: >-
+  Operating systems change rarely, so monthly is enough to spot an end-of-life
+  OS or a device that is not what it claims to be. OS detection sends unusual
+  probe packets and needs the scanner to run with raw-socket privileges; some
+  IDS and older embedded devices react to it, so keep it monthly.
+intrusive: false
+load: heavy
+schedule:
+  frequency: monthly
+  day_of_month: 1
+  time: "03:30"
+options:
+  scanType: os
+inputs:
+  - field: targets
+    label: Subnets or hosts
+    hint: The networks or hosts to fingerprint, as IPs or CIDRs.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

@@ -7,12 +7,13 @@
 #   published  detections/<cat>/  -> this repo  rules/<cat>/
 #   published  packs/             -> this repo  catalog/packs/
 #   published  applications/      -> this repo  catalog/applications/
+#   published  scans/             -> this repo  catalog/scans/
 #
-# It is a true mirror: parser/detection/pack/application files that no longer
-# exist upstream are removed locally. One exception, for content types the
-# published catalog does not carry yet: while it has no packs/ (or no
-# applications/) at all, catalog/packs/ (catalog/applications/) is left as it
-# is (an older catalog is not "every pack deleted"). Run manually (`./scripts/sync-catalog.sh`) or on a schedule via
+# It is a true mirror: parser/detection/pack/application/scan files that no
+# longer exist upstream are removed locally. One exception, for content types
+# the published catalog does not carry yet: while it has no packs/ (or no
+# applications/, or no scans/) at all, catalog/packs/ (catalog/applications/,
+# catalog/scans/) is left as it is (an older catalog is not "every pack deleted"). Run manually (`./scripts/sync-catalog.sh`) or on a schedule via
 # .github/workflows/sync-catalog.yml.
 #
 # Env: CATALOG_REPO (default cladkins/siembox-catalog), CATALOG_REF (default main),
@@ -30,7 +31,7 @@ AUTH=()
 
 echo "Syncing catalog from ${REPO}@${REF} ..."
 tree="$(curl -fsSL "${AUTH[@]}" -H 'Accept: application/vnd.github+json' "$API")"
-paths="$(printf '%s' "$tree" | python3 -c "import sys,json;[print(t['path']) for t in json.load(sys.stdin)['tree'] if t['type']=='blob' and (t['path'].startswith('parsers/') or t['path'].startswith('detections/') or t['path'].startswith('packs/') or t['path'].startswith('applications/'))]")"
+paths="$(printf '%s' "$tree" | python3 -c "import sys,json;[print(t['path']) for t in json.load(sys.stdin)['tree'] if t['type']=='blob' and (t['path'].startswith('parsers/') or t['path'].startswith('detections/') or t['path'].startswith('packs/') or t['path'].startswith('applications/') or t['path'].startswith('scans/'))]")"
 [ -n "$paths" ] || { echo 'No parser/detection files found upstream — aborting (not wiping local).' >&2; exit 1; }
 
 # Stage all downloads first; only swap into place if every file fetched cleanly,
@@ -43,6 +44,7 @@ while IFS= read -r p; do
     detections/*) dest="$stage/rules/${p#detections/}" ;;     # detections/cat/x -> rules/cat/x
     packs/*)      dest="$stage/catalog/$p" ;;                 # packs/x          -> catalog/packs/x
     applications/*) dest="$stage/catalog/$p" ;;               # applications/x   -> catalog/applications/x
+    scans/*)      dest="$stage/catalog/$p" ;;                 # scans/x          -> catalog/scans/x
     *) continue ;;
   esac
   mkdir -p "$(dirname "$dest")"
@@ -70,5 +72,11 @@ if [ -d "$stage/catalog/applications" ]; then
 else
   echo 'The published catalog has no applications/ yet: catalog/applications/ left as it is.'
 fi
+if [ -d "$stage/catalog/scans" ]; then
+  rm -rf "$ROOT/catalog/scans"
+  mv "$stage/catalog/scans" "$ROOT/catalog/scans"
+else
+  echo 'The published catalog has no scans/ yet: catalog/scans/ left as it is.'
+fi
 
-echo "Synced $(find "$ROOT/catalog/parsers" -name '*.parser.json' | wc -l | tr -d ' ') parsers, $(find "$ROOT/rules" -name '*.yaml' | wc -l | tr -d ' ') detections, $(find "$ROOT/catalog/packs" -name '*.pack.yaml' 2>/dev/null | wc -l | tr -d ' ') packs, $(find "$ROOT/catalog/applications" -name '*.app.yaml' 2>/dev/null | wc -l | tr -d ' ') application signatures from ${REPO}@${REF}."
+echo "Synced $(find "$ROOT/catalog/parsers" -name '*.parser.json' | wc -l | tr -d ' ') parsers, $(find "$ROOT/rules" -name '*.yaml' | wc -l | tr -d ' ') detections, $(find "$ROOT/catalog/packs" -name '*.pack.yaml' 2>/dev/null | wc -l | tr -d ' ') packs, $(find "$ROOT/catalog/applications" -name '*.app.yaml' 2>/dev/null | wc -l | tr -d ' ') application signatures, $(find "$ROOT/catalog/scans" -name '*.scan.yaml' 2>/dev/null | wc -l | tr -d ' ') suggested scans from ${REPO}@${REF}."

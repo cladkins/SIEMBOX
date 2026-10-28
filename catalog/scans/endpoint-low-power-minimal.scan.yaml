@@ -1,0 +1,33 @@
+schema: siembox.scan/v1
+id: endpoint-low-power-minimal
+name: Low-power devices — minimal
+kind: endpoint_policy
+category: endpoints
+tags: [endpoint, low-power, raspberry-pi]
+description: >-
+  Single-board computers and small appliances: packages and vulnerabilities
+  weekly at night, YARA off, inventory every six hours.
+why: >-
+  A full YARA pass can take hours and hold the CPU on a Raspberry Pi or a
+  thin client. This keeps vulnerability coverage and drops the heavy part;
+  turn YARA on in the policy if the device has the headroom.
+intrusive: false
+load: light
+options:
+  scans:
+    vuln:
+      enabled: true
+      schedule: { frequency: weekly, days: [0], time: "03:00" }
+    yara:
+      enabled: false
+      interval_minutes: 10080
+    packages:
+      enabled: true
+      schedule: { frequency: weekly, days: [0], time: "02:30" }
+    inventory:
+      enabled: true
+      interval_minutes: 360
+inputs:
+  - field: endpoints
+    label: Endpoints
+    hint: Select the devices on the Endpoints page, then Assign policy.

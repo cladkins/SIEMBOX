@@ -3,9 +3,14 @@
     <template #header>
       <div class="card-header-row">
         <span>Scan policies</span>
-        <el-button v-if="canEdit" size="small" type="primary" data-testid="new-policy" @click="openEditor(null)">
-          <el-icon><Plus /></el-icon> New policy
-        </el-button>
+        <span class="header-actions">
+          <el-button size="small" data-testid="suggested-policies" @click="suggestionsOpen = true">
+            <el-icon><MagicStick /></el-icon> Suggested policies
+          </el-button>
+          <el-button v-if="canEdit" size="small" type="primary" data-testid="new-policy" @click="openEditor(null)">
+            <el-icon><Plus /></el-icon> New policy
+          </el-button>
+        </span>
       </div>
     </template>
     <p class="muted intro">
@@ -75,6 +80,14 @@
         <el-button type="primary" :loading="editor.saving" data-testid="save-policy" @click="save">Save</el-button>
       </template>
     </el-dialog>
+
+    <ScanSuggestionsBrowser
+      v-model="suggestionsOpen"
+      :kinds="['endpoint_policy']"
+      :can-add="canEdit"
+      title="Suggested scan policies"
+      @added="onSuggestionAdded"
+    />
   </el-card>
 </template>
 
@@ -84,9 +97,10 @@
  * with each scan type's timing, how many endpoints follow each, and the editor
  * (operators and admins). The parent loads the list and reloads on `changed`.
  */
-import { reactive } from 'vue';
+import { reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus } from '@element-plus/icons-vue';
+import { MagicStick, Plus } from '@element-plus/icons-vue';
+import ScanSuggestionsBrowser from '@/components/ScanSuggestionsBrowser.vue';
 import ScanSpecEditor from './ScanSpecEditor.vue';
 import PerfSettingsEditor from './PerfSettingsEditor.vue';
 import { describePerformance, performanceForm, performanceProblem, type PolicyPerformance } from '@/utils/endpointPerformance';
@@ -105,8 +119,24 @@ import {
   type SpecForm,
 } from '@/utils/scanPolicies';
 
-defineProps<{ policies: ScanPolicy[]; loading: boolean; canEdit: boolean }>();
+const props = defineProps<{ policies: ScanPolicy[]; loading: boolean; canEdit: boolean }>();
 const emit = defineEmits<{ changed: [] }>();
+
+// Suggested policies from the catalog: Add creates an unassigned policy and opens it here.
+const suggestionsOpen = ref(false);
+function onSuggestionAdded(result: { policy?: ScanPolicy }) {
+  emit('changed');
+  if (result.policy && props.canEdit) openEditor(result.policy);
+}
+
+/** Open a policy's editor by id (the Endpoints page, after "Add" on the Scheduled Scans page). */
+function openPolicy(id: number): boolean {
+  const policy = props.policies.find((p) => p.id === id);
+  if (!policy || !props.canEdit) return false;
+  openEditor(policy);
+  return true;
+}
+defineExpose({ openPolicy });
 
 const zone = browserTimeZone();
 
@@ -212,6 +242,10 @@ async function remove(policy: ScanPolicy) {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.header-actions {
+  display: flex;
+  gap: 8px;
 }
 .intro {
   margin: 0 0 10px;

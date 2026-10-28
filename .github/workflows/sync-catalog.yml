@@ -1,10 +1,11 @@
 name: Sync Catalog
 
 # Mirror the published siembox-catalog repo (the source of truth for parsers,
-# detections, content packs and application signatures, and what users install
-# from) into this repo's catalog/parsers/ + rules/ + catalog/packs/ +
-# catalog/applications/, so the in-repo copy, the validate-catalog gate, Content Packs and Application Monitoring all
-# agree. Author content in siembox-catalog: this copy is exact, so a change made
+# detections, content packs, application signatures and suggested scans, and
+# what users install from) into this repo's catalog/parsers/ + rules/ +
+# catalog/packs/ + catalog/applications/ + catalog/scans/, so the in-repo copy,
+# the validate-catalog gate, Content Packs, Application Monitoring and
+# Suggested scans all agree. Author content in siembox-catalog: this copy is exact, so a change made
 # only here is reverted by the next sync.
 #
 # Runs weekly (and on demand). The synced content is VALIDATED before a PR is
@@ -85,18 +86,27 @@ jobs:
             echo "No application signatures to validate."
           fi
 
+      - name: Validate synced suggested scans (strict, schedules, no concrete targets)
+        working-directory: backend
+        run: |
+          if [ -d ../catalog/scans ]; then
+            npm run validate-scans -- ../catalog/scans
+          else
+            echo "No suggested scans to validate."
+          fi
+
       - name: Open a PR if the catalog drifted
         uses: peter-evans/create-pull-request@v8
         with:
           branch: chore/catalog-sync
           delete-branch: true
-          commit-message: 'chore(catalog): sync parsers, detections, packs + applications from published catalog'
+          commit-message: 'chore(catalog): sync parsers, detections, packs, applications + scans from published catalog'
           title: 'chore(catalog): sync from published siembox-catalog'
           body: |
             Automated mirror of the published **siembox-catalog** into `catalog/parsers/`,
-            `rules/`, `catalog/packs/` and `catalog/applications/` (run by `.github/workflows/sync-catalog.yml`).
+            `rules/`, `catalog/packs/`, `catalog/applications/` and `catalog/scans/` (run by `.github/workflows/sync-catalog.yml`).
 
-            The synced parsers, detections, packs and application signatures already passed strict
+            The synced parsers, detections, packs, application signatures and suggested scans already passed strict
             validation + self-tests in this job. Merging keeps the in-repo source, the
             `validate-catalog` gate, and what users install from Browse Catalog /
             Content Packs all in agreement.

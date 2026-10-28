@@ -11,7 +11,10 @@ permissions:
 # engine supports; content packs under catalog/packs/ must pass the pack schema
 # and reference only parsers and detections that exist here; application
 # signatures under catalog/applications/ must pass the signature schema, the
-# ReDoS check and their own tests, and reference only parsers that exist here.
+# ReDoS check and their own tests, and reference only parsers that exist here;
+# suggested scans under catalog/scans/ must pass the suggestion schema (valid
+# schedules, options the Scheduled Scans and scan-policy routes accept, no
+# concrete targets, intrusive selections declared).
 # Anything that passes here imports into SIEMBox cleanly.
 on:
   pull_request:
@@ -26,6 +29,10 @@ on:
       - 'backend/src/services/packs/**'
       - 'backend/src/scripts/validate-applications.ts'
       - 'backend/src/services/applications/**'
+      - 'backend/src/scripts/validate-scans.ts'
+      - 'backend/src/services/scanSuggestions/**'
+      - 'backend/src/services/scanner/scheduleOptions.ts'
+      - 'backend/src/utils/scheduleTiming.ts'
       - '.github/workflows/validate-catalog.yml'
   push:
     branches: [main, develop]
@@ -36,6 +43,8 @@ on:
       - 'backend/src/services/rules/**'
       - 'backend/src/services/packs/**'
       - 'backend/src/services/applications/**'
+      - 'backend/src/services/scanSuggestions/**'
+      - 'backend/src/services/scanner/scheduleOptions.ts'
       - '.github/workflows/validate-catalog.yml'
   workflow_dispatch:
 
@@ -77,3 +86,7 @@ jobs:
       - name: Validate application signatures (strict, ReDoS, self-tests, parsers resolve)
         working-directory: backend
         run: npm run validate-applications -- ../catalog/applications --parsers ../catalog/parsers
+
+      - name: Validate suggested scans (strict, schedules, options, no concrete targets)
+        working-directory: backend
+        run: npm run validate-scans -- ../catalog/scans

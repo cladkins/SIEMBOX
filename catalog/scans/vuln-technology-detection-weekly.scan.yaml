@@ -1,0 +1,30 @@
+schema: siembox.scan/v1
+id: vuln-technology-detection-weekly
+name: Weekly web technology fingerprint
+kind: vulnerability
+category: inventory
+tags: [nuclei, tech, inventory]
+description: >-
+  The Nuclei tech templates once a week: which web servers, frameworks,
+  CMSs and appliances each host runs, recorded as informational findings.
+why: >-
+  An inventory of web software without installing anything: useful to see
+  where an affected product runs the day a new advisory comes out.
+intrusive: false
+load: light
+schedule:
+  frequency: weekly
+  days: [5]
+  time: "04:00"
+options:
+  templateSelection:
+    tags: [tech]
+    excludeTags: [intrusive, dos, fuzz]
+  rateLimit: 100
+inputs:
+  - field: target
+    label: Host or range
+    hint: The web hosts to fingerprint, as a host, IP or CIDR.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

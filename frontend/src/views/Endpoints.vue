@@ -129,6 +129,7 @@
     </el-card>
 
     <ScanPoliciesCard
+      ref="policiesCard"
       style="margin-top: 16px"
       :policies="policies.list"
       :loading="policies.loading"
@@ -511,6 +512,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { api } from '@/services/api';
 import { useAuthStore } from '@/stores/auth';
 import {
@@ -636,7 +638,23 @@ async function refresh() {
   catch { ElMessage.error('Failed to load endpoints'); }
   finally { loading.value = false; }
 }
-onMounted(refresh);
+onMounted(async () => {
+  await refresh();
+  openPolicyFromQuery();
+});
+
+// /endpoints?policy=<id> (a suggested policy added on the Scheduled Scans page): open its editor once.
+const route = useRoute();
+const router = useRouter();
+const policiesCard = ref<InstanceType<typeof ScanPoliciesCard> | null>(null);
+function openPolicyFromQuery() {
+  const id = Number(route.query.policy);
+  if (!Number.isInteger(id) || id <= 0) return;
+  policiesCard.value?.openPolicy(id);
+  const { policy: _policy, ...rest } = route.query;
+  void _policy;
+  router.replace({ query: rest });
+}
 
 async function pullYaraForge() {
   try {

@@ -1,0 +1,27 @@
+schema: siembox.scan/v1
+id: logdisc-passive-daily
+name: Daily passive log source discovery
+kind: log_discovery
+category: log-sources
+tags: [log-discovery, passive]
+description: >-
+  A passive Log Discovery run every day: reads what the network already
+  announces (the ARP table, mDNS, SSDP, DHCP leases, LLDP) without sending a
+  packet to any host, and ranks the devices that could be sending logs.
+why: >-
+  Finds log sources you have not onboarded yet without touching any host.
+  Leave the CIDRs empty to use the scope saved on the Log Discovery page.
+intrusive: false
+load: light
+schedule:
+  frequency: daily
+  time: "00:45"
+options:
+  mode: passive
+inputs:
+  - field: cidrs
+    label: Subnets (optional)
+    hint: Leave empty to use the Log Discovery scope; otherwise your LAN subnets in CIDR form.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

@@ -1,0 +1,21 @@
+schema: siembox.scan/v1
+id: container-all-images-weekly
+name: Weekly scan of every container image
+kind: container
+category: containers
+tags: [trivy, images, low-power]
+description: >-
+  A Trivy scan of every discovered container image once a week, on Sunday
+  morning.
+why: >-
+  The same coverage as the nightly scan for hosts where a nightly Trivy run
+  of many images is too heavy (a small single-board computer or a busy NAS).
+intrusive: false
+load: moderate
+schedule:
+  frequency: weekly
+  days: [0]
+  time: "05:30"
+options:
+  all_images: true
+inputs: []

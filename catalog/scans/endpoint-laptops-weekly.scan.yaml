@@ -1,0 +1,37 @@
+schema: siembox.scan/v1
+id: endpoint-laptops-weekly
+name: Laptops — weekly
+kind: endpoint_policy
+category: endpoints
+tags: [endpoint, laptops]
+description: >-
+  Laptops that come and go: vulnerabilities, YARA and packages once a week
+  in the daytime, system inventory every four hours. A scan missed while the
+  laptop was away runs once when it reconnects (inside the 08:00-20:00 window).
+why: >-
+  Laptops run on battery and are often asleep or off-site, so frequent or
+  night-time scans either never run or drain the battery. Weekly daytime scans
+  keep them covered without users noticing.
+intrusive: false
+load: light
+options:
+  scans:
+    vuln:
+      enabled: true
+      schedule: { frequency: weekly, days: [1], time: "11:00" }
+      window: { start: "08:00", end: "20:00" }
+    yara:
+      enabled: true
+      schedule: { frequency: weekly, days: [3], time: "13:00" }
+      window: { start: "08:00", end: "20:00" }
+    packages:
+      enabled: true
+      schedule: { frequency: weekly, days: [1], time: "10:00" }
+      window: { start: "08:00", end: "20:00" }
+    inventory:
+      enabled: true
+      interval_minutes: 240
+inputs:
+  - field: endpoints
+    label: Endpoints
+    hint: Select the laptops on the Endpoints page, then Assign policy.

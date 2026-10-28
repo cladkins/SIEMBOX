@@ -1,0 +1,36 @@
+schema: siembox.scan/v1
+id: endpoint-servers-nightly-full
+name: Servers — nightly full
+kind: endpoint_policy
+category: endpoints
+tags: [endpoint, servers]
+description: >-
+  Always-on servers: vulnerabilities, a full YARA pass and packages every
+  night between midnight and 06:00, system inventory hourly.
+why: >-
+  Servers are up at night and quiet then, so they can afford a full check
+  every day; findings are fresh each morning and the load stays out of
+  working hours.
+intrusive: false
+load: moderate
+options:
+  scans:
+    vuln:
+      enabled: true
+      schedule: { frequency: daily, time: "02:00" }
+      window: { start: "00:00", end: "06:00" }
+    yara:
+      enabled: true
+      schedule: { frequency: daily, time: "03:00" }
+      window: { start: "00:00", end: "06:00" }
+    packages:
+      enabled: true
+      schedule: { frequency: daily, time: "01:00" }
+      window: { start: "00:00", end: "06:00" }
+    inventory:
+      enabled: true
+      interval_minutes: 60
+inputs:
+  - field: endpoints
+    label: Endpoints
+    hint: Select the servers on the Endpoints page, then Assign policy.

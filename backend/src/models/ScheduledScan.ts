@@ -1,7 +1,7 @@
 import { query } from '../config/database';
 import { computeNextRun, type CalendarSchedule } from '../utils/scheduleTiming';
 
-export type ScheduledScanType = 'asset' | 'vulnerability' | 'container';
+export type ScheduledScanType = 'asset' | 'vulnerability' | 'container' | 'log_discovery';
 
 export interface ScheduledScan {
   id: number;

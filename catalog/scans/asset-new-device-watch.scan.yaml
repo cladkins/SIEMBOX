@@ -1,0 +1,28 @@
+schema: siembox.scan/v1
+id: asset-new-device-watch
+name: New device watch (ping sweep every 2 hours)
+kind: asset
+category: inventory
+tags: [nmap, ping, new-devices]
+description: >-
+  A ping sweep every two hours, around the clock, so a device that joins the
+  network appears in Asset Inventory within hours rather than the next day.
+why: >-
+  For networks where an unknown device matters quickly (guest or IoT VLANs, a
+  small office). Ping sweeps are light, but keep the subnets small: a /16
+  every two hours is a lot of traffic.
+intrusive: false
+load: light
+schedule:
+  frequency: hourly
+  minute: 10
+  every_hours: 2
+options:
+  scanType: ping
+inputs:
+  - field: targets
+    label: Subnets to watch
+    hint: The subnets where new devices appear (Wi-Fi, guest or IoT networks), in CIDR form.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

@@ -1,0 +1,34 @@
+schema: siembox.scan/v1
+id: vuln-full-template-run-monthly
+name: Monthly full Nuclei run (all templates, intrusive)
+kind: vulnerability
+category: cves
+tags: [nuclei, full, deep]
+description: >-
+  Every Nuclei template against one target, once a month: CVEs of every
+  severity, misconfigurations, exposures, default logins and fuzzing.
+why: >-
+  The deepest check SIEMBox can run, for a lab or a staging host you want
+  to see everything about. It is slow, loud and intrusive: never point it at
+  production without agreement.
+intrusive: true
+intrusive_note: >-
+  Includes templates that log in, send exploit payloads, fuzz parameters and
+  can overload fragile services. Run only against systems you may disrupt.
+load: heavy
+schedule:
+  frequency: monthly
+  day_of_month: 1
+  time: "01:00"
+options:
+  templateSelection:
+    all: true
+  rateLimit: 50
+  timeout: 7200000
+inputs:
+  - field: target
+    label: Host
+    hint: A single lab or staging host you are allowed to disrupt.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

@@ -1,0 +1,27 @@
+schema: siembox.scan/v1
+id: asset-host-discovery-daily
+name: Daily host discovery (ping sweep)
+kind: asset
+category: inventory
+tags: [nmap, ping, inventory]
+description: >-
+  Sweeps your subnets with an Nmap ping scan (-sn, no ports) once a night and
+  records every host that answers in Asset Inventory.
+why: >-
+  The cheapest way to keep the asset list current. Start here: new devices,
+  re-addressed ones and hosts that went quiet show up the next morning, and
+  every other scan works from a known set of hosts.
+intrusive: false
+load: light
+schedule:
+  frequency: daily
+  time: "01:15"
+options:
+  scanType: ping
+inputs:
+  - field: targets
+    label: Subnets to sweep
+    hint: Your own LAN subnets in CIDR form, one per line.
+  - field: shipper
+    label: Run from
+    hint: Pick a log shipper on that network when SIEMBox itself cannot reach it.

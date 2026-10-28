@@ -236,6 +236,14 @@ each agent's built-in intervals. Stored in `edr_scan_policies`,
   endpoints back to the default. The default starts as what agents did on
   their own: system inventory hourly, packages every 6 hours, vulnerabilities
   and a full YARA pass daily.
+- **Suggested policies.** *Suggested policies* in the card (and *Suggested
+  scans* on the Scheduled Scans page) lists ready-made policies from the
+  catalog (`scans/<id>.scan.yaml`, kind `endpoint_policy`): workstations in
+  business hours, servers nightly, laptops weekly, critical servers every 6
+  hours, low-power devices. *Add* (operators and admins) creates it as a named
+  policy, its schedules and windows in your browser's time zone, that no
+  endpoint follows until you assign it, and opens it in the editor
+  (`POST /api/scan-suggestions/:id/add`).
 - **Per-endpoint overrides.** In the drawer's *Scan policy* tab, *Override*
   replaces one scan type's entry for that endpoint only (*Clear* returns it to
   the policy). The tab shows each type's source (policy or override), its

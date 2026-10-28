@@ -1,0 +1,28 @@
+schema: siembox.scan/v1
+id: asset-service-versions-weekly
+name: Weekly service and version detection
+kind: asset
+category: services
+tags: [nmap, services, versions]
+description: >-
+  An Nmap version scan (-sV, ports 1-1000) once a week: open ports with the
+  product and version of the service behind each one.
+why: >-
+  Versions are what vulnerability linking and Application Monitoring work
+  from, so this turns "port 443 is open" into "nginx 1.24 is running". It
+  takes longer than a plain port scan; run it on a quiet night.
+intrusive: false
+load: moderate
+schedule:
+  frequency: weekly
+  days: [6]
+  time: "03:00"
+options:
+  scanType: service
+inputs:
+  - field: targets
+    label: Subnets or hosts
+    hint: The networks or hosts to fingerprint, as IPs or CIDRs.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

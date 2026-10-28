@@ -24,6 +24,7 @@ catalog/
   parsers/         *.parser.json   — one portable parser per file
   packs/           *.pack.yaml     — content packs (mirrored from siembox-catalog)
   applications/    *.app.yaml      — application signatures for Application Monitoring (mirrored from siembox-catalog)
+  scans/           *.scan.yaml     — suggested scans for Scheduled Scans and endpoint scan policies (mirrored from siembox-catalog)
   schema/          parser.schema.json — JSON Schema (editor autocomplete + docs)
   README.md
   CONTRIBUTING.md  — how to add a parser (read this before submitting)
@@ -49,6 +50,7 @@ Parsers install from **Parsers → Browse Catalog**; detection rules from
 | `SIEMBOX_CATALOG_DETECTIONS_PATH` | `detections` | detection-rule directory within the repo |
 | `SIEMBOX_CATALOG_PACKS_PATH` | `packs` | content-pack directory within the repo |
 | `SIEMBOX_CATALOG_APPLICATIONS_PATH` | `applications` | application-signature directory within the repo |
+| `SIEMBOX_CATALOG_SCANS_PATH` | `scans` | suggested-scan directory within the repo |
 | `SIEMBOX_CATALOG_TOKEN` / `GITHUB_TOKEN` | — | optional; raises GitHub API rate limit / private repos |
 
 ## Validate locally
@@ -61,6 +63,7 @@ npm ci && npm run build
 npm run validate-parsers -- ../catalog/parsers      # a dir, or specific files
 npm run validate-packs -- ../catalog/packs --parsers ../catalog/parsers --detections ../rules
 npm run validate-applications -- ../catalog/applications --parsers ../catalog/parsers
+npm run validate-scans -- ../catalog/scans
 ```
 
 It exits non-zero if any file fails strict schema validation or any self-test.

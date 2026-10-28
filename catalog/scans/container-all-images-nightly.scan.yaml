@@ -1,0 +1,22 @@
+schema: siembox.scan/v1
+id: container-all-images-nightly
+name: Nightly scan of every container image
+kind: container
+category: containers
+tags: [trivy, images]
+description: >-
+  Every night, a Trivy scan of every image SIEMBox can see: the images on the
+  SIEMBox host (Docker socket) and on each log shipper's host. Images started
+  since the schedule was added are picked up automatically.
+why: >-
+  New CVEs are published daily against packages already inside your images,
+  so an image that was clean last month may not be now. Nothing to fill in:
+  just enable it.
+intrusive: false
+load: moderate
+schedule:
+  frequency: daily
+  time: "05:00"
+options:
+  all_images: true
+inputs: []

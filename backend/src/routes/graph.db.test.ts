@@ -415,6 +415,14 @@ test('an asset: current IP, host, open vulnerabilities, shipper match, alerts by
 
   const vuln = (await nbr('viewer', `vuln:${ids.vuln}`)).json;
   assert.ok(edge(vuln, 'asset_vulns', asset, `vuln:${ids.vuln}`));
+
+  // One hop from the asset's IP, host name and endpoint too (asset_vulns needs two).
+  const ip = (await nbr('viewer', `ip:${IP.asset}`)).json;
+  assert.ok(edge(ip, 'ip_vulns', `ip:${IP.asset}`, `vuln:${ids.vuln}`), 'the IP shows its asset\'s vulnerability');
+  const host = (await nbr('viewer', `host:asset-${tag}`)).json;
+  assert.ok(edge(host, 'host_vulns', `host:asset-${tag}`, `vuln:${ids.vuln}`), 'the host name shows its asset\'s vulnerability');
+  const endpoint = (await nbr('admin', `endpoint:${AGENT_ID}`)).json;
+  assert.ok(edge(endpoint, 'endpoint_vulns', `endpoint:${AGENT_ID}`, `vuln:${ids.vuln}`), 'the endpoint shows its asset\'s vulnerability');
   const shipper = (await nbr('viewer', `shipper:${ids.shipper}`)).json;
   assert.ok(edge(shipper, 'shipper_address', `shipper:${ids.shipper}`, `host:${HOST.toLowerCase()}`));
   assert.ok(!shipper.nodes.some((n) => Object.keys(n.facts).some((f) => /key|hash/.test(f))), 'no key or hash facts');

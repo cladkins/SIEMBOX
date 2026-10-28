@@ -7023,6 +7023,7 @@ So that the graph can't crowd out the rest of SIEMBox:
 | `asset_ip` / `ip_asset` | asset / ip | ip / asset | inventory, solid | the asset's current IP |
 | `asset_host` / `host_assets` | asset / host | host / asset | inventory, solid | the asset's host name |
 | `asset_vulns` / `vuln_assets` | asset / vuln | vuln / asset | inventory, solid | open findings, or all with `vuln_status=all`, by risk score |
+| `ip_vulns` / `host_vulns` / `endpoint_vulns` | ip / host / endpoint | vuln | inventory, solid | the same findings for the asset(s) with that IP or host name, or the endpoint's asset, one hop away (one row per vulnerability, its highest risk); `endpoint_vulns` is admin-only like the endpoint |
 | `asset_shipper` / `shipper_assets` | asset / shipper | shipper / asset | inventory, dotted | a shipper with the asset's host name or IP |
 | `asset_endpoint` | asset, endpoint (admin) | endpoint, asset | inventory, solid | the asset's agent |
 | `shipper_address` | shipper | ip, host | inventory, solid | the address and host name it reported |

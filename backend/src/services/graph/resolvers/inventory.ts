@@ -7,6 +7,9 @@
  *   asset_host / host_assets    lower(assets.hostname)
  *   asset_vulns / vuln_assets   asset_vulnerabilities, open only unless
  *                               vuln_status=all, ranked by risk score
+ *   ip_vulns / host_vulns       the same findings for the asset(s) with this
+ *                               IP or host name, so they show one hop from
+ *                               an IP or host (an alert's usual neighbours)
  *
  * The edges point from the asset, whichever side was expanded.
  */
@@ -58,6 +61,45 @@ const VULN_ORDER = (page: PageRequest) =>
     ? `${page.sort === 'first_seen' ? 'first_detected' : 'last_detected'} ${dir(page)} NULLS LAST, id ${dir(page)}`
     : `is_open ${dir(page)}, risk_score ${dir(page)} NULLS LAST, id ${dir(page)}`;
 
+/**
+ * Vulnerabilities of the assets matching `assetWhere` (on `a`), one row per
+ * vulnerability (its highest risk across those assets), with an edge from the
+ * centre. Shared by ip_vulns, host_vulns and endpoint_vulns.
+ */
+export async function vulnsOfAssets(
+  q: Query,
+  ctx: ResolverCtx,
+  page: PageRequest,
+  assetWhere: string,
+  params: unknown[],
+  rel: 'ip_vulns' | 'host_vulns' | 'endpoint_vulns'
+) {
+  const n = params.length + 1;
+  const result = await pagedSql(
+    q,
+    `SELECT v.id, max(av.risk_score) AS risk_score, bool_or(av.status = 'open') AS is_open,
+            min(av.first_detected) AS first_detected, max(av.last_detected) AS last_detected
+       FROM asset_vulnerabilities av
+       JOIN vulnerabilities v ON v.id = av.vulnerability_id
+       JOIN assets a ON a.id = av.asset_id
+      WHERE ${assetWhere} AND ($${n} = 'all' OR av.status = 'open') ${LABEL_FILTER}
+      GROUP BY v.id
+      ORDER BY bool_or(av.status = 'open') DESC, max(av.risk_score) DESC NULLS LAST, v.id DESC`,
+    [...params, ctx.vulnStatus],
+    VULN_ORDER(page),
+    page,
+    `v.cve_id || ' ' || COALESCE(v.title, '')`
+  );
+  return {
+    items: result.rows.map((row) => {
+      const vuln = entityRef('vuln', String(row.id));
+      return { ref: vuln, edge: edgeSpec(rel, ctx.center, vuln, 'inventory', 'recorded') };
+    }),
+    total: result.total,
+    totalCapped: result.totalCapped,
+  };
+}
+
 export const INVENTORY_RELATIONS: RelationDef[] = [
   {
     rel: 'asset_ip',
@@ -83,6 +125,25 @@ export const INVENTORY_RELATIONS: RelationDef[] = [
     // net.isIP guards the ::inet cast (entityKey.ts already canonicalized it).
     fetch: (q, ctx, page) =>
       net.isIP(ctx.center.key) ? assetPage(q, ctx, page, 'a.ip_address = $1::inet', [ctx.center.key], 'asset_ip') : Promise.resolve(EMPTY_PAGE),
+  },
+  {
+    rel: 'ip_vulns',
+    label: 'Vulnerabilities on the asset with this IP',
+    center: 'ip',
+    neighborType: 'vuln',
+    origin: 'inventory',
+    style: 'recorded',
+    fetch: (q, ctx, page) =>
+      net.isIP(ctx.center.key) ? vulnsOfAssets(q, ctx, page, 'a.ip_address = $1::inet', [ctx.center.key], 'ip_vulns') : Promise.resolve(EMPTY_PAGE),
+  },
+  {
+    rel: 'host_vulns',
+    label: 'Vulnerabilities on assets with this host name',
+    center: 'host',
+    neighborType: 'vuln',
+    origin: 'inventory',
+    style: 'recorded',
+    fetch: (q, ctx, page) => vulnsOfAssets(q, ctx, page, 'lower(a.hostname) = $1', [ctx.center.key], 'host_vulns'),
   },
   {
     rel: 'asset_host',

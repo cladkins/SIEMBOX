@@ -1,0 +1,27 @@
+schema: siembox.scan/v1
+id: logdisc-full-monthly
+name: Monthly full log source discovery
+kind: log_discovery
+category: log-sources
+tags: [log-discovery, full]
+description: >-
+  A full Log Discovery run (passive, then active) on the 2nd of each month,
+  refreshing the ranked list of log sources to onboard.
+why: >-
+  A monthly review of logging coverage: everything passive and active
+  discovery can find in one run, on a quiet night.
+intrusive: false
+load: moderate
+schedule:
+  frequency: monthly
+  day_of_month: 2
+  time: "02:45"
+options:
+  mode: full
+inputs:
+  - field: cidrs
+    label: Subnets (optional)
+    hint: Leave empty to use the Log Discovery scope; otherwise your LAN subnets in CIDR form.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

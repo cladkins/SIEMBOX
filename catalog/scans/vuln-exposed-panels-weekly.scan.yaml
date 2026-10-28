@@ -1,0 +1,30 @@
+schema: siembox.scan/v1
+id: vuln-exposed-panels-weekly
+name: Weekly exposed admin panel check
+kind: vulnerability
+category: exposure
+tags: [nuclei, panel, exposure]
+description: >-
+  Finds login and admin panels (routers, NAS boxes, hypervisors, CI servers,
+  databases' web consoles) with the Nuclei panel templates, once a week.
+why: >-
+  An admin panel reachable from the wrong network is one of the most common
+  ways in. This only detects that a panel answers; it never tries to log in.
+intrusive: false
+load: light
+schedule:
+  frequency: weekly
+  days: [1]
+  time: "05:00"
+options:
+  templateSelection:
+    tags: [panel]
+    excludeTags: [intrusive, dos, fuzz]
+  rateLimit: 100
+inputs:
+  - field: target
+    label: Host or range
+    hint: A host or CIDR range, ideally as seen from the less trusted side of your firewall.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

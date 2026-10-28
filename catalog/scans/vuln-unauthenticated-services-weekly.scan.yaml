@@ -1,0 +1,32 @@
+schema: siembox.scan/v1
+id: vuln-unauthenticated-services-weekly
+name: Weekly unauthenticated service check
+kind: vulnerability
+category: exposure
+tags: [nuclei, unauth, network]
+description: >-
+  Checks for services that answer without any authentication (Redis, MongoDB,
+  Elasticsearch, Docker and Kubernetes APIs, message brokers) using the
+  Nuclei unauth templates.
+why: >-
+  An open database or container API is a full compromise, not a finding to
+  schedule for later. The templates read a banner or a status call and change
+  nothing.
+intrusive: false
+load: light
+schedule:
+  frequency: weekly
+  days: [2]
+  time: "04:00"
+options:
+  templateSelection:
+    tags: [unauth]
+    excludeTags: [intrusive, dos, fuzz]
+  rateLimit: 100
+inputs:
+  - field: target
+    label: Host or range
+    hint: The servers to check, as a host, IP or CIDR.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

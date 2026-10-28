@@ -1,0 +1,34 @@
+schema: siembox.scan/v1
+id: vuln-default-logins-monthly
+name: Monthly default credentials check (intrusive)
+kind: vulnerability
+category: credentials
+tags: [nuclei, default-login, credentials]
+description: >-
+  The Nuclei default-login templates once a month: tries vendor default
+  usernames and passwords on the login pages and services it finds.
+why: >-
+  Default credentials on a camera, printer or admin console are an open door,
+  and only a login attempt proves them. It does log in, so warn the owners of
+  the systems first and expect failed-login alerts in SIEMBox.
+intrusive: true
+intrusive_note: >-
+  Attempts real logins: can lock out accounts with lockout policies, raises
+  authentication alerts and, on success, opens a session on the device.
+load: moderate
+schedule:
+  frequency: monthly
+  day_of_month: 15
+  time: "02:00"
+options:
+  templateSelection:
+    tags: [default-login]
+    excludeTags: [dos, fuzz]
+  rateLimit: 20
+inputs:
+  - field: target
+    label: Host or range
+    hint: Only hosts you are authorized to log in to, as a host, IP or CIDR.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

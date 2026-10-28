@@ -1,18 +1,36 @@
 import { Router, Request, Response } from 'express';
 import { ScheduledScanModel, ScheduledScanType } from '../models/ScheduledScan';
 import { ApiError } from '../middleware/errorHandler';
-import { pendingRunFor, triggerScheduledScan } from '../jobs/scheduledScans';
+import { discoverySweep, pendingRunFor, triggerScheduledScan } from '../jobs/scheduledScans';
 import { LogShipperModel } from '../models/LogShipper';
 import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { auditPublicTargetConfirmation, enforcePublicTargets } from '../services/scanner/publicTargetGuard';
 import { findPublicTargets } from '../services/scanner/targetSafety';
 import type { PublicTargetConfirmation } from '../services/scanner/publicTargetGuard';
 import { nextRuns, normalizeCalendarSchedule, type CalendarSchedule } from '../utils/scheduleTiming';
+import {
+  SCHEDULED_SCAN_TYPES,
+  isScheduledScanKind,
+  missingInputMessage,
+  missingScanInputs,
+  scanOptionsShapeError,
+  scheduleTargets,
+} from '../services/scanner/scheduleOptions';
+import { isSweepableCidr } from '../services/logDiscovery/scope';
 
 // app.ts mounts this router behind `authenticate`. Listing is open to any role;
 // creating, changing, deleting or running a schedule (which dispatches a scan,
 // possibly to a shipper) requires admin or operator, the roles that can open the
 // Scheduled Scans page. Denials are written to audit_logs.
+//
+// Scan types: asset (Nmap), vulnerability (Nuclei), container (Trivy) and
+// log_discovery (a Log Discovery sweep). What scan_options each takes:
+// services/scanner/scheduleOptions.ts.
+//
+// Incomplete schedules: a schedule added from a suggested scan
+// (routes/scanSuggestions.ts) is saved disabled, without its targets. It
+// cannot be enabled or run until they are filled in (a 400 names what is
+// missing); saving its options from the edit dialog needs them complete.
 //
 // Public targets: creating a schedule, or saving one's scan_options, with a
 // target in public address space needs allow_public_targets: true (a 400 names
@@ -29,34 +47,14 @@ import { nextRuns, normalizeCalendarSchedule, type CalendarSchedule } from '../u
 const router = Router();
 const requireScheduleWrite = requireScanPermission(UserRole.Operator, 'scheduled_scan');
 
+/** A 400 for scan_options that are malformed or still missing their targets. */
 function validateScanOptions(scanType: ScheduledScanType, opts: any): void {
-  if (!opts || typeof opts !== 'object' || Array.isArray(opts)) {
-    throw new ApiError(400, 'scan_options must be an object');
-  }
-  if (scanType === 'asset') {
-    if (!Array.isArray(opts.targets) || opts.targets.length === 0) {
-      throw new ApiError(400, 'Asset scans require scan_options.targets (a non-empty array of IPs/CIDRs)');
-    }
-  } else if (scanType === 'container') {
-    // Either one image, or every image discovered when the schedule runs.
-    if (opts.all_images !== undefined && typeof opts.all_images !== 'boolean') {
-      throw new ApiError(400, 'scan_options.all_images must be a boolean');
-    }
-    if (opts.all_images !== true && (!opts.image_ref || typeof opts.image_ref !== 'string')) {
-      throw new ApiError(400, 'Container scans require scan_options.image_ref (an image reference) or scan_options.all_images: true');
-    }
-  } else {
-    if (!opts.target || typeof opts.target !== 'string') {
-      throw new ApiError(400, 'Vulnerability scans require scan_options.target (a host/IP string)');
-    }
-  }
-
-  // Optional shipper dispatch (asset/vuln only -- container scans are Trivy, no
-  // LAN scan). Shape check here; existence is verified in assertShipperExists.
-  if (scanType !== 'container' && opts.assignedShipperId !== undefined && opts.assignedShipperId !== null) {
-    if (!Number.isInteger(opts.assignedShipperId) || opts.assignedShipperId <= 0) {
-      throw new ApiError(400, 'scan_options.assignedShipperId must be a positive integer');
-    }
+  const shape = scanOptionsShapeError(scanType, opts);
+  if (shape) throw new ApiError(400, shape);
+  if (missingScanInputs(scanType, opts).length > 0) throw new ApiError(400, missingInputMessage(scanType));
+  if (scanType === 'log_discovery' && Array.isArray(opts.manual_cidrs)) {
+    const bad = opts.manual_cidrs.filter((c: string) => !isSweepableCidr(c));
+    if (bad.length > 0) throw new ApiError(400, `scan_options.manual_cidrs: not a sweepable CIDR: ${bad.slice(0, 5).join(', ')}`);
   }
 }
 
@@ -72,11 +70,21 @@ async function assertShipperExists(scanType: ScheduledScanType, opts: any): Prom
   }
 }
 
-/** The targets a schedule's scan_options name (none for a container scan). */
-function scheduleTargets(scanType: ScheduledScanType, opts: any): string[] {
-  if (scanType === 'container' || !opts) return [];
-  if (scanType === 'asset') return Array.isArray(opts.targets) ? opts.targets.map(String) : [];
-  return opts.target ? [String(opts.target)] : [];
+/**
+ * The addresses a save's public-target check covers: the targets the options
+ * name; for a log discovery schedule without its own CIDRs, the saved Log
+ * Discovery scope each run sweeps (as POST /api/log-discovery/scans checks).
+ */
+async function targetsToCheck(scanType: ScheduledScanType, opts: any): Promise<string[]> {
+  return scanType === 'log_discovery' ? discoverySweep(opts) : scheduleTargets(scanType, opts);
+}
+
+/** A 400 when the schedule cannot be enabled or run yet: an input is still to be filled in. */
+function assertComplete(schedule: { scan_type: ScheduledScanType; scan_options: any }, action: string): void {
+  const missing = missingScanInputs(schedule.scan_type, schedule.scan_options);
+  if (missing.length > 0) {
+    throw new ApiError(400, `Fill in ${missing.join(', ')} (Edit) before ${action} this schedule`);
+  }
 }
 
 /** scan_options as stored: the client's options with this save's confirmation, or none. */
@@ -125,6 +133,7 @@ router.get('/', async (_req: Request, res: Response) => {
     scans.map((s) => ({
       ...s,
       public_targets: findPublicTargets(scheduleTargets(s.scan_type, s.scan_options)).publicTargets.map((t) => t.target),
+      missing_inputs: missingScanInputs(s.scan_type, s.scan_options),
     }))
   );
 });
@@ -151,13 +160,13 @@ router.post('/', requireScheduleWrite, async (req: Request, res: Response) => {
   if (!name || typeof name !== 'string') {
     throw new ApiError(400, 'name is required');
   }
-  if (scan_type !== 'asset' && scan_type !== 'vulnerability' && scan_type !== 'container') {
-    throw new ApiError(400, "scan_type must be 'asset', 'vulnerability', or 'container'");
+  if (!isScheduledScanKind(scan_type)) {
+    throw new ApiError(400, `scan_type must be one of: ${SCHEDULED_SCAN_TYPES.join(', ')}`);
   }
   const timing = parseTiming(req.body);
   validateScanOptions(scan_type, scan_options);
   await assertShipperExists(scan_type, scan_options);
-  const targets = scheduleTargets(scan_type, scan_options);
+  const targets = await targetsToCheck(scan_type, scan_options);
   const publicCheck = enforcePublicTargets(targets, req, res);
   if (!publicCheck) return;
 
@@ -188,8 +197,8 @@ router.put('/:id', requireScheduleWrite, async (req: Request, res: Response) => 
 
   const { name, scan_type, scan_options, enabled } = req.body;
 
-  if (scan_type !== undefined && scan_type !== 'asset' && scan_type !== 'vulnerability' && scan_type !== 'container') {
-    throw new ApiError(400, "scan_type must be 'asset', 'vulnerability', or 'container'");
+  if (scan_type !== undefined && !isScheduledScanKind(scan_type)) {
+    throw new ApiError(400, `scan_type must be one of: ${SCHEDULED_SCAN_TYPES.join(', ')}`);
   }
 
   // Timing, if this save changes it. A calendar `schedule` replaces any
@@ -220,11 +229,20 @@ router.put('/:id', requireScheduleWrite, async (req: Request, res: Response) => 
     // Saving the options (the edit dialog) is a new decision about the
     // targets, so public ones need confirming again, even if the schedule
     // already had them. Toggling enabled or renaming alone doesn't.
-    targets = scheduleTargets(effectiveType, scan_options);
+    targets = await targetsToCheck(effectiveType, scan_options);
     const publicCheck = enforcePublicTargets(targets, req, res);
     if (!publicCheck) return;
     confirmation = publicCheck.confirmation;
     storedOptions = withConfirmation(scan_options, confirmation);
+  }
+
+  // Enabling needs the targets in place (a suggestion is added without them).
+  const effectiveEnabled = enabled === undefined ? existing.enabled : enabled === true;
+  if (effectiveEnabled) {
+    assertComplete(
+      { scan_type: (scan_type as ScheduledScanType) || existing.scan_type, scan_options: scan_options ?? existing.scan_options },
+      enabled === true && !existing.enabled ? 'enabling' : 'saving'
+    );
   }
 
   await ScheduledScanModel.update(id, {
@@ -268,6 +286,7 @@ router.post('/:id/run', requireScheduleWrite, async (req: Request, res: Response
   if (!schedule) {
     throw new ApiError(404, 'Scheduled scan not found');
   }
+  assertComplete(schedule, 'running');
   // A run still waiting for its shipper isn't queued a second time.
   const pending = await pendingRunFor(schedule);
   if (pending !== null) {

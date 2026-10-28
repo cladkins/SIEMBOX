@@ -139,3 +139,28 @@ npm run validate-applications -- ../catalog/applications --parsers ../catalog/pa
 ```
 
 The format and its rules: the wiki's *Application Monitoring* page.
+
+## Suggested scans
+
+The ready-made scans behind **Scheduled Scans → Suggested scans** and
+**Endpoints → Scan policies → Suggested policies** (`scans/<id>.scan.yaml`,
+format `siembox.scan/v1`) are contributed to
+[siembox-catalog](https://github.com/cladkins/siembox-catalog) too;
+`catalog/scans/` here is its mirror. One file per suggestion, of one kind:
+`asset` (Nmap), `vulnerability` (Nuclei), `container` (Trivy), `log_discovery`
+or `endpoint_policy`. It carries the scan's options and a calendar schedule
+**without a time zone** (the person adding it gets their browser's), and lists
+under `inputs` what that person fills in afterwards. It never names a target:
+no `targets`, `target`, `image_ref` or CIDRs in `options`, and no IP address,
+CIDR or host name in the options or inputs (nor an IP or CIDR anywhere). A
+Nuclei selection that can log in, send payloads or fuzz (all templates, an
+intrusive tag such as `default-login`, or not excluding `intrusive`, `dos` and
+`fuzz`) must say `intrusive: true` with an `intrusive_note`. Validate with:
+
+```bash
+cd backend && npm run build
+npm run validate-scans -- ../catalog/scans
+```
+
+The format and its rules: `backend/src/services/scanSuggestions/scanFormat.ts`
+and the wiki's *Vulnerability and Container Scanning* page.

@@ -1,0 +1,30 @@
+schema: siembox.scan/v1
+id: vuln-tls-weekly
+name: Weekly TLS certificate and configuration check
+kind: vulnerability
+category: tls
+tags: [nuclei, tls, certificates]
+description: >-
+  The Nuclei ssl/ templates once a week: expired, soon-to-expire, self-signed
+  and mismatched certificates, deprecated protocol versions and weak ciphers.
+why: >-
+  Catches the certificate that is about to expire before users see the
+  browser warning, and the old appliance still offering TLS 1.0.
+intrusive: false
+load: light
+schedule:
+  frequency: weekly
+  days: [6]
+  time: "04:30"
+options:
+  templateSelection:
+    templates: [ssl/]
+    excludeTags: [intrusive, dos, fuzz]
+  rateLimit: 50
+inputs:
+  - field: target
+    label: Host or range
+    hint: The hosts that serve TLS (web servers, mail, VPN), as a host, IP or CIDR.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

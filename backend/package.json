@@ -16,7 +16,8 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "validate-detections": "node dist/scripts/validate-detections.js",
     "validate-packs": "node dist/scripts/validate-packs.js",
-    "validate-applications": "node dist/scripts/validate-applications.js"
+    "validate-applications": "node dist/scripts/validate-applications.js",
+    "validate-scans": "node dist/scripts/validate-scans.js"
   },
   "keywords": [
     "siem",

@@ -1,0 +1,22 @@
+schema: siembox.scan/v1
+id: container-single-image-daily
+name: Daily scan of one important image
+kind: container
+category: containers
+tags: [trivy, image]
+description: >-
+  A daily Trivy scan of one image you name, pulled fresh on each run.
+why: >-
+  For the image that matters most (the one facing the internet, or the one
+  you build and publish yourself), including an image not running on any
+  host SIEMBox can see.
+intrusive: false
+load: light
+schedule:
+  frequency: daily
+  time: "06:15"
+options: {}
+inputs:
+  - field: image_ref
+    label: Image
+    hint: An image reference as you would pass it to docker pull (repository and tag).

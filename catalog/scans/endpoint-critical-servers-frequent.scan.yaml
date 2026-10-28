@@ -1,0 +1,34 @@
+schema: siembox.scan/v1
+id: endpoint-critical-servers-frequent
+name: Critical servers — every 6 hours
+kind: endpoint_policy
+category: endpoints
+tags: [endpoint, servers, critical]
+description: >-
+  Internet-facing or business-critical servers: vulnerabilities and packages
+  every six hours, a full YARA pass nightly, inventory hourly.
+why: >-
+  For the few machines where a day's delay matters (a reverse proxy, a mail
+  server, a domain controller): a newly published vulnerability in an
+  installed package shows up within hours.
+intrusive: false
+load: moderate
+options:
+  scans:
+    vuln:
+      enabled: true
+      schedule: { frequency: hourly, minute: 20, every_hours: 6 }
+    yara:
+      enabled: true
+      schedule: { frequency: daily, time: "03:30" }
+      window: { start: "00:00", end: "06:00" }
+    packages:
+      enabled: true
+      schedule: { frequency: hourly, minute: 5, every_hours: 6 }
+    inventory:
+      enabled: true
+      interval_minutes: 60
+inputs:
+  - field: endpoints
+    label: Endpoints
+    hint: Select the critical servers on the Endpoints page, then Assign policy.

@@ -1,0 +1,28 @@
+schema: siembox.scan/v1
+id: logdisc-active-weekly
+name: Weekly active log source discovery
+kind: log_discovery
+category: log-sources
+tags: [log-discovery, active]
+description: >-
+  An active Log Discovery run once a week: probes the hosts in scope on the
+  ports and paths the fingerprint library declares (web consoles, APIs, TLS
+  certificates, banners) and identifies the log-capable products behind them.
+why: >-
+  Identifies firewalls, NAS boxes, hypervisors and applications that can send
+  logs but do not announce themselves. Probes are light but visible to an IDS.
+intrusive: false
+load: moderate
+schedule:
+  frequency: weekly
+  days: [2]
+  time: "02:15"
+options:
+  mode: active
+inputs:
+  - field: cidrs
+    label: Subnets (optional)
+    hint: Leave empty to use the Log Discovery scope; otherwise your LAN subnets in CIDR form.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

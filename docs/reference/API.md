@@ -179,6 +179,7 @@ Reads under `/api/assets`, `/api/vulnerabilities`, `/api/scheduled-scans`, `/api
 | `POST /api/vulnerabilities/scans`, `POST /api/vulnerabilities/scans/:scanId/cancel` | yes | yes | no | no |
 | `PATCH /api/vulnerabilities/:assetId/:vulnId` | yes | yes | no | no |
 | `POST /api/scheduled-scans`, `POST /api/scheduled-scans/preview`, `PUT` / `DELETE /api/scheduled-scans/:id`, `POST /api/scheduled-scans/:id/run` | yes | yes | no | no |
+| `POST /api/scan-suggestions/:id/add` | yes | yes | no | no |
 | `POST /api/log-discovery/scans`, `POST /api/log-discovery/scans/:id/cancel` | yes | yes | no | no |
 | `POST /api/log-discovery/sources/:id/confirm`, `/ignore`, `/onboard/confirm` | yes | yes | no | no |
 | `PUT /api/log-discovery/scope/cidrs`, `POST /api/log-discovery/sources/manual`, `PATCH` and `DELETE /api/log-discovery/sources/:id`, the `/sources/:id/poller` writes | yes | no | no | no |
@@ -253,6 +254,75 @@ The next runs a timing would produce, for the edit dialog's "Next runs" preview.
 ```
 
 For an interval, `next_runs` are now + 1, 2, 3 × `interval_minutes` (when it would run if saved now).
+
+### Scheduled scan types and options
+
+`scan_type` is `asset` (Nmap), `vulnerability` (Nuclei), `container` (Trivy) or `log_discovery` (a Log Discovery sweep). `scan_options` per type:
+
+| `scan_type` | `scan_options` |
+|---|---|
+| `asset` | `targets` (IPs/CIDRs, required to run), `scanType` (`ping`, `port`, `service`, `os`), `assignedShipperId` |
+| `vulnerability` | `target` (host, IP or CIDR, required to run), `templateSelection` (`all`, `cves`, `templates` (ids or `<dir>/`), `tags`, `severities`, `exclude`, `excludeTags`; must select something), `rateLimit` (1-10000 requests/second), `timeout` (ms, 60000 to 86400000), `assignedShipperId` |
+| `container` | `image_ref`, or `all_images: true` |
+| `log_discovery` | `mode` (`passive`, `active`, `full`; default `full`), `manual_cidrs` (omitted: each run sweeps the saved Log Discovery scope), `assignedShipperId` |
+
+A schedule added from a [suggested scan](#suggested-scans) is saved **disabled and without its targets**. `GET /api/scheduled-scans` lists what each schedule still needs as `missing_inputs` (`["targets"]`, `["target"]`, `["image_ref"]`, or `[]`). Such a schedule cannot be enabled (`PUT` with `enabled: true`) or run (`POST /:id/run`) until they are filled in: a `400` says `Fill in targets (Edit) before enabling this schedule`. A `PUT` that sends `scan_options` needs them complete, as `POST` always does.
+
+A `log_discovery` schedule's public-target check (above) covers its `manual_cidrs`, or the saved scope it would sweep. When it runs it reads the scope again; CIDRs in public address space that were not confirmed when the schedule was saved make the run fail with a message naming them (save the schedule again to confirm).
+
+### Suggested scans
+
+Ready-made scans from the catalog (`scans/<id>.scan.yaml` in `SIEMBOX_CATALOG_REPO`; `SIEMBOX_CATALOG_SCANS_PATH`, default `scans`). When the catalog cannot be reached the last read is used, or the starter set built into SIEMBox.
+
+#### GET /api/scan-suggestions
+
+Any role. `?refresh=true` re-reads the catalog (operator and up; others get the cached read).
+
+```json
+{
+  "source": "catalog",
+  "repo": "cladkins/siembox-catalog",
+  "ref": "main",
+  "fetched_at": "2026-10-28T09:00:00.000Z",
+  "error": null,
+  "invalid": [],
+  "suggestions": [
+    {
+      "id": "asset-host-discovery-daily",
+      "name": "Daily host discovery (ping sweep)",
+      "kind": "asset",
+      "category": "inventory",
+      "tags": ["nmap", "ping", "inventory"],
+      "description": "Sweeps your subnets with an Nmap ping scan ...",
+      "why": "The cheapest way to keep the asset list current ...",
+      "intrusive": false,
+      "intrusive_note": null,
+      "load": "light",
+      "schedule": { "frequency": "daily", "time": "01:15" },
+      "options": { "scanType": "ping" },
+      "inputs": [
+        { "field": "targets", "required": true, "label": "Subnets to sweep", "hint": "Your own LAN subnets in CIDR form, one per line." },
+        { "field": "shipper", "required": false, "label": "Run from", "hint": "..." }
+      ]
+    }
+  ]
+}
+```
+
+`source` is `catalog`, `cache` (the last read; the catalog is unreachable) or `bundled` (the starter set); `error` says why when it is not `catalog`, and `invalid` lists catalog files that failed validation (left out). `kind` is `asset`, `vulnerability`, `container`, `log_discovery` or `endpoint_policy`. `schedule` has no time zone (null for an endpoint policy, whose `options.scans` entries carry their own timing and windows, also without a time zone).
+
+#### POST /api/scan-suggestions/:id/add
+
+Admin or operator (the roles that create schedules and scan policies); a refusal is recorded in `audit_logs` (`access.denied`, `resource_type` `scan_suggestion`). Body: `{ "timezone": "America/Chicago" }`, the browser's IANA zone (default `UTC`; an offset such as `+05:00` is a `400`). Creates, and returns with `201`:
+
+- for `asset`, `vulnerability`, `container` and `log_discovery`: `scheduled_scan`, a **disabled** schedule named after the suggestion, with its `scan_options` and its calendar `schedule` in that zone, and no targets;
+- for `endpoint_policy`: `policy`, a named endpoint scan policy that no endpoint follows yet (assign it from the Endpoints page), each schedule and window in that zone. A name already taken gets ` (2)`, ` (3)`, ...
+
+```json
+{ "suggestion_id": "asset-host-discovery-daily", "kind": "asset", "scheduled_scan": { "id": 12, "enabled": false, "scan_type": "asset", "scan_options": { "scanType": "ping" }, "schedule": { "frequency": "daily", "time": "01:15", "timezone": "America/Chicago" }, "...": "..." }, "inputs": [ ... ] }
+```
+
+`404` for an unknown id. Each add is audited as `scan_suggestion.add`.
 
 ---
 

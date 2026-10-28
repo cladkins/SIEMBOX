@@ -1,0 +1,28 @@
+schema: siembox.scan/v1
+id: vuln-dns-monthly
+name: Monthly DNS configuration check
+kind: vulnerability
+category: dns
+tags: [nuclei, dns]
+description: >-
+  The Nuclei dns/ templates on the 5th of each month:
+  missing or weak SPF and DMARC records, zone transfers allowed, dangling
+  CNAMEs and similar DNS mistakes for a domain you own.
+why: >-
+  DNS mistakes enable spoofed mail and subdomain takeovers and change rarely,
+  so monthly is enough. The target is a domain name, not an address.
+intrusive: false
+load: light
+schedule:
+  frequency: monthly
+  day_of_month: 5
+  time: "05:00"
+options:
+  templateSelection:
+    templates: [dns/]
+    excludeTags: [intrusive, dos, fuzz]
+  rateLimit: 50
+inputs:
+  - field: target
+    label: Domain
+    hint: A domain you own, without a scheme or path.

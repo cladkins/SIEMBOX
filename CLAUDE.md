@@ -28,7 +28,7 @@ numbers match first.
 
 **Catalog content is authored in siembox-catalog, not here.** The published
 `cladkins/siembox-catalog` repo is the source of truth for parsers,
-detections, content packs and application signatures: users install from it, and its CI validates every PR with this
+detections, content packs, application signatures and suggested scans: users install from it, and its CI validates every PR with this
 repo's validators (built from `main`). `catalog/parsers/` and `rules/` here are
 a mirror: `.github/workflows/sync-catalog.yml` copies the published catalog in
 weekly and opens a PR on drift. The copy is exact, so a file changed or added
@@ -39,7 +39,11 @@ the fallback for a catalog without packs). Application signatures (Application
 Monitoring) too: `applications/<id>.app.yaml` in the catalog, mirrored to
 `catalog/applications/`; `backend/src/services/applications/bundledApplications.ts`
 is a starter-set fallback whose entries must equal their mirror files
-(`appCatalog.test.ts` checks). New or changed content goes
+(`appCatalog.test.ts` checks). Suggested scans (Scheduled Scans and endpoint
+scan policies) too: `scans/<id>.scan.yaml` in the catalog, mirrored to
+`catalog/scans/`; `backend/src/services/scanSuggestions/bundledScans.ts` is the
+starter-set fallback, checked the same way (`scanCatalog.test.ts`). New or
+changed content goes
 in as a PR to siembox-catalog; when a change here needs catalog content to
 change with it (a stricter validator, say), land the same content in both
 repos. Fresh installs ship zero parsers and detections (users install from the
@@ -52,6 +56,7 @@ npm run validate-parsers -- ../catalog/parsers      # or <siembox-catalog>/parse
 npm run validate-detections -- ../rules             # or <siembox-catalog>/detections
 npm run validate-packs -- ../catalog/packs --parsers ../catalog/parsers --detections ../rules
 npm run validate-applications -- ../catalog/applications --parsers ../catalog/parsers
+npm run validate-scans -- ../catalog/scans
 ```
 
 **Ghost shippers are intentional.** A shipper whose API key is revoked keeps

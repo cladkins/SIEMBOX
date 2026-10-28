@@ -464,6 +464,10 @@ const INVENTORY: Row[] = [
   ['POST', '/api/applications/refresh', ANALYST_UP],
   ['GET', '/api/applications/:id', ANY_ROLE],
 
+  // routes/scanSuggestions.ts: Suggested scans (Scheduled Scans page, Endpoints scan policies)
+  ['GET', '/api/scan-suggestions', ANY_ROLE],
+  ['POST', '/api/scan-suggestions/:id/add', OPERATOR_UP, AUDITED],
+
   // routes/display.ts: a wall screen's own read (its display link in X-Display-Token, never a login)
   ['GET', '/api/display/snapshot', DISPLAY],
 

@@ -1,7 +1,8 @@
 /**
  * Scheduled Scans Job
  *
- * Periodically triggers user-defined recurring vulnerability and asset scans.
+ * Periodically triggers user-defined recurring asset (Nmap), vulnerability
+ * (Nuclei), container (Trivy) and log discovery scans.
  * A schedule is "due" when enabled and next_run_at <= NOW(); after triggering,
  * next_run_at is rolled forward: by interval_minutes for a fixed-interval
  * schedule, or to the next calendar occurrence after now for a calendar one
@@ -19,6 +20,19 @@ import { logger } from '../utils/logger';
 import { ErrorLogService } from '../services/errors/errorLogService';
 import { registerRecurringJob, trackJobRun, markJobResult } from '../services/jobs/jobRegistry';
 import { pendingScheduledRun, type ScanOrigin } from '../services/scanner/shipperJobs';
+import { findPublicTargets } from '../services/scanner/targetSafety';
+import { getPersistedScopeCidrs, runScan } from '../services/logDiscovery/discoveryScanService';
+import { resolveScope } from '../services/logDiscovery/scope';
+import { query } from '../config/database';
+
+/**
+ * The CIDRs a log discovery schedule sweeps: its own manual_cidrs, or (none
+ * set) the saved Log Discovery scope, read when it runs.
+ */
+export async function discoverySweep(opts: any): Promise<string[]> {
+  const manual: string[] = Array.isArray(opts?.manual_cidrs) ? opts.manual_cidrs : await getPersistedScopeCidrs();
+  return resolveScope(manual, []).cidrs;
+}
 
 const JOB_KEY = 'scheduled-scans';
 
@@ -36,6 +50,14 @@ const CHECK_INTERVAL_MS = 60 * 1000; // look for due scans once a minute
 export async function pendingRunFor(schedule: ScheduledScan): Promise<number | null> {
   if (schedule.scan_type === 'container') return null;
   const shipperId = schedule.scan_options?.assignedShipperId ?? null;
+  if (schedule.scan_type === 'log_discovery') {
+    if (schedule.last_scan_id == null || shipperId == null) return null;
+    const r = await query(`SELECT id FROM discovery_scans WHERE id = $1 AND assigned_shipper_id = $2 AND status = 'queued'`, [
+      schedule.last_scan_id,
+      shipperId,
+    ]);
+    return r.rows[0]?.id ?? null;
+  }
   return pendingScheduledRun(schedule.last_scan_id ?? null, shipperId);
 }
 
@@ -89,6 +111,27 @@ export async function triggerScheduledScan(schedule: ScheduledScan): Promise<num
       );
       assignedShipperId = null;
     }
+  }
+
+  if (schedule.scan_type === 'log_discovery') {
+    // The sweep is read now (the saved scope may have changed since the
+    // schedule was saved): public CIDRs the save did not confirm are refused.
+    const sweep = await discoverySweep(opts);
+    const confirmed = new Set<string>(publicTargetsConfirmation?.publicTargets ?? []);
+    const unconfirmed = findPublicTargets(sweep).publicTargets.map((t) => t.target).filter((t) => !confirmed.has(t));
+    if (unconfirmed.length > 0) {
+      throw new Error(
+        `Log discovery schedule would sweep public address space not confirmed when it was saved (${unconfirmed.join(', ')}); edit and save it to confirm`
+      );
+    }
+    const result = await runScan({
+      mode: opts.mode || 'full',
+      manualCidrs: Array.isArray(opts.manual_cidrs) ? opts.manual_cidrs : undefined,
+      createdBy: schedule.created_by ?? null,
+      assignedShipperId,
+      scanOptions: { origin, ...(publicTargetsConfirmation ? { publicTargetsConfirmation } : {}) },
+    });
+    return result.scanId;
   }
 
   if (schedule.scan_type === 'vulnerability') {
@@ -179,7 +222,7 @@ export function startScheduledScansJob(): void {
   registerRecurringJob({
     key: JOB_KEY,
     name: 'Scheduled scan dispatcher',
-    description: 'Triggers user-defined recurring vulnerability, asset and container scans when due.',
+    description: 'Triggers user-defined recurring vulnerability, asset, container and log discovery scans when due.',
     intervalMs: CHECK_INTERVAL_MS,
   });
   logger.info('[Scheduled Scans] Scheduler started (checking every 60s)');

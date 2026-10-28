@@ -1,0 +1,31 @@
+schema: siembox.scan/v1
+id: vuln-misconfiguration-weekly
+name: Weekly misconfiguration scan
+kind: vulnerability
+category: misconfiguration
+tags: [nuclei, misconfig]
+description: >-
+  The Nuclei misconfiguration templates once a week: directory listings,
+  debug endpoints left on, permissive CORS, unprotected status pages and
+  similar settings mistakes.
+why: >-
+  Misconfigurations rarely get a CVE, so a CVE scan alone misses them. Run it
+  midweek, after the week's changes have landed.
+intrusive: false
+load: moderate
+schedule:
+  frequency: weekly
+  days: [3]
+  time: "03:00"
+options:
+  templateSelection:
+    tags: [misconfig]
+    excludeTags: [intrusive, dos, fuzz]
+  rateLimit: 100
+inputs:
+  - field: target
+    label: Host or range
+    hint: The web servers and reverse proxies to check, as a host, IP or CIDR.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

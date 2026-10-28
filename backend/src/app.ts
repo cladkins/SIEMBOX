@@ -36,6 +36,7 @@ import logDiscoveryRoutes from './routes/logDiscovery';
 import exposureRoutes from './routes/exposure';
 import graphRoutes from './routes/graph';
 import applicationsRoutes from './routes/applications';
+import scanSuggestionsRoutes from './routes/scanSuggestions';
 import sigmaRoutes from './routes/sigma';
 import displayRoutes from './routes/display';
 import displayLinksRoutes from './routes/displayLinks';
@@ -204,6 +205,7 @@ app.use('/api/exposure', authenticate, exposureRoutes); // Digital Risk: leaked 
 app.use('/api/sigma', authenticate, sigmaRoutes); // SigmaHQ library: browse, compatibility, one-click add
 app.use('/api/graph', authenticate, graphRoutes); // Context Graph: read-only pivots between alerts, IPs, assets, findings, rules
 app.use('/api/applications', authenticate, applicationsRoutes); // Application Monitoring: software inventory from logs, scans, containers, endpoints
+app.use('/api/scan-suggestions', authenticate, scanSuggestionsRoutes); // Suggested scans from the catalog: add as a disabled schedule or endpoint scan policy
 
 // Big Display (docs/architecture/BIG-DISPLAY.md). A wall screen's read takes
 // its display link in X-Display-Token, never a login: each route gates itself

@@ -510,6 +510,10 @@ export const api = {
   deleteScheduledScan: (id: number) => apiClient.delete(`/scheduled-scans/${id}`),
   runScheduledScan: (id: number) => apiClient.post(`/scheduled-scans/${id}/run`),
 
+  // Suggested scans (catalog): browse, and add one as a disabled schedule or an unassigned endpoint policy
+  getScanSuggestions: (refresh = false) => apiClient.get('/scan-suggestions', { params: refresh ? { refresh: 'true' } : {} }),
+  addScanSuggestion: (id: string, timezone: string) => apiClient.post(`/scan-suggestions/${encodeURIComponent(id)}/add`, { timezone }),
+
   // Notifications - Channels
   getNotificationChannels: () => apiClient.get('/notifications/channels'),
   createNotificationChannel: (data: any) => apiClient.post('/notifications/channels', data),

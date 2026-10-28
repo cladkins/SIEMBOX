@@ -1,0 +1,30 @@
+schema: siembox.scan/v1
+id: vuln-exposed-files-weekly
+name: Weekly exposed files and secrets check
+kind: vulnerability
+category: exposure
+tags: [nuclei, exposure, secrets]
+description: >-
+  The Nuclei exposure templates once a week: .git and .env files, backups,
+  logs, configuration files and keys served by a web server by mistake.
+why: >-
+  A leaked .env or database dump is often worse than an unpatched service.
+  The templates only request well-known paths and read the answer.
+intrusive: false
+load: moderate
+schedule:
+  frequency: weekly
+  days: [4]
+  time: "03:00"
+options:
+  templateSelection:
+    tags: [exposure]
+    excludeTags: [intrusive, dos, fuzz]
+  rateLimit: 100
+inputs:
+  - field: target
+    label: Host or range
+    hint: The web servers to check, as a host, IP or CIDR.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

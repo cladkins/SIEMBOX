@@ -3,8 +3,10 @@
     <div class="page-header">
       <h2>Scheduled Scans</h2>
       <p class="subtitle">
-        Recurring asset discovery, vulnerability, and container image scans. Each
+        Recurring asset discovery, vulnerability, container image and log discovery scans. Each
         schedule runs automatically at the times you choose, or trigger it now with "Run now".
+        Start from a <el-link type="primary" :underline="false" @click="suggestionsOpen = true">suggested scan</el-link>
+        to get sensible options and timing in one click.
       </p>
     </div>
 
@@ -19,6 +21,9 @@
             data-testid="convert-legacy"
             @click="convertLegacySchedules"
           >Switch {{ convertible.length }} to set times</el-button>
+          <el-button size="small" data-testid="open-suggestions" :icon="MagicStick" @click="suggestionsOpen = true">
+            Suggested scans
+          </el-button>
           <el-button type="primary" size="small" @click="showCreateSchedule" :icon="Plus">
             New Schedule
           </el-button>
@@ -29,15 +34,18 @@
       <el-table :data="scheduledScans" v-loading="scheduledScansLoading" stripe>
         <el-table-column prop="name" label="Name" min-width="150" />
 
-        <el-table-column label="Type" width="110">
+        <el-table-column label="Type" width="120">
           <template #default="{ row }">
-            <el-tag :type="scanTypeTag(row.scan_type)" size="small">{{ row.scan_type }}</el-tag>
+            <el-tag :type="scanTypeTag(row.scan_type)" size="small">{{ scanTypeLabel(row.scan_type) }}</el-tag>
           </template>
         </el-table-column>
 
         <el-table-column label="Target" min-width="150">
           <template #default="{ row }">
-            <el-text size="small">{{ formatScanTarget(row) }}</el-text>
+            <el-tag v-if="row.missing_inputs?.length" type="warning" size="small" effect="plain" data-testid="needs-inputs">
+              {{ missingInputsText(row.missing_inputs) }}
+            </el-tag>
+            <el-text v-else size="small">{{ formatScanTarget(row) }}</el-text>
             <el-tooltip
               v-if="row.public_targets?.length"
               placement="top"
@@ -75,11 +83,14 @@
 
         <el-table-column label="Enabled" width="90" align="center">
           <template #default="{ row }">
-            <el-switch
-              v-model="row.enabled"
-              :loading="scheduledScansSaving"
-              @change="toggleScheduleEnabled(row)"
-            />
+            <el-tooltip :disabled="!(row.missing_inputs?.length && !row.enabled)" content="Fill in the targets (Edit) to enable it" placement="top">
+              <el-switch
+                v-model="row.enabled"
+                :loading="scheduledScansSaving"
+                :disabled="!!row.missing_inputs?.length && !row.enabled"
+                @change="toggleScheduleEnabled(row)"
+              />
+            </el-tooltip>
           </template>
         </el-table-column>
 
@@ -92,7 +103,7 @@
 
         <el-table-column label="Actions" width="240" align="center" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" type="success" @click="runScheduleNow(row)" :icon="VideoPlay">
+            <el-button size="small" type="success" :disabled="!!row.missing_inputs?.length" @click="runScheduleNow(row)" :icon="VideoPlay">
               Run now
             </el-button>
             <el-button size="small" @click="editSchedule(row)" :icon="Edit">Edit</el-button>
@@ -120,8 +131,19 @@
             <el-option label="Asset" value="asset" />
             <el-option label="Vulnerability" value="vulnerability" />
             <el-option label="Container image (Trivy)" value="container" />
+            <el-option label="Log discovery" value="log_discovery" />
           </el-select>
         </el-form-item>
+
+        <el-alert
+          v-if="fromSuggestion"
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 12px"
+          data-testid="from-suggestion"
+          :title="`Added from the suggested scan &quot;${fromSuggestion.name}&quot;. Fill in: ${fromSuggestion.inputs}, then switch Enabled on and save.`"
+        />
 
         <!-- Asset options -->
         <template v-if="scheduledScanForm.scan_type === 'asset'">
@@ -244,6 +266,30 @@
               <el-option label="Info" value="info" />
             </el-select>
           </el-form-item>
+
+          <el-form-item label="Exclude tags">
+            <el-select
+              v-model="scheduledScanForm.vulnExcludeTags"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              placeholder="e.g. intrusive, dos, fuzz"
+              style="width: 100%"
+              data-testid="vuln-exclude-tags"
+            >
+              <el-option v-for="t in ['intrusive', 'dos', 'fuzz']" :key="t" :label="t" :value="t" />
+            </el-select>
+            <el-text size="small" type="info">
+              Templates with these tags are skipped. Excluding intrusive, dos and fuzz keeps the scan from logging in,
+              sending payloads or stressing services.
+            </el-text>
+          </el-form-item>
+
+          <el-form-item label="Rate limit">
+            <el-input-number v-model="scheduledScanForm.vulnRateLimit" :min="1" :max="10000" :step="10" controls-position="right" />
+            <el-text size="small" type="info" style="margin-left: 8px">requests per second (empty: Nuclei's default)</el-text>
+          </el-form-item>
         </template>
 
         <!-- Container options -->
@@ -269,7 +315,35 @@
           </el-form-item>
         </template>
 
-        <!-- Run from (asset/vuln only; container = Trivy, no LAN scan) -->
+        <!-- Log discovery options -->
+        <template v-else-if="scheduledScanForm.scan_type === 'log_discovery'">
+          <el-form-item label="Mode" required>
+            <el-select v-model="scheduledScanForm.discoveryMode" style="width: 100%" data-testid="discovery-mode">
+              <el-option label="Passive (listen only, no packets to hosts)" value="passive" />
+              <el-option label="Active (probe hosts on fingerprinted ports and paths)" value="active" />
+              <el-option label="Full (passive, then active)" value="full" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="Subnets">
+            <el-input
+              v-model="scheduledScanForm.discoveryCidrs"
+              type="textarea"
+              :rows="2"
+              placeholder="Leave empty to sweep the scope saved on the Log Discovery page"
+            />
+            <el-text size="small" type="info">
+              CIDRs separated by comma, space or newline. Empty: each run sweeps the saved Log Discovery scope as it is then.
+            </el-text>
+            <PublicTargetWarning
+              v-model="schedPublicConfirmed"
+              :targets="schedTargetList"
+              style="width: 100%"
+              @use-suggestion="(from: string, to: string) => (scheduledScanForm.discoveryCidrs = replaceTargetToken(scheduledScanForm.discoveryCidrs, from, to))"
+            />
+          </el-form-item>
+        </template>
+
+        <!-- Run from (asset/vuln/log discovery; container = Trivy, no LAN scan) -->
         <el-form-item v-if="scheduledScanForm.scan_type !== 'container'" label="Run from">
           <el-select v-model="scheduledScanForm.assignedShipperId" placeholder="Select where to run the scan" style="width: 100%">
             <el-option :label="'SIEMBox backend (built-in)'" :value="null" />
@@ -404,13 +478,16 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <ScanSuggestionsBrowser v-model="suggestionsOpen" @added="onSuggestionAdded" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Edit, Delete, VideoPlay } from '@element-plus/icons-vue';
+import { Plus, Edit, Delete, VideoPlay, MagicStick } from '@element-plus/icons-vue';
+import { useRouter } from 'vue-router';
 import { format } from 'date-fns';
 import { api } from '@/services/api';
 import vulnerabilityService, {
@@ -420,6 +497,8 @@ import vulnerabilityService, {
   type ShipperSummary,
 } from '@/services/vulnerabilityService';
 import PublicTargetWarning from '@/components/PublicTargetWarning.vue';
+import ScanSuggestionsBrowser from '@/components/ScanSuggestionsBrowser.vue';
+import { describeInputs, missingInputsText, type SuggestionInput } from '@/utils/scanSuggestions';
 import { publicTargetGate, replaceTargetToken } from '@/utils/shipperJobs';
 import {
   INTERVAL_PRESETS,
@@ -438,7 +517,13 @@ import {
   type TimingForm,
 } from '@/utils/scheduleTiming';
 
+const router = useRouter();
 const scheduledScansLoading = ref(false);
+// "Suggested scans" browser, and the suggestion the open dialog was added from.
+const suggestionsOpen = ref(false);
+const fromSuggestion = ref<{ name: string; inputs: string } | null>(null);
+// Options the form has no field for (Nuclei timeout and template exclusions), kept on save.
+let vulnPassThrough: Record<string, unknown> = {};
 const scheduledScansSaving = ref(false);
 const scheduledScanDialogVisible = ref(false);
 const scheduledScans = ref<any[]>([]);
@@ -446,7 +531,7 @@ const scheduledScans = ref<any[]>([]);
 const scheduledScanForm = reactive({
   id: null as number | null,
   name: '',
-  scan_type: 'asset' as 'asset' | 'vulnerability' | 'container',
+  scan_type: 'asset' as 'asset' | 'vulnerability' | 'container' | 'log_discovery',
   enabled: true,
   // asset
   assetTargets: '',
@@ -458,9 +543,14 @@ const scheduledScanForm = reactive({
   vulnTags: [] as string[],
   vulnTemplates: [] as string[],
   vulnSeverities: [] as string[],
+  vulnExcludeTags: [] as string[],
+  vulnRateLimit: undefined as number | undefined,
   // container: every discovered image, or one image ref
   containerAll: true,
   imageRef: '',
+  // log discovery: mode, and CIDRs (empty = the saved Log Discovery scope)
+  discoveryMode: 'full' as 'passive' | 'active' | 'full',
+  discoveryCidrs: '',
   // optional LAN-side dispatch (asset/vuln only); null = run on the backend
   assignedShipperId: null as number | null,
 });
@@ -532,6 +622,7 @@ const schedTargetList = computed<string[]>(() => {
     const t = scheduledScanForm.vulnTarget.trim();
     return t ? [t] : [];
   }
+  if (scheduledScanForm.scan_type === 'log_discovery') return parseTargets(scheduledScanForm.discoveryCidrs);
   return [];
 });
 const schedGate = computed(() => publicTargetGate(schedTargetList.value, schedPublicConfirmed.value));
@@ -613,7 +704,11 @@ async function searchScheduledTemplates(query: string) {
 }
 
 function scanTypeTag(type: string): string {
-  return { asset: 'primary', vulnerability: 'danger', container: 'warning' }[type] || 'info';
+  return { asset: 'primary', vulnerability: 'danger', container: 'warning', log_discovery: 'success' }[type] || 'info';
+}
+
+function scanTypeLabel(type: string): string {
+  return type === 'log_discovery' ? 'log discovery' : type;
 }
 
 function formatScanTarget(scan: any): string {
@@ -623,6 +718,10 @@ function formatScanTarget(scan: any): string {
   }
   if (scan.scan_type === 'container') {
     return options.all_images ? 'All discovered images' : options.image_ref || '-';
+  }
+  if (scan.scan_type === 'log_discovery') {
+    const cidrs = Array.isArray(options.manual_cidrs) && options.manual_cidrs.length ? options.manual_cidrs.join(', ') : 'Saved Log Discovery scope';
+    return `${options.mode || 'full'}: ${cidrs}`;
   }
   return options.target || '-';
 }
@@ -650,10 +749,33 @@ function resetScheduledScanForm() {
   scheduledScanForm.vulnTags = [];
   scheduledScanForm.vulnTemplates = [];
   scheduledScanForm.vulnSeverities = [];
+  scheduledScanForm.vulnExcludeTags = [];
+  scheduledScanForm.vulnRateLimit = undefined;
+  vulnPassThrough = {};
+  fromSuggestion.value = null;
+  scheduledScanForm.discoveryMode = 'full';
+  scheduledScanForm.discoveryCidrs = '';
   scheduledScanForm.imageRef = '';
   scheduledScanForm.containerAll = true;
   scheduledScanForm.assignedShipperId = null;
   schedPublicConfirmed.value = false;
+}
+
+// A suggestion was added: a disabled schedule (open it to fill in the targets),
+// or an endpoint policy (open it on the Endpoints page).
+async function onSuggestionAdded(result: { scheduled_scan?: any; policy?: { id: number }; inputs?: SuggestionInput[] }) {
+  if (result.policy) {
+    router.push({ path: '/endpoints', query: { policy: String(result.policy.id) } });
+    return;
+  }
+  await fetchScheduledScans();
+  const row = scheduledScans.value.find((r) => r.id === result.scheduled_scan?.id) ?? result.scheduled_scan;
+  if (!row) return;
+  editSchedule(row);
+  fromSuggestion.value = {
+    name: row.name,
+    inputs: describeInputs({ inputs: result.inputs ?? [] } as Parameters<typeof describeInputs>[0]),
+  };
 }
 
 function showCreateSchedule() {
@@ -687,6 +809,9 @@ function editSchedule(scan: any) {
   } else if (scan.scan_type === 'container') {
     scheduledScanForm.imageRef = options.image_ref || '';
     scheduledScanForm.containerAll = options.all_images === true;
+  } else if (scan.scan_type === 'log_discovery') {
+    scheduledScanForm.discoveryMode = options.mode || 'full';
+    scheduledScanForm.discoveryCidrs = Array.isArray(options.manual_cidrs) ? options.manual_cidrs.join('\n') : '';
   } else if (scan.scan_type === 'vulnerability') {
     scheduledScanForm.vulnTarget = options.target || '';
     const sel = options.templateSelection || {};
@@ -707,6 +832,12 @@ function editSchedule(scan: any) {
       }
     }
     scheduledScanForm.vulnSeverities = Array.isArray(sel.severities) ? [...sel.severities] : [];
+    scheduledScanForm.vulnExcludeTags = Array.isArray(sel.excludeTags) ? [...sel.excludeTags] : [];
+    scheduledScanForm.vulnRateLimit = Number.isInteger(options.rateLimit) ? options.rateLimit : undefined;
+    vulnPassThrough = {
+      ...(Array.isArray(sel.exclude) && sel.exclude.length ? { exclude: [...sel.exclude] } : {}),
+      ...(Number.isInteger(options.timeout) ? { timeout: options.timeout } : {}),
+    };
   }
 
   loadScanTemplateData();
@@ -744,6 +875,10 @@ function buildTemplateSelection(): any {
   if (scheduledScanForm.vulnSeverities.length > 0) {
     selection.severities = [...scheduledScanForm.vulnSeverities];
   }
+  if (scheduledScanForm.vulnExcludeTags.length > 0) {
+    selection.excludeTags = [...scheduledScanForm.vulnExcludeTags];
+  }
+  if (Array.isArray(vulnPassThrough.exclude)) selection.exclude = [...(vulnPassThrough.exclude as string[])];
   return selection;
 }
 
@@ -774,6 +909,9 @@ async function saveSchedule() {
       return;
     }
     scan_options = { image_ref: imageRef };
+  } else if (scheduledScanForm.scan_type === 'log_discovery') {
+    const cidrs = parseTargets(scheduledScanForm.discoveryCidrs);
+    scan_options = { mode: scheduledScanForm.discoveryMode, ...(cidrs.length ? { manual_cidrs: cidrs } : {}) };
   } else {
     if (!scheduledScanForm.vulnTarget.trim()) {
       ElMessage.warning('Please enter a target');
@@ -782,6 +920,8 @@ async function saveSchedule() {
     scan_options = {
       target: scheduledScanForm.vulnTarget.trim(),
       templateSelection: buildTemplateSelection(),
+      ...(scheduledScanForm.vulnRateLimit ? { rateLimit: scheduledScanForm.vulnRateLimit } : {}),
+      ...(typeof vulnPassThrough.timeout === 'number' ? { timeout: vulnPassThrough.timeout } : {}),
     };
   }
 

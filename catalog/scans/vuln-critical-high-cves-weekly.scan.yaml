@@ -1,0 +1,32 @@
+schema: siembox.scan/v1
+id: vuln-critical-high-cves-weekly
+name: Weekly critical and high CVE scan
+kind: vulnerability
+category: cves
+tags: [nuclei, cve]
+description: >-
+  Runs the Nuclei CVE templates rated critical or high against a host or
+  range once a week, skipping templates tagged intrusive, dos or fuzz.
+why: >-
+  The baseline vulnerability scan: known, exploitable flaws in what you run,
+  without the noise of hundreds of informational findings. Pair it with the
+  weekly service scan so findings link to the right assets.
+intrusive: false
+load: moderate
+schedule:
+  frequency: weekly
+  days: [0]
+  time: "03:00"
+options:
+  templateSelection:
+    cves: true
+    severities: [critical, high]
+    excludeTags: [intrusive, dos, fuzz]
+  rateLimit: 100
+inputs:
+  - field: target
+    label: Host or range
+    hint: One host, IP or CIDR range you own or are authorized to scan.
+  - field: shipper
+    label: Run from
+    hint: A log shipper on that network, if SIEMBox cannot reach it.

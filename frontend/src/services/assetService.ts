@@ -1,4 +1,5 @@
 import apiClient from './api';
+import type { DuplicateHint, MergeResult } from '@/utils/assetMerge';
 
 export interface Asset {
   id: number;
@@ -7,10 +8,10 @@ export interface Asset {
   mac_address?: string;
   os_type?: string;
   os_version?: string;
-  asset_type: 'server' | 'workstation' | 'network' | 'iot';
+  asset_type: 'server' | 'workstation' | 'network' | 'iot' | 'endpoint';
   criticality: 'low' | 'medium' | 'high' | 'critical';
   status: 'active' | 'inactive' | 'offline';
-  discovery_method: 'nmap' | 'log_correlation' | 'manual';
+  discovery_method: 'nmap' | 'log_correlation' | 'manual' | 'edr_agent';
   first_seen: string;
   last_seen: string;
   last_scanned?: string;
@@ -18,6 +19,8 @@ export interface Asset {
   tags?: string[];
   created_at: string;
   updated_at: string;
+  /** Endpoint agents reporting on this asset (the list only). */
+  agent_count?: number;
 }
 
 export interface AssetService {
@@ -177,6 +180,18 @@ class AssetServiceClient {
 
   async deleteAsset(id: number): Promise<void> {
     await apiClient.delete(`/assets/${id}`);
+  }
+
+  /** Possible duplicates of an asset (hints; nothing is merged). */
+  async getDuplicates(id: number): Promise<DuplicateHint[]> {
+    const response = await apiClient.get(`/assets/${id}/duplicates`);
+    return response.data.duplicates;
+  }
+
+  /** Merge `from` into asset `intoId` (dryRun: only report what would move). */
+  async mergeAssets(intoId: number, from: number[], dryRun = false): Promise<MergeResult> {
+    const response = await apiClient.post(`/assets/${intoId}/merge`, { from, dry_run: dryRun });
+    return response.data;
   }
 
   async getServices(assetId: number): Promise<AssetService[]> {

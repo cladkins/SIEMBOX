@@ -934,6 +934,73 @@ sudo journalctl -u siembox-agent -n 200 --no-pager | grep -i scan
 **Solution:** fix the cause and press *Scan now* again; *Cancel* drops a
 request that is still queued.
 
+### Issue: One Machine Shows Up as Several Assets
+
+**Symptoms:**
+- One laptop with one endpoint agent appears as many assets on Asset Inventory,
+  one per IP address it has had (home, office, VPN, hotspot, Tailscale)
+- Vulnerability totals count the same machine's findings several times
+- Application Monitoring lists the machine at several "locations"
+
+**Cause:** before endpoint assets became sticky, the agent was re-linked on
+every inventory report to whatever asset its current IP belonged to (assets are
+keyed by IP), and each of those assets kept the findings stored while the
+agent pointed at it. Now an agent stays on its asset (`docs/edr.md`,
+*Endpoint assets*).
+
+**What happens on its own:** at every backend start, and on every inventory
+report, an agent's duplicates are merged into its asset when the evidence is
+strong: an asset with no agent of its own that recorded this agent's id, or one
+an endpoint agent created with the same hardware MAC. The backend log says how
+many it merged:
+```bash
+docker compose logs backend | grep "endpoint asset backfill"
+```
+Each merge is in the audit log (`action = 'asset.merge'`).
+
+**What needs you:** duplicates without that evidence (an nmap-found asset with
+the same host name, rows an earlier, removed install of the agent created)
+stay until you merge them, because a matching host name alone can be a
+different machine:
+
+1. Open the asset the agent reports on (*Assets*, *Details*; the *Endpoint
+   Agent* card names it). *Possible duplicates* lists assets with the same MAC,
+   the same short host name (`Chriss-MBP-383.localdomain` and
+   `chriss-mbp-383.local` match), or that recorded its agent.
+2. Tick the ones that are this machine and press **Merge selected into this
+   asset**, or on the asset list search the host name, tick every row of the
+   machine and press **Merge into…**, then choose the asset to keep (the one
+   with the endpoint agent is chosen by default).
+3. The confirmation lists what moves (findings, services, alerts, agents,
+   Application Monitoring entries) and the assets that will be deleted, with a
+   warning for a different hardware MAC or host name. **Merge** does it in one
+   transaction; findings found on several of them become one.
+
+Merging needs the analyst, operator or admin role. It cannot be undone; the
+audit row lists every merged asset (`details.merged`) and the kept one records
+them in `metadata.merged_assets`.
+
+**To see what the startup backfill would merge before upgrading** (read-only):
+```sql
+SELECT e.agent_id, e.asset_id AS kept, a.id AS duplicate, host(a.ip_address) AS ip, a.hostname, a.discovery_method
+  FROM edr_agents e
+  JOIN assets a ON a.id <> e.asset_id
+               AND a.metadata->>'agent_id' = e.agent_id::text
+               AND NOT EXISTS (SELECT 1 FROM edr_agents x WHERE x.asset_id = a.id)
+ ORDER BY e.agent_id, a.id;
+```
+(This covers the agent-id rule; an nmap-found row is skipped when it has a
+hardware MAC other than the agent's. The MAC rule rarely applies to laptops:
+macOS reports a private, per-network Wi-Fi address.)
+
+### Issue: An Endpoint's Asset Shows a "Current IP" Different From Its IP
+
+The agent reported an address another asset holds (another device, or another
+agent's machine), so its asset kept its own address instead of taking it.
+Nothing is wrong; when the agent reports a free address, its asset moves there
+and *Current IP* disappears. If the other asset is really this machine, merge
+it (above).
+
 ---
 
 ## Log Discovery & API-Polled Sources

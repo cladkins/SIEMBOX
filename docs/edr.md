@@ -13,7 +13,7 @@ Only the agent **identity** is new. Everything the agent reports lands in the
 | Agent sends        | Stored in                                  |
 |--------------------|--------------------------------------------|
 | enroll / heartbeat | `edr_agents` (new)                         |
-| inventory          | `assets` (`asset_type='endpoint'`, upserted by IP so it correlates with log/Nuclei data) |
+| inventory          | `assets` (`asset_type='endpoint'`): the agent's own asset, kept across IP changes (see [Endpoint assets](#endpoint-assets-one-machine-one-asset)) |
 | events (detection) | `alerts` (`source='edr'`, linked to the endpoint asset, deduped on the agent event id) |
 | vulnerabilities    | `vulnerabilities` + `asset_vulnerabilities` (idempotent upsert) |
 | packages           | `edr_agent_packages` + `edr_agent_package_snapshots` (migration 049; full snapshot per agent) |
@@ -58,6 +58,59 @@ install instructions.
 - **Detections:** `type='detection'` → alerts; `telemetry` events are ignored for now.
 - **Offline:** an agent reads as offline when `last_seen` is older than 5 minutes.
 - **Rate limiting:** the agent-key routes (heartbeat, config, YARA, inventory, events, vulnerabilities, packages, metrics) carrying `X-Agent-ID`, with the method each route answers, skip the general per-address limiter, so a fleet behind one NAT address isn't throttled; they have their own, higher per-address limit (`EDR_AGENT_RATE_MAX`, default 30000 per 15 minutes) in front of agent auth. Enrollment counts toward the general limit, with or without `X-Agent-ID`. The address is the agent's TCP address: an `X-Forwarded-For` it sends to port 8421 is ignored.
+
+## Endpoint assets: one machine, one asset
+
+Assets are keyed by IP (`assets.ip_address` is unique), and a laptop's
+address changes with every network, VPN and hotspot. Ingest used to re-link
+the agent to whatever asset its current IP resolved to, so one machine became
+one asset per address it ever had, each keeping the findings stored while the
+agent pointed at it (inflated vulnerability totals, extra "locations" in
+Application Monitoring). Now the link is sticky
+(`backend/src/services/edr/endpointAsset.ts`):
+
+- **An enrolled agent stays on its asset** (`edr_agents.asset_id`). When an
+  inventory reports a new IP:
+  - nobody holds it: the agent's asset takes the address (hostname, MAC and OS
+    are refreshed as before);
+  - one of this agent's own duplicates holds it (see below): it is merged into
+    the agent's asset, which then takes the address;
+  - another device holds it (an nmap-found host with its own MAC, another
+    agent's asset, ...): nothing is taken. The agent's asset keeps its address
+    and records the reported one in `metadata.current_ip` (shown as *Current IP*
+    on the asset); every address the agent reported is kept in
+    `metadata.ip_history`. `edr_agents.ip` is always the last reported address.
+  Heartbeats carry no address, so only inventory reports move the asset.
+- **An agent without an asset** (just enrolled, or its asset was deleted)
+  reuses an asset that clearly is its machine and has no agent of its own:
+  one recording its agent id, or one with the same hardware MAC (enrollment
+  accepts an optional `mac`; the agent does not send one yet, so a
+  re-installed agent usually matches by its first inventory's IP instead).
+  Otherwise it links to the asset at its IP (so an endpoint still correlates
+  with the nmap/log asset there), else a new `edr_agent` asset is created.
+- **Automatic merge, strong evidence only.** On every inventory, and once per
+  backend start for every agent (an idempotent backfill that cleans up the
+  rows the old behaviour left), assets with no agent attached are merged into
+  the agent's asset when they
+  - record this agent's id in `metadata.agent_id` (only the agent's own
+    inventory writes it), and have no hardware MAC other than the agent's
+    (so an nmap host now at an address the agent once used is left alone), or
+  - were created by an endpoint agent (`discovery_method='edr_agent'`) and have
+    this agent's hardware MAC. A MAC counts only when it is a globally
+    administered unicast address: random/private Wi-Fi, VM, container and VPN
+    MACs (locally administered), all-zero and multicast ones never do.
+  Never on host name alone, and never an nmap/log/manual asset on MAC alone.
+  Each merge is one transaction and one `audit_logs` row (`asset.merge`,
+  `details.mode = 'auto'`, the agent id, the rule per merged asset, and
+  `trigger` = `inventory`, `enroll` or `backfill`); the backend log says how
+  many rows the startup backfill merged.
+- **Everything else is a manual merge.** The asset detail lists *Possible
+  duplicates* (same MAC, same short host name, case-insensitive, first DNS
+  label, so `.local`, `.localdomain`, `.lan` and tailnet suffixes don't matter,
+  matched against the asset's name and the name its agent reports, or one that
+  recorded its agent) as hints, and Asset Inventory's **Merge into…** merges
+  selected assets (analyst, operator, admin). See `POST /api/assets/:id/merge`
+  in `docs/reference/API.md` for what moves.
 
 ## Installed packages
 

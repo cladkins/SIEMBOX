@@ -64,6 +64,12 @@ export interface PoolOptions {
   /** Worker entry file. Defaults to regexWorker next to this module (.ts under tsx, .js when built). */
   workerFile?: string;
   resourceLimits?: ResourceLimits;
+  /**
+   * Extra time for the first task on a freshly started worker, whose module
+   * loading would otherwise count against a short budget (the ingest regex
+   * pool's 100 ms). Default 0.
+   */
+  bootAllowanceMs?: number;
 }
 
 export interface RunOptions {
@@ -89,6 +95,8 @@ interface Slot {
   timer: NodeJS.Timeout | null;
   /** Set once the slot has been removed from the pool (terminated or crashed). */
   dead: boolean;
+  /** No task has run on this worker yet (bootAllowanceMs applies). */
+  fresh: boolean;
 }
 
 export interface PoolStats {
@@ -225,7 +233,7 @@ export class RegexWorkerPool {
 
   private spawn(): Slot {
     const worker = startWorker(this.opts.workerFile ?? defaultWorkerFile(), this.opts.resourceLimits);
-    const slot: Slot = { worker, task: null, timer: null, dead: false };
+    const slot: Slot = { worker, task: null, timer: null, dead: false, fresh: true };
     worker.unref();
     worker.on('message', (msg: { id: number; ok: boolean; result?: unknown; error?: string }) => {
       const task = slot.task;
@@ -255,7 +263,9 @@ export class RegexWorkerPool {
     // While a task runs, the worker (and the timer) keep the process alive: an
     // awaited result must not be lost to an idle-looking event loop.
     slot.worker.ref();
-    slot.timer = setTimeout(() => this.timeout(slot, task), task.timeoutMs);
+    const budget = task.timeoutMs + (slot.fresh ? (this.opts.bootAllowanceMs ?? 0) : 0);
+    slot.fresh = false;
+    slot.timer = setTimeout(() => this.timeout(slot, task), budget);
     slot.worker.postMessage({ id: task.id, op: task.op, payload: task.payload });
   }
 

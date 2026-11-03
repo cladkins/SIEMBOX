@@ -1201,6 +1201,22 @@ anyway, but not a polynomial one (`curl.*\|`), a case-insensitive one, one
 with lookahead or a backreference, a counted repeat over 16, or (on a backend
 built on Node 20; the images run Node 22) one with lookbehind.
 
+**Per-line budget on ingest:** a parser whose stored verdict is vulnerable
+runs in a worker thread with a hard budget per line (`INGEST_REGEX_BUDGET_MS`,
+default `100`; workers: `INGEST_REGEX_WORKERS`, default `2`). A line that
+blows the budget counts as "no match" for that parser and the backend logs
+`ran out of its 100 ms budget`; ingestion keeps moving. A parser not flagged
+that takes longer than the budget 3 times in 10 minutes is moved to the worker
+too (`took over 100 ms per line 3 times`). Detection-rule regexes do not run
+under this budget.
+
+**vaultwarden-access, plex, jellyfin:** installs that had these seeded by
+older releases hold vulnerable versions; the catalog versions are linear.
+Reinstall all three from *Browse Catalog*. Before this release, migration
+`007_fix_vaultwarden_parser.sql` re-wrote the vulnerable vaultwarden-access
+pattern on every start, so a reinstall only lasted until the next restart.
+It is now a no-op.
+
 **Fix**, in order of preference:
 1. Edit it and rewrite the regex linear (see the previous issue). Saving a
    change to its pattern is refused until the regex is linear, so the editor

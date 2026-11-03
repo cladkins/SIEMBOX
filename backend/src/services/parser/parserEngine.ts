@@ -6,6 +6,7 @@ import { RulesEngine } from '../rules/rulesEngine';
 import { ErrorLogService } from '../errors/errorLogService';
 import { geoipService } from '../geoip/geoipService';
 import { runParser } from './runParser';
+import { IngestRegexGuard } from './ingestRegexBudget';
 import { normalizeParsedData } from '../normalize/fieldNormalizer';
 import { query } from '../../config/database';
 
@@ -23,6 +24,8 @@ export class ParserEngine {
   private pendingMatchCounts = new Map<string, number>();
   private lastMatchCountFlush = Date.now();
   private lastMatchCountPrune = 0;
+  /** Per-line regex time budget (ingestRegexBudget.ts). */
+  readonly regexGuard = new IngestRegexGuard();
 
   constructor() {
     this.rulesEngine = RulesEngine.getInstance();
@@ -61,6 +64,7 @@ export class ParserEngine {
    */
   async reload(): Promise<void> {
     await this.loadParsers();
+    this.regexGuard.reset();
   }
 
   private async loadParsers(): Promise<void> {
@@ -77,7 +81,9 @@ export class ParserEngine {
       for (const parser of this.parsers) {
         // Match + map + derive + normalize via the shared DB-free pipeline (the
         // same path the portable-parser validator/CI uses, so behavior matches).
-        const result = runParser(parser, rawLog.raw_message, { packetSourceIp: rawLog.source_ip });
+        // Under the per-line regex budget: a parser that blows it is cut off
+        // (no match) instead of blocking ingestion (ingestRegexBudget.ts).
+        const result = await this.regexGuard.run(parser, rawLog.raw_message, { packetSourceIp: rawLog.source_ip });
 
         if (result) {
           const eventType = result.event_type;

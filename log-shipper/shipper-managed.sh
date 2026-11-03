@@ -56,6 +56,10 @@ SHIPPER_STATE_DIR="${SHIPPER_STATE_DIR:-/tmp/siembox-state}"
 #   all            -- always the whole log
 #   end            -- always only new lines
 DOCKER_UNSEEN_CONTAINERS="${DOCKER_UNSEEN_CONTAINERS:-auto}"
+# Containers skipped when a Docker source tails "all containers", unless the
+# source sets include_siembox_containers. Shipping SIEMBox's own logs back into
+# SIEMBox is a feedback loop: every ingested line writes more log.
+SIEMBOX_OWN_CONTAINERS="${SIEMBOX_OWN_CONTAINERS:-siembox-backend siembox-postgres siembox-frontend siembox-log-shipper}"
 
 # Color output for logs
 GREEN='\033[0;32m'
@@ -551,14 +555,37 @@ tail_one_docker_container() {
     (sleep 1; rm -f "$pipe" 2>/dev/null) &
 }
 
+# Is this container name excluded? $1 = name, $2 = names or shell globs
+# separated by commas/spaces/newlines, $3 = "true" to include SIEMBox's own.
+container_excluded() {
+    local name="$1" exclude="$2" include_own="$3" pattern
+    if [ "$include_own" != "true" ]; then
+        for pattern in $SIEMBOX_OWN_CONTAINERS; do
+            [ "$name" = "$pattern" ] && return 0
+        done
+    fi
+    [ -n "$exclude" ] && [ "$exclude" != "null" ] || return 1
+    local IFS=$', \t\n' excluded=1
+    set -f
+    for pattern in $exclude; do
+        # Unquoted on purpose: the pattern is a glob.
+        if [[ "$name" == $pattern ]]; then excluded=0; break; fi
+    done
+    set +f
+    return $excluded
+}
+
 # Tail one container, or every running container when the name is blank / "*" /
-# "all" (each line tagged with its own container name).
+# "all" (each line tagged with its own container name). In all-containers mode
+# $6 (exclude list) and $7 (include SIEMBox's own containers) apply.
 tail_docker_source() {
     local container="$1"
     local tag="$2"
     local facility="$3"
     local siem_host="$4"
     local siem_port="$5"
+    local exclude="${6:-}"
+    local include_own="${7:-false}"
 
     # Treat blank / "*" / "all" (and forgiving variants like "* / all") as
     # "every running container".
@@ -573,7 +600,12 @@ tail_docker_source() {
         fi
         log_info "Tailing all running containers (each tagged with its name)"
         while IFS= read -r c; do
-            [ -n "$c" ] && tail_one_docker_container "$c" "$c" "$facility" "$siem_host" "$siem_port"
+            [ -n "$c" ] || continue
+            if container_excluded "$c" "$exclude" "$include_own"; then
+                log_info "Skipping excluded container: $c"
+                continue
+            fi
+            tail_one_docker_container "$c" "$c" "$facility" "$siem_host" "$siem_port"
         done <<< "$names"
         return
     fi
@@ -701,7 +733,10 @@ apply_config() {
                 ;;
             docker)
                 local container_name=$(echo "$source" | jq -r '.container_name')
-                tail_docker_source "$container_name" "$tag" "$facility" "$siem_host" "$siem_port"
+                local container_exclude=$(echo "$source" | jq -r '.container_exclude // ""')
+                local include_own=$(echo "$source" | jq -r '.include_siembox_containers // false')
+                tail_docker_source "$container_name" "$tag" "$facility" "$siem_host" "$siem_port" \
+                    "$container_exclude" "$include_own"
                 ;;
             journal)
                 local journal_unit=$(echo "$source" | jq -r '.journal_unit // ""')

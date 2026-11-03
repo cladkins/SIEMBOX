@@ -106,6 +106,8 @@ const SOURCE_UPDATE_COLUMNS = new Set([
   'journal_unit',
   'tag',
   'facility',
+  'container_exclude',
+  'include_siembox_containers',
 ]);
 
 export interface ShipperSource {
@@ -118,6 +120,10 @@ export interface ShipperSource {
   journal_unit: string | null;
   tag: string;
   facility: string;
+  /** All-containers Docker sources: names/globs to skip, comma or space separated (migration 057). */
+  container_exclude: string | null;
+  /** All-containers Docker sources: also tail SIEMBox's own containers (default false). */
+  include_siembox_containers: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -315,12 +321,15 @@ export class ShipperSourceModel {
   // Create source
   static async create(source: Partial<ShipperSource>): Promise<ShipperSource> {
     const { shipper_id, source_type, enabled, file_path, container_name, journal_unit, tag, facility } = source;
+    const containerExclude = source.container_exclude ?? null;
+    const includeSiembox = source.include_siembox_containers === true;
     const result = await pool.query(
       `INSERT INTO shipper_sources
-       (shipper_id, source_type, enabled, file_path, container_name, journal_unit, tag, facility)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       (shipper_id, source_type, enabled, file_path, container_name, journal_unit, tag, facility,
+        container_exclude, include_siembox_containers)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
-      [shipper_id, source_type, enabled, file_path, container_name, journal_unit, tag, facility]
+      [shipper_id, source_type, enabled, file_path, container_name, journal_unit, tag, facility, containerExclude, includeSiembox]
     );
     return result.rows[0];
   }

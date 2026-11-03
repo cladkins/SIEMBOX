@@ -24,6 +24,7 @@ import router, {
   shipperForRole,
   SHIPPER_EDITABLE_FIELDS,
   SOURCE_EDITABLE_FIELDS,
+  normalizeContainerExclusion,
 } from './shippers';
 import { authenticate, authenticateAllowingPasswordChange, requireAdmin, requireOperator } from '../middleware/auth';
 import { LogShipperModel, ShipperSourceModel, type LogShipper, type ShipperSource } from '../models/LogShipper';
@@ -285,4 +286,22 @@ test('the update models refuse unknown column names before any SQL runs', async 
 test('nothing in this file reached the database', () => {
   assert.equal(poolQuery.mock.callCount(), 0, 'no query may run');
   assert.equal(poolConnect.mock.callCount(), 0, 'no connection may be opened');
+});
+
+test('docker sources: container exclusion fields are editable and validated', () => {
+  const picked = pickFields<ShipperSource>(
+    { container_exclude: ' redis, *-sidecar ', include_siembox_containers: true, id: 1 },
+    SOURCE_EDITABLE_FIELDS
+  ) as Record<string, unknown>;
+  normalizeContainerExclusion(picked);
+  assert.deepEqual(picked, { container_exclude: 'redis, *-sidecar', include_siembox_containers: true });
+
+  const blank: Record<string, unknown> = { container_exclude: '' };
+  normalizeContainerExclusion(blank);
+  assert.equal(blank.container_exclude, null);
+
+  for (const bad of [{ container_exclude: 42 }, { container_exclude: 'a;rm -rf /' }, { container_exclude: '$(id)' },
+    { container_exclude: 'x'.repeat(2001) }, { include_siembox_containers: 'yes' }]) {
+    assert.throws(() => normalizeContainerExclusion({ ...bad }), (e: unknown) => e instanceof ApiError && e.statusCode === 400);
+  }
 });

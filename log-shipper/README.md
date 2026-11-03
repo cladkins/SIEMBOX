@@ -176,6 +176,8 @@ Forward logs from running Docker containers.
 **Configured in the SIEMBox UI:**
 - Type: docker
 - Container Name: `nginx` — or leave **blank** (or `*` / `all`) to tail **every running container**, each tagged with its own name
+- Exclude (all-containers mode): names or globs to skip, e.g. `redis, *-sidecar`
+- SIEMBox's own (all-containers mode): off by default, which skips `siembox-backend`, `siembox-postgres`, `siembox-frontend` and `siembox-log-shipper`. Turn it on only if you want SIEMBox to ingest its own logs; every ingested line then writes more log
 - Tag: `nginx-container` (ignored in all-containers mode)
 - Facility: `local1`
 

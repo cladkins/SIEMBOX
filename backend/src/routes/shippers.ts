@@ -93,7 +93,38 @@ export const SOURCE_EDITABLE_FIELDS: readonly (keyof ShipperSource)[] = [
   'journal_unit',
   'tag',
   'facility',
+  'container_exclude',
+  'include_siembox_containers',
 ];
+
+/** Longest container exclude list accepted (names/globs, comma or space separated). */
+export const MAX_CONTAINER_EXCLUDE_LENGTH = 2000;
+
+/**
+ * Check and normalize the container-exclusion fields of a source body in
+ * place. container_exclude: a string of names or shell globs (or null/empty
+ * for none); include_siembox_containers: a boolean. Throws ApiError(400).
+ */
+export function normalizeContainerExclusion(body: Record<string, unknown>): void {
+  if ('container_exclude' in body) {
+    const v = body.container_exclude;
+    if (v === null || v === undefined || v === '') {
+      body.container_exclude = null;
+    } else if (typeof v !== 'string') {
+      throw new ApiError(400, 'container_exclude must be a string of container names or globs');
+    } else if (v.length > MAX_CONTAINER_EXCLUDE_LENGTH) {
+      throw new ApiError(400, `container_exclude is longer than ${MAX_CONTAINER_EXCLUDE_LENGTH} characters`);
+    } else if (/[^A-Za-z0-9_.*?[\]\-,\s]/.test(v)) {
+      // Docker names are [a-zA-Z0-9][a-zA-Z0-9_.-]*; globs add * ? [ ].
+      throw new ApiError(400, 'container_exclude may contain only container names, *, ?, [ ], commas and spaces');
+    } else {
+      body.container_exclude = v.trim();
+    }
+  }
+  if ('include_siembox_containers' in body && typeof body.include_siembox_containers !== 'boolean') {
+    throw new ApiError(400, 'include_siembox_containers must be true or false');
+  }
+}
 
 /**
  * Copy only the `allowed` fields from a request body. The update models build
@@ -313,6 +344,8 @@ router.post('/:id/sources', authenticate, requireOperator, async (req: Request, 
     if (!source_type || !tag) {
       throw new ApiError(400, 'source_type and tag are required');
     }
+    const exclusion = pickFields<ShipperSource>(req.body, ['container_exclude', 'include_siembox_containers']);
+    normalizeContainerExclusion(exclusion as Record<string, unknown>);
 
     const source = await ShipperSourceModel.create({
       shipper_id,
@@ -323,6 +356,7 @@ router.post('/:id/sources', authenticate, requireOperator, async (req: Request, 
       journal_unit,
       tag,
       facility: facility || 'local0',
+      ...exclusion,
     });
 
     await ShipperActivityModel.log(shipper_id, 'source_added', `Added ${source_type} source: ${tag}`);
@@ -340,6 +374,7 @@ router.put('/sources/:sourceId', authenticate, requireOperator, async (req: Requ
     const sourceId = parseInt(req.params.sourceId as string);
     // The UI sends the whole form (including `id`); keep only the editable fields.
     const updates = pickFields<ShipperSource>(req.body, SOURCE_EDITABLE_FIELDS);
+    normalizeContainerExclusion(updates as Record<string, unknown>);
 
     if (Object.keys(updates).length === 0) {
       throw new ApiError(400, `Nothing to update; editable fields are ${SOURCE_EDITABLE_FIELDS.join(', ')}`);

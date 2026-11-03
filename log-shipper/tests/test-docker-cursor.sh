@@ -153,7 +153,26 @@ got=$(generate_shipper_id "$KEY" 2>/dev/null)
 generate_shipper_id "" >/dev/null 2>&1 && fail "empty key accepted" || pass "empty key refused"
 generate_shipper_id "not-hex" >/dev/null 2>&1 && fail "non-hex key accepted" || pass "non-hex key refused"
 
-# --- 7. Heartbeat fields do not count as a config change --------------------
+# --- 7. Container exclusion (all-containers mode) --------------------------
+container_excluded siembox-backend "" false && pass "siembox-backend skipped by default" || fail "siembox-backend not skipped"
+container_excluded siembox-postgres "" false && pass "siembox-postgres skipped by default" || fail "siembox-postgres not skipped"
+container_excluded siembox-backend "" true && fail "include_siembox_containers ignored" || pass "include_siembox_containers opts in"
+container_excluded app "" false && fail "app excluded with an empty list" || pass "other containers tailed"
+container_excluded redis-cache "nginx, redis-*" false && pass "glob exclude matches" || fail "glob exclude missed"
+container_excluded nginx "nginx, redis-*" false && pass "name exclude matches" || fail "name exclude missed"
+container_excluded nginx-proxy "nginx, redis-*" false && fail "exclude matched a prefix only" || pass "exclude matches whole names"
+# The real all-containers path: the fake daemon lists siembox-backend and app.
+printf 'siembox-backend\napp\n' > "$FAKE_DIR/name.all"
+cp "$FAKE_DIR/name" "$FAKE_DIR/name.one"
+cp "$FAKE_DIR/name.all" "$FAKE_DIR/name"
+out=$(tail_docker_source "" docker local0 127.0.0.1 514 "" false 2>&1)
+cp "$FAKE_DIR/name.one" "$FAKE_DIR/name"
+for pid in "${TAILING_PIDS[@]}"; do kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; done
+TAILING_PIDS=()
+printf '%s' "$out" | grep -q "Skipping excluded container: siembox-backend" \
+    && pass "all-containers mode skips siembox-backend" || fail "all-containers mode tailed siembox-backend"
+
+# --- 8. Heartbeat fields do not count as a config change --------------------
 if command -v jq >/dev/null 2>&1; then
     c1='{"id":7,"last_seen":"2026-10-29T20:08:00Z","updated_at":"x","siem_port":514,"sources":[{"id":1,"source_type":"docker","enabled":true,"container_name":"","tag":"docker","facility":"local0","updated_at":"a"}]}'
     c2='{"id":7,"last_seen":"2026-10-29T20:08:37Z","updated_at":"y","siem_port":514,"sources":[{"id":1,"source_type":"docker","enabled":true,"container_name":"","tag":"docker","facility":"local0","updated_at":"a"}]}'

@@ -3390,6 +3390,28 @@ Add log source to shipper.
 }
 ```
 
+**Request Body (Docker Source, all containers):**
+```json
+{
+  "source_type": "docker",
+  "enabled": true,
+  "container_name": "",
+  "container_exclude": "redis, *-sidecar",
+  "include_siembox_containers": false,
+  "tag": "docker",
+  "facility": "local0"
+}
+```
+
+A blank `container_name` (or `*` / `all`) tails every running container.
+`container_exclude` lists names or shell globs to skip, separated by commas or
+spaces (letters, digits, `_ . - * ? [ ]` only; 2000 characters at most).
+`include_siembox_containers` defaults to `false`, which skips
+`siembox-backend`, `siembox-postgres`, `siembox-frontend` and
+`siembox-log-shipper`: shipping SIEMBox's own logs into SIEMBox is a feedback
+loop. Both fields apply only in all-containers mode and need shipper 1.5.0 or
+later. Older shippers ignore them.
+
 **Request Body (Journal Source):**
 ```json
 {
@@ -3445,7 +3467,7 @@ Update log source.
 }
 ```
 
-**Note:** Editable fields are `source_type`, `enabled`, `file_path`, `container_name`, `journal_unit`, `tag` and `facility`; anything else in the body (such as `id` or `shipper_id`) is ignored.
+**Note:** Editable fields are `source_type`, `enabled`, `file_path`, `container_name`, `journal_unit`, `tag`, `facility`, `container_exclude` and `include_siembox_containers`; anything else in the body (such as `id` or `shipper_id`) is ignored.
 
 **Errors:**
 - `400` - The body contains none of the editable fields

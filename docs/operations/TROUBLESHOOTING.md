@@ -574,6 +574,10 @@ Look at what is slow rather than the symptom: a long `siembox-backend` query poi
   | `INGEST_QUEUE_MAX` | `20000` | Messages held in memory while all workers are busy; past this, UDP is dropped and TCP is slowed. |
   | `DB_INGEST_ACQUIRE_TIMEOUT_MS` | `10000` | How long one attempt waits for a free connection. |
   | `DB_INGEST_RETRY_MS` | `30000` | Total time spent retrying connection failures; `0` turns retrying off. |
+  | `INGEST_DEDUP_ENABLED` | `true` | Drop shipper lines already stored (a replayed log). The backend logs `Dropped N duplicate shipper line(s)` every 10 s while it happens. |
+  | `INGEST_DEDUP_WINDOW_SECONDS` | `3600` | How long a line's key is remembered (at least this, at most twice). |
+  | `INGEST_DEDUP_MAX_KEYS` | `200000` | Keys held in memory at most (about 20 MB). |
+  | `INGEST_DEDUP_MIN_LAG_SECONDS` | `30` | Only lines whose original timestamp is at least this old are ever dropped, so identical live lines in the same second are kept. |
 
   The backend's compose file passes through only the variables it lists, so add any of these to the `backend` service's `environment:` and redeploy. The backend now uses up to 40 database connections at most (20 main + 20 ingest); Postgres' default `max_connections = 100` covers that, but see [Too Many Connections](#issue-too-many-connections-error) if you run other clients.
 
@@ -753,7 +757,11 @@ curl -X PUT http://localhost:8421/api/shippers/sources/<source-id> \
 
 **Fix:**
 - Upgrade the backend: `/config` no longer carries heartbeat fields, so 1.4.2
-  shippers stop re-applying on every poll.
+  shippers stop re-applying on every poll. The backend also drops a shipper
+  line it already stored (same shipper, host, container, original timestamp
+  and text) and logs how many; see `INGEST_DEDUP_*` under
+  [Logs are dropped or ingestion is slow](#issue-logs-are-dropped-or-ingestion-is-slow).
+  This needs shipper 1.5.0, which sends each line's original timestamp.
 - Upgrade the shipper to 1.5.0 or later. It keeps a read position per
   container ID in `SHIPPER_STATE_DIR` (default `/tmp/siembox-state`, on the
   `shipper-cache` volume), reports its real shipper id, and skips SIEMBox's own

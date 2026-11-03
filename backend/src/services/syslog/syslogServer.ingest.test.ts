@@ -109,6 +109,7 @@ test('UDP overload: messages beyond workers + backlog are dropped AND counted, t
     processed: 0,
     failed: 0,
     storeFailures: 0,
+    duplicatesDropped: 0,
   });
 
   rig.release();
@@ -257,4 +258,19 @@ test('stop() is idempotent and safe on a server that never started', async () =>
   const never = new SyslogServer(0);
   await never.stop();
   await never.stop();
+});
+
+test('a replayed shipper log is stored once and the replay is counted', async (t) => {
+  const rig = await startRig(t, { gated: false });
+  // What shipper 1.5.0 sends: original timestamp (here, hours old) and [shipper id].
+  const replayed = (i: number) =>
+    `<134>Oct 28 20:03:31 llm siembox-backend[4773d12e]: 2026-10-28 20:03:31 [info]: Running migration: 00${i}.sql`;
+  const pass = Array.from({ length: 5 }, (_, i) => replayed(i));
+  await sendUdp(rig.udpPort, pass);
+  await waitFor(() => rig.server.getIngestStats().processed === 5, 'the first pass');
+  await sendUdp(rig.udpPort, pass); // the replay: same lines, same timestamps
+  await sendUdp(rig.udpPort, pass);
+  await waitFor(() => rig.server.getIngestStats().processed === 15, 'the replays');
+  assert.equal(rig.started.length, 5, 'each line is stored once');
+  assert.equal(rig.server.getIngestStats().duplicatesDropped, 10);
 });

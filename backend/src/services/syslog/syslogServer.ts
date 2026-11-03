@@ -8,6 +8,7 @@ import { ErrorLogService } from '../errors/errorLogService';
 import { getPoolStats, INGEST_POOL_MAX, runInIngestContext } from '../../config/database';
 import { envInt } from '../../utils/envInt';
 import { IngestQueue, IngestQueueStats } from './ingestQueue';
+import { IngestDedup } from './ingestDedup';
 
 /**
  * Cap on the unterminated tail we'll hold for one TCP connection. A sender that
@@ -85,6 +86,9 @@ export class SyslogServer {
   private lastReport = { dropped: 0, retries: 0 };
   /** Messages whose processing threw -- in practice, a database error. Each is also logged. */
   private storeFailures = 0;
+  /** Drops shipper lines already stored (a replayed container log). See ingestDedup.ts. */
+  private dedup = IngestDedup.fromEnv();
+  private lastDuplicatesReported = 0;
 
   constructor(port: number = 514) {
     this.port = port;
@@ -111,8 +115,8 @@ export class SyslogServer {
   }
 
   /** Queue depth and loss counters, for diagnostics and tests. */
-  getIngestStats(): IngestQueueStats & { storeFailures: number } {
-    return { ...this.queue.stats(), storeFailures: this.storeFailures };
+  getIngestStats(): IngestQueueStats & { storeFailures: number; duplicatesDropped: number } {
+    return { ...this.queue.stats(), storeFailures: this.storeFailures, duplicatesDropped: this.dedup.stats().dropped };
   }
 
   async start(): Promise<void> {
@@ -276,6 +280,10 @@ export class SyslogServer {
       // Parse syslog message (RFC 3164 or RFC 5424)
       const parsed = parseSyslogMessage(rawMessage);
 
+      // A line this shipper already sent (same original timestamp and text):
+      // a replayed log. Counted, never stored twice.
+      if (this.dedup.isDuplicate(parsed)) return;
+
       // Store raw log in database
       const rawLog = await RawLogModel.create({
         timestamp: parsed.timestamp,
@@ -342,6 +350,16 @@ export class SyslogServer {
             '"Issue: Logs are dropped or ingestion is slow". Senders that use TCP or HTTP push are slowed down instead of dropped.',
         },
       });
+    }
+
+    const duplicates = this.dedup.stats().dropped - this.lastDuplicatesReported;
+    this.lastDuplicatesReported += duplicates;
+    if (duplicates > 0) {
+      logger.warn(
+        `Dropped ${duplicates} duplicate shipper line(s) in the last ${seconds}s: lines already stored, ` +
+          'resent with their original timestamp (a shipper re-reading a log from the start). ' +
+          'See Troubleshooting -> "Docker logs replayed in a loop".'
+      );
     }
 
     if (retries > 0) {

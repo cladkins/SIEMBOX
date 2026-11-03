@@ -13,6 +13,8 @@ import {
 import { ApiError } from '../middleware/errorHandler';
 import { query } from '../config/database';
 import crypto from 'crypto';
+import net from 'net';
+import { DEFAULT_TIMEZONE, isValidTimezone, normalizeSourceIp, sourceTimezones } from '../services/syslog/sourceTimezone';
 import { groupContainers, DockerContainer } from '../services/scanner/dockerDiscovery';
 import { ShipperContainerModel } from '../models/ShipperContainer';
 import { authenticate, authorize, requireAdmin, requireOperator } from '../middleware/auth';
@@ -228,6 +230,51 @@ router.get('/direct-syslog-sources', authenticate, async (_req: Request, res: Re
     }
     throw new ApiError(500, 'Failed to fetch direct syslog sources');
   }
+});
+
+// Timezone of zoneless syslog header timestamps, per sender IP, plus the
+// default for senders without one (UTC unless set). Read by the syslog listener
+// (services/syslog/sourceTimezone.ts); changes apply at once.
+router.get('/syslog-timezones', authenticate, async (_req: Request, res: Response) => {
+  const rows = (await query(`SELECT source_ip, timezone, updated_at FROM syslog_source_timezones ORDER BY source_ip`)).rows;
+  const d = (await query(`SELECT value FROM system_settings WHERE key = 'syslog_default_timezone'`)).rows[0]?.value;
+  res.json({ default_timezone: isValidTimezone(d) ? d : DEFAULT_TIMEZONE, sources: rows });
+});
+
+router.put('/syslog-timezones/default', authenticate, requireOperator, async (req: Request, res: Response) => {
+  const { timezone } = req.body ?? {};
+  if (!isValidTimezone(timezone)) throw new ApiError(400, 'timezone must be an IANA timezone name such as UTC or America/Chicago');
+  await query(
+    `INSERT INTO system_settings (key, value) VALUES ('syslog_default_timezone', $1)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    [timezone]
+  );
+  await sourceTimezones.invalidate();
+  res.json({ default_timezone: timezone });
+});
+
+router.put('/syslog-timezones/:sourceIp', authenticate, requireOperator, async (req: Request, res: Response) => {
+  const sourceIp = normalizeSourceIp(String(req.params.sourceIp));
+  const { timezone } = req.body ?? {};
+  if (net.isIP(sourceIp) === 0) throw new ApiError(400, 'sourceIp must be an IPv4 or IPv6 address');
+  if (!isValidTimezone(timezone)) throw new ApiError(400, 'timezone must be an IANA timezone name such as UTC or America/Chicago');
+  const row = (
+    await query(
+      `INSERT INTO syslog_source_timezones (source_ip, timezone) VALUES ($1, $2)
+       ON CONFLICT (source_ip) DO UPDATE SET timezone = EXCLUDED.timezone, updated_at = NOW()
+       RETURNING source_ip, timezone, updated_at`,
+      [sourceIp, timezone]
+    )
+  ).rows[0];
+  await sourceTimezones.invalidate();
+  res.json(row);
+});
+
+router.delete('/syslog-timezones/:sourceIp', authenticate, requireOperator, async (req: Request, res: Response) => {
+  const sourceIp = normalizeSourceIp(String(req.params.sourceIp));
+  const result = await query(`DELETE FROM syslog_source_timezones WHERE source_ip = $1`, [sourceIp]);
+  await sourceTimezones.invalidate();
+  res.json({ deleted: (result.rowCount ?? 0) > 0 });
 });
 
 // Get single shipper with full config

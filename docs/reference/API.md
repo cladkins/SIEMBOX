@@ -3131,7 +3131,8 @@ Two kinds of route live under `/api/shippers`:
 
 | Method | Path | Access |
 |---|---|---|
-| GET | `/api/shippers`, `/api/shippers/:id`, `/:id/sources`, `/:id/volumes`, `/:id/activity`, `/unknown-sources`, `/direct-syslog-sources` | Any role |
+| GET | `/api/shippers`, `/api/shippers/:id`, `/:id/sources`, `/:id/volumes`, `/:id/activity`, `/unknown-sources`, `/direct-syslog-sources`, `/syslog-timezones` | Any role |
+| PUT / DELETE | `/syslog-timezones/default`, `/syslog-timezones/:sourceIp` | Admin or operator |
 | POST / PUT / DELETE | `/api/shippers`, `/api/shippers/:id` | Admin or operator |
 | POST / PUT / DELETE | `/:id/sources`, `/sources/:sourceId`, `/:id/volumes`, `/volumes/:volumeId` | Admin or operator |
 | POST | `/:id/regenerate-key` | Admin |
@@ -3204,6 +3205,43 @@ Served from a 30 s single-flight cache with the same statement-timeout / stale-o
 - `503` - The database was too busy to answer in time (try again shortly)
 
 ---
+
+
+### Syslog source timezones
+
+An RFC 3164 header (`Nov  3 12:17:04`) has no zone. SIEMBox reads it in the
+sender's timezone: the one set for its source IP, else the default, else
+`UTC`. Shippers 1.5.0+ always send UTC. RFC 5424 timestamps with an offset
+are used as they are. Changes apply to new logs at once; stored rows keep
+their timestamp.
+
+**GET /api/shippers/syslog-timezones** (any role)
+
+```json
+{
+  "default_timezone": "UTC",
+  "sources": [
+    { "source_ip": "192.168.1.20", "timezone": "America/Chicago", "updated_at": "2026-11-03T18:30:00.000Z" }
+  ]
+}
+```
+
+**PUT /api/shippers/syslog-timezones/:sourceIp** (admin or operator), body
+`{ "timezone": "America/Chicago" }`. `:sourceIp` is the sender's address as
+shown under Direct Syslog Sources. An IANA name is required; anything else is
+a `400`.
+
+**DELETE /api/shippers/syslog-timezones/:sourceIp** (admin or operator):
+the sender falls back to the default.
+
+**PUT /api/shippers/syslog-timezones/default** (admin or operator), body
+`{ "timezone": "UTC" }`: the timezone for senders without their own.
+
+```bash
+curl -X PUT http://localhost:8421/api/shippers/syslog-timezones/192.168.1.20 \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"timezone": "America/Chicago"}'
+```
 
 ### GET /api/shippers/:id
 

@@ -340,6 +340,35 @@ docker-compose logs backend | grep -i "error\|invalid"
 
 ---
 
+### Issue: Syslog timestamps are hours off (UniFi, Proxmox, appliances)
+
+**Symptoms:** logs from a device that sends syslog directly have a
+`timestamp` a fixed number of hours away from `created_at`, for example 6
+hours behind for a device in America/Chicago (received 18:17 UTC, stored as
+12:17 UTC).
+
+**Cause:** an RFC 3164 header (`Nov  3 12:17:04`) has no timezone, and the
+device writes its local time. SIEMBox reads a zoneless header as UTC unless
+told otherwise. (Before this release it used the backend's own local time,
+which is UTC in the image, with the same result.)
+
+**Fix:** set the device's timezone, by source IP (the address under
+*Shippers -> Direct Syslog Sources*):
+
+```bash
+curl -X PUT http://localhost:8421/api/shippers/syslog-timezones/192.168.1.20 \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"timezone": "America/Chicago"}'
+```
+
+Or set a default for every sender without its own:
+`PUT /api/shippers/syslog-timezones/default` with `{"timezone": "America/Chicago"}`.
+The alternative is to set the device to log in UTC. New logs use the setting
+within seconds; stored rows are not rewritten. See
+[API: Syslog source timezones](../reference/API.md#syslog-source-timezones).
+
+---
+
 ### Issue: Logs Received But Not Parsed
 
 **Symptoms:**

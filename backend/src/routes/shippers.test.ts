@@ -45,6 +45,7 @@ const READS: Route[] = [
   ['get', '/'],
   ['get', '/unknown-sources'],
   ['get', '/direct-syslog-sources'],
+  ['get', '/syslog-timezones'],
   ['get', '/:id'],
   ['get', '/:id/sources'],
   ['get', '/:id/volumes'],
@@ -66,6 +67,9 @@ const OPERATOR_WRITES: Route[] = [
   ['delete', '/sources/:sourceId'],
   ['post', '/:id/volumes'],
   ['delete', '/volumes/:volumeId'],
+  ['put', '/syslog-timezones/default'],
+  ['put', '/syslog-timezones/:sourceIp'],
+  ['delete', '/syslog-timezones/:sourceIp'],
 ];
 
 const ADMIN_WRITES: Route[] = [

@@ -9,6 +9,7 @@ import { getPoolStats, INGEST_POOL_MAX, runInIngestContext } from '../../config/
 import { envInt } from '../../utils/envInt';
 import { IngestQueue, IngestQueueStats } from './ingestQueue';
 import { IngestDedup } from './ingestDedup';
+import { sourceTimezones } from './sourceTimezone';
 
 /**
  * Cap on the unterminated tail we'll hold for one TCP connection. A sender that
@@ -278,7 +279,8 @@ export class SyslogServer {
   ): Promise<void> {
     try {
       // Parse syslog message (RFC 3164 or RFC 5424)
-      const parsed = parseSyslogMessage(rawMessage);
+      // Zoneless header timestamps are read in the sender's configured timezone (default UTC).
+      const parsed = parseSyslogMessage(rawMessage, { timezone: sourceTimezones.forSource(sourceIp) });
 
       // A line this shipper already sent (same original timestamp and text):
       // a replayed log. Counted, never stored twice.

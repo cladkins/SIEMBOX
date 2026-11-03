@@ -1,4 +1,5 @@
 import { logger } from '../../utils/logger';
+import { bsdTimestampToUtc, wallClockToUtc, DEFAULT_TIMEZONE } from './sourceTimezone';
 
 export interface ParsedSyslog {
   timestamp: Date;
@@ -108,7 +109,19 @@ function extractTag(rest: string): TagParts | null {
  * RFC 3164: <PRI>TIMESTAMP HOSTNAME TAG: MESSAGE
  * RFC 5424: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID STRUCTURED-DATA MESSAGE
  */
-export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
+export interface ParseSyslogOptions {
+  /**
+   * IANA timezone of the sender's zoneless header timestamps (RFC 3164, or an
+   * RFC 5424 timestamp without an offset). Default UTC. See sourceTimezone.ts.
+   */
+  timezone?: string;
+  /** "Now", for the year of an RFC 3164 timestamp (test seam). */
+  now?: Date;
+}
+
+export function parseSyslogMessage(rawMessage: string, opts: ParseSyslogOptions = {}): ParsedSyslog {
+  const tz = opts.timezone ?? DEFAULT_TIMEZONE;
+  const now = opts.now ?? new Date();
   const originalMessage = rawMessage;
   // Strip ANSI/color escapes up front so they can't break ^-anchored parsers
   // downstream and never get stored or displayed (~1 in 6 shipped lines carries
@@ -170,7 +183,7 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
       // MSGID, STRUCTURED-DATA, MSG; VERSION, MSGID and STRUCTURED-DATA are unused.
       const [, , timestamp, hostname, appName, procId, , , message] = rfc5424Match;
 
-      result.timestamp = parseTimestamp(timestamp) || new Date();
+      result.timestamp = parseTimestamp(timestamp, tz, now) || new Date();
       result.hostname = hostname !== '-' ? hostname : null;
       result.appName = appName !== '-' ? appName : null;
       result.processId = procId !== '-' ? procId : null;
@@ -184,7 +197,7 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
       if (rfc3164Match) {
         const [, timestamp, hostname, rest] = rfc3164Match;
 
-        result.timestamp = parseTimestamp(timestamp) || new Date();
+        result.timestamp = parseTimestamp(timestamp, tz, now) || new Date();
         result.hostname = hostname;
 
         // UniFi AP tags — "<mac>,<model>-<fw>" with the real program following in
@@ -269,37 +282,44 @@ export function parseSyslogMessage(rawMessage: string): ParsedSyslog {
   return result;
 }
 
+/** An ISO 8601 timestamp that states its zone ("Z" or "+05:00"). */
+const ISO_WITH_ZONE = /(?:[zZ]|[+-]\d{2}:?\d{2})$/;
+/** An ISO 8601 local date-time without a zone: 2024-01-15T12:34:56(.789). */
+const ISO_LOCAL = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?$/;
+
+const MONTHS: Record<string, number> = {
+  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+  Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+};
+
 /**
- * Parse various timestamp formats commonly found in syslog
+ * Parse the header timestamp. A timestamp without a zone is read in `tz` (the
+ * sender's configured timezone, UTC by default), never in the backend's own
+ * local time: that put every Chicago-time UniFi/Proxmox event 6 hours early.
  */
-function parseTimestamp(timestampStr: string): Date | null {
+export function parseTimestamp(timestampStr: string, tz: string = DEFAULT_TIMEZONE, now: Date = new Date()): Date | null {
   try {
     // ISO 8601 format (RFC 5424): 2024-01-15T12:34:56.789Z
     if (timestampStr.includes('T')) {
-      return new Date(timestampStr);
+      if (!ISO_WITH_ZONE.test(timestampStr)) {
+        const m = timestampStr.match(ISO_LOCAL);
+        if (m) {
+          const ms = m[7] ? Math.floor(Number(`0.${m[7]}`) * 1000) : 0;
+          return wallClockToUtc(tz, +m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], ms);
+        }
+      }
+      const d = new Date(timestampStr);
+      return isNaN(d.getTime()) ? null : d;
     }
 
     // BSD syslog format (RFC 3164): Jan 15 12:34:56
-    const currentYear = new Date().getFullYear();
     const bsdMatch = timestampStr.match(/^(\w+)\s+(\d+)\s+(\d+):(\d+):(\d+)$/);
 
     if (bsdMatch) {
       const [, month, day, hour, minute, second] = bsdMatch;
-      const monthMap: Record<string, number> = {
-        Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
-        Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
-      };
-
-      const monthNum = monthMap[month];
+      const monthNum = MONTHS[month];
       if (monthNum !== undefined) {
-        return new Date(
-          currentYear,
-          monthNum,
-          parseInt(day),
-          parseInt(hour),
-          parseInt(minute),
-          parseInt(second)
-        );
+        return bsdTimestampToUtc(tz, monthNum, parseInt(day, 10), parseInt(hour, 10), parseInt(minute, 10), parseInt(second, 10), now);
       }
     }
 

@@ -76,6 +76,8 @@ const LOGIN_REQUIRED: Array<[string, string, unknown?]> = [
   ['GET', '/api/shippers'],
   ['GET', '/api/shippers/unknown-sources'],
   ['GET', '/api/shippers/direct-syslog-sources'],
+  ['GET', '/api/shippers/syslog-timezones'],
+  ['PUT', '/api/shippers/syslog-timezones/10.0.0.1', { timezone: 'UTC' }],
   ['GET', '/api/shippers/1'],
   ['POST', '/api/shippers', { name: 'x' }],
   ['PUT', '/api/shippers/1', { name: 'x' }],

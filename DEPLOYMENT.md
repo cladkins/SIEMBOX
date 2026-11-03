@@ -45,7 +45,17 @@ LOG_LEVEL=info
 
 # Optional: Specify version (default: latest)
 # SIEMBOX_VERSION=2.0.0
+
+# Optional: Postgres max_wal_size (default 2GB; 4GB for heavy ingest)
+# POSTGRES_MAX_WAL_SIZE=2GB
 ```
+
+> **Postgres WAL.** The compose files start Postgres with
+> `max_wal_size=${POSTGRES_MAX_WAL_SIZE:-2GB}`. Postgres' own default (1GB)
+> forced a checkpoint about every 28 seconds under heavy ingest and logged
+> `checkpoints are occurring too frequently`. WAL can use up to about this much
+> disk. Existing installs pick it up when you pull the new compose file and run
+> `docker compose up -d postgres` (a Postgres restart).
 
 > **Optional v2 features.** The AI builder, parser/detection catalog, and GeoIP
 > enrichment are all configured with additional (optional) environment variables —

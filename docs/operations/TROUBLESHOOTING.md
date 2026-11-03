@@ -49,8 +49,9 @@ docker logs siembox-backend
 docker logs siembox-postgres
 docker logs siembox-frontend
 
-# Test API endpoint
-curl http://localhost:8421/api/health
+# Test API endpoint: 503 with an "ingest" reason means ingestion has stalled
+# while shippers are online (or the database is not answering)
+curl -s http://localhost:8421/health
 ```
 
 ### Common Error Patterns

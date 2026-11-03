@@ -1,4 +1,6 @@
 import express, { Application, NextFunction, Request, Response } from 'express';
+import { getIngestHealth } from './services/ingest/ingestHealth';
+import { getIngestQueueStats } from './services/syslog/ingestStats';
 import qs from 'qs';
 import rateLimit from 'express-rate-limit';
 import { bodyParserErrorHandler, errorHandler, notFoundHandler } from './middleware/errorHandler';
@@ -142,12 +144,19 @@ app.use(function emptyBodyDefault(req: Request, _res: Response, next: NextFuncti
 // every API request's lifecycle.
 app.use(requestTimeoutLogger());
 
-// Health check endpoint
-app.get('/health', (_req, res) => {
-  res.status(200).json({
-    status: 'ok',
+// Health check endpoint. 503 when ingestion has stalled while shippers are
+// online, or the database does not answer (services/ingest/ingestHealth.ts).
+app.get('/health', async (_req, res) => {
+  const ingest = await getIngestHealth();
+  const stats = getIngestQueueStats();
+  res.status(ingest.ok ? 200 : 503).json({
+    status: ingest.ok ? 'ok' : 'degraded',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
+    ingest: {
+      ...ingest,
+      ...(stats ? { queued: stats.queued, active: stats.active, dropped: stats.dropped, duplicatesDropped: stats.duplicatesDropped } : {}),
+    },
   });
 });
 

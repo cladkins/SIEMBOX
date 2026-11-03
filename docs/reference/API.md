@@ -9,6 +9,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
 - [Error Codes](#error-codes)
 - [Rate Limiting](#rate-limiting)
 - [API Endpoints](#api-endpoints)
+  - [Health](#health)
   - [Authentication](#authentication-endpoints)
   - [Logs](#logs-endpoints)
   - [Regex safety (parsers and rules)](#regex-safety-parsers-and-rules)
@@ -506,6 +507,50 @@ TROUBLESHOOTING.md, "Locked out of SIEMBox", for the command line.
 ---
 
 ## API Endpoints
+
+## Health
+
+### GET /health
+
+No authentication. Answers `200` with `"status": "ok"` when ingestion is
+alive, and `503` with `"status": "degraded"` when:
+
+- at least one shipper with an enabled source has checked in within 3 minutes,
+  and the newest raw log is older than `HEALTH_INGEST_STALL_SECONDS` (default
+  `300`; `0` turns the check off), or none was ever stored; or
+- the database did not answer within 3 seconds (a wedged connection pool).
+
+Results are cached for 10 seconds.
+
+```json
+{
+  "status": "degraded",
+  "timestamp": "2026-10-29T20:46:00.000Z",
+  "uptime": 86400.1,
+  "ingest": {
+    "ok": false,
+    "reason": "no logs stored for 600s (threshold 300s) while 3 shipper(s) are online",
+    "newestRawLogAgeSeconds": 600,
+    "onlineShippers": 3,
+    "thresholdSeconds": 300,
+    "queued": 20000,
+    "active": 18,
+    "dropped": 41210,
+    "duplicatesDropped": 0
+  }
+}
+```
+
+`queued`, `active`, `dropped` (UDP messages refused by a full queue) and
+`duplicatesDropped` (replayed shipper lines, see `INGEST_DEDUP_*`) are present
+while the syslog listener runs.
+
+A built-in alert (Alerts page, source `siembox:ingestion`, severity
+`critical`) is raised once per stall when no log has been stored for 10
+minutes while shippers are online. Settings (`system_settings`):
+`ingestion_stall_alert_enabled` (default `true`) and
+`ingestion_stall_alert_minutes` (default `10`). It does not depend on the
+ingestion notification settings.
 
 ## Authentication Endpoints
 

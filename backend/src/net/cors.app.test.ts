@@ -5,7 +5,8 @@
  *
  * Hermetic: before app.ts (and so config/database.ts) is loaded, DB_HOST and
  * DB_PORT point at a local port nothing listens on; nothing here reaches SQL
- * (preflights are answered before any route, /health reads no table).
+ * (preflights are answered before any route; /health's ingest read fails
+ * fast and answers 503).
  *
  * config/database.ts loads .env from the working directory without overriding
  * a variable that is already set. A developer's backend/.env may still say
@@ -90,7 +91,9 @@ test('app.ts: CORS_ORIGIN empty is same-origin only, whatever .env says', async 
   assert.deepEqual(acHeaders(pre), [], 'no allow answer to a preflight from another origin');
 
   const health = await call('GET', '/health', { Origin: 'http://evil.example' });
-  assert.equal(health.status, 200);
+  // 503 here: /health reads ingest state and no database is listening. The
+  // CORS headers are the point.
+  assert.ok([200, 503].includes(health.status), `status ${health.status}`);
   assert.deepEqual(acHeaders(health), []);
   assert.equal(health.headers.vary, undefined);
 });

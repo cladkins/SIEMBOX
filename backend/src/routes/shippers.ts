@@ -6,6 +6,7 @@ import {
   ShipperVolumeModel,
   ShipperActivityModel,
   withHttpPushStatus,
+  agentConfigView,
   type LogShipper,
   type ShipperSource,
 } from '../models/LogShipper';
@@ -634,9 +635,11 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // Inject syslog settings at top level (not nested in config.config).
     // config is stripped of http_push_key_hash first — this is the shipper's
-    // own record, but the hash still has no reason to leave the server.
+    // own record, but the hash still has no reason to leave the server — and of
+    // heartbeat fields, so it only changes when the configuration does
+    // (agentConfigView; a changing body made shippers re-read Docker logs).
     const fullConfig = {
-      ...(config ? withHttpPushStatus(config) : config),
+      ...(config ? agentConfigView(config) : config),
       ...syslogSettings,
     };
 
@@ -720,9 +723,11 @@ router.get('/config/:api_key', async (req: Request, res: Response) => {
 
     // Inject syslog settings at top level (not nested in config.config).
     // config is stripped of http_push_key_hash first — this is the shipper's
-    // own record, but the hash still has no reason to leave the server.
+    // own record, but the hash still has no reason to leave the server — and of
+    // heartbeat fields, so it only changes when the configuration does
+    // (agentConfigView; a changing body made shippers re-read Docker logs).
     const fullConfig = {
-      ...(config ? withHttpPushStatus(config) : config),
+      ...(config ? agentConfigView(config) : config),
       ...syslogSettings,
     };
 

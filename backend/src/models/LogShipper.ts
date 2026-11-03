@@ -43,6 +43,42 @@ export function withHttpPushStatus<T extends { http_push_key_hash?: string | nul
 }
 
 /**
+ * Shipper-row fields that change on a heartbeat or report rather than on a
+ * configuration change. They are dropped from the config the shipper agent
+ * receives (GET /config, POST /register): shippers up to 1.4.2 compare that
+ * JSON byte for byte, and GET /config updates last_seen in the same request,
+ * so every poll looked like a new config. Each re-apply restarted
+ * `docker logs` from the first line: the log replay loop.
+ */
+export const AGENT_CONFIG_VOLATILE_FIELDS = [
+  'last_seen',
+  'updated_at',
+  'status',
+  'ip_address',
+  'version',
+  'hostname',
+  'metadata',
+  'containers_reported_at',
+  'containers_available',
+  'containers_unavailable_reason',
+  'http_push_key_created_at',
+  'http_push_last_seen',
+] as const;
+
+/**
+ * The config a shipper agent applies: the full config minus volatile fields
+ * (AGENT_CONFIG_VOLATILE_FIELDS) and minus the push-key hash. Identical across
+ * polls until an operator changes a source, a volume or the syslog settings.
+ */
+export function agentConfigView<T extends { http_push_key_hash?: string | null }>(
+  config: T
+): Record<string, unknown> {
+  const view: Record<string, unknown> = { ...withHttpPushStatus(config) };
+  for (const field of AGENT_CONFIG_VOLATILE_FIELDS) delete view[field];
+  return view;
+}
+
+/**
  * Columns LogShipperModel.update may set: the caller-editable fields
  * (name/description/hostname), api_key (regenerate-key), and what the shipper
  * reports on register. The HTTP push-key columns have their own setters. Not

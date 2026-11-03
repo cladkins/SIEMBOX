@@ -733,6 +733,36 @@ curl -X PUT http://localhost:8421/api/shippers/sources/<source-id> \
 
 ---
 
+### Issue: Docker logs replayed in a loop
+
+**Symptoms:**
+- The same container lines (for example `Running migration: 007_...`) land in
+  raw logs again and again, about every 37 seconds, each pass the whole log.
+- Postgres logs `checkpoints are occurring too frequently`.
+- Every shipper's Docker rows carry shipper id `e3b0c442`.
+
+**Cause (shipper 1.4.2 and older):**
+1. `GET /api/shippers/config/:key` returned the whole shipper row, and the
+   same request updates `last_seen`. The shipper compared the JSON byte for
+   byte, saw a change on every poll and re-applied its config.
+2. Re-applying ran `docker logs -f <container>` with no start position, which
+   prints the container's whole log from the first line.
+3. The shipper id came from `xxd`, which the image does not ship, so every
+   shipper hashed an empty input: `e3b0c442` is the start of SHA-256 of
+   nothing.
+
+**Fix:**
+- Upgrade the backend: `/config` no longer carries heartbeat fields, so 1.4.2
+  shippers stop re-applying on every poll.
+- Upgrade the shipper to 1.5.0 or later. It keeps a read position per
+  container ID in `SHIPPER_STATE_DIR` (default `/tmp/siembox-state`, on the
+  `shipper-cache` volume), reports its real shipper id, and skips SIEMBox's own
+  containers in all-containers mode.
+- Check the shipper log after the upgrade: `Shipper ID:` must not be
+  `e3b0c442`, and each container line shows `from: since ...` or `from: tail 0`.
+
+---
+
 ### Issue: A Shipper Scanned an Unexpected Range
 
 **Symptoms:**

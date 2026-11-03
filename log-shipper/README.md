@@ -156,6 +156,8 @@ The log shipper supports glob patterns for file paths:
 | `SCAN_POLL_INTERVAL` | `30` | How often to poll for dispatched scan jobs — nmap + nuclei (seconds; `0` disables scanning) |
 | `SCAN_TIMEOUT` | `900` | Max wall-clock for a single dispatched scan (seconds) |
 | `NUCLEI_UPDATE_TEMPLATES` | `true` | Auto-update the nuclei template corpus at startup; set `false` for air-gapped / self-managed templates |
+| `SHIPPER_STATE_DIR` | `/tmp/siembox-state` | Where Docker read cursors are kept. The default is on the `shipper-cache` volume mounted at `/tmp`, so positions survive restarts and upgrades |
+| `DOCKER_UNSEEN_CONTAINERS` | `auto` | What to read from a container with no saved position: `auto` reads the whole log of a container created after the shipper first ran and only new lines of an older one; `all` always reads the whole log; `end` always starts at new lines |
 
 ### Source Types
 
@@ -180,6 +182,17 @@ Forward logs from running Docker containers.
 **Requirements:**
 - Mount Docker socket: `-v /var/run/docker.sock:/var/run/docker.sock:ro`
 - New/removed containers are picked up on the next config poll (~30s).
+
+**Read position (1.5.0+):** the shipper saves, per container ID, the timestamp
+of the last line it sent (`$SHIPPER_STATE_DIR/docker-cursors/<container-id>`).
+A shipper restart, a config change or a container restart resumes after that
+line, so no line is sent twice. A container recreated under the same name has
+a new ID and is read from its start. Each line goes out with its original
+timestamp (UTC) in the syslog header.
+
+Before 1.5.0 the shipper re-read every container's log from the beginning on
+each config poll (about every 37 s), which flooded SIEMBox with duplicates.
+See docs/operations/TROUBLESHOOTING.md, "Docker logs replayed in a loop".
 
 #### Systemd Journal Sources
 Forward the host's systemd journal — the usual way to ship a Linux server's system logs.

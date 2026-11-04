@@ -18,7 +18,11 @@ SHIPPER_API_KEY="${SHIPPER_API_KEY}"
 #           surface the real nuclei error on failure
 #   1.4.2 — discovery: capture the agent's stderr into the failure reason, and
 #           distinguish "produced no output" from a nonzero exit
-SHIPPER_VERSION="1.4.2"
+#   1.5.0 — docker: persistent per-container read cursor (no replay on restart
+#           or config poll), real shipper id (no xxd dependency), container
+#           exclude list (SIEMBox's own containers skipped by default), and the
+#           original log timestamp in the syslog header
+SHIPPER_VERSION="1.5.0"
 CONFIG_POLL_INTERVAL="${CONFIG_POLL_INTERVAL:-30}" # seconds
 HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-60}" # seconds
 # How often to report this host's container images to SIEMBox for vuln scanning.
@@ -41,6 +45,21 @@ NUCLEI_TEMPLATES_MARKER="${NUCLEI_TEMPLATES_MARKER:-/tmp/siembox-nuclei-template
 # Bundled Node agent that runs dispatched log-discovery scans (baked into the
 # image by the Dockerfile; see log-shipper/discovery-agent/).
 DISCOVERY_AGENT="${DISCOVERY_AGENT:-/usr/local/lib/siembox/discovery-agent.js}"
+# Persistent state: per-container Docker read cursors. The default sits on the
+# shipper-cache volume both compose files already mount at /tmp, so cursors
+# survive shipper restarts and image upgrades without a compose change.
+SHIPPER_STATE_DIR="${SHIPPER_STATE_DIR:-/tmp/siembox-state}"
+# What to read from a container this shipper has no cursor for:
+#   auto (default) -- the whole log if the container was created after this
+#                     shipper first started (a genuinely new container), else
+#                     only lines written from now on
+#   all            -- always the whole log
+#   end            -- always only new lines
+DOCKER_UNSEEN_CONTAINERS="${DOCKER_UNSEEN_CONTAINERS:-auto}"
+# Containers skipped when a Docker source tails "all containers", unless the
+# source sets include_siembox_containers. Shipping SIEMBox's own logs back into
+# SIEMBox is a feedback loop: every ingested line writes more log.
+SIEMBOX_OWN_CONTAINERS="${SIEMBOX_OWN_CONTAINERS:-siembox-backend siembox-postgres siembox-frontend siembox-log-shipper}"
 
 # Color output for logs
 GREEN='\033[0;32m'
@@ -65,12 +84,129 @@ log_debug() {
     echo -e "${BLUE}[DEBUG]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1" >&2
 }
 
+# SHA-256 of zero bytes, first 8 hex digits. Seeing this as a shipper id means
+# the key was never decoded (the hash of an empty input).
+EMPTY_INPUT_SHIPPER_ID="e3b0c442"
+
 # Generate short shipper ID from API key (first 8 chars of SHA256)
 # NOTE: API key is a 64-char hex string. We must decode it to binary before hashing
 # to match the backend's computation: SHA256(decode(api_key, 'hex'))
+#
+# The hex decode is pure bash (printf %b with \xHH escapes). It used to be
+# `xxd -r -p`, but the image does not ship xxd: the pipeline then hashed an
+# EMPTY input and every shipper reported the same id, e3b0c442, while the
+# pipeline's exit status (cut's) hid the failure.
 generate_shipper_id() {
     local api_key="$1"
-    echo -n "$api_key" | xxd -r -p | sha256sum 2>/dev/null | cut -c1-8 || echo -n "$api_key" | xxd -r -p | md5sum 2>/dev/null | cut -c1-8
+    case "$api_key" in
+        ''|*[!0-9a-fA-F]*)
+            log_error "SHIPPER_API_KEY is not a hex string; cannot derive the shipper id"
+            return 1 ;;
+    esac
+    if [ $(( ${#api_key} % 2 )) -ne 0 ]; then
+        log_error "SHIPPER_API_KEY has an odd number of hex digits; cannot derive the shipper id"
+        return 1
+    fi
+    local escaped id
+    escaped=$(printf '%s' "$api_key" | sed 's/../\\x&/g')
+    id=$(printf '%b' "$escaped" | sha256sum | cut -c1-8)
+    if [ -z "$id" ] || [ "$id" = "$EMPTY_INPUT_SHIPPER_ID" ]; then
+        log_error "Shipper id came out as the hash of an empty input; refusing to send unattributed logs"
+        return 1
+    fi
+    printf '%s\n' "$id"
+}
+
+# Fingerprint of the parts of a config the shipper acts on. The config endpoint
+# returns the whole shipper row, including last_seen, which the same request
+# updates. Comparing the raw JSON therefore saw a "change" on every poll, and
+# every apply restarted `docker logs` from the beginning: the replay loop.
+config_fingerprint() {
+    printf '%s' "$1" | jq -S -c '{
+        siem_host: (.siem_host // null),
+        siem_port: (.siem_port // null),
+        sources: [ (.sources // [])[] | {
+            id, source_type, enabled, file_path, container_name, journal_unit,
+            tag, facility, container_exclude, include_siembox_containers } ]
+    }' 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# DOCKER READ CURSORS. One file per container ID under
+# $SHIPPER_STATE_DIR/docker-cursors holding the timestamp (RFC 3339, nanosecond,
+# fixed width, as `docker logs --timestamps` prints it) of the last line sent.
+# A restarted shipper or a re-applied config resumes after it. A container
+# recreated under the same name has a new ID, so it starts fresh.
+# ---------------------------------------------------------------------------
+
+docker_cursor_dir() {
+    printf '%s/docker-cursors' "$SHIPPER_STATE_DIR"
+}
+
+# Create the state directory and record when this shipper first ran (used to
+# tell a container created later, which is new, from one that predates us).
+init_state_dir() {
+    mkdir -p "$(docker_cursor_dir)" 2>/dev/null || {
+        log_warn "Cannot create $SHIPPER_STATE_DIR; Docker read positions will not survive a restart"
+        return 1
+    }
+    if [ ! -s "$SHIPPER_STATE_DIR/first-run" ]; then
+        date -u +%s > "$SHIPPER_STATE_DIR/first-run" 2>/dev/null || true
+    fi
+}
+
+# Current time in the fixed-width format docker uses for log timestamps.
+docker_now_ts() {
+    date -u +%Y-%m-%dT%H:%M:%S.%NZ
+}
+
+# Read the cursor for a container ID (empty when there is none).
+read_docker_cursor() {
+    local file
+    file="$(docker_cursor_dir)/$1"
+    [ -s "$file" ] || return 0
+    local ts
+    IFS= read -r ts < "$file" || true
+    case "$ts" in
+        [0-9][0-9][0-9][0-9]-*T*Z) printf '%s' "$ts" ;;
+    esac
+}
+
+# Where to start reading a container: prints "since <ts>" or "tail 0" or "all".
+# $1 = container ID, $2 = container creation time (RFC 3339, from inspect).
+docker_start_position() {
+    local id="$1" created="$2" cursor
+    cursor=$(read_docker_cursor "$id")
+    if [ -n "$cursor" ]; then
+        printf 'since %s' "$cursor"
+        return
+    fi
+    case "$DOCKER_UNSEEN_CONTAINERS" in
+        all) printf 'all'; return ;;
+        end) printf 'tail 0'; return ;;
+    esac
+    local first_run created_s
+    first_run=$(cat "$SHIPPER_STATE_DIR/first-run" 2>/dev/null)
+    created_s=$(date -u -d "$created" +%s 2>/dev/null)
+    if [ -n "$first_run" ] && [ -n "$created_s" ] && [ "$created_s" -gt "$first_run" ]; then
+        printf 'all'
+    else
+        printf 'tail 0'
+    fi
+}
+
+# RFC 3164 header timestamp ("Oct 28 20:03:31") from a docker log timestamp
+# ("2026-10-28T20:03:31.123456789Z"), in UTC, without forking `date`.
+MONTH_NAMES=(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
+syslog_ts_from_docker() {
+    local ts="$1"
+    case "$ts" in
+        [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]*) ;;
+        *) return 1 ;;
+    esac
+    local month=$((10#${ts:5:2})) day=$((10#${ts:8:2}))
+    [ "$month" -ge 1 ] && [ "$month" -le 12 ] || return 1
+    printf '%s %2d %s' "${MONTH_NAMES[$((month - 1))]}" "$day" "${ts:11:8}"
 }
 
 # Save configuration to cache file
@@ -104,6 +240,8 @@ load_cached_config() {
 
 # Global variables
 CURRENT_CONFIG=""
+CURRENT_CONFIG_FINGERPRINT=""
+DOCKER_CONTAINERS_FINGERPRINT=""
 TAILING_PIDS=()
 LAST_HEARTBEAT=0
 LAST_CONTAINER_REPORT=0
@@ -119,6 +257,9 @@ send_log() {
     local severity="${4:-info}"
     local siem_host="${5:-localhost}"
     local siem_port="${6:-514}"
+    # Optional: the line's original timestamp (docker format). Without it the
+    # header carries the send time.
+    local original_ts="${7:-}"
 
     # Syslog severity levels
     case $severity in
@@ -151,7 +292,14 @@ send_log() {
 
     # RFC 3164 syslog format with shipper identification
     # Include SHIPPER_ID in the tag so we can trace logs back to their source
-    timestamp=$(date '+%b %d %H:%M:%S')
+    # UTC, always: SIEMBox reads a header timestamp with no zone as UTC unless
+    # the source has a timezone configured. The original log time when known,
+    # so a resent line keeps its time and SIEMBox can drop the duplicate.
+    timestamp=""
+    if [ -n "$original_ts" ]; then
+        timestamp=$(syslog_ts_from_docker "$original_ts") || timestamp=""
+    fi
+    [ -n "$timestamp" ] || timestamp=$(date -u '+%b %e %H:%M:%S')
     hostname=$(hostname)
 
     # If SHIPPER_ID is set, append it to the tag in brackets [SHIPPERID]
@@ -215,8 +363,10 @@ EOF
 
     if [ "$http_code" = "200" ]; then
         log_info "Successfully registered with SIEMBox"
-        # Extract .config from response and write to stdout
-        jq '.config' "$response_file" 2>/dev/null
+        # The response IS the config (sources, siem_host, siem_port at the top
+        # level, same as GET /config). It used to print only `.config`, the
+        # row's free-form column, so the first apply found no sources.
+        cat "$response_file" 2>/dev/null
         rm -f "$response_file"
         return 0
     else
@@ -325,12 +475,39 @@ tail_one_docker_container() {
     local siem_host="$4"
     local siem_port="$5"
 
-    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx -- "$container"; then
         log_warn "Container not found or not running: $container"
         return
     fi
 
-    log_info "Tailing Docker container: $container (tag: $tag)"
+    # The cursor is keyed by the container's full ID, not its name: a container
+    # recreated under the same name is a different log stream.
+    local info id created
+    info=$(docker inspect --format '{{.Id}} {{.Created}}' "$container" 2>/dev/null) || info=""
+    id="${info%% *}"
+    created="${info#* }"
+    case "$id" in
+        ''|*[!0-9a-f]*)
+            log_warn "Cannot read the ID of container $container; not tailing it"
+            return ;;
+    esac
+
+    local cursor_file position cursor="" logs_args=(-f --timestamps)
+    cursor_file="$(docker_cursor_dir)/$id"
+    position=$(docker_start_position "$id" "$created")
+    case "$position" in
+        since\ *)
+            cursor="${position#since }"
+            logs_args+=(--since "$cursor") ;;
+        tail\ 0)
+            logs_args+=(--tail 0)
+            # Record "now" so a restart before the first line resumes here
+            # instead of treating the container as unseen again.
+            cursor=$(docker_now_ts)
+            printf '%s\n' "$cursor" > "$cursor_file" 2>/dev/null || true ;;
+    esac
+
+    log_info "Tailing Docker container: $container (id ${id:0:12}, tag: $tag, from: ${position})"
 
     # Use named pipe to properly track docker logs process PID
     local pipe="/tmp/shipper-docker-pipe-$$-$RANDOM"
@@ -340,7 +517,7 @@ tail_one_docker_container() {
     }
 
     # Start docker logs process, redirect to pipe, background it
-    docker logs -f "$container" > "$pipe" 2>&1 &
+    docker logs "${logs_args[@]}" "$id" > "$pipe" 2>&1 &
     local docker_pid=$!
     TAILING_PIDS+=($docker_pid)
     log_debug "Started docker logs process $docker_pid for $container"
@@ -349,8 +526,25 @@ tail_one_docker_container() {
     (
         # Create new process group
         set -m
+        local last="$cursor" ts msg
         while IFS= read -r line; do
-            send_log "$line" "$tag" "$facility" "info" "$siem_host" "$siem_port"
+            # "<RFC3339Nano> <message>" (--timestamps). The fixed-width format
+            # sorts as text, so lines at or before the cursor are skipped:
+            # --since is inclusive and would resend the last line.
+            ts="${line%% *}"
+            case "$ts" in
+                [0-9][0-9][0-9][0-9]-*T*Z) msg="${line#* }"
+                    [ "$msg" = "$line" ] && msg="" ;;
+                *) ts=""; msg="$line" ;;
+            esac
+            if [ -n "$ts" ] && [ -n "$last" ] && [[ ! "$ts" > "$last" ]]; then
+                continue
+            fi
+            send_log "$msg" "$tag" "$facility" "info" "$siem_host" "$siem_port" "$ts"
+            if [ -n "$ts" ]; then
+                last="$ts"
+                printf '%s\n' "$ts" > "$cursor_file" 2>/dev/null || true
+            fi
         done < "$pipe"
     ) &
     local reader_pid=$!
@@ -361,14 +555,37 @@ tail_one_docker_container() {
     (sleep 1; rm -f "$pipe" 2>/dev/null) &
 }
 
+# Is this container name excluded? $1 = name, $2 = names or shell globs
+# separated by commas/spaces/newlines, $3 = "true" to include SIEMBox's own.
+container_excluded() {
+    local name="$1" exclude="$2" include_own="$3" pattern
+    if [ "$include_own" != "true" ]; then
+        for pattern in $SIEMBOX_OWN_CONTAINERS; do
+            [ "$name" = "$pattern" ] && return 0
+        done
+    fi
+    [ -n "$exclude" ] && [ "$exclude" != "null" ] || return 1
+    local IFS=$', \t\n' excluded=1
+    set -f
+    for pattern in $exclude; do
+        # Unquoted on purpose: the pattern is a glob.
+        if [[ "$name" == $pattern ]]; then excluded=0; break; fi
+    done
+    set +f
+    return $excluded
+}
+
 # Tail one container, or every running container when the name is blank / "*" /
-# "all" (each line tagged with its own container name).
+# "all" (each line tagged with its own container name). In all-containers mode
+# $6 (exclude list) and $7 (include SIEMBox's own containers) apply.
 tail_docker_source() {
     local container="$1"
     local tag="$2"
     local facility="$3"
     local siem_host="$4"
     local siem_port="$5"
+    local exclude="${6:-}"
+    local include_own="${7:-false}"
 
     # Treat blank / "*" / "all" (and forgiving variants like "* / all") as
     # "every running container".
@@ -383,7 +600,12 @@ tail_docker_source() {
         fi
         log_info "Tailing all running containers (each tagged with its name)"
         while IFS= read -r c; do
-            [ -n "$c" ] && tail_one_docker_container "$c" "$c" "$facility" "$siem_host" "$siem_port"
+            [ -n "$c" ] || continue
+            if container_excluded "$c" "$exclude" "$include_own"; then
+                log_info "Skipping excluded container: $c"
+                continue
+            fi
+            tail_one_docker_container "$c" "$c" "$facility" "$siem_host" "$siem_port"
         done <<< "$names"
         return
     fi
@@ -451,6 +673,7 @@ apply_config() {
 
     # Stop existing tailing processes
     stop_tailing
+    DOCKER_CONTAINERS_FINGERPRINT=$(docker_containers_fingerprint "$config")
 
     # Extract SIEMBox connection info from config (at top level after Phase 1 backend changes)
     local siem_host=$(echo "$config" | jq -r '.siem_host // ""' 2>/dev/null)
@@ -510,7 +733,10 @@ apply_config() {
                 ;;
             docker)
                 local container_name=$(echo "$source" | jq -r '.container_name')
-                tail_docker_source "$container_name" "$tag" "$facility" "$siem_host" "$siem_port"
+                local container_exclude=$(echo "$source" | jq -r '.container_exclude // ""')
+                local include_own=$(echo "$source" | jq -r '.include_siembox_containers // false')
+                tail_docker_source "$container_name" "$tag" "$facility" "$siem_host" "$siem_port" \
+                    "$container_exclude" "$include_own"
                 ;;
             journal)
                 local journal_unit=$(echo "$source" | jq -r '.journal_unit // ""')
@@ -524,14 +750,33 @@ apply_config() {
 }
 
 # Check if configuration has changed
+#
+# Compares only what apply_config acts on (config_fingerprint). The raw JSON
+# carries last_seen and other heartbeat fields that change on every poll.
 config_changed() {
-    local new_config="$1"
+    local new_config="$1" fp
+    fp=$(config_fingerprint "$new_config")
+    # Unparseable config: fall back to the raw comparison.
+    [ -n "$fp" ] || fp="$new_config"
+    [ "$CURRENT_CONFIG_FINGERPRINT" != "$fp" ]
+}
 
-    if [ "$CURRENT_CONFIG" != "$new_config" ]; then
-        return 0
-    else
-        return 1
-    fi
+# Remember the config just applied (raw, for the cache, and its fingerprint).
+set_current_config() {
+    CURRENT_CONFIG="$1"
+    CURRENT_CONFIG_FINGERPRINT=$(config_fingerprint "$1")
+    [ -n "$CURRENT_CONFIG_FINGERPRINT" ] || CURRENT_CONFIG_FINGERPRINT="$1"
+}
+
+# The running containers (full IDs, sorted) when the config has an enabled
+# Docker source, else empty. A change means a container started, stopped or was
+# recreated, so the Docker sources are re-applied; the cursors make that
+# re-apply resume where each container left off instead of replaying.
+docker_containers_fingerprint() {
+    local config="$1"
+    printf '%s' "$config" | jq -e '[(.sources // [])[] | select(.enabled == true and .source_type == "docker")] | length > 0' \
+        >/dev/null 2>&1 || return 0
+    docker ps --no-trunc --format '{{.ID}}' 2>/dev/null | sort | tr '\n' ' '
 }
 
 # Send heartbeat
@@ -941,8 +1186,14 @@ main() {
     fi
 
     # Generate shipper ID for log attribution
-    SHIPPER_ID=$(generate_shipper_id "$SHIPPER_API_KEY")
+    if ! SHIPPER_ID=$(generate_shipper_id "$SHIPPER_API_KEY"); then
+        log_error "Cannot derive the shipper id from SHIPPER_API_KEY (copy the key again from SIEMBox -> Shippers)"
+        exit 1
+    fi
     log_info "Shipper ID: $SHIPPER_ID"
+
+    # Docker read cursors live here (see SHIPPER_STATE_DIR).
+    init_state_dir || true
 
     # Install required tools if not present
     if ! command -v nc &> /dev/null; then
@@ -963,14 +1214,14 @@ main() {
         log_debug "Registration returned $(echo "$config" | wc -c) bytes"
         log_debug "First 200 chars: $(echo "$config" | head -c 200)"
         log_debug "Config type check: $(echo "$config" | jq type 2>/dev/null || echo 'jq parse failed')"
-        CURRENT_CONFIG="$config"
+        set_current_config "$config"
         save_cached_config "$config"
         apply_config "$config"
     else
         log_warn "Initial registration failed - checking for cached configuration..."
         if cached_config=$(load_cached_config); then
             log_info "Using cached configuration (API key may be invalid - creating ghost shipper)"
-            CURRENT_CONFIG="$cached_config"
+            set_current_config "$cached_config"
             apply_config "$cached_config"
         else
             log_error "No cached configuration available, retrying in ${CONFIG_POLL_INTERVAL}s..."
@@ -1010,8 +1261,11 @@ main() {
 
             if config_changed "$new_config"; then
                 log_info "Configuration changed, applying new configuration..."
-                CURRENT_CONFIG="$new_config"
+                set_current_config "$new_config"
                 apply_config "$new_config"
+            elif [ "$(docker_containers_fingerprint "$CURRENT_CONFIG")" != "$DOCKER_CONTAINERS_FINGERPRINT" ]; then
+                log_info "Running containers changed, re-applying Docker sources (resuming from saved positions)..."
+                apply_config "$CURRENT_CONFIG"
             fi
         else
             # Config fetch failed - continue with cached config if available
@@ -1020,7 +1274,7 @@ main() {
                 log_warn "Failed to fetch configuration - attempting to load cached config..."
                 if cached_config=$(load_cached_config); then
                     log_info "Using cached configuration (API key may be invalid - creating ghost shipper)"
-                    CURRENT_CONFIG="$cached_config"
+                    set_current_config "$cached_config"
                     apply_config "$cached_config"
                 else
                     log_error "No cached configuration available, will retry on next poll..."
@@ -1041,6 +1295,9 @@ cleanup() {
     exit 0
 }
 
-trap cleanup SIGTERM SIGINT
-
-main
+# Run only when executed, not when sourced (log-shipper/tests source this file
+# to exercise its functions).
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    trap cleanup SIGTERM SIGINT
+    main
+fi

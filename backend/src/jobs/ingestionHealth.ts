@@ -12,6 +12,8 @@ import { NotificationService } from '../services/notifications/notificationServi
 import { logger } from '../utils/logger';
 import { ErrorLogService } from '../services/errors/errorLogService';
 import { registerRecurringJob, trackJobRun, markJobSkipped } from '../services/jobs/jobRegistry';
+import { AlertModel } from '../models/Alert';
+import { evaluateIngestHealth, readIngestSnapshot } from '../services/ingest/ingestHealth';
 
 const JOB_KEY = 'ingestion-health';
 
@@ -28,8 +30,61 @@ async function getSetting(key: string, fallback: string): Promise<string> {
   }
 }
 
+/** Source of the built-in stall alert on the Alerts page (alerts.source). */
+export const STALL_ALERT_SOURCE = 'siembox:ingestion';
+
+/** Minutes of zero ingest (with shippers online) before the built-in alert fires (setting ingestion_stall_alert_minutes). */
+export const DEFAULT_STALL_ALERT_MINUTES = 10;
+
+/**
+ * The stall alert's dedupe id: one alert per stall, keyed by the newest log's
+ * time (the moment ingestion stopped). A later stall has a later newest log.
+ */
+export function stallAlertEventId(newestRawLogAt: Date | null): string {
+  return `ingestion-stall:${newestRawLogAt ? newestRawLogAt.toISOString() : 'never'}`;
+}
+
+/**
+ * Built-in alert, on by default and independent of the notification settings:
+ * raise one alert on the Alerts page when no log has been stored for
+ * ingestion_stall_alert_minutes (default 10) while shippers are online.
+ * ingestion_stall_alert_enabled = 'false' turns it off. Returns the verdict.
+ */
+export async function checkStallAlert(now: number = Date.now()): Promise<'disabled' | 'healthy' | 'stalled'> {
+  if ((await getSetting('ingestion_stall_alert_enabled', 'true')) === 'false') return 'disabled';
+  const minutes = parseInt(await getSetting('ingestion_stall_alert_minutes', String(DEFAULT_STALL_ALERT_MINUTES)), 10);
+  const thresholdSeconds = (Number.isFinite(minutes) && minutes > 0 ? minutes : DEFAULT_STALL_ALERT_MINUTES) * 60;
+  const snapshot = await readIngestSnapshot();
+  const verdict = evaluateIngestHealth(snapshot, thresholdSeconds, now);
+  if (verdict.ok) return 'healthy';
+  const created = await AlertModel.createSourced({
+    source: STALL_ALERT_SOURCE,
+    event_id: stallAlertEventId(snapshot.newestRawLogAt),
+    severity: 'critical',
+    title: 'Log ingestion stalled',
+    description:
+      `SIEMBox has stored no logs for ${Math.round(thresholdSeconds / 60)}+ minutes while ` +
+      `${snapshot.onlineShippers} shipper(s) are online (${verdict.reason}). ` +
+      'Check GET /health, the backend log, and Troubleshooting -> "No Logs Appearing in SIEMBox".',
+    matched_data: {
+      newest_raw_log_at: snapshot.newestRawLogAt ? snapshot.newestRawLogAt.toISOString() : null,
+      online_shippers: snapshot.onlineShippers,
+      threshold_minutes: Math.round(thresholdSeconds / 60),
+    },
+  });
+  if (created !== null) {
+    logger.error(`[Ingestion Health] ${verdict.reason}; raised alert ${created}`);
+  }
+  return 'stalled';
+}
+
 export async function checkIngestionHealth(): Promise<void> {
   try {
+    await checkStallAlert().catch((err) => {
+      logger.error('[Ingestion Health] stall alert check failed:', err);
+      ErrorLogService.logBackgroundError('ingestion-health', err, { dedupeKey: 'stall-alert' });
+    });
+
     if ((await getSetting('notify_ingestion_enabled', 'false')) !== 'true') {
       lastHealthy = null;
       markJobSkipped(JOB_KEY, 'ingestion notifications disabled in settings');
@@ -75,7 +130,8 @@ export function startIngestionHealthJob(): void {
   registerRecurringJob({
     key: JOB_KEY,
     name: 'Ingestion health monitor',
-    description: 'Watches for a stalled log stream and notifies on stall/recovery transitions.',
+    description:
+      'Watches for a stalled log stream: raises a built-in alert after 10 minutes of zero ingest while shippers are online, and notifies on stall/recovery transitions.',
     intervalMs: CHECK_INTERVAL_MS,
   });
   logger.info('[Ingestion Health] Monitor started (every 2 min)');

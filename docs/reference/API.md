@@ -9,6 +9,7 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
 - [Error Codes](#error-codes)
 - [Rate Limiting](#rate-limiting)
 - [API Endpoints](#api-endpoints)
+  - [Health](#health)
   - [Authentication](#authentication-endpoints)
   - [Logs](#logs-endpoints)
   - [Regex safety (parsers and rules)](#regex-safety-parsers-and-rules)
@@ -506,6 +507,50 @@ TROUBLESHOOTING.md, "Locked out of SIEMBox", for the command line.
 ---
 
 ## API Endpoints
+
+## Health
+
+### GET /health
+
+No authentication. Answers `200` with `"status": "ok"` when ingestion is
+alive, and `503` with `"status": "degraded"` when:
+
+- at least one shipper with an enabled source has checked in within 3 minutes,
+  and the newest raw log is older than `HEALTH_INGEST_STALL_SECONDS` (default
+  `300`; `0` turns the check off), or none was ever stored; or
+- the database did not answer within 3 seconds (a wedged connection pool).
+
+Results are cached for 10 seconds.
+
+```json
+{
+  "status": "degraded",
+  "timestamp": "2026-10-29T20:46:00.000Z",
+  "uptime": 86400.1,
+  "ingest": {
+    "ok": false,
+    "reason": "no logs stored for 600s (threshold 300s) while 3 shipper(s) are online",
+    "newestRawLogAgeSeconds": 600,
+    "onlineShippers": 3,
+    "thresholdSeconds": 300,
+    "queued": 20000,
+    "active": 18,
+    "dropped": 41210,
+    "duplicatesDropped": 0
+  }
+}
+```
+
+`queued`, `active`, `dropped` (UDP messages refused by a full queue) and
+`duplicatesDropped` (replayed shipper lines, see `INGEST_DEDUP_*`) are present
+while the syslog listener runs.
+
+A built-in alert (Alerts page, source `siembox:ingestion`, severity
+`critical`) is raised once per stall when no log has been stored for 10
+minutes while shippers are online. Settings (`system_settings`):
+`ingestion_stall_alert_enabled` (default `true`) and
+`ingestion_stall_alert_minutes` (default `10`). It does not depend on the
+ingestion notification settings.
 
 ## Authentication Endpoints
 
@@ -3086,7 +3131,8 @@ Two kinds of route live under `/api/shippers`:
 
 | Method | Path | Access |
 |---|---|---|
-| GET | `/api/shippers`, `/api/shippers/:id`, `/:id/sources`, `/:id/volumes`, `/:id/activity`, `/unknown-sources`, `/direct-syslog-sources` | Any role |
+| GET | `/api/shippers`, `/api/shippers/:id`, `/:id/sources`, `/:id/volumes`, `/:id/activity`, `/unknown-sources`, `/direct-syslog-sources`, `/syslog-timezones` | Any role |
+| PUT / DELETE | `/syslog-timezones/default`, `/syslog-timezones/:sourceIp` | Admin or operator |
 | POST / PUT / DELETE | `/api/shippers`, `/api/shippers/:id` | Admin or operator |
 | POST / PUT / DELETE | `/:id/sources`, `/sources/:sourceId`, `/:id/volumes`, `/volumes/:volumeId` | Admin or operator |
 | POST | `/:id/regenerate-key` | Admin |
@@ -3159,6 +3205,43 @@ Served from a 30 s single-flight cache with the same statement-timeout / stale-o
 - `503` - The database was too busy to answer in time (try again shortly)
 
 ---
+
+
+### Syslog source timezones
+
+An RFC 3164 header (`Nov  3 12:17:04`) has no zone. SIEMBox reads it in the
+sender's timezone: the one set for its source IP, else the default, else
+`UTC`. Shippers 1.5.0+ always send UTC. RFC 5424 timestamps with an offset
+are used as they are. Changes apply to new logs at once; stored rows keep
+their timestamp.
+
+**GET /api/shippers/syslog-timezones** (any role)
+
+```json
+{
+  "default_timezone": "UTC",
+  "sources": [
+    { "source_ip": "192.168.1.20", "timezone": "America/Chicago", "updated_at": "2026-11-03T18:30:00.000Z" }
+  ]
+}
+```
+
+**PUT /api/shippers/syslog-timezones/:sourceIp** (admin or operator), body
+`{ "timezone": "America/Chicago" }`. `:sourceIp` is the sender's address as
+shown under Direct Syslog Sources. An IANA name is required; anything else is
+a `400`.
+
+**DELETE /api/shippers/syslog-timezones/:sourceIp** (admin or operator):
+the sender falls back to the default.
+
+**PUT /api/shippers/syslog-timezones/default** (admin or operator), body
+`{ "timezone": "UTC" }`: the timezone for senders without their own.
+
+```bash
+curl -X PUT http://localhost:8421/api/shippers/syslog-timezones/192.168.1.20 \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"timezone": "America/Chicago"}'
+```
 
 ### GET /api/shippers/:id
 
@@ -3390,6 +3473,28 @@ Add log source to shipper.
 }
 ```
 
+**Request Body (Docker Source, all containers):**
+```json
+{
+  "source_type": "docker",
+  "enabled": true,
+  "container_name": "",
+  "container_exclude": "redis, *-sidecar",
+  "include_siembox_containers": false,
+  "tag": "docker",
+  "facility": "local0"
+}
+```
+
+A blank `container_name` (or `*` / `all`) tails every running container.
+`container_exclude` lists names or shell globs to skip, separated by commas or
+spaces (letters, digits, `_ . - * ? [ ]` only; 2000 characters at most).
+`include_siembox_containers` defaults to `false`, which skips
+`siembox-backend`, `siembox-postgres`, `siembox-frontend` and
+`siembox-log-shipper`: shipping SIEMBox's own logs into SIEMBox is a feedback
+loop. Both fields apply only in all-containers mode and need shipper 1.5.0 or
+later. Older shippers ignore them.
+
 **Request Body (Journal Source):**
 ```json
 {
@@ -3445,7 +3550,7 @@ Update log source.
 }
 ```
 
-**Note:** Editable fields are `source_type`, `enabled`, `file_path`, `container_name`, `journal_unit`, `tag` and `facility`; anything else in the body (such as `id` or `shipper_id`) is ignored.
+**Note:** Editable fields are `source_type`, `enabled`, `file_path`, `container_name`, `journal_unit`, `tag`, `facility`, `container_exclude` and `include_siembox_containers`; anything else in the body (such as `id` or `shipper_id`) is ignored.
 
 **Errors:**
 - `400` - The body contains none of the editable fields

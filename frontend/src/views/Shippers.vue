@@ -392,7 +392,14 @@
           <el-table-column label="Path/Container" min-width="200">
             <template #default="{ row }">
               <span v-if="row.source_type === 'file'">{{ row.file_path }}</span>
-              <span v-else-if="row.source_type === 'docker'">{{ row.container_name }}</span>
+              <span v-else-if="row.source_type === 'docker'">
+                {{ isAllContainers(row.container_name) ? 'All containers' : row.container_name }}
+                <el-text v-if="isAllContainers(row.container_name)" size="small" type="info">
+                  {{ row.include_siembox_containers ? '(incl. SIEMBox)' : '(excl. SIEMBox)' }}{{
+                    row.container_exclude ? `, skips ${row.container_exclude}` : ''
+                  }}
+                </el-text>
+              </span>
               <span v-else-if="row.source_type === 'journal'">{{ row.journal_unit }}</span>
             </template>
           </el-table-column>
@@ -538,6 +545,26 @@
             Leave blank to ship logs from ALL running containers — each is tagged with its own container name.
           </el-text>
         </el-form-item>
+
+        <template v-if="sourceForm.source_type === 'docker' && isAllContainers(sourceForm.container_name)">
+          <el-form-item label="Exclude">
+            <el-input
+              v-model="sourceForm.container_exclude"
+              placeholder="redis, *-sidecar"
+              maxlength="2000"
+            />
+            <el-text size="small" type="info">
+              Container names or globs to skip, separated by commas or spaces.
+            </el-text>
+          </el-form-item>
+          <el-form-item label="SIEMBox's own">
+            <el-switch v-model="sourceForm.include_siembox_containers" />
+            <el-text size="small" type="info" style="margin-left: 8px">
+              Off (recommended): skip siembox-backend, siembox-postgres, siembox-frontend and
+              siembox-log-shipper. Shipping SIEMBox's own logs into SIEMBox is a feedback loop.
+            </el-text>
+          </el-form-item>
+        </template>
 
         <el-form-item
           v-if="sourceForm.source_type === 'journal'"
@@ -751,11 +778,19 @@ const sourceForm = reactive({
   source_type: 'file',
   file_path: '',
   container_name: '',
+  container_exclude: '',
+  include_siembox_containers: false,
   journal_unit: '',
   tag: '',
   facility: 'local0',
   enabled: true,
 });
+
+/** Blank, "*" or "all" tails every running container (same rule as the shipper). */
+function isAllContainers(name: string | null | undefined): boolean {
+  const n = (name ?? '').replace(/\s+/g, '');
+  return n === '' || n === '*' || n === 'all' || n === '*/all';
+}
 
 const volumeForm = reactive({
   host_path: '',
@@ -1033,6 +1068,8 @@ function showAddSource() {
   sourceForm.source_type = 'file';
   sourceForm.file_path = '';
   sourceForm.container_name = '';
+  sourceForm.container_exclude = '';
+  sourceForm.include_siembox_containers = false;
   sourceForm.journal_unit = '';
   sourceForm.tag = '';
   sourceForm.facility = 'local0';
@@ -1091,6 +1128,8 @@ function editSource(source: any) {
   sourceForm.source_type = source.source_type;
   sourceForm.file_path = source.file_path || '';
   sourceForm.container_name = source.container_name || '';
+  sourceForm.container_exclude = source.container_exclude || '';
+  sourceForm.include_siembox_containers = source.include_siembox_containers === true;
   sourceForm.journal_unit = source.journal_unit || '';
   sourceForm.tag = source.tag;
   sourceForm.facility = source.facility;

@@ -258,6 +258,14 @@ jobs:
           docker run --rm siembox-log-shipper:check sh -c \
             'nmap --version | head -1; nuclei -version 2>&1 | grep -i "engine version"; docker --version; journalctl --version | head -1'
 
+      # The cursor/shipper-id tests against the script and tools in the image:
+      # the shipper id bug (hashing an empty input) only showed with the
+      # image's own tool set, which has no xxd.
+      - name: "Log shipper: Docker cursor and shipper id"
+        run: |
+          docker run --rm -v "$PWD/log-shipper/tests:/tests:ro" -e SHIPPER_SCRIPT=/usr/local/bin/shipper \
+            siembox-log-shipper:check bash /tests/test-docker-cursor.sh
+
       - name: Container logs
         if: always()
         run: |

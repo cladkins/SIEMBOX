@@ -49,8 +49,9 @@ docker logs siembox-backend
 docker logs siembox-postgres
 docker logs siembox-frontend
 
-# Test API endpoint
-curl http://localhost:8421/api/health
+# Test API endpoint: 503 with an "ingest" reason means ingestion has stalled
+# while shippers are online (or the database is not answering)
+curl -s http://localhost:8421/health
 ```
 
 ### Common Error Patterns
@@ -339,6 +340,35 @@ docker-compose logs backend | grep -i "error\|invalid"
 
 ---
 
+### Issue: Syslog timestamps are hours off (UniFi, Proxmox, appliances)
+
+**Symptoms:** logs from a device that sends syslog directly have a
+`timestamp` a fixed number of hours away from `created_at`, for example 6
+hours behind for a device in America/Chicago (received 18:17 UTC, stored as
+12:17 UTC).
+
+**Cause:** an RFC 3164 header (`Nov  3 12:17:04`) has no timezone, and the
+device writes its local time. SIEMBox reads a zoneless header as UTC unless
+told otherwise. (Before this release it used the backend's own local time,
+which is UTC in the image, with the same result.)
+
+**Fix:** set the device's timezone, by source IP (the address under
+*Shippers -> Direct Syslog Sources*):
+
+```bash
+curl -X PUT http://localhost:8421/api/shippers/syslog-timezones/192.168.1.20 \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"timezone": "America/Chicago"}'
+```
+
+Or set a default for every sender without its own:
+`PUT /api/shippers/syslog-timezones/default` with `{"timezone": "America/Chicago"}`.
+The alternative is to set the device to log in UTC. New logs use the setting
+within seconds; stored rows are not rewritten. See
+[API: Syslog source timezones](../reference/API.md#syslog-source-timezones).
+
+---
+
 ### Issue: Logs Received But Not Parsed
 
 **Symptoms:**
@@ -574,6 +604,10 @@ Look at what is slow rather than the symptom: a long `siembox-backend` query poi
   | `INGEST_QUEUE_MAX` | `20000` | Messages held in memory while all workers are busy; past this, UDP is dropped and TCP is slowed. |
   | `DB_INGEST_ACQUIRE_TIMEOUT_MS` | `10000` | How long one attempt waits for a free connection. |
   | `DB_INGEST_RETRY_MS` | `30000` | Total time spent retrying connection failures; `0` turns retrying off. |
+  | `INGEST_DEDUP_ENABLED` | `true` | Drop shipper lines already stored (a replayed log). The backend logs `Dropped N duplicate shipper line(s)` every 10 s while it happens. |
+  | `INGEST_DEDUP_WINDOW_SECONDS` | `3600` | How long a line's key is remembered (at least this, at most twice). |
+  | `INGEST_DEDUP_MAX_KEYS` | `200000` | Keys held in memory at most (about 20 MB). |
+  | `INGEST_DEDUP_MIN_LAG_SECONDS` | `30` | Only lines whose original timestamp is at least this old are ever dropped, so identical live lines in the same second are kept. |
 
   The backend's compose file passes through only the variables it lists, so add any of these to the `backend` service's `environment:` and redeploy. The backend now uses up to 40 database connections at most (20 main + 20 ingest); Postgres' default `max_connections = 100` covers that, but see [Too Many Connections](#issue-too-many-connections-error) if you run other clients.
 
@@ -730,6 +764,40 @@ curl -X PUT http://localhost:8421/api/shippers/sources/<source-id> \
   -H "Content-Type: application/json" \
   -d '{"enabled": true}'
 ```
+
+---
+
+### Issue: Docker logs replayed in a loop
+
+**Symptoms:**
+- The same container lines (for example `Running migration: 007_...`) land in
+  raw logs again and again, about every 37 seconds, each pass the whole log.
+- Postgres logs `checkpoints are occurring too frequently`.
+- Every shipper's Docker rows carry shipper id `e3b0c442`.
+
+**Cause (shipper 1.4.2 and older):**
+1. `GET /api/shippers/config/:key` returned the whole shipper row, and the
+   same request updates `last_seen`. The shipper compared the JSON byte for
+   byte, saw a change on every poll and re-applied its config.
+2. Re-applying ran `docker logs -f <container>` with no start position, which
+   prints the container's whole log from the first line.
+3. The shipper id came from `xxd`, which the image does not ship, so every
+   shipper hashed an empty input: `e3b0c442` is the start of SHA-256 of
+   nothing.
+
+**Fix:**
+- Upgrade the backend: `/config` no longer carries heartbeat fields, so 1.4.2
+  shippers stop re-applying on every poll. The backend also drops a shipper
+  line it already stored (same shipper, host, container, original timestamp
+  and text) and logs how many; see `INGEST_DEDUP_*` under
+  [Logs are dropped or ingestion is slow](#issue-logs-are-dropped-or-ingestion-is-slow).
+  This needs shipper 1.5.0, which sends each line's original timestamp.
+- Upgrade the shipper to 1.5.0 or later. It keeps a read position per
+  container ID in `SHIPPER_STATE_DIR` (default `/tmp/siembox-state`, on the
+  `shipper-cache` volume), reports its real shipper id, and skips SIEMBox's own
+  containers in all-containers mode.
+- Check the shipper log after the upgrade: `Shipper ID:` must not be
+  `e3b0c442`, and each container line shows `from: since ...` or `from: tail 0`.
 
 ---
 
@@ -1161,6 +1229,22 @@ those logs. On the live stream, V8's linear-time fallback
 anyway, but not a polynomial one (`curl.*\|`), a case-insensitive one, one
 with lookahead or a backreference, a counted repeat over 16, or (on a backend
 built on Node 20; the images run Node 22) one with lookbehind.
+
+**Per-line budget on ingest:** a parser whose stored verdict is vulnerable
+runs in a worker thread with a hard budget per line (`INGEST_REGEX_BUDGET_MS`,
+default `100`; workers: `INGEST_REGEX_WORKERS`, default `2`). A line that
+blows the budget counts as "no match" for that parser and the backend logs
+`ran out of its 100 ms budget`; ingestion keeps moving. A parser not flagged
+that takes longer than the budget 3 times in 10 minutes is moved to the worker
+too (`took over 100 ms per line 3 times`). Detection-rule regexes do not run
+under this budget.
+
+**vaultwarden-access, plex, jellyfin:** installs that had these seeded by
+older releases hold vulnerable versions; the catalog versions are linear.
+Reinstall all three from *Browse Catalog*. Before this release, migration
+`007_fix_vaultwarden_parser.sql` re-wrote the vulnerable vaultwarden-access
+pattern on every start, so a reinstall only lasted until the next restart.
+It is now a no-op.
 
 **Fix**, in order of preference:
 1. Edit it and rewrite the regex linear (see the previous issue). Saving a

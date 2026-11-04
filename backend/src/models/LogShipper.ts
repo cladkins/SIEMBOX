@@ -43,6 +43,42 @@ export function withHttpPushStatus<T extends { http_push_key_hash?: string | nul
 }
 
 /**
+ * Shipper-row fields that change on a heartbeat or report rather than on a
+ * configuration change. They are dropped from the config the shipper agent
+ * receives (GET /config, POST /register): shippers up to 1.4.2 compare that
+ * JSON byte for byte, and GET /config updates last_seen in the same request,
+ * so every poll looked like a new config. Each re-apply restarted
+ * `docker logs` from the first line: the log replay loop.
+ */
+export const AGENT_CONFIG_VOLATILE_FIELDS = [
+  'last_seen',
+  'updated_at',
+  'status',
+  'ip_address',
+  'version',
+  'hostname',
+  'metadata',
+  'containers_reported_at',
+  'containers_available',
+  'containers_unavailable_reason',
+  'http_push_key_created_at',
+  'http_push_last_seen',
+] as const;
+
+/**
+ * The config a shipper agent applies: the full config minus volatile fields
+ * (AGENT_CONFIG_VOLATILE_FIELDS) and minus the push-key hash. Identical across
+ * polls until an operator changes a source, a volume or the syslog settings.
+ */
+export function agentConfigView<T extends { http_push_key_hash?: string | null }>(
+  config: T
+): Record<string, unknown> {
+  const view: Record<string, unknown> = { ...withHttpPushStatus(config) };
+  for (const field of AGENT_CONFIG_VOLATILE_FIELDS) delete view[field];
+  return view;
+}
+
+/**
  * Columns LogShipperModel.update may set: the caller-editable fields
  * (name/description/hostname), api_key (regenerate-key), and what the shipper
  * reports on register. The HTTP push-key columns have their own setters. Not
@@ -70,6 +106,8 @@ const SOURCE_UPDATE_COLUMNS = new Set([
   'journal_unit',
   'tag',
   'facility',
+  'container_exclude',
+  'include_siembox_containers',
 ]);
 
 export interface ShipperSource {
@@ -82,6 +120,10 @@ export interface ShipperSource {
   journal_unit: string | null;
   tag: string;
   facility: string;
+  /** All-containers Docker sources: names/globs to skip, comma or space separated (migration 057). */
+  container_exclude: string | null;
+  /** All-containers Docker sources: also tail SIEMBox's own containers (default false). */
+  include_siembox_containers: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -279,12 +321,15 @@ export class ShipperSourceModel {
   // Create source
   static async create(source: Partial<ShipperSource>): Promise<ShipperSource> {
     const { shipper_id, source_type, enabled, file_path, container_name, journal_unit, tag, facility } = source;
+    const containerExclude = source.container_exclude ?? null;
+    const includeSiembox = source.include_siembox_containers === true;
     const result = await pool.query(
       `INSERT INTO shipper_sources
-       (shipper_id, source_type, enabled, file_path, container_name, journal_unit, tag, facility)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       (shipper_id, source_type, enabled, file_path, container_name, journal_unit, tag, facility,
+        container_exclude, include_siembox_containers)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
-      [shipper_id, source_type, enabled, file_path, container_name, journal_unit, tag, facility]
+      [shipper_id, source_type, enabled, file_path, container_name, journal_unit, tag, facility, containerExclude, includeSiembox]
     );
     return result.rows[0];
   }

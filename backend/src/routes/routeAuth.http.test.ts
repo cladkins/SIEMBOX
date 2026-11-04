@@ -76,6 +76,8 @@ const LOGIN_REQUIRED: Array<[string, string, unknown?]> = [
   ['GET', '/api/shippers'],
   ['GET', '/api/shippers/unknown-sources'],
   ['GET', '/api/shippers/direct-syslog-sources'],
+  ['GET', '/api/shippers/syslog-timezones'],
+  ['PUT', '/api/shippers/syslog-timezones/10.0.0.1', { timezone: 'UTC' }],
   ['GET', '/api/shippers/1'],
   ['POST', '/api/shippers', { name: 'x' }],
   ['PUT', '/api/shippers/1', { name: 'x' }],
@@ -176,7 +178,9 @@ test('POST /api/shippers/logs asks for the HTTP push key, not a login', async ()
 });
 
 test('login and the health check stay reachable without a login', async () => {
-  assert.equal((await call('GET', '/health')).status, 200);
+  // 200 or 503 (no database here, so the ingest read fails): never a login wall.
+  const health = await call('GET', '/health');
+  assert.ok([200, 503].includes(health.status), `GET /health answered ${health.status}`);
   const login = await call('POST', '/api/auth/login', {});
   assert.equal(login.status, 400, 'missing credentials is a validation error, not an auth wall');
   assert.equal(login.message, 'Username and password are required');

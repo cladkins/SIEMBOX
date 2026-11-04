@@ -28,7 +28,7 @@ test("reads the registered server's live queue counters, including UDP drops", (
 });
 
 test('is null again once shutdown clears it', () => {
-  registerIngestStats(() => ({ active: 0, queued: 0, blocked: 0, dropped: 7, processed: 0, failed: 0, storeFailures: 0 }));
+  registerIngestStats(() => ({ active: 0, queued: 0, blocked: 0, dropped: 7, processed: 0, failed: 0, storeFailures: 0, duplicatesDropped: 0 }));
   assert.equal(getIngestQueueStats()?.dropped, 7);
   registerIngestStats(null);
   assert.equal(getIngestQueueStats(), null);

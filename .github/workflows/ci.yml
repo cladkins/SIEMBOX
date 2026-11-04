@@ -103,3 +103,11 @@ jobs:
       # The pure graph and display modules, safeRedirect, and the display's lint
       # isolation rules, under node --test (Node 22 strips the types).
       - run: npm run test:unit
+
+  log-shipper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Docker read cursor (no replay on restart), shipper id, config change
+      # detection. Fake docker/nc binaries; no daemon needed.
+      - run: bash log-shipper/tests/test-docker-cursor.sh

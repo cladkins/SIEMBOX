@@ -22,7 +22,10 @@ SHIPPER_API_KEY="${SHIPPER_API_KEY}"
 #           or config poll), real shipper id (no xxd dependency), container
 #           exclude list (SIEMBox's own containers skipped by default), and the
 #           original log timestamp in the syslog header
-SHIPPER_VERSION="1.5.0"
+#   1.5.1 — Docker health check works: the main loop touches a heartbeat file
+#           and shipper-healthcheck checks its age (the old check used pgrep,
+#           which the image does not have, so every shipper showed unhealthy)
+SHIPPER_VERSION="1.5.1"
 CONFIG_POLL_INTERVAL="${CONFIG_POLL_INTERVAL:-30}" # seconds
 HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-60}" # seconds
 # How often to report this host's container images to SIEMBox for vuln scanning.
@@ -56,6 +59,9 @@ SHIPPER_STATE_DIR="${SHIPPER_STATE_DIR:-/tmp/siembox-state}"
 #   all            -- always the whole log
 #   end            -- always only new lines
 DOCKER_UNSEEN_CONTAINERS="${DOCKER_UNSEEN_CONTAINERS:-auto}"
+# Touched on every pass of the main loop; the Docker health check
+# (shipper-healthcheck.sh) reads its age.
+SHIPPER_ALIVE_FILE="${SHIPPER_ALIVE_FILE:-/tmp/siembox-shipper.alive}"
 # Containers skipped when a Docker source tails "all containers", unless the
 # source sets include_siembox_containers. Shipping SIEMBox's own logs back into
 # SIEMBox is a feedback loop: every ingested line writes more log.
@@ -87,6 +93,11 @@ log_debug() {
 # SHA-256 of zero bytes, first 8 hex digits. Seeing this as a shipper id means
 # the key was never decoded (the hash of an empty input).
 EMPTY_INPUT_SHIPPER_ID="e3b0c442"
+
+# Record that the main loop is alive (for the Docker health check).
+mark_alive() {
+    : > "$SHIPPER_ALIVE_FILE" 2>/dev/null || true
+}
 
 # Generate short shipper ID from API key (first 8 chars of SHA256)
 # NOTE: API key is a 64-char hex string. We must decode it to binary before hashing
@@ -1177,6 +1188,7 @@ main() {
     log_info "Version: $SHIPPER_VERSION"
     log_info "API URL: $SIEMBOX_API_URL"
     log_info "Poll Interval: ${CONFIG_POLL_INTERVAL}s"
+    mark_alive
     log_info ""
 
     # Check for API key
@@ -1243,6 +1255,7 @@ main() {
 
     # Main polling loop
     while true; do
+        mark_alive
         sleep $CONFIG_POLL_INTERVAL
 
         # Send heartbeat

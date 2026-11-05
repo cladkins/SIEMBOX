@@ -116,6 +116,24 @@
           <el-text size="small" type="info" style="display: block; margin-bottom: 12px">
             Devices sending syslog directly to SIEMBox on port 514 without a log shipper, in the last 24 hours.
           </el-text>
+          <div class="tz-default">
+            <el-text size="small">Default timezone</el-text>
+            <el-select
+              :model-value="tzSettings.default_timezone"
+              filterable
+              size="small"
+              style="width: 260px"
+              :disabled="!canManageShippers || tzSaving.has('default')"
+              :loading="tzSaving.has('default')"
+              @change="(tz: string) => saveDefaultTimezone(tz)"
+            >
+              <el-option v-for="tz in tzOptions" :key="tz" :label="tzLabel(tz)" :value="tz" />
+            </el-select>
+            <el-text size="small" type="info">
+              Syslog headers carry no timezone ("Nov  3 12:17:04"). SIEMBox reads them in the sender's timezone below,
+              else this default. Set the zone the device logs in, or set the device to UTC. Applies to new logs only.
+            </el-text>
+          </div>
           <el-alert v-if="directError" type="warning" :closable="false" :title="directError" style="margin-bottom: 12px" />
           <el-table
             :data="directSources"
@@ -149,6 +167,23 @@
                   {{ app }}
                 </el-tag>
                 <el-tag v-if="row.app_name_count > 3" size="small" type="info">+{{ row.app_name_count - 3 }} more</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="Timezone" min-width="220">
+              <template #default="{ row }">
+                <el-select
+                  v-if="row.source_ip"
+                  :model-value="sourceTimezone(row.source_ip)"
+                  filterable
+                  size="small"
+                  style="width: 100%"
+                  :disabled="!canManageShippers || tzSaving.has(row.source_ip)"
+                  :loading="tzSaving.has(row.source_ip)"
+                  @change="(tz: string) => saveSourceTimezone(row.source_ip, tz)"
+                >
+                  <el-option :label="`Default (${tzLabel(tzSettings.default_timezone)})`" :value="TZ_DEFAULT" />
+                  <el-option v-for="tz in tzOptions" :key="tz" :label="tzLabel(tz)" :value="tz" />
+                </el-select>
               </template>
             </el-table-column>
             <el-table-column label="Logs (24h)" width="120" align="right" sortable :sort-method="(a: any, b: any) => a.log_count - b.log_count">
@@ -702,6 +737,13 @@ import { ref, onMounted, reactive, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '@/services/api';
 import { useAuthStore } from '@/stores/auth';
+import {
+  normalizeSourceIp,
+  timezoneMap,
+  timezoneOptions,
+  utcOffsetLabel,
+  type SyslogTimezoneSettings,
+} from '@/utils/syslogTimezones';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Plus,
@@ -749,6 +791,56 @@ interface DirectSyslogSource {
 const directSources = ref<DirectSyslogSource[]>([]);
 const directLoading = ref(false);
 const directError = ref('');
+
+// Syslog timezones (utils/syslogTimezones.ts). TZ_DEFAULT in a row's picker
+// means "no setting of its own": the row follows the default.
+const TZ_DEFAULT = '__default__';
+const tzOptions = timezoneOptions();
+const tzSettings = ref<SyslogTimezoneSettings>({ default_timezone: 'UTC', sources: [] });
+const tzByIp = computed(() => timezoneMap(tzSettings.value));
+const tzSaving = ref(new Set<string>());
+
+function tzLabel(tz: string): string {
+  const offset = utcOffsetLabel(tz);
+  return offset && offset !== tz ? `${tz} (${offset})` : tz;
+}
+
+function sourceTimezone(ip: string): string {
+  return tzByIp.value.get(normalizeSourceIp(ip)) ?? TZ_DEFAULT;
+}
+
+async function fetchSyslogTimezones() {
+  try {
+    tzSettings.value = (await api.getSyslogTimezones()).data;
+  } catch {
+    // Older backend without the endpoint: leave the defaults showing.
+  }
+}
+
+async function withTzSaving(key: string, run: () => Promise<unknown>, done: string) {
+  tzSaving.value = new Set(tzSaving.value).add(key);
+  try {
+    await run();
+    await fetchSyslogTimezones();
+    ElMessage.success(done);
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Failed to save the timezone');
+  } finally {
+    const next = new Set(tzSaving.value);
+    next.delete(key);
+    tzSaving.value = next;
+  }
+}
+
+function saveSourceTimezone(ip: string, tz: string) {
+  return tz === TZ_DEFAULT
+    ? withTzSaving(ip, () => api.clearSyslogTimezone(ip), `${ip} now follows the default timezone`)
+    : withTzSaving(ip, () => api.setSyslogTimezone(ip, tz), `${ip}: timestamps read as ${tz}`);
+}
+
+function saveDefaultTimezone(tz: string) {
+  return withTzSaving('default', () => api.setDefaultSyslogTimezone(tz), `Default syslog timezone: ${tz}`);
+}
 
 const apiPolledSources = ref<RankedSource[]>([]);
 const dlFingerprints = ref<FingerprintEntry[]>([]);
@@ -802,6 +894,7 @@ onMounted(() => {
   fetchShippers();
   fetchUnknownSources();
   fetchDirectSources();
+  fetchSyslogTimezones();
   fetchApiPolledSources();
 });
 
@@ -1327,6 +1420,13 @@ function formatActivityType(type: string): string {
 </script>
 
 <style scoped>
+.tz-default {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
 .shippers {
   padding: 0;
 }

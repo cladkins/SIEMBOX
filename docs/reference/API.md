@@ -3213,7 +3213,8 @@ An RFC 3164 header (`Nov  3 12:17:04`) has no zone. SIEMBox reads it in the
 sender's timezone: the one set for its source IP, else the default, else
 `UTC`. Shippers 1.5.0+ always send UTC. RFC 5424 timestamps with an offset
 are used as they are. Changes apply to new logs at once; stored rows keep
-their timestamp.
+their timestamp. The Shippers page sets these from the Direct Syslog Sources
+table (Timezone column and Default timezone).
 
 **GET /api/shippers/syslog-timezones** (any role)
 

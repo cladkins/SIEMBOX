@@ -352,8 +352,9 @@ device writes its local time. SIEMBox reads a zoneless header as UTC unless
 told otherwise. (Before this release it used the backend's own local time,
 which is UTC in the image, with the same result.)
 
-**Fix:** set the device's timezone, by source IP (the address under
-*Shippers -> Direct Syslog Sources*):
+**Fix:** on *Shippers -> Direct Syslog Sources*, pick the device's zone in
+its **Timezone** column (admin or operator), or change **Default timezone**
+for every sender without its own. The same through the API, by source IP:
 
 ```bash
 curl -X PUT http://localhost:8421/api/shippers/syslog-timezones/192.168.1.20 \

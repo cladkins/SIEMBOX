@@ -341,10 +341,20 @@ docker logs -f siembox-log-shipper
 
 ### Health Check
 
-The shipper includes a health check:
+The shipper's main loop touches `/tmp/siembox-shipper.alive` on every pass
+(`SHIPPER_ALIVE_FILE`). The Docker health check (`shipper-healthcheck`) reports
+unhealthy when that file is missing or older than `HEALTH_MAX_AGE` seconds
+(default: three `CONFIG_POLL_INTERVAL`s plus 60, so 150 s). That catches a
+main loop stuck on a hung request, not only a dead process.
+
 ```bash
 docker inspect siembox-log-shipper | jq '.[0].State.Health'
+docker exec siembox-log-shipper shipper-healthcheck
 ```
+
+Before 1.5.1 the check ran `pgrep`, which the image does not include, so
+every shipper showed **unhealthy** while shipping logs normally. The status
+was wrong; the shipper was fine. Upgrade to clear it.
 
 ## Troubleshooting
 

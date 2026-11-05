@@ -77,9 +77,14 @@ COPY discovery-agent.js /usr/local/lib/siembox/discovery-agent.js
 COPY shipper-managed.sh /usr/local/bin/shipper
 RUN chmod +x /usr/local/bin/shipper
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD pgrep -f shipper || exit 1
+# Health check: healthy while the main loop keeps touching its heartbeat file
+# (see shipper-healthcheck.sh). Not pgrep: the image has no procps, and
+# `pgrep -f shipper` would match the check's own command line anyway.
+# The start period covers the first registration with a slow SIEMBox.
+COPY shipper-healthcheck.sh /usr/local/bin/shipper-healthcheck
+RUN chmod +x /usr/local/bin/shipper-healthcheck
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD ["/usr/local/bin/shipper-healthcheck"]
 
 # Run managed shipper (requires API authentication)
 CMD ["/usr/local/bin/shipper"]

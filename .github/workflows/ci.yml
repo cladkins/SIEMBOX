@@ -111,3 +111,5 @@ jobs:
       # Docker read cursor (no replay on restart), shipper id, config change
       # detection. Fake docker/nc binaries; no daemon needed.
       - run: bash log-shipper/tests/test-docker-cursor.sh
+      # Docker health check (heartbeat file, no pgrep).
+      - run: bash log-shipper/tests/test-healthcheck.sh

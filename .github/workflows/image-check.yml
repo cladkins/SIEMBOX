@@ -265,6 +265,15 @@ jobs:
         run: |
           docker run --rm -v "$PWD/log-shipper/tests:/tests:ro" -e SHIPPER_SCRIPT=/usr/local/bin/shipper \
             siembox-log-shipper:check bash /tests/test-docker-cursor.sh
+      # The health check against the image's own tools: the old pgrep check
+      # failed on every run because the image has no procps.
+      - name: "Log shipper: health check"
+        run: |
+          docker run --rm -v "$PWD/log-shipper/tests:/tests:ro" \
+            -e HEALTHCHECK_SCRIPT=/usr/local/bin/shipper-healthcheck -e SHIPPER_SCRIPT=/usr/local/bin/shipper \
+            siembox-log-shipper:check bash /tests/test-healthcheck.sh
+          test "$(docker inspect --format '{{json .Config.Healthcheck.Test}}' siembox-log-shipper:check)" \
+            = '["CMD","/usr/local/bin/shipper-healthcheck"]'
 
       - name: Container logs
         if: always()

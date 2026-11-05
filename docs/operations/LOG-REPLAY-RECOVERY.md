@@ -29,7 +29,8 @@ Do these in order. Nothing here touches stored logs.
    105 as ReDoS-vulnerable at startup. Until you do, they run under the
    100 ms per-line budget in a worker.
 6. **Direct syslog timezones.** UniFi APs, UCG-Max and Proxmox log
-   America/Chicago time. Set it per source IP (or set the default):
+   America/Chicago time. On *Shippers -> Direct Syslog Sources*, set each
+   device's **Timezone** (or the **Default timezone**). Or through the API:
 
    ```bash
    curl -X PUT http://<siembox>:8421/api/shippers/syslog-timezones/<device-ip> \

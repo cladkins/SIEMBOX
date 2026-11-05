@@ -439,6 +439,12 @@ export const api = {
   deleteShipper: (id: number) => apiClient.delete(`/shippers/${id}`),
   getUnknownSources: () => apiClient.get('/shippers/unknown-sources'),
   getDirectSyslogSources: () => apiClient.get('/shippers/direct-syslog-sources'),
+  // Timezone of zoneless syslog header timestamps, per sender IP and default.
+  getSyslogTimezones: () => apiClient.get('/shippers/syslog-timezones'),
+  setSyslogTimezone: (sourceIp: string, timezone: string) =>
+    apiClient.put(`/shippers/syslog-timezones/${encodeURIComponent(sourceIp)}`, { timezone }),
+  clearSyslogTimezone: (sourceIp: string) => apiClient.delete(`/shippers/syslog-timezones/${encodeURIComponent(sourceIp)}`),
+  setDefaultSyslogTimezone: (timezone: string) => apiClient.put('/shippers/syslog-timezones/default', { timezone }),
 
   // Shipper Sources
   getShipperSources: (shipperId: number) => apiClient.get(`/shippers/${shipperId}/sources`),

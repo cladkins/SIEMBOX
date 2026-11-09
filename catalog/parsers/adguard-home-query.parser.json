@@ -1,0 +1,123 @@
+{
+  "schema": "siembox.parser/v1",
+  "name": "adguard-home-query",
+  "description": "Parses AdGuard Home DNS queries pulled by SIEMBox's AdGuard Home API source (Log Discovery). The poller stores each /control/querylog entry as 'query[TYPE] name from client reason=Reason'. The reason says what AdGuard did: Filtered* is a block, NotFilteredAllowList an allow-list hit, Rewrite* a DNS rewrite. Runs ahead of pihole-query, whose pattern also matches the start of these lines.",
+  "parser_type": "regex",
+  "priority": 25,
+  "pattern": "^query\\[(?<query_type>[^\\] ]{1,16})\\] (?<domain>\\S{1,255}) from (?<client_ip>[0-9A-Fa-f.:]{2,45}) reason=(?<dns_reason>[A-Za-z]{1,40})$",
+  "field_mappings": {
+    "query_type": "query_type",
+    "domain": "domain",
+    "client_ip": "client_ip",
+    "dns_reason": "dns_reason"
+  },
+  "derivations": [
+    {
+      "set": { "service": "adguard-home" }
+    },
+    {
+      "when": { "dns_reason": { "matches": "^Filtered" } },
+      "set": { "event": "dns_blocked", "action": "blocked", "message": "DNS query blocked by AdGuard Home" }
+    },
+    {
+      "when": { "dns_reason": { "in": ["NotFilteredAllowList", "NotFilteredWhiteList"] } },
+      "set": { "event": "dns_allowed", "action": "allowed", "message": "DNS query allowed by an AdGuard Home allow rule" }
+    },
+    {
+      "when": { "dns_reason": { "matches": "^Rewrite" } },
+      "set": { "event": "dns_rewrite", "action": "rewritten", "message": "DNS query answered by an AdGuard Home rewrite" }
+    },
+    {
+      "set": { "event": "dns_query", "action": "allowed", "message": "DNS query" }
+    }
+  ],
+  "event_type": "dns_query",
+  "enabled": true,
+  "test_samples": [
+    {
+      "description": "Ordinary query, not filtered",
+      "input": "query[A] cdn.example.net from 203.0.113.5 reason=NotFilteredNotFound",
+      "expect": {
+        "query_type": "A",
+        "domain": "cdn.example.net",
+        "client_ip": "203.0.113.5",
+        "source_ip": "203.0.113.5",
+        "dns_reason": "NotFilteredNotFound",
+        "event": "dns_query",
+        "action": "allowed",
+        "service": "adguard-home"
+      }
+    },
+    {
+      "description": "Blocked by a filter list",
+      "input": "query[A] ads.tracker.example.com from 203.0.113.5 reason=FilteredBlackList",
+      "expect": {
+        "domain": "ads.tracker.example.com",
+        "source_ip": "203.0.113.5",
+        "dns_reason": "FilteredBlackList",
+        "event": "dns_blocked",
+        "action": "blocked",
+        "service": "adguard-home"
+      }
+    },
+    {
+      "description": "Blocked service (newer reason name), IPv6 client",
+      "input": "query[AAAA] video.example.org from 2001:db8::1a reason=FilteredBlockedService",
+      "expect": {
+        "query_type": "AAAA",
+        "domain": "video.example.org",
+        "client_ip": "2001:db8::1a",
+        "event": "dns_blocked",
+        "action": "blocked"
+      }
+    },
+    {
+      "description": "Allowed by an allow-list rule",
+      "input": "query[A] login.example.com from 198.51.100.9 reason=NotFilteredAllowList",
+      "expect": {
+        "source_ip": "198.51.100.9",
+        "event": "dns_allowed",
+        "action": "allowed"
+      }
+    },
+    {
+      "description": "Allow-list hit under the pre-v0.107 reason name",
+      "input": "query[A] login.example.com from 198.51.100.9 reason=NotFilteredWhiteList",
+      "expect": {
+        "event": "dns_allowed",
+        "action": "allowed"
+      }
+    },
+    {
+      "description": "Answered by a DNS rewrite",
+      "input": "query[A] stream.example.com from 198.51.100.9 reason=Rewrite",
+      "expect": {
+        "domain": "stream.example.com",
+        "event": "dns_rewrite",
+        "action": "rewritten"
+      }
+    },
+    {
+      "description": "TXT query keeps query_type, so the DNS tunneling detection applies",
+      "input": "query[TXT] a1b2c3d4e5.t.example.net from 203.0.113.5 reason=NotFilteredNotFound",
+      "expect": {
+        "query_type": "TXT",
+        "client_ip": "203.0.113.5",
+        "event": "dns_query"
+      }
+    }
+  ],
+  "metadata": {
+    "author": "siembox",
+    "log_source": "AdGuard Home query log via the SIEMBox AdGuard Home API source (/control/querylog)",
+    "tags": [
+      "dns",
+      "adguard",
+      "network"
+    ],
+    "references": [
+      "https://github.com/AdguardTeam/AdGuardHome/wiki/Configuration",
+      "https://github.com/AdguardTeam/AdGuardHome/blob/master/openapi/openapi.yaml"
+    ]
+  }
+}

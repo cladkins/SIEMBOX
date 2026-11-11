@@ -63,6 +63,13 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/ThreatIntel.vue'),
       },
       {
+        // Threat Hunting: every role reads hunts; analyst and up start, edit
+        // and run them (the controls are hidden from viewers).
+        path: 'threat-hunting',
+        name: 'ThreatHunting',
+        component: () => import('@/views/ThreatHunting.vue'),
+      },
+      {
         // Context Graph: every role (the API decides what each role's graph holds).
         path: 'graph',
         name: 'ContextGraph',

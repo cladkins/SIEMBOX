@@ -386,6 +386,39 @@ export const api = {
   saveThreatProvider: (name: string, data: { apiKey?: string | null; enabled?: boolean }) =>
     apiClient.put(`/threat-feeds/providers/${name}`, data),
   lookupThreatIp: (ip: string) => apiClient.get(`/threat-feeds/lookup/${encodeURIComponent(ip)}`),
+
+  // Threat Hunting: reports -> indicators + hypotheses -> log hunts; STIX export, TAXII tokens
+  getHuntSummary: () => apiClient.get('/hunts/summary'),
+  getHunts: (params?: { limit?: number; offset?: number; status?: string; source_id?: number; search?: string }) =>
+    apiClient.get('/hunts', { params }),
+  getHunt: (id: number) => apiClient.get(`/hunts/${id}`),
+  createHunt: (data: { url?: string; text?: string; title?: string; lookback_days?: number; alert_on_match?: boolean; use_ai?: boolean }) =>
+    apiClient.post('/hunts', data),
+  importStixHunt: (bundle: unknown, opts: { lookback_days?: number; alert_on_match?: boolean }) =>
+    apiClient.post('/hunts/import', { bundle, ...opts }, { timeout: 60000 }),
+  updateHunt: (id: number, data: { title?: string; lookback_days?: number; alert_on_match?: boolean }) =>
+    apiClient.put(`/hunts/${id}`, data),
+  deleteHunt: (id: number) => apiClient.delete(`/hunts/${id}`),
+  runHunt: (id: number) => apiClient.post(`/hunts/${id}/run`),
+  reextractHunt: (id: number) => apiClient.post(`/hunts/${id}/reextract`),
+  downloadHuntStix: (id: number) => apiClient.get(`/hunts/${id}/stix`, { responseType: 'blob' }),
+  addHuntIndicator: (id: number, data: { type: string; value: string; context?: string }) =>
+    apiClient.post(`/hunts/${id}/indicators`, data),
+  setHuntIndicatorEnabled: (id: number, indicatorId: number, enabled: boolean) =>
+    apiClient.put(`/hunts/${id}/indicators/${indicatorId}`, { enabled }),
+  addHuntHypothesis: (id: number, data: { title: string; description?: string; search_terms?: string[]; attack_techniques?: string[] }) =>
+    apiClient.post(`/hunts/${id}/hypotheses`, data),
+  updateHuntHypothesis: (id: number, hypothesisId: number, data: Record<string, unknown>) =>
+    apiClient.put(`/hunts/${id}/hypotheses/${hypothesisId}`, data),
+  deleteHuntHypothesis: (id: number, hypothesisId: number) => apiClient.delete(`/hunts/${id}/hypotheses/${hypothesisId}`),
+  getHuntSources: () => apiClient.get('/hunts/sources'),
+  createHuntSource: (data: Record<string, unknown>) => apiClient.post('/hunts/sources', data),
+  updateHuntSource: (id: number, data: Record<string, unknown>) => apiClient.put(`/hunts/sources/${id}`, data),
+  deleteHuntSource: (id: number) => apiClient.delete(`/hunts/sources/${id}`),
+  checkHuntSource: (id: number) => apiClient.post(`/hunts/sources/${id}/check`, {}, { timeout: 120000 }),
+  getTaxiiTokens: () => apiClient.get('/hunts/taxii-tokens'),
+  createTaxiiToken: (name: string) => apiClient.post('/hunts/taxii-tokens', { name }),
+  revokeTaxiiToken: (id: number) => apiClient.delete(`/hunts/taxii-tokens/${id}`),
   /** `handled`: the caller shows its own message for an error response (e.g. a 404 for a deleted alert). */
   getAlert: (id: number, handled = false) =>
     apiClient.get(`/alerts/${id}`, handled ? { skipErrorToast: true } : undefined),

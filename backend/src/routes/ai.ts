@@ -4,6 +4,7 @@ import { requireScanPermission, UserRole } from '../middleware/scanPermissions';
 import { explain, getChatAiPublicConfig, getTriagePublicConfig } from '../services/ai/aiService';
 import { runAnalystChat } from '../services/ai/analystChat';
 import { getAiBudgets } from '../services/ai/aiBudgets';
+import { loadMcpTools } from '../services/ai/mcpServers';
 import { ChatThreadModel } from '../models/ChatThread';
 import type { Role } from '../services/ai/analystTools';
 
@@ -142,7 +143,8 @@ router.delete('/chat/sessions/:id', requireAnalystChat, async (req: Request, res
 });
 
 // Send a message to the analyst. Creates a thread if none is supplied, loads the
-// thread's prior turns, runs the read-only tool loop, and persists both turns.
+// thread's prior turns, runs the tool loop (the read-only built-in tools plus any
+// MCP tools an admin enabled), and persists both turns.
 router.post('/chat', requireAnalystChat, async (req: Request, res: Response) => {
   if (!req.user) throw new ApiError(401, 'Authentication required');
   const userId = req.user.id;
@@ -193,7 +195,7 @@ router.post('/chat', requireAnalystChat, async (req: Request, res: Response) => 
       const budgets = await getAiBudgets();
       result = await runAnalystChat(
         { messages: convo, user: { id: userId, role }, context: ctx },
-        { budgets: budgets.analyst }
+        { budgets: budgets.analyst, extraTools: await loadMcpTools('chat') }
       );
     } catch (e) {
       // Keep the persisted thread consistent: record the failure as the assistant

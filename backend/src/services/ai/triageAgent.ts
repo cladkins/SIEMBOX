@@ -24,7 +24,7 @@ import {
 } from './aiService';
 import { getTriageAiConfig } from './aiService';
 import { formatAlertRef } from '../alerts/alertRef';
-import { getToolsForRole, findToolForRole, Role } from './analystTools';
+import { getToolsForRole, findToolForRole, externalToolsNote, AnalystTool, Role } from './analystTools';
 import { AnalystTraceEntry, AgentStopReason, totalToolBytes } from './analystChat';
 import { AI_BUDGET_FIELDS, ANSWER_CALL_TIMEOUT_MS, tokenLimitNote } from './aiBudgets';
 
@@ -101,6 +101,8 @@ export interface TriageAgentDeps {
   answerMaxTokens?: number;
   /** Output-token cap of each JSON working step. */
   stepMaxTokens?: number;
+  /** MCP tools an admin allowed for triage (mcpServers.ts loadMcpTools('triage')); none by default. */
+  extraTools?: AnalystTool[];
   /** Clock, for tests of the time budget. */
   now?: () => number;
 }
@@ -315,8 +317,9 @@ function deterministicFallback(alert: TriageAlertInput): TriageVerdict {
 
 // ---- prompt construction -----------------------------------------------------
 
-function buildSystemPrompt(maxToolCalls: number): string {
-  const menu = getToolsForRole(TRIAGE_ROLE)
+function buildSystemPrompt(maxToolCalls: number, extraTools: AnalystTool[] = []): string {
+  const tools = getToolsForRole(TRIAGE_ROLE, extraTools);
+  const menu = tools
     .map((t) => `- ${t.name}: ${t.description} [args: ${t.args}]`)
     .join('\n');
   return `You are an autonomous, READ-ONLY SOC triage analyst embedded in SIEMBox, a self-hosted homelab/small-network SIEM. You are given ONE alert and must produce a structured verdict. You observe only — you cannot change anything, and no action you propose is ever auto-executed; a human always applies it manually.
@@ -337,7 +340,7 @@ Rules:
 - If a tool errors, adapt or note the limitation; do not loop pointlessly.
 
 Available tools:
-${menu}
+${menu}${externalToolsNote(tools, true)}
 
 Remember: output ONLY one JSON object per turn.`;
 }
@@ -399,10 +402,11 @@ export async function runAlertTriage(
   const complete = deps.complete || callProviderChatDetailed;
   const getConfig = deps.getConfig || getTriageAiConfig;
   const now = deps.now || Date.now;
+  const extraTools = deps.extraTools || [];
   const executeTool =
     deps.executeTool ||
     (async (name: string, args: any, role: Role) => {
-      const tool = findToolForRole(name, role);
+      const tool = findToolForRole(name, role, extraTools);
       if (!tool) return { error: `unknown or not-permitted tool: ${name}` };
       return tool.run(args, { userRole: role });
     });
@@ -418,7 +422,7 @@ export async function runAlertTriage(
   const deadline = start + wallBudgetMs;
   const budgetForNotes = { maxToolCalls, wallBudgetSeconds: Math.round(wallBudgetMs / 1000), stepMaxTokens };
   const convo: ChatMsg[] = [
-    { role: 'system', content: buildSystemPrompt(maxToolCalls) },
+    { role: 'system', content: buildSystemPrompt(maxToolCalls, extraTools) },
     { role: 'user', content: buildAlertPrompt(input.alert) },
   ];
 
@@ -546,7 +550,7 @@ export async function runAlertTriage(
       let result: any;
       let ok = true;
       let err: string | undefined;
-      const tool = findToolForRole(obj.tool, TRIAGE_ROLE);
+      const tool = findToolForRole(obj.tool, TRIAGE_ROLE, extraTools);
       if (!tool) {
         ok = false;
         err = `unknown or not-permitted tool: ${obj.tool}`;

@@ -15,6 +15,15 @@ import {
   CleanupParams,
 } from '../services/cleanup/cleanupService';
 import { ApiError } from '../middleware/errorHandler';
+import {
+  McpNotFoundError,
+  McpValidationError,
+  createMcpServer,
+  deleteMcpServer,
+  listMcpServers,
+  syncMcpServer,
+  updateMcpServer,
+} from '../services/ai/mcpServers';
 import { authorize } from '../middleware/auth';
 import {
   getAiPublicConfig,
@@ -256,6 +265,82 @@ router.put('/ai-budgets', authorize('admin'), async (req: Request, res: Response
   } catch (error) {
     if (error instanceof AiBudgetValidationError) throw new ApiError(400, error.message);
     throw new ApiError(500, 'Failed to update AI budgets');
+  }
+});
+
+// ===========================
+// MCP servers for the AI Analyst (services/ai/mcpServers.ts)
+// ===========================
+
+function mcpServerId(req: Request): number {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isFinite(id) || id <= 0) throw new ApiError(400, 'invalid MCP server id');
+  return id;
+}
+
+/** The client error to answer with for an MCP settings failure; else a 500 with `fallback`. */
+function mcpFailure(error: any, fallback: string): ApiError {
+  if (error instanceof ApiError) return error;
+  if (error instanceof McpValidationError) return new ApiError(400, error.message);
+  if (error instanceof McpNotFoundError) return new ApiError(404, error.message);
+  return new ApiError(
+    500,
+    error?.message?.includes('CREDENTIAL_ENCRYPTION_KEY')
+      ? 'Set CREDENTIAL_ENCRYPTION_KEY to store an auth value for an MCP server.'
+      : fallback
+  );
+}
+
+// The configured MCP servers with their tool lists and per-tool switches.
+// Never returns an auth value, only whether one is saved (hasAuthValue).
+router.get('/ai-mcp', authorize('admin'), async (_req: Request, res: Response) => {
+  try {
+    res.json({ servers: await listMcpServers() });
+  } catch (error) {
+    throw mcpFailure(error, 'Failed to fetch MCP servers');
+  }
+});
+
+// Add a server: { name, url, authHeader?, authValue?, enabled?, triageEnabled? },
+// then fetch its tool list. A server that cannot be reached is still saved, with
+// lastError set. Tools the server marks read-only start enabled; the rest start off.
+router.post('/ai-mcp', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    const created = await createMcpServer(req.body ?? {});
+    res.status(201).json(await syncMcpServer(created.id));
+  } catch (error) {
+    throw mcpFailure(error, 'Failed to add the MCP server');
+  }
+});
+
+// Change a server: any of url, authHeader, authValue ('' removes it), enabled,
+// triageEnabled, and tools: [{ name, enabled?, triage? }] to switch tools on or
+// off for chat (enabled) and for triage (triage, the per-tool override). A new
+// url clears the tool list (sync again) and needs authValue again when one is saved.
+router.put('/ai-mcp/:id', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    res.json(await updateMcpServer(mcpServerId(req), req.body ?? {}));
+  } catch (error) {
+    throw mcpFailure(error, 'Failed to update the MCP server');
+  }
+});
+
+// Fetch the server's tool list again. New tools follow the read-only rule above;
+// a tool whose description or arguments changed is switched off for review.
+router.post('/ai-mcp/:id/sync', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    res.json(await syncMcpServer(mcpServerId(req)));
+  } catch (error) {
+    throw mcpFailure(error, 'Failed to sync the MCP server');
+  }
+});
+
+router.delete('/ai-mcp/:id', authorize('admin'), async (req: Request, res: Response) => {
+  try {
+    await deleteMcpServer(mcpServerId(req));
+    res.json({ deleted: true });
+  } catch (error) {
+    throw mcpFailure(error, 'Failed to delete the MCP server');
   }
 });
 

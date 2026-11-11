@@ -139,11 +139,25 @@ engine):
   existing `PUT /api/alerts/:id` — the triage agent has no executor, by the
   same construction as the chat analyst's tool registry.
 
+- **MCP tools (opt-in).** An admin can connect MCP servers for the chat analyst
+  (`mcpServers.ts`, Settings → AI → MCP servers). Triage receives none of them
+  unless a server's "Use in AI Triage" switch is on, and then only the tools
+  that server marks read-only (`loadMcpTools('triage')`), passed in as
+  `TriageAgentDeps.extraTools`. The "no new write path" property above then
+  rests on the server's own read-only annotation, and each lookup sends
+  model-chosen arguments (derived from alert content) to that server. Both are
+  why the switch is per server and off by default. `suggested_queries` stay
+  limited to built-in tools.
+
 ## Extension points ("thin and extensible")
 
 - **New data source** → add one entry to `analystTools.ts`'s `ALL_TOOLS`
   (name/description/args/`run`). Both the chat analyst and the triage agent
   pick it up automatically via `getToolsForRole`.
+- **External data source without a code change** → an MCP server
+  (`mcpServers.ts`). Its admin-enabled tools are merged into the menu per run
+  via `getToolsForRole(role, extraTools)`; a name that collides with a built-in
+  is ignored.
 - **New detection type** → nothing. The agent reasons generically over
   whatever's in `matched_data`/`title`/`rule_name`, the same way the rules
   engine itself is generic over `rules/*.yaml` — a new detection category is

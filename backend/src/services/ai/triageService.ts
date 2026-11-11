@@ -14,6 +14,7 @@ import { AlertModel } from '../../models/Alert';
 import { AlertTriageModel, TriageTriggeredBy } from '../../models/AlertTriage';
 import { runAlertTriage, TriageAlertInput } from './triageAgent';
 import { getTriageAiConfig, getTriageOperationalConfig, TriageOperationalConfig } from './aiService';
+import { loadMcpTools } from './mcpServers';
 import { ErrorLogService } from '../errors/errorLogService';
 import { logger } from '../../utils/logger';
 
@@ -137,6 +138,8 @@ async function runOne(alertId: number, opts: TriageOpts): Promise<void> {
         wallBudgetMs: cfg.wallBudgetSeconds * 1000,
         answerMaxTokens: cfg.answerMaxTokens,
         stepMaxTokens: cfg.stepMaxTokens,
+        // Read-only tools of the MCP servers switched on for triage (none by default).
+        extraTools: await loadMcpTools('triage'),
       }
     );
 

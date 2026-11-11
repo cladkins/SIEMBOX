@@ -46,6 +46,12 @@ const ROUTES: Array<[method: string, path: string, allowed: Role[]]> = [
   // AI budgets: output-token caps, lookups and time budgets.
   ['get', '/ai-budgets', ADMIN_ONLY],
   ['put', '/ai-budgets', ADMIN_ONLY],
+  // MCP servers for the AI Analyst: URLs, tool switches, and a stored auth value.
+  ['get', '/ai-mcp', ADMIN_ONLY],
+  ['post', '/ai-mcp', ADMIN_ONLY],
+  ['put', '/ai-mcp/:id', ADMIN_ONLY],
+  ['post', '/ai-mcp/:id/sync', ADMIN_ONLY],
+  ['delete', '/ai-mcp/:id', ADMIN_ONLY],
   // Data retention
   ['get', '/retention', ADMIN_ONLY],
   ['put', '/retention', ADMIN_ONLY],

@@ -21,7 +21,7 @@ import {
   logOutputTruncated,
 } from './aiService';
 import { AgentBudget, AI_BUDGET_FIELDS, ANSWER_CALL_TIMEOUT_MS, tokenLimitNote } from './aiBudgets';
-import { getToolsForRole, findToolForRole, Role } from './analystTools';
+import { getToolsForRole, findToolForRole, externalToolsNote, AnalystTool, Role } from './analystTools';
 
 // The lookup, time and output budgets are admin-configurable (Settings -> AI ->
 // AI budgets, aiBudgets.ts) and passed in via deps.budgets; the route reads
@@ -115,12 +115,15 @@ export interface AnalystChatDeps {
   executeTool?: (name: string, args: any, role: Role) => Promise<any>;
   /** Admin-configured budgets (Settings -> AI -> AI budgets); anything missing uses the defaults. */
   budgets?: Partial<AgentBudget>;
+  /** Admin-enabled MCP tools for this run (mcpServers.ts loadMcpTools); none by default. */
+  extraTools?: AnalystTool[];
   /** Clock, for tests of the time budget. */
   now?: () => number;
 }
 
-function buildSystemPrompt(role: Role, maxToolCalls: number): string {
-  const menu = getToolsForRole(role)
+function buildSystemPrompt(role: Role, maxToolCalls: number, extraTools: AnalystTool[] = []): string {
+  const tools = getToolsForRole(role, extraTools);
+  const menu = tools
     .map((t) => `- ${t.name}: ${t.description} [args: ${t.args}]`)
     .join('\n');
   return `You are a senior, READ-ONLY SOC security analyst embedded in SIEMBox. You help the operator understand alerts, incidents, vulnerabilities, assets, and threat intelligence, and you help them PRIORITIZE. You can only observe — you cannot change anything.
@@ -138,7 +141,7 @@ Rules:
 - If a tool returns an error, adapt or explain the limitation; do not loop pointlessly.
 
 Available tools:
-${menu}
+${menu}${externalToolsNote(tools)}
 
 Remember: output ONLY one JSON object per turn.`;
 }
@@ -197,10 +200,11 @@ export async function runAnalystChat(
   const complete = deps.complete || callProviderChatDetailed;
   const getConfig = deps.getConfig || getChatAiConfig;
   const now = deps.now || Date.now;
+  const extraTools = deps.extraTools || [];
   const executeTool =
     deps.executeTool ||
     (async (name: string, args: any, role: Role) => {
-      const tool = findToolForRole(name, role);
+      const tool = findToolForRole(name, role, extraTools);
       if (!tool) return { error: `unknown or not-permitted tool: ${name}` };
       return tool.run(args, { userRole: role });
     });
@@ -216,7 +220,7 @@ export async function runAnalystChat(
 
   // Fold context into the system prompt (rather than a separate user turn) so the
   // user/assistant history stays strictly alternating for providers that require it.
-  let systemContent = buildSystemPrompt(role, maxToolCalls);
+  let systemContent = buildSystemPrompt(role, maxToolCalls, extraTools);
   if (input.context && input.context.kind && input.context.id !== undefined && input.context.id !== null) {
     systemContent += `\n\nThe operator is currently viewing ${input.context.kind} id=${input.context.id}. If relevant, load it with the matching tool before answering.`;
   }
@@ -323,7 +327,7 @@ export async function runAnalystChat(
       let toolResult: any;
       let ok = true;
       let err: string | undefined;
-      const tool = findToolForRole(obj.tool, role);
+      const tool = findToolForRole(obj.tool, role, extraTools);
       if (!tool) {
         ok = false;
         err = `unknown or not-permitted tool: ${obj.tool}`;

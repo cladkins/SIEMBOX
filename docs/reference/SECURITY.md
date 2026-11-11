@@ -140,6 +140,25 @@ CREDENTIAL_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(3
   set with `ANTHROPIC_API_KEY` only goes to `api.anthropic.com`. The AbuseIPDB,
   OTX and Have I Been Pwned keys only go to those services' own hosts.
 
+### AI Analyst MCP servers
+
+- The AI Analyst's built-in tools only read SIEMBox data. An admin can connect
+  remote MCP servers (Settings → AI → MCP servers); a tool of such a server does
+  whatever that server does. Nothing is offered to the model until an admin
+  switches the tool on. Tools the server marks read-only start on, all others
+  start off. Treat a write-capable tool like a credential: a prompt injection in
+  a log or alert is the way a model gets talked into calling one.
+- Only admins manage servers. The backend connects to whatever URL an admin
+  saves, private addresses included (MCP servers often live on the LAN), so the
+  setting carries the same trust as the AI provider base URL.
+- The auth header value is encrypted at rest with `CREDENTIAL_ENCRYPTION_KEY`,
+  never returned by the API, sent only to the URL it was saved for (a URL
+  change needs it again), and redirects are refused.
+- The model sees tool descriptions as stored at the last admin-triggered sync.
+  A tool whose definition changes is switched off until reviewed.
+- AI Triage is unattended: it gets a server's tools only when that server's
+  triage switch is on, and then only the tools marked read-only.
+
 ### AI Builder & Catalog Trust (v2)
 
 - **AI builder data flow.** When you generate a parser or detection, the log

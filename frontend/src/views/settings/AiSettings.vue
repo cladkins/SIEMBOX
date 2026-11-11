@@ -336,6 +336,8 @@
         </el-form-item>
       </el-form>
     </el-card>
+
+    <McpServersCard />
   </div>
 </template>
 
@@ -345,6 +347,7 @@ import { api } from '@/services/api';
 import { ElMessage } from 'element-plus';
 import { Check } from '@element-plus/icons-vue';
 import HelpTip from '@/components/HelpTip.vue';
+import McpServersCard from './McpServersCard.vue';
 import { ENV_KEY_VARS, blankBaseUrl, keyNeeded, type AiEndpoint } from './aiKeyTarget';
 
 // A saved key is only sent to the provider and base URL it was saved for (the

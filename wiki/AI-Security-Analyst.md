@@ -17,7 +17,7 @@ Available to **admin**, **analyst**, and **operator** roles.
 Each turn, the model emits exactly one action — either a **tool call** or a **final answer** — as a small JSON object. SIEMBox executes the (read-only) tool, feeds the result back as data, and loops until the model answers or a budget is reached. This structured loop is **model-agnostic**, so it works on a local **Ollama** model in JSON mode just as well as on a cloud model.
 
 **Safety properties:**
-- **Read-only.** The analyst can only call the tools below — all of which are reads. It has no write/delete capability.
+- **Read-only.** The analyst's built-in tools below are all reads. It has no write/delete capability in SIEMBox. The one way to give it more is an admin connecting an [MCP server](#mcp-servers-optional) and switching a tool on.
 - **Grounded.** Every factual claim is backed by a tool result; the system prompt forbids inventing counts, IPs, CVEs, or hostnames.
 - **Untrusted data.** Tool results (log lines, alert text, etc.) are treated as *data*, never as instructions — embedded "prompt-injection" content is ignored.
 - **No code execution.** Model output is never executed; only a validated tool name + clamped arguments are.
@@ -41,6 +41,23 @@ Each turn, the model emits exactly one action — either a **tool call** or a **
 | `get_alert_history_stats` | How a rule/title has historically been dispositioned (new/investigating/closed/false_positive counts) |
 
 The alert tools take an alert id or its [reference](Detection-Rules#alert-references-alr-) and return each alert's `ref`.
+
+## MCP servers (optional)
+
+An admin can connect remote [MCP](https://modelcontextprotocol.io) (Model Context Protocol) servers under **Settings → AI → MCP servers**. Their tools join the analyst's menu next to the built-in ones, named `mcp__<server>__<tool>`: a ticket system, a threat intelligence service, your firewall's API, your own tooling.
+
+**Adding a server.** Give it a short name (lowercase letters, digits, underscores), its URL, and, when it needs authentication, a header name and value (for example `Authorization` and `Bearer <token>`). SIEMBox connects from the backend over the **Streamable HTTP** transport, so the backend container must reach the URL. Servers that only run as a local command (stdio) are not supported directly; put them behind an HTTP gateway.
+
+**You choose every tool.** On the first sync, tools the server marks read-only start switched on. All others start off. The card lists each tool with its kind (*read-only* or *may change data*) and a switch. Only switched-on tools are offered to the model. The read-only mark is the server's own claim, so review the list for a server you do not run yourself.
+
+**What changes about safety:**
+- A built-in tool only reads SIEMBox data. An MCP tool does whatever its server does. When a tool marked *may change data* is on, the analyst is told to call it only when you ask for that action in your own message, never because a log line, alert or tool result suggests it. A model can still be misled, so switch on write-capable tools with care.
+- Tool arguments the model writes go to the MCP server, and tool results go to your AI provider like any other tool result.
+- The analyst sees the tool descriptions stored at the last sync, not a live copy. **Sync tools** fetches the list again. A tool whose description or arguments changed is switched off until you review it.
+- The header value is encrypted at rest (it needs `CREDENTIAL_ENCRYPTION_KEY`), is never shown again, and is only sent to the URL it was saved for: changing the URL asks for it again and clears the tool list. Redirects are refused.
+- Limits: 10 servers, 100 tools per server, 40 MCP tools offered per question, 20 s per request to a server. Results count against the same per-question data limits as built-in tools.
+
+**AI Triage.** Each server has a separate **Use in AI Triage** switch, off by default. Triage runs unattended on alert content an attacker can influence, so with the switch on it gets only that server's tools marked read-only. Each lookup sends alert details to that server.
 
 ## Citing alerts
 

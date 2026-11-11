@@ -361,6 +361,12 @@ export const api = {
   // AI budgets: output lengths, data lookups and time budgets (admin)
   getAiBudgets: () => apiClient.get('/settings/ai-budgets'),
   updateAiBudgets: (data: any) => apiClient.put('/settings/ai-budgets', data),
+  // MCP servers the AI Analyst may use (admin)
+  getMcpServers: () => apiClient.get('/settings/ai-mcp'),
+  createMcpServer: (data: any) => apiClient.post('/settings/ai-mcp', data, { timeout: 60000 }),
+  updateMcpServer: (id: number, data: any) => apiClient.put(`/settings/ai-mcp/${id}`, data),
+  syncMcpServer: (id: number) => apiClient.post(`/settings/ai-mcp/${id}/sync`, undefined, { timeout: 60000 }),
+  deleteMcpServer: (id: number) => apiClient.delete(`/settings/ai-mcp/${id}`),
   getTriageRiskSummary: () => apiClient.get('/alerts/triage-risk-summary'),
 
   // Alerts

@@ -45,9 +45,10 @@ test('htmlToText keeps the article and drops scripts, styles and navigation', ()
   assert.equal(page.title, 'Big & Bad Campaign');
   assert.ok(page.text.includes('45.142.212[.]100'));
   assert.ok(page.text.includes('rundll32.exe x.dll'));
-  assert.ok(!page.text.includes('1.1.1.1'));
-  assert.ok(!page.text.includes('navlink.com'));
-  assert.ok(!page.text.includes('footer.com'));
+  // Text checks, not URL checks: the nav, footer and script content must be gone.
+  assert.doesNotMatch(page.text, /1\.1\.1\.1/);
+  assert.doesNotMatch(page.text, /navlink/);
+  assert.doesNotMatch(page.text, /footer\b/);
 });
 
 test('documentKind tells feeds, STIX, HTML and text apart', () => {
@@ -57,6 +58,14 @@ test('documentKind tells feeds, STIX, HTML and text apart', () => {
   assert.equal(documentKind({ contentType: 'application/json', body: '{"a":1}' }), 'text');
   assert.equal(documentKind({ contentType: 'text/html', body: '<html></html>' }), 'html');
   assert.equal(documentKind({ contentType: 'text/plain', body: '1.2.3.4' }), 'text');
+  assert.equal(documentKind({ contentType: 'text/xml', body: '<?xml version="1.0"?>\n<!-- a --><!-- b -->\n<rss></rss>' }), 'feed');
+});
+
+test('documentKind stays fast on a run of XML comments (no backtracking)', () => {
+  const evil = '<!--' + '--><!--'.repeat(5000) + 'x';
+  const started = Date.now();
+  assert.equal(documentKind({ contentType: 'text/xml', body: evil }), 'text');
+  assert.ok(Date.now() - started < 200);
 });
 
 test('parseFeed reads RSS 2.0 and Atom, newest first', async () => {

@@ -106,6 +106,26 @@ export async function fetchDocument(rawUrl: string, get: HttpGet = httpsGet): Pr
 
 export type DocumentKind = 'feed' | 'stix' | 'html' | 'text';
 
+/**
+ * `xml` without its leading XML declaration, comments and whitespace, found
+ * with indexOf (a regex with a repeated comment group can backtrack
+ * exponentially on input like "<!----><!----><!--...").
+ */
+export function afterXmlPrologue(xml: string): string {
+  let s = xml.trimStart();
+  if (s.startsWith('<?xml')) {
+    const end = s.indexOf('?>');
+    if (end < 0) return s;
+    s = s.slice(end + 2).trimStart();
+  }
+  while (s.startsWith('<!--')) {
+    const end = s.indexOf('-->', 4);
+    if (end < 0) return s;
+    s = s.slice(end + 3).trimStart();
+  }
+  return s;
+}
+
 export function documentKind(doc: { contentType: string; body: string }): DocumentKind {
   const ct = doc.contentType.toLowerCase();
   const head = doc.body.slice(0, 2000).trimStart();
@@ -123,7 +143,7 @@ export function documentKind(doc: { contentType: string; body: string }): Docume
     }
     return 'text';
   }
-  if (/rss|atom/.test(ct) || /^(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<(?:rss|feed|rdf:RDF)\b/i.test(head)) {
+  if (/rss|atom/.test(ct) || /^<(?:rss|feed|rdf:RDF)\b/i.test(afterXmlPrologue(head))) {
     return 'feed';
   }
   if (/html/.test(ct) || /<html|<body|<!doctype html/i.test(head)) return 'html';

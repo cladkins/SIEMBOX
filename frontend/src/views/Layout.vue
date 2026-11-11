@@ -34,6 +34,11 @@
           <span>Threat Intel</span>
         </el-menu-item>
 
+        <el-menu-item index="/threat-hunting">
+          <el-icon><Search /></el-icon>
+          <span>Threat Hunting</span>
+        </el-menu-item>
+
         <el-menu-item index="/graph">
           <el-icon><Share /></el-icon>
           <span>Context Graph</span>
@@ -277,6 +282,7 @@ const pageTitle = computed(() => {
     '/ai-analyst': 'AI Analyst',
     '/getting-started': 'Getting Started',
     '/threat-intel': 'Threat Intel',
+    '/threat-hunting': 'Threat Hunting',
     '/graph': 'Context Graph',
     '/digital-risk': 'Digital Risk',
     '/alerts': 'Alerts',

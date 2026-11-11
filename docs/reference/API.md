@@ -26,6 +26,8 @@ Complete REST API reference for SIEMBox. All API endpoints are prefixed with `/a
   - [Log Discovery](#log-discovery-endpoints)
   - [Vulnerabilities](#vulnerabilities-endpoints)
   - [Exposure Monitoring (Digital Risk)](#exposure-monitoring-digital-risk)
+  - [Threat Hunting](#threat-hunting-endpoints)
+  - [TAXII 2.1](#taxii-21-endpoints)
   - [Context Graph](#context-graph-endpoints)
   - [Application Monitoring](#application-monitoring-endpoints)
   - [Endpoint Installed Packages (EDR)](#endpoint-installed-packages-edr)
@@ -7064,6 +7066,94 @@ At most 1024 characters.
 - `400` - missing, empty or over-long password, or a malformed JSON body
 - `429` - rate limit exceeded
 - `502` - the Pwned Passwords service could not be reached
+
+---
+
+## Threat Hunting Endpoints
+
+Turn a threat report into indicators and hypotheses, hunt for them in the raw
+logs, and export the hunt as STIX 2.1. See [docs/threat-hunting.md](../threat-hunting.md).
+
+Reads are open to every role. Hunt and source writes need **analyst**,
+**operator** or **admin**. TAXII token routes are **admin** only.
+
+| Method | Path | Who | What |
+|---|---|---|---|
+| GET | `/api/hunts/summary` | any | Counts: hunts, hunts with matches, in progress, failed, active indicators, enabled sources, queue depth |
+| GET | `/api/hunts` | any | List. Query: `limit` (1-200, default 50), `offset`, `status`, `source_id`, `search` (title or URL). Returns `{ hunts, total }` |
+| POST | `/api/hunts` | analyst+ | Start a hunt from `url` (https, public host) or `text` (20 B to 1 MB). Optional `title`, `lookback_days` (1-90, default 14), `alert_on_match` (default false), `use_ai` (default true). 202 with the hunt (`status: pending`) |
+| POST | `/api/hunts/import` | analyst+ | Start a hunt from a STIX 2.x bundle: the bundle as the body, or `{ bundle, lookback_days, alert_on_match, run }`. 201 with the hunt (`status: ready`, then it runs unless `run: false`). 400 when nothing in it can be hunted |
+| GET | `/api/hunts/:id` | any | The hunt with `indicators`, `hypotheses` and up to 500 `matches` (sample log lines) |
+| GET | `/api/hunts/:id/stix` | any | The hunt as a STIX 2.1 bundle (`application/stix+json;version=2.1`, attachment) |
+| PUT | `/api/hunts/:id` | analyst+ | Change `title`, `lookback_days`, `alert_on_match` |
+| DELETE | `/api/hunts/:id` | analyst+ | Delete the hunt and its results. 409 while it is extracting or running |
+| POST | `/api/hunts/:id/run` | analyst+ | Search the logs again. 202; 409 while the hunt is busy |
+| POST | `/api/hunts/:id/reextract` | analyst+ | Fetch and read the report again, then run. Keeps switched-off indicators and hypotheses the user wrote or edited. 400 for an imported STIX hunt |
+| POST | `/api/hunts/:id/indicators` | analyst+ | Add `{ type, value, context? }`. `type`: ipv4, ipv6, domain, url, email, md5, sha1, sha256, cve. 400 for an invalid, private or reserved value |
+| PUT | `/api/hunts/:id/indicators/:indicatorId` | analyst+ | `{ enabled: true \| false }` |
+| POST | `/api/hunts/:id/hypotheses` | analyst+ | Add `{ title, description?, search_terms?, attack_techniques? }`. Terms: 3-200 characters, at most 20. Techniques: ATT&CK IDs |
+| PUT | `/api/hunts/:id/hypotheses/:hypothesisId` | analyst+ | Change any of `title`, `description`, `search_terms`, `attack_techniques`, `enabled` |
+| DELETE | `/api/hunts/:id/hypotheses/:hypothesisId` | analyst+ | Delete a hypothesis |
+| GET | `/api/hunts/sources` | any | Monitored sources |
+| POST | `/api/hunts/sources` | analyst+ | Add `{ url, name?, kind? (auto \| feed \| page), check_interval_minutes? (30-10080, default 360), lookback_days?, alert_on_match? (default true), use_ai? (default true), enabled? }`. 409 for a URL already added |
+| PUT | `/api/hunts/sources/:id` | analyst+ | Change any of the fields above |
+| DELETE | `/api/hunts/sources/:id` | analyst+ | Stop watching; the source's hunts are kept |
+| POST | `/api/hunts/sources/:id/check` | analyst+ | Check now. Returns `{ ok, kind, hunts_created, error? }` |
+| GET | `/api/hunts/taxii-tokens` | admin | TAXII client tokens (never the token itself) and the collection id |
+| POST | `/api/hunts/taxii-tokens` | admin | Create `{ name }`. 201 with the token in `token`, shown this once. Audited |
+| DELETE | `/api/hunts/taxii-tokens/:id` | admin | Revoke. Audited |
+
+Hunt `status`: `pending`, `extracting`, `ready`, `running`, `completed`,
+`failed` (`error` says why). `origin`: `url`, `text`, `stix`, `source`.
+`extraction_method`: `regex`, `ai`, `stix`; `extraction_note` explains a
+missing or failed AI step.
+
+A hunt with `alert_on_match` raises an alert with `source: "threat-hunt"` and
+`matched_data` `{ hunt_id, hunt_title, source_url, logs_matched,
+matched_indicators, matched_hypotheses }`.
+
+**Example**
+
+```bash
+curl -X POST https://siembox.example/api/hunts \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"url":"https://vendor.example/blog/new-campaign","lookback_days":30,"alert_on_match":true}'
+```
+
+---
+
+## TAXII 2.1 Endpoints
+
+A read-only TAXII 2.1 server with one collection, **SIEMBox Threat Hunts**,
+holding every hunt's STIX objects. Responses use
+`application/taxii+json;version=2.1`; errors are TAXII error messages.
+
+**Sign-in:** a TAXII client token as the HTTP Basic password (any user name)
+or as `Authorization: Bearer sbx_taxii_...`, or any role's session. A Basic
+header without a TAXII token is refused with 401: user passwords are never
+accepted over Basic auth.
+
+| Method | Path |
+|---|---|
+| GET | `/api/taxii2/` (discovery) |
+| GET | `/api/taxii2/hunts/` (API root) |
+| GET | `/api/taxii2/hunts/collections/` |
+| GET | `/api/taxii2/hunts/collections/:collectionId/` |
+| GET | `/api/taxii2/hunts/collections/:collectionId/objects/` |
+| GET | `/api/taxii2/hunts/collections/:collectionId/objects/:objectId/` |
+| GET | `/api/taxii2/hunts/collections/:collectionId/objects/:objectId/versions/` |
+| GET | `/api/taxii2/hunts/collections/:collectionId/manifest/` |
+
+`:collectionId` is the UUID the collections list returns, or `threat-hunts`.
+Filters on objects and manifest: `added_after`, `limit` (default 100, max
+1000), `next`, `match[id]`, `match[type]`, `match[version]`,
+`match[spec_version]`. Responses carry `X-TAXII-Date-Added-First` and
+`X-TAXII-Date-Added-Last`.
+
+```bash
+curl -u client:sbx_taxii_... \
+  "https://siembox.example/api/taxii2/hunts/collections/threat-hunts/objects/?match[type]=indicator&limit=50"
+```
 
 ---
 

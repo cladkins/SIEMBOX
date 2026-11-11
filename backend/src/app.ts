@@ -7,6 +7,7 @@ import { bodyParserErrorHandler, errorHandler, notFoundHandler } from './middlew
 import { rejectBrotliBodies } from './middleware/rejectBrotliBodies';
 import { requestTimeoutLogger } from './middleware/requestTimeoutLogger';
 import { authenticate, requireAdmin } from './middleware/auth';
+import { taxiiAuthenticate } from './middleware/taxiiAuth';
 import { query } from './config/database';
 import { corsHeaders, parseCorsOrigin } from './net/cors';
 import { ignoredForwardedForTracker, trustedProxies } from './net/trustedProxies';
@@ -32,6 +33,8 @@ import aiRoutes from './routes/ai';
 import containersRoutes from './routes/containers';
 import threatIntelRoutes from './routes/threatIntel';
 import threatFeedsRoutes from './routes/threatFeeds';
+import huntsRoutes from './routes/hunts';
+import taxiiRoutes from './routes/taxii';
 import edrRoutes from './routes/edr';
 import packsRoutes from './routes/packs';
 import logDiscoveryRoutes from './routes/logDiscovery';
@@ -207,6 +210,10 @@ app.use('/api/ai', authenticate, aiRoutes); // "Explain this" assistant (any aut
 app.use('/api/containers', authenticate, containersRoutes); // Trivy container image scanning
 app.use('/api/threat-intel', authenticate, threatIntelRoutes); // IP-centric geo/event/alert lookup
 app.use('/api/threat-feeds', authenticate, threatFeedsRoutes); // External threat feeds + IP reputation
+app.use('/api/hunts', authenticate, huntsRoutes); // Threat Hunting: reports -> IOCs + hypotheses -> log hunts, STIX export
+// TAXII 2.1 (read-only) collection of the hunts: a TAXII client token or a
+// user session (middleware/taxiiAuth.ts).
+app.use('/api/taxii2', taxiiAuthenticate, taxiiRoutes);
 app.use('/api/edr', edrRoutes); // EDR endpoint agents (enroll + agent-auth ingest + admin UI)
 app.use('/api/packs', authenticate, packsRoutes); // Content Packs (curated parser+detection bundles)
 app.use('/api/log-discovery', authenticate, logDiscoveryRoutes); // Log source discovery, fingerprinting + onboarding

@@ -88,6 +88,7 @@ Deep-dives for specific shipped features (see also the friendlier **[GitHub Wiki
 - ✅ **SIEMBOX Endpoint agents** — enrollment, inventory/detections/vulnerabilities, server-delivered YARA
 - ✅ **Asset-360** — one asset view correlating vulns, alerts, agent, shipper, geo, and ports
 - ✅ Threat Intel — blocklist feeds + BYO-key reputation (AbuseIPDB, AlienVault OTX) + dashboard country map
+- ✅ Threat Hunting — reports and watched feeds become log hunts; STIX 2.1 export and a TAXII 2.1 collection ([threat-hunting.md](threat-hunting.md))
 
 **v2 — the Parser Platform:**
 - ✅ Declarative parser engine + portable, in-app community catalog (browse / install / export / **contribute**)

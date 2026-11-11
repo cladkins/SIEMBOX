@@ -18,6 +18,7 @@ A lightweight, self-hosted Security Information and Event Management (SIEM) syst
 - **🖥️ SIEMBOX Endpoint agents (new in v3)**: Enroll lightweight endpoint agents from *Endpoints* to report host inventory, detections, and vulnerabilities, with **server-delivered YARA** rule packs (optional YARA-Forge sync). Endpoint findings flow into the same Alerts and Assets views.
 - **Asset-360**: One asset view that correlates its open vulnerabilities, the alerts it raised, its endpoint agent and log shipper, GeoIP, and open ports.
 - **Context Graph**: Pivot from an alert, IP, user, host, asset or domain to everything SIEMBox knows that is linked to it: the alerts that name it, the rule that raised them, the asset and its vulnerabilities, Digital Risk findings, log shippers. Open it from *Context Graph* in the sidebar, or with **Open in Context Graph** on an alert, an asset or a Threat Intel IP; expand one hop at a time, or switch to a table view. Graph links can be shared: whoever opens one sees what their role allows, and someone who has to sign in first lands back on the same graph.
+- **Threat Hunting**: Hand SIEMBox a threat report (a URL, pasted text or a STIX bundle) or a feed to watch. It extracts the indicators (IPs, domains, URLs, hashes, CVEs) and, with an AI model, hunt hypotheses with log search terms, then searches your logs, keeps the matching lines and can raise an alert. Every hunt exports as **STIX 2.1** and is served from a read-only **TAXII 2.1** collection for OpenCTI, MISP and other tools. See [docs/threat-hunting.md](./docs/threat-hunting.md).
 - **Threat Intel**: Investigate any IP — its GeoIP country, the log events it produced, and the alerts it triggered — with a country choropleth on the dashboard that drills into source IPs. Enriched with **external threat feeds** (free abuse.ch / Tor / blocklist.de blocklists) and optional **bring-your-own-key reputation** (AbuseIPDB, AlienVault OTX).
 - **Ready-made parsers in the catalog**: Nginx, Traefik, Caddy, Authelia, Keycloak, Nextcloud, Pi-hole, Vaultwarden, UniFi, Home Assistant, Plex, Jellyfin, and more — one click to install from *Parsers → Browse Catalog*.
 - **Alert management**: View, acknowledge, and manage security alerts.
@@ -202,6 +203,7 @@ the GeoIP database is DB-IP Lite (CC BY 4.0, [docs/geoip.md](docs/geoip.md)).
 - [x] Canonical normalization + GeoIP enrichment (v2)
 - [x] Email / Slack / NTFY alert notifications
 - [x] Threat intelligence (IP drill-down, country map, blocklist feeds, BYO-key reputation)
+- [x] Threat hunting from reports and feeds (IOC and hypothesis extraction, log hunts, STIX 2.1 / TAXII 2.1)
 - [x] GeoIP dashboard map (alerts by country)
 - [x] Container vulnerability scanning (Trivy) + scheduled scans
 - [x] External threat-intelligence feeds (blocklists + BYO-key reputation)

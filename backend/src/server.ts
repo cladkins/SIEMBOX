@@ -18,6 +18,7 @@ import { startScheduledScansJob, stopScheduledScansJob } from './jobs/scheduledS
 import { startShipperJobExpiryJob, stopShipperJobExpiryJob } from './jobs/shipperJobExpiry';
 import { startIngestionHealthJob, stopIngestionHealthJob } from './jobs/ingestionHealth';
 import { startThreatFeedsJob, stopThreatFeedsJob } from './jobs/threatFeeds';
+import { startHuntSourcesJob, stopHuntSourcesJob } from './jobs/huntSources';
 import { startDiscoveryApiPollerJob, stopDiscoveryApiPollerJob } from './jobs/discoveryApiPoller';
 import { startGeoipUpdateJob, stopGeoipUpdateJob } from './jobs/geoipUpdate';
 import { startYaraRulesJob, stopYaraRulesJob } from './jobs/yaraRules';
@@ -164,6 +165,10 @@ const startServer = async () => {
 
     // Start the external threat-feed refresher (populates blocklist indicators).
     startThreatFeedsJob();
+
+    // Threat Hunting: resume unfinished hunts, then watch the monitored
+    // report sources (feeds and pages) for new reports to hunt.
+    startHuntSourcesJob();
 
     // Start the Log Discovery API poller (pulls events from sources configured
     // for polling instead of the manual cron+curl+logger recipe).
@@ -318,6 +323,7 @@ const shutdown = async (signal: string) => {
   stopShipperJobExpiryJob();
   stopIngestionHealthJob();
   stopThreatFeedsJob();
+  stopHuntSourcesJob();
   stopDiscoveryApiPollerJob();
   stopGeoipUpdateJob();
   stopYaraRulesJob();

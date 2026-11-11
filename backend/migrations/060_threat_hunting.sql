@@ -1,4 +1,4 @@
--- Migration 059: Threat Hunting.
+-- Migration 060: Threat Hunting.
 --
 -- A hunt starts from an article (a URL, pasted text, or an imported STIX
 -- bundle). SIEMBox extracts its indicators of compromise and hunt hypotheses,

@@ -50,7 +50,7 @@
             <el-switch :model-value="s.triageEnabled" :disabled="!s.enabled" @change="(v: any) => patch(s, { triageEnabled: !!v })" />
             <el-text size="small" class="mcp-switch-label">
               Use in AI Triage
-              <HelpTip text="Triage runs unattended on alert content an attacker can influence, so it only ever gets this server's tools marked read-only. Each lookup sends alert details to this server." />
+              <HelpTip text="Triage runs unattended on alert content an attacker can influence. With this on, triage gets the tools whose Triage switch below is on: by default the ones the server marks read-only. Each lookup sends alert details to this server." />
             </el-text>
           </span>
           <el-text size="small" type="info">
@@ -62,6 +62,21 @@
           <el-table-column label="On" width="70">
             <template #default="{ row }">
               <el-switch size="small" :model-value="row.enabled" @change="(v: any) => toggleTool(s, row, !!v)" />
+            </template>
+          </el-table-column>
+          <el-table-column width="90">
+            <template #header>
+              Triage
+              <HelpTip text="Whether AI Triage may use this tool, when the server's Use in AI Triage switch is on. Starts on for tools the server marks read-only and off for the rest. Override it for a lookup tool the server did not mark, or to keep a tool out of triage. A tool must also be On to be used." />
+            </template>
+            <template #default="{ row }">
+              <el-switch
+                size="small"
+                :model-value="row.triage"
+                :disabled="!s.triageEnabled || !row.enabled"
+                :data-test="`mcp-triage-${row.name}`"
+                @change="(v: any) => toggleTriage(s, row, !!v)"
+              />
             </template>
           </el-table-column>
           <el-table-column label="Tool" min-width="180">
@@ -122,7 +137,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus } from '@element-plus/icons-vue';
 import { api } from '@/services/api';
 import HelpTip from '@/components/HelpTip.vue';
@@ -132,6 +147,8 @@ interface McpTool {
   description: string;
   readOnly: boolean;
   enabled: boolean;
+  /** AI Triage may use the tool (when the server is on for triage). */
+  triage: boolean;
 }
 interface McpServer {
   id: number;
@@ -237,6 +254,22 @@ async function patch(s: McpServer, body: Record<string, unknown>) {
 
 function toggleTool(s: McpServer, tool: McpTool, enabled: boolean) {
   return patch(s, { tools: [{ name: tool.name, enabled }] });
+}
+
+/** The per-tool triage override. Letting a tool not marked read-only into unattended triage asks first. */
+async function toggleTriage(s: McpServer, tool: McpTool, triage: boolean) {
+  if (triage && !tool.readOnly) {
+    try {
+      await ElMessageBox.confirm(
+        `${tool.name} is not marked read-only by its server. AI Triage runs unattended on alert content an attacker can influence, and could call this tool with no one watching. Allow it only if it is a lookup that changes nothing.`,
+        'Allow in AI Triage?',
+        { type: 'warning', confirmButtonText: 'Allow in triage', cancelButtonText: 'Cancel' }
+      );
+    } catch {
+      return;
+    }
+  }
+  return patch(s, { tools: [{ name: tool.name, triage }] });
 }
 
 async function sync(s: McpServer) {

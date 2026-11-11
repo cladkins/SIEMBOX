@@ -101,7 +101,7 @@ export interface TriageAgentDeps {
   answerMaxTokens?: number;
   /** Output-token cap of each JSON working step. */
   stepMaxTokens?: number;
-  /** Admin-enabled, read-only MCP tools for this run (mcpServers.ts loadMcpTools('triage')); none by default. */
+  /** MCP tools an admin allowed for triage (mcpServers.ts loadMcpTools('triage')); none by default. */
   extraTools?: AnalystTool[];
   /** Clock, for tests of the time budget. */
   now?: () => number;

@@ -16,6 +16,7 @@ import {
   McpValidationError,
   mergeSyncedTools,
   shapeCallResult,
+  toolAllowedInTriage,
   validateAuthHeader,
   validateName,
   validateUrl,
@@ -178,6 +179,21 @@ test('sync: new tools start enabled only when read-only; a changed tool is switc
   assert.deepEqual(changed.map((t) => [t.name, t.enabled]), [['lookup_ip', false]]);
 });
 
+test('triage override: follows read-only by default, survives an unchanged sync, resets on a changed one', () => {
+  assert.equal(toolAllowedInTriage({ readOnly: true }), true);
+  assert.equal(toolAllowedInTriage({ readOnly: false }), false);
+  assert.equal(toolAllowedInTriage({ readOnly: false, triage: true }), true);
+  assert.equal(toolAllowedInTriage({ readOnly: true, triage: false }), false);
+  const overridden = mergeSyncedTools([], TOOLS).map((t) => ({ ...t, enabled: true, triage: !t.readOnly }));
+  assert.deepEqual(mergeSyncedTools(overridden, TOOLS).map((t) => t.triage), [false, true]);
+  // block_ip changes: the override that let it into triage is dropped with its chat switch.
+  const changed = mergeSyncedTools(overridden, [TOOLS[0], { ...TOOLS[1], description: 'Block an IP everywhere' }]);
+  assert.deepEqual(changed.map((t) => [t.name, t.enabled, toolAllowedInTriage(t)]), [
+    ['lookup_ip', true, false],
+    ['block_ip', false, false],
+  ]);
+});
+
 test('sync: long descriptions are clipped to one line and oversized schemas dropped', () => {
   const [t] = mergeSyncedTools([], [
     { name: 'big', description: `line one\n\n${'x'.repeat(2000)}`, inputSchema: { type: 'object', properties: { p: { description: 'y'.repeat(5000) } } } },
@@ -203,7 +219,7 @@ const stored = (over: Partial<McpStoredTool>): McpStoredTool => ({
   ...over,
 });
 
-test('scopes: chat gets every enabled tool; triage only read-only tools of opted-in servers', async () => {
+test('scopes: chat gets every enabled tool; triage the triage-allowed tools of opted-in servers', async () => {
   const rows = [
     { name: 'intel', enabled: true, triage_enabled: true, tools: [stored({}), stored({ name: 'block_ip', readOnly: false }), stored({ name: 'off', enabled: false })] },
     { name: 'tickets', enabled: true, triage_enabled: false, tools: [stored({ name: 'search' })] },
@@ -218,6 +234,13 @@ test('scopes: chat gets every enabled tool; triage only read-only tools of opted
   assert.deepEqual(chat.map((t) => t.name), ['mcp__intel__lookup_ip', 'mcp__intel__block_ip', 'mcp__tickets__search']);
   assert.match(chat[1].description, /may change that system/);
   assert.deepEqual(buildMcpTools(rows, 'triage', call).map((t) => t.name), ['mcp__intel__lookup_ip']);
+  // Per-tool override, both directions: block_ip allowed in triage, lookup_ip kept out. A
+  // tool switched off for chat stays out of triage whatever its override says.
+  const o = [{ ...rows[0], tools: [stored({ triage: false }), stored({ name: 'block_ip', readOnly: false, triage: true }), stored({ name: 'off', enabled: false, triage: true })] }, rows[1]];
+  const tri = buildMcpTools(o, 'triage', call);
+  assert.deepEqual(tri.map((t) => t.name), ['mcp__intel__block_ip']);
+  assert.match(externalToolsNote(tri, true), /ONLY to look up context/);
+  assert.deepEqual(buildMcpTools(o, 'chat', call).map((t) => t.name), ['mcp__intel__lookup_ip', 'mcp__intel__block_ip', 'mcp__tickets__search']);
   // Non-object args from the model become {}.
   assert.deepEqual(await chat[0].run('oops' as any, { userRole: 'analyst' }), { text: 'ok' });
   assert.deepEqual(calls, [['intel', 'lookup_ip', {}]]);
@@ -235,6 +258,7 @@ test('registry: MCP tools join the menu, cannot shadow a built-in, and add the p
   assert.doesNotMatch(externalToolsNote([ro]), /may change the external system/);
   assert.match(externalToolsNote([ro, rw]), /ONLY when the operator asked/);
   assert.doesNotMatch(externalToolsNote([ro, rw], true), /operator asked/);
+  assert.doesNotMatch(externalToolsNote([ro], true), /look up context/);
 });
 
 const cfg = async () => ({ provider: 'openai' as const, model: 'm', apiKey: 'k' });

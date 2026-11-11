@@ -1997,10 +1997,10 @@ card edits these. See the wiki page
 
 | Method & Path | Purpose |
 |---|---|
-| `GET /api/settings/ai-mcp` | `{ "servers": [ { "id": 1, "name": "intel", "url": "https://…/mcp", "authHeader": "Authorization", "hasAuthValue": true, "enabled": true, "triageEnabled": false, "tools": [ { "name": "lookup_ip", "description": "…", "readOnly": true, "enabled": true } ], "lastSyncAt": "…", "lastError": null } ] }`. The auth value is never returned. |
+| `GET /api/settings/ai-mcp` | `{ "servers": [ { "id": 1, "name": "intel", "url": "https://…/mcp", "authHeader": "Authorization", "hasAuthValue": true, "enabled": true, "triageEnabled": false, "tools": [ { "name": "lookup_ip", "description": "…", "readOnly": true, "enabled": true, "triage": true } ], "lastSyncAt": "…", "lastError": null } ] }`. The auth value is never returned. |
 | `POST /api/settings/ai-mcp` | Add a server and fetch its tool list. Body: `{ "name": "intel", "url": "https://…/mcp", "authHeader": "Authorization", "authValue": "Bearer …", "enabled": true, "triageEnabled": false }`; only `name` and `url` are required. `name`: 1-24 lowercase letters, digits and underscores, unique. `url`: `http://` or `https://`, no embedded credentials. Answers `201` with the server. A server that cannot be reached is still saved, with `lastError` set. Tools the server marks read-only (`annotations.readOnlyHint`) start enabled; all others start disabled. At most 10 servers. |
-| `PUT /api/settings/ai-mcp/:id` | Change any of `url`, `authHeader`, `authValue` (`""` removes it), `enabled`, `triageEnabled`, and `tools: [ { "name": "…", "enabled": true } ]` to switch tools on or off (unlisted tools keep their state). A new `url` clears the tool list (sync again) and, when an auth value is saved, needs `authValue` in the same request (`400` otherwise). The name cannot change. |
-| `POST /api/settings/ai-mcp/:id/sync` | Fetch the tool list again. New tools follow the read-only rule, removed tools are dropped, and a tool whose description or arguments changed is disabled for review. A failed fetch answers `200` with `lastError` set and the stored tools unchanged. |
+| `PUT /api/settings/ai-mcp/:id` | Change any of `url`, `authHeader`, `authValue` (`""` removes it), `enabled`, `triageEnabled`, and `tools: [ { "name": "…", "enabled": true, "triage": false } ]` to switch tools on or off: `enabled` for use at all, `triage` for use by AI Triage (the per-tool override). Each entry needs `name` and at least one of the two; unlisted tools and omitted switches keep their state. A new `url` clears the tool list (sync again) and, when an auth value is saved, needs `authValue` in the same request (`400` otherwise). The name cannot change. |
+| `POST /api/settings/ai-mcp/:id/sync` | Fetch the tool list again. New tools follow the read-only rule, removed tools are dropped, and a tool whose description or arguments changed is disabled for review and loses its `triage` override. A failed fetch answers `200` with `lastError` set and the stored tools unchanged. |
 | `DELETE /api/settings/ai-mcp/:id` | Remove the server. `{ "deleted": true }`. |
 
 Validation failures are `400`, an unknown id `404`. Storing an auth value needs
@@ -2008,8 +2008,9 @@ Validation failures are `400`, an unknown id `404`. Storing an auth value needs
 
 Enabled tools appear to the model as `mcp__<server>__<tool>` in
 `POST /api/ai/chat`, and in that response's `trace`. AI Triage gets a server's
-tools only when `triageEnabled` is true, and then only the tools with
-`readOnly: true`. SIEMBox speaks the Streamable HTTP transport (JSON or SSE
+tools only when `triageEnabled` is true, and then only the enabled tools with
+`triage: true`. A tool's `triage` equals its `readOnly` until an admin sets it
+with `PUT`, in either direction. SIEMBox speaks the Streamable HTTP transport (JSON or SSE
 responses), opens a short session per call, waits up to 20 s per request, reads
 at most 1 MB per response, and refuses redirects.
 

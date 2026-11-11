@@ -57,7 +57,9 @@ An admin can connect remote [MCP](https://modelcontextprotocol.io) (Model Contex
 - The header value is encrypted at rest (it needs `CREDENTIAL_ENCRYPTION_KEY`), is never shown again, and is only sent to the URL it was saved for: changing the URL asks for it again and clears the tool list. Redirects are refused.
 - Limits: 10 servers, 100 tools per server, 40 MCP tools offered per question, 20 s per request to a server. Results count against the same per-question data limits as built-in tools.
 
-**AI Triage.** Each server has a separate **Use in AI Triage** switch, off by default. Triage runs unattended on alert content an attacker can influence, so with the switch on it gets only that server's tools marked read-only. Each lookup sends alert details to that server.
+**AI Triage.** Each server has a separate **Use in AI Triage** switch, off by default. Triage runs unattended on alert content an attacker can influence. With the switch on, triage gets the tools that are **On** and whose own **Triage** switch is on. The Triage switch starts on for tools the server marks read-only and off for the rest. Each lookup sends alert details to that server.
+
+You can override the Triage switch per tool, in either direction. Many servers do not mark their lookup tools read-only: switch Triage on for such a tool to let triage use it (the page asks you to confirm). Or switch it off to keep a read-only tool out of triage. Allow a tool that is not marked read-only only when it is a lookup that changes nothing: no operator is present when triage calls it. Triage is told to use such tools for lookups only, but a model can be misled by alert content. If a later sync finds the tool's definition changed, the override is dropped along with the tool's On switch.
 
 ## Citing alerts
 

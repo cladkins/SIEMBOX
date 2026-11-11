@@ -141,10 +141,15 @@ engine):
 
 - **MCP tools (opt-in).** An admin can connect MCP servers for the chat analyst
   (`mcpServers.ts`, Settings → AI → MCP servers). Triage receives none of them
-  unless a server's "Use in AI Triage" switch is on, and then only the tools
-  that server marks read-only (`loadMcpTools('triage')`), passed in as
-  `TriageAgentDeps.extraTools`. The "no new write path" property above then
-  rests on the server's own read-only annotation, and each lookup sends
+  unless a server's "Use in AI Triage" switch is on, and then only the enabled
+  tools allowed in triage (`toolAllowedInTriage`, via `loadMcpTools('triage')`),
+  passed in as `TriageAgentDeps.extraTools`. A tool is allowed when the server
+  marks it read-only, unless an admin overrode that per tool: off for a
+  read-only tool, or on for one the server did not mark (many servers omit the
+  annotation on plain lookups). The "no new write path" property above then
+  rests on the server's own read-only annotation or on the admin's explicit
+  override, plus a prompt line telling the agent to use unmarked tools for
+  lookups only, which is guidance and not enforcement. Each lookup sends
   model-chosen arguments (derived from alert content) to that server. Both are
   why the switch is per server and off by default. `suggested_queries` stay
   limited to built-in tools.

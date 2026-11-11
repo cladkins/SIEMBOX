@@ -157,7 +157,10 @@ CREDENTIAL_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(3
 - The model sees tool descriptions as stored at the last admin-triggered sync.
   A tool whose definition changes is switched off until reviewed.
 - AI Triage is unattended: it gets a server's tools only when that server's
-  triage switch is on, and then only the tools marked read-only.
+  triage switch is on, and then only the tools marked read-only. An admin can
+  override that per tool. Allowing a tool that is not marked read-only puts a
+  possibly write-capable tool in a loop that reads attacker-influenced alerts
+  with no operator present, so do it only for a lookup that changes nothing.
 
 ### AI Builder & Catalog Trust (v2)
 

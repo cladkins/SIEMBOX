@@ -15,7 +15,9 @@
  *   changed on a later sync is switched off until an admin enables it again.
  * - Automated triage runs unattended over attacker-influenced alert content. It
  *   gets a server's tools only when that server's "use in triage" switch is on,
- *   and then only the tools the server marks read-only.
+ *   and then only the enabled tools whose own triage switch is on. That switch
+ *   starts on for tools the server marks read-only and off for the rest; an
+ *   admin can override it per tool, in either direction (toolAllowedInTriage).
  * - The auth value is encrypted at rest, never returned, and bound to the URL:
  *   changing the URL requires entering it again. Redirects are refused.
  */
@@ -56,6 +58,16 @@ export interface McpStoredTool {
   /** The server marks the tool read-only (annotations.readOnlyHint). Self-declared. */
   readOnly: boolean;
   enabled: boolean;
+  /**
+   * The admin's per-tool triage override. Absent (rows stored before the
+   * override existed, or never set): triage follows `readOnly`.
+   */
+  triage?: boolean;
+}
+
+/** Whether triage may use the tool, given its server is on for triage: the override, else the read-only mark. */
+export function toolAllowedInTriage(t: Pick<McpStoredTool, 'readOnly' | 'triage'>): boolean {
+  return typeof t.triage === 'boolean' ? t.triage : !!t.readOnly;
 }
 
 interface McpServerRow {
@@ -82,7 +94,8 @@ export interface McpServerPublic {
   hasAuthValue: boolean;
   enabled: boolean;
   triageEnabled: boolean;
-  tools: Array<Pick<McpStoredTool, 'name' | 'description' | 'readOnly' | 'enabled'>>;
+  /** `triage`: the effective per-tool triage switch (toolAllowedInTriage). */
+  tools: Array<Pick<McpStoredTool, 'name' | 'description' | 'readOnly' | 'enabled'> & { triage: boolean }>;
   lastSyncAt: string | null;
   lastError: string | null;
 }
@@ -108,7 +121,7 @@ export interface McpServerInput {
   authValue?: unknown;
   enabled?: unknown;
   triageEnabled?: unknown;
-  /** Per-tool switches: [{ name, enabled }]. */
+  /** Per-tool switches: [{ name, enabled?, triage? }]. */
   tools?: unknown;
 }
 
@@ -174,7 +187,7 @@ function clip(s: string, n: number): string {
 }
 
 /** The stored form of one server-reported tool, or null when its name is unusable. */
-export function toStoredTool(def: McpToolDef): Omit<McpStoredTool, 'enabled'> | null {
+export function toStoredTool(def: McpToolDef): Omit<McpStoredTool, 'enabled' | 'triage'> | null {
   if (!def || typeof def.name !== 'string' || !TOOL_NAME_RE.test(def.name)) return null;
   let schema: Record<string, unknown> = { type: 'object' };
   if (def.inputSchema && typeof def.inputSchema === 'object' && !Array.isArray(def.inputSchema)) {
@@ -198,8 +211,9 @@ export function toStoredTool(def: McpToolDef): Omit<McpStoredTool, 'enabled'> | 
 
 /**
  * The tool list after a sync. A tool new to the server starts enabled only when
- * the server marks it read-only. A known tool keeps its switch, unless its
- * definition changed, in which case it is switched off for review.
+ * the server marks it read-only. A known tool keeps its switches, unless its
+ * definition changed, in which case it is switched off for review and its
+ * triage override is dropped (triage follows the new read-only mark again).
  */
 export function mergeSyncedTools(previous: McpStoredTool[], reported: McpToolDef[]): McpStoredTool[] {
   const before = new Map(previous.map((t) => [t.name, t]));
@@ -219,7 +233,11 @@ export function mergeSyncedTools(previous: McpStoredTool[], reported: McpToolDef
       old.description === t.description &&
       old.readOnly === t.readOnly &&
       JSON.stringify(old.inputSchema) === JSON.stringify(t.inputSchema);
-    out.push({ ...t, enabled: same ? old.enabled : false });
+    out.push({
+      ...t,
+      enabled: same ? old.enabled : false,
+      ...(same && typeof old.triage === 'boolean' ? { triage: old.triage } : {}),
+    });
   }
   return out;
 }
@@ -279,6 +297,7 @@ function toPublic(r: McpServerRow): McpServerPublic {
       description: t.description,
       readOnly: !!t.readOnly,
       enabled: !!t.enabled,
+      triage: toolAllowedInTriage(t),
     })),
     lastSyncAt: r.last_sync_at,
     lastError: r.last_error,
@@ -366,15 +385,28 @@ export async function updateMcpServer(id: number, input: McpServerInput): Promis
 
   let tools = row.tools || [];
   if (input.tools !== undefined) {
-    if (!Array.isArray(input.tools)) throw new McpValidationError('tools must be an array of { name, enabled }');
-    const switches = new Map<string, boolean>();
+    const shape = 'tools must be an array of { name, enabled?, triage? } with at least one boolean switch';
+    if (!Array.isArray(input.tools)) throw new McpValidationError(shape);
+    const switches = new Map<string, { enabled?: boolean; triage?: boolean }>();
     for (const t of input.tools) {
-      if (!t || typeof t.name !== 'string' || typeof t.enabled !== 'boolean') {
-        throw new McpValidationError('tools must be an array of { name, enabled }');
-      }
-      switches.set(t.name, t.enabled);
+      const ok =
+        t &&
+        typeof t.name === 'string' &&
+        (t.enabled === undefined || typeof t.enabled === 'boolean') &&
+        (t.triage === undefined || typeof t.triage === 'boolean') &&
+        (t.enabled !== undefined || t.triage !== undefined);
+      if (!ok) throw new McpValidationError(shape);
+      switches.set(t.name, { enabled: t.enabled, triage: t.triage });
     }
-    tools = tools.map((t) => (switches.has(t.name) ? { ...t, enabled: switches.get(t.name) as boolean } : t));
+    tools = tools.map((t) => {
+      const sw = switches.get(t.name);
+      if (!sw) return t;
+      return {
+        ...t,
+        ...(sw.enabled !== undefined ? { enabled: sw.enabled } : {}),
+        ...(sw.triage !== undefined ? { triage: sw.triage } : {}),
+      };
+    });
   }
   // A different URL is a different server: its tools need a fresh sync and review.
   if (url !== row.url) tools = [];
@@ -437,7 +469,7 @@ export function buildMcpTools(
     if (scope === 'triage' && !row.triage_enabled) continue;
     for (const t of row.tools || []) {
       if (!t.enabled) continue;
-      if (scope === 'triage' && !t.readOnly) continue;
+      if (scope === 'triage' && !toolAllowedInTriage(t)) continue;
       if (out.length >= MAX_MCP_TOOLS_PER_RUN) return out;
       out.push({
         name: mcpToolName(row.name, t.name),

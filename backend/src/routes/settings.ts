@@ -314,7 +314,8 @@ router.post('/ai-mcp', authorize('admin'), async (req: Request, res: Response) =
 });
 
 // Change a server: any of url, authHeader, authValue ('' removes it), enabled,
-// triageEnabled, and tools: [{ name, enabled }] to switch tools on or off. A new
+// triageEnabled, and tools: [{ name, enabled?, triage? }] to switch tools on or
+// off for chat (enabled) and for triage (triage, the per-tool override). A new
 // url clears the tool list (sync again) and needs authValue again when one is saved.
 router.put('/ai-mcp/:id', authorize('admin'), async (req: Request, res: Response) => {
   try {

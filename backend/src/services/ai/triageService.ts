@@ -138,7 +138,7 @@ async function runOne(alertId: number, opts: TriageOpts): Promise<void> {
         wallBudgetMs: cfg.wallBudgetSeconds * 1000,
         answerMaxTokens: cfg.answerMaxTokens,
         stepMaxTokens: cfg.stepMaxTokens,
-        // Read-only tools of the MCP servers switched on for triage (none by default).
+        // Tools of the MCP servers switched on for triage that are allowed in triage (none by default).
         extraTools: await loadMcpTools('triage'),
       }
     );

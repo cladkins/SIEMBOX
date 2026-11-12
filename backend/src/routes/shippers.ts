@@ -784,11 +784,29 @@ router.post('/containers', async (req: Request, res: Response) => {
   }
 });
 
-// Get shipper configuration (for shipper to poll)
-router.get('/config/:api_key', async (req: Request, res: Response) => {
-  try {
-    const { api_key } = req.params as { api_key: string };
+// The header a shipper sends its syslog api_key in on the GET routes below.
+// A key in the URL path lands in every access log on the way (nginx, a reverse
+// proxy, the error log for a 404), so current shippers send it here instead.
+export const SHIPPER_KEY_HEADER = 'X-Shipper-Key';
 
+function shipperKeyFromHeader(req: Request): string {
+  const key = (req.header(SHIPPER_KEY_HEADER) || '').trim();
+  if (!key) throw new ApiError(401, `Shipper authentication required (${SHIPPER_KEY_HEADER} header)`);
+  return key;
+}
+
+/**
+ * The legacy form: the key in the URL path. Kept so shippers built before
+ * the header routes keep working until they are updated; deprecated, and to be
+ * removed in a later release.
+ */
+function shipperKeyFromPath(req: Request): string {
+  return (req.params as { api_key: string }).api_key;
+}
+
+// Get shipper configuration (for shipper to poll)
+async function sendShipperConfig(api_key: string, req: Request, res: Response): Promise<void> {
+  try {
     const shipper = await LogShipperModel.findByApiKey(api_key);
 
     if (!shipper) {
@@ -818,7 +836,10 @@ router.get('/config/:api_key', async (req: Request, res: Response) => {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch configuration');
   }
-});
+}
+
+router.get('/agent/config', (req: Request, res: Response) => sendShipperConfig(shipperKeyFromHeader(req), req, res));
+router.get('/config/:api_key', (req: Request, res: Response) => sendShipperConfig(shipperKeyFromPath(req), req, res));
 
 // ============================================================================
 // REMOTE SCAN DISPATCH (shipper api_key authenticated — the SAME key used by
@@ -837,10 +858,8 @@ router.get('/config/:api_key', async (req: Request, res: Response) => {
 // tagged with `kind` so the shipper knows which tool to run:
 //   { jobs: [{ scanId, kind:'nmap',   nmapArgs,   targets }, ... ,
 //             { scanId, kind:'nuclei', nucleiArgs, targets }, ... ] }
-router.get('/scan-jobs/:api_key', async (req: Request, res: Response) => {
+async function sendScanJobs(api_key: string, req: Request, res: Response): Promise<void> {
   try {
-    const { api_key } = req.params as { api_key: string };
-
     const shipper = await LogShipperModel.findByApiKey(api_key);
     if (!shipper) {
       throw new ApiError(404, 'Invalid API key');
@@ -870,7 +889,10 @@ router.get('/scan-jobs/:api_key', async (req: Request, res: Response) => {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch scan jobs');
   }
-});
+}
+
+router.get('/agent/scan-jobs', (req: Request, res: Response) => sendScanJobs(shipperKeyFromHeader(req), req, res));
+router.get('/scan-jobs/:api_key', (req: Request, res: Response) => sendScanJobs(shipperKeyFromPath(req), req, res));
 
 // A shipper posts back the result of a scan it ran. The backend routes by the
 // scan's own scan_type (authoritative), not by what the shipper claims:

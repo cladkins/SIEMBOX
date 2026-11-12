@@ -223,7 +223,7 @@ the next poll rather than waiting out a full interval.
 SIEMBox and never finishes. Applies to both **asset (nmap)** and
 **vulnerability (nuclei)** scans.
 
-A shipper polls `GET /api/shippers/scan-jobs/<api_key>` every
+A shipper polls `GET /api/shippers/agent/scan-jobs` (key in the `X-Shipper-Key` header) every
 `SCAN_POLL_INTERVAL` seconds; that GET atomically **claims** any assigned scans
 (queued → running) and hands back the server-built flags and validated targets,
 each tagged with its `kind`. The shipper runs `nmap … -oX -` (asset) or

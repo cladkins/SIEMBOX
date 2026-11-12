@@ -82,7 +82,9 @@ const ADMIN_WRITES: Route[] = [
 const SHIPPER_FACING: Route[] = [
   ['post', '/register'],
   ['post', '/containers'],
+  ['get', '/agent/config'],
   ['get', '/config/:api_key'],
+  ['get', '/agent/scan-jobs'],
   ['get', '/scan-jobs/:api_key'],
   ['post', '/scan-results'],
   ['post', '/discovery-results'],

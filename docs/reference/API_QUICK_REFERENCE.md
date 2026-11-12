@@ -244,7 +244,7 @@ curl -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8421/api/shippers"
 
 # Get shipper config (shipper uses this)
-curl "http://localhost:8421/api/shippers/config/YOUR_API_KEY"
+curl -H "X-Shipper-Key: YOUR_API_KEY" "http://localhost:8421/api/shippers/agent/config"
 
 # Register shipper (shipper uses this)
 curl -X POST http://localhost:8421/api/shippers/register \

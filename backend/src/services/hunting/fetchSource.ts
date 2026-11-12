@@ -12,9 +12,12 @@
 import { parseStringPromise } from 'xml2js';
 import { httpsGet, HttpError, type HttpGet } from '../exposure/domainMonitor/http';
 import { hostnameRejection, resolvePublicAddresses, UnsafeTargetError } from '../exposure/domainMonitor/netSafety';
+import { isMispEvent, isMispManifest } from './misp';
 
 export const FETCH_TIMEOUT_MS = 20_000;
 export const FETCH_MAX_BYTES = 3 * 1024 * 1024;
+/** For a hunt's own report and a MISP feed's manifest and events, which run larger than a web page. */
+export const LARGE_FETCH_MAX_BYTES = 16 * 1024 * 1024;
 export const MAX_REDIRECTS = 5;
 export const MAX_URL_LENGTH = 2048;
 
@@ -59,7 +62,12 @@ function decode(body: Buffer, contentType: string): string {
   }
 }
 
-export async function fetchDocument(rawUrl: string, get: HttpGet = httpsGet): Promise<FetchedDocument> {
+export async function fetchDocument(
+  rawUrl: string,
+  get: HttpGet = httpsGet,
+  opts: { maxBytes?: number } = {}
+): Promise<FetchedDocument> {
+  const maxBytes = opts.maxBytes ?? FETCH_MAX_BYTES;
   let current = rawUrl;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const why = urlRejection(current);
@@ -68,7 +76,7 @@ export async function fetchDocument(rawUrl: string, get: HttpGet = httpsGet): Pr
     try {
       res = await get(new URL(current), {
         timeoutMs: FETCH_TIMEOUT_MS,
-        maxBytes: FETCH_MAX_BYTES,
+        maxBytes,
         resolve: (host) => resolvePublicAddresses(host),
         headers: {
           'User-Agent': USER_AGENT,
@@ -81,7 +89,7 @@ export async function fetchDocument(rawUrl: string, get: HttpGet = httpsGet): Pr
       if (err instanceof HttpError || err instanceof UnsafeTargetError) {
         throw new SourceFetchError(
           err instanceof HttpError && err.kind === 'too_large'
-            ? `The page is larger than ${FETCH_MAX_BYTES / (1024 * 1024)} MB.`
+            ? `The document is larger than ${maxBytes / (1024 * 1024)} MB.`
             : `Could not fetch ${new URL(current).hostname}: ${err.message}`
         );
       }
@@ -104,7 +112,7 @@ export async function fetchDocument(rawUrl: string, get: HttpGet = httpsGet): Pr
 
 // ---- What kind of document ------------------------------------------------------
 
-export type DocumentKind = 'feed' | 'stix' | 'html' | 'text';
+export type DocumentKind = 'feed' | 'stix' | 'misp-event' | 'misp-manifest' | 'html' | 'text';
 
 /**
  * `xml` without its leading XML declaration, comments and whitespace, found
@@ -138,6 +146,8 @@ export function documentKind(doc: { contentType: string; body: string }): Docume
       ) {
         return 'stix';
       }
+      if (isMispEvent(parsed)) return 'misp-event';
+      if (isMispManifest(parsed)) return 'misp-manifest';
     } catch {
       /* not JSON after all */
     }

@@ -32,7 +32,8 @@ import { AlertModel } from '../../models/Alert';
 import { getTechnique, techniqueDisplayName } from '../attack/attackData';
 import { extractIocs, IocType, IOC_TYPES, normalizeIoc, occursIn, siteDomain } from './iocExtract';
 import { aiExtract, AiExtraction } from './huntAi';
-import { documentKind, fetchDocument, htmlToText, SourceFetchError } from './fetchSource';
+import { documentKind, fetchDocument, htmlToText, LARGE_FETCH_MAX_BYTES, SourceFetchError } from './fetchSource';
+import { isMispEvent, looksLikeMispFeedIndex, MAX_MISP_INDICATORS, parseMispEvent } from './misp';
 import {
   huntBundle,
   huntStixObjects,
@@ -40,6 +41,7 @@ import {
   indicatorStixId,
   ImportedHunt,
   parseStixInput,
+  StixImportError,
   StixBundle,
   StixHunt,
   StixObject,
@@ -50,14 +52,21 @@ export const MAX_LOOKBACK_DAYS = 90;
 export const DEFAULT_LOOKBACK_DAYS = 14;
 const MAX_SOURCE_TEXT = 1_000_000;
 const MAX_TERMS_PER_QUERY = 100;
-const MAX_ROWS_PER_QUERY = 20_000;
+/** Most matching log lines one run reads (newest first). */
+const MAX_ROWS = 20_000;
+const INITIAL_SLICE_MS = 6 * 3_600_000;
+const MIN_SLICE_MS = 15 * 60_000;
+const MAX_SLICE_MS = 7 * 86_400_000;
 const MAX_SAMPLES_PER_TERM = 25;
 const MAX_MESSAGE_CHARS = 2000;
 export const MAX_HUNT_TERMS = 600;
+/** The limit on one search statement (one time slice of one batch of terms). */
 const HUNT_STATEMENT_TIMEOUT_MS = envInt('HUNT_STATEMENT_TIMEOUT_MS', 120_000, 1000);
+/** The limit on one whole run; past it the run keeps what it found and says how far back it got. */
+const HUNT_MAX_RUNTIME_MS = envInt('HUNT_MAX_RUNTIME_MS', 30 * 60_000, 60_000);
 
 export type HuntStatus = 'pending' | 'extracting' | 'ready' | 'running' | 'completed' | 'failed';
-export type HuntOrigin = 'url' | 'text' | 'stix' | 'source';
+export type HuntOrigin = 'url' | 'text' | 'stix' | 'misp' | 'source';
 
 export interface HuntRow {
   id: number;
@@ -79,6 +88,9 @@ export interface HuntRow {
   match_count: number;
   logs_matched: number;
   results_truncated: boolean;
+  search_complete: boolean;
+  searched_from: Date | null;
+  progress: string | null;
   last_run_at: Date | null;
   last_alert_id: number | null;
   created_by: number | null;
@@ -169,7 +181,7 @@ async function drain(): Promise<void> {
         const message = (err as Error)?.message || String(err);
         logger.warn(`[Hunt] hunt ${task.huntId} ${task.kind} failed: ${message}`);
         await query(
-          `UPDATE threat_hunts SET status = 'failed', error = $2, updated_at = NOW() WHERE id = $1`,
+          `UPDATE threat_hunts SET status = 'failed', error = $2, progress = NULL, updated_at = NOW() WHERE id = $1`,
           [task.huntId, message.slice(0, 1000)]
         ).catch(() => undefined);
         ErrorLogService.logBackgroundError('threat-hunt', `hunt ${task.huntId}: ${message}`, {
@@ -237,13 +249,47 @@ export async function createHunt(input: CreateHuntInput): Promise<HuntRow> {
   return hunt;
 }
 
+/** A structured document (STIX bundle or MISP event) as a hunt, with how it was read. */
+export function parseStructured(input: unknown): { parsed: ImportedHunt; method: 'stix' | 'misp'; note: string } {
+  if (isMispEvent(input)) {
+    const parsed = parseMispEvent(input);
+    const notes = [`Read ${parsed.stats.objects} MISP attribute(s)`];
+    if (parsed.stats.all_attributes) {
+      notes.push('the event marks none for detection (to_ids), so every huntable attribute was used');
+    }
+    if (parsed.stats.truncated) {
+      notes.push(`${parsed.stats.truncated} indicator(s) past the ${MAX_MISP_INDICATORS} limit were left out`);
+    }
+    return { parsed, method: 'misp', note: notes.join('; ') };
+  }
+  const parsed = parseStixInput(input);
+  return {
+    parsed,
+    method: 'stix',
+    note:
+      `Read ${parsed.stats.objects} STIX object(s)` +
+      (parsed.stats.skipped_patterns
+        ? `; ${parsed.stats.skipped_patterns} indicator pattern(s) were not simple values and were skipped`
+        : ''),
+  };
+}
+
 export async function importStixHunt(
   input: unknown,
   opts: { lookbackDays?: number; alertOnMatch?: boolean; createdBy?: number | null; run?: boolean }
 ): Promise<HuntRow> {
-  const parsed: ImportedHunt = parseStixInput(input);
+  let structured: ReturnType<typeof parseStructured>;
+  try {
+    structured = parseStructured(input);
+  } catch (err) {
+    if (err instanceof StixImportError) {
+      throw new StixImportError('Expected a STIX bundle (a JSON object with an "objects" array) or a MISP event (a JSON object with an "Event").');
+    }
+    throw err;
+  }
+  const { parsed, method, note } = structured;
   if (!parsed.indicators.length && !parsed.hypotheses.length) {
-    throw new HuntError(400, 'The bundle holds no indicator, vulnerability or note SIEMBox can hunt for.');
+    throw new HuntError(400, `The ${method === 'misp' ? 'MISP event' : 'bundle'} holds nothing SIEMBox can hunt for.`);
   }
   const client = await pool.connect();
   let hunt: HuntRow;
@@ -253,33 +299,33 @@ export async function importStixHunt(
       `INSERT INTO threat_hunts
          (stix_uuid, title, origin, source_url, status, summary, extraction_method, extraction_note,
           lookback_days, alert_on_match, use_ai, created_by)
-       VALUES ($1, $2, 'stix', $3, 'ready', $4, 'stix', $5, $6, $7, false, $8)
+       VALUES ($1, $2, $9, $3, 'ready', $4, $9, $5, $6, $7, false, $8)
        RETURNING id`,
       [
         randomUUID(),
         parsed.title.slice(0, 500),
         parsed.source_url,
         parsed.summary,
-        `Imported ${parsed.stats.objects} STIX object(s)` +
-          (parsed.stats.skipped_patterns ? `; ${parsed.stats.skipped_patterns} indicator pattern(s) were not simple values and were skipped` : ''),
+        note,
         clampLookback(opts.lookbackDays),
         opts.alertOnMatch ?? false,
         opts.createdBy ?? null,
+        method,
       ]
     );
     hunt = r.rows[0];
     for (const ind of parsed.indicators) {
       await client.query(
         `INSERT INTO threat_hunt_indicators (hunt_id, stix_id, ioc_type, value, context, found_by)
-         VALUES ($1, $2, $3, $4, $5, 'stix') ON CONFLICT (hunt_id, ioc_type, value) DO NOTHING`,
-        [hunt.id, ind.stix_id, ind.type, ind.value, ind.context]
+         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (hunt_id, ioc_type, value) DO NOTHING`,
+        [hunt.id, ind.stix_id, ind.type, ind.value, ind.context, method]
       );
     }
     for (const h of parsed.hypotheses) {
       await client.query(
         `INSERT INTO threat_hunt_hypotheses (hunt_id, stix_id, title, description, attack_techniques, search_terms, found_by)
-         VALUES ($1, $2, $3, $4, $5, $6, 'stix')`,
-        [hunt.id, h.stix_id, h.title, h.description, h.attack_techniques, h.search_terms.slice(0, 20)]
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [hunt.id, h.stix_id, h.title, h.description, h.attack_techniques, h.search_terms.slice(0, 20), method]
       );
     }
     await client.query('COMMIT');
@@ -297,7 +343,9 @@ export async function importStixHunt(
 export async function reextractHunt(id: number): Promise<void> {
   const hunt = await getHuntRow(id);
   if (!hunt) throw new HuntError(404, 'Hunt not found');
-  if (hunt.origin === 'stix') throw new HuntError(400, 'An imported STIX hunt has no report to re-read.');
+  if (hunt.origin === 'stix' || hunt.origin === 'misp') {
+    throw new HuntError(400, 'An imported file has no report to re-read.');
+  }
   if (hunt.status === 'extracting' || hunt.status === 'running') throw new HuntError(409, 'The hunt is busy.');
   await query(`UPDATE threat_hunts SET status = 'pending', error = NULL, updated_at = NOW() WHERE id = $1`, [id]);
   enqueue({ huntId: id, kind: 'extract' });
@@ -322,14 +370,19 @@ interface ReportText {
   url: string | null;
 }
 
-async function readReport(hunt: HuntRow & { source_text: string | null }): Promise<ReportText | { stix: unknown }> {
+async function readReport(hunt: HuntRow & { source_text: string | null }): Promise<ReportText | { structured: unknown }> {
   if (hunt.origin === 'text' || !hunt.source_url) {
     return { title: null, text: hunt.source_text || '', url: null };
   }
   try {
-    const doc = await fetchDocument(hunt.source_url);
+    const doc = await fetchDocument(hunt.source_url, undefined, { maxBytes: LARGE_FETCH_MAX_BYTES });
     const kind = documentKind(doc);
-    if (kind === 'stix') return { stix: JSON.parse(doc.body) };
+    if (kind === 'stix' || kind === 'misp-event') return { structured: JSON.parse(doc.body) };
+    if (kind === 'misp-manifest' || (kind === 'html' && looksLikeMispFeedIndex(doc.body))) {
+      throw new SourceFetchError(
+        'This URL is a MISP feed. Add it under Monitored sources (kind MISP feed) so each event becomes a hunt, or hunt one event file (<uuid>.json).'
+      );
+    }
     if (kind === 'feed') {
       throw new SourceFetchError('This URL is an RSS/Atom feed. Add it under Sources so each new article becomes a hunt.');
     }
@@ -340,7 +393,7 @@ async function readReport(hunt: HuntRow & { source_text: string | null }): Promi
     return { title: null, text: doc.body, url: doc.url };
   } catch (err) {
     // A feed item whose page can't be fetched still has the feed's own copy.
-    if (hunt.source_text && !(err instanceof SourceFetchError && /RSS\/Atom/.test(err.message))) {
+    if (hunt.source_text && !(err instanceof SourceFetchError && /RSS\/Atom|MISP feed/.test(err.message))) {
       return { title: null, text: hunt.source_text, url: hunt.source_url };
     }
     throw err;
@@ -354,16 +407,16 @@ async function extractHunt(id: number): Promise<void> {
   await query(`UPDATE threat_hunts SET status = 'extracting', error = NULL, updated_at = NOW() WHERE id = $1`, [id]);
 
   const report = await readReport(hunt);
-  if ('stix' in report) {
-    const parsed = parseStixInput(report.stix);
+  if ('structured' in report) {
+    const { parsed, method, note } = parseStructured(report.structured);
     await storeExtraction(hunt, {
-      title: parsed.title,
+      title: hunt.title_locked ? hunt.title : parsed.title,
       summary: parsed.summary,
       text: null,
-      method: 'stix',
-      note: `Read ${parsed.stats.objects} STIX object(s) from the URL`,
-      indicators: parsed.indicators.map((i) => ({ ...i, found_by: 'stix', enabled: true })),
-      hypotheses: parsed.hypotheses.map((h) => ({ ...h, found_by: 'stix' })),
+      method,
+      note: `${note} from the URL`,
+      indicators: parsed.indicators.map((i) => ({ ...i, found_by: method, enabled: true })),
+      hypotheses: parsed.hypotheses.map((h) => ({ ...h, found_by: method })),
     });
     enqueue({ huntId: id, kind: 'run' });
     return;
@@ -561,41 +614,109 @@ export function huntTerms(indicators: IndicatorRow[], hypotheses: HypothesisRow[
   return terms.slice(0, MAX_HUNT_TERMS);
 }
 
-async function searchLogs(needles: string[], lookbackDays: number): Promise<{ rows: LogRow[]; truncated: boolean }> {
+export interface SearchResult {
+  rows: LogRow[];
+  /** The newest MAX_ROWS lines matched, so older ones were not read. */
+  truncated: boolean;
+  /** The whole window was searched. */
+  complete: boolean;
+  /** The oldest log time the search covered. */
+  searchedFrom: Date;
+}
+
+/** The SQL condition and parameters that match one batch of terms (lower-case needles). */
+export function matchCondition(needles: string[], firstParam: number): { sql: string; params: unknown[] } {
+  return {
+    sql: `lower(raw_message) LIKE ANY($${firstParam}::text[])`,
+    params: [needles.map((n) => `%${escapeLike(n)}%`)],
+  };
+}
+
+/** Is this error a statement timeout? */
+const isTimeout = (err: unknown) => (err as { code?: string })?.code === '57014';
+
+/**
+ * Search raw_logs for the needles over the lookback window, in time slices,
+ * newest first. Each slice is one statement per batch of terms under
+ * HUNT_STATEMENT_TIMEOUT_MS, so a busy SIEM's window never has to fit in one
+ * statement: a slice that times out is split (down to MIN_SLICE_MS) and
+ * retried, and a fast one lets the next slice grow (up to MAX_SLICE_MS). The
+ * whole search stops at HUNT_MAX_RUNTIME_MS or after MAX_ROWS matching lines,
+ * and says how far back it got.
+ */
+export async function searchLogs(
+  needles: string[],
+  lookbackDays: number,
+  onProgress: (searchedMs: number, windowMs: number) => Promise<void> = async () => undefined,
+  limits: { statementTimeoutMs?: number; maxRuntimeMs?: number; initialSliceMs?: number } = {}
+): Promise<SearchResult> {
+  const statementTimeoutMs = limits.statementTimeoutMs ?? HUNT_STATEMENT_TIMEOUT_MS;
   const byId = new Map<number, LogRow>();
-  let truncated = false;
-  for (let i = 0; i < needles.length; i += MAX_TERMS_PER_QUERY) {
-    const patterns = needles.slice(i, i + MAX_TERMS_PER_QUERY).map((n) => `%${escapeLike(n)}%`);
-    const client = await pool.connect();
+  const windowEnd = Date.now();
+  const windowMs = lookbackDays * 86_400_000;
+  const windowStart = windowEnd - windowMs;
+  const deadline = Date.now() + (limits.maxRuntimeMs ?? HUNT_MAX_RUNTIME_MS);
+  const batches: string[][] = [];
+  for (let i = 0; i < needles.length; i += MAX_TERMS_PER_QUERY) batches.push(needles.slice(i, i + MAX_TERMS_PER_QUERY));
+
+  let sliceEnd = windowEnd;
+  let sliceMs = limits.initialSliceMs ?? INITIAL_SLICE_MS;
+  while (sliceEnd > windowStart) {
+    if (Date.now() > deadline) {
+      return { rows: [...byId.values()], truncated: false, complete: false, searchedFrom: new Date(sliceEnd) };
+    }
+    const sliceStart = Math.max(windowStart, sliceEnd - sliceMs);
+    const started = Date.now();
+    const found: LogRow[] = [];
     try {
-      await client.query('BEGIN');
-      await client.query("SELECT set_config('statement_timeout', $1, true)", [String(HUNT_STATEMENT_TIMEOUT_MS)]);
-      const r = await client.query(
-        `SELECT id, timestamp, source_ip, hostname, app_name, raw_message
-           FROM raw_logs
-          WHERE timestamp >= NOW() - make_interval(days => $1)
-            AND raw_message ILIKE ANY($2::text[])
-          ORDER BY timestamp DESC
-          LIMIT $3`,
-        [lookbackDays, patterns, MAX_ROWS_PER_QUERY]
-      );
-      await client.query('COMMIT');
-      if (r.rows.length >= MAX_ROWS_PER_QUERY) truncated = true;
-      for (const row of r.rows) byId.set(Number(row.id), row);
+      for (const batch of batches) {
+        const cond = matchCondition(batch, 4);
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query("SELECT set_config('statement_timeout', $1, true), set_config('jit', 'off', true)", [
+            String(statementTimeoutMs),
+          ]);
+          const r = await client.query(
+            `SELECT id, timestamp, source_ip, hostname, app_name, raw_message
+               FROM raw_logs
+              WHERE timestamp >= $1 AND timestamp < $2
+                AND ${cond.sql}
+              ORDER BY timestamp DESC
+              LIMIT $3`,
+            [new Date(sliceStart), new Date(sliceEnd), MAX_ROWS - byId.size, ...cond.params]
+          );
+          await client.query('COMMIT');
+          found.push(...r.rows);
+        } catch (err) {
+          await client.query('ROLLBACK').catch(() => undefined);
+          throw err;
+        } finally {
+          client.release();
+        }
+      }
     } catch (err) {
-      await client.query('ROLLBACK').catch(() => undefined);
-      if ((err as { code?: string }).code === '57014') {
+      if (!isTimeout(err)) throw err;
+      if (sliceMs <= MIN_SLICE_MS) {
         throw new HuntError(
           504,
-          `The log search ran past ${Math.round(HUNT_STATEMENT_TIMEOUT_MS / 1000)} s. Shorten the lookback window or switch off noisy terms.`
+          `Searching even ${Math.round(MIN_SLICE_MS / 60_000)} minutes of logs took longer than ` +
+            `${Math.round(statementTimeoutMs / 1000)} s. Switch off short or common search terms, ` +
+            'or raise HUNT_STATEMENT_TIMEOUT_MS.'
         );
       }
-      throw err;
-    } finally {
-      client.release();
+      sliceMs = Math.max(MIN_SLICE_MS, Math.floor(sliceMs / 4));
+      continue;
     }
+    for (const row of found) byId.set(Number(row.id), row);
+    if (byId.size >= MAX_ROWS) {
+      return { rows: [...byId.values()], truncated: true, complete: false, searchedFrom: new Date(sliceStart) };
+    }
+    sliceEnd = sliceStart;
+    await onProgress(windowEnd - sliceEnd, windowMs);
+    if (Date.now() - started < statementTimeoutMs / 4) sliceMs = Math.min(MAX_SLICE_MS, sliceMs * 2);
   }
-  return { rows: [...byId.values()], truncated };
+  return { rows: [...byId.values()], truncated: false, complete: true, searchedFrom: new Date(windowStart) };
 }
 
 interface TermHits {
@@ -632,18 +753,45 @@ export function matchRows(terms: Term[], rows: LogRow[]): { hits: Map<Term, Term
   return { hits, logsMatched };
 }
 
+/** "Searched 6 of 30 days" for a run in progress. */
+export function progressText(doneMs: number, totalMs: number): string {
+  const days = (ms: number) => {
+    const d = ms / 86_400_000;
+    return d >= 10 ? Math.round(d).toString() : (Math.round(d * 10) / 10).toString();
+  };
+  return `Searched ${days(doneMs)} of ${days(totalMs)} days`;
+}
+
+/** Why a finished run covered only part of its window. */
+function coverageText(searchedFrom: Date | null, lookbackDays: number, truncated: boolean): string {
+  const covered = searchedFrom ? Math.max(0, Date.now() - searchedFrom.getTime()) : 0;
+  const part = `${progressText(covered, lookbackDays * 86_400_000).replace('Searched', 'Searched the newest')}`;
+  return truncated
+    ? `${part}: over ${MAX_ROWS.toLocaleString('en-US')} log lines matched, so older logs were not read. Switch off noisy terms and run again.`
+    : `${part}: the run hit its ${Math.round(HUNT_MAX_RUNTIME_MS / 60_000)}-minute limit (HUNT_MAX_RUNTIME_MS). Shorten the window or run again.`;
+}
+
 export async function runHunt(id: number): Promise<void> {
   const hunt = await getHuntRow(id);
   if (!hunt) return;
-  await query(`UPDATE threat_hunts SET status = 'running', error = NULL, updated_at = NOW() WHERE id = $1`, [id]);
+  await query(
+    `UPDATE threat_hunts SET status = 'running', error = NULL, progress = 'Starting the log search', updated_at = NOW() WHERE id = $1`,
+    [id]
+  );
   const [indicators, hypotheses] = await Promise.all([getIndicators(id), getHypotheses(id)]);
   const terms = huntTerms(indicators, hypotheses);
 
   let rows: LogRow[] = [];
   let truncated = false;
+  let complete = true;
+  let searchedFrom: Date | null = null;
   if (terms.length) {
     const needles = [...new Set(terms.map((t) => t.needle))];
-    ({ rows, truncated } = await searchLogs(needles, hunt.lookback_days));
+    ({ rows, truncated, complete, searchedFrom } = await searchLogs(needles, hunt.lookback_days, async (done, total) => {
+      await query(`UPDATE threat_hunts SET progress = $2 WHERE id = $1`, [id, progressText(done, total)]).catch(
+        () => undefined
+      );
+    }));
   }
   const { hits, logsMatched } = matchRows(terms, rows);
 
@@ -715,9 +863,17 @@ export async function runHunt(id: number): Promise<void> {
     await client.query(
       `UPDATE threat_hunts
           SET status = 'completed', error = NULL, match_count = $2, logs_matched = $3, results_truncated = $4,
-              last_run_at = NOW(), updated_at = NOW()
+              search_complete = $5, searched_from = $6, progress = $7, last_run_at = NOW(), updated_at = NOW()
         WHERE id = $1`,
-      [id, matchCount, logsMatched.size, truncated]
+      [
+        id,
+        matchCount,
+        logsMatched.size,
+        truncated,
+        complete,
+        searchedFrom,
+        complete ? null : coverageText(searchedFrom, hunt.lookback_days, truncated),
+      ]
     );
     await client.query('COMMIT');
   } catch (err) {
@@ -785,7 +941,7 @@ async function raiseHuntAlert(
 
 const HUNT_COLUMNS = `h.id, h.stix_uuid, h.title, h.title_locked, h.origin, h.source_url, h.source_id, s.name AS source_name, h.status,
   h.summary, h.extraction_method, h.extraction_note, h.lookback_days, h.alert_on_match, h.use_ai, h.error,
-  h.match_count, h.logs_matched, h.results_truncated, h.last_run_at, h.last_alert_id, h.created_by,
+  h.match_count, h.logs_matched, h.results_truncated, h.search_complete, h.searched_from, h.progress, h.last_run_at, h.last_alert_id, h.created_by,
   h.created_at, h.updated_at`;
 
 export async function getHuntRow(id: number): Promise<HuntRow | null> {

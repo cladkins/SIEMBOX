@@ -324,6 +324,16 @@ send_log() {
     echo "$syslog_msg" | nc -u -w1 ${siem_host} ${siem_port} 2>/dev/null || true
 }
 
+# True when a response body is the backend's "no such route" 404
+# ({"message":"Route ... not found"}), as an older backend answers the header
+# routes. An unknown key's 404 says "Invalid API key" and is not one.
+is_unknown_route() {
+    case "$1" in
+        *'"message":"Route '*' not found"'*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # Fetch configuration from SIEMBox
 fetch_config() {
     local api_key="$1"
@@ -332,7 +342,13 @@ fetch_config() {
 
     local config_file="/tmp/siembox-config-$$.json"
 
-    local http_code=$(curl -s -w "%{http_code}" -o "$config_file" "${SIEMBOX_API_URL}/shippers/config/${api_key}" 2>/dev/null)
+    # The key goes in a header, not the URL, so it stays out of access logs.
+    local http_code=$(curl -s -w "%{http_code}" -o "$config_file" -H "X-Shipper-Key: ${api_key}" \
+        "${SIEMBOX_API_URL}/shippers/agent/config" 2>/dev/null)
+    if [ "$http_code" = "404" ] && is_unknown_route "$(cat "$config_file" 2>/dev/null)"; then
+        # A backend from before the header route: it takes the key in the path.
+        http_code=$(curl -s -w "%{http_code}" -o "$config_file" "${SIEMBOX_API_URL}/shippers/config/${api_key}" 2>/dev/null)
+    fi
 
     if [ "$http_code" = "200" ]; then
         cat "$config_file"
@@ -1131,7 +1147,12 @@ poll_and_run_scans() {
     command -v jq >/dev/null 2>&1 || return 0
 
     local resp
-    resp=$(curl -s --max-time 20 "${SIEMBOX_API_URL}/shippers/scan-jobs/${SHIPPER_API_KEY}" 2>/dev/null) || true
+    resp=$(curl -s --max-time 20 -H "X-Shipper-Key: ${SHIPPER_API_KEY}" \
+        "${SIEMBOX_API_URL}/shippers/agent/scan-jobs" 2>/dev/null) || true
+    if is_unknown_route "$resp"; then
+        # A backend from before the header route: it takes the key in the path.
+        resp=$(curl -s --max-time 20 "${SIEMBOX_API_URL}/shippers/scan-jobs/${SHIPPER_API_KEY}" 2>/dev/null) || true
+    fi
     [ -z "$resp" ] && return 0
 
     local count

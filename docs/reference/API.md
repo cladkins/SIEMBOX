@@ -3157,7 +3157,7 @@ Without a public URL the messages are unchanged: the `ALR-####` reference, no li
 Two kinds of route live under `/api/shippers`:
 
 - **Management routes** (the UI and API users) require a login (`Authorization: Bearer <token>`); without one the API answers `401`, and a role that may not use a route gets `403`. (Earlier versions answered these without a login; scripts that relied on that must now send a token.)
-- **Shipper-facing routes** (`/register`, `/containers`, `/config/:api_key`, `/scan-jobs/:api_key`, `/scan-results`, `/discovery-results`, `/logs`) take no login. The shipper authenticates with its syslog `api_key` (or, for `/logs`, the HTTP push key), so these work exactly as before.
+- **Shipper-facing routes** (`/register`, `/containers`, `/agent/config`, `/agent/scan-jobs`, the deprecated `/config/:api_key` and `/scan-jobs/:api_key`, `/scan-results`, `/discovery-results`, `/logs`) take no login. The shipper authenticates with its syslog `api_key` (or, for `/logs`, the HTTP push key), so these work exactly as before.
 
 | Method | Path | Access |
 |---|---|---|
@@ -3915,11 +3915,19 @@ Revoke the HTTP log-push key for a shipper. `POST /api/shippers/logs` immediatel
 
 ---
 
-### GET /api/shippers/config/:api_key
+### GET /api/shippers/agent/config
 
 **PUBLIC ENDPOINT** - Get shipper configuration.
 
-**Authentication:** None (uses API key in URL)
+**Authentication:** None. The shipper sends its syslog `api_key` in the `X-Shipper-Key` header, so the key stays out of access logs:
+
+```bash
+curl -H "X-Shipper-Key: YOUR_API_KEY" "http://localhost:8421/api/shippers/agent/config"
+```
+
+`401` without the header, `404` for an unknown key.
+
+**Deprecated form:** `GET /api/shippers/config/:api_key` (the key in the URL path) still answers the same, for shippers from before the header route. Update those shippers: a key in a URL is written to every access log on the way. The path form is to be removed in a later release.
 
 **Response (200):**
 ```json
@@ -4037,9 +4045,9 @@ If the database can't be reached (including a connection pool that stays exhaust
 
 ---
 
-### GET /api/shippers/scan-jobs/:api_key
+### GET /api/shippers/agent/scan-jobs
 
-**PUBLIC ENDPOINT** (shipper-authenticated by the syslog `api_key` in the path, like `/config/:api_key`). A shipper polls this to pick up scans dispatched to it. The GET itself **claims** the shipper's queued jobs atomically (`queued → running`, stamping `claimed_at`), so each job is handed out exactly once even under concurrent polls. Lets a scan run from a shipper out on the LAN, which the backend's own nmap/nuclei/discovery can't reach from inside the Docker network (see migrations `032`/`033`). Returns asset (nmap), vulnerability (nuclei), and log-discovery jobs, each tagged with `kind`.
+**PUBLIC ENDPOINT** (shipper-authenticated by the syslog `api_key` in the `X-Shipper-Key` header, like `/agent/config`; `401` without it, `404` for an unknown key. The deprecated `GET /api/shippers/scan-jobs/:api_key` takes the key in the path and answers the same). A shipper polls this to pick up scans dispatched to it. The GET itself **claims** the shipper's queued jobs atomically (`queued → running`, stamping `claimed_at`), so each job is handed out exactly once even under concurrent polls. Lets a scan run from a shipper out on the LAN, which the backend's own nmap/nuclei/discovery can't reach from inside the Docker network (see migrations `032`/`033`). Returns asset (nmap), vulnerability (nuclei), and log-discovery jobs, each tagged with `kind`.
 
 **Response (200):**
 ```json
@@ -5553,7 +5561,7 @@ Trigger a new vulnerability scan using Nuclei.
 | `templates` | string/array | No | Template selection: `all`, `cves`, `default`, or array of specific templates |
 | `severity` | array | No | Filter by severity: `critical`, `high`, `medium`, `low`, `info` |
 | `description` | string | No | Description for this scan |
-| `timeout` | integer | No | Scan timeout in milliseconds (default: 30 minutes) |
+| `timeout` | integer | No | Scan timeout in milliseconds (default: 30 minutes; held to 1 minute through 1 hour) |
 | `rateLimit` | integer | No | Maximum requests per second |
 | `assignedShipperId` | integer | No | Run the scan from this log shipper (queued until it picks it up; expires unrun after the [expiry window](#get-apisettingsshipper-jobs)) |
 | `allow_public_targets` | boolean | No | `true` confirms a target in public address space; without it such a target gets `400` ([Public scan targets](#public-scan-targets)) |

@@ -89,3 +89,17 @@ test('matchRows counts each log line per term, with whole-token matching', () =>
   assert.equal(hits.get(terms[1])!.count, 1);
   assert.equal(hits.get(terms[2])!.count, 1);
 });
+
+test('progressText reports days searched', async () => {
+  const { progressText } = await import('./huntService');
+  assert.equal(progressText(6 * 86_400_000, 30 * 86_400_000), 'Searched 6 of 30 days');
+  assert.equal(progressText(0.25 * 86_400_000, 1 * 86_400_000), 'Searched 0.3 of 1 days');
+  assert.equal(progressText(14.4 * 86_400_000, 30 * 86_400_000), 'Searched 14 of 30 days');
+});
+
+test('matchCondition lower-cases once and escapes LIKE wildcards', async () => {
+  const { matchCondition } = await import('./huntService');
+  const c = matchCondition(['evil.com', '100%_x'], 4);
+  assert.equal(c.sql, 'lower(raw_message) LIKE ANY($4::text[])');
+  assert.deepEqual(c.params, [['%evil.com%', '%100\\%\\_x%']]);
+});

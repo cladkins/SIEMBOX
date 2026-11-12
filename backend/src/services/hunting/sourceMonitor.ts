@@ -8,7 +8,13 @@
  *         feed doesn't start a hunt for its whole archive.
  *   page  a single page (an advisory, an IOC list): a new hunt whenever the
  *         set of indicators on it changes.
- *   auto  decide from what the URL returns (a STIX bundle counts as a page).
+ *   misp  a MISP feed (the directory with manifest.json and one <uuid>.json
+ *         per event, like CIRCL's OSINT feed): each new event becomes a hunt
+ *         that reads the event's attributes (misp.ts). The first check hunts
+ *         the newest FIRST_CHECK_ITEMS events and marks the rest seen.
+ *   auto  decide from what the URL returns: a manifest.json URL, a MISP
+ *         manifest or a directory listing that links to one is a MISP feed;
+ *         a STIX bundle counts as a page.
  *
  * Fetching uses fetchSource.ts: public HTTPS hosts only.
  */
@@ -18,7 +24,8 @@ import { logger } from '../../utils/logger';
 import { ErrorLogService } from '../errors/errorLogService';
 import { getTechnique } from '../attack/attackData';
 import { extractIocs, siteDomain } from './iocExtract';
-import { documentKind, fetchDocument, htmlToText, parseFeed, urlRejection } from './fetchSource';
+import { documentKind, fetchDocument, htmlToText, LARGE_FETCH_MAX_BYTES, parseFeed, urlRejection } from './fetchSource';
+import { isMispManifest, looksLikeMispFeedIndex, mispFeedUrls, parseMispManifest } from './misp';
 import { clampLookback, createHunt, HuntError } from './huntService';
 
 export const FIRST_CHECK_ITEMS = 3;
@@ -27,7 +34,7 @@ const MIN_INTERVAL = 30;
 const MAX_INTERVAL = 10_080;
 const DEFAULT_INTERVAL = 360;
 
-export type SourceKind = 'auto' | 'feed' | 'page';
+export type SourceKind = 'auto' | 'feed' | 'page' | 'misp';
 
 export interface HuntSource {
   id: number;
@@ -60,8 +67,8 @@ function clampInterval(raw: unknown): number {
 
 function cleanKind(raw: unknown): SourceKind {
   if (raw === undefined || raw === null || raw === '') return 'auto';
-  if (raw === 'auto' || raw === 'feed' || raw === 'page') return raw;
-  throw new HuntError(400, 'kind must be auto, feed or page');
+  if (raw === 'auto' || raw === 'feed' || raw === 'page' || raw === 'misp') return raw;
+  throw new HuntError(400, 'kind must be auto, feed, page or misp');
 }
 
 export async function listSources(): Promise<HuntSource[]> {
@@ -161,7 +168,7 @@ function textOfHtml(html: string | null): string | null {
 
 export interface CheckResult {
   ok: boolean;
-  kind?: 'feed' | 'page';
+  kind?: 'feed' | 'page' | 'misp';
   hunts_created: number;
   error?: string;
 }
@@ -172,10 +179,6 @@ export async function checkSource(id: number): Promise<CheckResult> {
   if (!source) return { ok: false, hunts_created: 0, error: 'Source not found' };
   let created = 0;
   try {
-    const doc = await fetchDocument(source.url);
-    const detected = documentKind(doc);
-    const kind: 'feed' | 'page' =
-      source.kind === 'feed' || (source.kind === 'auto' && detected === 'feed') ? 'feed' : 'page';
     const huntDefaults = {
       lookbackDays: source.lookback_days,
       alertOnMatch: source.alert_on_match,
@@ -183,6 +186,27 @@ export async function checkSource(id: number): Promise<CheckResult> {
       sourceId: source.id,
       createdBy: source.created_by,
     };
+    const counted = { created: 0 };
+    const misp = async () => {
+      await checkMispFeed(source, huntDefaults, counted);
+      created = counted.created;
+      await recordCheck(id, 'ok', null, source.last_content_hash, created);
+      return { ok: true, kind: 'misp' as const, hunts_created: created };
+    };
+    if (source.kind === 'misp' || (source.kind === 'auto' && /\/manifest\.json$/i.test(new URL(source.url).pathname))) {
+      return await misp();
+    }
+
+    const doc = await fetchDocument(source.url);
+    const detected = documentKind(doc);
+    if (
+      source.kind === 'auto' &&
+      (detected === 'misp-manifest' || (detected === 'html' && looksLikeMispFeedIndex(doc.body)))
+    ) {
+      return await misp();
+    }
+    const kind: 'feed' | 'page' =
+      source.kind === 'feed' || (source.kind === 'auto' && detected === 'feed') ? 'feed' : 'page';
 
     if (kind === 'feed') {
       if (detected !== 'feed') throw new HuntError(422, 'The URL did not return an RSS or Atom feed.');
@@ -221,13 +245,10 @@ export async function checkSource(id: number): Promise<CheckResult> {
           [id, item.key, itemUrl, item.title, item.published, huntId]
         );
       }
-      for (const item of skipped) {
-        await query(
-          `INSERT INTO hunt_source_items (source_id, item_key, item_url, title, published_at)
-           VALUES ($1, $2, $3, $4, $5) ON CONFLICT (source_id, item_key) DO NOTHING`,
-          [id, item.key, item.url, item.title, item.published]
-        );
-      }
+      await markSeen(
+        id,
+        skipped.map((i) => ({ key: i.key, url: i.url, title: i.title, published: i.published }))
+      );
     } else {
       // A page: a new hunt when its indicators change.
       let fingerprint: string;
@@ -267,6 +288,86 @@ export async function checkSource(id: number): Promise<CheckResult> {
     ErrorLogService.logBackgroundError('hunt-source', `${source.name}: ${message}`, { dedupeKey: `hunt-source-${id}` });
     logger.warn(`[HuntSources] ${source.name} check failed: ${message}`);
     return { ok: false, hunts_created: created, error: message };
+  }
+}
+
+/** Record items as seen without a hunt, in bulk (a MISP feed's first check can skip thousands). */
+async function markSeen(
+  sourceId: number,
+  items: Array<{ key: string; url: string | null; title: string | null; published: Date | null }>
+): Promise<void> {
+  for (let i = 0; i < items.length; i += 1000) {
+    const chunk = items.slice(i, i + 1000);
+    await query(
+      `INSERT INTO hunt_source_items (source_id, item_key, item_url, title, published_at)
+       SELECT $1, k, u, t, p FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[]) AS x(k, u, t, p)
+       ON CONFLICT (source_id, item_key) DO NOTHING`,
+      [
+        sourceId,
+        chunk.map((c) => c.key),
+        chunk.map((c) => c.url),
+        chunk.map((c) => c.title),
+        chunk.map((c) => c.published),
+      ]
+    );
+  }
+}
+
+/**
+ * A MISP feed: read its manifest.json and start a hunt for each event not seen
+ * before (the newest FIRST_CHECK_ITEMS on the first check, which marks the
+ * rest seen; then up to MAX_NEW_ITEMS_PER_CHECK a check, newest first). Each
+ * hunt reads the event file <uuid>.json (misp.ts parseMispEvent).
+ */
+async function checkMispFeed(
+  source: HuntSource,
+  huntDefaults: { lookbackDays: number; alertOnMatch: boolean; useAi: boolean; sourceId: number; createdBy: number | null },
+  counted: { created: number }
+): Promise<void> {
+  const { base, manifest } = mispFeedUrls(source.url);
+  const doc = await fetchDocument(manifest, undefined, { maxBytes: LARGE_FETCH_MAX_BYTES });
+  let json: unknown;
+  try {
+    json = JSON.parse(doc.body);
+  } catch {
+    throw new HuntError(422, `${manifest} is not JSON, so this is not a MISP feed.`);
+  }
+  if (!isMispManifest(json)) throw new HuntError(422, `${manifest} is not a MISP feed manifest.`);
+  const entries = parseMispManifest(json);
+  const keys = entries.map((e) => e.uuid);
+  const seenRows = keys.length
+    ? await query(`SELECT item_key FROM hunt_source_items WHERE source_id = $1 AND item_key = ANY($2::text[])`, [
+        source.id,
+        keys,
+      ])
+    : { rows: [] };
+  const seen = new Set(seenRows.rows.map((r: { item_key: string }) => r.item_key));
+  const fresh = entries.filter((e) => !seen.has(e.uuid));
+  const firstCheck = !source.last_checked_at;
+  const toHunt = fresh.slice(0, firstCheck ? FIRST_CHECK_ITEMS : MAX_NEW_ITEMS_PER_CHECK);
+  const published = (e: (typeof entries)[number]) =>
+    e.timestamp > 0 ? new Date(e.timestamp * 1000) : e.date ? new Date(e.date) : null;
+
+  for (const e of toHunt) {
+    const eventUrl = `${base}${e.uuid}.json`;
+    const hunt = await createHunt({
+      origin: 'source',
+      url: eventUrl,
+      title: e.info || `MISP event ${e.uuid}`,
+      ...huntDefaults,
+    });
+    counted.created++;
+    await query(
+      `INSERT INTO hunt_source_items (source_id, item_key, item_url, title, published_at, hunt_id)
+       VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (source_id, item_key) DO NOTHING`,
+      [source.id, e.uuid, eventUrl, e.info, published(e), hunt.id]
+    );
+  }
+  if (firstCheck) {
+    await markSeen(
+      source.id,
+      fresh.slice(FIRST_CHECK_ITEMS).map((e) => ({ key: e.uuid, url: `${base}${e.uuid}.json`, title: e.info, published: published(e) }))
+    );
   }
 }
 

@@ -3,7 +3,7 @@
     <div class="page-header">
       <h2>Threat Hunting</h2>
       <p class="subtitle">
-        Give SIEMBox a threat report (a URL, pasted text or a STIX bundle) or a feed to watch. It extracts the
+        Give SIEMBox a threat report (a URL, pasted text, a STIX bundle or a MISP event) or a feed to watch. It extracts the
         indicators and hunt hypotheses, searches your logs for them, and publishes each hunt as STIX 2.1 over TAXII.
       </p>
     </div>
@@ -41,7 +41,11 @@
             </template>
           </el-table-column>
           <el-table-column label="Status" width="120">
-            <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag></template>
+            <template #default="{ row }">
+              <el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag>
+              <div v-if="row.status === 'running' && row.progress" class="ctx">{{ row.progress }}</div>
+              <div v-else-if="row.status === 'completed' && !row.search_complete" class="ctx">partial window</div>
+            </template>
           </el-table-column>
           <el-table-column prop="indicator_count" label="IOCs" width="70" align="right" />
           <el-table-column prop="hypothesis_count" label="Hypotheses" width="115" align="right" />
@@ -75,7 +79,8 @@
       <el-tab-pane label="Monitored sources" name="sources">
         <p class="muted">
           SIEMBox checks each source on its interval. A feed (RSS or Atom) creates a hunt for every new article; the
-          first check takes the newest 3. A page creates a new hunt when its indicators change.
+          first check takes the newest 3. A MISP feed (a directory with manifest.json, such as CIRCL's OSINT feed) creates a hunt
+          for every new event, the same way. A page creates a new hunt when its indicators change.
         </p>
         <div class="toolbar">
           <el-button v-if="canAnalyst" type="primary" @click="openSource()"><el-icon><Plus /></el-icon> Add source</el-button>
@@ -171,7 +176,7 @@
           <el-radio-group v-model="newHunt.mode">
             <el-radio-button value="url">Report URL</el-radio-button>
             <el-radio-button value="text">Paste text</el-radio-button>
-            <el-radio-button value="stix">STIX bundle</el-radio-button>
+            <el-radio-button value="stix">STIX or MISP file</el-radio-button>
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="newHunt.mode === 'url'" label="URL of the report, advisory or blog post (https)">
@@ -180,7 +185,7 @@
         <el-form-item v-else-if="newHunt.mode === 'text'" label="Report text">
           <el-input v-model="newHunt.text" type="textarea" :rows="10" placeholder="Paste the report, an IOC list, an email..." />
         </el-form-item>
-        <el-form-item v-else label="STIX 2.x bundle (.json)">
+        <el-form-item v-else label="STIX 2.x bundle or MISP event (.json)">
           <input type="file" accept=".json,application/json,application/stix+json" @change="readStixFile" />
           <el-text v-if="newHunt.stixName" size="small" type="info">{{ newHunt.stixName }}</el-text>
         </el-form-item>
@@ -217,7 +222,7 @@
     <!-- Source editor -->
     <el-dialog v-model="sourceForm.visible" :title="sourceForm.id ? 'Edit source' : 'Add source'" width="560px">
       <el-form label-position="top">
-        <el-form-item label="URL (https): an RSS/Atom feed or a page">
+        <el-form-item label="URL (https): an RSS/Atom feed, a MISP feed directory or a page">
           <el-input v-model="sourceForm.url" placeholder="https://vendor.example/blog/feed/" />
         </el-form-item>
         <el-form-item label="Name">
@@ -230,6 +235,7 @@
                 <el-option label="Detect" value="auto" />
                 <el-option label="Feed (RSS/Atom)" value="feed" />
                 <el-option label="Page" value="page" />
+                <el-option label="MISP feed" value="misp" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -279,10 +285,19 @@
         <el-alert v-if="detail.error" type="error" :title="detail.error" :closable="false" show-icon class="mb" />
         <el-alert v-if="detail.extraction_note" type="info" :title="detail.extraction_note" :closable="false" class="mb" />
         <el-alert
-          v-if="detail.results_truncated"
-          type="warning"
-          title="Over 20,000 log lines matched; the counts cover the newest of them. Switch off noisy terms or shorten the window."
+          v-if="busy && detail.progress"
+          type="info"
+          :title="detail.progress"
           :closable="false"
+          show-icon
+          class="mb"
+        />
+        <el-alert
+          v-else-if="detail.status === 'completed' && !detail.search_complete && detail.progress"
+          type="warning"
+          :title="detail.progress"
+          :closable="false"
+          show-icon
           class="mb"
         />
         <p v-if="detail.summary">{{ detail.summary }}</p>
@@ -468,7 +483,7 @@ function statusType(s: string): 'success' | 'warning' | 'danger' | 'info' | 'pri
 }
 
 function originLabel(h: any): string {
-  return ({ url: 'From a URL', text: 'From pasted text', stix: 'Imported STIX', source: 'From a monitored source' } as Record<string, string>)[h.origin] || h.origin;
+  return ({ url: 'From a URL', text: 'From pasted text', stix: 'Imported STIX', misp: 'Imported MISP event', source: 'From a monitored source' } as Record<string, string>)[h.origin] || h.origin;
 }
 
 function intervalLabel(min: number): string {

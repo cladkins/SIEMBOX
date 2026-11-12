@@ -7082,7 +7082,7 @@ Reads are open to every role. Hunt and source writes need **analyst**,
 | GET | `/api/hunts/summary` | any | Counts: hunts, hunts with matches, in progress, failed, active indicators, enabled sources, queue depth |
 | GET | `/api/hunts` | any | List. Query: `limit` (1-200, default 50), `offset`, `status`, `source_id`, `search` (title or URL). Returns `{ hunts, total }` |
 | POST | `/api/hunts` | analyst+ | Start a hunt from `url` (https, public host) or `text` (20 B to 1 MB). Optional `title`, `lookback_days` (1-90, default 14), `alert_on_match` (default false), `use_ai` (default true). 202 with the hunt (`status: pending`) |
-| POST | `/api/hunts/import` | analyst+ | Start a hunt from a STIX 2.x bundle: the bundle as the body, or `{ bundle, lookback_days, alert_on_match, run }`. 201 with the hunt (`status: ready`, then it runs unless `run: false`). 400 when nothing in it can be hunted |
+| POST | `/api/hunts/import` | analyst+ | Start a hunt from a STIX 2.x bundle or a MISP event: the document as the body, or `{ bundle, lookback_days, alert_on_match, run }`. 201 with the hunt (`origin` `stix` or `misp`, `status: ready`, then it runs unless `run: false`). 400 when nothing in it can be hunted |
 | GET | `/api/hunts/:id` | any | The hunt with `indicators`, `hypotheses` and up to 500 `matches` (sample log lines) |
 | GET | `/api/hunts/:id/stix` | any | The hunt as a STIX 2.1 bundle (`application/stix+json;version=2.1`, attachment) |
 | PUT | `/api/hunts/:id` | analyst+ | Change `title`, `lookback_days`, `alert_on_match` |
@@ -7095,18 +7095,22 @@ Reads are open to every role. Hunt and source writes need **analyst**,
 | PUT | `/api/hunts/:id/hypotheses/:hypothesisId` | analyst+ | Change any of `title`, `description`, `search_terms`, `attack_techniques`, `enabled` |
 | DELETE | `/api/hunts/:id/hypotheses/:hypothesisId` | analyst+ | Delete a hypothesis |
 | GET | `/api/hunts/sources` | any | Monitored sources |
-| POST | `/api/hunts/sources` | analyst+ | Add `{ url, name?, kind? (auto \| feed \| page), check_interval_minutes? (30-10080, default 360), lookback_days?, alert_on_match? (default true), use_ai? (default true), enabled? }`. 409 for a URL already added |
+| POST | `/api/hunts/sources` | analyst+ | Add `{ url, name?, kind? (auto \| feed \| page \| misp), check_interval_minutes? (30-10080, default 360), lookback_days?, alert_on_match? (default true), use_ai? (default true), enabled? }`. 409 for a URL already added |
 | PUT | `/api/hunts/sources/:id` | analyst+ | Change any of the fields above |
 | DELETE | `/api/hunts/sources/:id` | analyst+ | Stop watching; the source's hunts are kept |
-| POST | `/api/hunts/sources/:id/check` | analyst+ | Check now. Returns `{ ok, kind, hunts_created, error? }` |
+| POST | `/api/hunts/sources/:id/check` | analyst+ | Check now. Returns `{ ok, kind (feed \| page \| misp), hunts_created, error? }` |
 | GET | `/api/hunts/taxii-tokens` | admin | TAXII client tokens (never the token itself) and the collection id |
 | POST | `/api/hunts/taxii-tokens` | admin | Create `{ name }`. 201 with the token in `token`, shown this once. Audited |
 | DELETE | `/api/hunts/taxii-tokens/:id` | admin | Revoke. Audited |
 
 Hunt `status`: `pending`, `extracting`, `ready`, `running`, `completed`,
-`failed` (`error` says why). `origin`: `url`, `text`, `stix`, `source`.
-`extraction_method`: `regex`, `ai`, `stix`; `extraction_note` explains a
-missing or failed AI step.
+`failed` (`error` says why). `origin`: `url`, `text`, `stix`, `misp`, `source`.
+`extraction_method`: `regex`, `ai`, `stix`, `misp`; `extraction_note` explains a
+missing or failed AI step, or how a STIX or MISP document was read.
+`progress` says how far a running search has got; after a run,
+`search_complete` is false when it stopped early (time budget or 20,000
+matching lines), `progress` says how much of the window it covered, and
+`searched_from` is the oldest log time it searched.
 
 A hunt with `alert_on_match` raises an alert with `source: "threat-hunt"` and
 `matched_data` `{ hunt_id, hunt_title, source_url, logs_matched,

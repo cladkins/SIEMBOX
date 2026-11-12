@@ -3,8 +3,8 @@
 Threat Hunting turns a threat report into a hunt through your logs.
 
 1. You give SIEMBox a report: a URL (a vendor blog post, an advisory, a news
-   article), pasted text, or a STIX 2.x bundle. Or you add a source for
-   SIEMBox to watch: an RSS/Atom feed or a page.
+   article), pasted text, a STIX 2.x bundle or a MISP event. Or you add a
+   source for SIEMBox to watch: an RSS/Atom feed, a MISP feed or a page.
 2. SIEMBox extracts the indicators of compromise (IPs, domains, URLs, email
    addresses, MD5/SHA-1/SHA-256 hashes, CVEs) and the ATT&CK techniques the
    report names. With an AI model configured (Settings → AI, the AI Builder
@@ -24,10 +24,12 @@ Admins create TAXII client tokens.
 **New hunt** takes one of:
 
 - **Report URL**: `https://` only, on a public host (see [Fetching](#fetching)).
-  A URL that returns a STIX bundle is imported; a URL that returns a feed is
-  refused with a hint to add it as a source.
+  A URL that returns a STIX bundle or a MISP event (`<uuid>.json`) is read as
+  one; a URL that returns an RSS/Atom feed or a MISP feed directory is refused
+  with a hint to add it as a source.
 - **Paste text**: 20 characters to 1 MB. An IOC list, an email, a report.
-- **STIX bundle**: a `.json` file. See [Importing STIX](#importing-stix).
+- **STIX or MISP file**: a `.json` STIX bundle or MISP event. See
+  [Importing STIX](#importing-stix) and [MISP](#misp).
 
 Options: the lookback window, **Raise an alert on a match**, and **Hypotheses
 with AI**.
@@ -77,10 +79,25 @@ In the hunt's detail view:
 
 ## How the search works
 
-SIEMBox scans `raw_logs` in the lookback window for lines that contain any term
-(`ILIKE ANY`, 100 terms per query, newest 20,000 lines per query), under a
-statement timeout (`HUNT_STATEMENT_TIMEOUT_MS`, default 120 s). Each candidate
-line is then checked so an indicator only matches as a whole token:
+SIEMBox searches `raw_logs` for lines that contain any term
+(`lower(raw_message) LIKE ANY`, 100 terms per statement). It searches the
+lookback window in time slices, newest first, so a busy SIEM's 30 days never
+has to fit in one statement:
+
+- each slice is one statement per 100 terms, under `HUNT_STATEMENT_TIMEOUT_MS`
+  (default 120 s);
+- the first slice is 6 hours; a fast slice doubles the next one (up to 7 days),
+  and a slice that times out is split into quarters and retried, down to 15
+  minutes;
+- the whole run stops at `HUNT_MAX_RUNTIME_MS` (default 30 minutes) or after
+  20,000 matching lines. It then keeps what it found and says how far back it
+  got ("Searched the newest 12 of 30 days"), so the counts cover part of the
+  window.
+
+While a hunt runs, its progress shows on the hunt and in the list. On 3
+million log lines over 30 days, a 100-term hunt took about 16 s in testing.
+
+Each candidate line is then checked so an indicator only matches as a whole token:
 `1.2.3.4` does not match `11.2.3.45`, `evil.com` matches `sub.evil.com` but not
 `notevil.com`, a hash does not match inside a longer hex string.
 
@@ -97,7 +114,7 @@ second alert.
 
 ## Monitored sources
 
-**Monitored sources → Add source** takes a URL, a kind (Detect, Feed or Page),
+**Monitored sources → Add source** takes a URL, a kind (Detect, Feed, Page or MISP feed),
 a check interval (30 minutes to 7 days, default 6 hours) and the defaults for
 the hunts it creates (lookback, alert on match, AI).
 
@@ -105,6 +122,14 @@ the hunts it creates (lookback, alert on match, AI).
   article it links to, named after the item. The first check hunts only the
   newest 3 items; later checks take up to 10 new items each. When the article
   can't be fetched, the hunt uses the item's own content.
+- **MISP feed**: the directory of a MISP feed (with `manifest.json` and one
+  `<uuid>.json` per event), such as CIRCL's OSINT feed at
+  `https://www.circl.lu/doc/misp/feed-osint/`. Each check reads
+  `manifest.json`; each new event becomes a hunt named after the event. The
+  first check hunts only the newest 3 events and marks the rest seen; later
+  checks take up to 10 new events each. Detect recognises a MISP feed from a
+  `manifest.json` URL, the manifest itself, or a directory listing that links
+  to it. See [MISP](#misp).
 - **Page**: SIEMBox extracts the page's indicators on each check and starts a
   new hunt when the set of indicators changes. A page that returns a STIX
   bundle starts a new hunt when the bundle changes.
@@ -143,6 +168,30 @@ TAXII envelope or an array of objects (up to 10,000). SIEMBox reads:
   terms), and the ATT&CK IDs of `attack-pattern` objects;
 - the first `report` (else `grouping`, `campaign`, `intrusion-set`, `malware`
   or `threat-actor`) for the title, summary and source URL.
+
+## MISP
+
+A MISP event (from a MISP feed source, a `<uuid>.json` URL, or an uploaded
+file) is read as MISP data, not as text:
+
+- **Indicators** come from the attributes MISP marks for detection
+  (`to_ids`), on the event and inside its objects. When an event marks none,
+  every huntable attribute is used, and the hunt says so. Deleted attributes
+  are skipped. At most 500 indicators per event.
+- **Types**: `ip-src`, `ip-dst` (and `|port`), `domain`, `hostname`
+  (and `|port`), `domain|ip`, `url`, `email`, `email-src`, `email-dst`,
+  `email-reply-to`, `md5`, `sha1`, `sha256`, `filename|md5`,
+  `filename|sha1`, `filename|sha256`, `vulnerability`. Other types (file names
+  alone, registry keys, mutexes, links) are not hunted. Values go through the
+  same validation as extracted ones, so private addresses are dropped.
+- **Context**: each indicator keeps the attribute's category, comment and
+  object name. Its STIX id is the MISP attribute UUID.
+- **Techniques**: ATT&CK IDs from the event's `mitre-attack-pattern` galaxies
+  and tags (event, object and attribute level) become a hypothesis.
+- **Summary**: the creating organisation, date and tags; the first `link`
+  attribute is the report URL.
+
+MISP hunts don't use the AI step. Add hypotheses with search terms by hand.
 
 ## TAXII 2.1
 
@@ -191,7 +240,8 @@ domain monitor uses:
 - every address the host resolves to must be public; the connection goes only
   to those addresses, checked at connect time (no DNS rebinding);
 - up to 5 redirects, each checked the same way; 20 s per request; 3 MB per
-  response.
+  response for source checks of feeds and pages, 16 MB for a hunt's own report
+  and for MISP manifests and events.
 
 A report on an internal wiki or an `http://` site can't be fetched: paste its
 text instead.
@@ -201,8 +251,12 @@ text instead.
 - **A hunt failed with "Could not fetch".** The backend container has no route
   out, or the site refused the request. Paste the text instead, or check
   outbound HTTPS from the backend.
-- **"The log search ran past 120 s".** Shorten the lookback window, switch off
-  short or common search terms, or raise `HUNT_STATEMENT_TIMEOUT_MS`.
+- **"Searching even 15 minutes of logs took longer than 120 s".** Even the
+  smallest slice was too slow: switch off short or common search terms, or
+  raise `HUNT_STATEMENT_TIMEOUT_MS`.
+- **"Searched the newest N of M days".** The run hit `HUNT_MAX_RUNTIME_MS` or
+  20,000 matching lines before the end of the window. Switch off noisy terms,
+  shorten the window, or raise `HUNT_MAX_RUNTIME_MS`.
 - **Few or no hypotheses.** Configure the AI Builder model (Settings → AI), or
   add hypotheses by hand.
 - **An indicator is a false positive.** Switch it off in the hunt and run it

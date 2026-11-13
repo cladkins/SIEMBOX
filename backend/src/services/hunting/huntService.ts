@@ -155,10 +155,24 @@ type Task = { huntId: number; kind: 'extract' | 'run' };
 const queue: Task[] = [];
 let working = false;
 let stopped = false;
+/** The hunt the queue is working on now, if any. */
+let current: number | null = null;
 
 /** Hunts waiting or in progress, for the UI. */
 export function huntQueueDepth(): number {
   return queue.length + (working ? 1 : 0);
+}
+
+/**
+ * Each queued hunt's place: 0 for the one being worked on, 1 for the next,
+ * and so on. Hunts run one at a time, so a hunt from a monitored source can
+ * wait behind others; the UI shows this instead of a bare "pending".
+ */
+export function huntQueuePositions(): Map<number, number> {
+  const positions = new Map<number, number>();
+  if (current !== null) positions.set(current, 0);
+  for (const task of queue) if (!positions.has(task.huntId)) positions.set(task.huntId, positions.size + (current === null ? 1 : 0));
+  return positions;
 }
 
 function enqueue(task: Task): void {
@@ -174,6 +188,7 @@ async function drain(): Promise<void> {
   try {
     while (queue.length && !stopped) {
       const task = queue.shift()!;
+      current = task.huntId;
       try {
         if (task.kind === 'extract') await extractHunt(task.huntId);
         else await runHunt(task.huntId);
@@ -191,6 +206,7 @@ async function drain(): Promise<void> {
     }
   } finally {
     working = false;
+    current = null;
   }
 }
 
@@ -986,7 +1002,9 @@ export async function listHunts(opts: {
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
-  return { hunts: r.rows, total: total.rows[0]?.n ?? 0 };
+  const positions = huntQueuePositions();
+  const hunts = r.rows.map((h: HuntRow) => ({ ...h, queue_position: positions.get(h.id) ?? null }));
+  return { hunts, total: total.rows[0]?.n ?? 0 };
 }
 
 export async function getIndicators(huntId: number): Promise<IndicatorRow[]> {
@@ -1021,7 +1039,14 @@ export async function getHuntDetail(id: number) {
   const hunt = await getHuntRow(id);
   if (!hunt) return null;
   const [indicators, hypotheses, matches] = await Promise.all([getIndicators(id), getHypotheses(id), getMatches(id)]);
-  return { ...hunt, indicators, hypotheses, matches, queue_depth: huntQueueDepth() };
+  return {
+    ...hunt,
+    indicators,
+    hypotheses,
+    matches,
+    queue_depth: huntQueueDepth(),
+    queue_position: huntQueuePositions().get(id) ?? null,
+  };
 }
 
 function toStixHunt(hunt: HuntRow, indicators: IndicatorRow[], hypotheses: HypothesisRow[]): StixHunt {

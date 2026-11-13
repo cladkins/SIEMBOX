@@ -57,7 +57,24 @@ export interface HuntSource {
 }
 
 const PUBLIC_COLUMNS = `id, name, url, kind, enabled, check_interval_minutes, lookback_days, alert_on_match, use_ai,
-  last_checked_at, last_status, last_error, hunts_created, created_by, created_at, updated_at`;
+  last_checked_at, last_status, last_error, hunts_created, created_by, created_at, updated_at,
+  CASE WHEN enabled AND last_checked_at IS NOT NULL
+       THEN last_checked_at + make_interval(mins => check_interval_minutes) END AS next_check_at`;
+
+/** Sources being checked now: a second check of the same source waits for the first to finish. */
+const checking = new Set<number>();
+
+export function isChecking(id: number): boolean {
+  return checking.has(id);
+}
+
+/**
+ * Check a source in the background, right away (a new or re-enabled source
+ * shouldn't wait for the next job tick). Errors are recorded on the source.
+ */
+export function checkSoon(id: number): void {
+  void checkSource(id).catch((err) => logger.warn(`[HuntSources] background check of source ${id} failed: ${(err as Error).message}`));
+}
 
 function clampInterval(raw: unknown): number {
   const n = parseInt(String(raw ?? ''), 10);
@@ -71,9 +88,9 @@ function cleanKind(raw: unknown): SourceKind {
   throw new HuntError(400, 'kind must be auto, feed, page or misp');
 }
 
-export async function listSources(): Promise<HuntSource[]> {
+export async function listSources(): Promise<Array<HuntSource & { checking: boolean }>> {
   const r = await query(`SELECT ${PUBLIC_COLUMNS} FROM hunt_sources ORDER BY name, id`);
-  return r.rows;
+  return r.rows.map((row: HuntSource) => ({ ...row, checking: checking.has(row.id) }));
 }
 
 export async function getSource(id: number): Promise<HuntSource | null> {
@@ -115,7 +132,9 @@ export async function createSource(input: SourceInput, createdBy: number | null)
         createdBy,
       ]
     );
-    return r.rows[0];
+    const source = r.rows[0] as HuntSource;
+    if (source.enabled) checkSoon(source.id);
+    return { ...source, checking: source.enabled } as HuntSource;
   } catch (err) {
     if ((err as { code?: string }).code === '23505') throw new HuntError(409, 'That URL is already a source.');
     throw err;
@@ -149,7 +168,12 @@ export async function updateSource(id: number, input: SourceInput): Promise<Hunt
       `UPDATE hunt_sources SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1 RETURNING ${PUBLIC_COLUMNS}`,
       params
     );
-    return r.rows[0] || null;
+    const source = (r.rows[0] as HuntSource | undefined) ?? null;
+    // A changed URL or kind, or a source switched back on, is checked now.
+    if (source?.enabled && (typeof input.url === 'string' || input.kind !== undefined || input.enabled === true)) {
+      checkSoon(source.id);
+    }
+    return source;
   } catch (err) {
     if ((err as { code?: string }).code === '23505') throw new HuntError(409, 'That URL is already a source.');
     throw err;
@@ -175,6 +199,16 @@ export interface CheckResult {
 
 /** Check one source now. Records the outcome on the source; never throws. */
 export async function checkSource(id: number): Promise<CheckResult> {
+  if (checking.has(id)) return { ok: false, hunts_created: 0, error: 'A check of this source is already running.' };
+  checking.add(id);
+  try {
+    return await checkSourceNow(id);
+  } finally {
+    checking.delete(id);
+  }
+}
+
+async function checkSourceNow(id: number): Promise<CheckResult> {
   const source = await getSource(id);
   if (!source) return { ok: false, hunts_created: 0, error: 'Source not found' };
   let created = 0;
@@ -197,7 +231,7 @@ export async function checkSource(id: number): Promise<CheckResult> {
       return await misp();
     }
 
-    const doc = await fetchDocument(source.url);
+    const doc = await fetchDocument(source.url, undefined, { maxBytes: LARGE_FETCH_MAX_BYTES });
     const detected = documentKind(doc);
     if (
       source.kind === 'auto' &&
@@ -220,7 +254,7 @@ export async function checkSource(id: number): Promise<CheckResult> {
         : { rows: [] };
       const seen = new Set(seenRows.rows.map((r: { item_key: string }) => r.item_key));
       const fresh = feed.items.filter((i) => !seen.has(i.key));
-      const firstCheck = !source.last_checked_at;
+      const firstCheck = await isFirstCheck(source.id);
       const toHunt = fresh.slice(0, firstCheck ? FIRST_CHECK_ITEMS : MAX_NEW_ITEMS_PER_CHECK);
       // On the first check, the older items are recorded as seen without a hunt.
       const skipped = firstCheck ? fresh.slice(FIRST_CHECK_ITEMS) : [];
@@ -291,6 +325,16 @@ export async function checkSource(id: number): Promise<CheckResult> {
   }
 }
 
+/**
+ * A source's first successful check: nothing recorded as seen yet. (Not "never
+ * checked": a first check that failed sets last_checked_at, and the retry must
+ * still take only the newest FIRST_CHECK_ITEMS, not a backlog.)
+ */
+async function isFirstCheck(sourceId: number): Promise<boolean> {
+  const r = await query(`SELECT EXISTS (SELECT 1 FROM hunt_source_items WHERE source_id = $1) AS any`, [sourceId]);
+  return !r.rows[0]?.any;
+}
+
 /** Record items as seen without a hunt, in bulk (a MISP feed's first check can skip thousands). */
 async function markSeen(
   sourceId: number,
@@ -343,7 +387,7 @@ async function checkMispFeed(
     : { rows: [] };
   const seen = new Set(seenRows.rows.map((r: { item_key: string }) => r.item_key));
   const fresh = entries.filter((e) => !seen.has(e.uuid));
-  const firstCheck = !source.last_checked_at;
+  const firstCheck = await isFirstCheck(source.id);
   const toHunt = fresh.slice(0, firstCheck ? FIRST_CHECK_ITEMS : MAX_NEW_ITEMS_PER_CHECK);
   const published = (e: (typeof entries)[number]) =>
     e.timestamp > 0 ? new Date(e.timestamp * 1000) : e.date ? new Date(e.date) : null;

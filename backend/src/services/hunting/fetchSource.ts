@@ -16,7 +16,7 @@ import { isMispEvent, isMispManifest } from './misp';
 
 export const FETCH_TIMEOUT_MS = 20_000;
 export const FETCH_MAX_BYTES = 3 * 1024 * 1024;
-/** For a hunt's own report and a MISP feed's manifest and events, which run larger than a web page. */
+/** For source checks (large vendor feeds such as CISA's run past 3 MB), a hunt's own report, and MISP manifests and events. */
 export const LARGE_FETCH_MAX_BYTES = 16 * 1024 * 1024;
 export const MAX_REDIRECTS = 5;
 export const MAX_URL_LENGTH = 2048;

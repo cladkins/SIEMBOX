@@ -394,9 +394,13 @@ export const api = {
   lookupThreatIp: (ip: string) => apiClient.get(`/threat-feeds/lookup/${encodeURIComponent(ip)}`),
 
   // Threat Hunting: reports -> indicators + hypotheses -> log hunts; STIX export, TAXII tokens
-  getHuntSummary: () => apiClient.get('/hunts/summary'),
-  getHunts: (params?: { limit?: number; offset?: number; status?: string; source_id?: number; search?: string }) =>
-    apiClient.get('/hunts', { params }),
+  // `quiet`: a background refresh, which shows no toast when it fails (the next one retries).
+  getHuntSummary: (quiet = false) =>
+    apiClient.get('/hunts/summary', quiet ? { skipErrorToast: true, skipNetworkErrorToast: true } : undefined),
+  getHunts: (
+    params?: { limit?: number; offset?: number; status?: string; source_id?: number; search?: string },
+    quiet = false
+  ) => apiClient.get('/hunts', { params, ...(quiet ? { skipErrorToast: true, skipNetworkErrorToast: true } : {}) }),
   getHunt: (id: number) => apiClient.get(`/hunts/${id}`),
   createHunt: (data: { url?: string; text?: string; title?: string; lookback_days?: number; alert_on_match?: boolean; use_ai?: boolean }) =>
     apiClient.post('/hunts', data),
@@ -417,7 +421,8 @@ export const api = {
   updateHuntHypothesis: (id: number, hypothesisId: number, data: Record<string, unknown>) =>
     apiClient.put(`/hunts/${id}/hypotheses/${hypothesisId}`, data),
   deleteHuntHypothesis: (id: number, hypothesisId: number) => apiClient.delete(`/hunts/${id}/hypotheses/${hypothesisId}`),
-  getHuntSources: () => apiClient.get('/hunts/sources'),
+  getHuntSources: (quiet = false) =>
+    apiClient.get('/hunts/sources', quiet ? { skipErrorToast: true, skipNetworkErrorToast: true } : undefined),
   createHuntSource: (data: Record<string, unknown>) => apiClient.post('/hunts/sources', data),
   updateHuntSource: (id: number, data: Record<string, unknown>) => apiClient.put(`/hunts/sources/${id}`, data),
   deleteHuntSource: (id: number) => apiClient.delete(`/hunts/sources/${id}`),

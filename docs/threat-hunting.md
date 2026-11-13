@@ -134,9 +134,22 @@ the hunts it creates (lookback, alert on match, AI).
   new hunt when the set of indicators changes. A page that returns a STIX
   bundle starts a new hunt when the bundle changes.
 
-The `hunt-sources` background job checks due sources every 15 minutes
-(listed on the Admin Dashboard with the other background jobs). **Check now** runs a check at once. A failed check shows its
-error on the source and in Recent Errors.
+A source is checked as soon as it is added, re-enabled, or its URL or kind
+changes. After that, the `hunt-sources` background job (listed on the Admin
+Dashboard with the other background jobs) looks for due sources every 5
+minutes, and each source is checked again once its interval has passed. The
+Sources tab shows each source's last and next check. **Check now** runs a
+check at once; a second check of a source that is already being checked
+waits for the first. A failed check shows its error on the source and in
+Recent Errors.
+
+"First check" means the first check that succeeds: a source whose first
+check failed (a wrong kind, a site that was down) still hunts only the newest
+items once it works, not its whole backlog.
+
+Hunts run one at a time. A hunt waiting its turn shows its place in the
+queue ("waiting: 3rd in queue"). The page refreshes itself, every 5 seconds
+while anything is running and every 30 seconds otherwise.
 
 ## STIX 2.1
 
@@ -239,15 +252,20 @@ domain monitor uses:
   `.local`, `.internal`, `.home.arpa` and similar);
 - every address the host resolves to must be public; the connection goes only
   to those addresses, checked at connect time (no DNS rebinding);
-- up to 5 redirects, each checked the same way; 20 s per request; 3 MB per
-  response for source checks of feeds and pages, 16 MB for a hunt's own report
-  and for MISP manifests and events.
+- up to 5 redirects, each checked the same way; 20 s per request; 16 MB per
+  response (large vendor feeds such as CISA's advisories feed run past 3 MB).
 
 A report on an internal wiki or an `http://` site can't be fetched: paste its
 text instead.
 
 ## Troubleshooting
 
+- **A source doesn't seem to create hunts.** Open Monitored sources and look
+  at Last check and Next check. "error" with a message means the check
+  failed; fix the URL or kind (the source is checked again at once). A
+  feed only makes a hunt when it publishes a new item, and a page only when
+  its indicators change, so a quiet source makes none. New hunts that say
+  "waiting: Nth in queue" are queued behind other hunts.
 - **A hunt failed with "Could not fetch".** The backend container has no route
   out, or the site refused the request. Paste the text instead, or check
   outbound HTTPS from the backend.

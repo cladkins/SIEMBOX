@@ -7094,8 +7094,8 @@ Reads are open to every role. Hunt and source writes need **analyst**,
 | POST | `/api/hunts/:id/hypotheses` | analyst+ | Add `{ title, description?, search_terms?, attack_techniques? }`. Terms: 3-200 characters, at most 20. Techniques: ATT&CK IDs |
 | PUT | `/api/hunts/:id/hypotheses/:hypothesisId` | analyst+ | Change any of `title`, `description`, `search_terms`, `attack_techniques`, `enabled` |
 | DELETE | `/api/hunts/:id/hypotheses/:hypothesisId` | analyst+ | Delete a hypothesis |
-| GET | `/api/hunts/sources` | any | Monitored sources |
-| POST | `/api/hunts/sources` | analyst+ | Add `{ url, name?, kind? (auto \| feed \| page \| misp), check_interval_minutes? (30-10080, default 360), lookback_days?, alert_on_match? (default true), use_ai? (default true), enabled? }`. 409 for a URL already added |
+| GET | `/api/hunts/sources` | any | Monitored sources, each with `next_check_at` (null while never checked or switched off) and `checking` (a check is running now) |
+| POST | `/api/hunts/sources` | analyst+ | Add `{ url, name?, kind? (auto \| feed \| page \| misp), check_interval_minutes? (30-10080, default 360), lookback_days?, alert_on_match? (default true), use_ai? (default true), enabled? }`. 409 for a URL already added. The source is checked at once |
 | PUT | `/api/hunts/sources/:id` | analyst+ | Change any of the fields above |
 | DELETE | `/api/hunts/sources/:id` | analyst+ | Stop watching; the source's hunts are kept |
 | POST | `/api/hunts/sources/:id/check` | analyst+ | Check now. Returns `{ ok, kind (feed \| page \| misp), hunts_created, error? }` |
@@ -7111,6 +7111,9 @@ missing or failed AI step, or how a STIX or MISP document was read.
 `search_complete` is false when it stopped early (time budget or 20,000
 matching lines), `progress` says how much of the window it covered, and
 `searched_from` is the oldest log time it searched.
+`queue_position` (list and detail) is a hunt's place in the work queue while it
+is pending, extracting or running: 0 for the hunt being worked on, 1 for the
+next, null when it is not queued. Hunts run one at a time.
 
 A hunt with `alert_on_match` raises an alert with `source: "threat-hunt"` and
 `matched_data` `{ hunt_id, hunt_title, source_url, logs_matched,

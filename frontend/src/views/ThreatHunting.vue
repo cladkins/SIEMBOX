@@ -44,6 +44,7 @@
             <template #default="{ row }">
               <el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag>
               <div v-if="row.status === 'running' && row.progress" class="ctx">{{ row.progress }}</div>
+              <div v-else-if="queueLabel(row)" class="ctx">{{ queueLabel(row) }}</div>
               <div v-else-if="row.status === 'completed' && !row.search_complete" class="ctx">partial window</div>
             </template>
           </el-table-column>
@@ -78,7 +79,7 @@
       <!-- Sources -->
       <el-tab-pane label="Monitored sources" name="sources">
         <p class="muted">
-          SIEMBox checks each source on its interval. A feed (RSS or Atom) creates a hunt for every new article; the
+          SIEMBox checks a source as soon as you add it, then again on its interval. A feed (RSS or Atom) creates a hunt for every new article; the
           first check takes the newest 3. A MISP feed (a directory with manifest.json, such as CIRCL's OSINT feed) creates a hunt
           for every new event, the same way. A page creates a new hunt when its indicators change.
         </p>
@@ -103,9 +104,17 @@
           </el-table-column>
           <el-table-column label="Last check" min-width="200">
             <template #default="{ row }">
-              <span>{{ fmt(row.last_checked_at) }}</span>
+              <el-tag v-if="row.checking" type="warning" size="small">checking…</el-tag>
+              <span v-else>{{ row.last_checked_at ? fmt(row.last_checked_at) : 'not yet' }}</span>
               <el-tag v-if="row.last_status === 'error'" type="danger" size="small" class="ml">error</el-tag>
               <div v-if="row.last_error" class="error-text">{{ row.last_error }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="Next check" width="150">
+            <template #default="{ row }">
+              <span v-if="!row.enabled" class="muted">off</span>
+              <span v-else-if="row.checking || !row.last_checked_at" class="muted">now</span>
+              <span v-else>{{ fmt(row.next_check_at) }}</span>
             </template>
           </el-table-column>
           <el-table-column label="Hunts" width="80" align="right">
@@ -268,6 +277,7 @@
       <div v-if="detail" v-loading="detailLoading">
         <div class="detail-head">
           <el-tag :type="statusType(detail.status)">{{ detail.status }}</el-tag>
+          <el-text v-if="queueLabel(detail)" size="small" type="info">{{ queueLabel(detail) }}</el-text>
           <el-tag v-if="detail.extraction_method" type="info" size="small">{{ detail.extraction_method }}</el-tag>
           <span class="muted">Last {{ detail.lookback_days }} days · {{ originLabel(detail) }}</span>
         </div>
@@ -492,24 +502,27 @@ function intervalLabel(min: number): string {
   return `${min} min`;
 }
 
-async function loadSummary() {
+async function loadSummary(quiet = false) {
   try {
-    summary.value = (await api.getHuntSummary()).data;
+    summary.value = (await api.getHuntSummary(quiet)).data;
   } catch {
     /* toast shown by the API client */
   }
 }
 
-async function loadHunts() {
-  huntsLoading.value = true;
+async function loadHunts(quiet = false) {
+  if (!quiet) huntsLoading.value = true;
   try {
-    const { data } = await api.getHunts({
-      limit: pageSize,
-      offset: (page.value - 1) * pageSize,
-      status: filters.status || undefined,
-      search: filters.search || undefined,
-      source_id: filters.source_id,
-    });
+    const { data } = await api.getHunts(
+      {
+        limit: pageSize,
+        offset: (page.value - 1) * pageSize,
+        status: filters.status || undefined,
+        search: filters.search || undefined,
+        source_id: filters.source_id,
+      },
+      quiet
+    );
     hunts.value = data.hunts;
     total.value = data.total;
   } finally {
@@ -517,10 +530,10 @@ async function loadHunts() {
   }
 }
 
-async function loadSources() {
-  sourcesLoading.value = true;
+async function loadSources(quiet = false) {
+  if (!quiet) sourcesLoading.value = true;
   try {
-    sources.value = (await api.getHuntSources()).data.sources;
+    sources.value = (await api.getHuntSources(quiet)).data.sources;
   } finally {
     sourcesLoading.value = false;
   }
@@ -536,6 +549,37 @@ async function loadTokens() {
 function refreshAll() {
   void loadSummary();
   void loadHunts();
+  lastAction = Date.now();
+  scheduleListRefresh();
+}
+
+/** "3rd in queue" for a hunt waiting its turn (hunts run one at a time). */
+function queueLabel(h: any): string {
+  if (!BUSY.includes(h.status) || h.queue_position === null || h.queue_position === undefined) return '';
+  if (h.queue_position === 0) return '';
+  const n = h.queue_position;
+  const suffix = n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th';
+  return `waiting: ${n}${suffix} in queue`;
+}
+
+// The page keeps itself current: sources are checked and hunts run in the
+// background, so without this nothing new shows until a reload. Faster while
+// anything is busy; paused while the tab is hidden.
+let listTimer: ReturnType<typeof setTimeout> | null = null;
+/** When the user last started something (a hunt, a source, a check): refresh fast for a while after. */
+let lastAction = 0;
+function scheduleListRefresh() {
+  if (listTimer) clearTimeout(listTimer);
+  const busyNow =
+    Date.now() - lastAction < 120_000 ||
+    hunts.value.some((h) => BUSY.includes(h.status)) ||
+    sources.value.some((s) => s.checking);
+  listTimer = setTimeout(async () => {
+    if (!document.hidden) {
+      await Promise.allSettled([loadSummary(true), loadHunts(true), loadSources(true)]);
+    }
+    scheduleListRefresh();
+  }, busyNow ? 5000 : 30000);
 }
 
 // ---- New hunt
@@ -787,8 +831,11 @@ async function saveSource() {
     if (id) await api.updateHuntSource(id, body);
     else await api.createHuntSource(body);
     sourceForm.visible = false;
+    if (!id && body.url) ElMessage.success('Source added. SIEMBox is checking it now.');
     await loadSources();
     void loadSummary();
+    lastAction = Date.now();
+    scheduleListRefresh();
   } finally {
     sourceForm.saving = false;
   }
@@ -858,10 +905,12 @@ onMounted(() => {
   void loadSources();
   void loadTokens();
   window.addEventListener('resize', onResize);
+  scheduleListRefresh();
 });
 
 onBeforeUnmount(() => {
   if (pollTimer) clearTimeout(pollTimer);
+  if (listTimer) clearTimeout(listTimer);
   window.removeEventListener('resize', onResize);
 });
 </script>

@@ -2,7 +2,7 @@
  * Threat Hunting background job.
  *
  * At startup it queues again any hunt the previous process left unfinished.
- * Then, every CHECK_INTERVAL_MS, it checks the monitored hunt sources that are
+ * Then, every CHECK_INTERVAL_MS (5 minutes), it checks the monitored hunt sources that are
  * due (each has its own check_interval_minutes); new feed items and changed
  * pages become hunts (services/hunting/sourceMonitor.ts).
  */
@@ -13,7 +13,8 @@ import { ErrorLogService } from '../services/errors/errorLogService';
 import { registerRecurringJob, trackJobRun } from '../services/jobs/jobRegistry';
 
 const JOB_KEY = 'hunt-sources';
-const CHECK_INTERVAL_MS = 15 * 60 * 1000;
+// Cheap when nothing is due (one query); each source keeps its own interval.
+const CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const STARTUP_DELAY_MS = 30 * 1000;
 
 let intervalId: NodeJS.Timeout | null = null;

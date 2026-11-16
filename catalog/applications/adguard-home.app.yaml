@@ -7,10 +7,13 @@ description: Network-wide DNS ad blocker.
 website: https://adguard.com/adguard-home/overview.html
 match:
   syslog_program: [adguardhome]
+  parser: [adguard-home-query]
   container_image: [adguard/adguardhome, '*/adguard/adguardhome']
 tests:
   - source: syslog_program
     input: AdGuardHome
+  - source: parser
+    input: adguard-home-query
   - source: container_image
     input: 'adguard/adguardhome:v0.107.43'
     version: '0.107.43'

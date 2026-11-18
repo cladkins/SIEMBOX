@@ -103,3 +103,83 @@ test('matchCondition lower-cases once and escapes LIKE wildcards', async () => {
   assert.equal(c.sql, 'lower(raw_message) LIKE ANY($4::text[])');
   assert.deepEqual(c.params, [['%evil.com%', '%100\\%\\_x%']]);
 });
+
+test('matchRows groups matching lines by device: the header host, else the sender IP', async () => {
+  const { deviceOf, rankDevices, UNKNOWN_DEVICE } = await import('./huntService');
+  const terms = huntTerms([indicator(1, 'ipv4', '45.142.212.100'), indicator(2, 'domain', 'evil-cdn.com')], [hypothesis(10, ['rundll32.exe', 'temp'])]);
+  const t = (s: string) => new Date(s);
+  const rows = [
+    { id: 1, timestamp: t('2026-11-01T00:00:00Z'), source_ip: '10.0.0.1', hostname: 'FW-01', app_name: 'filterlog', raw_message: 'DENY 45.142.212.100:443' },
+    { id: 2, timestamp: t('2026-11-02T00:00:00Z'), source_ip: '10.0.0.9', hostname: 'fw-01', app_name: 'filterlog', raw_message: 'DENY 45.142.212.100:80' },
+    { id: 3, timestamp: t('2026-11-03T00:00:00Z'), source_ip: '10.0.0.2', hostname: '-', app_name: 'dns', raw_message: 'query cdn.evil-cdn.com A' },
+    { id: 4, timestamp: t('2026-11-04T00:00:00Z'), source_ip: '10.0.0.3', hostname: 'pc7', app_name: 'sysmon', raw_message: 'rundll32.exe C:\\temp\\x.dll' },
+    { id: 5, timestamp: t('2026-11-05T00:00:00Z'), source_ip: null, hostname: null, app_name: null, raw_message: 'rundll32.exe again' },
+    { id: 6, timestamp: t('2026-11-06T00:00:00Z'), source_ip: '10.0.0.3', hostname: 'pc7', app_name: 'sysmon', raw_message: 'nothing here' },
+  ];
+  const { devices } = matchRows(terms, rows);
+  assert.deepEqual([...devices.keys()].sort(), ['10.0.0.2', UNKNOWN_DEVICE, 'fw-01', 'pc7'].sort());
+
+  const fw = devices.get('fw-01')!;
+  assert.equal(fw.deviceType, 'host');
+  assert.equal(fw.lineIds.size, 2);
+  assert.equal(fw.lastRawLogId, 2);
+  assert.equal(fw.sourceIp, '10.0.0.9', 'the newest line names the sender');
+  assert.deepEqual([...fw.indicators], [[1, 2]]);
+
+  // A junk host name falls back to the sender.
+  assert.equal(devices.get('10.0.0.2')!.deviceType, 'ip');
+  // Two terms of one hypothesis on one line count that line once.
+  assert.deepEqual([...devices.get('pc7')!.hypotheses], [[10, 1]]);
+  assert.equal(devices.get('pc7')!.lineIds.size, 1);
+
+  assert.equal(rankDevices(devices)[0].device, 'fw-01');
+  assert.deepEqual(deviceOf(' Web01 ', '10.0.0.1'), { device: 'web01', deviceType: 'host' });
+  assert.deepEqual(deviceOf('unknown', '::ffff:10.0.0.1'), { device: '10.0.0.1', deviceType: 'ip' });
+  assert.deepEqual(deviceOf(null, 'not an ip'), { device: UNKNOWN_DEVICE, deviceType: null });
+});
+
+test('deviceAlertKeys names the device, its sender and the top indicators for the Context Graph', async () => {
+  const { deviceAlertKeys } = await import('./huntService');
+  assert.deepEqual(
+    deviceAlertKeys({ device: 'fw-01', deviceType: 'host', hostname: 'FW-01', sourceIp: '10.0.0.1' }, [
+      { type: 'domain', value: 'evil-cdn.com', lines: 1 },
+      { type: 'ipv4', value: '45.142.212.100', lines: 2 },
+      { type: 'ipv4', value: '45.142.212.101', lines: 1 },
+    ]),
+    { host: 'fw-01', client_ip: '10.0.0.1', observer_ip: '10.0.0.1', source_ip: '45.142.212.100', domain: 'evil-cdn.com' }
+  );
+  // A sender-only device: no host key. A URL indicator gives its host as the domain.
+  assert.deepEqual(
+    deviceAlertKeys({ device: '10.0.0.2', deviceType: 'ip', hostname: null, sourceIp: '10.0.0.2' }, [
+      { type: 'url', value: 'https://Bad.Example.net/payload', lines: 3 },
+      { type: 'sha256', value: 'a'.repeat(64), lines: 5 },
+    ]),
+    { client_ip: '10.0.0.2', observer_ip: '10.0.0.2', domain: 'bad.example.net' }
+  );
+});
+
+test('deviceAlertText says where the lines were seen and what the run searched', async () => {
+  const { deviceAlertText } = await import('./huntService');
+  const text = deviceAlertText(
+    { id: 7, title: 'Campaign', source_url: 'https://example.org/report' },
+    {
+      device: 'fw-01',
+      hostname: 'FW-01',
+      sourceIp: '10.0.0.1',
+      appNames: new Set(['filterlog']),
+      lineIds: new Set([1, 2]),
+      first: new Date('2026-11-01T00:00:00Z'),
+      last: new Date('2026-11-02T00:00:00Z'),
+    },
+    [{ type: 'ipv4', value: '45.142.212.100', lines: 2 }],
+    [],
+    { from: new Date('2026-10-19T00:00:00Z'), to: new Date('2026-11-02T00:00:00Z'), complete: true, lookbackDays: 14, devices: 3, lines: 9 },
+    2
+  );
+  assert.match(text, /found 2 matching log line\(s\) on fw-01/);
+  assert.match(text, /Seen on: host FW-01 · sender 10\.0\.0\.1 · app filterlog/);
+  assert.match(text, /Indicator ipv4 45\.142\.212\.100: 2 line\(s\)/);
+  assert.match(text, /Searched all stored logs from 2026-10-19 00:00 UTC to 2026-11-02 00:00 UTC \(the full 14-day window\)/);
+  assert.match(text, /3 device\(s\); 2 other device\(s\) have their own alert/);
+  assert.match(text, /Report: https:\/\/example\.org\/report/);
+});

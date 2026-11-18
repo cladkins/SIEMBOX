@@ -57,6 +57,13 @@
               <span v-else class="muted">-</span>
             </template>
           </el-table-column>
+          <el-table-column label="Devices" width="85" align="right">
+            <template #default="{ row }">
+              <el-tag v-if="row.devices_matched > 0" type="danger" size="small" effect="plain">{{ row.devices_matched }}</el-tag>
+              <span v-else-if="row.last_run_at" class="muted">0</span>
+              <span v-else class="muted">-</span>
+            </template>
+          </el-table-column>
           <el-table-column label="Last run" width="160">
             <template #default="{ row }">{{ fmt(row.last_run_at) }}</template>
           </el-table-column>
@@ -314,6 +321,11 @@
         <p v-if="detail.source_url" class="muted">
           Source: <a :href="detail.source_url" target="_blank" rel="noopener noreferrer nofollow">{{ detail.source_url }}</a>
         </p>
+        <p v-if="detail.last_run_at && !busy" class="muted" data-testid="hunt-scope">
+          Last run searched all stored logs from {{ fmt(detail.searched_from) }} to {{ fmt(detail.last_run_at) }}
+          ({{ detail.search_complete ? `the full ${detail.lookback_days}-day window` : 'part of the window' }}):
+          {{ detail.logs_matched }} matching line(s) on {{ detail.devices_matched }} device(s).
+        </p>
         <el-row v-if="canAnalyst" :gutter="12" class="mb">
           <el-col :span="10">
             <el-input-number v-model="edit.lookback_days" :min="1" :max="90" size="small" /> days
@@ -379,6 +391,68 @@
             </el-table>
           </el-tab-pane>
 
+          <el-tab-pane :label="`Where seen (${detail.devices_matched || 0})`" name="devices">
+            <el-empty
+              v-if="!detail.devices?.length"
+              :image-size="60"
+              :description="detail.last_run_at ? (detail.logs_matched ? 'Run the hunt again to list the devices.' : 'Nothing found in the window.') : 'Not run yet.'"
+            />
+            <template v-else>
+              <el-text size="small" type="info">
+                Each device whose logs matched: the syslog header host, else the IP that sent the log.
+                <template v-if="detail.alert_on_match">The {{ MAX_ALERT_DEVICES }} with the most lines each raise an alert.</template>
+              </el-text>
+              <el-table :data="detail.devices" size="small" stripe max-height="520" class="devices">
+                <el-table-column label="Device" min-width="170">
+                  <template #default="{ row }">
+                    <strong>{{ row.hostname || row.device }}</strong>
+                    <div v-if="row.source_ip" class="ctx">sent by {{ row.source_ip }}</div>
+                    <div v-if="row.app_names?.length" class="ctx">{{ row.app_names.join(', ') }}</div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="Lines" width="70" align="right">
+                  <template #default="{ row }"><el-tag type="danger" size="small">{{ row.lines }}</el-tag></template>
+                </el-table-column>
+                <el-table-column label="Seen" width="150">
+                  <template #default="{ row }">
+                    {{ fmt(row.last_seen) }}
+                    <div v-if="row.first_seen && row.first_seen !== row.last_seen" class="ctx">first {{ fmt(row.first_seen) }}</div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="Matched" min-width="220">
+                  <template #default="{ row }">
+                    <div class="tags">
+                      <el-tag v-for="i in row.indicators.slice(0, 6)" :key="`i${i.id}`" size="small" type="danger" effect="plain">
+                        {{ i.value }} · {{ i.lines }}
+                      </el-tag>
+                      <el-tag v-for="h in row.hypotheses.slice(0, 3)" :key="`h${h.id}`" size="small" type="warning" effect="plain">
+                        {{ h.title }} · {{ h.lines }}
+                      </el-tag>
+                      <el-text v-if="row.indicators.length + row.hypotheses.length > 9" size="small" type="info">
+                        +{{ row.indicators.length + row.hypotheses.length - 9 }} more
+                      </el-text>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="" width="200">
+                  <template #default="{ row }">
+                    <div class="device-actions">
+                      <OpenInGraphButton
+                        v-if="row.device_type"
+                        :type="row.device_type"
+                        :value="row.device"
+                        :around="row.last_seen"
+                        label="Graph"
+                        size="small"
+                      />
+                      <el-button v-if="row.alert_id" size="small" @click="openAlert(row.alert_id)">Alert</el-button>
+                    </div>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </template>
+          </el-tab-pane>
+
           <el-tab-pane :label="`Matches (${detail.logs_matched})`" name="matches">
             <el-empty v-if="!detail.matches.length" :image-size="60" :description="detail.last_run_at ? 'Nothing found in the window.' : 'Not run yet.'" />
             <el-table v-else :data="detail.matches" size="small" stripe max-height="520">
@@ -390,7 +464,11 @@
                 </template>
               </el-table-column>
               <el-table-column label="Host" width="130">
-                <template #default="{ row }">{{ row.hostname || row.source_ip }}<div class="ctx">{{ row.app_name }}</div></template>
+                <template #default="{ row }">
+                  {{ row.hostname || row.source_ip }}
+                  <div v-if="row.hostname && row.source_ip" class="ctx">sent by {{ row.source_ip }}</div>
+                  <div class="ctx">{{ row.app_name }}</div>
+                </template>
               </el-table-column>
               <el-table-column label="Log line" min-width="300">
                 <template #default="{ row }"><span class="logline">{{ row.message }}</span></template>
@@ -435,9 +513,16 @@ import { Plus, Refresh } from '@element-plus/icons-vue';
 import { format } from 'date-fns';
 import { api } from '@/services/api';
 import { useAuthStore } from '@/stores/auth';
+import { useRoute, useRouter } from 'vue-router';
 import AlertDetailDialog from '@/components/AlertDetailDialog.vue';
+import OpenInGraphButton from '@/components/graph/OpenInGraphButton.vue';
 
 const authStore = useAuthStore();
+const route = useRoute();
+const router = useRouter();
+/** Matches huntService.ts MAX_ALERT_DEVICES. */
+const MAX_ALERT_DEVICES = 25;
+
 const isAdmin = computed(() => authStore.user?.role === 'admin');
 const canAnalyst = computed(() => ['admin', 'operator', 'analyst'].includes(authStore.user?.role || ''));
 
@@ -669,7 +754,7 @@ async function loadDetail(id: number, quiet = false) {
     edit.alert_on_match = detail.value.alert_on_match;
     if (wasBusy && !BUSY.includes(detail.value.status)) {
       refreshAll();
-      if (detail.value.logs_matched > 0) detailTab.value = 'matches';
+      if (detail.value.logs_matched > 0) detailTab.value = 'devices';
     }
   } finally {
     detailLoading.value = false;
@@ -682,12 +767,19 @@ async function openHunt(id: number) {
   detailTab.value = 'hypotheses';
   detail.value = null;
   await loadDetail(id);
+  if (detail.value?.logs_matched > 0) detailTab.value = 'devices';
 }
 
 watch(drawer, (open) => {
   if (!open && pollTimer) {
     clearTimeout(pollTimer);
     pollTimer = null;
+  }
+  // ?hunt=ID (a hunt alert's link) opens the hunt once; closing it drops the parameter.
+  if (!open && route.query.hunt) {
+    const rest = { ...route.query };
+    delete rest.hunt;
+    void router.replace({ query: rest });
   }
 });
 
@@ -901,6 +993,8 @@ watch(
 );
 
 onMounted(() => {
+  const linked = Number(route.query.hunt);
+  if (Number.isInteger(linked) && linked > 0) void openHunt(linked);
   refreshAll();
   void loadSources();
   void loadTokens();
@@ -1007,6 +1101,17 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   word-break: break-word;
+}
+.device-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.device-actions :deep(.open-in-graph) {
+  margin-right: 0;
+}
+.devices {
+  margin-top: 6px;
 }
 .logline {
   font-family: var(--el-font-family-mono, monospace);

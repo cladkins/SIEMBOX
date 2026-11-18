@@ -124,10 +124,12 @@ export class AlertModel {
     description?: string | null;
     matched_data: Record<string, any>;
     asset_id?: number | null;
+    /** The log the alert is about, when there is one (a threat hunt's newest matching line). */
+    parsed_log_id?: number | null;
   }): Promise<number | null> {
     const result = await query(
       `INSERT INTO alerts (rule_id, parsed_log_id, severity, title, description, matched_data, status, asset_id, source, event_id)
-       VALUES (NULL, NULL, $1, $2, $3, $4, 'new', $5, $6, $7)
+       VALUES (NULL, $8, $1, $2, $3, $4, 'new', $5, $6, $7)
        ON CONFLICT (event_id) WHERE event_id IS NOT NULL DO NOTHING
        RETURNING id`,
       [
@@ -138,6 +140,7 @@ export class AlertModel {
         params.asset_id ?? null,
         params.source,
         params.event_id,
+        params.parsed_log_id ?? null,
       ]
     );
     return (result.rowCount ?? 0) > 0 ? result.rows[0].id : null;

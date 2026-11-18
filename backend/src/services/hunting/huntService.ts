@@ -30,6 +30,7 @@ import { envInt } from '../../utils/envInt';
 import { ErrorLogService } from '../errors/errorLogService';
 import { AlertModel } from '../../models/Alert';
 import { getTechnique, techniqueDisplayName } from '../attack/attackData';
+import { canonicalDomain, canonicalHost, canonicalIp, JUNK_USERS } from '../graph/entityKey';
 import { extractIocs, IocType, IOC_TYPES, normalizeIoc, occursIn, siteDomain } from './iocExtract';
 import { aiExtract, AiExtraction } from './huntAi';
 import { documentKind, fetchDocument, htmlToText, LARGE_FETCH_MAX_BYTES, SourceFetchError } from './fetchSource';
@@ -58,6 +59,9 @@ const INITIAL_SLICE_MS = 6 * 3_600_000;
 const MIN_SLICE_MS = 15 * 60_000;
 const MAX_SLICE_MS = 7 * 86_400_000;
 const MAX_SAMPLES_PER_TERM = 25;
+/** Devices one run stores (most lines first) and raises an alert for. */
+const MAX_STORED_DEVICES = 500;
+export const MAX_ALERT_DEVICES = 25;
 const MAX_MESSAGE_CHARS = 2000;
 export const MAX_HUNT_TERMS = 600;
 /** The limit on one search statement (one time slice of one batch of terms). */
@@ -87,6 +91,7 @@ export interface HuntRow {
   error: string | null;
   match_count: number;
   logs_matched: number;
+  devices_matched: number;
   results_truncated: boolean;
   search_complete: boolean;
   searched_from: Date | null;
@@ -553,6 +558,7 @@ async function storeExtraction(
     );
     const disabled = new Set(off.rows.map((r) => `${r.ioc_type}:${r.value}`));
     await client.query(`DELETE FROM threat_hunt_matches WHERE hunt_id = $1`, [hunt.id]);
+    await client.query(`DELETE FROM threat_hunt_devices WHERE hunt_id = $1`, [hunt.id]);
     await client.query(`DELETE FROM threat_hunt_indicators WHERE hunt_id = $1 AND found_by <> 'user'`, [hunt.id]);
     await client.query(`DELETE FROM threat_hunt_hypotheses WHERE hunt_id = $1 AND found_by <> 'user'`, [hunt.id]);
     // Hypotheses the analyst wrote or edited are kept; an extracted one with the same title is not added again.
@@ -576,7 +582,7 @@ async function storeExtraction(
     await client.query(
       `UPDATE threat_hunts
           SET title = $2, summary = $3, source_text = COALESCE($4, source_text), extraction_method = $5,
-              extraction_note = $6, status = 'ready', error = NULL, match_count = 0, logs_matched = 0,
+              extraction_note = $6, status = 'ready', error = NULL, match_count = 0, logs_matched = 0, devices_matched = 0,
               results_truncated = false, updated_at = NOW()
         WHERE id = $1`,
       [hunt.id, x.title.slice(0, 500), x.summary, x.text ? x.text.slice(0, MAX_SOURCE_TEXT) : null, x.method, x.note]
@@ -744,15 +750,54 @@ interface TermHits {
   samples: LogRow[];
 }
 
-/** Which terms each log line holds. Exported for tests. */
-export function matchRows(terms: Term[], rows: LogRow[]): { hits: Map<Term, TermHits>; logsMatched: Set<number> } {
+/** Where matching lines were seen: one device (the syslog header host, else the sender IP). */
+export interface DeviceHits {
+  /** The Context Graph key: a host key, else an IP key, else UNKNOWN_DEVICE. */
+  device: string;
+  /** Which graph node the key names. */
+  deviceType: 'host' | 'ip' | null;
+  hostname: string | null;
+  sourceIp: string | null;
+  appNames: Set<string>;
+  lineIds: Set<number>;
+  first: Date | null;
+  last: Date | null;
+  /** The newest matching line. */
+  lastRawLogId: number | null;
+  /** Indicator id → lines on this device. */
+  indicators: Map<number, number>;
+  /** Hypothesis id → lines on this device (each line once). */
+  hypotheses: Map<number, number>;
+}
+
+export const UNKNOWN_DEVICE = '(unknown)';
+
+/** A log's device, keyed as the Context Graph keys its host and ip nodes. Exported for tests. */
+export function deviceOf(hostname: string | null, sourceIp: string | null): { device: string; deviceType: 'host' | 'ip' | null } {
+  const host = canonicalHost(hostname);
+  if (host && !JUNK_USERS.has(host)) return { device: host, deviceType: 'host' };
+  const ip = canonicalIp(sourceIp);
+  if (ip) return { device: ip, deviceType: 'ip' };
+  return { device: UNKNOWN_DEVICE, deviceType: null };
+}
+
+/** Which terms each log line holds, and on which device. Exported for tests. */
+export function matchRows(
+  terms: Term[],
+  rows: LogRow[]
+): { hits: Map<Term, TermHits>; logsMatched: Set<number>; devices: Map<string, DeviceHits> } {
   const hits = new Map<Term, TermHits>();
   const logsMatched = new Set<number>();
+  const devices = new Map<string, DeviceHits>();
   for (const row of rows) {
     const hay = (row.raw_message || '').toLowerCase();
+    const rowIndicators = new Set<number>();
+    const rowHypotheses = new Set<number>();
     for (const term of terms) {
       if (!occursIn(hay, term.needle, term.kind)) continue;
       logsMatched.add(Number(row.id));
+      if (term.indicatorId) rowIndicators.add(term.indicatorId);
+      if (term.hypothesisId) rowHypotheses.add(term.hypothesisId);
       let h = hits.get(term);
       if (!h) {
         h = { lineIds: new Set(), count: 0, first: null, last: null, samples: [] };
@@ -765,8 +810,88 @@ export function matchRows(terms: Term[], rows: LogRow[]): { hits: Map<Term, Term
       if (!h.last || t > h.last) h.last = t;
       if (h.samples.length < MAX_SAMPLES_PER_TERM) h.samples.push(row);
     }
+    if (!rowIndicators.size && !rowHypotheses.size) continue;
+    const { device, deviceType } = deviceOf(row.hostname, row.source_ip);
+    let d = devices.get(device);
+    if (!d) {
+      d = {
+        device,
+        deviceType,
+        hostname: row.hostname || null,
+        sourceIp: row.source_ip || null,
+        appNames: new Set(),
+        lineIds: new Set(),
+        first: null,
+        last: null,
+        lastRawLogId: null,
+        indicators: new Map(),
+        hypotheses: new Map(),
+      };
+      devices.set(device, d);
+    }
+    const t = new Date(row.timestamp);
+    if (!d.first || t < d.first) d.first = t;
+    if (!d.last || t > d.last) {
+      d.last = t;
+      d.lastRawLogId = Number(row.id);
+      // The newest line's sender and host name, should a device's change.
+      d.sourceIp = row.source_ip || d.sourceIp;
+      d.hostname = row.hostname || d.hostname;
+    }
+    d.lineIds.add(Number(row.id));
+    if (row.app_name && d.appNames.size < 10) d.appNames.add(row.app_name);
+    for (const id of rowIndicators) d.indicators.set(id, (d.indicators.get(id) ?? 0) + 1);
+    for (const id of rowHypotheses) d.hypotheses.set(id, (d.hypotheses.get(id) ?? 0) + 1);
   }
-  return { hits, logsMatched };
+  return { hits, logsMatched, devices };
+}
+
+/** The devices with the most matching lines first (ties: the newest last line). Exported for tests. */
+export function rankDevices(devices: Map<string, DeviceHits>): DeviceHits[] {
+  return [...devices.values()].sort(
+    (a, b) => b.lineIds.size - a.lineIds.size || (b.last?.getTime() ?? 0) - (a.last?.getTime() ?? 0) || a.device.localeCompare(b.device)
+  );
+}
+
+/**
+ * The keys a device's hunt alert carries in matched_data, so the Context Graph
+ * (graph/resolvers/alerts.ts), Threat Intel's IP view and Asset-360 find it:
+ *   host                    the device's host name (alert_hosts)
+ *   client_ip, observer_ip  the sender: equal, so the graph draws it as the sender
+ *   source_ip               the indicator IP with the most lines on the device
+ *   domain                  the indicator domain (or URL host) with the most lines
+ * Exported for tests.
+ */
+export function deviceAlertKeys(
+  d: Pick<DeviceHits, 'hostname' | 'sourceIp' | 'deviceType' | 'device'>,
+  matched: Array<{ type: IocType; value: string; lines: number }>
+): Record<string, string> {
+  const keys: Record<string, string> = {};
+  if (d.deviceType === 'host') keys.host = d.device;
+  const sender = canonicalIp(d.sourceIp);
+  if (sender) {
+    keys.client_ip = sender;
+    keys.observer_ip = sender;
+  }
+  const byLines = [...matched].sort((a, b) => b.lines - a.lines);
+  const ip = byLines.find((i) => i.type === 'ipv4' || i.type === 'ipv6');
+  if (ip) keys.source_ip = ip.value;
+  for (const i of byLines) {
+    let domain: string | null = null;
+    if (i.type === 'domain') domain = canonicalDomain(i.value);
+    else if (i.type === 'url') {
+      try {
+        domain = canonicalDomain(new URL(i.value).hostname);
+      } catch {
+        domain = null;
+      }
+    }
+    if (domain && !canonicalIp(domain)) {
+      keys.domain = domain;
+      break;
+    }
+  }
+  return keys;
 }
 
 /** "Searched 6 of 30 days" for a run in progress. */
@@ -809,7 +934,18 @@ export async function runHunt(id: number): Promise<void> {
       );
     }));
   }
-  const { hits, logsMatched } = matchRows(terms, rows);
+  const { hits, logsMatched, devices } = matchRows(terms, rows);
+  const ranked = rankDevices(devices);
+  const indById = new Map(indicators.map((i) => [i.id, i]));
+  const hypById = new Map(hypotheses.map((h) => [h.id, h]));
+  const deviceIndicators = (d: DeviceHits) =>
+    [...d.indicators]
+      .map(([indId, lines]) => ({ id: indId, type: indById.get(indId)!.ioc_type, value: indById.get(indId)!.value, lines }))
+      .sort((a, b) => b.lines - a.lines);
+  const deviceHypotheses = (d: DeviceHits) =>
+    [...d.hypotheses]
+      .map(([hypId, lines]) => ({ id: hypId, title: hypById.get(hypId)!.title, lines }))
+      .sort((a, b) => b.lines - a.lines);
 
   // Per indicator / hypothesis totals (a hypothesis sums its terms, counting each line once).
   const indTotals = new Map<number, TermHits>();
@@ -876,10 +1012,31 @@ export async function runHunt(id: number): Promise<void> {
         );
       }
     }
+    await client.query(`DELETE FROM threat_hunt_devices WHERE hunt_id = $1`, [id]);
+    for (const d of ranked.slice(0, MAX_STORED_DEVICES)) {
+      await client.query(
+        `INSERT INTO threat_hunt_devices
+           (hunt_id, device, hostname, source_ip, app_names, lines, first_seen, last_seen, indicators, hypotheses, last_raw_log_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+          id,
+          d.device,
+          d.hostname?.slice(0, 255) ?? null,
+          d.sourceIp,
+          [...d.appNames].map((a) => a.slice(0, 100)),
+          d.lineIds.size,
+          d.first,
+          d.last,
+          JSON.stringify(deviceIndicators(d).slice(0, 100)),
+          JSON.stringify(deviceHypotheses(d).slice(0, 50)),
+          d.lastRawLogId,
+        ]
+      );
+    }
     await client.query(
       `UPDATE threat_hunts
           SET status = 'completed', error = NULL, match_count = $2, logs_matched = $3, results_truncated = $4,
-              search_complete = $5, searched_from = $6, progress = $7, last_run_at = NOW(), updated_at = NOW()
+              search_complete = $5, searched_from = $6, progress = $7, devices_matched = $8, last_run_at = NOW(), updated_at = NOW()
         WHERE id = $1`,
       [
         id,
@@ -889,6 +1046,7 @@ export async function runHunt(id: number): Promise<void> {
         complete,
         searchedFrom,
         complete ? null : coverageText(searchedFrom, hunt.lookback_days, truncated),
+        devices.size,
       ]
     );
     await client.query('COMMIT');
@@ -899,65 +1057,165 @@ export async function runHunt(id: number): Promise<void> {
     client.release();
   }
 
-  logger.info(`[Hunt] hunt ${id}: ${terms.length} term(s), ${logsMatched.size} matching log line(s)`);
+  logger.info(
+    `[Hunt] hunt ${id}: ${terms.length} term(s), ${logsMatched.size} matching log line(s) on ${devices.size} device(s)`
+  );
   if (hunt.alert_on_match && logsMatched.size > 0) {
-    await raiseHuntAlert(hunt, indicators, hypotheses, indTotals, hypLines, logsMatched);
+    const search: HuntSearchScope = {
+      from: searchedFrom,
+      to: new Date(),
+      complete,
+      lookbackDays: hunt.lookback_days,
+      devices: devices.size,
+      lines: logsMatched.size,
+    };
+    await raiseHuntAlerts(hunt, ranked, deviceIndicators, deviceHypotheses, search);
   }
 }
 
-async function raiseHuntAlert(
-  hunt: HuntRow,
-  indicators: IndicatorRow[],
-  hypotheses: HypothesisRow[],
-  indTotals: Map<number, TermHits>,
-  hypLines: Map<number, { lines: Set<number> }>,
-  logsMatched: Set<number>
-): Promise<void> {
-  const matchedIndicators = indicators
-    .filter((i) => indTotals.has(i.id))
-    .map((i) => ({ type: i.ioc_type, value: i.value, count: indTotals.get(i.id)!.count }))
-    .sort((a, b) => b.count - a.count);
-  const matchedHypotheses = hypotheses
-    .filter((h) => hypLines.has(h.id))
-    .map((h) => ({ title: h.title, count: hypLines.get(h.id)!.lines.size }));
-  // The same matching lines raise one alert, however often the hunt re-runs.
-  const fingerprint = createHash('sha256')
-    .update([...logsMatched].sort((a, b) => a - b).join(','))
-    .digest('hex')
-    .slice(0, 24);
+interface HuntSearchScope {
+  from: Date | null;
+  to: Date;
+  complete: boolean;
+  lookbackDays: number;
+  /** Devices and lines the whole run matched. */
+  devices: number;
+  lines: number;
+}
+
+const isoMinute = (d: Date | null) => (d ? `${d.toISOString().slice(0, 16).replace('T', ' ')} UTC` : 'unknown');
+
+/** The alert text for one device. Exported for tests. */
+export function deviceAlertText(
+  hunt: Pick<HuntRow, 'id' | 'title' | 'source_url'>,
+  d: Pick<DeviceHits, 'device' | 'hostname' | 'sourceIp' | 'appNames' | 'lineIds' | 'first' | 'last'>,
+  matched: Array<{ type: string; value: string; lines: number }>,
+  hyps: Array<{ title: string; lines: number }>,
+  search: HuntSearchScope,
+  othersAlerted: number
+): string {
+  const where = [
+    d.hostname ? `host ${d.hostname}` : null,
+    d.sourceIp ? `sender ${d.sourceIp}` : null,
+    d.appNames.size ? `app ${[...d.appNames].slice(0, 5).join(', ')}` : null,
+  ].filter(Boolean);
   const lines = [
-    `Threat hunt #${hunt.id} found ${logsMatched.size} log line(s) in the last ${hunt.lookback_days} day(s).`,
-    ...matchedIndicators.slice(0, 10).map((i) => `Indicator ${i.type} ${i.value}: ${i.count} line(s)`),
-    ...matchedHypotheses.slice(0, 5).map((h) => `Hypothesis "${h.title}": ${h.count} line(s)`),
-    ...(hunt.source_url ? [`Source: ${hunt.source_url}`] : []),
+    `Threat hunt #${hunt.id} found ${d.lineIds.size} matching log line(s) on ${d.device}.`,
+    `Seen on: ${where.length ? where.join(' · ') : 'a log with no host or sender'}`,
+    `First seen ${isoMinute(d.first)}, last seen ${isoMinute(d.last)}.`,
+    ...matched.slice(0, 10).map((i) => `Indicator ${i.type} ${i.value}: ${i.lines} line(s)`),
+    ...hyps.slice(0, 5).map((h) => `Hypothesis "${h.title}": ${h.lines} line(s)`),
+    `Searched all stored logs from ${isoMinute(search.from)} to ${isoMinute(search.to)}` +
+      (search.complete ? ` (the full ${search.lookbackDays}-day window).` : ` (part of the ${search.lookbackDays}-day window; see the hunt).`),
+    `The run matched ${search.lines} line(s) on ${search.devices} device(s)` +
+      (othersAlerted > 0 ? `; ${othersAlerted} other device(s) have their own alert.` : '.'),
+    ...(search.devices > MAX_ALERT_DEVICES
+      ? [`Only the ${MAX_ALERT_DEVICES} devices with the most lines raise an alert; the hunt lists all of them.`]
+      : []),
+    ...(hunt.source_url ? [`Report: ${hunt.source_url}`] : []),
   ];
+  return lines.join('\n');
+}
+
+/** The asset a device is: by host name, else (no host name) by its sender IP. */
+async function deviceAsset(d: DeviceHits): Promise<number | null> {
   try {
-    const alertId = await AlertModel.createSourced({
-      source: 'threat-hunt',
-      event_id: `threat-hunt:${hunt.id}:${fingerprint}`,
-      severity: matchedIndicators.length ? 'high' : 'medium',
-      title: `Threat hunt match: ${hunt.title}`,
-      description: lines.join('\n'),
-      matched_data: {
-        hunt_id: hunt.id,
-        hunt_title: hunt.title,
-        source_url: hunt.source_url,
-        logs_matched: logsMatched.size,
-        matched_indicators: matchedIndicators.slice(0, 50),
-        matched_hypotheses: matchedHypotheses,
-      },
-    });
-    if (alertId) await query(`UPDATE threat_hunts SET last_alert_id = $2 WHERE id = $1`, [hunt.id, alertId]);
-  } catch (err) {
-    logger.warn(`[Hunt] hunt ${hunt.id}: could not raise an alert: ${(err as Error).message}`);
+    if (d.deviceType === 'host') {
+      const r = await query(`SELECT id FROM assets WHERE lower(hostname) = $1 ORDER BY last_seen DESC NULLS LAST LIMIT 1`, [d.device]);
+      return r.rows[0]?.id ?? null;
+    }
+    if (d.deviceType === 'ip') {
+      const r = await query(`SELECT id FROM assets WHERE ip_address = $1::inet LIMIT 1`, [d.device]);
+      return r.rows[0]?.id ?? null;
+    }
+  } catch {
+    /* no asset link */
   }
+  return null;
+}
+
+/** The parsed log of a raw log line, if it is still stored. */
+async function parsedLogOf(rawLogId: number | null): Promise<number | null> {
+  if (!rawLogId) return null;
+  const r = await query(`SELECT id FROM parsed_logs WHERE raw_log_id = $1 ORDER BY id DESC LIMIT 1`, [rawLogId]).catch(() => null);
+  return r?.rows[0]?.id ?? null;
+}
+
+/**
+ * One alert per device with matching lines (the MAX_ALERT_DEVICES with the
+ * most), so each says where the hunt's matches were seen and carries the keys
+ * the Context Graph links on (deviceAlertKeys), plus the newest matching log
+ * (parsed_log_id: the graph's "Logged by" and shipper) and the device's asset.
+ * A device whose matching lines are the same as last run raises no new alert.
+ */
+async function raiseHuntAlerts(
+  hunt: HuntRow,
+  ranked: DeviceHits[],
+  deviceIndicators: (d: DeviceHits) => Array<{ id: number; type: IocType; value: string; lines: number }>,
+  deviceHypotheses: (d: DeviceHits) => Array<{ id: number; title: string; lines: number }>,
+  search: HuntSearchScope
+): Promise<void> {
+  const alerted = ranked.slice(0, MAX_ALERT_DEVICES);
+  let firstAlertId: number | null = null;
+  for (const d of alerted) {
+    const matched = deviceIndicators(d);
+    const hyps = deviceHypotheses(d);
+    const deviceHash = createHash('sha256').update(d.device).digest('hex').slice(0, 12);
+    const fingerprint = createHash('sha256')
+      .update([...d.lineIds].sort((a, b) => a - b).join(','))
+      .digest('hex')
+      .slice(0, 24);
+    const eventId = `threat-hunt:${hunt.id}:${deviceHash}:${fingerprint}`;
+    try {
+      const [assetId, parsedLogId] = await Promise.all([deviceAsset(d), parsedLogOf(d.lastRawLogId)]);
+      const created = await AlertModel.createSourced({
+        source: 'threat-hunt',
+        event_id: eventId,
+        severity: matched.length ? 'high' : 'medium',
+        title: `Threat hunt match on ${d.device}: ${hunt.title}`,
+        description: deviceAlertText(hunt, d, matched, hyps, search, alerted.length - 1),
+        asset_id: assetId,
+        parsed_log_id: parsedLogId,
+        matched_data: {
+          ...deviceAlertKeys(d, matched),
+          hunt_id: hunt.id,
+          hunt_title: hunt.title,
+          source_url: hunt.source_url,
+          device: d.device,
+          hostname: d.hostname,
+          sender_ip: d.sourceIp,
+          app_names: [...d.appNames],
+          lines: d.lineIds.size,
+          first_seen: d.first,
+          last_seen: d.last,
+          raw_log_id: d.lastRawLogId,
+          matched_indicators: matched.slice(0, 50).map(({ type, value, lines }) => ({ type, value, lines })),
+          matched_hypotheses: hyps.slice(0, 20).map(({ title, lines }) => ({ title, lines })),
+          search_from: search.from,
+          search_to: search.to,
+          search_complete: search.complete,
+          run_devices: search.devices,
+          run_lines: search.lines,
+        },
+      });
+      // The same lines on an earlier run: that run's alert stands for them.
+      const alertId =
+        created ?? ((await query(`SELECT id FROM alerts WHERE event_id = $1`, [eventId])).rows[0]?.id as number | undefined) ?? null;
+      if (!alertId) continue;
+      firstAlertId ??= alertId;
+      await query(`UPDATE threat_hunt_devices SET alert_id = $3 WHERE hunt_id = $1 AND device = $2`, [hunt.id, d.device, alertId]);
+    } catch (err) {
+      logger.warn(`[Hunt] hunt ${hunt.id}: could not raise an alert for ${d.device}: ${(err as Error).message}`);
+    }
+  }
+  if (firstAlertId) await query(`UPDATE threat_hunts SET last_alert_id = $2 WHERE id = $1`, [hunt.id, firstAlertId]);
 }
 
 // ---- Reading -----------------------------------------------------------------------
 
 const HUNT_COLUMNS = `h.id, h.stix_uuid, h.title, h.title_locked, h.origin, h.source_url, h.source_id, s.name AS source_name, h.status,
   h.summary, h.extraction_method, h.extraction_note, h.lookback_days, h.alert_on_match, h.use_ai, h.error,
-  h.match_count, h.logs_matched, h.results_truncated, h.search_complete, h.searched_from, h.progress, h.last_run_at, h.last_alert_id, h.created_by,
+  h.match_count, h.logs_matched, h.devices_matched, h.results_truncated, h.search_complete, h.searched_from, h.progress, h.last_run_at, h.last_alert_id, h.created_by,
   h.created_at, h.updated_at`;
 
 export async function getHuntRow(id: number): Promise<HuntRow | null> {
@@ -1035,15 +1293,37 @@ export async function getMatches(huntId: number, limit = 500): Promise<unknown[]
   return r.rows;
 }
 
+/** Where the last run's matches were seen: one row per device, most lines first. */
+export async function getDevices(huntId: number, limit = MAX_STORED_DEVICES): Promise<unknown[]> {
+  const r = await query(
+    `SELECT d.id, d.device, d.hostname, d.source_ip, d.app_names, d.lines, d.first_seen, d.last_seen,
+            d.indicators, d.hypotheses, d.last_raw_log_id, d.alert_id, a.severity AS alert_severity, a.status AS alert_status
+       FROM threat_hunt_devices d
+       LEFT JOIN alerts a ON a.id = d.alert_id
+      WHERE d.hunt_id = $1
+      ORDER BY d.lines DESC, d.last_seen DESC NULLS LAST, d.device
+      LIMIT $2`,
+    [huntId, limit]
+  );
+  // device_type: which Context Graph node the device key names (host, ip, or none).
+  return r.rows.map((row) => ({ ...row, device_type: deviceOf(row.hostname, row.source_ip).deviceType }));
+}
+
 export async function getHuntDetail(id: number) {
   const hunt = await getHuntRow(id);
   if (!hunt) return null;
-  const [indicators, hypotheses, matches] = await Promise.all([getIndicators(id), getHypotheses(id), getMatches(id)]);
+  const [indicators, hypotheses, matches, devices] = await Promise.all([
+    getIndicators(id),
+    getHypotheses(id),
+    getMatches(id),
+    getDevices(id),
+  ]);
   return {
     ...hunt,
     indicators,
     hypotheses,
     matches,
+    devices,
     queue_depth: huntQueueDepth(),
     queue_position: huntQueuePositions().get(id) ?? null,
   };

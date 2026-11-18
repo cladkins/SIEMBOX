@@ -107,10 +107,31 @@ Parsers match only the extracted syslog message, and so does the hunt: it reads
 Up to 25 sample lines per indicator or search term are stored with the hunt.
 They are a snapshot: retention can delete the raw logs later.
 
-A hunt with **Raise an alert on a match** creates one alert (source
-`threat-hunt`): severity high when an indicator matched, medium when only
-hypothesis terms did. Re-running a hunt that finds the same lines raises no
-second alert.
+Each run also records where its matches were seen, under **Where seen** on the
+hunt: one row per device, with its lines, first and last time, and the
+indicators and hypotheses that matched there. A device is the syslog header
+host of the log, else the IP that sent it, the same key the Context Graph uses
+for its host and ip nodes, so **Graph** on a row opens that device in the graph.
+The hunt also says what the last run searched: the time range, whether it
+covered the whole window, and how many lines and devices matched.
+
+A hunt with **Raise an alert on a match** creates one alert per device (source
+`threat-hunt`), for the 25 devices with the most matching lines: severity high
+when an indicator matched on the device, medium when only hypothesis terms did.
+The alert says where the lines were seen (host, sender IP, application), when,
+which indicators and hypotheses matched, and the time range the run searched.
+Re-running a hunt that finds the same lines on a device raises no second alert
+for it. **Open threat hunt** on the alert opens the hunt.
+
+Each alert's matched_data carries the keys the Context Graph links on: `host`
+(the device), `client_ip` and `observer_ip` (the sender, drawn as the sender),
+`source_ip` (the indicator IP with the most lines on the device) and `domain`
+(the indicator domain or URL host with the most lines). It also names the
+device's newest matching log, so the graph shows the device that logged it and
+its shipper, and the asset the device is, when SIEMBox knows it. In the graph,
+the alert links to all of these, and the device, the indicator IP and the
+indicator domain each list the alert under **Alerts**. Alerts raised before
+this change carry none of these keys: run the hunt again to raise new ones.
 
 ## Monitored sources
 

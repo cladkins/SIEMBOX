@@ -7080,10 +7080,10 @@ Reads are open to every role. Hunt and source writes need **analyst**,
 | Method | Path | Who | What |
 |---|---|---|---|
 | GET | `/api/hunts/summary` | any | Counts: hunts, hunts with matches, in progress, failed, active indicators, enabled sources, queue depth |
-| GET | `/api/hunts` | any | List. Query: `limit` (1-200, default 50), `offset`, `status`, `source_id`, `search` (title or URL). Returns `{ hunts, total }` |
+| GET | `/api/hunts` | any | List. Query: `limit` (1-200, default 50), `offset`, `status`, `source_id`, `search` (title or URL). Returns `{ hunts, total }`; each hunt has `logs_matched` and `devices_matched` |
 | POST | `/api/hunts` | analyst+ | Start a hunt from `url` (https, public host) or `text` (20 B to 1 MB). Optional `title`, `lookback_days` (1-90, default 14), `alert_on_match` (default false), `use_ai` (default true). 202 with the hunt (`status: pending`) |
 | POST | `/api/hunts/import` | analyst+ | Start a hunt from a STIX 2.x bundle or a MISP event: the document as the body, or `{ bundle, lookback_days, alert_on_match, run }`. 201 with the hunt (`origin` `stix` or `misp`, `status: ready`, then it runs unless `run: false`). 400 when nothing in it can be hunted |
-| GET | `/api/hunts/:id` | any | The hunt with `indicators`, `hypotheses` and up to 500 `matches` (sample log lines) |
+| GET | `/api/hunts/:id` | any | The hunt with `indicators`, `hypotheses`, up to 500 `matches` (sample log lines) and up to 500 `devices` (where the last run's matches were seen: `device`, `device_type` (`host`, `ip` or null), `hostname`, `source_ip`, `app_names`, `lines`, `first_seen`, `last_seen`, `indicators`, `hypotheses`, `alert_id`). The hunt's `devices_matched` counts them |
 | GET | `/api/hunts/:id/stix` | any | The hunt as a STIX 2.1 bundle (`application/stix+json;version=2.1`, attachment) |
 | PUT | `/api/hunts/:id` | analyst+ | Change `title`, `lookback_days`, `alert_on_match` |
 | DELETE | `/api/hunts/:id` | analyst+ | Delete the hunt and its results. 409 while it is extracting or running |

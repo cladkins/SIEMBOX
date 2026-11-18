@@ -63,6 +63,13 @@
                 @click="emit('update:modelValue', false)"
               >View finding on the Digital Risk page →</router-link>
             </p>
+            <!-- Raised by a threat hunt: open the hunt (its devices, indicators and sample lines). -->
+            <p v-if="huntId(alert)" class="finding-link">
+              <router-link
+                :to="{ path: '/threat-hunting', query: { hunt: String(huntId(alert)) } }"
+                @click="emit('update:modelValue', false)"
+              >Open threat hunt #{{ huntId(alert) }} →</router-link>
+            </p>
           </div>
 
           <div class="alert-explain">
@@ -142,6 +149,13 @@ watch(
 
 // Alerts the exposure jobs raise for their findings (findingWriter.ts sets the source).
 const isExposureAlert = (alert: Alert) => alert.source === 'leaked-creds' || alert.source === 'domain-monitor';
+
+/** The hunt behind a threat-hunt alert (huntService.ts sets matched_data.hunt_id). */
+const huntId = (alert: Alert): number | null => {
+  if (alert.source !== 'threat-hunt') return null;
+  const id = Number((alert.matched_data as Record<string, unknown> | null)?.hunt_id);
+  return Number.isInteger(id) && id > 0 ? id : null;
+};
 
 const explainPayload = (alert: Alert) => ({
   severity: alert.severity,

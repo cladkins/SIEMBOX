@@ -41,6 +41,18 @@
             <el-option label="Low" value="low" />
           </el-select>
         </el-form-item>
+        <el-form-item label="Created">
+          <el-date-picker
+            v-model="dateRange"
+            type="datetimerange"
+            range-separator="to"
+            start-placeholder="Start date"
+            end-placeholder="End date"
+            :shortcuts="dateShortcuts"
+            style="width: 380px"
+            @change="applyFilters"
+          />
+        </el-form-item>
         <el-form-item>
           <el-button @click="resetFilters">Reset</el-button>
         </el-form-item>
@@ -168,6 +180,24 @@ const filters = ref({
   severity: '',
 });
 
+// Filters on the alert's created_at (the Created column).
+const dateRange = ref<[Date, Date] | null>(null);
+
+/** [now - ms, now], computed when the shortcut is clicked. */
+function lastDuration(ms: number): [Date, Date] {
+  const end = new Date();
+  return [new Date(end.getTime() - ms), end];
+}
+const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+const dateShortcuts = [
+  { text: 'Last hour', value: () => lastDuration(HOUR) },
+  { text: 'Last 24 hours', value: () => lastDuration(DAY) },
+  { text: 'Last 3 days', value: () => lastDuration(3 * DAY) },
+  { text: 'Last 7 days', value: () => lastDuration(7 * DAY) },
+  { text: 'Last 30 days', value: () => lastDuration(30 * DAY) },
+];
+
 const detailVisible = ref(false);
 const selectedAlert = ref<Alert | null>(null);
 const statusDialogVisible = ref(false);
@@ -187,6 +217,10 @@ async function fetchRows() {
     if (filters.value.triageVerdict) params.triageVerdict = filters.value.triageVerdict;
     if (filters.value.triageStatus) params.triageStatus = filters.value.triageStatus;
     if (filters.value.severity) params.severity = filters.value.severity;
+    if (dateRange.value && dateRange.value.length === 2) {
+      params.startTime = dateRange.value[0].toISOString();
+      params.endTime = dateRange.value[1].toISOString();
+    }
     const res = await api.getAlerts(params);
     rows.value = res.data.alerts;
     total.value = res.data.total;
@@ -203,6 +237,7 @@ function applyFilters() {
 }
 function resetFilters() {
   filters.value = { triageVerdict: '', triageStatus: '', severity: '' };
+  dateRange.value = null;
   applyFilters();
 }
 

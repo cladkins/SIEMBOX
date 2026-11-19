@@ -122,7 +122,7 @@ Beyond the interactive chat, SIEMBox can run the **same read-only tool loop auto
 
 **Where to see it:**
 - A **Triage** column and a per-alert tab in Alerts' detail view.
-- A dedicated **SOC Triage** page (sidebar, under SIEM) — a queue view across all triaged alerts, sortable by risk score and filterable by verdict/status, for scanning many at once.
+- A dedicated **SOC Triage** page (sidebar, under SIEM) — a queue view across all triaged alerts, sortable by risk score and filterable by verdict/status/severity and created date range, for scanning many at once.
 
 Configuration is a **third independent model selection** (provider/model/base URL/key), inheriting the AI Analyst (chat) config when left unset — see [Configuration](Configuration#ai-triage-optional).
 

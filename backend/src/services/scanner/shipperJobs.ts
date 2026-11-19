@@ -17,6 +17,11 @@
  *
  * Only unclaimed ('queued') jobs expire. A job the shipper already claimed is
  * 'running' on the shipper and finishes or fails there.
+ *
+ * Stalls. A claimed job whose shipper never reports back (shipper restarted
+ * mid-scan, result POST lost) would stay 'running' forever, so the same sweep
+ * fails any claimed job that has run well past its time budget
+ * (failStalledShipperJobs). Results that still arrive afterwards are ingested.
  */
 import pool from '../../config/database';
 import { logger } from '../../utils/logger';
@@ -149,6 +154,68 @@ export async function expireStaleShipperJobs(opts: { shipperId?: number; maxAgeH
   }
   return {
     hours,
+    scans: scans.rows.map((r) => r.id as number),
+    discoveryScans: discovery.rows.map((r) => r.id as number),
+  };
+}
+
+/** Template fetch (up to 10 min on the shipper) plus slack for posting results. */
+const STALL_GRACE_SECONDS = 20 * 60;
+/**
+ * Budget for nmap and discovery jobs. The shipper caps them at its own
+ * SCAN_TIMEOUT (default 15 min), which the backend can't see, so this is wide.
+ */
+const STALL_FLAT_SECONDS = 2 * 60 * 60;
+
+/** Seconds a claimed vulnerability_scans row may run: the nuclei budget claimScanJobsForShipper hands out, plus grace. */
+const VULN_STALL_SECONDS_SQL = `CASE WHEN scan_type = 'vulnerability' THEN
+            LEAST(3600, GREATEST(60, CASE WHEN scan_options->>'timeout' ~ '^[0-9]{1,12}$'
+                                          THEN (scan_options->>'timeout')::numeric / 1000 ELSE 1800 END))
+            + ${STALL_GRACE_SECONDS}
+          ELSE ${STALL_FLAT_SECONDS} END`;
+
+export const STALL_MESSAGE =
+  'No result from the log shipper: it claimed this scan but never reported back within the scan time limit ' +
+  '(shipper restarted mid-scan, or the result upload failed). Check the shipper log and start the scan again.';
+
+export interface StallResult {
+  /** vulnerability_scans rows (asset and vulnerability scans) marked failed. */
+  scans: number[];
+  /** discovery_scans rows marked failed. */
+  discoveryScans: number[];
+}
+
+/**
+ * Fail every shipper job that was claimed ('running') and is past its time
+ * budget with no result. Idempotent: a failed row is no longer 'running'.
+ */
+export async function failStalledShipperJobs(): Promise<StallResult> {
+  const scans = await pool.query(
+    `UPDATE vulnerability_scans
+        SET status = 'failed', completed_at = NOW(), updated_at = NOW(), error_message = $1
+      WHERE assigned_shipper_id IS NOT NULL
+        AND status = 'running'
+        AND COALESCE(claimed_at, started_at, created_at)
+            <= NOW() - make_interval(secs => (${VULN_STALL_SECONDS_SQL})::double precision)
+      RETURNING id, scan_type, assigned_shipper_id`,
+    [STALL_MESSAGE]
+  );
+  const discovery = await pool.query(
+    `UPDATE discovery_scans
+        SET status = 'failed', completed_at = NOW(), error_message = $1
+      WHERE assigned_shipper_id IS NOT NULL
+        AND status = 'running'
+        AND COALESCE(claimed_at, started_at, created_at) <= NOW() - make_interval(secs => ${STALL_FLAT_SECONDS})
+      RETURNING id, assigned_shipper_id`,
+    [STALL_MESSAGE]
+  );
+  for (const row of scans.rows) {
+    logger.warn(`[ShipperJobs] ${row.scan_type} scan ${row.id} on shipper ${row.assigned_shipper_id} failed: no result within its time limit`);
+  }
+  for (const row of discovery.rows) {
+    logger.warn(`[ShipperJobs] discovery scan ${row.id} on shipper ${row.assigned_shipper_id} failed: no result within its time limit`);
+  }
+  return {
     scans: scans.rows.map((r) => r.id as number),
     discoveryScans: discovery.rows.map((r) => r.id as number),
   };

@@ -261,7 +261,21 @@ doesn't run old scans. Re-run the scan once the shipper is back. Before that:
   timeout. (nuclei now fetches templates before scanning, so the first run no
   longer fails for that — see below.)
 - `Scan <id> result POST failed (HTTP ...)` — the result couldn't be delivered
-  (`000` = couldn't reach `SIEMBOX_API_URL`; `404` = key not recognised).
+  (`000` = couldn't reach `SIEMBOX_API_URL`; `404` = key not recognised;
+  `413` = output over the 10 MB request limit). From shipper 1.5.2 the POST
+  retries twice on `000`/`5xx`, then reports the scan **failed** with the HTTP
+  code.
+
+A `running` job does not stay that way. The *Shipper job expiry* sweep (every
+five minutes) marks a claimed job **failed** with "No result from the log
+shipper" once it is well past its time limit: the nuclei timeout plus 20 minutes
+for a vulnerability scan, 2 hours for an asset or discovery scan. This covers a
+shipper restarted mid-scan. Results that arrive after that are still ingested.
+
+Two bugs, now fixed, left vulnerability scans `running`
+forever: a scan with **no findings** (empty nuclei output) was rejected with
+HTTP 400, and shippers older than 1.5.2 could not send output over 128 KB
+(`failed to build result body`). Update the backend and the shipper image.
 - A **backend** restart no longer fails shipper jobs: their worker is the
   shipper, so queued ones stay queued (until they expire) and running ones
   still post their results. (It used to mark them `failed` with *Interrupted by

@@ -933,7 +933,9 @@ router.post('/scan-results', async (req: Request, res: Response): Promise<void> 
     }
 
     if (isVuln) {
-      if (typeof jsonl !== 'string' || jsonl.length === 0) {
+      // An empty string is a valid result: nuclei prints nothing when it finds
+      // nothing. Rejecting it left every clean scan 'running' forever.
+      if (typeof jsonl !== 'string') {
         throw new ApiError(400, 'jsonl (nuclei -jsonl output) or error is required');
       }
       try {

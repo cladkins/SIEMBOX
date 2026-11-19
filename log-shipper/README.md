@@ -300,7 +300,9 @@ own template snapshot. Set `NUCLEI_UPDATE_TEMPLATES=false` to skip the auto-upda
 
 A scan the shipper can't run (scanner error, host unreachable, or a
 `SCAN_TIMEOUT` of `900`s exceeded) is reported back and shown as **failed** in
-SIEMBox rather than left hanging.
+SIEMBox rather than left hanging. The same goes for a result SIEMBox does not
+accept after two retries. If the shipper dies mid-scan, SIEMBox fails the scan
+itself once it is past its time limit.
 
 ## Volume Mounts
 

@@ -25,7 +25,11 @@ SHIPPER_API_KEY="${SHIPPER_API_KEY}"
 #   1.5.1 — Docker health check works: the main loop touches a heartbeat file
 #           and shipper-healthcheck checks its age (the old check used pgrep,
 #           which the image does not have, so every shipper showed unhealthy)
-SHIPPER_VERSION="1.5.1"
+#   1.5.2 — scans: results post from a file (output over 128 KB no longer
+#           fails to send), transient POST failures retry, and a result that
+#           cannot be delivered reports the scan failed instead of leaving it
+#           running
+SHIPPER_VERSION="1.5.2"
 CONFIG_POLL_INTERVAL="${CONFIG_POLL_INTERVAL:-30}" # seconds
 HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-60}" # seconds
 # How often to report this host's container images to SIEMBox for vuln scanning.
@@ -888,23 +892,48 @@ report_containers() {
 # backend/src/routes/shippers.ts.
 # ---------------------------------------------------------------------------
 
+# POST a JSON body file to a results endpoint, retrying transient failures
+# (no response, 5xx) twice. Prints the final HTTP code. The body goes from a
+# file, never the command line: a single argv string tops out at 128 KB on
+# Linux, which a scan with a few findings exceeds.
+post_result_file() {
+    local url="$1" bodyfile="$2" code="" attempt
+    for attempt in 1 2 3; do
+        code=$(curl -s --max-time 60 -o /dev/null -w '%{http_code}' \
+            -X POST "$url" -H 'Content-Type: application/json' \
+            --data-binary "@${bodyfile}" 2>/dev/null) || true
+        case "$code" in
+            ''|000|5*) [ "$attempt" -lt 3 ] && sleep 10 ;;
+            *) break ;;
+        esac
+    done
+    printf '%s' "${code:-000}"
+}
+
 # POST a scan's raw output back to SIEMBox. $2 is the JSON field name the backend
-# expects for this scan kind ("xml" for nmap, "jsonl" for nuclei).
+# expects for this scan kind ("xml" for nmap, "jsonl" for nuclei). If the result
+# cannot be delivered the scan is reported failed, so it never sits 'running'.
 post_scan_output() {
     local scan_id="$1" field="$2" output="$3"
-    local body
-    body=$(jq -n --arg key "$SHIPPER_API_KEY" --argjson sid "$scan_id" \
-        --arg field "$field" --arg out "$output" \
-        '{api_key:$key, scan_id:$sid} + {($field): $out}' 2>/dev/null) || true
-    [ -z "$body" ] && { log_warn "Scan $scan_id: failed to build result body"; return; }
+    local outfile bodyfile code
+    outfile=$(mktemp 2>/dev/null || echo "/tmp/siembox-scan-out.$$.$scan_id")
+    bodyfile=$(mktemp 2>/dev/null || echo "/tmp/siembox-scan-body.$$.$scan_id")
+    printf '%s' "$output" > "$outfile"
+    if ! jq -n --arg key "$SHIPPER_API_KEY" --argjson sid "$scan_id" \
+        --arg field "$field" --rawfile out "$outfile" \
+        '{api_key:$key, scan_id:$sid} + {($field): $out}' > "$bodyfile" 2>/dev/null; then
+        rm -f "$outfile" "$bodyfile"
+        log_warn "Scan $scan_id: failed to build result body"
+        post_scan_error "$scan_id" "The shipper could not build the result payload"
+        return
+    fi
 
-    local code
-    code=$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' \
-        -X POST "${SIEMBOX_API_URL}/shippers/scan-results" \
-        -H 'Content-Type: application/json' -d "$body" 2>/dev/null) || true
+    code=$(post_result_file "${SIEMBOX_API_URL}/shippers/scan-results" "$bodyfile")
+    rm -f "$outfile" "$bodyfile"
     case "$code" in
         2*) log_info "Scan $scan_id results posted (HTTP $code)" ;;
-        *)  log_warn "Scan $scan_id result POST failed (HTTP ${code:-000})" ;;
+        *)  log_warn "Scan $scan_id result POST failed (HTTP $code)"
+            post_scan_error "$scan_id" "The scan finished on the shipper but SIEMBox did not accept its results (HTTP $code)" ;;
     esac
 }
 
@@ -1022,21 +1051,28 @@ run_nuclei_job() {
     rm -f "$errfile"
 }
 
-# POST discovery signals (a JSON array the agent produced) back to SIEMBox.
+# POST discovery signals (a JSON array the agent produced) back to SIEMBox. If
+# they cannot be delivered the scan is reported failed, not left 'running'.
 post_discovery_results() {
     local scan_id="$1" signals="$2"
-    local body
-    body=$(jq -n --arg key "$SHIPPER_API_KEY" --argjson sid "$scan_id" --argjson signals "$signals" \
-        '{api_key:$key, scan_id:$sid, signals:$signals}' 2>/dev/null) || true
-    [ -z "$body" ] && { log_warn "Discovery scan $scan_id: failed to build result body"; return; }
+    local sigfile bodyfile code
+    sigfile=$(mktemp 2>/dev/null || echo "/tmp/siembox-disc-out.$$.$scan_id")
+    bodyfile=$(mktemp 2>/dev/null || echo "/tmp/siembox-disc-body.$$.$scan_id")
+    printf '%s' "$signals" > "$sigfile"
+    if ! jq -n --arg key "$SHIPPER_API_KEY" --argjson sid "$scan_id" --slurpfile signals "$sigfile" \
+        '{api_key:$key, scan_id:$sid, signals:$signals[0]}' > "$bodyfile" 2>/dev/null; then
+        rm -f "$sigfile" "$bodyfile"
+        log_warn "Discovery scan $scan_id: failed to build result body"
+        post_discovery_error "$scan_id" "The shipper could not build the result payload (agent output was not valid JSON)"
+        return
+    fi
 
-    local code
-    code=$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' \
-        -X POST "${SIEMBOX_API_URL}/shippers/discovery-results" \
-        -H 'Content-Type: application/json' -d "$body" 2>/dev/null) || true
+    code=$(post_result_file "${SIEMBOX_API_URL}/shippers/discovery-results" "$bodyfile")
+    rm -f "$sigfile" "$bodyfile"
     case "$code" in
         2*) log_info "Discovery scan $scan_id results posted (HTTP $code)" ;;
-        *)  log_warn "Discovery scan $scan_id result POST failed (HTTP ${code:-000})" ;;
+        *)  log_warn "Discovery scan $scan_id result POST failed (HTTP $code)"
+            post_discovery_error "$scan_id" "The scan finished on the shipper but SIEMBox did not accept its results (HTTP $code)" ;;
     esac
 }
 

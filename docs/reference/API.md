@@ -4086,7 +4086,7 @@ The args/targets (or, for discovery, the probe plan) are **built and validated b
 **Response (200):** `{ "status": "completed" }` or `{ "status": "failed" }`; for a scan that was cancelled (from the Shippers page or the scan page) or expired, `{ "status": "cancelled" | "expired", "ignored": true }` and the payload is discarded.
 
 **Errors:**
-- `400` - Missing `api_key`, non-positive `scan_id`, or no output (`xml` for an asset scan / `jsonl` for a vuln scan) and no `error`
+- `400` - Missing `api_key`, non-positive `scan_id`, or no output (`xml` for an asset scan / `jsonl` for a vuln scan) and no `error`. An empty `jsonl` string is valid: nuclei prints nothing when it finds nothing, and the scan completes with zero findings
 - `404` - Invalid API key, or the scan isn't assigned to this shipper
 - `422` - the output could not be parsed/ingested (the scan is marked `failed`)
 

@@ -35,6 +35,7 @@ import { ScheduledScanModel } from '../models/ScheduledScan';
 import {
   SHIPPER_JOB_EXPIRY_SETTING_KEY,
   expireStaleShipperJobs,
+  failStalledShipperJobs,
   getShipperJobExpiryHours,
 } from '../services/scanner/shipperJobs';
 import { NmapScanner } from '../services/scanner/nmapScanner';
@@ -227,6 +228,49 @@ test('the sweep marks stale queued shipper jobs expired, and nothing else', asyn
   const again = await expireStaleShipperJobs({ maxAgeHours: 24 });
   assert.ok(!again.scans.includes(stale));
   await pool.query('DELETE FROM vulnerability_scans WHERE id = $1', [staleBackend]);
+});
+
+test('a claimed job with no result past its time limit is failed, and a clean nuclei scan completes', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  // Claimed 30 h ago and never heard from again.
+  const stalledNuclei = await queuedScan('nuclei', 30, { status: 'running' });
+  const stalledNmap = await queuedScan('nmap', 30, { status: 'running' });
+  const stalledDiscovery = await queuedDiscovery(30);
+  await pool.query(`UPDATE discovery_scans SET status = 'running', started_at = created_at WHERE id = $1`, [stalledDiscovery]);
+  // Still inside their budget, queued, or backend-run: untouched.
+  const active = await queuedScan('nuclei', 0, { status: 'running' });
+  const queued = await queuedScan('nuclei', 30);
+  const backendRun = await queuedScan('nuclei', 30, { status: 'running', shipper: null });
+  await pool.query(`UPDATE vulnerability_scans SET claimed_at = created_at, started_at = created_at WHERE id = ANY($1)`, [
+    [stalledNuclei, stalledNmap, active, backendRun],
+  ]);
+  // 45 min in: past the 30 min nuclei budget but inside its grace, and inside nmap's 2 h.
+  const inGrace = await queuedScan('nuclei', 0, { status: 'running' });
+  await pool.query(`UPDATE vulnerability_scans SET claimed_at = NOW() - INTERVAL '45 minutes' WHERE id = $1`, [inGrace]);
+  const overdue = await queuedScan('nuclei', 0, { status: 'running' });
+  await pool.query(`UPDATE vulnerability_scans SET claimed_at = NOW() - INTERVAL '55 minutes' WHERE id = $1`, [overdue]);
+
+  const result = await failStalledShipperJobs();
+  for (const id of [stalledNuclei, stalledNmap, overdue]) assert.ok(result.scans.includes(id), `scan ${id}`);
+  assert.ok(result.discoveryScans.includes(stalledDiscovery));
+  for (const id of [active, queued, backendRun, inGrace]) assert.ok(!result.scans.includes(id), `scan ${id}`);
+
+  const failed = await statusOf('vulnerability_scans', stalledNuclei);
+  assert.equal(failed.status, 'failed');
+  assert.match(failed.error_message, /never reported back/);
+  assert.equal((await statusOf('discovery_scans', stalledDiscovery)).status, 'failed');
+  assert.equal((await statusOf('vulnerability_scans', active)).status, 'running');
+  assert.equal((await statusOf('vulnerability_scans', queued)).status, 'queued');
+  assert.ok(!(await failStalledShipperJobs()).scans.includes(stalledNuclei), 'idempotent');
+
+  // nuclei prints nothing when it finds nothing: an empty result completes the scan.
+  const clean = await call(null, 'POST', '/api/shippers/scan-results', { api_key: shipperKey, scan_id: active, jsonl: '' });
+  assert.equal(clean.status, 200);
+  assert.deepEqual(clean.json, { status: 'completed' });
+  assert.equal((await statusOf('vulnerability_scans', active)).status, 'completed');
+  const missing = await call(null, 'POST', '/api/shippers/scan-results', { api_key: shipperKey, scan_id: inGrace });
+  assert.equal(missing.status, 400);
+  await pool.query('DELETE FROM vulnerability_scans WHERE id = $1', [backendRun]);
 });
 
 test('a shipper back after a week gets no week-old work from the job-pull', async (t) => {

@@ -2,7 +2,7 @@
  * Scan jobs dispatched to log shippers: expiry, listing and cancel.
  *
  * A scan with "Run from" a shipper is created 'queued' and waits for that
- * shipper to claim it on its next job-pull (GET /api/shippers/scan-jobs/:api_key).
+ * shipper to claim it on its next job-pull (GET /api/shippers/agent/scan-jobs).
  * Three tables of work end up there: asset scans (nmap) and vulnerability scans
  * (nuclei) in vulnerability_scans, and log-discovery sweeps in discovery_scans.
  *

@@ -121,8 +121,14 @@ after(async () => {
   await closePools();
 });
 
-async function call(role: Role | null, method: string, path: string, body?: unknown) {
-  const headers: Record<string, string> = {};
+async function call(
+  role: Role | null,
+  method: string,
+  path: string,
+  body?: unknown,
+  extraHeaders: Record<string, string> = {}
+) {
+  const headers: Record<string, string> = { ...extraHeaders };
   if (role) headers.Authorization = `Bearer ${tokens[role]}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const res = await fetch(base + path, {
@@ -256,6 +262,24 @@ test('shipper-facing endpoints work with the shipper key and no login', async (t
   const register = await call(null, 'POST', '/api/shippers/register', { api_key: shipperKey, version: 'authz-test' });
   assert.equal(register.status, 200);
   assert.equal((await call(null, 'GET', `/api/shippers/config/${'0'.repeat(64)}`)).status, 404, 'an unknown key is still refused');
+});
+
+test('shipper GET routes take the key in the X-Shipper-Key header', async (t) => {
+  if (!dbReady) return t.skip(SKIP);
+  const key = { 'X-Shipper-Key': shipperKey };
+  const config = await call(null, 'GET', '/api/shippers/agent/config', undefined, key);
+  assert.equal(config.status, 200);
+  assert.equal(config.json.id, shipperId);
+  assert.ok(Array.isArray(config.json.sources));
+  assert.equal(config.json.http_push_key_hash, undefined);
+  const jobs = await call(null, 'GET', '/api/shippers/agent/scan-jobs', undefined, key);
+  assert.equal(jobs.status, 200);
+  assert.ok(Array.isArray(jobs.json.jobs));
+  const unknown = { 'X-Shipper-Key': '0'.repeat(64) };
+  assert.equal((await call(null, 'GET', '/api/shippers/agent/config', undefined, unknown)).status, 404);
+  assert.equal((await call(null, 'GET', '/api/shippers/agent/scan-jobs', undefined, unknown)).status, 404);
+  assert.equal((await call(null, 'GET', '/api/shippers/agent/config')).status, 401, 'no key: refused');
+  assert.equal((await call(null, 'GET', '/api/shippers/agent/scan-jobs')).status, 401, 'no key: refused');
 });
 
 test('admin can rotate the syslog key', async (t) => {

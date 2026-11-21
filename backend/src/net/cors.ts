@@ -148,8 +148,13 @@ export function logCorsPolicy(policy: CorsPolicy, log: Log = logger): void {
  * tracker, so preflights are answered before the rate limiter and the routes.
  */
 export function corsHeaders(policy: CorsPolicy) {
+  // Only when the operator sets CORS_ORIGIN=*, with the warning above at
+  // startup and no credentials.
   const allowAny = cors({ origin: '*' });
-  const allowListed = cors({ origin: true, credentials: true });
+  // The listed origins themselves, not `origin: true` (reflect any Origin): a
+  // request reaches this only after the allow-list check below, and cors
+  // checks the list again.
+  const allowListed = cors({ origin: [...policy.origins], credentials: true });
   const allowed = new Set(policy.origins);
   return function corsHeaders(req: Request, res: Response, next: NextFunction): void {
     if (policy.mode === 'any') {

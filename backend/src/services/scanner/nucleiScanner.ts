@@ -96,6 +96,24 @@ export function validateNucleiTarget(target: unknown): string | null {
   return null;
 }
 
+/** A scan's time budget when the request names none: 30 minutes. */
+export const DEFAULT_NUCLEI_TIMEOUT_MS = 30 * 60 * 1000;
+export const MIN_NUCLEI_TIMEOUT_MS = 60 * 1000;
+export const MAX_NUCLEI_TIMEOUT_MS = 60 * 60 * 1000;
+
+/**
+ * A scan's time budget in ms, from the `timeout` a request or a schedule
+ * carries: a positive number is held to 1 minute through 1 hour (the bounds a
+ * shipper-run scan already had), anything else is the 30-minute default. The
+ * value comes from the request body, so it must not set an unbounded timer.
+ */
+export function nucleiTimeoutMs(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return DEFAULT_NUCLEI_TIMEOUT_MS;
+  if (raw > MAX_NUCLEI_TIMEOUT_MS) return MAX_NUCLEI_TIMEOUT_MS;
+  if (raw < MIN_NUCLEI_TIMEOUT_MS) return MIN_NUCLEI_TIMEOUT_MS;
+  return Math.round(raw);
+}
+
 /**
  * Nuclei Scanner class
  */
@@ -128,7 +146,7 @@ export class NucleiScanner {
     });
 
     // When assigned to a log shipper the scan stays 'queued' for that shipper to
-    // claim (GET /api/shippers/scan-jobs/:api_key) and run nuclei out on the
+    // claim (GET /api/shippers/agent/scan-jobs) and run nuclei out on the
     // LAN; the backend does NOT run nuclei itself. The shipper posts findings
     // back to POST /api/shippers/scan-results, which calls ingestShipperResults.
     // An unassigned scan runs in-process exactly as before.
@@ -239,8 +257,7 @@ export class NucleiScanner {
 
       // Same budget an in-process scan gets (executeScan defaults to 30 min),
       // not the shipper's flat SCAN_TIMEOUT. opts.timeout is in ms when set.
-      const timeoutMs = typeof opts?.timeout === 'number' && opts.timeout > 0 ? opts.timeout : 30 * 60 * 1000;
-      const timeoutSeconds = Math.min(3600, Math.max(60, Math.round(timeoutMs / 1000)));
+      const timeoutSeconds = Math.round(nucleiTimeoutMs(opts?.timeout) / 1000);
 
       jobs.push({ scanId: row.id, kind: 'nuclei', nucleiArgs: dispatchArgs, targets: [target], timeoutSeconds });
     }
@@ -319,8 +336,8 @@ export class NucleiScanner {
       const args = await this.buildNucleiArgs(scanId, options);
       console.log(`[Nuclei] Command: nuclei ${args.join(' ')}`);
 
-      // Set timeout (default: 30 minutes for vuln scans)
-      const timeout = options.timeout || 30 * 60 * 1000;
+      // Set timeout (default: 30 minutes for vuln scans, at most 1 hour)
+      const timeout = nucleiTimeoutMs(options.timeout);
       const scanTimeout = setTimeout(async () => {
         console.error(`[Nuclei] Scan ${scanId} timed out after ${timeout / 1000} seconds`);
         if (this.activeScans.has(scanId)) {

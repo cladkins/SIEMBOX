@@ -81,3 +81,17 @@ test('buildNucleiArgs passes category directories through untouched', async () =
   const flagIndex = args.indexOf('-t');
   assert.equal(args[flagIndex + 1], 'http/');
 });
+
+test('nucleiTimeoutMs holds a requested timeout to 1 minute through 1 hour', async () => {
+  const { nucleiTimeoutMs } = await nucleiScannerPromise;
+  const minute = 60 * 1000;
+  assert.equal(nucleiTimeoutMs(undefined), 30 * minute, 'no timeout: the 30-minute default');
+  assert.equal(nucleiTimeoutMs(0), 30 * minute);
+  assert.equal(nucleiTimeoutMs(-5), 30 * minute);
+  assert.equal(nucleiTimeoutMs('1800000'), 30 * minute, 'a string is not a timeout');
+  assert.equal(nucleiTimeoutMs(Number.NaN), 30 * minute);
+  assert.equal(nucleiTimeoutMs(Infinity), 30 * minute);
+  assert.equal(nucleiTimeoutMs(1000), minute, 'raised to the 1-minute floor');
+  assert.equal(nucleiTimeoutMs(10 * minute), 10 * minute);
+  assert.equal(nucleiTimeoutMs(2 ** 40), 60 * minute, 'held to the 1-hour cap');
+});

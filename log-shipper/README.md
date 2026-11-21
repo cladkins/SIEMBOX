@@ -224,7 +224,7 @@ to run the scan from. Three kinds of scan can be dispatched:
   (ARP/mDNS/SSDP + port/HTTP/TLS), run by a small bundled Node agent, to find and
   fingerprint devices whose logs you can onboard.
 
-**How it works:** the shipper polls `GET /api/shippers/scan-jobs/<api_key>` every
+**How it works:** the shipper polls `GET /api/shippers/agent/scan-jobs` (key in the `X-Shipper-Key` header) every
 `SCAN_POLL_INTERVAL` seconds. SIEMBox hands back any scans assigned to this
 shipper, each tagged with its `kind` and carrying the **exact flags/targets (or,
 for discovery, the probe plan) the server chose** — the shipper runs it

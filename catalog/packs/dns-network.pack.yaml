@@ -1,13 +1,14 @@
 schema: siembox.pack/v1
 id: dns-network
 name: DNS & Network
-description: Pi-hole queries / ad-block and UniFi firewall-audit + IDS-IPS logs with the network-anomaly detections.
+description: Pi-hole and AdGuard Home queries / ad-block and UniFi firewall-audit + IDS-IPS logs with the network-anomaly detections.
 icon: Share
 # Bump whenever parsers, detections or sigma change (installs show the difference as "What's new").
-version: 1
+version: 2
 parsers:
   - pihole-query
   - pihole-dns-adblock
+  - adguard-home-query
   - ubiquiti-unifi-cef-audit
   - ubiquiti-unifi-ids-ips
 detections:
@@ -26,6 +27,21 @@ setup:
             - /srv/pihole/var-log:/logs/pihole:ro
       # Shipper source (File): /logs/pihole/pihole.log
     code_language: yaml
+  - title: AdGuard Home
+    text: |
+      SIEMBox pulls AdGuard Home's query log over its API, so no shipper is
+      needed. Create an AdGuard Home login for SIEMBox (AdGuard has no read-only
+      role, so use a login of its own you can remove later). Then in **Log
+      Discovery** choose **Add source**, pick **AdGuard Home**, and enter the
+      address, the admin port (3000 unless you changed it), and that login.
+      Query logging must be on (**Settings > General settings > Logs
+      configuration** in AdGuard Home).
+    code: |
+      Address:  <adguard-host>
+      Port:     3000
+      Endpoint: /control/querylog
+      Username: <adguard login for SIEMBox>
+    code_language: text
   - title: UniFi gateway
     text: |
       In UniFi Network open **Settings > Control Plane > Integrations** (older
